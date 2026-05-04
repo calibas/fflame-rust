@@ -31,6 +31,93 @@ mod mobius_extended;
 mod circle_blur;
 mod numbered_extras;
 mod glynn;
+mod wedge_extended;
+mod shapes3;
+mod radial_extras;
+mod internal_weight;
+mod pre_post_bridges;
+mod truchet;
+mod blur_extras;
+mod boarders;
+mod standalone_exotics;
+mod parametric_curves;
+mod stub_recoveries;
+mod maurer_hyper;
+mod misc_2d;
+mod misc_extras;
+mod bipolar_series;
+mod singleton_misc;
+mod misc_extras2;
+mod misc_extras3;
+mod stub_recoveries2;
+mod lazy_family;
+mod misc_extras4;
+mod watchlist_misc;
+mod classic_blades_misc;
+mod apo_misc;
+mod erf_misc;
+mod simple_classics;
+mod inflate_z;
+mod apo_misc7;
+mod apo_misc8;
+mod apo_misc9;
+mod apo_misc10;
+mod apo_misc11;
+mod apo_misc12;
+mod apo_misc13;
+mod spin_phase;
+mod apo_misc14;
+mod apo_misc15;
+mod rosoni_misc;
+mod apo_misc16;
+mod bwraps7_misc;
+mod apo_misc17;
+mod bwraps2_phase;
+mod post_heat_misc;
+mod post_rblur_misc;
+mod onion2_misc;
+mod jacobi_elliptic;
+mod circlecrop_phase;
+mod circlecrop_misc;
+mod exblur_misc;
+mod curl_sp_misc;
+mod extrude_misc;
+mod butterfly_fay_misc;
+mod minkowskope_misc;
+mod glynnlissa_misc;
+mod glynnspiro_misc;
+mod glynnsshape_misc;
+mod apo_misc18;
+mod apo_misc19;
+mod apo_misc20;
+mod apo_misc21;
+mod apo_misc22;
+mod sosa_attractors;
+mod sosa_attractors2;
+mod sosa_attractors3;
+mod sosa_attractors4;
+mod wf_curves;
+mod waves_wf_family;
+mod pointgrid_misc;
+mod dc_misc;
+mod dc_misc2;
+mod affine3d_misc;
+mod truchet2_misc;
+mod truchet_misc;
+mod post_axis_symmetry_misc;
+mod pre_wave3d_misc;
+mod circle_rand_misc;
+mod iconattractor_misc;
+mod waveblur_misc;
+mod siercarpet_misc;
+mod popcorn2_3d_misc;
+mod jac_asn_misc;
+mod plusrecip_misc;
+mod gamma_misc;
+mod bubblet3d_misc;
+mod waves2b_misc;
+mod prepost_compromise;
+mod dc_carpet3d_misc;
 
 pub use basic::*;
 pub use advanced::*;
@@ -60,6 +147,93 @@ pub use mobius_extended::*;
 pub use circle_blur::*;
 pub use numbered_extras::*;
 pub use glynn::*;
+pub use wedge_extended::*;
+pub use shapes3::*;
+pub use radial_extras::*;
+pub use internal_weight::*;
+pub use pre_post_bridges::*;
+pub use truchet::*;
+pub use blur_extras::*;
+pub use boarders::*;
+pub use standalone_exotics::*;
+pub use parametric_curves::*;
+pub use stub_recoveries::*;
+pub use maurer_hyper::*;
+pub use misc_2d::*;
+pub use misc_extras::*;
+pub use bipolar_series::*;
+pub use singleton_misc::*;
+pub use misc_extras2::*;
+pub use misc_extras3::*;
+pub use stub_recoveries2::*;
+pub use lazy_family::*;
+pub use misc_extras4::*;
+pub use watchlist_misc::*;
+pub use classic_blades_misc::*;
+pub use apo_misc::*;
+pub use erf_misc::*;
+pub use simple_classics::*;
+pub use inflate_z::*;
+pub use apo_misc7::*;
+pub use apo_misc8::*;
+pub use apo_misc9::*;
+pub use apo_misc10::*;
+pub use apo_misc11::*;
+pub use apo_misc12::*;
+pub use apo_misc13::*;
+pub use spin_phase::*;
+pub use apo_misc14::*;
+pub use apo_misc15::*;
+pub use rosoni_misc::*;
+pub use apo_misc16::*;
+pub use bwraps7_misc::*;
+pub use apo_misc17::*;
+pub use bwraps2_phase::*;
+pub use post_heat_misc::*;
+pub use post_rblur_misc::*;
+pub use onion2_misc::*;
+pub use jacobi_elliptic::*;
+pub use circlecrop_phase::*;
+pub use circlecrop_misc::*;
+pub use exblur_misc::*;
+pub use curl_sp_misc::*;
+pub use extrude_misc::*;
+pub use butterfly_fay_misc::*;
+pub use minkowskope_misc::*;
+pub use glynnlissa_misc::*;
+pub use glynnspiro_misc::*;
+pub use glynnsshape_misc::*;
+pub use apo_misc18::*;
+pub use apo_misc19::*;
+pub use apo_misc20::*;
+pub use apo_misc21::*;
+pub use apo_misc22::*;
+pub use sosa_attractors::*;
+pub use sosa_attractors2::*;
+pub use sosa_attractors3::*;
+pub use sosa_attractors4::*;
+pub use wf_curves::*;
+pub use waves_wf_family::*;
+pub use pointgrid_misc::*;
+pub use dc_misc::*;
+pub use dc_misc2::*;
+pub use affine3d_misc::*;
+pub use truchet2_misc::*;
+pub use truchet_misc::*;
+pub use post_axis_symmetry_misc::*;
+pub use pre_wave3d_misc::*;
+pub use circle_rand_misc::*;
+pub use iconattractor_misc::*;
+pub use waveblur_misc::*;
+pub use siercarpet_misc::*;
+pub use popcorn2_3d_misc::*;
+pub use jac_asn_misc::*;
+pub use plusrecip_misc::*;
+pub use gamma_misc::*;
+pub use bubblet3d_misc::*;
+pub use waves2b_misc::*;
+pub use prepost_compromise::*;
+pub use dc_carpet3d_misc::*;
 
 use super::definition::VariationDef;
 
@@ -308,4 +482,357 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &GLYNN_SIM1,
     &GLYNN_SIM2,
     &GLYNN_SIM3,
+    // Wedge family extensions
+    &WEDGE_JULIA,
+    &WEDGE_SPH,
+    // Standalone shapes — 3rd batch (super_shape, henon, apollony)
+    &SUPER_SHAPE,
+    &HENON,
+    &APOLLONY,
+    // Radial extras — variations whose X/Y output doesn't scale with weight
+    &ONION,
+    &TARGET_SP,
+    // Internal-weight watchlist via needs_transform
+    &LOONIE3,
+    &LOONIE_3D,
+    &SIGMOID,
+    &BLOCKY,
+    // Pre/post bridges
+    &PRE_CURL,
+    &POST_JULIAQ,
+    &POST_JULIA3DQ,
+    // Truchet family
+    &TRUCHET_FILL,
+    // Additional blur primitives
+    &SINEBLUR,
+    &STARBLUR,
+    &R_CIRCLEBLUR,
+    // Boarders / border-tile family
+    &BOARDERS,
+    &BOARDERS2,
+    &PRE_BOARDERS2,
+    &SPLITBRDR,
+    // Standalone exotics
+    &KALEIDOSCOPE,
+    &TAURUS,
+    &HOLE2,
+    // Parametric curves + 3D crop
+    &SPIROGRAPH,
+    &LISSAJOUS,
+    &VOGEL,
+    &CROP3D,
+    // Stub-bucket recoveries (cpp PluginVarCalc empty; ported from Java)
+    &BSPLIT,
+    &CYLINDER2,
+    &ECLIPSE,
+    &LOZI,
+    &PULSE,
+    &HYPERSHIFT,
+    // Larger param-heavy: maurer_rose + hypercrop
+    &MAURER_ROSE,
+    &HYPERCROP,
+    // Miscellaneous small 2D primitives
+    &SPLIT,
+    &SQUIRREL,
+    &STRIPES,
+    &SHIFT,
+    &PRESSURE_WAVE,
+    &SPHERICALN,
+    &SPLIGON,
+    &TILE_HLP,
+    // Miscellaneous larger / 3D primitives
+    &HO,
+    &CHUNK,
+    &PTRANSFORM,
+    &RATIONAL3,
+    &TILE_REVERSE,
+    &ORTHO,
+    // Bipolar (B-) and Elliptic (E-) coordinate-system series (Faber)
+    &BCOLLIDE,
+    &BMOD,
+    &BSWIRL,
+    &BARYCENTROID,
+    &ECOLLIDE,
+    &EMOD,
+    &ESWIRL,
+    &ESCALE,
+    &EPUSH,
+    &EROTATE,
+    // Singleton misc
+    &CORNERS,
+    &MODULUS,
+    &OCTAGON,
+    &CIRCUS,
+    &CIRCLIZE,
+    &CIRCLIZE2,
+    &ATAN_VAR,
+    &MURL,
+    // More misc
+    &COLLIDEOSCOPE,
+    &BENT2,
+    &MCARPET,
+    &LINEART3D,
+    &OSCILLOSCOPE,
+    &FIBONACCI2,
+    // Even more misc
+    &OSCILLOSCOPE2,
+    &LINEART,
+    &PHOENIX_JULIA,
+    &POW_BLOCK,
+    // Stub-bucket recoveries 2nd file
+    &DISC3,
+    &PROJECTIVE,
+    &TQMIRROR,
+    &INTERSECTION,
+    // Lazy family (Faber / FarDareisMai)
+    &LAZYJESS,
+    &LAZYTRAVIS,
+    // Misc 4
+    &ANAMORPHCYL,
+    &SVF,
+    &SHREDLIN,
+    &SHREDRAD,
+    &XHEART,
+    &STWIN,
+    &WHORL,
+    &DEVIL_WARP,
+    // Internal-weight watchlist + small misc
+    &TRADE,
+    &VORON,
+    &SQUIRCULAR,
+    &FLUX,
+    &RAYS,
+    &RAYS1,
+    &LOONIE2,
+    &FOURTH,
+    // Classic blades + misc
+    &ARCH,
+    &BI_LINEAR,
+    &BLADE,
+    &BLADE3D,
+    &SQUARIZE,
+    &SQUISH,
+    &TWOFACE,
+    &TWINTRIAN,
+    &UNPOLAR,
+    // Apo misc 5
+    &XERF,
+    &INVERTED_JULIA,
+    &IDISC,
+    &CONIC,
+    &POWER,
+    &ROUNDSPHER,
+    &CHECKS,
+    &CONE,
+    // Erf family + small misc
+    &ERF,
+    &ERF3D,
+    &D_SPHERICAL,
+    &DUSTPOINT,
+    &DELTAA,
+    &EDISC,
+    &CURVE,
+    &ELLIPTIC2,
+    // Simple Apophysis classics
+    &EXP2,
+    &EXPONENTIAL,
+    &FLIPY,
+    &FUNNEL,
+    &INVPOLAR,
+    &PERSPECTIVE,
+    &LINE,
+    &HOLESQ,
+    // Inflate Z family + foci_3D + sintrange
+    &INFLATEZ_1,
+    &INFLATEZ_2,
+    &INFLATEZ_3,
+    &INFLATEZ_4,
+    &INFLATEZ_5,
+    &INFLATEZ_6,
+    &SINTRANGE,
+    &FOCI_3D,
+    // Apo misc 7
+    &ASTERIA,
+    &ESTIQ,
+    &FDISC,
+    &BTRANSFORM,
+    &NPOLAR,
+    // Apo misc 8
+    &CSC_SQUARED,
+    &HYPERBOLICELLIPSE,
+    &LAYERED_SPIRAL,
+    &ATAN2_SPIRALS,
+    &GRIDOUT2,
+    // Apo misc 9
+    &EJULIA,
+    &EMOTION,
+    &FLOWER_DB,
+    &JULIAN2,
+    // Apo misc 10
+    &MASK,
+    &OVOID3D,
+    &MURL2,
+    &MINKQM,
+    // Apo misc 11
+    &SWIRL3,
+    &WDISC,
+    &SPH3D,
+    &INVSQUIRCULAR,
+    &SPHERE_NJA,
+    // Apo misc 12
+    &RINGS,
+    &RIPPLED,
+    &WAFFLE,
+    &STRIPFIT,
+    // Apo misc 13
+    &Q_ODE,
+    &RIPPLE,
+    &SCRY2,
+    // Spin / pre / post phase
+    &PRE_SPIN_Z,
+    &POST_SPIN_Z,
+    &POST_SPHERICAL,
+    &PRE_DISC3D,
+    // Apo misc 14
+    &WAVES2_RADIAL,
+    &SPLIPTIC_BS,
+    &POINCARE3D,
+    // Apo misc 15
+    &PRE_SINUSOIDAL3D,
+    &PRE_BLUR3D,
+    &JULIAN3DX,
+    // Rosoni
+    &ROSONI,
+    // Apo misc 16
+    &SEASHELL3D,
+    &HYPERSHIFT2,
+    // bwraps7
+    &BWRAPS7,
+    // Apo misc 17
+    &LOQ,
+    &SPIROGRAPH3D,
+    // bwraps2 phase variants
+    &PRE_BWRAPS2,
+    &POST_BWRAPS2,
+    // post_heat
+    &POST_HEAT,
+    // post_rblur
+    &POST_RBLUR,
+    // onion2
+    &ONION2,
+    // Jacobi elliptic family
+    &JAC_SN,
+    &JAC_CN,
+    &JAC_DN,
+    // Circle-crop phase variants
+    &PRE_CIRCLECROP,
+    &POST_CIRCLECROP,
+    // circlecrop (normal phase) + exblur
+    &CIRCLECROP,
+    &EXBLUR,
+    // curl_sp
+    &CURL_SP,
+    // extrude
+    &EXTRUDE,
+    // butterfly_fay
+    &BUTTERFLY_FAY,
+    // minkowskope
+    &MINKOWSKOPE,
+    // glynnlissa
+    &GLYNNLISSA,
+    // glynnspiro
+    &GLYNNSPIRO,
+    // glynnSShape
+    &GLYNNSSHAPE,
+    // apo_misc18: lazysensen, spherecrop, xheart_blur_wf
+    &LAZYSENSEN,
+    &SPHERECROP,
+    &XHEART_BLUR_WF,
+    // apo_misc19: mobius_strip, circleLinear
+    &MOBIUS_STRIP,
+    &CIRCLE_LINEAR,
+    // apo_misc20: cannabiscurve_wf, spherical3D_wf, swirl3D_wf
+    &CANNABISCURVE_WF,
+    &SPHERICAL3D_WF,
+    &SWIRL3D_WF,
+    // apo_misc21: heart_wf, post_ztranslate_wf, post_mirror_wf
+    &HEART_WF,
+    &POST_ZTRANSLATE_WF,
+    &POST_MIRROR_WF,
+    // apo_misc22: dc_carpet, post_point_symmetry_wf, cpow3_wf
+    &DC_CARPET,
+    &POST_POINT_SYMMETRY_WF,
+    &CPOW3_WF,
+    // sosa_attractors: clifford_js, svensson_js, sattractor_js
+    &CLIFFORD_JS,
+    &SVENSSON_JS,
+    &SATTRACTOR_JS,
+    // sosa_attractors2: threepoint_js, lorenz_js, woggle_js
+    &THREEPOINT_JS,
+    &LORENZ_JS,
+    &WOGGLE_JS,
+    // sosa_attractors3: lace_js, wallpaper_js
+    &LACE_JS,
+    &WALLPAPER_JS,
+    // sosa_attractors4: hadamard_js, invtree_js, crown_js
+    &HADAMARD_JS,
+    &INVTREE_JS,
+    &CROWN_JS,
+    // wf_curves: epispiral_wf, cloverleaf_wf, rose_wf, bubble_wf
+    &EPISPIRAL_WF,
+    &CLOVERLEAF_WF,
+    &ROSE_WF,
+    &BUBBLE_WF,
+    // waves_wf_family: waves2_wf, waves3_wf, waves4_wf, dinis_surface_wf
+    &WAVES2_WF,
+    &WAVES3_WF,
+    &WAVES4_WF,
+    &DINIS_SURFACE_WF,
+    // pointgrid_misc: pointgrid_wf, pointgrid3d_wf, apocarpet_js
+    &POINTGRID_WF,
+    &POINTGRID3D_WF,
+    &APOCARPET_JS,
+    // dc_misc: dc_cylinder, dc_cylinder2, dc_triangle
+    &DC_CYLINDER,
+    &DC_CYLINDER2,
+    &DC_TRIANGLE,
+    // dc_misc2: dc_cube, pre_rect_wf
+    &DC_CUBE,
+    &PRE_RECT_WF,
+    // affine3d_misc: affine3D
+    &AFFINE3D,
+    // truchet2_misc: truchet2
+    &TRUCHET2,
+    // truchet_misc: truchet
+    &TRUCHET,
+    // post_axis_symmetry_misc: post_axis_symmetry_wf
+    &POST_AXIS_SYMMETRY_WF,
+    // pre_wave3d_misc: pre_wave3D_wf
+    &PRE_WAVE3D_WF,
+    // circle_rand_misc: circleRand, CircleTrans1
+    &CIRCLE_RAND,
+    &CIRCLE_TRANS1,
+    // iconattractor_misc: iconattractor_js
+    &ICONATTRACTOR_JS,
+    // waveblur_misc: waveblur_wf
+    &WAVEBLUR_WF,
+    // siercarpet_misc: siercarpet_js
+    &SIERCARPET_JS,
+    // popcorn2_3d_misc: popcorn2_3D
+    &POPCORN2_3D,
+    // jac_asn_misc: jac_asn
+    &JAC_ASN,
+    // plusrecip_misc: plusrecip
+    &PLUSRECIP,
+    // gamma_misc: gamma
+    &GAMMA,
+    // bubblet3d_misc: bubbleT3D
+    &BUBBLE_T3D,
+    // waves2b_misc: waves2b
+    &WAVES2B,
+    // prepost_compromise: prepost_circlize, prepost_mobius (single-phase compromise)
+    &PREPOST_CIRCLIZE,
+    &PREPOST_MOBIUS,
+    // dc_carpet3d_misc: dc_carpet3D (color-z coupling dropped)
+    &DC_CARPET3D,
 ];

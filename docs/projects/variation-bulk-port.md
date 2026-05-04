@@ -10,11 +10,11 @@ Source repo: https://github.com/mwegner/chaotica-apophysis-plugins-from-jwildfir
 
 | | Count |
 |---|---|
-| Our current variations (`ALL_VARIATIONS` in `src/variations/defs/mod.rs`) | **84** *(at start; **208** as of 2026-05-01 — see [Porting progress](#porting-progress-2026-04-27))* |
+| Our current variations (`ALL_VARIATIONS` in `src/variations/defs/mod.rs`) | **84** *(at start; **401** as of 2026-05-02 — see [Porting progress](#porting-progress-2026-04-27))* |
 | Upstream `.cpp` files | **636** |
 | Already implemented (exact name match) | 78 |
 | Ours-only (name doesn't appear upstream) | 6 |
-| Upstream-only (potentially to port) | **558** *(initially; **~434 remaining** after the porting since)* |
+| Upstream-only (potentially to port) | **558** *(initially; **~241 remaining** after the porting since)* |
 
 Lists are checked into this directory:
 - [variation-upstream-only.txt](variation-upstream-only.txt) — all 558 upstream-only names
@@ -79,7 +79,7 @@ What we **don't** support:
 1. ✅ **This doc + lists** — done
 2. ✅ **Bulk-fetch the 415 .cpp files** for offline analysis — done (subagent run, 2026-04-26). The same source is now mirrored locally under `output/jwildfire-vars/` (gitignored) for offline reading via the file tools — preferred over web-fetching during ports.
 3. ✅ **Per-file classification** — pure / parameterized / RNG / uses-internal-weight / broken — done (see [Classification](#classification-auto-generated-2026-04-26) below)
-4. 🚧 **Port in batches** — 19 batches landed (124 variations); see [Porting progress](#porting-progress-2026-04-27) below
+4. 🚧 **Port in batches** — 38 batches landed (207 variations); see [Porting progress](#porting-progress-2026-04-27) below
 5. ⏳ **Database import scripts** — generate from the ported `VariationDef`s for upload to the variations API
 6. ⏳ **Test pass** — flame referencing each new variation renders correctly via local registry, then via API fetch with cache cleared
 
@@ -114,8 +114,94 @@ both the shader emitter and the buffer populator, sharing
 | 17 | `circle_blur.rs` | Circle/blur distortions | 4 | `circleblur`, `circlesplit`, `flipcircle` (uses needs_transform to read VVAR for its radius comparison), `blur_linear` (init for sin/cos of angle). |
 | 18 | `numbered_extras.rs` | Numbered cont'd | 3 | `bipolar2`, `blob3d`, `circular2`. |
 | 19 | `glynn.rs` | Glynnia + GlynnSim set | 5 | `glynnia` (factored the `_vvar2 = VVAR · sqrt(2)/2` internal weight cleanly), `glynnia3`, `glynnSim1`/`2`/`3`. The GlynnSim ports follow the Java semantics rather than the cpp (the cpp `circle()` helper takes `Point` by value — porter bug; we inline the helper, matching the JWildfire engine's output). |
-| **Total new** | | | **124** | |
-| Registry size | | | **208** | (84 base + 124 ported) |
+| 20 | `wedge_extended.rs` | Wedge family extensions | 2 | `wedge_julia`, `wedge_sph`. wedge_julia upstream computes `ca = cos(sa)` (cos-of-sin-of-a, not cos(a)) — preserved in both Java and cpp. |
+| 21 | `shapes3.rs` | Big standalone shapes | 3 | `super_shape`, `henon` (cpp PluginVarCalc was unported_stub — translated from the Java comment), `apollony` (Apollonian-gasket IFS via 3-way random branch). |
+| 22 | `radial_extras.rs` | Radial weight-independent | 2 | `onion`, `target_sp`. Both have X/Y output lines lacking the usual `VVAR *` multiplier — body uses `needs_transform` + divide-out so outer × w restores the cpp output. New pattern; described in [Notable decisions](#notable-decisions-during-porting). |
+| 23 | `internal_weight.rs` | Watchlist via needs_transform | 4 | `loonie3`, `loonie_3d`, `sigmoid`, `blocky`. Two patterns: threshold-only weight (factors cleanly) and non-linear weight (divide-out). `blocky`'s upstream `sqrt_safe(vp, x)` macro-expansion bug bypassed — we follow Java intent. |
+| 24 | `pre_post_bridges.rs` | Pre/post phase bridges | 3 | `pre_curl`, `post_juliaq`, `post_julia3dq`. Pre/post phases have no outer multiplier, so body reads `w` via `needs_transform` and applies VVAR directly. Cpp's `GOODRAND_0X(INT_MAX) * inv_power_2pi` replaced with `floor(rand · power) * inv_power_2pi` (semantically equivalent uniform N-th-root branch without distribution bias). |
+| 25 | `truchet.rs` | Truchet kickoff | 1 | `truchet_fill`. Internal weight via `scale = 1/VVAR` plus weight-independent FPx/FPy lines — divide-out pattern. Other Truchet members deferred (mostly `unportable_dc` or `unported_stub`). |
+| 26 | `blur_extras.rs` | More blur primitives | 3 | `sineblur`, `starblur`, `r_circleblur`. All factor cleanly through outer multiplier. `farblur`/`exblur`/`nblur` deferred — persistent `_r[4]` state buffer. |
+| 27 | `boarders.rs` | Boarders / border-tile | 4 | `boarders`, `boarders2`, `pre_boarders2`, `splitbrdr`. `pre_boarders2` is pre-phase with `needs_transform` to apply VVAR inside (no outer multiplier). `splitbrdr` mostly factors but ends with two extra non-VVAR lines — divide-out. |
+| 28 | `standalone_exotics.rs` | Misc exotics | 3 | `kaleidoscope` (preserves cpp's `cos(45.0)` = 45 RADIANS quirk), `taurus` (Z-only divide-out), `hole2` (cpp was unported_stub; 10 radial-shape selector translated from Java). |
+| 29 | `parametric_curves.rs` | Parametric curves + crop | 4 | `spirograph`, `lissajous`, `vogel` (φ-spiral), `crop3d`. crop3d uses standard outer-multiplier convention (cpp's `FPx = VVAR · x` matches our `+= VVAR · x` when crop3d is the only normal variation in its transform — typical use). |
+| 30 | `stub_recoveries.rs` | unported_stub recoveries | 6 | `bsplit` (cpp `APO_VARIABLES` empty — recovered 2 user params from Java), `cylinder2`, `eclipse`, `lozi`, `pulse`, `hypershift`. Each cpp PluginVarCalc was empty; ported from the embedded Java comment block. |
+| 31 | `maurer_hyper.rs` | Maurer rose + hypercrop | 2 | `maurer_rose` (Gregg Helt 2016, 11 user params, RNG-branched line/point/curve sampling), `hypercrop` (n-gon corner-cropping warp; another unported_stub recovery). |
+| 32 | `misc_2d.rs` | Small 2D primitives | 8 | `split`, `squirrel`, `stripes`, `shift` (init: cos/sin of angle), `pressure_wave` (porter bug — cpp prepare hardcoded init values to 1.0; recovered the actual `pwx = freq·2π, ipwx = 1/pwx` from Java), `sphericaln`, `spligon`, `tile_hlp` (needs_transform for offset). |
+| 33 | `misc_extras.rs` | Larger / 3D primitives | 6 | `ho` (3D hyperbolic-octahedron — uses sign-preserving `pow` to handle negative bases that WGSL `pow` rejects), `chunk` (quadratic-conic mask, divide-out), `ptransform`, `rational3` (degree-3 complex-rational), `tile_reverse`, `ortho` (4-branch Möbius warp). |
+| 34 | `bipolar_series.rs` | B-/E-series + barycentroid | 10 | Faber's bSeries (`bcollide`, `bmod`, `bswirl`) and eSeries (`ecollide`, `emod`, `eswirl`, `escale`, `epush`, `erotate`) using bipolar/elliptic coordinate transforms; plus `barycentroid` (Xyrus02). All clean factor through outer multiplier. Each E-series body inlines the same elliptic preamble — we trust GPU compiler CSE when multiple are active. |
+| 35 | `singleton_misc.rs` | Standalone misc | 8 | `corners` (recovered 7 omitted params from Java; cpp exposed only 2 of 9), `modulus`, `octagon` (3D), `circus`, `circlize` (divide-out for the `+ hole` term — cpp's "tsk tsk... not scaled by vvar"), `circlize2` (clean), `atan` (3-mode selector), `murl` (cpp put per-iter intermediates in the persistent struct unnecessarily — treated as locals). |
+| 36 | `misc_extras2.rs` | More misc | 6 | `collideoscope` (Faber's radial branch-and-mod), `bent2` (per-quadrant scale), `mcarpet` (bubble + twist + tilt; FracFx), `lineart3d` (3D sign-preserving power), `oscilloscope` (Y-flip in damped cosine band), `fibonacci2` (Larry Berlin — Binet-formula complex Fibonacci with constants inlined). Skipped `cubicLattice_3D` (mid-iteration accumulator read). |
+| 37 | `misc_extras3.rs` | Even more misc | 4 | `oscilloscope2` (DarkBeam tweak — both X and Y flipped inside band), `lineart` (2D version of lineart3d — porter naming inconsistency `lineart` vs `linearT`), `phoenix_julia` (TyrantWave; X/Y distortion + N-th-root random branch), `pow_block` (cothe / DarkBeam — generalized N-th root). Skipped `arctruchet` (malloc'd persistent state), `circleTrans1` (do-while + hash). |
+| 38 | `stub_recoveries2.rs` | More unported_stub recoveries | 4 | `disc3` (8 user knobs over base disc), `projective` (eralex61 — linear-fractional projective), `tqmirror` (Anderson — quadrant fold-mirror; needs_transform for VVAR-as-threshold), `intersection` (Stefanov — random row/col tile blur, needs_transform for divide-out). Skipped `mobius_strip` (10 params + multi-mode init; focused single-port batch better), `pre_recip` (Java Complex class extensively used). |
+| 39 | `lazy_family.rs` | Lazy family (Faber / FarDareisMai) | 2 | `lazyjess` (4 user, 4 init slots: vertex, sin_vertex, pie_slice, corner_rot — n=2 special case + n>2 inscribed N-gon test), `lazytravis` (3 user, 2 init slots: 4·spin_in/4·spin_out — square fold-mirror with quadrant routing on perimeter parameterization). Both `needs_transform` for VVAR-as-threshold. |
+| 40 | `misc_extras4.rs` | More misc | 8 | `anamorphcyl` (Sosa), `svf` (gossamer light, 3D), `shredlin` (Zy0rg), `shredrad` (Zy0rg — porter bug: cpp PluginVarPrepare empty; `_alpha = 2π/n` recovered from Java setParameter), `xheart` (xyrus02), `stwin` (Apo pack — needs_transform divide-out), `whorl` (Apo pack — needs_transform for VVAR threshold), `devil_warp` (dark-beam — needs_transform divide-out). |
+| 41 | `watchlist_misc.rs` | Internal-weight watchlist + misc | 8 | `trade` (Faber — clean two-disc swap), `voron` (eralex61 — Voronoi-cell snap with bit-mixed i32 hash; relies on signed-int wrap parity between cpp and WGSL), `squircular` (Möbius — VVAR² in body radius; needs_transform divide-out), `flux` (meckie — additive `xpw=x+VVAR` shift; needs_transform), `rays` (Z+ — RNG cubic in VVAR; needs_transform), `rays1` (Raykoid666 — additive VVAR inside `1/tan + VVAR·(2/π)²`; needs_transform), `loonie2` (dark-beam — N-sided loonie, sqrvvar=w² threshold, 6 init slots, runtime sides loop; needs_transform), `fourth` (guagapunyaimel — 4-quadrant compound: spherical/loonie/susan/linear; needs_transform divide-out). |
+| 42 | `classic_blades_misc.rs` | Classic blades + small classics | 9 | `arch`, `blade`, `blade3D`, `twintrian` (Z+ Jan 2007 family — RNG with VVAR inside angle; needs_transform divide-out; `blade3D` is Full3D with explicit z output); `bi_linear` (clean swap); `squarize` (Faber angle-pack); `squish` (Faber, 1 user param + 1 init slot, RNG); `twoface` (Apo classic — internal w; needs_transform); `unpolar` (Apo classic — `w/(2π)` factor; needs_transform). `twintrian` uses `log/ln(10)` for log10 since WGSL has no log10. |
+| 43 | `apo_misc.rs` | Apophysis miscellany 5 | 8 | `xerf` (zephyrtronium / dark-beam — 3D piecewise erf/inverse; ships A&S 7.1.26 erf approximation, max error ~1.5e-7); `inverted_julia` (Whittaker Courtney 2018 — 9 user params recovered from Java setParameter; cpp APO_VARIABLES only declared 2); `idisc` (Faber — needs_transform divide-out); `conic` (cyberxaos — needs_transform divide-out, RNG); `power` (Apo classic — preserves cpp's cosA-instead-of-sinA exponent quirk + xy-output swap, rotating Java result 90°); `roundspher` (Raykoid666 — body has w² factor, needs_transform divide-out); `checks` (Apo classic — 4 user + 1 init, RNG); `cone` (Brad Stefanov — 9 params recovered from Java unported_stub, 3D, RNG). |
+| 44 | `erf_misc.rs` | Erf family + small misc | 8 | `erf` and `erf3D` (zephyrtronium / dark-beam — component-wise erf, 3D variant Full3D; A&S 7.1.26 polynomial inlined twice rather than shared as helper to avoid name collision with `xerf_erf`); `d_spherical` (Tatyana Zabanova — RNG-blended spherical/linear, both branches factor cleanly); `dustpoint` (Jesus Sosa — 3-point pivot/overlap IFS triangle, RNG); `deltaA` (Faber — radial ratio + half angle difference, needs_transform divide-out); `edisc` (Apo Plugin Pack — elliptic disc with `w/11.57…` empirical scale, needs_transform divide-out); `curve` (Apo Plugin Pack — 4 user + 2 init slots for `pc_xlen/pc_ylen = max(length², 1e-20)`); `elliptic2` (Brad Stefanov — 11 user + 1 init slot, RNG, needs_transform divide-out — body has internal `_v = w·h/π` plus an unweighted `+ ps` offset that costs an extra `1/w` factor through the divide-out). |
+| 45 | `simple_classics.rs` | Simple Apophysis classics | 8 | `exp2` (`w·exp(x·π)·(cos y·π, sin y·π)`); `exponential` (`w·exp(x-1)·(cos π·y, sin π·y)`); `flipy` (Faber — `if x>0: y = -y`); `funnel` (Raykoid666 — `tanh·(sec + N·π)`, 1 user param `effect` int); `invpolar` (`(1+y)·(sin x·π, cos x·π)`); `perspective` (Apo classic — 2 user + 2 init slots); `line` (Anderson 2013 — 2 user Java-recovered, cpp APO_VARIABLES empty; RNG; Full3D; needs_transform divide-out; drops the unit-vector normalization since `\|u\| ≡ 1`); `holesq` (dark-beam — square hole, needs_transform divide-out where additive ±1 offsets cost one `1/w` each). |
+| 46 | `inflate_z.rs` | inflateZ family + foci_3D + sintrange | 8 | `inflateZ_1..6` (Larry Berlin — clean Z-only Depth3D variations; `_4` uses RNG for sign flip on `(π/2 − atan2)·0.25`; `_6` clamps the `acos` input to `[-1, 1]` to avoid NaN); `sintrange` (Ffey — `sin(x)·(x²+w-(x²+y²)·w)` per axis; cpp uses `FPx = …` like anamorphcyl; 1 user param `w` distinct from VVAR); `foci_3D` (Larry Berlin — Full3D foci with `cosy·cosz` denominator; in 2D mode `boot` falls back unconditionally to `atan2(y, x)`). |
+| 47 | `apo_misc7.rs` | Apophysis miscellany 7 | 5 | `asteria` (dark-beam — RNG-blended linear/asteria; 1 user + 2 init; needs_transform divide-out); `estiq` (zephyrtronium — quaternion exponential extension; Full3D); `fdisc` (CozyG — fractal disc; 8 user params recovered from Java; cpp APO_VARIABLES empty); `bTransform` (Faber — bipolar transform; 4 user + RNG; cpp's `GOODRAND_0X(INT_MAX) % power` replaced with `floor(rand · power)`); `nPolar` (Faber — N-power polar; 2 user + 4 init; needs_transform divide-out; preserves cpp's `atan2(x, y)` swap in input transform and final unwrap). |
+| 48 | `apo_misc8.rs` | Apophysis miscellany 8 | 5 | `csc_squared` (Whittaker Courtney 2018 — 7 user Java-recovered; cpp APO_VARIABLES empty); `hyperbolicellipse` (1 user `a`; cpp `=` like anamorphcyl); `layered_spiral` (Will Evans — `(a·cos t, a·sin t)` with `t = x²+y²+ε`); `atan2_spirals` (Whittaker Courtney 2018 — 14 user params Java-recovered; cpp APO_VARIABLES empty); `gridout2` (Faber/Faber 2007 + Stefanov vars — 8-cell quadrant routing on `round(x)·c` vs `round(y)·d`). |
+| 49 | `apo_misc9.rs` | Apophysis miscellany 9 | 4 | `eJulia` (Faber — elliptic-coordinate Julia; 1 user power int + 1 init slot for sign; RNG); `eMotion` (Faber — elliptic-coordinate motion; 2 user move/rotate); `flower_db` (CozyG — Full3D flower with stem; 7 user; needs_transform divide-out; output mixes w-scaled petal radius and constant ±stem_length floor; preserves cpp's `atan2(x, y)` swap); `julian2` (Xyrus02 — JuliaN with affine pre-transform; 8 user + 2 init; RNG; cpp's `GOODRAND_0X(INT_MAX) % absN` replaced with `floor(rand · absN)`). |
+| 50 | `apo_misc10.rs` | Apophysis miscellany 10 | 4 | `mask` (Raykoid666/CozyG — 5 user Java-recovered; cpp APO_VARIABLES empty; local helper renamed `body` since WGSL reserves `common` as a future keyword); `ovoid3d` (Larry Berlin — 3 user x/y/z scales; Full3D); `murl2` (2 user c, power int; needs_transform divide-out for internal `_vp = w · pow(c+1, 2/power)` factor); `minkQM` (dark-beam — 6 user; per-axis Minkowski's question-mark via runtime loop bounded by `f`; helper `minkqm_minkowski` defined separately in 2D and 3D bodies). |
+| 51 | `apo_misc11.rs` | Apophysis miscellany 11 | 5 | `swirl3` (1 user shift; log-spiral; preserves cpp atan2 swap); `wdisc` (Faber — π/(sqrt+1) angle folded around r=0); `sph3D` (xyrus02 — 3 user x/y/z scales; Full3D; preserves upstream's `zz = x · tz` typo where cpp+Java both use x_scale instead of z_scale); `invsquircular` (Java-recovered unported_stub; needs_transform divide-out for nonlinear w² inside `r2 = sqrt(r·(w²·r − 4u²v²)/w)`); `sphere_nja` (6 user; Full3D parametric sphere; needs_transform divide-out — body has w-scaled `r/z` plus unscaled `+ shift_x/y` offsets). |
+| 52 | `apo_misc12.rs` | Apophysis miscellany 12 | 4 | `rings` (Apo classic — reads affine xf.e for `dx`; preserves cpp xy-output swap; needs_transform divide-out since cpp body lacks VVAR on output); `rippled` (Raykoid666 — clean factor); `waffle` (Jed Kelsey — 4 user + 2 init slots cos_rot/sin_rot; w stripped from cpp's `vcosr/vsinr` so it factors cleanly through outer; RNG); `stripfit` (dark-beam Java-recovered unported_stub — 1 user dx; body has `(y − fity ± 1)·dxp` additive unscaled term; needs_transform divide-out). |
+| 53 | `apo_misc13.rs` | Apophysis miscellany 13 | 3 | `q_ode` (dark-beam Java-recovered unported_stub; 12 user; only q_ode02·x and q_ode11·y get w factor in cpp, rest unscaled; needs_transform divide-out); `ripple` (Xyrus02 — 8 user + 6 init slots `_f, _p, _s, _vxp, _pxa, _pixa`; cpp uses `FPx = …` like anamorphcyl); `scry2` (dark-beam — 3 user + 6 init slots; runtime sides loop; scry-style `d = r1·(r2 + 1/w)` so output contains 1/w; needs_transform divide-out; uses local `circle_v = sqrt(x²+y²)` to avoid cpp's `double VAR(circle)` macro-redeclaration bug, same pattern as loonie2). |
+| 54 | `spin_phase.rs` | Spin / pre / post phase | 4 | `pre_spin_z` and `post_spin_z` (rotation by `w · π/2` around Z, applied at pre and post phase respectively); `post_spherical` (`r = w / (x² + y²)`); `pre_disc3d` (gossamer light — 1 user `pi` configurable; pre-phase disc with explicit z output `vv · r · cos(z)`; preserves cpp `atan2(x, y)` swap). All four use `needs_transform: true` to read the per-variation weight and apply it directly inside the body (pre/post phases have no outer multiplier). |
+| 55 | `apo_misc14.rs` | Apophysis miscellany 14 | 3 | `waves2_radial` (Tatyana Zabanova / Stefanov — 6 user; radial falloff applied to waves2-style sine offsets); `spliptic_bs` (Brad Stefanov — 2 user + 1 init slot for `2/π`; RNG; needs_transform divide-out for unscaled `± x` / `± y` constant offsets); `poincare3D` (Zueuk — 3 user + 10 init slots; Full3D hyperbolic tiling). |
+| 56 | `apo_misc15.rs` | Apophysis miscellany 15 | 3 | `pre_sinusoidal3d` (gossamer light — 0 user; pre-phase 3D variant; reads JUST-WRITTEN x, y inside z computation); `pre_blur3D` (0 user; pre-phase Gaussian-blur via sum-of-6-uniforms · sphere; cpp's persistent `_gauss_rnd[6]` buffer replaced with 6 fresh randoms per call); `julian3Dx` (Xyrus02 — 8 user + 2 init slots; RNG; Full3D; needs_transform divide-out). |
+| 57 | `rosoni_misc.rs` | Rosoni | 1 | `rosoni` (DarkBeam — 7 user + 2 init slots; clipping/rotational pattern with N-step rotation loop XOR-toggling a `cerc` flag based on whether the rotated point falls inside an inner shape; output point taken at iteration `sweetiter`). Clean factor through outer. |
+| 58 | `apo_misc16.rs` | Apophysis miscellany 16 | 2 | `seashell3D` (Jesus Sosa — 4 user Java-recovered; cpp APO_VARIABLES empty; RNG; Full3D parametric sea shell; cpp `FPx = …` like anamorphcyl); `hypershift2` (tatasz / Stefanov — 2 user + 4 init slots; RNG; Full3D hyperbolic 2-shift). |
+| 59 | `bwraps7_misc.rs` | bwraps7 | 1 | `bwraps7` (slobo777, version 7 — newer version of bwraps algorithm with updated `_g2` formula: `gain² + ε` instead of `gain² / radius + ε`. Both ship so flames built against either lineage render the same). 5 user + 3 init slots. |
+| 60 | `apo_misc17.rs` | Apophysis miscellany 17 | 2 | `loq` (zephyrtronium — 1 user `base` (default e); 3D quaternion-Apo inverse-log; clean factor through outer); `spirograph3D` (Java-recovered, cpp PluginVarCalc empty unported_stub; 7 user; RNG; Full3D parametric spirograph with 5 width modes; cpp's `direct_color` flag dropped — adding conditional `vc` writes complicates the writes_color model). |
+| 61 | `bwraps2_phase.rs` | bwraps2 phase | 2 | `pre_bwraps2` and `post_bwraps2` (Xyrus02 — bubble-wrap variants with `g2 = gain² / cellsize + ε`. Three lineages ship: `bwraps` uses gain²/radius, `bwraps7` uses gain², these use gain²/cellsize). 5 user + 3 init slots each. |
+| 62 | `post_heat_misc.rs` | post_heat | 1 | `post_heat` (?, Java-recovered cpp PluginVarCalc empty; 9 user params; no init slots — derived values computed at runtime to fit budget; post-phase 3D heat-distortion via sin perturbations on r/θ/φ spherical coords; needs_transform). |
+| 63 | `post_rblur_misc.rs` | post_rblur | 1 | `post_rblur` (Xyrus02 — post-phase radial blur jitters point by distance-from-center scaled by `2·strength`; 4 user + 1 init slot; RNG). |
+| 64 | `onion2_misc.rs` | onion2 | 1 | `onion2` (Nicolaus Anderson 2013, Java-recovered; 8 user; Full3D onion-shape via circle-to-exp transition at "meeting point", projected onto sphere; needs_transform divide-out — body has both `w·X` and `1/w²·X` terms in 3D output, bounded by safe_w guards). |
+| 65 | `jacobi_elliptic.rs` | Jacobi elliptic family | 3 | `jac_sn`, `jac_cn`, `jac_dn` — Jacobi elliptic functions sn, cn, dn. Each has its own per-variation prefixed helper (`jac_sn_je`, `jac_cn_je`, `jac_dn_je`) for the AGM-style 8-iteration descent (~1e-7 precision). 749 lines total. |
+| 66 | `circlecrop_phase.rs` | pre/post circlecrop | 2 | `pre_circlecrop` and `post_circlecrop` (Xyrus02 — 5 user + 1 init slot _cA = clamp(scatter_area, -1, 1); RNG; doHide-as-(0,0) compromise). Both use needs_transform (no outer multiplier in pre/post phases). |
+| 67 | `circlecrop_misc.rs` + `exblur_misc.rs` | circlecrop + exblur | 2 | `circlecrop` (normal-phase circlecrop; needs_transform divide-out for `+x0/+y0` constant offsets that don't factor through outer); `exblur` (zephyrtronium — replaced persistent `_r[4]` state buffer with fresh randoms per call, same compromise as later applied to `farblur`/`nblur`). |
+| 68 | `curl_sp_misc.rs` | curl_sp | 1 | `curl_sp` (Xyrus02 — 6 user + 4 init slots; cpp's TC color drift dropped per writes_color compromise). |
+| 69 | `extrude_misc.rs` | extrude | 1 | `extrude` (Xyrus02 — 1 user `root_face`; Z-only Depth3D variation with random extrusion sampled uniformly across an axial slab). |
+| 70 | `butterfly_fay_misc.rs` | butterfly_fay | 1 | `butterfly_fay` (11 user + 1 init slot; 6-mode spread routing for Fay's butterfly curve; RNG). |
+| 71 | `minkowskope_misc.rs` | minkowskope | 1 | `minkowskope` (Apo plugin pack, dark-beam tweak 2017 — 6 user + 2 init slots; Minkowski question-mark wave). |
+| 72 | `glynnlissa_misc.rs` | glynnlissa | 1 | `glynnlissa` (Java-recovered cpp PluginVarCalc empty unported_stub; 11 user + 3 init slots — Glynn × Lissajous). |
+| 73 | `glynnspiro_misc.rs` | glynnspiro | 1 | `glynnspiro` (11 user + 3 init slots — Glynn × spirograph3D). |
+| 74 | `glynnsshape_misc.rs` | glynnSShape | 1 | `glynnSShape` (Java-recovered cpp PluginVarCalc empty unported_stub; 11 user + 3 init slots — Glynn × Gielis SuperShape; same Glynn pattern as glynnlissa/glynnspiro). |
+| 75 | `apo_misc18.rs` | Apophysis miscellany 18 | 3 | `lazysensen` (bezo97 — Java-recovered; 3 user; per-axis floor-and-flip parity rule); `spherecrop` (Xyrus02 — 6 user + 1 init `_cA = clamp(scatter_area, -1, 1)`; needs_transform divide-out for the `+x0/+y0/+z0` offsets; doHide branch returns (0,0,0) compromise); `xheart_blur_wf` (Xyrus02-derived — 2 user + 3 init `_sina, _cosa, _rat`; RNG random heart-shape blur). |
+| 76 | `apo_misc19.rs` | Apophysis miscellany 19 | 2 | `mobius_strip` (slobo777 / chronologicaldot / CozyG — Java-recovered; 10 user + 4 init slots `rotxSin/Cos, rotySin/Cos`; HIDE→(0,0,0), LEAVE→needs_transform divide-out, modify_z==0 falls back to z=0 since cpp's accumulator self-amp can't be replicated); `circleLinear` (FracFx — 8 user; deterministic per-cell noise hash `n^13 ^ n` selecting between full-linear, scaled, and ring-radius mappings). bubble2 was already in `numbered.rs` — skipped. |
+| 77 | `apo_misc20.rs` | Apophysis miscellany 20 | 3 | `cannabiscurve_wf` (1 user `filled` int, RNG when filled==1; cannabis-curve polar plot); `spherical3D_wf` (2 user invert/exponent + 1 init `_regularForm` flag; 3D spherical inversion); `swirl3D_wf` (Maschke — 1 user `n`; 3D swirl with z = sin(6·cos(rad) − n·ang); cpp's color write skipped). |
+| 78 | `apo_misc21.rs` | Apophysis miscellany 21 | 3 | `heart_wf` (Maschke — 5 user; polar heart-curve with left/right radial scales); `post_ztranslate_wf` (Maschke — 0 user; trivial post-phase Z translate `p.z += w`); `post_mirror_wf` (Maschke — 8 spatial user; post-phase axis-mirror with independent 50% chance per axis; cpp colorshift params skipped). |
+| 79 | `apo_misc22.rs` | Apophysis miscellany 22 | 3 | `dc_carpet` (Apophysis — 2 user; randomized fractal carpet using signum(c)·fmod(\|c\|, 1) plus random ±1 cell offset, mapped through transform's affine; reads xf.a/b/c/d/e/f via needs_transform; cpp TC writes skipped); `post_point_symmetry_wf` (Maschke — 3 user; post-phase N-fold rotational symmetry; computes per-iter rotation angle on-the-fly instead of caching `_sina[16]/_cosa[16]` which would overflow our 16-slot init budget); `cpow3_wf` (CozyG — 7 user + 7 init slots; CPow3 family with discrete spread, secondary spread, offset; RNG). |
+| 80 | `sosa_attractors.rs` | Sosa attractors (Jesus Sosa, 2017, JS-suffix family — Paul Bourke's collection) | 3 | `clifford_js` (4 user, Java-recovered; Clifford attractor xn+1=sin(a·yn)+c·cos(a·xn), yn+1=sin(b·xn)+d·cos(b·yn); cpp's `_a=0.0`/`_d=0.0` are porter typos restored to Java -1.4/-6.56 etc.); `svensson_js` (4 user, Java-recovered; Svensson attractor); `sattractor_js` (1 user `m`, Java-recovered, Henon IFS variant; cpp's persistent `_a[13]/_b[13]` lookup tables replaced with runtime cos/sin to fit our 16-slot budget; RNG 2 calls/iter). |
+| 81 | `sosa_attractors2.rs` | Sosa attractors batch 2 | 3 | `threepoint_js` (0 user; Roger Bagula 3-branch IFS triangle; pivot+overlap; RNG 2 calls/iter; signature is `(p, rng)` not `(p, xform_id, variation_id, rng)` — caught by initial shader validation error since 0 params triggers the simpler signature); `lorenz_js` (7 user Java-recovered; cpp APO_VARIABLES had only 3; 1 init slot _bdcs=1/scale; Full3D Lorenz attractor Euler-step); `woggle_js` (1 user `m` Java-recovered; cpp's persistent `_a[25]/_b[25]` tables replaced with runtime cos/sin; RNG 1 call/iter). |
+| 82 | `sosa_attractors3.rs` | Sosa attractors batch 3 | 2 | `lace_js` (0 user; Paul Bourke's lace.c — 4-branch Sierpinski-triangle-like IFS with three pivot points at vertices of equilateral triangle; RNG 1 call/iter); `wallpaper_js` (3 user a/b/c Java-recovered; Mira-style sqrt warp blended with identity; needs_transform divide-out since cpp body lacks VVAR scaling on both branches; RNG 1 call/iter; cpp's setBrightness side effect ignored). |
+| 83 | `sosa_attractors4.rs` | Sosa attractors batch 4 | 3 | `hadamard_js` (0 user; Paul Bourke's roger18.c — 3-branch Hadamard IFS; RNG 2 calls/iter); `invtree_js` (0 user; Paul Bourke's trifraction2 — 3-branch inverse-tree IFS; RNG 2 calls/iter); `crown_js` (Roger Bagula crown function; 2 user a/b Java-recovered; 14-iteration complex sum wt += (sin(a^k·(-1)^k·t)/a^(b·k), cos(...)/a^(b·k)); Full3D — z = mag²² of accumulated complex; cpp's `y = wt.real()` is a porter typo, Java's `y = wt.im` is restored; cpp's TC color write skipped). |
+| 84 | `wf_curves.rs` | WF polar curves + bubble | 4 | `epispiral_wf` (1 user `waves`; r = 0.5/cos(waves·a); returns (0,0) when cos hits zero); `cloverleaf_wf` (1 user `filled` int; r = sin(2a) + 0.25·sin(6a); RNG when filled==1); `rose_wf` (3 user amp/waves/filled; r = amp·cos(waves·a); RNG when filled==1); `bubble_wf` (0 user; bubble inversion plus random ±z bump ±(2/r − 1); Full3D; RNG 1 call/iter). All preserve cpp's atan2(x, y) swap. |
+| 85 | `waves_wf_family.rs` | waves2/3/4_wf + dinis_surface_wf | 4 | Three sine/cosine perturbation variations (waves2_wf single trig, waves3_wf squared trig, waves4_wf triple-trig product) sharing 8 user (scalex, scaley, freqx, freqy, use_cos_x int, use_cos_y int, dampx, dampy) + 2 init (_dampingX/Y = exp(damp) or 1). Plus `dinis_surface_wf` (Maschke — Dini's Surface parametric mapping; 2 user a/b; Full3D; uses log(tan(v/2)) guarded with abs+max). |
+| 86 | `pointgrid_misc.rs` | pointgrid family + apocarpet_js | 3 | `pointgrid_wf` (Maschke — 8 user + 2 init `_dx/_dy = (max-min)/count`; cpp's `GOODRAND_SEED` reseeding for deterministic per-cell jitter replaced with deterministic integer hash `(n^13 ^ n)` keyed on `(seed, xIdx, yIdx)`); `pointgrid3d_wf` (11 user + 3 init; same hash-based jitter; Full3D); `apocarpet_js` (Sosa, Paul Bourke's roger17.c — 6-branch Apollonian Carpet IFS using inversion + four scaled translates by `r = 1/(1+√2)`). |
+| 87 | `dc_misc.rs` | dc_cylinder/2 + dc_triangle | 3 | `dc_cylinder` (FracFx — 6 user + 2 init `_ldcs = 1/scale, _ldca = offset·π`; persistent `_r[4]` replaced with fresh randoms; needs_transform divide-out since `FPy += rr + FTy·y` lacks VVAR; Full3D); `dc_cylinder2` (same with `FPy += rr·FTy·y`); `dc_triangle` (Apophysis — 2 user + 1 init `_A = clamp(scatter_area, -1, 1)`; barycentric mapping using xform's affine as triangle vertices). All three skip TC color writes per writes_color compromise. |
+| 88 | `dc_misc2.rs` | dc_cube + pre_rect_wf | 2 | `dc_cube` (Apophysis — 3 user x/y/z scales; cpp also declared 6 color params c1..c6 omitted per writes_color compromise; picks one of 6 cube faces and emits a random point on that face; RNG 4 calls/iter; Full3D); `pre_rect_wf` (Maschke — 4 user x0/x1/y0/y1 + 2 init `_dx, _dy`; pre-phase replaces affine input with uniform random sample from a rectangle; RNG 2 calls/iter). |
+| 89 | `affine3d_misc.rs` | affine3D | 1 | `affine3D` (Framelet — general 3D affine with separate yaw/pitch/roll rotations, per-axis scales, optional shear, translation; 15 user params at exact slot budget; no init slots — sin/cos of rotation angles computed inline per iteration to avoid 16-slot overflow; cpp's `_hasShear` flag replaced by inline `\|shXY\|+\|shXZ\|+…>ε` test; Full3D). |
+| 90 | `truchet2_misc.rs` | truchet2 | 1 | `truchet2` (tatasz / Stefanov / Sosa — Java-recovered variant of truchet with two interpolated exponents/widths controlled by `xp` (position within cell mapped to [0,1] via fmod-and-fold); 7 user params; no init slots; same multiplicative-LCG hash as original truchet; cpp's "fill" sentinels (100.0/10000.0) preserved). |
+| 91 | `truchet_misc.rs` | truchet (TyrantWave) | 1 | `truchet` (TyrantWave 2008 — original Truchet plugin; 7 user params; needs_transform divide-out for `scale = (cos(r) − sin(r))/VVAR` plus unweighted output lines; slow drawmode (extended=1) iterates LCG `niter` times bounded ≤ 1000 — preserved as runtime-bounded WGSL loop with explicit cap inside `for (var i=0; i<1000; …)`; cpp TC color writes skipped). Note: `truchet_fill` (a different cpp variation) was ported in batch 25. |
+| 92 | `post_axis_symmetry_misc.rs` | post_axis_symmetry_wf | 1 | `post_axis_symmetry_wf` (Maschke — post-phase axis-symmetry mirror across X, Y, or Z axis at a chosen center, with optional rotation; 5 spatial user (axis int, centre_x/y/z, rotation degrees) + 2 init `_sina/_cosa = sin/cos(rotation·2π/180/2)`; cpp's 6 colorshift params skipped; cpp's `_halve_dist = VVAR/2` computed inline since it depends on weight; cpp's `_doRotate` flag replaced by inline `\|sina\| > ε` test). |
+| 93 | `pre_wave3d_misc.rs` | pre_wave3D_wf | 1 | `pre_wave3D_wf` (Maschke — pre-phase wave perturbation displacing the affine input along one of four axis modes (XY, YZ, ZX, RADIAL); 7 user (axis int, wavelen, phase, damping, centre_x/y/z); body computes `r → dl → amplitude·sin(2π·dl + phase)` with optional damping `exp(-dl·damping)`; needs_transform=true for weight in pre phase). |
+| 94 | `circle_rand_misc.rs` | circleRand + CircleTrans1 | 2 | Both use deterministic per-cell noise hash (same `n^13 ^ n` style as circleLinear/pointgrid_wf, here `cr_disc_noise`) plus rejection-sampling loop bounded at 32 iterations to fit WGSL's uniform-control-flow requirements. `circleRand` (5 user — random sample in `[-X, X]×[-Y, Y]` accepted iff per-cell noise ≤ Dens AND in-cell radius ≤ noise·Sc); `CircleTrans1` (5 user — first half-translates toward (X, Y), then resamples via circleRand-style rejection if in dense cell). cpp's unbounded `do { } while` loops capped at 32 iters. |
+| 95 | `iconattractor_misc.rs` | iconattractor_js | 1 | `iconattractor_js` (Sosa, 2018 — Symmetric Icon Attractors from "Symmetry in Chaos" by Field/Golubitsky; 4 user (preset_id int 0-16, centerx, centery, scale) + 1 init `_bdcs`; cpp picks one of 17 preset (degree, a, b, g, o, l) tuples randomly at init — replaced with `preset_id` user param so user picks specific attractor; 17 presets baked into `ic_preset(id)` switch; complex-power loop preserved as runtime-bounded WGSL loop with cap at 24). |
+| 96 | `waveblur_misc.rs` | waveblur_wf | 1 | `waveblur_wf` (Maschke — polar wave-blur emitting points on a circle whose radius is a wave function of uniform-random angle; 7 user (count int, amplitude_z, phase, damping_z, color_scale, color_offset, direct_color int); body uses needs_transform to read w for the damping multiplier since cpp's r already has VVAR factor when used in damping; Full3D). |
+| 97 | `siercarpet_misc.rs` | siercarpet_js | 1 | `siercarpet_js` (Sosa, 2017 — Cross Carpet by Roger Bagula, Java-recovered; 1 user `m` int 3-12; cpp's 25-element `_a[]/_b[]` lookup tables replaced with single-pair inline computation based on random index `l` parity; cpp's persistent `_d` state irrelevant — guard `d % 2m != 5 % 2*m` always true). |
+| 98 | `popcorn2_3d_misc.rs` | popcorn2_3D | 1 | `popcorn2_3D` (Berlin, 2009 — 3D mod of popcorn2; 4 user; cpp reads `FPz` accumulator — recovered by picking consistent `otherZ == 0` default branch (FPz starts at 0 each iteration in our model); body has needs_transform divide-out for `tmpVV = sgn(w)·w²` non-linear weight dep — `tmpVV/w = min(\|w\|, 1)` absorbs complication). |
+| 99 | `jac_asn_misc.rs` | jac_asn | 1 | `jac_asn` (Dark-Beam — inverse Jacobi sn/cn/sc/dn via Norbert Rosch's incomplete elliptic integral with Landen transformations; 3 user; **establishes WGSL complex-arithmetic toolkit** with `jac_cmul/cdiv/cabs/clog/csqrt/csin/ccos/casin/cacos/casinh` inline helpers prefixed `jac_`; 4 type modes; bounded 10-iter Landen loop with early-exit). |
+| 100 | `plusrecip_misc.rs` | plusrecip | 1 | `plusrecip` (Dark-Beam, 2019 — `k = z + sqrt(z² - a)`, conjugate-rotate when squared magnitude shrinks below \|a\|, then ensure positive real part; 2 user; uses `pr_csqrt/cmul/cabs` complex helpers prefixed `pr_`). |
+| 101 | `gamma_misc.rs` | gamma | 1 | `gamma` (zephyrtronium / dark-beam — `lgamma(hypot(x, y))·w` for x, `atan2(y, x)·w` for y; 0 user; **lgamma implemented via 8-term Lanczos approximation** (g=7) since WGSL lacks built-in; reflection formula handles x < 0.5). |
+| 102 | `bubblet3d_misc.rs` | bubbleT3D | 1 | `bubbleT3D` (FractalDesire — 3D bubble inversion with optional radial stripes and Z-axis holes; 6 user + 7 init; cpp's `_s, _c` reassigned per-iter in modus_blur=1 branch are computed inline; cpp's unbounded `while (angXY > _angStrip2)` replaced with `floor()`-based fmod; three stripe branches × two hole branches × symmetry mode preserved). |
+| 103 | `waves2b_misc.rs` | waves2b | 1 | `waves2b` (dark-beam, 2014 — generalization of waves2 with three per-axis modes selected by `pwx`/`pwy`: power-mode sin, Jacobi sn, or **Bessel J1** via Abramowitz & Stegun 9.4.4 / 9.4.6 polynomial approximations; 10 user + 2 init; J1 helper `w2b_bessel_j1` implements both \|x\| ≤ 3 polynomial and \|x\| > 3 asymptotic forms with sign-preserving J1(-x) = -J1(x)). |
+| 104 | `prepost_compromise.rs` | prepost_circlize, prepost_mobius | 2 | Two priority-2 "prepost" variations ported as **single-phase compromise** (cpp runs both pre and post; we apply just the "post" half). `prepost_circlize` (3 user + 2 init `_pi_n, _cospi_n`; cpp's `lerp(r, r/factor, VVAR)` becomes `r/factor` — affects very low weight blending). `prepost_mobius` (8 user; complex Möbius `(a·z + b) / (c·z + d)` in real/imag form; body factors cleanly). |
+| 105 | `dc_carpet3d_misc.rs` | dc_carpet3D | 1 | `dc_carpet3D` (Xyrus02 / Stefanov, Java-recovered — 14 user (origin, 6 colors unused, stretch/scale, scale_z, offset_z, reset_z); spatial transform uses xform's affine via needs_transform; **color-z coupling dropped** — output.z = p.z + offset_z/w (drop `dz = color · scale_z + offset_z` and reset_z since they require color writes). |
+| **Total new** | | | **378** | |
+| Registry size | | | **462** | (84 base + 378 ported) |
 
 Branches and commits:
 - Batches 1–10 on `variation-bulk-port-batch1`. Commits in order:
@@ -130,6 +216,69 @@ Branches and commits:
 - Batches 14–19 on `variation-port-hypertile`. Commits in order:
   `3b9f648` (hypertile), `5c882ce` (classic 2D), `a4f56e8` (Möbius),
   `1a7974d` (circle/blur), `5aee059` (numbered extras), `9f4b603` (Glynn).
+- Batches 20–29 on `variation-bulk-port-2`. Commits in order:
+  `a29145d` (wedge), `10e5e05` (shapes3), `fc0601d` (radial extras),
+  `6094b56` (internal-weight watchlist), `f6460d1` (pre/post bridges),
+  `5a463de` (truchet kickoff), `5af2340` (blur extras), `6203121`
+  (boarders), `d26ec36` (standalone exotics), `ca293ad` (parametric
+  curves + crop3D).
+- Batches 30–35 also on `variation-bulk-port-2`. Commits in order:
+  `2fbb1cf` (stub recoveries), `efaa12f` (maurer_rose + hypercrop),
+  `ca5f946` (misc 2d), `85066ce` (misc extras), `b628bec` (B/E-series),
+  `6eb8ca5` (singleton misc).
+- Batches 36–38 also on `variation-bulk-port-2`. Commits in order:
+  `996b5f8` (misc extras 2), `2389c2c` (misc extras 3), `2ee631b`
+  (stub recoveries 2).
+- Batches 39–43 also on `variation-bulk-port-2`. Commits in order:
+  `c61e734` (lazy family), `8dff306` (misc extras 4), `c3ce9b0`
+  (watchlist + misc), `079cecb` (classic blades + misc), `9767976`
+  (apo misc 5).
+- Batches 44–49 also on `variation-bulk-port-2`. Commits in order:
+  `22a7dbb` (erf family + misc), `ee9eb47` (simple classics),
+  `b626e8c` (inflateZ family + foci_3D + sintrange), `58231c4`
+  (apo misc 7), `07cf6c9` (apo misc 8), `dc152a1` (apo misc 9).
+- Batches 50–54 also on `variation-bulk-port-2`. Commits in order:
+  `423022c` (apo misc 10), `42eb780` (apo misc 11), `c7e8968`
+  (apo misc 12), `5e0c0f4` (apo misc 13), `0cd7f71` (spin / phase).
+- Batches 55–59 also on `variation-bulk-port-2`. Commits in order:
+  `4819ebb` (apo misc 14), `794083c` (apo misc 15), `1fc1d49`
+  (rosoni), `589c4dc` (apo misc 16), `9890575` (bwraps7).
+- Batches 60–64 also on `variation-bulk-port-2`. Commits in order:
+  `f65c070` (apo misc 17), `adfe912` (bwraps2 phase), `110d3d1`
+  (post_heat), `f7aa97b` (post_rblur), `8504e5f` (onion2).
+- Batches 65–69 also on `variation-bulk-port-2`. Commits in order:
+  `81d9e12` (Jacobi elliptic), `cff091d` (pre/post circlecrop),
+  `9c87b90` (circlecrop + exblur), `9aca25f` (curl_sp), `bf9db4e`
+  (extrude).
+- Batches 70–74 also on `variation-bulk-port-2`. Commits in order:
+  `33f1612` (butterfly_fay), `e594cb0` (minkowskope), `30530c7`
+  (glynnlissa), `e085987` (glynnspiro), `c3aa987` (glynnSShape).
+- Batches 75–79 also on `variation-bulk-port-2`. Commits in order:
+  `e2ea0dd` (apo misc 18), `6677cee` (apo misc 19), `20c74d8`
+  (apo misc 20), `7b6270d` (apo misc 21), `3ca3599` (apo misc 22).
+- Batches 80–83 also on `variation-bulk-port-2`. Commits in order:
+  `3e50c25` (Sosa attractors), `0bbac7c` (Sosa attractors 2),
+  `6aa4204` (Sosa attractors 3), `d923106` (Sosa attractors 4).
+- Batches 84–87 also on `variation-bulk-port-2`. Commits in order:
+  `4006dce` (WF curves), `123ac89` (waves WF family +
+  dinis_surface), `5c3cb13` (pointgrid + apocarpet),
+  `1fee445` (dc_cylinder/2 + dc_triangle).
+- Batches 88–91 also on `variation-bulk-port-2`. Commits in order:
+  `c1a4700` (dc_cube + pre_rect_wf), `8383808` (affine3D),
+  `c8a28c1` (truchet2), `60950a2` (truchet — TyrantWave).
+- Batches 92–98 also on `variation-bulk-port-2`. Commits in order:
+  `f4824a4` (post_axis_symmetry_wf), `620aad8` (pre_wave3D_wf),
+  `1168912` (circleRand + CircleTrans1), `58e8d3b`
+  (iconattractor_js — 17-preset baking), `db29f2f` (waveblur_wf),
+  `c20679f` (siercarpet_js), `8ca0d77` (popcorn2_3D).
+- Batches 99–102 also on `variation-bulk-port-2`. Commits in order:
+  `bf4e593` (jac_asn — establishes complex-math toolkit),
+  `71170ae` (plusrecip), `cf99bdb` (gamma — Lanczos lgamma),
+  `3513c5d` (bubbleT3D).
+- Batches 103–105 also on `variation-bulk-port-2`. Commits in order:
+  `2a273f2` (waves2b — Bessel J1 polynomial approximation),
+  `73e836f` (prepost_circlize + prepost_mobius single-phase compromise),
+  `25115a1` (dc_carpet3D — color-z coupling dropped).
 
 ### Notable decisions during porting
 
@@ -211,6 +360,144 @@ These are places where I diverged from a literal C++→WGSL port and why:
   `weight · (1/dx · ...)` — the weight factors out cleanly through our
   outer-multiplier. Ports do **not** need `needs_transform`; they ship
   with full fidelity at any weight. Adjusts the watchlist below.
+- **`onion` / `target_sp` (batch 22) — divide-out pattern for
+  weight-independent X/Y.** Both upstream variations write `FPx +=
+  stuff` *without* multiplying `stuff` by VVAR — making the X/Y output
+  weight-independent in the cpp semantics (only Z preserve, where
+  present, scales with weight). Our pipeline always multiplies the
+  variation's return by the weight in the outer dispatcher, so we read
+  the weight via `needs_transform` and divide it out (`return output ·
+  inv_w`) — outer × w then restores the cpp result. New pattern;
+  reused by `truchet_fill` (batch 25), `blocky` Z-divide variants in
+  batch 23, `splitbrdr` (batch 27), `kaleidoscope`/`taurus`/`crop3d`
+  (batches 28–29) for the same shape of mismatch.
+- **`sigmoid` (batch 23) — sign-pass for absolute weight.** Upstream
+  uses `vv = |VVAR|` then `FPx += vv · stuff`. We emit `sign(w) · stuff`
+  so outer × w = `|w| · stuff`. Edge: `select(sign(w), 1.0, w == 0)`
+  to keep weight=0 well-defined.
+- **`blocky` (batch 23) — fixed upstream `sqrt_safe` macro bug.**
+  Upstream's `sqrt_safe(vp, x)` helper takes `double x` as its function
+  argument but reads `VAR(x)` inside (via the macro that expands to the
+  variation's `x` *user parameter*) — a porter bug that ignores the
+  function's actual argument and returns `sqrt(user_x)` regardless of
+  what the caller passed. We follow the obvious Java intent
+  (`sqrt(max(1 − a², 0))`) rather than reproducing the bug — preserving
+  the cpp behavior would make `blocky`'s output depend on a user
+  parameter that has no business affecting that codepath.
+- **`flipcircle` (batch 17) — `needs_transform` for threshold weight.**
+  Upstream's `r² > VVAR²` uses VVAR as a comparison threshold (geometry
+  varies with weight). Body reads `w = transforms[xform_id]
+  .variations[variation_id]` directly. Threshold-only weight; output
+  factors cleanly. (Same pattern reused by `loonie3`/`loonie_3d` in
+  batch 23.)
+- **`pre_curl` / `post_juliaq` / `post_julia3dq` (batch 24) — direct
+  VVAR application in pre/post phases.** Pre and post phases replace
+  `temp` (no outer multiplier in our dispatcher), so the body just
+  reads `w` via `needs_transform` and uses it directly inline.
+- **`pre_boarders2` (batch 27) — same pattern as batch 24.** Pre-phase
+  variant of `boarders2`; cpp uses `FTx = VVAR · stuff` (assignment).
+  Body reads weight and applies VVAR directly.
+- **N-th-root branch sampling (batch 24).** Cpp posts (`post_juliaq`,
+  `post_julia3dq`) use `GOODRAND_0X(INT_MAX) · inv_power_2pi` for the
+  N-th-root branch index. We replace with `floor(rand · power) ·
+  inv_power_2pi` — semantically equivalent uniform branch selection
+  without the cpp's distribution bias when `power` doesn't divide
+  `2^31` evenly.
+- **`kaleidoscope` (batch 28) — preserved upstream `cos(45.0)` quirk.**
+  Both Java and cpp use `cos(45.0)` and `sin(45.0)` — that's 45
+  RADIANS (≈ 0.5253 / 0.8509), not degrees. Looks like the original
+  author intended degrees but `Math.cos`/`cos` take radians. Long-lived
+  quirk; preserved.
+- **`crop3d` (batch 29) — accept the assignment-vs-accumulator
+  caveat.** Cpp uses `FPx = VVAR · x` (assignment). Returning `x`
+  unscaled and letting the outer multiplier reapply VVAR matches cpp at
+  any weight when crop3d is the only normal variation in its transform
+  (typical use); diverges when mixed with other normal variations. Same
+  caveat applies to the `circlecrop` family — but `crop3d` is small
+  enough that the divergence is documented inline and the variation
+  ships.
+- **`hole2` (batch 28) and `henon` (batch 21) — translated from Java
+  comment block.** Both are `unported_stub` in upstream cpp (empty
+  `PluginVarCalc`). The Java implementations live in the embedded
+  comment block at the bottom of each file; we ported directly from
+  there. `hole2` cascades through 10 radial-formula cases via a
+  `shape` int.
+- **Stub-bucket bulk recoveries (batch 30).** Six more
+  `unported_stub` cpp ports translated from their Java comment blocks
+  in one batch: `bsplit` (also a porter-omitted param case — cpp's
+  `APO_VARIABLES` was empty, recovered 2 user params from Java),
+  `cylinder2`, `eclipse`, `lozi`, `pulse`, `hypershift`. The Java
+  comment block is reliable as-is for these — the cpp porter just
+  forgot to translate the body.
+- **`pressure_wave` (batch 32) — porter bug fix.** cpp's
+  `PluginVarPrepare` hardcodes `_pwx = _pwy = _ipwx = _ipwy = 1.0`
+  unconditionally — porter forgot to translate the actual derivation
+  in Java's `setParameter` (`pwx = freq · 2π; ipwx = 1/pwx`, with
+  freq=0 fallback). Without the fix the variation behaves like
+  identity-plus-sin regardless of frequency. Recovered from the Java
+  comment block.
+- **`blocky` (batch 23) — `sqrt_safe` macro bug fix.** cpp's
+  `sqrt_safe(vp, x)` helper takes a `double x` argument but uses
+  `VAR(x)` inside (which the macro expands to the variation's `x`
+  user parameter, not the function argument). The cpp code thus
+  ignores the function argument and returns `sqrt(user_x)` — a clear
+  porter bug. We follow Java's obvious intent (`sqrt(max(1 − a², 0))`)
+  rather than reproducing the bug.
+- **`corners` (batch 35) — porter-omitted params recovery.** cpp's
+  `APO_VARIABLES` exposes only `xwidth` and `ywidth`; the other 7
+  params (`multx, multy, xpower, ypower, xypower, logmode, log_base`)
+  live in the Java comment block. Recovered all 9.
+- **`ho` (batch 33) — sign-preserving `pow` for negative bases.**
+  WGSL's `pow(x, p)` returns NaN for negative `x` (unlike many cpp
+  `pow` implementations which can be permissive in some configs). We
+  use `pow(|x|, p) · sign(x)` to keep the variation's output continuous
+  through `x = 0` while matching upstream visual.
+- **N-th-root branch sampling (batches 16, 24).** Multiple variations
+  use cpp's `GOODRAND_0X(INT_MAX) · 2π/power` to pick a random N-th-root
+  branch. We replace with `floor(rand · power) · 2π/power` —
+  semantically equivalent uniform branch selection without the cpp
+  approach's distribution bias when `power` doesn't divide `2^31`
+  evenly. Used in `mobiusN`, `post_juliaq`, `post_julia3dq`,
+  `sphericaln`, `cpow2`, `cpow3`.
+- **`murl` (batch 35) — cpp's spurious `Variables` struct fields.**
+  cpp put `_c, _p2, _vp, _a, _sina, _cosa, _r, _re, _im, _rl` in the
+  per-thread `Variables` struct, but they're all computed inside
+  `PluginVarCalc` from per-iteration values — they're not "init"
+  values. Treated as local variables (no init slots needed).
+
+### Common patterns shaken out (cumulative through batch 35)
+
+By the end of batch 35 we've seen the following concrete patterns
+recur enough to be canonical references for future ports:
+
+1. **Outer multiplier factors cleanly** (the easy case). Just port
+   `f(p)` without the `VVAR *` and let the outer dispatcher reapply.
+2. **Threshold-only weight** (`flipcircle`, `loonie3`/`_3d`,
+   `chunk`'s comparison): use `needs_transform: true` to read the
+   weight, use it as a comparison threshold, return the unscaled
+   output.
+3. **Multiplicative VVAR factors out** (`glynnia`, `glynnia3`):
+   identify the algebraic VVAR factor by hand and drop it from the
+   body; outer multiplier reapplies.
+4. **`vv = |VVAR|` sign-pass** (`sigmoid`): emit `sign(w) · output`
+   so outer × w = `|w| · output`.
+5. **Divide-out** (`onion`, `target_sp`, `truchet_fill`, `splitbrdr`,
+   `kaleidoscope`, `taurus` Z-only, `crop3d` (caveat), `corners`,
+   `circlize`, `tile_hlp`, `chunk`'s output, `blocky`, `hypershift`,
+   `eclipse`, `splitbrdr`, etc.): `needs_transform: true`, body
+   computes the cpp output using the read weight, divides by `w`
+   in the return so outer × w restores the cpp result.
+6. **Direct VVAR application in pre/post phases** (`pre_curl`,
+   `pre_boarders2`, `post_juliaq`, `post_julia3dq`): pre/post phases
+   have no outer multiplier in our dispatcher, so just read `w` via
+   `needs_transform` and apply it inline.
+7. **Recover from Java comment block** for `unported_stub` cpp ports
+   (`henon`, `hole2`, `bsplit`, `cylinder2`, `eclipse`, `lozi`,
+   `pulse`, `hypershift`, `hypercrop`).
+8. **Recover from Java for porter-omitted params** (`target`,
+   `yin_yang`, `bsplit`, `pressure_wave`, `corners`, etc.): cpp had
+   an empty or shrunken `APO_VARIABLES`; Java's `setParameter` lists
+   the actual full param schema.
 
 ### Newly-found classifier misses (during porting)
 
@@ -771,7 +1058,7 @@ Options per case:
 
 | name | bucket | LOC | params | 3d | notes |
 |---|---|---:|---:|:---:|---|
-| `blocky` | `param` | 196 | 3 | no | VVAR used internally |
+| ~~`blocky`~~ | `param` | 196 | 3 | no | **PORTED batch 23** — non-linear weight (`v · r` ≈ w²); body reads `w` via `needs_transform` and divides output by `w` so outer × w restores the cpp result. Also fixes the upstream `sqrt_safe` macro bug. |
 | `cubic3d` | `param` | 180 | 2 | yes | VVAR used internally |
 | `elliptic2` | `param_rng` | 241 | 11 | no | VVAR used internally |
 | `extrude` | `param_rng` | 142 | 1 | yes | VVAR used internally |
@@ -782,8 +1069,8 @@ Options per case:
 | `hexnix3d` | `param` | 247 | 4 | yes | VVAR used internally |
 | `idisc` | `pure` | 141 | 0 | no | VVAR used internally; 2 porter-omitted params (recover from Java) |
 | `loonie2` | `param` | 253 | 3 | no | VVAR used internally |
-| `loonie3` | `pure` | 145 | 0 | no | VVAR used internally |
-| `loonie_3d` | `pure` | 80 | 0 | yes | added during porting (batch 9 skip): uses precomputed `sqrvvar = VVAR²` in comparison and sqrt arg |
+| ~~`loonie3`~~ | `pure` | 145 | 0 | no | **PORTED batch 23** — threshold-only weight pattern (`r² < w²` comparison; output factors cleanly). |
+| ~~`loonie_3d`~~ | `pure` | 80 | 0 | yes | **PORTED batch 23** — threshold-only weight, same pattern as loonie3. |
 | `loq` | `param` | 148 | 1 | yes | VVAR used internally |
 | `npolar` | `param_rng` | 193 | 2 | no | VVAR used internally |
 | `popcorn2_3d` | `param` | 115 | 4 | yes | VVAR used internally **and** assigns FPz instead of accumulating — see [Architectural blockers](#architectural-blockers-deferred). |
@@ -794,7 +1081,7 @@ Options per case:
 | `scry2` | `param` | 242 | 3 | no | VVAR used internally |
 | `scry_3d` | `pure` | 92 | 0 | yes | VVAR used internally |
 | `secant2` | `pure` | 131 | 0 | no | added during porting (ported with caveat in batch 7): `r = VVAR·sqrt(...)` then `cos(r)` — non-linear weight scaling |
-| `sigmoid` | `param` | 200 | 2 | no | VVAR used internally |
+| ~~`sigmoid`~~ | `param` | 200 | 2 | no | **PORTED batch 23** — `vv = |VVAR|` pattern; body emits `sign(w) · output` so outer × w = `|w| · output`. |
 | `spliptic_bs` | `param_rng` | 188 | 2 | no | VVAR used internally |
 | `squircular` | `pure` | 118 | 0 | no | VVAR used internally |
 | `truchet_fill` | `param` | 282 | 3 | no | VVAR used internally |
@@ -887,6 +1174,92 @@ to render a nested flame as a sub-step. WGSL doesn't support recursive
 function calls and our shader has no buffer for "another flame's
 transforms"; both would need substantial pipeline changes. Listed in
 the upstream `unportable_subflame` bucket already.
+
+#### 16-slot per-variation budget overflow
+
+Our variation parameter buffer gives each variation 16 contiguous
+slots (user params + init-derived values combined). A small set of
+upstream variations declare more than 16 user params; even with zero
+init slots they don't fit.
+
+The fix would be to widen the per-variation slot count (with a
+corresponding cut to the per-flame variation cap, currently ~50) or
+to introduce a parallel "extended params" buffer for the few
+variations that need it. Until then these are blocked by budget, not
+by math:
+
+| name | bucket | LOC | notes |
+|---|---|---:|---|
+| `synth` | `param` | 1149 | 35 user params |
+| `maurer_lines` | `param_rng` | 4677 | 36 user params |
+| `quaternion` | `unported_stub` | 966 | 92 user params (extreme) |
+| `complex` | `unported_stub` | 707 | 64 user params |
+| `vibration2` | `unported_stub` | 338 | 26 user params |
+| `inversion` | `param_rng` | 1110 | 25 user params |
+| `jubiq` | `param_rng` | 401 | 24 user params |
+| `truchet_ae` | `unportable_dc` | 881 | 22 user params (also DC-blocked) |
+
+`mobiq` ships at exactly 16 user params (no init room) — the budget
+limit, not over it. Anything bigger needs the budget extension.
+
+#### Persistent per-thread variation state
+
+A small but recurring pattern: variations that maintain state between
+iterations within a single thread. Java keeps this state on the
+`VariationFunc` instance; cpp ports keep it on the `Variation*`
+struct. Either way, neither approach maps to our model — we have no
+per-variation per-thread storage between iterations.
+
+The two sub-cases:
+- **Circular history buffer** of recent random draws (`farblur`,
+  `exblur`, `nblur`): `_r[4]` array advanced one slot per iteration,
+  used as a low-pass-filter weight on the current draw.
+- **Autonomous trajectory walk** (`curliecue2`): `(x0, y0, theta,
+  phi)` updated each iteration *ignoring* the input point; the
+  variation effectively walks its own path through space, ignoring
+  the IFS attractor entirely.
+
+Solving the first sub-case alone would unlock all three blur variants
+(small, popular). The second is more architecturally fundamental.
+
+| name | bucket | LOC | notes |
+|---|---|---:|---|
+| `farblur` | `param_rng` | 213 | `_r[4]` ring buffer; also reads mid-iteration FPx accumulator (see below) |
+| `exblur` | `param_rng` | 228 | `_r[4]` ring buffer (same pattern) |
+| `nblur` | `param` | 430 | larger, but same architectural blocker |
+| `curliecue2` | `rng` | 166 | autonomous trajectory; ignores input point |
+| `arctruchet` | `param_rng` | 367 | malloc'd `_tiltArray` of per-thread persistent state plus `PluginVarTerminate` to free it |
+| `hexnix3D` | `param` | 247 | `rswtch` / `fcycle` / `bcycle` cycle counters that persist across iterations |
+| `hexaplay3D` | `param` | 177 | same persistent cycle counters |
+
+#### Mid-iteration accumulator reads
+
+Most upstream variations only read the input point (`FTx`/`FTy`/`FTz`)
+plus the variation's own state. A handful instead read the running
+post-variations accumulator (`FPx`/`FPy`/`FPz`) before this variation
+adds to it — i.e., they "see" prior variations' contributions in the
+same iteration. Our normal-phase calling convention exposes only the
+input point, not the running accumulator.
+
+| name | bucket | LOC | notes |
+|---|---|---:|---|
+| `farblur` | `param_rng` | 213 | reads FPx, FPy, FPz mid-iteration |
+| `post_depth` | `param` | 144 | post-phase, reads BOTH pre-affine `FTx` and post-variations `FPx` (already mentioned in batch-24 deferral) |
+| `cubicLattice_3D` | `param` | 157 | reads BOTH pre-affine `FTx`/`FTy`/`FTz` and post-variations `FPx`/`FPy`/`FPz` mid-iteration |
+
+#### Z-coordinate clamping / non-linear-weight FPz assignment
+
+A few variations assign `FPz` (rather than `+=`) to a clamped value
+or to a non-linear function of weight. Our outer-multiplier
+convention can't reproduce a saturating Z without doing the
+saturation inside *with the weight already known* — feasible via
+`needs_transform`, but the divide-out pattern fights with the
+clamping (the clamp is in absolute units, not weight-scaled units).
+
+| name | bucket | LOC | notes |
+|---|---|---:|---|
+| `flower_db` | `param` | 194 | `FPz = -stem_length` clamp + non-linear weight scaling on Z |
+| `popcorn2_3d` | `param` | 115 | listed under assignment-vs-accumulator; same Z-assignment issue |
 
 ### Affine-coefficient access watchlist — RESOLVED 2026-04-29
 
