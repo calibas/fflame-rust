@@ -126,6 +126,7 @@ mod wz_lost_variations;
 mod quaternion_misc;
 mod xtrb_misc;
 mod curliecue2_misc;
+mod farblur_misc;
 
 pub use basic::*;
 pub use advanced::*;
@@ -250,6 +251,7 @@ pub use wz_lost_variations::*;
 pub use quaternion_misc::*;
 pub use xtrb_misc::*;
 pub use curliecue2_misc::*;
+pub use farblur_misc::*;
 
 use super::definition::VariationDef;
 
@@ -868,4 +870,6 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &XTRB,
     // curliecue2_misc: curliecue2 (1 user + 4 state) — Sosa walker; first state-using port
     &CURLIECUE2,
+    // farblur_misc: farblur (6 user + 5 state, needs_accum) — zephyrtronium; first accum-reading port
+    &FARBLUR,
 ];
