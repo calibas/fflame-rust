@@ -55,6 +55,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Pre-calculate tile buffer size (pixels per tile × 4 channels)
     let tile_buffer_size = tile_params.tile_size * tile_params.tile_size * 4u;
 
+    // Per-thread state initialization (see main_template.wgsl).
+//__STATE_INIT_BLOCK__
+
     // Iterate
     for (var i = 0u; i < params.iterations_per_thread; i++) {
         let old_pos = current;
