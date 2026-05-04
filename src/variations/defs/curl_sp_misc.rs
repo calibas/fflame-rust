@@ -61,6 +61,9 @@ fn init_curl_sp(user: array<f32, 6>) -> array<f32, 4> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn curl_sp_powq4c(x: f32, e: f32) -> f32 {
     if (abs(e - 1.0) < 1e-30) {

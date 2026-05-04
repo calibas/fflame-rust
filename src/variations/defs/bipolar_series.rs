@@ -50,6 +50,9 @@ pub static BCOLLIDE: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_bcollide(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let num = max(get_param(xform_id, variation_id, 0u), 1.0);
@@ -118,6 +121,9 @@ pub static BMOD: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_bmod(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let radius = get_param(xform_id, variation_id, 0u);
@@ -176,6 +182,9 @@ pub static BSWIRL: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_bswirl(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let in_p = get_param(xform_id, variation_id, 0u);
@@ -230,6 +239,9 @@ pub static BARYCENTROID: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_barycentroid(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let a = get_param(xform_id, variation_id, 0u);
@@ -309,6 +321,9 @@ pub static ECOLLIDE: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_ecollide(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let num = max(get_param(xform_id, variation_id, 0u), 1.0);
@@ -383,6 +398,9 @@ pub static EMOD: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_emod(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let radius = get_param(xform_id, variation_id, 0u);
@@ -453,6 +471,9 @@ pub static ESWIRL: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_eswirl(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let in_p = get_param(xform_id, variation_id, 0u);
@@ -506,6 +527,9 @@ pub static ESCALE: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_escale(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let scale = get_param(xform_id, variation_id, 0u);
@@ -578,6 +602,9 @@ pub static EPUSH: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_epush(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let push = get_param(xform_id, variation_id, 0u);
@@ -633,6 +660,9 @@ pub static EROTATE: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_erotate(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let rotate = get_param(xform_id, variation_id, 0u);

@@ -53,6 +53,9 @@ pub static INFLATEZ_1: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_inflateZ_1(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(0.0, 0.0);
@@ -81,6 +84,9 @@ pub static INFLATEZ_2: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_inflateZ_2(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(0.0, 0.0);
@@ -110,6 +116,9 @@ pub static INFLATEZ_3: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_inflateZ_3(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(0.0, 0.0);
@@ -139,6 +148,9 @@ pub static INFLATEZ_4: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_inflateZ_4(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     let _ = rng_nextf(rng);
@@ -172,6 +184,9 @@ pub static INFLATEZ_5: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_inflateZ_5(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(0.0, 0.0);
@@ -201,6 +216,9 @@ pub static INFLATEZ_6: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_inflateZ_6(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(0.0, 0.0);
@@ -239,6 +257,9 @@ pub static SINTRANGE: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_sintrange(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let w = get_param(xform_id, variation_id, 0u);
@@ -280,6 +301,9 @@ pub static FOCI_3D: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_foci_3D(p: vec2<f32>) -> vec2<f32> {
     let expx = exp(p.x) * 0.5;

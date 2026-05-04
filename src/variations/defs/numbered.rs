@@ -35,6 +35,9 @@ pub static SPHERICAL3D: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_spherical3d(p: vec2<f32>) -> vec2<f32> {
     let t = max(p.x * p.x + p.y * p.y, 1e-30);
@@ -66,6 +69,9 @@ pub static SINUSOIDAL3D: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_sinusoidal3d(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(sin(p.x), sin(p.y));
@@ -93,6 +99,9 @@ pub static SQUARE: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_square(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     return vec2<f32>(rng_nextf(rng) - 0.5, rng_nextf(rng) - 0.5);
@@ -119,6 +128,9 @@ pub static SQUARE3D: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_square3d(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     return vec2<f32>(rng_nextf(rng) - 0.5, rng_nextf(rng) - 0.5);
@@ -149,6 +161,9 @@ pub static DISC3D: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_disc3d(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let pi_p = get_param(xform_id, variation_id, 0u);
@@ -193,6 +208,9 @@ pub static BUBBLE2: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_bubble2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let x_p = get_param(xform_id, variation_id, 0u);
@@ -239,6 +257,9 @@ pub static POPCORN2: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_popcorn2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let x_p = get_param(xform_id, variation_id, 0u);
@@ -279,6 +300,9 @@ pub static SPLITS3D: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_splits3d(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let x_p = get_param(xform_id, variation_id, 0u);
@@ -324,6 +348,9 @@ pub static WAVES2_3D: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_waves2_3d(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let freq = get_param(xform_id, variation_id, 0u);
@@ -385,6 +412,9 @@ fn init_juliaq(user: array<f32, 2>) -> array<f32, 3> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_juliaq(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let inv_power = get_param(xform_id, variation_id, 2u);
@@ -453,6 +483,9 @@ fn init_julia3dq(user: array<f32, 2>) -> array<f32, 4> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_julia3dq(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let inv_power = get_param(xform_id, variation_id, 2u);
@@ -526,6 +559,9 @@ fn init_juliac(user: array<f32, 3>) -> array<f32, 2> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_juliac(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let two_pi = 6.28318530717959;

@@ -131,6 +131,21 @@ pub struct VariationInfo {
     /// `parameters.len()..parameters.len() + init_param_count`.
     pub init_param_count: usize,
 
+    /// Number of f32 state slots this variation owns per (xform, variation)
+    /// instance. State is per-(thread, xform, variation), zero-initialized
+    /// each shader invocation, and persists across the inner iteration loop.
+    /// Default 0 (no state). See `intra-iteration-state-and-accum.md`.
+    pub state_count: usize,
+
+    /// Optional WGSL fragment that runs at thread start to initialize state
+    /// slots beyond zero-fill. Default None.
+    pub wgsl_source_state_init: Option<String>,
+
+    /// Whether the variation reads the running variation accumulator (cpp's
+    /// `FPx/FPy/FPz`). When true, the function signature gains
+    /// `accum: vec2<f32>` / `vec3<f32>` after `p`. Default false.
+    pub needs_accum: bool,
+
     /// Parameters for this variation
     pub parameters: Vec<VariationParameter>,
 
@@ -189,6 +204,12 @@ impl VariationInfo {
             wgsl_source_3d: dl.shader_3d.clone(),
             wgsl_source_init: dl.shader_init.clone(),
             init_param_count: dl.init_param_count,
+            // API-loaded variations do not yet carry state / accum metadata.
+            // Default to stateless and no-accum until the API contract is
+            // extended (separate project — only adds fields, no breakage).
+            state_count: 0,
+            wgsl_source_state_init: None,
+            needs_accum: false,
             parameters,
             version: dl.version,
         }
@@ -210,6 +231,9 @@ impl VariationInfo {
             wgsl_source_3d: def.wgsl_3d.map(|s| s.to_string()),
             wgsl_source_init: def.wgsl_init.map(|s| s.to_string()),
             init_param_count: def.init_param_count,
+            state_count: def.state_count,
+            wgsl_source_state_init: def.wgsl_state_init.map(|s| s.to_string()),
+            needs_accum: def.needs_accum,
             parameters: def.parameters_to_runtime(),
             version: 0,
         }

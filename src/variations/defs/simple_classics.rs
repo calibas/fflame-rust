@@ -56,6 +56,9 @@ pub static EXP2: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_exp2(p: vec2<f32>) -> vec2<f32> {
     let pi = 3.14159265358979;
@@ -87,6 +90,9 @@ pub static EXPONENTIAL: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_exponential(p: vec2<f32>) -> vec2<f32> {
     let pi = 3.14159265358979;
@@ -122,6 +128,9 @@ pub static FLIPY: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_flipy(p: vec2<f32>) -> vec2<f32> {
     let sy = select(1.0, -1.0, p.x > 0.0);
@@ -155,6 +164,9 @@ pub static FUNNEL: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_funnel(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let effect = get_param(xform_id, variation_id, 0u);
@@ -200,6 +212,9 @@ pub static INVPOLAR: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_invpolar(p: vec2<f32>) -> vec2<f32> {
     let pi = 3.14159265358979;
@@ -250,6 +265,9 @@ fn init_perspective(user: array<f32, 2>) -> array<f32, 2> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_perspective(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let dist = get_param(xform_id, variation_id, 1u);
@@ -300,6 +318,9 @@ pub static LINE: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_line(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let delta = get_param(xform_id, variation_id, 0u);
@@ -358,6 +379,9 @@ pub static HOLESQ: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_holesq(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let w = transforms[xform_id].variations[variation_id];

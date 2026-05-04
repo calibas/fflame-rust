@@ -58,6 +58,9 @@ fn init_prepost_circlize(user: array<f32, 3>) -> array<f32, 2> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_prepost_circlize(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let n = max(get_param(xform_id, variation_id, 0u), 1.0);
@@ -124,6 +127,9 @@ pub static PREPOST_MOBIUS: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_prepost_mobius(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let re_a = get_param(xform_id, variation_id, 0u);

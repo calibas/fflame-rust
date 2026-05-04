@@ -49,6 +49,9 @@ pub static BOARDERS: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_boarders(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     let round_x = round(p.x);
@@ -160,6 +163,9 @@ fn init_boarders2(user: array<f32, 3>) -> array<f32, 3> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_boarders2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let c = get_param(xform_id, variation_id, 3u);
@@ -273,6 +279,9 @@ fn init_pre_boarders2(user: array<f32, 3>) -> array<f32, 3> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_pre_boarders2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let c = get_param(xform_id, variation_id, 3u);
@@ -375,6 +384,9 @@ pub static SPLITBRDR: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_splitbrdr(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let xp = get_param(xform_id, variation_id, 0u);

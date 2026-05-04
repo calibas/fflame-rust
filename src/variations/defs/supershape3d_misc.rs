@@ -88,6 +88,9 @@ fn init_superShape3d(user: array<f32, 16>) -> array<f32, 10> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_superShape3d(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let n2_1 = get_param(xform_id, variation_id, 10u);

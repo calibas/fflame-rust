@@ -43,6 +43,9 @@ pub static HADAMARD_JS: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_hadamard_js(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     let r1 = rng_nextf(rng);
@@ -102,6 +105,9 @@ pub static INVTREE_JS: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_invtree_js(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     let r1 = rng_nextf(rng);
@@ -168,6 +174,9 @@ pub static CROWN_JS: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_crown_js(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let a = get_param(xform_id, variation_id, 0u);

@@ -79,6 +79,30 @@ pub struct VariationDef {
     /// where N = parameters.len() and M = init_param_count.
     pub wgsl_init: Option<&'static str>,
 
+    /// Number of f32 state slots this variation owns per (xform, variation)
+    /// instance. Slots are zero-initialized at the start of each shader
+    /// invocation (one main() call = one compute dispatch) and persist
+    /// across the inner iteration loop within that invocation. Variations
+    /// access their slots via the generated `get_state` / `set_state`
+    /// accessors. Default 0 (no state).
+    ///
+    /// See [`docs/projects/intra-iteration-state-and-accum.md`](../../docs/projects/intra-iteration-state-and-accum.md).
+    pub state_count: usize,
+
+    /// Optional WGSL fragment that runs once at thread start (inside main(),
+    /// before the iteration loop) to initialize this variation's state slots
+    /// beyond zero-fill. Has `xform_id`, `variation_id`, and `set_state` in
+    /// scope. Default None (zero-init suffices).
+    pub wgsl_state_init: Option<&'static str>,
+
+    /// Whether the variation reads the running variation accumulator (cpp's
+    /// `FPx/FPy/FPz`). When true, the function signature gains
+    /// `accum: vec2<f32>` (or `vec3<f32>` in 3D) after `p`, and the shader
+    /// builder passes the current `result` value so the variation sees the
+    /// sum of contributions from prior variations in this iteration.
+    /// Effective only in normal and post phases. Default false.
+    pub needs_accum: bool,
+
     /// 2D WGSL implementation
     /// Function signature should match one of:
     /// - `fn variation_NAME(p: vec2<f32>) -> vec2<f32>`

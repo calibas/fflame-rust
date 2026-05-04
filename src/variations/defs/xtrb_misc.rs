@@ -142,6 +142,9 @@ fn init_xtrb(user: array<f32, 6>) -> array<f32, 22> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_xtrb(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let pi = 3.14159265358979;

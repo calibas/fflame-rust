@@ -77,6 +77,9 @@ fn init_jubiq(user: array<f32, 24>) -> array<f32, 2> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_jubiq(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let power = i32(get_param(xform_id, variation_id, 0u));

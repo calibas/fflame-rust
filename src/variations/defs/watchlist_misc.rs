@@ -64,6 +64,9 @@ fn init_trade(user: array<f32, 4>) -> array<f32, 2> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_trade(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let r1 = get_param(xform_id, variation_id, 0u);
@@ -143,6 +146,9 @@ pub static VORON: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn voron_noise(x_seed: i32) -> f32 {
     var n = x_seed;
@@ -245,6 +251,9 @@ pub static SQUIRCULAR: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_squircular(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let w = transforms[xform_id].variations[variation_id];
@@ -310,6 +319,9 @@ pub static FLUX: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_flux(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let spread = get_param(xform_id, variation_id, 0u);
@@ -361,6 +373,9 @@ pub static RAYS: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_rays(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let w = transforms[xform_id].variations[variation_id];
@@ -403,6 +418,9 @@ pub static RAYS1: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_rays1(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let w = transforms[xform_id].variations[variation_id];
@@ -492,6 +510,9 @@ fn init_loonie2(user: array<f32, 3>) -> array<f32, 6> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_loonie2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let sides_in = max(get_param(xform_id, variation_id, 0u), 1.0);
@@ -612,6 +633,9 @@ pub static FOURTH: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_fourth(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let spin = get_param(xform_id, variation_id, 0u);

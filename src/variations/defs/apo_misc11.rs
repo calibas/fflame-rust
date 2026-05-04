@@ -56,6 +56,9 @@ pub static SWIRL3: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_swirl3(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let shift = get_param(xform_id, variation_id, 0u);
@@ -93,6 +96,9 @@ pub static WDISC: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_wdisc(p: vec2<f32>) -> vec2<f32> {
     let pi = 3.14159265358979;
@@ -144,6 +150,9 @@ pub static SPH3D: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_sph3D(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let x_scale = get_param(xform_id, variation_id, 0u);
@@ -189,6 +198,9 @@ pub static INVSQUIRCULAR: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_invsquircular(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let w = transforms[xform_id].variations[variation_id];
@@ -257,6 +269,9 @@ pub static SPHERE_NJA: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_sphere_nja(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let shift_x = get_param(xform_id, variation_id, 2u);

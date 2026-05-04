@@ -46,6 +46,9 @@ pub static JAC_SN: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn jac_sn_je(uu: f32, emmc: f32) -> vec3<f32> {
     let CA = 0.0003;
@@ -244,6 +247,9 @@ pub static JAC_CN: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn jac_cn_je(uu: f32, emmc: f32) -> vec3<f32> {
     let CA = 0.0003;
@@ -442,6 +448,9 @@ pub static JAC_DN: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn jac_dn_je(uu: f32, emmc: f32) -> vec3<f32> {
     let CA = 0.0003;
