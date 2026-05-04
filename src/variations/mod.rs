@@ -140,6 +140,15 @@ pub struct VariationInfo {
 }
 
 impl VariationInfo {
+    /// Total slots this variation occupies in the packed parameter buffer.
+    ///
+    /// Equals `parameters.len() + init_param_count`. User params live in
+    /// slots `[0, parameters.len())` and init-derived params live in slots
+    /// `[parameters.len(), parameters.len() + init_param_count)`.
+    pub fn slot_count(&self) -> usize {
+        self.parameters.len() + self.init_param_count
+    }
+
     /// Get the default value for a parameter by name
     pub fn get_param_default(&self, param_name: &str) -> Option<f32> {
         self.parameters
