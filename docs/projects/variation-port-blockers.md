@@ -5,9 +5,10 @@ need to be added to unblock them.
 
 This document is the companion to
 [`variation-bulk-port.md`](variation-bulk-port.md), which tracks what
-*has* been ported. As of the packed-variation-params branch
-(2026-05-04, +8 slot-blocked variations), the registry holds 483
-variations; 157 of the 636 cpp variations in
+*has* been ported. As of the `port-stateful-variations` branch
+(2026-05-04, +3 state-using variations on top of the +8
+slot-blocked variations from `packed-variation-params`), the registry
+holds 486 variations; 154 of the 636 cpp variations in
 `output/jwildfire-vars/output/` remain unported.
 
 ## Unsupported features
@@ -31,13 +32,17 @@ haven't built it yet" and could be added with focused work.
    path raster). Requires an upload path for image bind groups and
    per-variation texture handles.
 
-3. **Mid-iteration accumulator reads** — variations whose body reads
-   `FPx`/`FPy`/`FPz` (the accumulator that the *current* iteration is
-   building up). Our model gives each iteration a clean p-input;
-   adding mid-iteration accumulator visibility would require a
-   single-threaded sequential evaluation per pixel, which kills GPU
-   parallelism. (We have *partial* compromises for some — e.g. picking
-   the `FP* == 0` branch consistently.)
+3. **~~Mid-iteration accumulator reads~~** — RESOLVED for the
+   intra-iteration case (2026-05-04). Variations declare `needs_accum`;
+   the codegen passes the running `result` value as a `vec2<f32>` /
+   `vec3<f32>` parameter, giving them visibility into contributions
+   from prior variations *in the same iteration*. Doesn't kill
+   parallelism since each thread is already sequential through its
+   variation chain. The original framing was wrong — the parallelism
+   killer is *cross-thread* accumulator reads (one pixel reading
+   another's state), which still doesn't exist in any audited
+   variation. See
+   [`intra-iteration-state-and-accum.md`](intra-iteration-state-and-accum.md).
 
 4. **Pre-affine input read in post phase** — `post_depth` and similar
    need access to `pAffineTP` (the pre-affine input) inside a post-
@@ -51,15 +56,26 @@ haven't built it yet" and could be added with focused work.
    pipeline is write-only from the variation perspective; reading it
    back into spatial computation would require restructuring the
    color-as-output model.
+   *Partially mitigated by the 2026-05-04 needs_accum work*: the
+   common pattern of computing TC from `FPx + FPy` after the
+   variation's own contribution is now expressible as
+   `accum + weight·own_contribution` (see macmillan port). True TC
+   *reads* (where TC drives spatial output, not just where TC is
+   computed from accum) still require this work.
 
 ### Soft blocks (could be implemented)
 
-6. **Persistent variation state** — per-(flame, transform, variation)
-   storage that's mutable across iterations. The cpp framework has
-   `Variables` structs that hold mutable state alongside user params.
-   Our model treats every per-thread call as fresh. Adding this would
-   need a per-(flame, xform_id, variation_id) storage buffer. Would
-   unblock ~25 variations on its own.
+6. **~~Persistent variation state~~** — RESOLVED for per-thread,
+   per-dispatch case (2026-05-04) by `var<private> thread_state` with
+   per-(xform, variation) baked offsets and optional `wgsl_state_init`
+   for thread-start initialization. State persists across the inner
+   iteration loop within a single shader invocation; re-initializes
+   each compute dispatch. See
+   [`intra-iteration-state-and-accum.md`](intra-iteration-state-and-accum.md).
+   The remaining gap is *cross-dispatch* persistence (state surviving
+   between frames), which only mandelbrot's point-cache appears to
+   actually need from the audited cases — and even there, re-init each
+   dispatch with random sampling is probably visually equivalent.
 
 7. **Primitives infrastructure** — turtle paths, line/triangle/polygon
    plotting against precomputed shapes (Hilbert curve, Koch snowflake,
@@ -129,26 +145,36 @@ practical sense.
 Format: `name` — *primary blocker*. Some have multiple blockers; we
 list the one most likely to be the easiest unlock.
 
-### Persistent state (#6) — ~22 variations
+### Persistent state (#6) — 19 remaining (3 ported, 2026-05-04)
+
+Per-thread state + intra-iteration accum-reads infrastructure (blocker
+#6 + #3) shipped on the `port-stateful-variations` branch. Ported as
+validation:
+
+| Variation | Slots | Notes |
+|---|---|---|
+| `curliecue2` | 4 state | Sosa walker; first state-only port |
+| `farblur` | 5 state + accum | zephyrtronium; first needs_accum port |
+| `macmillan` | 3 state + accum + writes_color + state_init | First port using all four new mechanisms |
+
+Still pending (originally listed under #6 but mostly blocked by other
+features once you read the cpp body carefully):
 
 | Variation | Notes |
 |---|---|
-| `arctruchet` | `_tiltArray` precomputed grid table |
-| `brownian_js` | Brownian-path canvas needs precompute |
-| `curliecue` | `_x0/_y0/_theta/_phi` accumulators (also #7 primitives) |
-| `curliecue2` | `_x0/_y0/_theta/_phi` accumulators |
+| `arctruchet` | `_tiltArray` precomputed grid table — actually #7 (primitives) and incomplete cpp port |
+| `brownian_js` | Brownian-path canvas — actually #7 (primitives) |
+| `curliecue` | `_x0/_y0/_theta/_phi` accumulators — actually #7 (`primitives.add(...)`) |
 | `dc_dmodulus` | `_oldColor` accumulator (also DC_BaseFunc #8) |
 | `dc_crackle_wf` | Crackle algorithm state (also #8) |
 | `dc_cracklep_wf` | Crackle algorithm state (also #8) |
-| `farblur` | `_r[4]` rolling-average state + accumulator reads (#3) |
-| `hexaplay3d` | `rswtch/fcycle/bcycle` cycle counters |
-| `hexnix3d` | Same cycle-counter pattern as hexaplay3d |
-| `klein_group` | `prev_matrix` to avoid m·m⁻¹ cancellations |
-| `macmillan` | `_xa/_x/_y` iterator state |
-| `mandelbrot` | `_x0/_y0` + `_xP/_yP/_zP` point cache + `_pIdx` |
+| `hexaplay3d` | Now portable with state+accum, but uses replacement-style `FPx = …` (needs `(desired − accum) / weight` workaround) |
+| `hexnix3d` | Same as hexaplay3d, plus more smoothing terms |
+| `klein_group` | `prev_matrix` only — but blocked by #11 (Complex math runtime), not state |
+| `mandelbrot` | `_x0/_y0` + `_xP/_yP/_zP` point cache + `_pIdx` — actually cross-dispatch persistence |
 | `nblur` | Rejection-sampling state |
-| `pre_stabilize` | `x[64]/y[64]/c[64]` plus `start` flag |
-| `recurrenceplot` | `_oldx/_oldy` for time-series plotting |
+| `pre_stabilize` | `x[64]/y[64]/c[64]` plus `start` flag — needs custom thread-init |
+| `recurrenceplot` | `_oldx/_oldy` + 30+ helper functions across 879 lines — own project |
 | `scrambly` | 626-element scrambled lookup table |
 | `sphtiling3v2` | `xy/uv` accumulators across iterations |
 | `ztwister` | Reads `FPz` accumulator (`ez = twist*FPz`) |
