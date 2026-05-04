@@ -628,6 +628,68 @@ impl ShaderBuilder {
         })
     }
 
+    /// Compute the packed parameter layout for the active variation set.
+    ///
+    /// Wraps [`crate::scene::transforms::compute_packed_layout`] given the
+    /// `(name, local_idx)` pairs from `active_with_local_indices`. Walks
+    /// in local-index order and assigns each variation a contiguous slot
+    /// range in the packed buffer.
+    fn packed_layout(
+        &self,
+        active_variations: &[(String, u32)],
+    ) -> Vec<crate::scene::transforms::PackedParamEntry> {
+        let local_map: std::collections::HashMap<String, u32> = active_variations
+            .iter()
+            .map(|(n, i)| (n.clone(), *i))
+            .collect();
+        crate::scene::transforms::compute_packed_layout(&local_map, &self.registry)
+    }
+
+    /// Generate a per-flame `get_param` function with packed offsets baked
+    /// from the active variation set.
+    ///
+    /// Each variation occupies exactly `slot_count()` slots in the
+    /// `variation_params` buffer (no fixed 16-slot stride). The generated
+    /// switch maps `variation_id` (the per-flame local index) to its byte
+    /// offset, so `get_param(xform, var, slot)` returns
+    /// `variation_params[xform].params[offset + slot]`.
+    ///
+    /// Variations not in the active set never have their `get_param` called
+    /// (the shader builder only emits calls for active ones), but the switch
+    /// includes a `default` case returning 0.0 for safety.
+    fn build_packed_get_param(
+        &self,
+        active_variations: &[(String, u32)],
+    ) -> String {
+        let layout = self.packed_layout(active_variations);
+        let mut out = String::new();
+        out.push_str(
+            "// Per-flame packed get_param: each active variation has its own\n\
+             // contiguous slot range in variation_params, with offsets baked\n\
+             // at flame compile time. See build_packed_get_param in\n\
+             // shader_builder_v2.rs.\n\
+             fn get_param(xform_id: u32, variation_id: u32, param_slot: u32) -> f32 {\n\
+             \x20   var offset: u32 = 0u;\n\
+             \x20   switch (variation_id) {\n",
+        );
+        for entry in &layout {
+            out.push_str(&format!(
+                "        case {idx}u: {{ offset = {off}u; }}  // {name}: {slots} slots\n",
+                idx = entry.local_idx,
+                off = entry.offset,
+                name = entry.name,
+                slots = entry.slot_count,
+            ));
+        }
+        out.push_str(
+            "        default: { offset = 0u; }\n\
+             \x20   }\n\
+             \x20   return variation_params[xform_id].params[offset + param_slot];\n\
+             }\n",
+        );
+        out
+    }
+
     /// Build the init compute shader for a flame's active variations.
     ///
     /// Returns `Some(wgsl)` if any active variation in the flame has a
@@ -654,7 +716,15 @@ impl ShaderBuilder {
             &self.registry,
         );
 
-        // Collect (xform_idx, var_name, local_idx) tuples for every transform
+        // Build name → packed offset lookup once — same layout the main
+        // shader's `get_param` switch was generated from.
+        let layout = crate::scene::transforms::compute_packed_layout(&local_map, &self.registry);
+        let offset_for: HashMap<String, u32> = layout
+            .iter()
+            .map(|e| (e.name.clone(), e.offset))
+            .collect();
+
+        // Collect (xform_idx, var_name, offset) tuples for every transform
         // that uses a variation with `wgsl_init`. Order matters — pair_idx in
         // the dispatch is the index into this list.
         let mut pairs: Vec<(u32, String, u32)> = Vec::new();
@@ -670,11 +740,11 @@ impl ShaderBuilder {
                 if info.wgsl_source_init.is_none() {
                     continue;
                 }
-                let local_idx = match local_map.get(var_name) {
-                    Some(&i) => i,
+                let offset = match offset_for.get(var_name) {
+                    Some(&o) => o,
                     None => continue,
                 };
-                pairs.push((xform_idx, var_name.clone(), local_idx));
+                pairs.push((xform_idx, var_name.clone(), offset));
             }
         };
         for (i, xform) in flame.transforms.iter().enumerate() {
@@ -729,14 +799,16 @@ impl ShaderBuilder {
              \x20   switch (pair_idx) {\n",
         );
 
-        for (case_idx, (xform_idx, var_name, local_idx)) in pairs.iter().enumerate() {
+        for (case_idx, (xform_idx, var_name, offset)) in pairs.iter().enumerate() {
             let info = match self.registry.get(var_name) {
                 Some(i) => i,
                 None => continue,
             };
             let n_user = info.parameters.len();
             let n_init = info.init_param_count;
-            let base_slot = (*local_idx as usize) * 16;
+            // Packed layout: this variation owns `n_user + n_init` slots
+            // starting at `offset` in variation_params[xform_idx].params.
+            let base_slot = *offset as usize;
             shader.push_str(&format!("        case {}u: {{\n", case_idx));
             // Read user params
             shader.push_str(&format!("            var user: array<f32, {}>;\n", n_user));
@@ -863,11 +935,19 @@ impl ShaderBuilder {
         }
         shader.push('\n');
 
-        // 8. Utilities
+        // 8. Per-flame packed get_param (must come before utilities, which
+        //    references it in some places via inlined comments). The packed
+        //    version replaces the fixed-stride version that used to live in
+        //    utilities.wgsl — each variation now has exactly its declared
+        //    slot count instead of a fixed 16.
+        shader.push_str(&self.build_packed_get_param(&active));
+        shader.push('\n');
+
+        // 9. Utilities
         shader.push_str(include_str!("../shaders/core/utilities.wgsl"));
         shader.push('\n');
 
-        // 9. Path filter utilities (only needed when path features enabled)
+        // 10. Path filter utilities (only needed when path features enabled)
         if path_features_enabled {
             shader.push_str(include_str!("../shaders/core/path_filter.wgsl"));
             shader.push('\n');
@@ -1353,11 +1433,16 @@ impl ShaderBuilder {
         }
         shader.push('\n');
 
-        // 6. Tiled utilities (uses full_width/full_height)
+        // 6. Per-flame packed get_param (replaces fixed-stride version that
+        //    used to live in utilities_tiled.wgsl).
+        shader.push_str(&self.build_packed_get_param(&active));
+        shader.push('\n');
+
+        // 7. Tiled utilities (uses full_width/full_height)
         shader.push_str(include_str!("../shaders/core/utilities_tiled.wgsl"));
         shader.push('\n');
 
-        // 7. Unified tiled main — RENDER_3D + HAS_DC select the variant.
+        // 8. Unified tiled main — RENDER_3D + HAS_DC select the variant.
         let mut processor = TemplateProcessor::new();
         processor.set("RENDER_3D", render_3d);
         processor.set("HAS_DC", has_dc);
@@ -1390,11 +1475,18 @@ impl ShaderBuilder {
         shader.push_str("const NUM_TRANSFORMS: u32 = 32u;\n");
         shader.push('\n');
 
-        // 4. Standard utilities (MUST come before variations - defines get_param)
+        // 4. Per-flame packed get_param (MUST come before variations).
+        //    Was previously a fixed-stride function in utilities.wgsl;
+        //    now generated per-flame from the active variation set.
+        shader.push_str(&self.build_packed_get_param(&active));
+        shader.push('\n');
+
+        // 5. Standard utilities (no longer defines get_param, just helpers
+        //    like select_transform / world_to_pixel).
         shader.push_str(include_str!("../shaders/core/utilities.wgsl"));
         shader.push('\n');
 
-        // 5. Affine (3D)
+        // 6. Affine (3D)
         shader.push_str(include_str!("../shaders/core/affine_3d.wgsl"));
         shader.push('\n');
 

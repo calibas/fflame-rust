@@ -5,8 +5,9 @@ need to be added to unblock them.
 
 This document is the companion to
 [`variation-bulk-port.md`](variation-bulk-port.md), which tracks what
-*has* been ported. As of batch 105, the registry holds 462 variations
-(84 base + 378 ported); 165 of the 636 cpp variations in
+*has* been ported. As of the packed-variation-params branch
+(2026-05-04, +8 slot-blocked variations), the registry holds 483
+variations; 157 of the 636 cpp variations in
 `output/jwildfire-vars/output/` remain unported.
 
 ## Unsupported features
@@ -80,12 +81,15 @@ haven't built it yet" and could be added with focused work.
    flame as a substep. Requires nested-flame execution infrastructure
    (recursive shader dispatch or precomputed subflame point cache).
 
-10. **16-slot per-variation budget** — we cap each variation at 16
-    parameter slots (user + init combined). A handful of variations
-    have 18-30+ user params (`quaternion` is in a class of its own at
-    ~120). Bumping to 32 unlocks `vibration2`, `gridout3d`,
-    `prepost_affine` (also #12), `xtrb`, and others. Storage cost is
-    minor (~1KB per flame at 50 active variations).
+10. **~~16-slot per-variation budget~~** — RESOLVED 2026-05-04 by the
+    packed-variation-params buffer (see
+    [`packed-variation-params.md`](packed-variation-params.md)). Each
+    variation now allocates exactly its slot count (user + init), with
+    per-flame compile-time offsets baked into the WGSL `get_param`
+    switch. Quaternion at 93 slots and the other 7 slot-blocked
+    variations are now ported. Remaining variations under this row
+    are blocked only by additional features (#11, #12, etc.), not by
+    slot count.
 
 11. **Color-write affecting spatial output** — variations like
     `dc_carpet3D` compute `dz = pVarTP.color * scale_z + offset_z`
@@ -275,22 +279,31 @@ or porting all 31 as no-op blurs would address them.
 | `scry_3d` | Reads `FPz` (`Foopzee = FPz` branch) |
 | `post_smartcrop` | Reads `*pFPx/*pFPy/*pFPz` via stored pointers + persistent state |
 
-### Over 16-slot budget (#10) — 9 variations
+### Over 16-slot budget (#10) — 5 remaining (8 ported, 2026-05-04)
 
-| Variation | Slot count |
-|---|---|
-| `complex` | ~50+ params (14 trig combinations × 4 mods each) |
-| `gridout3d` | 26 user |
-| `harmonograph_js` | 18 user |
-| `jubiq` | 18 user + 2 init |
-| `pre_recip` | 15 user + complex math (also #11, partly #1 — `Complex.Recip/Sqrt/AsinH/AcosH/AtanH/AsecH/AcosecH/AcotH/Log/Exp` complex helpers) |
-| `prepost_affine` | 15 user + 18 init (also #12 prepost) |
-| `quaternion` | ~120 params |
-| `vibration2` | 24 user |
-| `xtrb` | 6 user + ~30 init (mostly trig precomputes) |
-| `w` | 14 user (lituus + super-shape + star + hypergon combo) |
-| `z` | 13 user (same family as `w`) |
-| `rhodonea` | 15 user + 5 init |
+Packed-variation-params buffer eliminated the per-variation 16-slot
+ceiling. Ported on the `packed-variation-params` branch:
+
+| Variation | Slots | Notes |
+|---|---|---|
+| `vibration2` | 26 user | Two-wave directional vibration (FarDareisMai) |
+| `gridout3D` | 26 user | 8-region grid offset (Faber & Faber, Java-recovered) |
+| `jubiq` | 24 user + 2 init | Quaternion Möbius / julian2 mix |
+| `superShape3d` | 16 user + 10 init | Two-axis Gielis super-shape (cpp's `M_2_PI = 2/π` preserved) |
+| `z` | 13 user + 7 init | Faber Lost Variations radial boost |
+| `w` | 14 user + 7 init | Faber Lost Variations angle-rotate-and-clip |
+| `quaternion` | 92 user + 1 init | zephyrtronium / Stefanov 13-subfunction mega-variation |
+| `xtrb` | 6 user + 22 init | Zueuk's TriBorders trilinear hex variation |
+
+Still pending — additional non-slot blockers prevent porting:
+
+| Variation | Slot count | Other blockers |
+|---|---|---|
+| `complex` | ~50+ params (14 trig combinations × 4 mods each) | None — pure slot count, can be ported next |
+| `harmonograph_js` | 18 user | None — can be ported next |
+| `pre_recip` | 15 user + complex math | #11 (complex helpers `Complex.Recip/Sqrt/AsinH/...`) + partly #1 |
+| `prepost_affine` | 15 user + 18 init | #12 prepost — needs phase compromise |
+| `rhodonea` | 15 user + 5 init | None — can be ported next |
 
 ### Mandelbrot / fractal-iteration family — 8 variations
 
