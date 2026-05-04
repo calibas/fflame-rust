@@ -199,22 +199,30 @@ impl VariationDef {
     fn generate_3d_wrapper(&self) -> String {
         let func_name = self.wgsl_function_name();
 
-        // Determine the function signature based on needs_rng and parameters
-        let (params, call_args) = if self.needs_rng && !self.parameters.is_empty() {
-            (
-                "p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>",
-                "p.xy, xform_id, variation_id, rng",
-            )
-        } else if self.needs_rng {
-            ("p: vec3<f32>, rng: ptr<function, RngState>", "p.xy, rng")
-        } else if !self.parameters.is_empty() {
-            (
-                "p: vec3<f32>, xform_id: u32, variation_id: u32",
-                "p.xy, xform_id, variation_id",
-            )
-        } else {
-            ("p: vec3<f32>", "p.xy")
-        };
+        // Build the wrapper signature dynamically to handle the full
+        // dimension matrix (needs_rng × has_params × needs_transform ×
+        // writes_color × needs_accum). The forwarded call drops the Z
+        // component of `p` and `accum` since the 2D body takes vec2.
+        let mut wrapper_params: Vec<&str> = vec!["p: vec3<f32>"];
+        let mut call_args: Vec<String> = vec!["p.xy".to_string()];
+        if self.needs_accum {
+            wrapper_params.push("accum: vec3<f32>");
+            call_args.push("accum.xy".to_string());
+        }
+        if !self.parameters.is_empty() || self.needs_transform {
+            wrapper_params.push("xform_id: u32");
+            wrapper_params.push("variation_id: u32");
+            call_args.push("xform_id".to_string());
+            call_args.push("variation_id".to_string());
+        }
+        if self.needs_rng {
+            wrapper_params.push("rng: ptr<function, RngState>");
+            call_args.push("rng".to_string());
+        }
+        if self.writes_color {
+            wrapper_params.push("vc: ptr<function, f32>");
+            call_args.push("vc".to_string());
+        }
 
         format!(
             r#"
@@ -224,8 +232,8 @@ fn {func_name}({params}) -> vec3<f32> {{
 }}
 "#,
             func_name = func_name,
-            params = params,
-            call_args = call_args
+            params = wrapper_params.join(", "),
+            call_args = call_args.join(", ")
         )
     }
 }

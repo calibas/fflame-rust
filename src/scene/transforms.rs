@@ -126,6 +126,111 @@ pub fn total_packed_slots(
         .unwrap_or(0)
 }
 
+/// One entry in a flame's per-thread state layout. Records which (xform,
+/// variation) pair this entry belongs to, the offset in the flame's
+/// `thread_state` array where its slots start, and how many slots it owns.
+///
+/// Returned by [`compute_state_layout`]. Unlike
+/// [`PackedParamEntry`], state is keyed on `(xform_idx,
+/// variation_local_id)` rather than just `variation_local_id` — the
+/// same variation in different transforms gets independent state.
+///
+/// See [`docs/projects/intra-iteration-state-and-accum.md`](../../../docs/projects/intra-iteration-state-and-accum.md).
+#[derive(Debug, Clone)]
+pub struct PackedStateEntry {
+    pub xform_idx: u32,
+    pub variation_local_id: u32,
+    pub variation_name: String,
+    pub offset: u32,
+    pub state_count: u32,
+}
+
+/// Soft cap on the total `var<private> thread_state` allocation per flame.
+/// 1024 f32 = 4 KB per thread, well within the typical 32 KB per-thread
+/// stack on desktop / mobile GPUs. Bumped here if we encounter flames that
+/// legitimately need more.
+pub const MAX_STATE_SLOTS_PER_FLAME: u32 = 1024;
+
+/// Walk a flame's active variations and assign each `(xform_idx,
+/// variation_local_id)` pair with `state_count > 0` a contiguous offset
+/// in the per-thread state array.
+///
+/// Walk order:
+///   1. Each transform in declaration order (`flame.transforms`).
+///   2. The final transform last (if present), at index `transforms.len()`.
+///   3. Within each transform, active variations sorted by local_idx so
+///      the layout matches the shader builder's emit order.
+///
+/// Variations not in the active set, with weight ≈ 0, or with
+/// `state_count == 0` are skipped.
+pub fn compute_state_layout(
+    flame: &Flame,
+    local_map: &HashMap<String, u32>,
+    registry: &VariationRegistry,
+) -> Vec<PackedStateEntry> {
+    let mut out: Vec<PackedStateEntry> = Vec::new();
+    let mut cursor: u32 = 0;
+
+    let mut emit_xform = |xform_idx: u32, xform: &Transform, cursor: &mut u32| {
+        let mut active: Vec<(&String, u32)> = xform
+            .variations
+            .iter()
+            .filter(|(_, &w)| w.abs() > 1e-6)
+            .filter_map(|(name, _)| local_map.get(name).map(|&id| (name, id)))
+            .collect();
+        active.sort_by_key(|&(_, id)| id);
+        for (name, local_id) in active {
+            let info = match registry.get(name) {
+                Some(i) => i,
+                None => continue,
+            };
+            if info.state_count == 0 {
+                continue;
+            }
+            let state_count = info.state_count as u32;
+            out.push(PackedStateEntry {
+                xform_idx,
+                variation_local_id: local_id,
+                variation_name: name.clone(),
+                offset: *cursor,
+                state_count,
+            });
+            *cursor += state_count;
+        }
+    };
+
+    for (idx, xform) in flame.transforms.iter().enumerate() {
+        emit_xform(idx as u32, xform, &mut cursor);
+    }
+    if let Some(ref final_xform) = flame.final_transform {
+        emit_xform(flame.transforms.len() as u32, final_xform, &mut cursor);
+    }
+
+    if cursor > MAX_STATE_SLOTS_PER_FLAME {
+        log::warn!(
+            "Flame '{}' needs {} state slots; soft cap is {}. Consider raising MAX_STATE_SLOTS_PER_FLAME.",
+            flame.name,
+            cursor,
+            MAX_STATE_SLOTS_PER_FLAME,
+        );
+    }
+
+    out
+}
+
+/// Total number of state slots needed for a flame's active variations.
+/// Returns 0 if no active variation declares state.
+pub fn total_state_slots(
+    flame: &Flame,
+    local_map: &HashMap<String, u32>,
+    registry: &VariationRegistry,
+) -> u32 {
+    compute_state_layout(flame, local_map, registry)
+        .last()
+        .map(|e| e.offset + e.state_count)
+        .unwrap_or(0)
+}
+
 /// IFS Transform with named variations (V2)
 ///
 /// This struct is used for both regular transforms AND the final transform.
