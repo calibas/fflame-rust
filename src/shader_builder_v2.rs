@@ -645,6 +645,49 @@ impl ShaderBuilder {
         crate::scene::transforms::compute_packed_layout(&local_map, &self.registry)
     }
 
+    /// Build the per-thread state initialization block injected into main()
+    /// before the iteration loop. For each (xform, variation) pair where
+    /// the variation declares `wgsl_state_init`, emit a scoped block with
+    /// `xform_id` and `variation_id` baked as constants, then the user
+    /// fragment. Returns empty string if no active variation has custom
+    /// init — `var<private> thread_state` is already zero-initialized by
+    /// WGSL spec.
+    fn build_state_init_block(
+        &self,
+        flame: &crate::scene::transforms::Flame,
+        active_variations: &[(String, u32)],
+    ) -> String {
+        let local_map: std::collections::HashMap<String, u32> =
+            active_variations.iter().map(|(n, i)| (n.clone(), *i)).collect();
+        let layout = crate::scene::transforms::compute_state_layout(
+            flame,
+            &local_map,
+            &self.registry,
+        );
+        let mut out = String::new();
+        for entry in &layout {
+            let info = match self.registry.get(&entry.variation_name) {
+                Some(i) => i,
+                None => continue,
+            };
+            let init_src = match &info.wgsl_source_state_init {
+                Some(s) => s,
+                None => continue,
+            };
+            out.push_str(&format!(
+                "    {{\n\
+                 \x20       let xform_id: u32 = {x}u;\n\
+                 \x20       let variation_id: u32 = {v}u;\n\
+                 {body}\n\
+                 \x20   }}\n",
+                x = entry.xform_idx,
+                v = entry.variation_local_id,
+                body = init_src,
+            ));
+        }
+        out
+    }
+
     /// Build the per-thread variation state block — a module-level
     /// `var<private> thread_state` array plus generated `get_state` and
     /// `set_state` accessors with per-(xform, variation) offsets baked in.
@@ -1058,7 +1101,12 @@ impl ShaderBuilder {
         processor.set("PATH_TRACKING", path_features_enabled);
         processor.set("XAOS_ENABLED", xaos_enabled);
         processor.set("HAS_DC", has_dc);
-        shader.push_str(&processor.process(template));
+        let mut processed = processor.process(template);
+        // Inject per-thread state initialization block at the marker.
+        // No-op if no active variation has wgsl_state_init.
+        let state_init = self.build_state_init_block(flame, &active);
+        processed = processed.replace("//__STATE_INIT_BLOCK__", &state_init);
+        shader.push_str(&processed);
 
         // DEBUG: Write shader to file for analysis (enabled via --dump-shader CLI flag)
         if should_dump_shader() {
@@ -1583,7 +1631,10 @@ impl ShaderBuilder {
         let mut processor = TemplateProcessor::new();
         processor.set("RENDER_3D", render_3d);
         processor.set("HAS_DC", has_dc);
-        shader.push_str(&processor.process(include_str!("../shaders/core/main_tiled.wgsl")));
+        let mut processed = processor.process(include_str!("../shaders/core/main_tiled.wgsl"));
+        let state_init = self.build_state_init_block(flame, &active);
+        processed = processed.replace("//__STATE_INIT_BLOCK__", &state_init);
+        shader.push_str(&processed);
 
         shader
     }
@@ -1647,7 +1698,10 @@ impl ShaderBuilder {
         // 8. Export main — routed through TemplateProcessor with HAS_DC gate.
         let mut processor = TemplateProcessor::new();
         processor.set("HAS_DC", has_dc);
-        shader.push_str(&processor.process(include_str!("../shaders/core/main_export.wgsl")));
+        let mut processed = processor.process(include_str!("../shaders/core/main_export.wgsl"));
+        let state_init = self.build_state_init_block(flame, &active);
+        processed = processed.replace("//__STATE_INIT_BLOCK__", &state_init);
+        shader.push_str(&processed);
 
         shader
     }

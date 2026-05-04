@@ -127,6 +127,7 @@ mod quaternion_misc;
 mod xtrb_misc;
 mod curliecue2_misc;
 mod farblur_misc;
+mod macmillan_misc;
 
 pub use basic::*;
 pub use advanced::*;
@@ -252,6 +253,7 @@ pub use quaternion_misc::*;
 pub use xtrb_misc::*;
 pub use curliecue2_misc::*;
 pub use farblur_misc::*;
+pub use macmillan_misc::*;
 
 use super::definition::VariationDef;
 
@@ -872,4 +874,6 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &CURLIECUE2,
     // farblur_misc: farblur (6 user + 5 state, needs_accum) — zephyrtronium; first accum-reading port
     &FARBLUR,
+    // macmillan_misc: macmillan (5 user + 3 state, needs_accum + writes_color + custom init)
+    &MACMILLAN,
 ];
