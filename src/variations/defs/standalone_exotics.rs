@@ -59,6 +59,9 @@ pub static KALEIDOSCOPE: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_kaleidoscope(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let pull = get_param(xform_id, variation_id, 0u);
@@ -129,6 +132,9 @@ pub static TAURUS: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_taurus(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let r_p = get_param(xform_id, variation_id, 0u);
@@ -196,6 +202,9 @@ pub static HOLE2: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_hole2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let a = get_param(xform_id, variation_id, 0u);

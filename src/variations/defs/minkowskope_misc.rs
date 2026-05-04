@@ -49,6 +49,9 @@ fn init_minkowskope(user: array<f32, 6>) -> array<f32, 2> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn minkowskope_mink(xv: f32) -> f32 {
     var p: f32 = 0.0;

@@ -37,6 +37,9 @@ pub static PLUSRECIP: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn pr_cabs(z: vec2<f32>) -> f32 {
     return sqrt(z.x * z.x + z.y * z.y);

@@ -73,6 +73,9 @@ fn init_oscilloscope2(user: array<f32, 6>) -> array<f32, 2> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_oscilloscope2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let separation = get_param(xform_id, variation_id, 0u);
@@ -141,6 +144,9 @@ pub static LINEART: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_lineart(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let powx = get_param(xform_id, variation_id, 0u);
@@ -207,6 +213,9 @@ fn init_phoenix_julia(user: array<f32, 4>) -> array<f32, 3> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_phoenix_julia(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let power = get_param(xform_id, variation_id, 0u);
@@ -288,6 +297,9 @@ fn init_pow_block(user: array<f32, 5>) -> array<f32, 2> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_pow_block(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let numerator = get_param(xform_id, variation_id, 0u);

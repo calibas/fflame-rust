@@ -19,6 +19,9 @@ pub static PRE_ZSCALE: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_pre_zscale(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     // Pre_ZScale only affects Z (3D mode), pass through in 2D
@@ -45,6 +48,9 @@ pub static PRE_ZTRANSLATE: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_pre_ztranslate(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     // Pre_ZTranslate only affects Z (3D mode), pass through in 2D
@@ -71,6 +77,9 @@ pub static PRE_SPHERICAL: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_pre_spherical(p: vec2<f32>) -> vec2<f32> {
     // Apophysis Pre-Spherical: Pre-phase spherical distortion
@@ -98,6 +107,9 @@ pub static PRE_SINUSOIDAL: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_pre_sinusoidal(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     // Apophysis Pre-Sinusoidal: Pre-phase sinusoidal wave
@@ -125,6 +137,9 @@ pub static PRE_DISC: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_pre_disc(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     // Apophysis Pre-Disc: Pre-phase disc transformation
@@ -199,6 +214,9 @@ fn init_pre_bwraps(user: array<f32, 5>) -> array<f32, 5> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_pre_bwraps(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let cellsize = get_param(xform_id, variation_id, 0u);
@@ -306,6 +324,9 @@ pub static PRE_CROP: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_pre_crop(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     // Apophysis Pre_Crop - same as crop but applied before variations
@@ -418,6 +439,9 @@ pub static PRE_FALLOFF2: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_pre_falloff2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     // Apophysis Pre_Falloff2 - Distance-based scatter with multiple blur modes

@@ -61,6 +61,9 @@ fn init_glynnSShape(user: array<f32, 11>) -> array<f32, 3> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn glynnSShape_super(m: f32, n1: f32, n2: f32, n3: f32, phi: f32) -> vec2<f32> {
     let half_phi = m * phi * 0.25;

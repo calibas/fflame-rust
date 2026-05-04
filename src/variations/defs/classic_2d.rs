@@ -55,6 +55,9 @@ pub static FAN: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_fan(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let xf = transforms[xform_id];
@@ -108,6 +111,9 @@ pub static FISHEYE: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_fisheye(p: vec2<f32>) -> vec2<f32> {
     let r0 = sqrt(p.x * p.x + p.y * p.y);
@@ -142,6 +148,9 @@ pub static GRIDOUT: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_gridout(p: vec2<f32>) -> vec2<f32> {
     let x = round(p.x);
@@ -209,6 +218,9 @@ pub static CIRCULAR: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_circular(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let angle_deg = get_param(xform_id, variation_id, 0u);
@@ -254,6 +266,9 @@ pub static PANORAMA1: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_panorama1(p: vec2<f32>) -> vec2<f32> {
     let aux = 1.0 / sqrt(p.x * p.x + p.y * p.y + 1.0);
@@ -288,6 +303,9 @@ pub static PANORAMA2: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_panorama2(p: vec2<f32>) -> vec2<f32> {
     let aux = 1.0 / (sqrt(p.x * p.x + p.y * p.y) + 1.0);

@@ -47,6 +47,9 @@ pub static HO: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_ho(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let xpow = get_param(xform_id, variation_id, 0u);
@@ -126,6 +129,9 @@ pub static CHUNK: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_chunk(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let a = get_param(xform_id, variation_id, 0u);
@@ -206,6 +212,9 @@ pub static PTRANSFORM: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_ptransform(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let rotate = get_param(xform_id, variation_id, 0u);
@@ -268,6 +277,9 @@ pub static RATIONAL3: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_rational3(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let a = get_param(xform_id, variation_id, 0u);
@@ -358,6 +370,9 @@ pub static TILE_REVERSE: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_tile_reverse(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let space = get_param(xform_id, variation_id, 0u);
@@ -417,6 +432,9 @@ pub static ORTHO: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_ortho(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let in_p = get_param(xform_id, variation_id, 0u);

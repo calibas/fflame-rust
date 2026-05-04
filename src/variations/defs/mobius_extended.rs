@@ -70,6 +70,9 @@ pub static MOBIUSN: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_mobiusN(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let re_a = get_param(xform_id, variation_id, 0u);
@@ -201,6 +204,9 @@ pub static MOBIQ: VariationDef = VariationDef {
     // 2D form: FTz = 0 substituted into the full quaternion math, returning
     // only (FPx, FPy). Some output components (ny, nz) remain non-zero from
     // q*y and q*z parameter columns, so we still compute the whole thing.
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_mobiq(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let qat = get_param(xform_id, variation_id, 0u);

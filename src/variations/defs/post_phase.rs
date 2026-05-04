@@ -56,6 +56,9 @@ fn init_post_bwraps(user: array<f32, 5>) -> array<f32, 5> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_post_bwraps(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let cellsize = get_param(xform_id, variation_id, 0u);
@@ -163,6 +166,9 @@ pub static POST_CROP: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_post_crop(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     // Apophysis Post_Crop - same as crop but applied after variations
@@ -275,6 +281,9 @@ pub static POST_FALLOFF2: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_post_falloff2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     // Apophysis Post_Falloff2 - Same as pre_falloff2 but applied after variations
@@ -407,6 +416,9 @@ pub static POST_CURL: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_post_curl(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     // Apophysis Post_Curl - Same as curl but applied after variations
@@ -459,6 +471,9 @@ pub static POST_CURL3D: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_post_curl3d(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     // Apophysis Post_Curl3D - 2D version (placeholder)

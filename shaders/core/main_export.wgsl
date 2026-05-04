@@ -43,6 +43,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Xaos tracking: previous transform index for xaos-weighted selection
     var prev_xform_idx = 0u;
 
+    // Per-thread state initialization (see main_template.wgsl).
+//__STATE_INIT_BLOCK__
+
     // Iterate
     for (var i = 0u; i < params.iterations_per_thread; i++) {
         let old_pos = current;

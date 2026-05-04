@@ -57,6 +57,9 @@ pub static ANAMORPHCYL: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_anamorphcyl(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let a = get_param(xform_id, variation_id, 0u);
@@ -96,6 +99,9 @@ pub static SVF: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_svf(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let n = get_param(xform_id, variation_id, 0u);
@@ -139,6 +145,9 @@ pub static SHREDLIN: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_shredlin(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let sxd = get_param(xform_id, variation_id, 0u);
@@ -215,6 +224,9 @@ fn init_shredrad(user: array<f32, 2>) -> array<f32, 1> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_shredrad(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let sw = get_param(xform_id, variation_id, 1u);
@@ -288,6 +300,9 @@ fn init_xheart(user: array<f32, 2>) -> array<f32, 3> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_xheart(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let rat = get_param(xform_id, variation_id, 2u);
@@ -353,6 +368,9 @@ pub static STWIN: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_stwin(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let distort = get_param(xform_id, variation_id, 0u);
@@ -420,6 +438,9 @@ pub static WHORL: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_whorl(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let inside = get_param(xform_id, variation_id, 0u);
@@ -480,6 +501,9 @@ pub static DEVIL_WARP: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_devil_warp(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let a = get_param(xform_id, variation_id, 0u);

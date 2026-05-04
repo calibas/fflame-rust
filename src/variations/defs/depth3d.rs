@@ -19,6 +19,9 @@ pub static ZCONE: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 // 2D stub - not used in 2D mode
 fn variation_zcone(p: vec2<f32>) -> vec2<f32> {
@@ -46,6 +49,9 @@ pub static FLATTEN: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 // 2D stub - not used in 2D mode
 fn variation_flatten(p: vec2<f32>) -> vec2<f32> {
@@ -72,6 +78,9 @@ pub static ZSCALE: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 // 2D stub - not used in 2D mode
 fn variation_zscale(p: vec2<f32>) -> vec2<f32> {

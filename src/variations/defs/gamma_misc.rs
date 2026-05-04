@@ -60,6 +60,9 @@ pub static GAMMA: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn gm_lgamma_iter(x: f32) -> f32 {
     let log_2pi_half = 0.9189385332046727;

@@ -164,6 +164,9 @@ fn init_quaternion(user: array<f32, 92>) -> array<f32, 1> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_quaternion(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let x_in = p.x;

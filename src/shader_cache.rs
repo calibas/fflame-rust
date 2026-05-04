@@ -96,6 +96,7 @@ impl ShaderCache {
         // Only build the shader for the current render mode
         let is_3d = render_mode == RenderMode::ThreeD;
         let shader_source = builder.build_from_template(
+            flame,
             &active_variations,
             is_3d,
             path_features_enabled,
@@ -286,7 +287,7 @@ impl ShaderCache {
         let is_3d = render_mode == RenderMode::ThreeD;
 
         if is_3d {
-            self.shader_source_3d = builder.build_from_template(&needed, true, path_features_enabled, xaos_enabled, &constants);
+            self.shader_source_3d = builder.build_from_template(flame, &needed, true, path_features_enabled, xaos_enabled, &constants);
             self.compute_pipeline_3d = Self::create_compute_pipeline(
                 device,
                 bind_group_layout,
@@ -297,7 +298,7 @@ impl ShaderCache {
             self.shader_source_2d = self.shader_source_3d.clone();
             self.compute_pipeline_2d = self.compute_pipeline_3d.clone();
         } else {
-            self.shader_source_2d = builder.build_from_template(&needed, false, path_features_enabled, xaos_enabled, &constants);
+            self.shader_source_2d = builder.build_from_template(flame, &needed, false, path_features_enabled, xaos_enabled, &constants);
             self.compute_pipeline_2d = Self::create_compute_pipeline(
                 device,
                 bind_group_layout,

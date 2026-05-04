@@ -44,6 +44,9 @@ pub static LAZYSENSEN: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn lazysensen_flip(c: f32, scale: f32) -> f32 {
     if (abs(scale) < 1e-30) {
@@ -131,6 +134,9 @@ fn init_spherecrop(user: array<f32, 6>) -> array<f32, 1> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_spherecrop(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let cr = get_param(xform_id, variation_id, 0u);
@@ -232,6 +238,9 @@ fn init_xheart_blur_wf(user: array<f32, 2>) -> array<f32, 3> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_xheart_blur_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let sina = get_param(xform_id, variation_id, 2u);

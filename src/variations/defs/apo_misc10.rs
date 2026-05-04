@@ -58,6 +58,9 @@ pub static MASK: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_mask(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let xshift = get_param(xform_id, variation_id, 0u);
@@ -121,6 +124,9 @@ pub static OVOID3D: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_ovoid3d(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let x_scale = get_param(xform_id, variation_id, 0u);
@@ -170,6 +176,9 @@ pub static MURL2: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_murl2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let c = get_param(xform_id, variation_id, 0u);
@@ -273,6 +282,9 @@ pub static MINKQM: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn minkqm_minkowski(xv: f32, a: f32, b: f32, c: f32, dd: f32, e: f32, iters: i32) -> f32 {
     var p: f32 = 0.0;

@@ -18,6 +18,9 @@ pub static HEMISPHERE: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 // 2D version - projects onto unit circle
 fn variation_hemisphere(p: vec2<f32>) -> vec2<f32> {

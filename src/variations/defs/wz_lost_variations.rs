@@ -83,6 +83,9 @@ fn init_z(user: array<f32, 13>) -> array<f32, 7> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn z_blend_total(a: f32,
     hypergon: f32, star: f32, lituus: f32, super_w: f32,
@@ -274,6 +277,9 @@ fn init_w(user: array<f32, 14>) -> array<f32, 7> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn w_blend_total(a: f32,
     hypergon: f32, star: f32, lituus: f32, super_w: f32,

@@ -72,6 +72,9 @@ fn init_eJulia(user: array<f32, 1>) -> array<f32, 1> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_eJulia(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let power = get_param(xform_id, variation_id, 0u);
@@ -160,6 +163,9 @@ pub static EMOTION: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_eMotion(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let move_p = get_param(xform_id, variation_id, 0u);
@@ -252,6 +258,9 @@ pub static FLOWER_DB: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_flower_db(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let petals = get_param(xform_id, variation_id, 0u);
@@ -341,6 +350,9 @@ fn init_julian2(user: array<f32, 8>) -> array<f32, 2> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_julian2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let power = get_param(xform_id, variation_id, 0u);

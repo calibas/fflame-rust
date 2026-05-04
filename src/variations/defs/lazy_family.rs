@@ -73,6 +73,9 @@ fn init_lazyjess(user: array<f32, 4>) -> array<f32, 4> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_lazyjess(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let n = max(get_param(xform_id, variation_id, 0u), 2.0);
@@ -252,6 +255,9 @@ fn init_lazytravis(user: array<f32, 3>) -> array<f32, 2> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_lazytravis(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let space = get_param(xform_id, variation_id, 2u);

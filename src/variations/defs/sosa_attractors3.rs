@@ -40,6 +40,9 @@ pub static LACE_JS: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_lace_js(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     let r = 2.0;
@@ -121,6 +124,9 @@ pub static WALLPAPER_JS: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn wallpaper_signum(v: f32) -> f32 {
     if (v < 0.0) { return -1.0; }

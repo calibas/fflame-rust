@@ -63,6 +63,9 @@ fn init_pointgrid_wf(user: array<f32, 8>) -> array<f32, 2> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn pg_disc_noise(x: i32, y: i32) -> f32 {
     var n = x + y * 57;
@@ -165,6 +168,9 @@ fn init_pointgrid3d_wf(user: array<f32, 11>) -> array<f32, 3> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_pointgrid3d_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let xmin = get_param(xform_id, variation_id, 0u);
@@ -237,6 +243,9 @@ pub static APOCARPET_JS: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_apocarpet_js(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     let r = 1.0 / (1.0 + sqrt(2.0));

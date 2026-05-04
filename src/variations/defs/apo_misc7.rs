@@ -77,6 +77,9 @@ fn init_asteria(user: array<f32, 1>) -> array<f32, 2> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_asteria(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let sina = get_param(xform_id, variation_id, 1u);
@@ -182,6 +185,9 @@ pub static ESTIQ: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_estiq(p: vec2<f32>) -> vec2<f32> {
     let e = exp(p.x);
@@ -236,6 +242,9 @@ pub static FDISC: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_fdisc(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let ashift = get_param(xform_id, variation_id, 0u);
@@ -317,6 +326,9 @@ pub static BTRANSFORM: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_bTransform(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let rotate = get_param(xform_id, variation_id, 0u);
@@ -437,6 +449,9 @@ fn init_nPolar(user: array<f32, 2>) -> array<f32, 4> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_nPolar(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let parity = get_param(xform_id, variation_id, 0u);
