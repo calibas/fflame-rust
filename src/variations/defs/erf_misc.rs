@@ -57,6 +57,9 @@ pub static ERF: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_erf(p: vec2<f32>) -> vec2<f32> {
     // A&S 7.1.26 inlined twice
@@ -118,6 +121,9 @@ pub static ERF3D: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_erf3D(p: vec2<f32>) -> vec2<f32> {
     let pp = 0.3275911;
@@ -186,6 +192,9 @@ pub static D_SPHERICAL: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_d_spherical(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let d_spher_weight = get_param(xform_id, variation_id, 0u);
@@ -229,6 +238,9 @@ pub static DUSTPOINT: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_dustpoint(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     let p_sign = select(-1.0, 1.0, rng_nextf(rng) < 0.5);
@@ -275,6 +287,9 @@ pub static DELTAA: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_deltaA(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let w = transforms[xform_id].variations[variation_id];
@@ -325,6 +340,9 @@ pub static EDISC: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_edisc(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let w = transforms[xform_id].variations[variation_id];
@@ -410,6 +428,9 @@ fn init_curve(user: array<f32, 4>) -> array<f32, 2> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_curve(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let xamp = get_param(xform_id, variation_id, 0u);
@@ -482,6 +503,9 @@ fn init_elliptic2(user: array<f32, 11>) -> array<f32, 1> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_elliptic2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let a1 = get_param(xform_id, variation_id, 0u);

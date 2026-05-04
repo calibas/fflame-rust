@@ -46,6 +46,9 @@ pub static ONION: VariationDef = VariationDef {
     wgsl_init: None,
     // 2D form: drop the z curl, keep only the X/Y mapping (which is the
     // identity inside the sphere and a radial squeeze outside).
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_onion(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let cx = get_param(xform_id, variation_id, 0u);
@@ -158,6 +161,9 @@ fn init_target_sp(user: array<f32, 4>) -> array<f32, 3> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_target_sp(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let n_of_sp = get_param(xform_id, variation_id, 1u);

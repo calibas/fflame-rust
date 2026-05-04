@@ -34,6 +34,9 @@ pub static SIN: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_sin(p: vec2<f32>) -> vec2<f32> {
     let s = sin(p.x); let c = cos(p.x);
@@ -64,6 +67,9 @@ pub static COS: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_cos(p: vec2<f32>) -> vec2<f32> {
     let s = sin(p.x); let c = cos(p.x);
@@ -94,6 +100,9 @@ pub static TAN: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_tan(p: vec2<f32>) -> vec2<f32> {
     let s2 = sin(2.0 * p.x);
@@ -132,6 +141,9 @@ pub static SEC: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_sec(p: vec2<f32>) -> vec2<f32> {
     let s = sin(p.x); let c = cos(p.x);
@@ -166,6 +178,9 @@ pub static CSC: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_csc(p: vec2<f32>) -> vec2<f32> {
     let s = sin(p.x); let c = cos(p.x);
@@ -200,6 +215,9 @@ pub static COT: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_cot(p: vec2<f32>) -> vec2<f32> {
     let s2 = sin(2.0 * p.x);
@@ -240,6 +258,9 @@ pub static SINH: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_sinh(p: vec2<f32>) -> vec2<f32> {
     let pi_4 = 0.7853981633974483;
@@ -273,6 +294,9 @@ pub static COSH: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_cosh(p: vec2<f32>) -> vec2<f32> {
     let s = sin(p.y); let c = cos(p.y);
@@ -305,6 +329,9 @@ pub static TANH: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_tanh(p: vec2<f32>) -> vec2<f32> {
     let pi_2 = 1.5707963267948966;
@@ -345,6 +372,9 @@ pub static COTH: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_coth(p: vec2<f32>) -> vec2<f32> {
     let s2 = sin(2.0 * p.y);
@@ -386,6 +416,9 @@ pub static SECH: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_sech(p: vec2<f32>) -> vec2<f32> {
     let pi_4 = 0.7853981633974483;
@@ -426,6 +459,9 @@ pub static CSCH: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_csch(p: vec2<f32>) -> vec2<f32> {
     let s = sin(p.y); let c = cos(p.y);

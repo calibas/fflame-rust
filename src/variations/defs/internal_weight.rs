@@ -62,6 +62,9 @@ pub static LOONIE3: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_loonie3(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let w = transforms[xform_id].variations[variation_id];
@@ -121,6 +124,9 @@ pub static LOONIE_3D: VariationDef = VariationDef {
     wgsl_init: None,
     // 2D form: ef_z = atan2(y, x) (since p.z = 0 in 2D mode); same math
     // otherwise. The output's z-component is dropped via the wrapper.
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_loonie_3d(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let w = transforms[xform_id].variations[variation_id];
@@ -178,6 +184,9 @@ pub static SIGMOID: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_sigmoid(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let shiftx_in = get_param(xform_id, variation_id, 0u);
@@ -284,6 +293,9 @@ pub static BLOCKY: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_blocky(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let px = get_param(xform_id, variation_id, 0u);

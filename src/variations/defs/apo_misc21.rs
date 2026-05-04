@@ -51,6 +51,9 @@ pub static HEART_WF: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_heart_wf(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let scale_x = get_param(xform_id, variation_id, 0u);
@@ -118,6 +121,9 @@ pub static POST_ZTRANSLATE_WF: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_post_ztranslate_wf(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     return p;
@@ -155,6 +161,9 @@ pub static POST_MIRROR_WF: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_post_mirror_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let xaxis = i32(get_param(xform_id, variation_id, 0u));

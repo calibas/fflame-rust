@@ -79,6 +79,30 @@ pub struct VariationDef {
     /// where N = parameters.len() and M = init_param_count.
     pub wgsl_init: Option<&'static str>,
 
+    /// Number of f32 state slots this variation owns per (xform, variation)
+    /// instance. Slots are zero-initialized at the start of each shader
+    /// invocation (one main() call = one compute dispatch) and persist
+    /// across the inner iteration loop within that invocation. Variations
+    /// access their slots via the generated `get_state` / `set_state`
+    /// accessors. Default 0 (no state).
+    ///
+    /// See [`docs/projects/intra-iteration-state-and-accum.md`](../../docs/projects/intra-iteration-state-and-accum.md).
+    pub state_count: usize,
+
+    /// Optional WGSL fragment that runs once at thread start (inside main(),
+    /// before the iteration loop) to initialize this variation's state slots
+    /// beyond zero-fill. Has `xform_id`, `variation_id`, and `set_state` in
+    /// scope. Default None (zero-init suffices).
+    pub wgsl_state_init: Option<&'static str>,
+
+    /// Whether the variation reads the running variation accumulator (cpp's
+    /// `FPx/FPy/FPz`). When true, the function signature gains
+    /// `accum: vec2<f32>` (or `vec3<f32>` in 3D) after `p`, and the shader
+    /// builder passes the current `result` value so the variation sees the
+    /// sum of contributions from prior variations in this iteration.
+    /// Effective only in normal and post phases. Default false.
+    pub needs_accum: bool,
+
     /// 2D WGSL implementation
     /// Function signature should match one of:
     /// - `fn variation_NAME(p: vec2<f32>) -> vec2<f32>`
@@ -175,22 +199,30 @@ impl VariationDef {
     fn generate_3d_wrapper(&self) -> String {
         let func_name = self.wgsl_function_name();
 
-        // Determine the function signature based on needs_rng and parameters
-        let (params, call_args) = if self.needs_rng && !self.parameters.is_empty() {
-            (
-                "p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>",
-                "p.xy, xform_id, variation_id, rng",
-            )
-        } else if self.needs_rng {
-            ("p: vec3<f32>, rng: ptr<function, RngState>", "p.xy, rng")
-        } else if !self.parameters.is_empty() {
-            (
-                "p: vec3<f32>, xform_id: u32, variation_id: u32",
-                "p.xy, xform_id, variation_id",
-            )
-        } else {
-            ("p: vec3<f32>", "p.xy")
-        };
+        // Build the wrapper signature dynamically to handle the full
+        // dimension matrix (needs_rng × has_params × needs_transform ×
+        // writes_color × needs_accum). The forwarded call drops the Z
+        // component of `p` and `accum` since the 2D body takes vec2.
+        let mut wrapper_params: Vec<&str> = vec!["p: vec3<f32>"];
+        let mut call_args: Vec<String> = vec!["p.xy".to_string()];
+        if self.needs_accum {
+            wrapper_params.push("accum: vec3<f32>");
+            call_args.push("accum.xy".to_string());
+        }
+        if !self.parameters.is_empty() || self.needs_transform {
+            wrapper_params.push("xform_id: u32");
+            wrapper_params.push("variation_id: u32");
+            call_args.push("xform_id".to_string());
+            call_args.push("variation_id".to_string());
+        }
+        if self.needs_rng {
+            wrapper_params.push("rng: ptr<function, RngState>");
+            call_args.push("rng".to_string());
+        }
+        if self.writes_color {
+            wrapper_params.push("vc: ptr<function, f32>");
+            call_args.push("vc".to_string());
+        }
 
         format!(
             r#"
@@ -200,8 +232,8 @@ fn {func_name}({params}) -> vec3<f32> {{
 }}
 "#,
             func_name = func_name,
-            params = params,
-            call_args = call_args
+            params = wrapper_params.join(", "),
+            call_args = call_args.join(", ")
         )
     }
 }

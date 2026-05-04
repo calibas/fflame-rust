@@ -92,6 +92,9 @@ fn init_cpow2(user: array<f32, 4>) -> array<f32, 7> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_cpow2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let two_pi = 6.28318530717959;
@@ -212,6 +215,9 @@ fn init_cpow3(user: array<f32, 4>) -> array<f32, 6> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_cpow3(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let two_pi = 6.28318530717959;
@@ -317,6 +323,9 @@ fn init_disc2(user: array<f32, 2>) -> array<f32, 3> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_disc2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let pi = 3.14159265358979;

@@ -43,6 +43,9 @@ pub static CIRCLEBLUR: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_circleblur(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     let rad = sqrt(rng_nextf(rng));
@@ -85,6 +88,9 @@ pub static CIRCLESPLIT: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_circlesplit(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let radius = get_param(xform_id, variation_id, 0u);
@@ -134,6 +140,9 @@ pub static FLIPCIRCLE: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_flipcircle(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let w = transforms[xform_id].variations[variation_id];
@@ -189,6 +198,9 @@ fn init_blur_linear(user: array<f32, 2>) -> array<f32, 2> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_blur_linear(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let length_p = get_param(xform_id, variation_id, 0u);

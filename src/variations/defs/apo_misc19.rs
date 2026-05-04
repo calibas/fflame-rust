@@ -67,6 +67,9 @@ fn init_mobius_strip(user: array<f32, 10>) -> array<f32, 4> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_mobius_strip(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let radius = get_param(xform_id, variation_id, 0u);
@@ -255,6 +258,9 @@ pub static CIRCLE_LINEAR: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn cl_disc_noise(x: i32, y: i32) -> f32 {
     var n = x + y * 57;

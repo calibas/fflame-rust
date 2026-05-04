@@ -44,6 +44,9 @@ pub static COLLIDEOSCOPE: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_collideoscope(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let a_p = get_param(xform_id, variation_id, 0u);
@@ -133,6 +136,9 @@ pub static BENT2: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_bent2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let xs = get_param(xform_id, variation_id, 0u);
@@ -176,6 +182,9 @@ pub static MCARPET: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_mcarpet(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let xs = get_param(xform_id, variation_id, 0u);
@@ -229,6 +238,9 @@ pub static LINEART3D: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_lineart3d(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let powx = get_param(xform_id, variation_id, 0u);
@@ -291,6 +303,9 @@ fn init_oscilloscope(user: array<f32, 4>) -> array<f32, 1> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_oscilloscope(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let separation = get_param(xform_id, variation_id, 0u);
@@ -355,6 +370,9 @@ pub static FIBONACCI2: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_fibonacci2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let sc = get_param(xform_id, variation_id, 0u);

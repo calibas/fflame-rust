@@ -19,6 +19,9 @@ pub static ZTRANSLATE: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_ztranslate(p: vec2<f32>) -> vec2<f32> {
     // ZTranslate only affects Z (3D mode), pass through in 2D
@@ -48,6 +51,9 @@ pub static JULIA3D: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_julia3d(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     // Apophysis Julia3D in 2D mode (Z = 0)
@@ -177,6 +183,9 @@ pub static FALLOFF2: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_falloff2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     // Apophysis Falloff2: Distance-based blur effect with 3 modes
@@ -319,6 +328,9 @@ fn init_wedge(user: array<f32, 4>) -> array<f32, 2> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_wedge(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     const PI: f32 = 3.14159265359;
@@ -376,6 +388,9 @@ pub static EPISPIRAL: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_epispiral(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     // Apophysis Epispiral: Epicycloid spiral pattern with random thickness
@@ -457,6 +472,9 @@ fn init_bwraps(user: array<f32, 5>) -> array<f32, 3> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_bwraps(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let cellsize = get_param(xform_id, variation_id, 0u);
@@ -551,6 +569,9 @@ pub static JULIASCOPE: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_juliascope(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     // Apophysis JuliaScope variation
@@ -634,6 +655,9 @@ pub static JULIA3DZ: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_julia3dz(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     // Julia3Dz is a 3D variation, pass through in 2D
@@ -702,6 +726,9 @@ pub static CURL3D: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_curl3d(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     // Curl3D is a 3D variation, apply XY curl in 2D
@@ -764,6 +791,9 @@ fn init_radial_blur(user: array<f32, 1>) -> array<f32, 2> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_radial_blur(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let spin_var = get_param(xform_id, variation_id, 1u);
@@ -812,6 +842,9 @@ pub static BLUR_CIRCLE: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_blur_circle(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     // Apophysis Blur Circle - uniform blur in a circle
@@ -903,6 +936,9 @@ pub static BLUR_ZOOM: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_blur_zoom(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     // Apophysis Blur Zoom - zoom blur from a center point
@@ -950,6 +986,9 @@ pub static BLUR_PIXELIZE: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_blur_pixelize(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     // Apophysis Blur Pixelize - pixelated/mosaic blur effect
@@ -1003,6 +1042,9 @@ pub static SEPARATION: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_separation(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     // Apophysis Separation - separates positive/negative quadrants
@@ -1071,6 +1113,9 @@ pub static MOBIUS: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_mobius(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     // Apophysis Mobius - Möbius transformation f(z) = (Az + B)/(Cz + D)
@@ -1144,6 +1189,9 @@ pub static CROP: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_crop(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     // Apophysis Crop - crops to a rectangular region with optional scatter

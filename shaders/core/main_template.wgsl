@@ -66,6 +66,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var prev_xform_idx = 0u;
 {{/if}}
 
+    // Per-thread state initialization for stateful variations that need
+    // values beyond zero-fill (var<private> thread_state is already zeroed
+    // by WGSL spec; this block runs the wgsl_state_init fragments declared
+    // by active variations). Emitted by shader builder; empty for flames
+    // with no custom-init variations.
+//__STATE_INIT_BLOCK__
+
     // Iterate
     for (var i = 0u; i < params.iterations_per_thread; i++) {
         // Save old position for speed calculation

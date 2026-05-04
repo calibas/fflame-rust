@@ -65,6 +65,9 @@ pub static DISC3: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_disc3(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let a = get_param(xform_id, variation_id, 0u);
@@ -133,6 +136,9 @@ pub static PROJECTIVE: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_projective(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let a = get_param(xform_id, variation_id, 0u);
@@ -209,6 +215,9 @@ pub static TQMIRROR: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_tqmirror(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let a = get_param(xform_id, variation_id, 0u);
@@ -327,6 +336,9 @@ fn init_intersection(user: array<f32, 10>) -> array<f32, 2> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_intersection(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let xwidth = get_param(xform_id, variation_id, 0u);

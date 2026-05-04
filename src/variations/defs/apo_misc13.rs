@@ -80,6 +80,9 @@ pub static Q_ODE: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_q_ode(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let q01 = get_param(xform_id, variation_id, 0u);
@@ -178,6 +181,9 @@ fn init_ripple(user: array<f32, 8>) -> array<f32, 6> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_ripple(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let centerx = get_param(xform_id, variation_id, 3u);
@@ -299,6 +305,9 @@ fn init_scry2(user: array<f32, 3>) -> array<f32, 6> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_scry2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let sides_in = max(get_param(xform_id, variation_id, 0u), 1.0);

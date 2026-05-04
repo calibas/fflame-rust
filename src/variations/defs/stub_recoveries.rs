@@ -58,6 +58,9 @@ pub static BSPLIT: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_bsplit(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let x_shift = get_param(xform_id, variation_id, 0u);
@@ -110,6 +113,9 @@ pub static CYLINDER2: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_cylinder2(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(p.x / sqrt(p.x * p.x + 1.0), p.y);
@@ -151,6 +157,9 @@ pub static ECLIPSE: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_eclipse(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let shift = get_param(xform_id, variation_id, 0u);
@@ -212,6 +221,9 @@ pub static LOZI: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_lozi(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let a = get_param(xform_id, variation_id, 0u);
@@ -251,6 +263,9 @@ pub static PULSE: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_pulse(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let freqx = get_param(xform_id, variation_id, 0u);
@@ -303,6 +318,9 @@ pub static HYPERSHIFT: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_hypershift(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let shift = get_param(xform_id, variation_id, 0u);

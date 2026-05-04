@@ -94,6 +94,9 @@ fn init_bubbleT3D(user: array<f32, 6>) -> array<f32, 7> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_bubbleT3D(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let stripes_raw = get_param(xform_id, variation_id, 0u);

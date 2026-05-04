@@ -31,6 +31,9 @@ pub static EXP: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_exp(p: vec2<f32>) -> vec2<f32> {
     let e = exp(p.x);
@@ -89,6 +92,9 @@ fn init_log_db(user: array<f32, 2>) -> array<f32, 2> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_log_db(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let denom = get_param(xform_id, variation_id, 2u);
@@ -155,6 +161,9 @@ pub static LOG_TILE2: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_log_tile2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let sx = get_param(xform_id, variation_id, 0u);
@@ -201,6 +210,9 @@ pub static TILE_LOG: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_tile_log(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let sp = get_param(xform_id, variation_id, 0u);

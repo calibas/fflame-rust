@@ -42,6 +42,9 @@ fn init_post_rblur(user: array<f32, 4>) -> array<f32, 1> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_post_rblur(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let offset = get_param(xform_id, variation_id, 1u);

@@ -65,6 +65,9 @@ pub static VIBRATION2: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn v2_modulate(amp: f32, freq: f32, x: f32) -> f32 {
     let two_pi = 6.28318530717959;

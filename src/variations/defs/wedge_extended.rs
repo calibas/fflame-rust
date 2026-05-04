@@ -69,6 +69,9 @@ fn init_wedge_julia(user: array<f32, 4>) -> array<f32, 3> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_wedge_julia(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let power = get_param(xform_id, variation_id, 0u);
@@ -152,6 +155,9 @@ fn init_wedge_sph(user: array<f32, 4>) -> array<f32, 1> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_wedge_sph(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let angle = get_param(xform_id, variation_id, 0u);

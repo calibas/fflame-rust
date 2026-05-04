@@ -85,6 +85,9 @@ fn init_hypertile(user: array<f32, 3>) -> array<f32, 2> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_hypertile(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let re = get_param(xform_id, variation_id, 3u);
@@ -167,6 +170,9 @@ fn init_hypertile1(user: array<f32, 2>) -> array<f32, 2> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_hypertile1(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let pa = get_param(xform_id, variation_id, 2u);
@@ -262,6 +268,9 @@ fn init_hypertile2(user: array<f32, 2>) -> array<f32, 2> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_hypertile2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let pa = get_param(xform_id, variation_id, 2u);
@@ -376,6 +385,9 @@ fn init_hypertile3d(user: array<f32, 3>) -> array<f32, 8> {
 }
 "#),
     // 2D form: use only the in-plane part, drop z² from r2.
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_hypertile3d(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let cx = get_param(xform_id, variation_id, 3u);
@@ -472,6 +484,9 @@ fn init_hypertile3d1(user: array<f32, 2>) -> array<f32, 4> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_hypertile3d1(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let pa = get_param(xform_id, variation_id, 2u);
@@ -587,6 +602,9 @@ fn init_hypertile3d2(user: array<f32, 2>) -> array<f32, 7> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_hypertile3d2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let pa = get_param(xform_id, variation_id, 2u);

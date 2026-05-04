@@ -53,6 +53,9 @@ fn init_target(user: array<f32, 3>) -> array<f32, 1> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_target(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let even_p = get_param(xform_id, variation_id, 0u);
@@ -148,6 +151,9 @@ fn init_yin_yang(user: array<f32, 5>) -> array<f32, 4> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_yin_yang(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let radius = get_param(xform_id, variation_id, 0u);

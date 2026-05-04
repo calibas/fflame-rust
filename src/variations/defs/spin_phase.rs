@@ -42,6 +42,9 @@ pub static PRE_SPIN_Z: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_pre_spin_z(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let pi_2 = 1.5707963267948966;
@@ -79,6 +82,9 @@ pub static POST_SPIN_Z: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_post_spin_z(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let pi_2 = 1.5707963267948966;
@@ -117,6 +123,9 @@ pub static POST_SPHERICAL: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_post_spherical(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let w = transforms[xform_id].variations[variation_id];
@@ -155,6 +164,9 @@ pub static PRE_DISC3D: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_pre_disc3d(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let pi_p = get_param(xform_id, variation_id, 0u);
