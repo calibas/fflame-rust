@@ -70,6 +70,9 @@ pub static GRIDOUT_3D: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_gridout3D(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let xx = get_param(xform_id, variation_id, 0u);

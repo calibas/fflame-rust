@@ -65,6 +65,9 @@ fn init_dc_cylinder(user: array<f32, 6>) -> array<f32, 2> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_dc_cylinder(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let xp = get_param(xform_id, variation_id, 3u);
@@ -145,6 +148,9 @@ fn init_dc_cylinder2(user: array<f32, 6>) -> array<f32, 2> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_dc_cylinder2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let xp = get_param(xform_id, variation_id, 3u);
@@ -217,6 +223,9 @@ fn init_dc_triangle(user: array<f32, 2>) -> array<f32, 1> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_dc_triangle(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let zero_edges = i32(get_param(xform_id, variation_id, 1u));

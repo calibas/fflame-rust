@@ -53,6 +53,9 @@ pub static DC_CARPET: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn dc_carpet_signum(v: f32) -> f32 {
     if (v < 0.0) { return -1.0; }
@@ -118,6 +121,9 @@ pub static POST_POINT_SYMMETRY_WF: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_post_point_symmetry_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let cx = get_param(xform_id, variation_id, 0u);
@@ -203,6 +209,9 @@ fn init_cpow3_wf(user: array<f32, 7>) -> array<f32, 7> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_cpow3_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let spread = get_param(xform_id, variation_id, 3u);

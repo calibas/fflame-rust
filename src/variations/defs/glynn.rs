@@ -58,6 +58,9 @@ pub static GLYNNIA: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_glynnia(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     let half_sqrt2 = 0.7071067811865476;
@@ -139,6 +142,9 @@ pub static GLYNNIA3: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_glynnia3(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let rscale = get_param(xform_id, variation_id, 0u);
@@ -259,6 +265,9 @@ fn init_glynnSim1(user: array<f32, 6>) -> array<f32, 3> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_glynnSim1(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let radius = get_param(xform_id, variation_id, 0u);
@@ -400,6 +409,9 @@ fn init_glynnSim2(user: array<f32, 6>) -> array<f32, 5> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_glynnSim2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let radius = get_param(xform_id, variation_id, 0u);
@@ -498,6 +510,9 @@ fn init_glynnSim3(user: array<f32, 4>) -> array<f32, 4> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_glynnSim3(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let radius = get_param(xform_id, variation_id, 0u);

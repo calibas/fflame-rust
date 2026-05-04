@@ -53,6 +53,9 @@ pub static CIRCLE_RAND: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn cr_disc_noise(x: i32, y: i32) -> f32 {
     var n = x + y * 57;
@@ -154,6 +157,9 @@ pub static CIRCLE_TRANS1: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_CircleTrans1(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let sc = get_param(xform_id, variation_id, 0u);

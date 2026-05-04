@@ -20,6 +20,9 @@ pub static PRE_ROTATE_X: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 // 2D stub - not used in 2D mode
 fn variation_pre_rotate_x(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
@@ -51,6 +54,9 @@ pub static PRE_ROTATE_Y: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 // 2D stub - not used in 2D mode
 fn variation_pre_rotate_y(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
@@ -82,6 +88,9 @@ pub static POST_ROTATE_X: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 // 2D stub - not used in 2D mode
 fn variation_post_rotate_x(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
@@ -113,6 +122,9 @@ pub static POST_ROTATE_Y: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 // 2D stub - not used in 2D mode
 fn variation_post_rotate_y(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {

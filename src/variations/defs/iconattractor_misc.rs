@@ -58,6 +58,9 @@ fn init_iconattractor_js(user: array<f32, 4>) -> array<f32, 1> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn ic_preset(id: i32) -> array<f32, 6> {
     // Returns [degree, a, b, g, o, l] for preset id in [0, 16].

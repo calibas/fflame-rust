@@ -144,6 +144,9 @@ fn init_waves2b(user: array<f32, 10>) -> array<f32, 2> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn w2b_bessel_j1(x: f32) -> f32 {
     let ax = abs(x);

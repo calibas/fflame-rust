@@ -43,6 +43,9 @@ pub static CANNABISCURVE_WF: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_cannabiscurve_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let filled = i32(get_param(xform_id, variation_id, 0u));
@@ -103,6 +106,9 @@ fn init_spherical3D_wf(user: array<f32, 2>) -> array<f32, 1> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_spherical3D_wf(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let invert = i32(get_param(xform_id, variation_id, 0u));
@@ -160,6 +166,9 @@ pub static SWIRL3D_WF: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_swirl3D_wf(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let small = 1e-30;

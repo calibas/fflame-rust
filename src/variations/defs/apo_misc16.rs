@@ -53,6 +53,9 @@ pub static SEASHELL3D: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_seashell3D(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let a = get_param(xform_id, variation_id, 0u);
@@ -157,6 +160,9 @@ fn init_hypershift2(user: array<f32, 2>) -> array<f32, 4> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_hypershift2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let p_u = max(get_param(xform_id, variation_id, 0u), 2.0);

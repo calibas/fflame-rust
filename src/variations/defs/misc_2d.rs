@@ -45,6 +45,9 @@ pub static SPLIT: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_split(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let xsize = get_param(xform_id, variation_id, 0u);
@@ -95,6 +98,9 @@ pub static SQUIRREL: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_squirrel(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let a = get_param(xform_id, variation_id, 0u);
@@ -137,6 +143,9 @@ pub static STRIPES: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_stripes(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let space = get_param(xform_id, variation_id, 0u);
@@ -197,6 +206,9 @@ fn init_shift(user: array<f32, 3>) -> array<f32, 2> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_shift(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let sx = get_param(xform_id, variation_id, 0u);
@@ -268,6 +280,9 @@ fn init_pressure_wave(user: array<f32, 2>) -> array<f32, 4> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_pressure_wave(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let pwx = get_param(xform_id, variation_id, 2u);
@@ -316,6 +331,9 @@ pub static SPHERICALN: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_sphericaln(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let power = get_param(xform_id, variation_id, 0u);
@@ -384,6 +402,9 @@ fn init_spligon(user: array<f32, 2>) -> array<f32, 3> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_spligon(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let th = get_param(xform_id, variation_id, 2u);
@@ -434,6 +455,9 @@ pub static TILE_HLP: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_tile_hlp(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let width = get_param(xform_id, variation_id, 0u);

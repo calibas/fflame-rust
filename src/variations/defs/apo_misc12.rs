@@ -56,6 +56,9 @@ pub static RINGS: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_rings(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let xf = transforms[xform_id];
@@ -100,6 +103,9 @@ pub static RIPPLED: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_rippled(p: vec2<f32>) -> vec2<f32> {
     let d = p.x * p.x + p.y * p.y + 1e-30;
@@ -152,6 +158,9 @@ fn init_waffle(user: array<f32, 4>) -> array<f32, 2> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_waffle(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let slices = max(get_param(xform_id, variation_id, 0u), 1.0);
@@ -243,6 +252,9 @@ pub static STRIPFIT: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_stripfit(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let dx = get_param(xform_id, variation_id, 0u);

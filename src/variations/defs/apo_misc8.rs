@@ -78,6 +78,9 @@ pub static CSC_SQUARED: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_csc_squared(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let csc_div = get_param(xform_id, variation_id, 0u);
@@ -148,6 +151,9 @@ pub static HYPERBOLICELLIPSE: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_hyperbolicellipse(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let a = get_param(xform_id, variation_id, 0u);
@@ -186,6 +192,9 @@ pub static LAYERED_SPIRAL: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_layered_spiral(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let radius = get_param(xform_id, variation_id, 0u);
@@ -243,6 +252,9 @@ pub static ATAN2_SPIRALS: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_atan2_spirals(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let r_mult = get_param(xform_id, variation_id, 0u);
@@ -329,6 +341,9 @@ pub static GRIDOUT2: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_gridout2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let a = get_param(xform_id, variation_id, 0u);

@@ -55,6 +55,9 @@ fn init_pre_circlecrop(user: array<f32, 5>) -> array<f32, 1> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_pre_circlecrop(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let cr = get_param(xform_id, variation_id, 0u);
@@ -135,6 +138,9 @@ fn init_post_circlecrop(user: array<f32, 5>) -> array<f32, 1> {
     return out;
 }
 "#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
     wgsl_2d: r#"
 fn variation_post_circlecrop(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let cr = get_param(xform_id, variation_id, 0u);
