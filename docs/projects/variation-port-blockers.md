@@ -5,10 +5,10 @@ need to be added to unblock them.
 
 This document is the companion to
 [`variation-bulk-port.md`](variation-bulk-port.md), which tracks what
-*has* been ported. As of the `port-stateful-variations` branch
-(2026-05-04, +3 state-using variations on top of the +8
-slot-blocked variations from `packed-variation-params`), the registry
-holds 486 variations; 154 of the 636 cpp variations in
+*has* been ported. As of the `port-easy-moderate-batch` branch
+(2026-05-05, +5 variations on top of the prior `packed-variation-params`
+and `port-stateful-variations` branches), the registry holds 491
+variations; 149 of the 636 cpp variations in
 `output/jwildfire-vars/output/` remain unported.
 
 ## Unsupported features
@@ -156,6 +156,8 @@ validation:
 | `curliecue2` | 4 state | Sosa walker; first state-only port |
 | `farblur` | 5 state + accum | zephyrtronium; first needs_accum port |
 | `macmillan` | 3 state + accum + writes_color + state_init | First port using all four new mechanisms |
+| `hexaplay3D` | 3 state + accum + replacement-style accum write | Berlin 2009 hex snowflake (2026-05-05) |
+| `hexnix3D` | 3 state + accum + replacement-style + smooth/3-mode majplane | Berlin 2009 animated-friendly variant (2026-05-05) |
 
 Still pending (originally listed under #6 but mostly blocked by other
 features once you read the cpp body carefully):
@@ -168,8 +170,6 @@ features once you read the cpp body carefully):
 | `dc_dmodulus` | `_oldColor` accumulator (also DC_BaseFunc #8) |
 | `dc_crackle_wf` | Crackle algorithm state (also #8) |
 | `dc_cracklep_wf` | Crackle algorithm state (also #8) |
-| `hexaplay3d` | Now portable with state+accum, but uses replacement-style `FPx = …` (needs `(desired − accum) / weight` workaround) |
-| `hexnix3d` | Same as hexaplay3d, plus more smoothing terms |
 | `klein_group` | `prev_matrix` only — but blocked by #11 (Complex math runtime), not state |
 | `mandelbrot` | `_x0/_y0` + `_xP/_yP/_zP` point cache + `_pIdx` — actually cross-dispatch persistence |
 | `nblur` | Rejection-sampling state |
@@ -305,10 +305,11 @@ or porting all 31 as no-op blurs would address them.
 | `scry_3d` | Reads `FPz` (`Foopzee = FPz` branch) |
 | `post_smartcrop` | Reads `*pFPx/*pFPy/*pFPz` via stored pointers + persistent state |
 
-### Over 16-slot budget (#10) — 5 remaining (8 ported, 2026-05-04)
+### Over 16-slot budget (#10) — 2 remaining (11 ported)
 
 Packed-variation-params buffer eliminated the per-variation 16-slot
-ceiling. Ported on the `packed-variation-params` branch:
+ceiling. Ported across `packed-variation-params` (8) and
+`port-easy-moderate-batch` (3):
 
 | Variation | Slots | Notes |
 |---|---|---|
@@ -320,16 +321,16 @@ ceiling. Ported on the `packed-variation-params` branch:
 | `w` | 14 user + 7 init | Faber Lost Variations angle-rotate-and-clip |
 | `quaternion` | 92 user + 1 init | zephyrtronium / Stefanov 13-subfunction mega-variation |
 | `xtrb` | 6 user + 22 init | Zueuk's TriBorders trilinear hex variation |
+| `harmonograph_js` | 18 user | Sosa damped-pendulum harmonograph (2026-05-05) |
+| `rhodonea` | 15 user + 5 init | CozyG rose curves with 7×7 mode switch (2026-05-05) |
+| `complex` | 64 user | cothe / Stefanov 14-subfunction 2D analog of quaternion (2026-05-05) |
 
 Still pending — additional non-slot blockers prevent porting:
 
 | Variation | Slot count | Other blockers |
 |---|---|---|
-| `complex` | ~50+ params (14 trig combinations × 4 mods each) | None — pure slot count, can be ported next |
-| `harmonograph_js` | 18 user | None — can be ported next |
 | `pre_recip` | 15 user + complex math | #11 (complex helpers `Complex.Recip/Sqrt/AsinH/...`) + partly #1 |
 | `prepost_affine` | 15 user + 18 init | #12 prepost — needs phase compromise |
-| `rhodonea` | 15 user + 5 init | None — can be ported next |
 
 ### Mandelbrot / fractal-iteration family — 8 variations
 

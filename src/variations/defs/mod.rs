@@ -128,6 +128,11 @@ mod xtrb_misc;
 mod curliecue2_misc;
 mod farblur_misc;
 mod macmillan_misc;
+mod harmonograph_misc;
+mod rhodonea_misc;
+mod complex_misc;
+mod hexaplay3d_misc;
+mod hexnix3d_misc;
 
 pub use basic::*;
 pub use advanced::*;
@@ -254,6 +259,11 @@ pub use xtrb_misc::*;
 pub use curliecue2_misc::*;
 pub use farblur_misc::*;
 pub use macmillan_misc::*;
+pub use harmonograph_misc::*;
+pub use rhodonea_misc::*;
+pub use complex_misc::*;
+pub use hexaplay3d_misc::*;
+pub use hexnix3d_misc::*;
 
 use super::definition::VariationDef;
 
@@ -876,4 +886,14 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &FARBLUR,
     // macmillan_misc: macmillan (5 user + 3 state, needs_accum + writes_color + custom init)
     &MACMILLAN,
+    // harmonograph_misc: harmonograph_js (18 user) — Sosa damped-pendulum harmonograph
+    &HARMONOGRAPH_JS,
+    // rhodonea_misc: rhodonea (15 user + 5 init, 7×7 mode switch) — CozyG rose curves
+    &RHODONEA,
+    // complex_misc: complex (64 user) — cothe / Stefanov 14-subfunction 2D analog of quaternion
+    &COMPLEX,
+    // hexaplay3d_misc: hexaplay3D (3 user + 3 state, replacement-style accum + state_init) — Berlin 2009
+    &HEXAPLAY_3D,
+    // hexnix3d_misc: hexnix3D (4 user + 3 state, replacement-style with smooth+majplane modes) — Berlin 2009
+    &HEXNIX_3D,
 ];
