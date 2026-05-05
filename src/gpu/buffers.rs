@@ -3,8 +3,27 @@ use egui_wgpu::wgpu::util::DeviceExt;
 use crate::scene::transforms::{Transform, Flame};
 use crate::scene::palette::Palette;
 
-/// Maximum number of transforms supported (buffer is pre-allocated for this many)
+/// Maximum number of normal transforms supported (buffer is pre-allocated for this many).
+/// This is the historical name; for clarity prefer `MAX_NORMAL_TRANSFORMS`.
 pub const MAX_TRANSFORMS: usize = 32;
+
+/// Same as `MAX_TRANSFORMS` — the cap on normal transforms in a flame.
+/// See `docs/projects/per-transform-linked-and-final.md`.
+pub const MAX_NORMAL_TRANSFORMS: usize = 32;
+
+/// Maximum number of Linked transforms in the per-flame Linked pool.
+/// Referenced by index from each normal transform's
+/// `linked_attachments`. Multiple normals can share the same Linked.
+pub const MAX_LINKED_TRANSFORMS: usize = 32;
+
+/// Maximum number of Final transforms in the per-flame Final pool.
+/// Referenced by index from each normal transform's
+/// `final_attachments`. Multiple normals can share the same Final.
+pub const MAX_FINAL_TRANSFORMS: usize = 32;
+
+/// Maximum number of attachments (linked + final) per normal transform.
+/// Practically the cap on chain length for a single iteration.
+pub const MAX_ATTACHMENTS_PER_TRANSFORM: usize = 32;
 
 /// GPU representation of Transform (must match WGSL struct layout)
 #[repr(C)]
@@ -124,6 +143,88 @@ impl GpuTransform {
 /// not to any single variation. Even pathological flames stay well
 /// below this — typical flames use 30-150 slots.
 pub const MAX_VARIATION_PARAM_SLOTS: usize = 1600;
+
+/// GPU-side per-normal-transform list of attached Linked and Final
+/// indexes. Buffer is `array<GpuAttachmentList, MAX_NORMAL_TRANSFORMS>`
+/// — one entry per normal transform slot, indexed by `xform_id`.
+///
+/// Layout: each list is a fixed-capacity `[u32; 32]` plus a count.
+/// Unused tail entries are zero (the count gates how many are read).
+/// Indices in `linked` reference `linked_transforms[]`; indices in
+/// `final_` reference `final_transforms[]`.
+///
+/// std430 alignment: `array<u32, N>` is tightly packed, `u32` is
+/// 4-byte aligned. Total size: 32·4 + 4 + 32·4 + 4 = 264 bytes per
+/// entry, or 8.25 KB for the whole buffer at MAX_NORMAL_TRANSFORMS=32.
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct GpuAttachmentList {
+    pub linked: [u32; MAX_ATTACHMENTS_PER_TRANSFORM],
+    pub linked_count: u32,
+    pub final_: [u32; MAX_ATTACHMENTS_PER_TRANSFORM],
+    pub final_count: u32,
+}
+
+unsafe impl bytemuck::Pod for GpuAttachmentList {}
+unsafe impl bytemuck::Zeroable for GpuAttachmentList {}
+
+impl GpuAttachmentList {
+    /// Pack a normal transform's attachment lists into the GPU layout.
+    /// Truncates to `MAX_ATTACHMENTS_PER_TRANSFORM` with a warning if
+    /// either list exceeds the cap. Pool indexes that exceed their
+    /// respective MAX caps (`MAX_LINKED_TRANSFORMS` /
+    /// `MAX_FINAL_TRANSFORMS`) are dropped with a warning — host-side
+    /// validation should have caught this earlier.
+    pub fn from_transform(t: &crate::scene::transforms::Transform) -> Self {
+        let mut linked = [0u32; MAX_ATTACHMENTS_PER_TRANSFORM];
+        let mut final_ = [0u32; MAX_ATTACHMENTS_PER_TRANSFORM];
+
+        let mut linked_count = 0u32;
+        for &idx in t.linked_attachments.iter() {
+            if linked_count as usize >= MAX_ATTACHMENTS_PER_TRANSFORM {
+                log::warn!(
+                    "Transform has more than {} linked attachments; truncating",
+                    MAX_ATTACHMENTS_PER_TRANSFORM
+                );
+                break;
+            }
+            if idx >= MAX_LINKED_TRANSFORMS {
+                log::warn!("Linked attachment index {} exceeds cap {}; dropped", idx, MAX_LINKED_TRANSFORMS);
+                continue;
+            }
+            linked[linked_count as usize] = idx as u32;
+            linked_count += 1;
+        }
+
+        let mut final_count = 0u32;
+        for &idx in t.final_attachments.iter() {
+            if final_count as usize >= MAX_ATTACHMENTS_PER_TRANSFORM {
+                log::warn!(
+                    "Transform has more than {} final attachments; truncating",
+                    MAX_ATTACHMENTS_PER_TRANSFORM
+                );
+                break;
+            }
+            if idx >= MAX_FINAL_TRANSFORMS {
+                log::warn!("Final attachment index {} exceeds cap {}; dropped", idx, MAX_FINAL_TRANSFORMS);
+                continue;
+            }
+            final_[final_count as usize] = idx as u32;
+            final_count += 1;
+        }
+
+        Self { linked, linked_count, final_, final_count }
+    }
+
+    pub fn empty() -> Self {
+        Self {
+            linked: [0u32; MAX_ATTACHMENTS_PER_TRANSFORM],
+            linked_count: 0,
+            final_: [0u32; MAX_ATTACHMENTS_PER_TRANSFORM],
+            final_count: 0,
+        }
+    }
+}
 
 /// GPU representation of variation parameters for ONE transform.
 ///
