@@ -5,10 +5,9 @@ need to be added to unblock them.
 
 This document is the companion to
 [`variation-bulk-port.md`](variation-bulk-port.md), which tracks what
-*has* been ported. As of the `port-easy-moderate-batch` branch
-(2026-05-05, +5 variations on top of the prior `packed-variation-params`
-and `port-stateful-variations` branches), the registry holds 491
-variations; 149 of the 636 cpp variations in
+*has* been ported. As of the `complex-math-and-klein-group` branch
+(2026-05-05, +1 variation `klein_group` on top of the prior batches),
+the registry holds 492 variations; 148 of the 636 cpp variations in
 `output/jwildfire-vars/output/` remain unported.
 
 ## Unsupported features
@@ -128,6 +127,18 @@ haven't built it yet" and could be added with focused work.
     last sample. Some variations need higher caps that affect
     performance.
 
+14. **~~Complex math runtime~~** — RESOLVED 2026-05-05 by
+    [`shaders/core/complex.wgsl`](../../shaders/core/complex.wgsl)
+    (~90 LoC). Provides `cadd, csub, cmul, cdiv, cconj, cmag2, csquare,
+    csqrt, cmul_real` and a `CMat2` type with `cmat2_make, cmat2_apply`
+    (Möbius transformation), `cmat2_inverse_sl2`. Injected before
+    `utilities.wgsl` in main / tiled / export / init shaders.
+    Transcendental complex functions (`cexp, clog, csin/cos/tan, cpow,
+    csinh, asinh/acosh/...`) NOT included — adds opportunistically as
+    future variations need them. Unblocked `klein_group` (Indra's
+    Pearls Kleinian limit-set chaos game). See
+    [`complex-math-and-klein-group.md`](complex-math-and-klein-group.md).
+
 ### Special case: complete duplicates
 
 Three variations in the cpp set are exact (or near-exact) duplicates
@@ -158,6 +169,7 @@ validation:
 | `macmillan` | 3 state + accum + writes_color + state_init | First port using all four new mechanisms |
 | `hexaplay3D` | 3 state + accum + replacement-style accum write | Berlin 2009 hex snowflake (2026-05-05) |
 | `hexnix3D` | 3 state + accum + replacement-style + smooth/3-mode majplane | Berlin 2009 animated-friendly variant (2026-05-05) |
+| `klein_group` | 1 state + 16 init + complex math + state_init | Indra's Pearls Kleinian chaos game; 7 recipes (Grandma/Maskit/Jorgensen/Riley/+modified) (2026-05-05) |
 
 Still pending (originally listed under #6 but mostly blocked by other
 features once you read the cpp body carefully):
@@ -170,7 +182,6 @@ features once you read the cpp body carefully):
 | `dc_dmodulus` | `_oldColor` accumulator (also DC_BaseFunc #8) |
 | `dc_crackle_wf` | Crackle algorithm state (also #8) |
 | `dc_cracklep_wf` | Crackle algorithm state (also #8) |
-| `klein_group` | `prev_matrix` only — but blocked by #11 (Complex math runtime), not state |
 | `mandelbrot` | `_x0/_y0` + `_xP/_yP/_zP` point cache + `_pIdx` — actually cross-dispatch persistence |
 | `nblur` | Rejection-sampling state |
 | `pre_stabilize` | `x[64]/y[64]/c[64]` plus `start` flag — needs custom thread-init |
@@ -329,7 +340,7 @@ Still pending — additional non-slot blockers prevent porting:
 
 | Variation | Slot count | Other blockers |
 |---|---|---|
-| `pre_recip` | 15 user + complex math | #11 (complex helpers `Complex.Recip/Sqrt/AsinH/...`) + partly #1 |
+| `pre_recip` | 15 user + complex math | #14 transcendentals (`Complex.AsinH/AcosH/AtanH/AsecH/AcosecH/AcotH`) — basic ops now available, transcendentals still needed |
 | `prepost_affine` | 15 user + 18 init | #12 prepost — needs phase compromise |
 
 ### Mandelbrot / fractal-iteration family — 8 variations
