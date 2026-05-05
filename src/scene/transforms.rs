@@ -1263,6 +1263,26 @@ impl Default for Flame {
 }
 
 impl Flame {
+    /// Index in the GPU concatenated transforms buffer where the
+    /// LEGACY `flame.final_transform` is appended (see
+    /// `GpuTransform::from_flame` doc). Equals
+    /// `transforms.len() + linked_transforms.len() + final_transforms.len()`.
+    /// Only meaningful while `final_transform` is `Some`; the renderer
+    /// gates on `has_final_transform`. Removed in Phase 4 along with
+    /// the legacy field.
+    pub fn legacy_final_slot(&self) -> u32 {
+        (self.transforms.len() + self.linked_transforms.len() + self.final_transforms.len()) as u32
+    }
+
+    /// Total GPU transform slot count: normals + linkeds + finals + 1
+    /// (legacy final, if present).
+    pub fn total_gpu_transform_slots(&self) -> usize {
+        self.transforms.len()
+            + self.linked_transforms.len()
+            + self.final_transforms.len()
+            + if self.final_transform.is_some() { 1 } else { 0 }
+    }
+
     /// Migrate a legacy singular `final_transform` into the new
     /// `final_transforms` pool with an attachment on every normal
     /// transform. The legacy field is left populated for now (so the
@@ -1288,29 +1308,27 @@ impl Flame {
         self.transforms.push(transform);
     }
 
-    /// Extract all active variation names from all transforms
+    /// Extract all active variation names from all three pools.
+    /// Used by the shader builder to compile only the variations a
+    /// flame actually uses.
     pub fn extract_active_variations(&self) -> HashMap<String, f32> {
         let mut all_variations = HashMap::new();
-
-        // Extract from regular transforms
-        for transform in &self.transforms {
-            for (name, weight) in &transform.variations {
-                // Track max weight if variation used in multiple transforms
+        let mut absorb = |t: &Transform, all: &mut HashMap<String, f32>| {
+            for (name, weight) in &t.variations {
                 if weight.abs() > 1e-6 {
-                    let existing = all_variations.entry(name.clone()).or_insert(0.0);
+                    let existing = all.entry(name.clone()).or_insert(0.0);
                     *existing = f32::max(*existing, *weight);
                 }
             }
-        }
+        };
 
-        // Extract from final transform if present
+        for t in &self.transforms { absorb(t, &mut all_variations); }
+        for t in &self.linked_transforms { absorb(t, &mut all_variations); }
+        for t in &self.final_transforms { absorb(t, &mut all_variations); }
+
+        // Legacy global Final — kept in extract until Phase 4 drops the field.
         if let Some(final_xform) = &self.final_transform {
-            for (name, weight) in &final_xform.variations {
-                if weight.abs() > 1e-6 {
-                    let existing = all_variations.entry(name.clone()).or_insert(0.0);
-                    *existing = f32::max(*existing, *weight);
-                }
-            }
+            absorb(final_xform, &mut all_variations);
         }
 
         all_variations

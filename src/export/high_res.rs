@@ -744,7 +744,7 @@ impl HighResExporter {
                 fog_start: config.fog_start,
                 histogram_color_scale: config.histogram_color_scale,
                 has_final_transform: if config.flame.final_transform.is_some() { 1 } else { 0 },
-                final_transform_index: config.flame.transforms.len() as u32,
+                final_transform_index: config.flame.legacy_final_slot(),
                 bits_per_transform: crate::gpu::buffers::bits_per_transform(config.flame.transforms.len() as u32),
                 path_map_style: config.path_map_style as u32,
                 path_capture_mode: config.path_capture_mode as u32,

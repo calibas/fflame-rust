@@ -3,26 +3,24 @@ use egui_wgpu::wgpu::util::DeviceExt;
 use crate::scene::transforms::{Transform, Flame};
 use crate::scene::palette::Palette;
 
-/// Maximum number of normal transforms supported (buffer is pre-allocated for this many).
-/// This is the historical name; for clarity prefer `MAX_NORMAL_TRANSFORMS`.
-pub const MAX_TRANSFORMS: usize = 32;
-
-/// Same as `MAX_TRANSFORMS` — the cap on normal transforms in a flame.
+/// Maximum total number of transforms per flame, summed across the
+/// normal / linked / final pools. The GPU `transforms` buffer is a
+/// single concatenated array of this size: normals occupy the first
+/// `flame.transforms.len()` slots, linkeds the next
+/// `flame.linked_transforms.len()`, finals the next
+/// `flame.final_transforms.len()`. Per-pool CPU-side indexes are
+/// translated to global xform_ids during GPU packing.
+///
+/// Bumped from the legacy 32 to 128 in the per-transform-linked-and-final
+/// project (~880 KB GPU buffer total per flame; trivial). Soft cap
+/// (logs warning + truncates if exceeded).
+///
 /// See `docs/projects/per-transform-linked-and-final.md`.
-pub const MAX_NORMAL_TRANSFORMS: usize = 32;
-
-/// Maximum number of Linked transforms in the per-flame Linked pool.
-/// Referenced by index from each normal transform's
-/// `linked_attachments`. Multiple normals can share the same Linked.
-pub const MAX_LINKED_TRANSFORMS: usize = 32;
-
-/// Maximum number of Final transforms in the per-flame Final pool.
-/// Referenced by index from each normal transform's
-/// `final_attachments`. Multiple normals can share the same Final.
-pub const MAX_FINAL_TRANSFORMS: usize = 32;
+pub const MAX_TRANSFORMS: usize = 128;
 
 /// Maximum number of attachments (linked + final) per normal transform.
-/// Practically the cap on chain length for a single iteration.
+/// Per-normal chain length cap — independent of the total transform
+/// budget. 32 is generous for typical flames.
 pub const MAX_ATTACHMENTS_PER_TRANSFORM: usize = 32;
 
 /// GPU representation of Transform (must match WGSL struct layout)
@@ -107,6 +105,25 @@ impl GpuTransform {
     /// Create GPU transforms from a Flame, handling solo mode.
     /// Computes the per-flame local index map once, then populates each
     /// transform's variation slot array against that map.
+    /// Pack the flame's three transform pools (normals, linkeds, finals)
+    /// into a single concatenated GPU array. Layout:
+    ///   slots 0..N                      — normals (N = flame.transforms.len())
+    ///   slots N..N+L                    — linkeds (L = flame.linked_transforms.len())
+    ///   slots N+L..N+L+F                — finals  (F = flame.final_transforms.len())
+    ///   slot  N+L+F                     — LEGACY: copy of flame.final_transform
+    ///                                     for the existing renderer's
+    ///                                     `FINAL_TRANSFORM_INDEX = end - 1`
+    ///                                     path. Removed in Phase 4.
+    ///
+    /// `xform_id` in the shader is a global index into this array.
+    /// Per-pool CPU indexes (in `Transform::linked_attachments` /
+    /// `final_attachments`) get translated to global xform_ids during
+    /// attachment-list packing — see `GpuAttachmentList::from_transform`.
+    ///
+    /// Solo mode (a normal-only feature) sets effective_opacity to 0
+    /// for non-solo normals; linkeds and finals always run with their
+    /// own opacity (currently irrelevant for them since plot opacity
+    /// inherits from the normal that fired).
     pub fn from_flame(flame: &Flame, registry: &crate::variations::VariationRegistry) -> Vec<Self> {
         let local_map = crate::scene::transforms::compute_local_index_map(
             flame.extract_active_variations().into_keys(),
@@ -114,19 +131,37 @@ impl GpuTransform {
         );
         let solo_idx = flame.solo_transform;
 
-        let mut gpu_transforms: Vec<Self> = flame.transforms
-            .iter()
-            .enumerate()
-            .map(|(i, xform)| {
-                let effective_opacity = match solo_idx {
-                    Some(solo) if i != solo => 0.0,
-                    _ => xform.opacity,
-                };
-                Self::from_transform_with_opacity(xform, effective_opacity, &local_map)
-            })
-            .collect();
+        let mut gpu_transforms: Vec<Self> = Vec::with_capacity(
+            flame.transforms.len()
+                + flame.linked_transforms.len()
+                + flame.final_transforms.len()
+                + 1, // legacy final spot
+        );
 
-        // Append final transform if present (not affected by solo mode)
+        // 1. Normals (subject to solo mode)
+        for (i, xform) in flame.transforms.iter().enumerate() {
+            let effective_opacity = match solo_idx {
+                Some(solo) if i != solo => 0.0,
+                _ => xform.opacity,
+            };
+            gpu_transforms.push(Self::from_transform_with_opacity(xform, effective_opacity, &local_map));
+        }
+
+        // 2. Linkeds
+        for xform in &flame.linked_transforms {
+            gpu_transforms.push(Self::from_transform(xform, &local_map));
+        }
+
+        // 3. Finals
+        for xform in &flame.final_transforms {
+            gpu_transforms.push(Self::from_transform(xform, &local_map));
+        }
+
+        // 4. LEGACY: append a copy of `flame.final_transform` so the
+        //    existing renderer (which reads `transforms[FINAL_TRANSFORM_INDEX]`)
+        //    keeps working until Phase 4 rewires it. The host-side
+        //    `final_transform_index` is computed to point HERE — see
+        //    `GpuParams::final_transform_index` setter.
         if let Some(ref final_xform) = flame.final_transform {
             gpu_transforms.push(Self::from_transform(final_xform, &local_map));
         }
@@ -169,13 +204,28 @@ unsafe impl bytemuck::Pod for GpuAttachmentList {}
 unsafe impl bytemuck::Zeroable for GpuAttachmentList {}
 
 impl GpuAttachmentList {
-    /// Pack a normal transform's attachment lists into the GPU layout.
-    /// Truncates to `MAX_ATTACHMENTS_PER_TRANSFORM` with a warning if
-    /// either list exceeds the cap. Pool indexes that exceed their
-    /// respective MAX caps (`MAX_LINKED_TRANSFORMS` /
-    /// `MAX_FINAL_TRANSFORMS`) are dropped with a warning — host-side
-    /// validation should have caught this earlier.
-    pub fn from_transform(t: &crate::scene::transforms::Transform) -> Self {
+    /// Pack a normal transform's attachment lists into the GPU layout,
+    /// translating per-pool CPU indexes into the GLOBAL xform_id space
+    /// of the concatenated transforms buffer.
+    ///
+    /// Layout convention (set by host packing — see `GpuTransform::from_flame`):
+    ///   slots 0..normal_count                                      — normals
+    ///   slots normal_count..normal_count+linked_count               — linkeds
+    ///   slots normal_count+linked_count..total                      — finals
+    ///
+    /// `linked_offset = flame.transforms.len()`,
+    /// `final_offset  = flame.transforms.len() + flame.linked_transforms.len()`.
+    ///
+    /// Truncates to `MAX_ATTACHMENTS_PER_TRANSFORM` with a warning. Pool
+    /// indexes that overflow their pool's actual size are dropped with a
+    /// warning (host-side validation should catch this earlier).
+    pub fn from_transform(
+        t: &crate::scene::transforms::Transform,
+        linked_offset: usize,
+        linked_count_total: usize,
+        final_offset: usize,
+        final_count_total: usize,
+    ) -> Self {
         let mut linked = [0u32; MAX_ATTACHMENTS_PER_TRANSFORM];
         let mut final_ = [0u32; MAX_ATTACHMENTS_PER_TRANSFORM];
 
@@ -188,11 +238,11 @@ impl GpuAttachmentList {
                 );
                 break;
             }
-            if idx >= MAX_LINKED_TRANSFORMS {
-                log::warn!("Linked attachment index {} exceeds cap {}; dropped", idx, MAX_LINKED_TRANSFORMS);
+            if idx >= linked_count_total {
+                log::warn!("Linked attachment index {} exceeds linked pool size {}; dropped", idx, linked_count_total);
                 continue;
             }
-            linked[linked_count as usize] = idx as u32;
+            linked[linked_count as usize] = (linked_offset + idx) as u32;
             linked_count += 1;
         }
 
@@ -205,11 +255,11 @@ impl GpuAttachmentList {
                 );
                 break;
             }
-            if idx >= MAX_FINAL_TRANSFORMS {
-                log::warn!("Final attachment index {} exceeds cap {}; dropped", idx, MAX_FINAL_TRANSFORMS);
+            if idx >= final_count_total {
+                log::warn!("Final attachment index {} exceeds final pool size {}; dropped", idx, final_count_total);
                 continue;
             }
-            final_[final_count as usize] = idx as u32;
+            final_[final_count as usize] = (final_offset + idx) as u32;
             final_count += 1;
         }
 
@@ -319,10 +369,27 @@ impl GpuVariationParams {
                 local_map.keys().collect::<Vec<_>>(),
             );
         }
-        let mut result: Vec<Self> = flame.transforms
-            .iter()
-            .map(|xform| Self::from_transform(xform, &local_map, registry))
-            .collect();
+        // Concatenated layout: normals, then linkeds, then finals,
+        // then a legacy copy of flame.final_transform (see
+        // `GpuTransform::from_flame` doc comment for layout details).
+        // xform_id in the shader indexes into both the transforms array
+        // and this params array simultaneously, so the orderings must
+        // match.
+        let mut result: Vec<Self> = Vec::with_capacity(
+            flame.transforms.len()
+                + flame.linked_transforms.len()
+                + flame.final_transforms.len()
+                + 1,
+        );
+        for xform in &flame.transforms {
+            result.push(Self::from_transform(xform, &local_map, registry));
+        }
+        for xform in &flame.linked_transforms {
+            result.push(Self::from_transform(xform, &local_map, registry));
+        }
+        for xform in &flame.final_transforms {
+            result.push(Self::from_transform(xform, &local_map, registry));
+        }
         if let Some(ref final_xform) = flame.final_transform {
             result.push(Self::from_transform(final_xform, &local_map, registry));
         }
@@ -330,12 +397,18 @@ impl GpuVariationParams {
     }
 }
 
-/// Calculate bits needed per transform index based on transform count
+/// Calculate bits needed per (normal) transform index based on the
+/// normal-transform count. Used by the PathMap color mode's per-pixel
+/// path-hash packing (`xform_idx` is the NORMAL transform's index, not
+/// a global xform_id, since chaos-game selection is among normals only).
+///
 /// - 1-2 transforms: 1 bit
 /// - 3-4 transforms: 2 bits
 /// - 5-8 transforms: 3 bits
 /// - 9-16 transforms: 4 bits
 /// - 17-32 transforms: 5 bits
+/// - 33-64 transforms: 6 bits
+/// - 65-128 transforms: 7 bits
 pub fn bits_per_transform(num_transforms: u32) -> u32 {
     if num_transforms <= 2 {
         1
@@ -345,8 +418,12 @@ pub fn bits_per_transform(num_transforms: u32) -> u32 {
         3
     } else if num_transforms <= 16 {
         4
+    } else if num_transforms <= 32 {
+        5
+    } else if num_transforms <= 64 {
+        6
     } else {
-        5  // Up to 32 transforms
+        7  // Up to 128 transforms
     }
 }
 
@@ -689,7 +766,7 @@ impl FlameBuffers {
             fog_start: crate::config::DEFAULT_FOG_START,
             histogram_color_scale: crate::config::DEFAULT_HISTOGRAM_COLOR_SCALE,
             has_final_transform: if flame.final_transform.is_some() { 1 } else { 0 },
-            final_transform_index: flame.transforms.len() as u32,
+            final_transform_index: flame.legacy_final_slot(),
             bits_per_transform: bits_per_transform(flame.transforms.len() as u32),
             path_map_style: 0,
             path_capture_mode: 0, // FirstHit by default
@@ -1144,10 +1221,18 @@ impl FlameBuffers {
 
     /// Update transforms
     pub fn update_transforms(&self, queue: &Queue, flame: &Flame) {
-        // Check space for regular transforms + optional final transform
-        let total_transforms = flame.transforms.len() + if flame.final_transform.is_some() { 1 } else { 0 };
+        // Check space for normals + linkeds + finals + legacy_final.
+        let total_transforms = flame.total_gpu_transform_slots();
         if total_transforms > MAX_TRANSFORMS {
-            panic!("Flame has {} transforms (+ final) but MAX_TRANSFORMS is {}", flame.transforms.len(), MAX_TRANSFORMS);
+            panic!(
+                "Flame has {} total transform slots (normals={} + linkeds={} + finals={} + legacy_final={}) but MAX_TRANSFORMS is {}",
+                total_transforms,
+                flame.transforms.len(),
+                flame.linked_transforms.len(),
+                flame.final_transforms.len(),
+                if flame.final_transform.is_some() { 1 } else { 0 },
+                MAX_TRANSFORMS,
+            );
         }
 
         // Create transforms with solo mode handling
@@ -1165,10 +1250,18 @@ impl FlameBuffers {
 
     /// Update variation parameters
     pub fn update_variation_params(&self, queue: &Queue, flame: &Flame) {
-        // Check space for regular transforms + optional final transform
-        let total_transforms = flame.transforms.len() + if flame.final_transform.is_some() { 1 } else { 0 };
+        // Check space for normals + linkeds + finals + legacy_final.
+        let total_transforms = flame.total_gpu_transform_slots();
         if total_transforms > MAX_TRANSFORMS {
-            panic!("Flame has {} transforms (+ final) but MAX_TRANSFORMS is {}", flame.transforms.len(), MAX_TRANSFORMS);
+            panic!(
+                "Flame has {} total transform slots (normals={} + linkeds={} + finals={} + legacy_final={}) but MAX_TRANSFORMS is {}",
+                total_transforms,
+                flame.transforms.len(),
+                flame.linked_transforms.len(),
+                flame.final_transforms.len(),
+                if flame.final_transform.is_some() { 1 } else { 0 },
+                MAX_TRANSFORMS,
+            );
         }
 
         // Create a fixed-size array with all variation parameters, padding with zeroes
