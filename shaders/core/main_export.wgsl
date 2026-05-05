@@ -70,7 +70,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
         var vc: f32 = c_base;
 
-        // Apply affine + variations (3D, Step 2)
+        // NORMAL transform: affine + variations + post-affine
         let affine_p = apply_affine(xform, current);
         current = apply_variations(xform, xform_idx, affine_p, &rng, &vc);
 {{else}}
@@ -78,13 +78,27 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let affine_p = apply_affine(xform, current);
         current = apply_variations(xform, xform_idx, affine_p, &rng);
 {{/if}}
-
-        // Apply post-affine if enabled for this transform
         if (xform.post_enabled > 0.5) {
             current = apply_post_affine(xform, current);
         }
 
-        // Calculate speed
+        // LINKED CHAIN — see main_template.wgsl for full doc.
+        let attach = attachments[xform_idx];
+        for (var li = 0u; li < attach.linked_count; li = li + 1u) {
+            let lid = attach.linked[li];
+            let lxform = transforms[lid];
+            let laff = apply_affine(lxform, current);
+{{#if HAS_DC}}
+            current = apply_variations(lxform, lid, laff, &rng, &vc);
+{{else}}
+            current = apply_variations(lxform, lid, laff, &rng);
+{{/if}}
+            if (lxform.post_enabled > 0.5) {
+                current = apply_post_affine(lxform, current);
+            }
+        }
+
+        // Speed uses post-Linked position (= P_linked).
         let speed = length(current - old_pos);
 
 {{#if HAS_DC}}
@@ -114,21 +128,20 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         // Skip burn-in
         if (i >= params.burn_in) {
-            // Apply final transform if present
+            // FINAL CHAIN — plot-time filter; output not fed forward.
             var final_pos = current;
-            if (params.has_final_transform != 0u) {
-                let final_xform = transforms[params.final_transform_index];
+            for (var fi = 0u; fi < attach.final_count; fi = fi + 1u) {
+                let fid = attach.final_[fi];
+                let fxform = transforms[fid];
+                let faff = apply_affine(fxform, final_pos);
 {{#if HAS_DC}}
-                var final_vc: f32 = color_index;
-                let affine_p = apply_affine(final_xform, current);
-                final_pos = apply_variations(final_xform, params.final_transform_index, affine_p, &rng, &final_vc);
+                var final_vc: f32 = color_index;  // discarded after the call
+                final_pos = apply_variations(fxform, fid, faff, &rng, &final_vc);
 {{else}}
-                let affine_p = apply_affine(final_xform, current);
-                final_pos = apply_variations(final_xform, params.final_transform_index, affine_p, &rng);
+                final_pos = apply_variations(fxform, fid, faff, &rng);
 {{/if}}
-                // Post-affine on final transform
-                if (final_xform.post_enabled > 0.5) {
-                    final_pos = apply_post_affine(final_xform, final_pos);
+                if (fxform.post_enabled > 0.5) {
+                    final_pos = apply_post_affine(fxform, final_pos);
                 }
             }
 

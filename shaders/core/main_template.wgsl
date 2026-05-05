@@ -99,8 +99,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // Apophysis 3-step color flow (XForm.pas:312-313, 1067, 1078-1081),
         // emitted only when at least one active variation has writes_color: true:
         //   Step 1: c_base = color_speed-blended palette index
-        //   Step 2: variations run; DC variations (writes_color:true) write *vc
+        //   Step 2: normal + linked variations run; DC variations write *vc
         //   Step 3: color_index = c_base + direct_color * (vc - c_base)
+        // (Final variations may also write *vc but it's discarded — Final
+        //  is a plot-time filter, not part of dynamics.)
         var c_base: f32 = color_index;
         if (COLOR_MODE == 0u) {
             let symmetry = xform.color_speed;
@@ -108,7 +110,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
         var vc: f32 = c_base;
 
-        // Apply affine + variations (Step 2; vc gets passed for DC writes)
+        // Apply NORMAL transform: affine + variations + post-affine.
         let affine_p = apply_affine(xform, current);
         current = apply_variations(xform, xform_idx, affine_p, &rng, &vc);
 {{else}}
@@ -117,15 +119,35 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let affine_p = apply_affine(xform, current);
         current = apply_variations(xform, xform_idx, affine_p, &rng);
 {{/if}}
-
-        // Apply post-affine (compile-time gated for zero cost when unused)
         if (HAS_POST_AFFINE) {
             if (xform.post_enabled > 0.5) {
                 current = apply_post_affine(xform, current);
             }
         }
 
-        // Calculate speed (distance traveled)
+        // LINKED CHAIN — deterministic dynamics extension.
+        // Each Linked transform's output feeds the next iteration; their
+        // variations contribute to color flow (DC writes affect *vc).
+        // See docs/projects/per-transform-linked-and-final.md.
+        let attach = attachments[xform_idx];
+        for (var li = 0u; li < attach.linked_count; li = li + 1u) {
+            let lid = attach.linked[li];
+            let lxform = transforms[lid];
+            let laff = apply_affine(lxform, current);
+{{#if HAS_DC}}
+            current = apply_variations(lxform, lid, laff, &rng, &vc);
+{{else}}
+            current = apply_variations(lxform, lid, laff, &rng);
+{{/if}}
+            if (HAS_POST_AFFINE) {
+                if (lxform.post_enabled > 0.5) {
+                    current = apply_post_affine(lxform, current);
+                }
+            }
+        }
+
+        // After Linked chain: current = P_linked (feeds forward as
+        // next iteration's input). Speed and color flow use P_linked.
         let speed = length(current - old_pos);
 
 {{#if HAS_DC}}
@@ -190,33 +212,24 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         // Skip burn-in iterations
         if (i >= params.burn_in) {
-            // Apply final transform if present (hard-coded HAS_FINAL_TRANSFORM)
+            // FINAL CHAIN — pure plot-time filter. Each Final's variations
+            // and affine reshape what gets plotted but DON'T feed forward.
+            // DC writes from Final variations are discarded for color_index
+            // (color was already locked in after the Linked chain).
             var final_pos = current;
-            if (HAS_FINAL_TRANSFORM) {
-                let final_xform = transforms[FINAL_TRANSFORM_INDEX];
+            for (var fi = 0u; fi < attach.final_count; fi = fi + 1u) {
+                let fid = attach.final_[fi];
+                let fxform = transforms[fid];
+                let faff = apply_affine(fxform, final_pos);
 {{#if HAS_DC}}
-                // Final transform's vc is discarded — DC blend is per-iteration only.
-                var final_vc: f32 = color_index;
-{{#if RENDER_3D}}
-                let affine_p = apply_affine(final_xform, final_pos);
-                final_pos = apply_variations(final_xform, FINAL_TRANSFORM_INDEX, affine_p, &rng, &final_vc);
+                var final_vc: f32 = color_index;  // discarded after the call
+                final_pos = apply_variations(fxform, fid, faff, &rng, &final_vc);
 {{else}}
-                let affine_p = apply_affine(final_xform, current);
-                final_pos = apply_variations(final_xform, FINAL_TRANSFORM_INDEX, affine_p, &rng, &final_vc);
+                final_pos = apply_variations(fxform, fid, faff, &rng);
 {{/if}}
-{{else}}
-{{#if RENDER_3D}}
-                let affine_p = apply_affine(final_xform, final_pos);
-                final_pos = apply_variations(final_xform, FINAL_TRANSFORM_INDEX, affine_p, &rng);
-{{else}}
-                let affine_p = apply_affine(final_xform, current);
-                final_pos = apply_variations(final_xform, FINAL_TRANSFORM_INDEX, affine_p, &rng);
-{{/if}}
-{{/if}}
-                // Post-affine on final transform
                 if (HAS_POST_AFFINE) {
-                    if (final_xform.post_enabled > 0.5) {
-                        final_pos = apply_post_affine(final_xform, final_pos);
+                    if (fxform.post_enabled > 0.5) {
+                        final_pos = apply_post_affine(fxform, final_pos);
                     }
                 }
             }
