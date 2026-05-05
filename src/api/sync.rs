@@ -198,6 +198,11 @@ fn transform_from_api(resp: &TransformResponse) -> Transform {
         post_e: resp.post_e,
         post_f: resp.post_f,
         post_g: resp.post_g,
+        // API contract doesn't yet carry attachment lists. New transforms
+        // start with no attached Linked or Final; the legacy global Final
+        // (if any) gets migrated separately via `Flame::migrate_legacy_final`.
+        linked_attachments: Vec::new(),
+        final_attachments: Vec::new(),
     }
 }
 
@@ -544,15 +549,21 @@ pub fn flame_response_to_config(
         .as_ref()
         .and_then(|v| serde_json::from_value(v.clone()).ok());
 
-    let flame = Flame {
+    let mut flame = Flame {
         name: resp.name.clone(),
         transforms: transforms.iter().map(transform_from_api).collect(),
         final_transform,
+        linked_transforms: Vec::new(),
+        final_transforms: Vec::new(),
         render_mode: resp.render_mode.into(),
         perspective_strength: resp.perspective_strength,
         xaos,
         solo_transform: resp.solo_transform.map(|i| i as usize),
     };
+    // API doesn't yet carry the per-transform attachment lists.
+    // Migrate the legacy singular Final into the new pool so the rest
+    // of the pipeline sees a consistent shape.
+    flame.migrate_legacy_final();
 
     // Reconstruct palette
     let palette = palette_resp

@@ -195,6 +195,8 @@ pub fn generate_random_flame_with_rng<R: Rng>(settings: &RandomGeneratorSettings
         name: "Random".to_string(),
         transforms,
         final_transform: None,
+        linked_transforms: Vec::new(),
+        final_transforms: Vec::new(),
         render_mode,
         perspective_strength,
         xaos: None,
