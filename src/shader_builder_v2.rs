@@ -905,6 +905,12 @@ impl ShaderBuilder {
              @group(0) @binding(0) var<storage, read_write> variation_params: array<VariationParams>;\n\n",
         );
 
+        // 1a. Complex math helpers — init functions for variations like
+        //     klein_group use cmul/cdiv/csqrt to compute their generator
+        //     matrices. Always injected (~90 LoC, dead-code-eliminated).
+        shader.push_str(include_str!("../shaders/core/complex.wgsl"));
+        shader.push('\n');
+
         // 2. Emit each unique variation's init function (dedup by name).
         let mut emitted: HashSet<String> = HashSet::new();
         for (_xform_idx, var_name, _local_idx) in &pairs {
@@ -1082,6 +1088,12 @@ impl ShaderBuilder {
         //     declares state_count > 0; empty string for stateless flames).
         //     See docs/projects/intra-iteration-state-and-accum.md.
         shader.push_str(&self.build_state_accessors(flame, &active));
+        shader.push('\n');
+
+        // 8b. Complex arithmetic + 2x2 complex matrix helpers. Always
+        //     injected (~90 LoC, dead-code-eliminated when unused).
+        //     See docs/projects/complex-math-and-klein-group.md.
+        shader.push_str(include_str!("../shaders/core/complex.wgsl"));
         shader.push('\n');
 
         // 9. Utilities
@@ -1623,6 +1635,10 @@ impl ShaderBuilder {
         shader.push_str(&self.build_state_accessors(flame, &active));
         shader.push('\n');
 
+        // 6b. Complex arithmetic helpers (~90 LoC, dead-code-eliminated).
+        shader.push_str(include_str!("../shaders/core/complex.wgsl"));
+        shader.push('\n');
+
         // 7. Tiled utilities (uses full_width/full_height)
         shader.push_str(include_str!("../shaders/core/utilities_tiled.wgsl"));
         shader.push('\n');
@@ -1675,6 +1691,10 @@ impl ShaderBuilder {
 
         // 4a. Per-thread variation state (empty for stateless flames).
         shader.push_str(&self.build_state_accessors(flame, &active));
+        shader.push('\n');
+
+        // 4b. Complex arithmetic helpers (~90 LoC, dead-code-eliminated).
+        shader.push_str(include_str!("../shaders/core/complex.wgsl"));
         shader.push('\n');
 
         // 5. Standard utilities (no longer defines get_param, just helpers
