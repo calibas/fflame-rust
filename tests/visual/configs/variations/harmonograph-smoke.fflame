@@ -1,0 +1,58 @@
+{
+  "flame": {
+    "name": "HarmonographSmoke",
+    "transforms": [
+      {
+        "a": 1.0, "b": 0.0, "c": 0.0, "d": 1.0, "e": 0.0, "f": 0.0, "g": 0.0,
+        "weight": 1.0,
+        "variations": { "harmonograph_js": 1.0 },
+        "variation_params": {
+          "harmonograph_js.seed": 1234,
+          "harmonograph_js.time": 100,
+          "harmonograph_js.a1": 100,
+          "harmonograph_js.f1": 2.0,
+          "harmonograph_js.p1": 0,
+          "harmonograph_js.d1": 0.001,
+          "harmonograph_js.a2": 80,
+          "harmonograph_js.f2": 3.0,
+          "harmonograph_js.p2": 30,
+          "harmonograph_js.d2": 0.001,
+          "harmonograph_js.a3": 100,
+          "harmonograph_js.f3": 2.0,
+          "harmonograph_js.p3": 0,
+          "harmonograph_js.d3": 0.001,
+          "harmonograph_js.a4": 80,
+          "harmonograph_js.f4": 3.0,
+          "harmonograph_js.p4": 60,
+          "harmonograph_js.d4": 0.001
+        },
+        "color": 0.0, "color_speed": 0.0, "opacity": 1.0
+      }
+    ],
+    "render_mode": "TwoD",
+    "projection": "Orthographic"
+  },
+  "zoom": 1.0, "pan_x": 0.0, "pan_y": 0.0, "rotation": 0.0,
+  "camera_rotation_x": 0.0, "camera_rotation_y": 0.0, "camera_z": 0.0,
+  "density_scale": 1.0, "speed_factor": 0.5, "max_iterations": 5000000,
+  "histogram_color_scale": 100.0, "low_density_smoothing": 0.5,
+  "density_compression_strength": 0.0, "blend_factor": 0.1, "use_dynamic_blend": true,
+  "target_iterations_per_pixel": 0, "iterations_per_thread": 256, "speed_multiplier": 1,
+  "color_mode": "Palette", "palette_index": 1,
+  "palette": {
+    "name": "Smoke",
+    "stops": [
+      { "position": 0.0, "color": [0.05, 0.05, 0.2] },
+      { "position": 0.33, "color": [0.6, 0.2, 0.0] },
+      { "position": 0.66, "color": [0.9, 0.7, 0.1] },
+      { "position": 1.0, "color": [1.0, 1.0, 0.95] }
+    ],
+    "locked": false
+  },
+  "palette_rotation": 0.0, "background_color": [0.0, 0.0, 0.0],
+  "tonemap_mode": "Logarithmic",
+  "tonemap_curve": { "points": [{"x": 0.0, "y": 0.0}, {"x": 1.0, "y": 1.0}] },
+  "use_curve": true, "exposure": 1.0, "gamma": 1.0, "gamma_threshold": 0.0025,
+  "brightness": 1.0, "vibrancy": 1.0, "saturation": 1.0, "hue_shift": 0.0,
+  "value_scale": 1.0, "deterministic_rng": true
+}
