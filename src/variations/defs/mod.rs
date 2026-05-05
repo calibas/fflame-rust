@@ -128,6 +128,9 @@ mod xtrb_misc;
 mod curliecue2_misc;
 mod farblur_misc;
 mod macmillan_misc;
+mod harmonograph_misc;
+mod rhodonea_misc;
+mod complex_misc;
 
 pub use basic::*;
 pub use advanced::*;
@@ -254,6 +257,9 @@ pub use xtrb_misc::*;
 pub use curliecue2_misc::*;
 pub use farblur_misc::*;
 pub use macmillan_misc::*;
+pub use harmonograph_misc::*;
+pub use rhodonea_misc::*;
+pub use complex_misc::*;
 
 use super::definition::VariationDef;
 
@@ -876,4 +882,10 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &FARBLUR,
     // macmillan_misc: macmillan (5 user + 3 state, needs_accum + writes_color + custom init)
     &MACMILLAN,
+    // harmonograph_misc: harmonograph_js (18 user) — Sosa damped-pendulum harmonograph
+    &HARMONOGRAPH_JS,
+    // rhodonea_misc: rhodonea (15 user + 5 init, 7×7 mode switch) — CozyG rose curves
+    &RHODONEA,
+    // complex_misc: complex (64 user) — cothe / Stefanov 14-subfunction 2D analog of quaternion
+    &COMPLEX,
 ];
