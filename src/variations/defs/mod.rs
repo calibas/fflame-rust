@@ -133,6 +133,7 @@ mod rhodonea_misc;
 mod complex_misc;
 mod hexaplay3d_misc;
 mod hexnix3d_misc;
+mod klein_group_misc;
 
 pub use basic::*;
 pub use advanced::*;
@@ -264,6 +265,7 @@ pub use rhodonea_misc::*;
 pub use complex_misc::*;
 pub use hexaplay3d_misc::*;
 pub use hexnix3d_misc::*;
+pub use klein_group_misc::*;
 
 use super::definition::VariationDef;
 
@@ -896,4 +898,6 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &HEXAPLAY_3D,
     // hexnix3d_misc: hexnix3D (4 user + 3 state, replacement-style with smooth+majplane modes) — Berlin 2009
     &HEXNIX_3D,
+    // klein_group_misc: klein_group (6 user + 16 init + 1 state) — Indra's Pearls Kleinian limit set
+    &KLEIN_GROUP,
 ];
