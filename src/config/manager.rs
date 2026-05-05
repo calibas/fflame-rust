@@ -1620,17 +1620,38 @@ impl ConfigManager {
                 xform.set_scale(new_value);
             }
 
-            // Final Transform
+            // Final Transform — legacy single-Final UI control. Mirrors
+            // the legacy `flame.final_transform` field into the new
+            // per-transform model (`flame.final_transforms[0]` plus
+            // attachment[0] on every normal) so the attachment-driven
+            // chain renderer sees the change. Phase 5 will replace this
+            // legacy UI surface with the per-transform attachment UI.
+            // See `docs/projects/per-transform-linked-and-final.md`.
             ConfigPath::FinalTransformEnabled => {
                 let enabled: bool = value.try_into()?;
                 if enabled && self.current.flame.final_transform.is_none() {
-                    // Create new final transform with identity affine and linear variation
                     let mut final_xform = crate::scene::transforms::Transform::new();
                     final_xform.set_variation("linear", 1.0);
-                    self.current.flame.final_transform = Some(final_xform);
+                    self.current.flame.final_transform = Some(final_xform.clone());
+                    // Mirror into new model.
+                    let new_idx = self.current.flame.final_transforms.len();
+                    self.current.flame.final_transforms.push(final_xform);
+                    for t in &mut self.current.flame.transforms {
+                        if !t.final_attachments.contains(&new_idx) {
+                            t.final_attachments.push(new_idx);
+                        }
+                    }
                 } else if !enabled {
-                    // Remove final transform
                     self.current.flame.final_transform = None;
+                    // Mirror: remove last (the legacy-mirrored) entry from
+                    // final_transforms and detach from all normals.
+                    if !self.current.flame.final_transforms.is_empty() {
+                        let removed_idx = self.current.flame.final_transforms.len() - 1;
+                        self.current.flame.final_transforms.pop();
+                        for t in &mut self.current.flame.transforms {
+                            t.final_attachments.retain(|&i| i != removed_idx);
+                        }
+                    }
                 }
             }
             ConfigPath::FinalTransformAffine { param } => {
@@ -1838,6 +1859,30 @@ impl ConfigManager {
             | ConfigPath::SystemShowHelpOnStartup => {
                 panic!("System settings should not be modified via apply_value(). Use config_manager.update_system_setting() instead.");
             }
+        }
+
+        // After any FinalTransform-path edit, mirror the legacy
+        // `flame.final_transform` field into the new
+        // `final_transforms` pool so the chain renderer (which reads
+        // from the pool, not from the legacy field) sees the change.
+        // The FinalTransformEnabled arm handles add/remove inline; all
+        // other arms mutate the existing legacy field and rely on this
+        // post-match sync. Phase 5 will replace this transitional UI
+        // surface with per-transform attachment UI.
+        // See `docs/projects/per-transform-linked-and-final.md`.
+        match path {
+            ConfigPath::FinalTransformAffine { .. }
+            | ConfigPath::FinalTransformPostAffineEnabled
+            | ConfigPath::FinalTransformPostAffine { .. }
+            | ConfigPath::FinalTransformVariation { .. }
+            | ConfigPath::FinalTransformVariationParam { .. }
+            | ConfigPath::FinalTransformOriginX
+            | ConfigPath::FinalTransformOriginY
+            | ConfigPath::FinalTransformRotation
+            | ConfigPath::FinalTransformScale => {
+                self.current.flame.sync_legacy_final_into_pool();
+            }
+            _ => {}
         }
 
         Ok(())

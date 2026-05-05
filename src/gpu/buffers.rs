@@ -110,15 +110,17 @@ impl GpuTransform {
     ///   slots 0..N                      — normals (N = flame.transforms.len())
     ///   slots N..N+L                    — linkeds (L = flame.linked_transforms.len())
     ///   slots N+L..N+L+F                — finals  (F = flame.final_transforms.len())
-    ///   slot  N+L+F                     — LEGACY: copy of flame.final_transform
-    ///                                     for the existing renderer's
-    ///                                     `FINAL_TRANSFORM_INDEX = end - 1`
-    ///                                     path. Removed in Phase 4.
     ///
     /// `xform_id` in the shader is a global index into this array.
     /// Per-pool CPU indexes (in `Transform::linked_attachments` /
     /// `final_attachments`) get translated to global xform_ids during
     /// attachment-list packing — see `GpuAttachmentList::from_transform`.
+    ///
+    /// The legacy `flame.final_transform` field is migrated into
+    /// `flame.final_transforms[0]` at deserialize time and re-synced
+    /// on every UI edit, so chain renderers see it without needing a
+    /// separate GPU slot. See
+    /// `docs/projects/per-transform-linked-and-final.md`.
     ///
     /// Solo mode (a normal-only feature) sets effective_opacity to 0
     /// for non-solo normals; linkeds and finals always run with their
@@ -134,11 +136,9 @@ impl GpuTransform {
         let mut gpu_transforms: Vec<Self> = Vec::with_capacity(
             flame.transforms.len()
                 + flame.linked_transforms.len()
-                + flame.final_transforms.len()
-                + 1, // legacy final spot
+                + flame.final_transforms.len(),
         );
 
-        // 1. Normals (subject to solo mode)
         for (i, xform) in flame.transforms.iter().enumerate() {
             let effective_opacity = match solo_idx {
                 Some(solo) if i != solo => 0.0,
@@ -146,24 +146,11 @@ impl GpuTransform {
             };
             gpu_transforms.push(Self::from_transform_with_opacity(xform, effective_opacity, &local_map));
         }
-
-        // 2. Linkeds
         for xform in &flame.linked_transforms {
             gpu_transforms.push(Self::from_transform(xform, &local_map));
         }
-
-        // 3. Finals
         for xform in &flame.final_transforms {
             gpu_transforms.push(Self::from_transform(xform, &local_map));
-        }
-
-        // 4. LEGACY: append a copy of `flame.final_transform` so the
-        //    existing renderer (which reads `transforms[FINAL_TRANSFORM_INDEX]`)
-        //    keeps working until Phase 4 rewires it. The host-side
-        //    `final_transform_index` is computed to point HERE — see
-        //    `GpuParams::final_transform_index` setter.
-        if let Some(ref final_xform) = flame.final_transform {
-            gpu_transforms.push(Self::from_transform(final_xform, &local_map));
         }
 
         gpu_transforms
@@ -369,17 +356,14 @@ impl GpuVariationParams {
                 local_map.keys().collect::<Vec<_>>(),
             );
         }
-        // Concatenated layout: normals, then linkeds, then finals,
-        // then a legacy copy of flame.final_transform (see
-        // `GpuTransform::from_flame` doc comment for layout details).
-        // xform_id in the shader indexes into both the transforms array
-        // and this params array simultaneously, so the orderings must
-        // match.
+        // Concatenated layout: normals, then linkeds, then finals.
+        // Mirror of `GpuTransform::from_flame`. xform_id in the shader
+        // indexes into both the transforms array and this params array
+        // simultaneously, so the orderings must match.
         let mut result: Vec<Self> = Vec::with_capacity(
             flame.transforms.len()
                 + flame.linked_transforms.len()
-                + flame.final_transforms.len()
-                + 1,
+                + flame.final_transforms.len(),
         );
         for xform in &flame.transforms {
             result.push(Self::from_transform(xform, &local_map, registry));
@@ -389,9 +373,6 @@ impl GpuVariationParams {
         }
         for xform in &flame.final_transforms {
             result.push(Self::from_transform(xform, &local_map, registry));
-        }
-        if let Some(ref final_xform) = flame.final_transform {
-            result.push(Self::from_transform(final_xform, &local_map, registry));
         }
         result
     }
@@ -784,7 +765,7 @@ impl FlameBuffers {
             fog_start: crate::config::DEFAULT_FOG_START,
             histogram_color_scale: crate::config::DEFAULT_HISTOGRAM_COLOR_SCALE,
             has_final_transform: if flame.final_transform.is_some() { 1 } else { 0 },
-            final_transform_index: flame.legacy_final_slot(),
+            final_transform_index: 0,  // Legacy field — shader uses attachments chain now
             bits_per_transform: bits_per_transform(flame.transforms.len() as u32),
             path_map_style: 0,
             path_capture_mode: 0, // FirstHit by default
