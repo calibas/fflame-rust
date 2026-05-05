@@ -20,8 +20,11 @@ pub const MAX_TRANSFORMS: usize = 128;
 
 /// Maximum number of attachments (linked + final) per normal transform.
 /// Per-normal chain length cap — independent of the total transform
-/// budget. 32 is generous for typical flames.
-pub const MAX_ATTACHMENTS_PER_TRANSFORM: usize = 32;
+/// budget. Bumped from 32 → 100 during the per-transform-linked-and-final
+/// project to accommodate flames that share many Linked or Final
+/// transforms across normals (e.g., when a Final is auto-attached to
+/// every normal by default, MAX needs to cover the upper bound).
+pub const MAX_ATTACHMENTS_PER_TRANSFORM: usize = 100;
 
 /// GPU representation of Transform (must match WGSL struct layout)
 #[repr(C)]

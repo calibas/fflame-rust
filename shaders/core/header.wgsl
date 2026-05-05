@@ -111,9 +111,9 @@ struct PathFilter {
 // shape the plotted point only (output discarded for IFS).
 // See docs/projects/per-transform-linked-and-final.md.
 struct AttachmentList {
-    linked: array<u32, 32>,
+    linked: array<u32, 100>,
     linked_count: u32,
-    final_: array<u32, 32>,
+    final_: array<u32, 100>,
     final_count: u32,
 }
 
