@@ -1263,31 +1263,44 @@ impl Default for Flame {
 }
 
 impl Flame {
-    /// Index in the GPU concatenated transforms buffer where the
-    /// LEGACY `flame.final_transform` is appended (see
-    /// `GpuTransform::from_flame` doc). Equals
-    /// `transforms.len() + linked_transforms.len() + final_transforms.len()`.
-    /// Only meaningful while `final_transform` is `Some`; the renderer
-    /// gates on `has_final_transform`. Removed in Phase 4 along with
-    /// the legacy field.
-    pub fn legacy_final_slot(&self) -> u32 {
-        (self.transforms.len() + self.linked_transforms.len() + self.final_transforms.len()) as u32
-    }
-
-    /// Total GPU transform slot count: normals + linkeds + finals + 1
-    /// (legacy final, if present).
+    /// Total GPU transform slot count: normals + linkeds + finals.
+    /// The legacy `final_transform` field is migrated into
+    /// `final_transforms[0]` at deserialize time and re-synced on
+    /// every UI edit, so it doesn't get its own GPU slot.
     pub fn total_gpu_transform_slots(&self) -> usize {
         self.transforms.len()
             + self.linked_transforms.len()
             + self.final_transforms.len()
-            + if self.final_transform.is_some() { 1 } else { 0 }
+    }
+
+    /// Re-sync the legacy `final_transform` field's content into the
+    /// last element of `final_transforms`. Called by UI setters that
+    /// modify the legacy field — without this, edits via the legacy UI
+    /// surface (FinalTransformAffine etc.) wouldn't be visible to the
+    /// chain renderer.
+    ///
+    /// Assumes `migrate_legacy_final` was called once at flame load
+    /// time, so the last `final_transforms` entry is the
+    /// legacy-mirrored copy. Updates that copy in place; pool size
+    /// unchanged. No-op if either field is empty.
+    ///
+    /// Phase 5 will replace the legacy UI surface with per-transform
+    /// attachment UI, after which this helper can be removed.
+    /// See `docs/projects/per-transform-linked-and-final.md`.
+    pub fn sync_legacy_final_into_pool(&mut self) {
+        if let Some(ref legacy) = self.final_transform {
+            if let Some(last) = self.final_transforms.last_mut() {
+                *last = legacy.clone();
+            }
+        }
     }
 
     /// Migrate a legacy singular `final_transform` into the new
     /// `final_transforms` pool with an attachment on every normal
     /// transform. The legacy field is left populated for now (so the
-    /// existing renderer that reads `flame.final_transform` keeps
-    /// working) and will be cleared in Phase 4 of the project.
+    /// existing UI surface that operates on `flame.final_transform`
+    /// keeps working) and is mirrored into the pool via
+    /// `sync_legacy_final_into_pool` on every UI edit.
     /// See `docs/projects/per-transform-linked-and-final.md`.
     pub fn migrate_legacy_final(&mut self) {
         let Some(ref legacy) = self.final_transform else { return };
