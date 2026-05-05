@@ -625,7 +625,13 @@ pub struct AccumulateParams {
 /// Manages GPU buffers and textures for fractal flame rendering
 pub struct FlameBuffers {
     pub transform_buffer: Buffer,
-    pub variation_params_buffer: Buffer,  // NEW: Parameter buffer for variations
+    pub variation_params_buffer: Buffer,  // Parameter buffer for variations
+    /// Per-normal-transform attachment list buffer:
+    /// `array<GpuAttachmentList, MAX_TRANSFORMS>`. Indexed by the
+    /// normal's xform_id (0..flame.transforms.len()). Each entry holds
+    /// up to 32 linked + 32 final GLOBAL xform_ids (plus counts).
+    /// See `docs/projects/per-transform-linked-and-final.md`.
+    pub attachments_buffer: Buffer,
     pub params_buffer: Buffer,
     pub tonemap_params_buffer: Buffer,
     pub accumulate_params_buffer: Buffer,
@@ -736,6 +742,18 @@ impl FlameBuffers {
         let variation_params_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Variation Params Buffer"),
             size: params_buffer_size,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Per-normal-transform attachment list buffer (binding 10).
+        // One GpuAttachmentList entry per normal transform slot;
+        // MAX_TRANSFORMS entries pre-allocated, populated via
+        // update_attachments. See per-transform-linked-and-final.md.
+        let attachments_buffer_size = (MAX_TRANSFORMS * std::mem::size_of::<GpuAttachmentList>()) as u64;
+        let attachments_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Attachments Buffer"),
+            size: attachments_buffer_size,
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -1027,6 +1045,7 @@ impl FlameBuffers {
         let buffers = Self {
             transform_buffer,
             variation_params_buffer,
+            attachments_buffer,
             params_buffer,
             tonemap_params_buffer,
             accumulate_params_buffer,
@@ -1063,6 +1082,7 @@ impl FlameBuffers {
         // with the steady-state write.
         buffers.update_transforms(queue, flame);
         buffers.update_variation_params(queue, flame);
+        buffers.update_attachments(queue, flame);
 
         buffers
     }
@@ -1246,6 +1266,29 @@ impl FlameBuffers {
         }
 
         queue.write_buffer(&self.transform_buffer, 0, bytemuck::cast_slice(&gpu_transforms));
+    }
+
+    /// Update the per-normal-transform attachment list buffer.
+    /// One entry per normal transform; pads to MAX_TRANSFORMS with
+    /// empty lists. Per-pool CPU indexes get translated to global
+    /// xform_ids during packing.
+    /// See `docs/projects/per-transform-linked-and-final.md`.
+    pub fn update_attachments(&self, queue: &Queue, flame: &Flame) {
+        let n = flame.transforms.len();
+        let l = flame.linked_transforms.len();
+        let f = flame.final_transforms.len();
+        let linked_offset = n;
+        let final_offset = n + l;
+
+        let mut entries: Vec<GpuAttachmentList> = Vec::with_capacity(MAX_TRANSFORMS);
+        for t in &flame.transforms {
+            entries.push(GpuAttachmentList::from_transform(t, linked_offset, l, final_offset, f));
+        }
+        // Pad to MAX_TRANSFORMS with empty lists (no attachments).
+        while entries.len() < MAX_TRANSFORMS {
+            entries.push(GpuAttachmentList::empty());
+        }
+        queue.write_buffer(&self.attachments_buffer, 0, bytemuck::cast_slice(&entries));
     }
 
     /// Update variation parameters

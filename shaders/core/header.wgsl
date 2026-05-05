@@ -104,6 +104,19 @@ struct PathFilter {
     _padding: u32, // Padding for 16-byte alignment
 }
 
+// Per-normal-transform attachment list — entries hold global xform_ids
+// pointing into the concatenated transforms[] array. The main loop walks
+// these after the chaos game picks a normal transform: linkeds advance
+// the dynamics state (their output feeds the next iteration), finals
+// shape the plotted point only (output discarded for IFS).
+// See docs/projects/per-transform-linked-and-final.md.
+struct AttachmentList {
+    linked: array<u32, 32>,
+    linked_count: u32,
+    final_: array<u32, 32>,
+    final_count: u32,
+}
+
 // Bindings
 @group(0) @binding(0) var<storage, read> transforms: array<Transform>;
 @group(0) @binding(1) var<uniform> params: Params;
@@ -117,3 +130,6 @@ struct PathFilter {
 // Xaos (chaos) transition weights: xaos_weights[src * num_transforms + dst]
 // Modifies probability of selecting dst transform when coming from src
 @group(0) @binding(9) var<storage, read> xaos_weights: array<f32>;
+// Per-normal-transform attachment lists. Indexed by the normal's
+// xform_id (0..num_transforms). See AttachmentList struct above.
+@group(0) @binding(10) var<storage, read> attachments: array<AttachmentList>;

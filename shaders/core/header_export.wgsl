@@ -99,6 +99,14 @@ struct SampleCounter {
     count: atomic<u32>,
 }
 
+// Per-normal-transform attachment list — see header.wgsl for full doc.
+struct AttachmentList {
+    linked: array<u32, 32>,
+    linked_count: u32,
+    final_: array<u32, 32>,
+    final_count: u32,
+}
+
 // Bindings
 @group(0) @binding(0) var<storage, read> transforms: array<Transform>;
 @group(0) @binding(1) var<uniform> params: Params;
@@ -110,3 +118,5 @@ struct SampleCounter {
 // Xaos (chaos) transition weights: xaos_weights[src * num_transforms + dst]
 // Modifies probability of selecting dst transform when coming from src
 @group(0) @binding(7) var<storage, read> xaos_weights: array<f32>;
+// Per-normal-transform attachment lists (Linked + Final chains).
+@group(0) @binding(8) var<storage, read> attachments: array<AttachmentList>;
