@@ -134,6 +134,20 @@ impl FlamePipelines {
                     },
                     count: None,
                 },
+                // Per-normal-transform attachment list buffer.
+                // Each entry holds up to 32 linked + 32 final GLOBAL
+                // xform_ids; main loop walks them after the chaos game
+                // picks a normal transform.
+                BindGroupLayoutEntry {
+                    binding: 10,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -478,6 +492,11 @@ impl FlamePipelines {
                 BindGroupEntry {
                     binding: 9,
                     resource: buffers.get_xaos_buffer_for_binding().as_entire_binding(),
+                },
+                // Per-normal-transform attachment lists (Linked + Final chains)
+                BindGroupEntry {
+                    binding: 10,
+                    resource: buffers.attachments_buffer.as_entire_binding(),
                 },
             ],
         })

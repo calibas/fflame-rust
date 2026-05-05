@@ -679,6 +679,7 @@ impl FlameRenderer {
         // 1. Update transforms and variation parameters in GPU buffer
         self.buffers.update_transforms(queue, &config.flame);
         self.buffers.update_variation_params(queue, &config.flame);
+        self.buffers.update_attachments(queue, &config.flame);
         self.init_dirty = true;
 
         // 1b. Update xaos buffer (create/drop as needed)
@@ -804,6 +805,7 @@ impl FlameRenderer {
 
         self.buffers.update_transforms(queue, flame);
         self.buffers.update_variation_params(queue, flame);
+        self.buffers.update_attachments(queue, flame);
         self.init_dirty = true;
 
         // Update xaos buffer (create/drop as needed)

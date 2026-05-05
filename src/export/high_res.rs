@@ -91,6 +91,7 @@ pub struct HighResExporter {
     sample_counter_buffer: Buffer,
     variation_params_buffer: Buffer,
     xaos_buffer: Buffer,  // Xaos transition weights (identity if not used)
+    attachments_buffer: Buffer,  // Per-normal Linked + Final attachment lists (binding 8)
     palette_texture: Texture,
     palette_sampler: Sampler,
 
@@ -252,6 +253,32 @@ impl HighResExporter {
             let identity: Vec<f32> = vec![1.0; (num_transforms * num_transforms) as usize];
             queue.write_buffer(&xaos_buffer, 0, bytemuck::cast_slice(&identity));
         }
+
+        // Per-normal attachment lists (Linked + Final chains).
+        // See per-transform-linked-and-final.md.
+        let attachments_buffer_size = (crate::gpu::buffers::MAX_TRANSFORMS
+            * std::mem::size_of::<crate::gpu::buffers::GpuAttachmentList>()) as u64;
+        let attachments_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Export Attachments Buffer"),
+            size: attachments_buffer_size,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        // Pack per-normal attachment lists with global xform_id translation.
+        let n = config.flame.transforms.len();
+        let l = config.flame.linked_transforms.len();
+        let f = config.flame.final_transforms.len();
+        let mut attachment_entries: Vec<crate::gpu::buffers::GpuAttachmentList> =
+            Vec::with_capacity(crate::gpu::buffers::MAX_TRANSFORMS);
+        for t in &config.flame.transforms {
+            attachment_entries.push(
+                crate::gpu::buffers::GpuAttachmentList::from_transform(t, n, l, n + l, f),
+            );
+        }
+        while attachment_entries.len() < crate::gpu::buffers::MAX_TRANSFORMS {
+            attachment_entries.push(crate::gpu::buffers::GpuAttachmentList::empty());
+        }
+        queue.write_buffer(&attachments_buffer, 0, bytemuck::cast_slice(&attachment_entries));
 
         // Create palette texture (palette is always present)
         let palette = &config.palette;
@@ -415,6 +442,17 @@ impl HighResExporter {
                 // binding 7: xaos weights
                 BindGroupLayoutEntry {
                     binding: 7,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // binding 8: per-normal attachment lists (Linked + Final chains)
+                BindGroupLayoutEntry {
+                    binding: 8,
                     visibility: ShaderStages::COMPUTE,
                     ty: BindingType::Buffer {
                         ty: BufferBindingType::Storage { read_only: true },
@@ -613,6 +651,7 @@ impl HighResExporter {
             sample_counter_buffer,
             variation_params_buffer,
             xaos_buffer,
+            attachments_buffer,
             palette_texture,
             palette_sampler,
             compute_pipeline,
@@ -678,6 +717,10 @@ impl HighResExporter {
                 BindGroupEntry {
                     binding: 7,
                     resource: self.xaos_buffer.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 8,
+                    resource: self.attachments_buffer.as_entire_binding(),
                 },
             ],
         });
