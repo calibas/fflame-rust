@@ -1742,8 +1742,14 @@ mod tests {
         let mut active = HashMap::new();
         active.insert("linear".to_string(), 1.0);
 
-        let shader_2d = builder.build_trajectory_2d_tiled(&active);
-        let shader_3d = builder.build_trajectory_3d_tiled(&active);
+        // Stub flame so the shader builder can compute layouts.
+        let mut flame = crate::scene::transforms::Flame::new();
+        let mut t = crate::scene::transforms::Transform::new();
+        t.set_variation("linear", 1.0);
+        flame.transforms.push(t);
+
+        let shader_2d = builder.build_trajectory_2d_tiled(&flame, &active);
+        let shader_3d = builder.build_trajectory_3d_tiled(&flame, &active);
 
         // utilities_tiled.wgsl defines BOTH world_to_pixel and
         // world_to_pixel_3d functions, so check for the call site
@@ -1786,7 +1792,11 @@ mod tests {
         // Flame using just `linear` — no DC variation
         let mut active_no_dc = HashMap::new();
         active_no_dc.insert("linear".to_string(), 1.0);
-        let shader = builder.build_trajectory_2d_tiled(&active_no_dc);
+        let mut flame_no_dc = crate::scene::transforms::Flame::new();
+        let mut t = crate::scene::transforms::Transform::new();
+        t.set_variation("linear", 1.0);
+        flame_no_dc.transforms.push(t);
+        let shader = builder.build_trajectory_2d_tiled(&flame_no_dc, &active_no_dc);
         assert!(!shader.contains("var c_base"),
                 "HAS_DC=false shader contains c_base");
         assert!(!shader.contains("xform.direct_color"),
@@ -1797,7 +1807,11 @@ mod tests {
         // Flame using dc_linear — has writes_color: true
         let mut active_dc = HashMap::new();
         active_dc.insert("dc_linear".to_string(), 1.0);
-        let shader = builder.build_trajectory_2d_tiled(&active_dc);
+        let mut flame_dc = crate::scene::transforms::Flame::new();
+        let mut t = crate::scene::transforms::Transform::new();
+        t.set_variation("dc_linear", 1.0);
+        flame_dc.transforms.push(t);
+        let shader = builder.build_trajectory_2d_tiled(&flame_dc, &active_dc);
         assert!(shader.contains("var c_base"),
                 "HAS_DC=true shader missing c_base");
         assert!(shader.contains("xform.direct_color"),

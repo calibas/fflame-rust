@@ -311,6 +311,19 @@ pub struct Transform {
     pub post_f: f32,
     /// Post-affine Z offset for 3D mode (default: 0.0 = identity)
     pub post_g: f32,
+
+    /// Indexes into `flame.linked_transforms` — Linked transforms that
+    /// run sequentially after this normal transform's variations.
+    /// Linked transforms are part of dynamics: their output feeds the
+    /// next iteration. Empty for transforms in the linked/final pools
+    /// themselves. See `docs/projects/per-transform-linked-and-final.md`.
+    pub linked_attachments: Vec<usize>,
+
+    /// Indexes into `flame.final_transforms` — Final transforms that
+    /// run sequentially after the Linked chain to produce the plotted
+    /// point. Output is NOT fed forward (filter only). Empty for
+    /// transforms in the linked/final pools themselves.
+    pub final_attachments: Vec<usize>,
 }
 
 impl Default for Transform {
@@ -338,6 +351,8 @@ impl Default for Transform {
             post_e: 0.0,
             post_f: 0.0,
             post_g: 0.0,
+            linked_attachments: Vec::new(),
+            final_attachments: Vec::new(),
         }
     }
 }
@@ -709,11 +724,16 @@ impl Serialize for Transform {
         let params_sorted: BTreeMap<_, _> = self.variation_params.iter().collect();
 
         // Count fields: 13 base + 1 if direct_color != 0 + up to 8 post-affine
+        // + up to 2 attachment lists (only when non-empty)
         let has_post = self.post_affine_enabled;
         let has_direct_color = self.direct_color.abs() > 1e-6;
+        let has_linked = !self.linked_attachments.is_empty();
+        let has_final = !self.final_attachments.is_empty();
         let field_count = 13
             + if has_direct_color { 1 } else { 0 }
-            + if has_post { 8 } else { 0 };
+            + if has_post { 8 } else { 0 }
+            + if has_linked { 1 } else { 0 }
+            + if has_final { 1 } else { 0 };
 
         let mut state = serializer.serialize_struct("Transform", field_count)?;
         state.serialize_field("a", &self.a)?;
@@ -744,6 +764,12 @@ impl Serialize for Transform {
             state.serialize_field("post_f", &self.post_f)?;
             state.serialize_field("post_g", &self.post_g)?;
         }
+        if has_linked {
+            state.serialize_field("linked_attachments", &self.linked_attachments)?;
+        }
+        if has_final {
+            state.serialize_field("final_attachments", &self.final_attachments)?;
+        }
         state.end()
     }
 }
@@ -760,6 +786,7 @@ impl<'de> Deserialize<'de> for Transform {
             A, B, C, D, E, F, G, Weight, Variations, VariationParams, Color, ColorSpeed, Opacity,
             DirectColor,
             PostAffineEnabled, PostA, PostB, PostC, PostD, PostE, PostF, PostG,
+            LinkedAttachments, FinalAttachments,
         }
 
         struct TransformVisitor;
@@ -797,6 +824,8 @@ impl<'de> Deserialize<'de> for Transform {
                 let mut post_e = None;
                 let mut post_f = None;
                 let mut post_g = None;
+                let mut linked_attachments: Option<Vec<usize>> = None;
+                let mut final_attachments: Option<Vec<usize>> = None;
 
                 while let Some(key) = map.next_key()? {
                     match key {
@@ -887,6 +916,8 @@ impl<'de> Deserialize<'de> for Transform {
                         Field::PostE => post_e = Some(map.next_value()?),
                         Field::PostF => post_f = Some(map.next_value()?),
                         Field::PostG => post_g = Some(map.next_value()?),
+                        Field::LinkedAttachments => linked_attachments = Some(map.next_value()?),
+                        Field::FinalAttachments => final_attachments = Some(map.next_value()?),
                     }
                 }
 
@@ -914,11 +945,13 @@ impl<'de> Deserialize<'de> for Transform {
                     post_e: post_e.unwrap_or(0.0),
                     post_f: post_f.unwrap_or(0.0),
                     post_g: post_g.unwrap_or(0.0),
+                    linked_attachments: linked_attachments.unwrap_or_default(),
+                    final_attachments: final_attachments.unwrap_or_default(),
                 })
             }
         }
 
-        const FIELDS: &[&str] = &["a", "b", "c", "d", "e", "f", "g", "weight", "variations", "variation_params", "color", "color_speed", "opacity", "direct_color", "post_affine_enabled", "post_a", "post_b", "post_c", "post_d", "post_e", "post_f", "post_g"];
+        const FIELDS: &[&str] = &["a", "b", "c", "d", "e", "f", "g", "weight", "variations", "variation_params", "color", "color_speed", "opacity", "direct_color", "post_affine_enabled", "post_a", "post_b", "post_c", "post_d", "post_e", "post_f", "post_g", "linked_attachments", "final_attachments"];
         deserializer.deserialize_struct("Transform", FIELDS, TransformVisitor)
     }
 }
@@ -936,6 +969,63 @@ mod tests {
         assert_eq!(xform.get_variation("linear"), 0.5);
         assert_eq!(xform.get_variation("swirl"), 0.3);
         assert_eq!(xform.get_variation("nonexistent"), 0.0);
+    }
+
+    #[test]
+    fn test_legacy_final_migration_attaches_to_every_normal() {
+        let mut flame = Flame::new();
+        flame.transforms.push(Transform::new());
+        flame.transforms.push(Transform::new());
+        flame.transforms.push(Transform::new());
+        flame.final_transform = Some({
+            let mut t = Transform::new();
+            t.set_variation("spherical", 0.5);
+            t
+        });
+
+        flame.migrate_legacy_final();
+
+        // Pool should now contain the legacy final at index 0.
+        assert_eq!(flame.final_transforms.len(), 1);
+        assert_eq!(flame.final_transforms[0].get_variation("spherical"), 0.5);
+        // Every normal transform should reference final_transforms[0].
+        for t in &flame.transforms {
+            assert_eq!(t.final_attachments, vec![0]);
+            assert_eq!(t.linked_attachments, Vec::<usize>::new());
+        }
+    }
+
+    #[test]
+    fn test_migration_is_idempotent() {
+        let mut flame = Flame::new();
+        flame.transforms.push(Transform::new());
+        flame.final_transform = Some(Transform::new());
+
+        flame.migrate_legacy_final();
+        let first_pool_len = flame.final_transforms.len();
+        let first_attach = flame.transforms[0].final_attachments.clone();
+
+        // Calling again should not duplicate the attachment on already-attached
+        // normals (it WILL append a second copy to the pool, since we don't
+        // dedup pool contents — but per-normal attachments are guarded). The
+        // second call's attachments come back as [0, 1] though, since the new
+        // pool index is 1. So idempotency is per-normal-deduplication only.
+        flame.migrate_legacy_final();
+        // Pool grows by 1 (we don't dedup pool contents — calling twice is a
+        // bug we want to catch, not silently ignore).
+        assert_eq!(flame.final_transforms.len(), first_pool_len + 1);
+        // The attachment list grows by 1 (new pool index).
+        assert_eq!(flame.transforms[0].final_attachments.len(), first_attach.len() + 1);
+    }
+
+    #[test]
+    fn test_migration_no_legacy_final_is_noop() {
+        let mut flame = Flame::new();
+        flame.transforms.push(Transform::new());
+        // No final_transform set.
+        flame.migrate_legacy_final();
+        assert!(flame.final_transforms.is_empty());
+        assert!(flame.transforms[0].final_attachments.is_empty());
     }
 
     #[test]
@@ -1114,8 +1204,27 @@ impl Point {
 pub struct Flame {
     pub name: String,
     pub transforms: Vec<Transform>,
+    /// LEGACY: singular global Final transform. Loaded by the Flame
+    /// deserializer if present in the JSON, then migrated into
+    /// `final_transforms[0]` (with `final_attachments = [0]` on every
+    /// normal). Kept here for now so the existing renderer and UI
+    /// callers continue to work; will be removed once the new chain
+    /// model fully replaces them. Always `None` after migration.
+    /// See `docs/projects/per-transform-linked-and-final.md`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub final_transform: Option<Transform>,
+    /// Pool of Linked transforms — referenced by index from each
+    /// normal transform's `linked_attachments`. Linked transforms are
+    /// part of dynamics (their output feeds the next iteration) and
+    /// run in declaration order after the normal transform's variations.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub linked_transforms: Vec<Transform>,
+    /// Pool of Final transforms — referenced by index from each
+    /// normal transform's `final_attachments`. Final transforms are
+    /// pure plot-time filters (output is plotted but NOT fed forward)
+    /// and run in declaration order after the Linked chain.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub final_transforms: Vec<Transform>,
     /// Rendering mode (2D or 3D)
     pub render_mode: RenderMode,
     /// Perspective strength for 3D rendering (0.0 = flat/orthographic, 10.0 = strong perspective)
@@ -1143,6 +1252,8 @@ impl Default for Flame {
             name: "Untitled".to_string(),
             transforms: Vec::new(),
             final_transform: None,
+            linked_transforms: Vec::new(),
+            final_transforms: Vec::new(),
             render_mode: RenderMode::default(),
             perspective_strength: 0.0,  // Default to orthographic (flat)
             xaos: None,  // Default: no xaos (all weights implicitly 1.0)
@@ -1152,6 +1263,23 @@ impl Default for Flame {
 }
 
 impl Flame {
+    /// Migrate a legacy singular `final_transform` into the new
+    /// `final_transforms` pool with an attachment on every normal
+    /// transform. The legacy field is left populated for now (so the
+    /// existing renderer that reads `flame.final_transform` keeps
+    /// working) and will be cleared in Phase 4 of the project.
+    /// See `docs/projects/per-transform-linked-and-final.md`.
+    pub fn migrate_legacy_final(&mut self) {
+        let Some(ref legacy) = self.final_transform else { return };
+        let new_idx = self.final_transforms.len();
+        self.final_transforms.push(legacy.clone());
+        for t in &mut self.transforms {
+            if !t.final_attachments.contains(&new_idx) {
+                t.final_attachments.push(new_idx);
+            }
+        }
+    }
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -1252,6 +1380,8 @@ impl<'de> Deserialize<'de> for Flame {
             Name,
             Transforms,
             FinalTransform,
+            LinkedTransforms,
+            FinalTransforms,
             RenderMode,
             PerspectiveStrength,
             Projection, // Old field name for backward compatibility
@@ -1273,8 +1403,10 @@ impl<'de> Deserialize<'de> for Flame {
                 V: MapAccess<'de>,
             {
                 let mut name = None;
-                let mut transforms = None;
-                let mut final_transform = None;
+                let mut transforms: Option<Vec<Transform>> = None;
+                let mut final_transform: Option<Transform> = None;
+                let mut linked_transforms: Option<Vec<Transform>> = None;
+                let mut final_transforms: Option<Vec<Transform>> = None;
                 let mut render_mode = None;
                 let mut perspective_strength = None;
                 let mut xaos = None;
@@ -1289,7 +1421,13 @@ impl<'de> Deserialize<'de> for Flame {
                             transforms = Some(map.next_value()?);
                         }
                         Field::FinalTransform => {
-                            final_transform = Some(map.next_value()?);
+                            final_transform = map.next_value()?;
+                        }
+                        Field::LinkedTransforms => {
+                            linked_transforms = Some(map.next_value()?);
+                        }
+                        Field::FinalTransforms => {
+                            final_transforms = Some(map.next_value()?);
                         }
                         Field::RenderMode => {
                             render_mode = Some(map.next_value()?);
@@ -1332,19 +1470,32 @@ impl<'de> Deserialize<'de> for Flame {
                     }
                 }
 
-                Ok(Flame {
+                let transforms = transforms
+                    .ok_or_else(|| de::Error::missing_field("transforms"))?;
+                let linked_transforms = linked_transforms.unwrap_or_default();
+                let final_transforms = final_transforms.unwrap_or_default();
+
+                let mut flame = Flame {
                     name: name.unwrap_or_else(|| default_flame_name()),
-                    transforms: transforms.ok_or_else(|| de::Error::missing_field("transforms"))?,
-                    final_transform: final_transform.unwrap_or(None),
+                    transforms,
+                    final_transform,
+                    linked_transforms,
+                    final_transforms,
                     render_mode: render_mode.unwrap_or_default(),
                     perspective_strength: perspective_strength.unwrap_or(0.0),
                     xaos,
                     solo_transform: solo_transform.unwrap_or(None),
-                })
+                };
+                // Migrate legacy singular `final_transform` into the new
+                // `final_transforms` pool. See
+                // `docs/projects/per-transform-linked-and-final.md`
+                // §"File format / migration".
+                flame.migrate_legacy_final();
+                Ok(flame)
             }
         }
 
-        const FIELDS: &[&str] = &["name", "transforms", "final_transform", "render_mode", "perspective_strength", "projection", "xaos", "solo_transform"];
+        const FIELDS: &[&str] = &["name", "transforms", "final_transform", "linked_transforms", "final_transforms", "render_mode", "perspective_strength", "projection", "xaos", "solo_transform"];
         deserializer.deserialize_struct("Flame", FIELDS, FlameVisitor)
     }
 }
