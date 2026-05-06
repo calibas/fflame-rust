@@ -95,9 +95,9 @@ struct VariationParams {
 
 // Per-normal-transform attachment list — see header.wgsl for full doc.
 struct AttachmentList {
-    linked: array<u32, 32>,
+    linked: array<u32, {{ATTACHMENT_CAP}}>,
     linked_count: u32,
-    final_: array<u32, 32>,
+    final_: array<u32, {{ATTACHMENT_CAP}}>,
     final_count: u32,
 }
 
