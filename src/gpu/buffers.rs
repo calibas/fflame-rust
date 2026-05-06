@@ -702,9 +702,14 @@ pub struct FlameBuffers {
     pub transform_buffer: Buffer,
     pub variation_params_buffer: Buffer,  // Parameter buffer for variations
     /// Per-normal-transform attachment list buffer:
-    /// `array<GpuAttachmentList, MAX_TRANSFORMS>`. Indexed by the
-    /// normal's xform_id (0..flame.transforms.len()). Each entry holds
-    /// up to 32 linked + 32 final GLOBAL xform_ids (plus counts).
+    /// `array<AttachmentList, MAX_TRANSFORMS>`. Indexed by the normal's
+    /// xform_id (0..flame.transforms.len()). Each entry holds up to
+    /// `flame.attachment_cap()` linked + cap final GLOBAL xform_ids
+    /// (plus counts) — the per-flame cap is substituted into the
+    /// shader struct via `{{ATTACHMENT_CAP}}` and matched by
+    /// `update_attachments`'s packing stride. Backing storage is
+    /// always allocated at the worst-case `MAX_ATTACHMENTS_PER_TRANSFORM`
+    /// stride; smaller per-flame caps just write fewer bytes per slot.
     /// See `docs/projects/per-transform-linked-and-final.md`.
     pub attachments_buffer: Buffer,
     pub params_buffer: Buffer,

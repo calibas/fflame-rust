@@ -34,15 +34,6 @@ pub fn should_use_inlined_constants() -> bool {
     INLINED_CONSTANTS_ENABLED.load(Ordering::Relaxed)
 }
 
-/// True when the flame has any Linked or Final pool members. Drives
-/// the `HAS_ATTACHMENTS` template flag — when false, the per-iteration
-/// `attachments[xform_idx]` storage load and both Linked/Final chain
-/// loops are stripped from the compiled shader entirely, restoring
-/// pre-attachment-feature performance.
-fn has_attachments(flame: &crate::scene::transforms::Flame) -> bool {
-    !flame.linked_transforms.is_empty() || !flame.final_transforms.is_empty()
-}
-
 /// Simple template processor for shader conditional compilation
 ///
 /// Supports:
@@ -472,7 +463,7 @@ impl ShaderConstants {
             has_final_transform: has_final,
             final_transform_index: final_idx,
             has_post_affine: flame.has_post_affine(),
-            has_attachments: has_attachments(flame),
+            has_attachments: flame.has_attachments(),
             attachment_cap: flame.attachment_cap() as u32,
             inlined_transforms: Some(inlined),
             cumulative_weights: Some(cumulative),
@@ -1703,7 +1694,7 @@ impl ShaderBuilder {
         let mut processor = TemplateProcessor::new();
         processor.set("RENDER_3D", render_3d);
         processor.set("HAS_DC", has_dc);
-        processor.set("HAS_ATTACHMENTS", has_attachments(flame));
+        processor.set("HAS_ATTACHMENTS", flame.has_attachments());
         let mut processed = processor.process(include_str!("../shaders/core/main_tiled.wgsl"));
         let state_init = self.build_state_init_block(flame, &active);
         processed = processed.replace("//__STATE_INIT_BLOCK__", &state_init);
@@ -1778,7 +1769,7 @@ impl ShaderBuilder {
         // 8. Export main — routed through TemplateProcessor with HAS_DC gate.
         let mut processor = TemplateProcessor::new();
         processor.set("HAS_DC", has_dc);
-        processor.set("HAS_ATTACHMENTS", has_attachments(flame));
+        processor.set("HAS_ATTACHMENTS", flame.has_attachments());
         let mut processed = processor.process(include_str!("../shaders/core/main_export.wgsl"));
         let state_init = self.build_state_init_block(flame, &active);
         processed = processed.replace("//__STATE_INIT_BLOCK__", &state_init);

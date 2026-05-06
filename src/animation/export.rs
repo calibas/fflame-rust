@@ -764,8 +764,7 @@ fn apply_config_value(
         }
         (ConfigPath::TransformVariationParam { index, variation, param }, ConfigValue::Float(v)) => {
             if let Some(xform) = config.flame.transforms.get_mut(*index) {
-                let key = format!("{}:{}", variation, param);
-                xform.variation_params.insert(key, *v);
+                xform.set_variation_param(variation, param, *v);
             }
         }
 
@@ -807,8 +806,7 @@ fn apply_config_value(
         }
         (ConfigPath::FinalTransformVariationParam { variation, param }, ConfigValue::Float(v)) => {
             if let Some(final_xform) = config.flame.final_transforms.first_mut() {
-                let key = format!("{}:{}", variation, param);
-                final_xform.variation_params.insert(key, *v);
+                final_xform.set_variation_param(variation, param, *v);
             }
         }
         (ConfigPath::FinalTransformOriginX, ConfigValue::Float(v)) => {
@@ -855,8 +853,7 @@ fn apply_config_value(
         }
         (ConfigPath::LinkedTransformVariationParam { index, variation, param }, ConfigValue::Float(v)) => {
             if let Some(xform) = config.flame.linked_transforms.get_mut(*index) {
-                let key = format!("{}:{}", variation, param);
-                xform.variation_params.insert(key, *v);
+                xform.set_variation_param(variation, param, *v);
             }
         }
 
@@ -883,8 +880,7 @@ fn apply_config_value(
         }
         (ConfigPath::PoolFinalTransformVariationParam { index, variation, param }, ConfigValue::Float(v)) => {
             if let Some(xform) = config.flame.final_transforms.get_mut(*index) {
-                let key = format!("{}:{}", variation, param);
-                xform.variation_params.insert(key, *v);
+                xform.set_variation_param(variation, param, *v);
             }
         }
 

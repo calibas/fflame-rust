@@ -245,33 +245,22 @@ fn parse_flame_element(
     // Determine perspective strength from cam_perspective
     let perspective_strength = f32::abs(cam_perspective);
 
-    // Apophysis XML always carries a singular global Final (or none);
-    // emit it directly into the new `final_transforms` pool with an
-    // attachment on every normal so the rest of the pipeline sees a
-    // consistent shape.
+    // Apophysis XML always carries a singular global Final (or none).
+    // `Flame::migrate_legacy_final` pushes it into the new
+    // `final_transforms` pool and auto-attaches to every normal so the
+    // rest of the pipeline sees a consistent shape.
     // See `docs/projects/per-transform-linked-and-final.md`.
-    let mut final_transforms = Vec::new();
-    if let Some(ft) = final_transform {
-        final_transforms.push(ft);
-        let new_idx = 0;
-        for t in transforms.iter_mut() {
-            if !t.final_attachments.contains(&new_idx) {
-                t.final_attachments.push(new_idx);
-            }
-        }
-    }
-
-    // Build FractalConfig
-    let flame = Flame {
+    let mut flame = Flame {
         name,
         transforms,
         linked_transforms: Vec::new(),
-        final_transforms,
+        final_transforms: Vec::new(),
         render_mode,
         perspective_strength,
         xaos,
         solo_transform: solo_xform,
     };
+    flame.migrate_legacy_final(final_transform);
 
     // Convert Apophysis scale/center to our zoom/pan
     // Apophysis: scale = pixels per unit, where scale 200 ≈ zoom 1.0
