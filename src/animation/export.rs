@@ -661,6 +661,36 @@ pub fn apply_animation_values(
     }
 }
 
+/// Write one affine coefficient on a transform. Shared across all four
+/// pool sites (Normal / legacy-Final / Linked / PoolFinal) so the match
+/// arms only differ in how they look the transform up.
+fn apply_affine_param(xform: &mut crate::scene::transforms::Transform, param: crate::config::AffineParam, v: f32) {
+    use crate::config::AffineParam;
+    match param {
+        AffineParam::A => xform.a = v,
+        AffineParam::B => xform.b = v,
+        AffineParam::C => xform.c = v,
+        AffineParam::D => xform.d = v,
+        AffineParam::E => xform.e = v,
+        AffineParam::F => xform.f = v,
+        AffineParam::G => xform.g = v,
+    }
+}
+
+/// Same as `apply_affine_param` but for the post-affine half.
+fn apply_post_affine_param(xform: &mut crate::scene::transforms::Transform, param: crate::config::AffineParam, v: f32) {
+    use crate::config::AffineParam;
+    match param {
+        AffineParam::A => xform.post_a = v,
+        AffineParam::B => xform.post_b = v,
+        AffineParam::C => xform.post_c = v,
+        AffineParam::D => xform.post_d = v,
+        AffineParam::E => xform.post_e = v,
+        AffineParam::F => xform.post_f = v,
+        AffineParam::G => xform.post_g = v,
+    }
+}
+
 /// Apply a single ConfigValue to a FractalConfig
 fn apply_config_value(
     config: &mut FractalConfig,
@@ -724,16 +754,7 @@ fn apply_config_value(
         }
         (ConfigPath::TransformAffine { index, param }, ConfigValue::Float(v)) => {
             if let Some(xform) = config.flame.transforms.get_mut(*index) {
-                use crate::config::AffineParam;
-                match param {
-                    AffineParam::A => xform.a = *v,
-                    AffineParam::B => xform.b = *v,
-                    AffineParam::C => xform.c = *v,
-                    AffineParam::D => xform.d = *v,
-                    AffineParam::E => xform.e = *v,
-                    AffineParam::F => xform.f = *v,
-                    AffineParam::G => xform.g = *v,
-                }
+                apply_affine_param(xform, *param, *v);
             }
         }
         (ConfigPath::TransformVariation { index, variation }, ConfigValue::Float(v)) => {
@@ -770,50 +791,100 @@ fn apply_config_value(
             }
         }
 
-        // Final Transform parameters
+        // Legacy "singular Final" ConfigPath variants — animation tracks
+        // saved against these target the first entry of `final_transforms`
+        // (the post-Phase-5d migration target). See manager.rs's matching
+        // arms for the same routing.
         (ConfigPath::FinalTransformAffine { param }, ConfigValue::Float(v)) => {
-            if let Some(ref mut final_xform) = config.flame.final_transform {
-                use crate::config::AffineParam;
-                match param {
-                    AffineParam::A => final_xform.a = *v,
-                    AffineParam::B => final_xform.b = *v,
-                    AffineParam::C => final_xform.c = *v,
-                    AffineParam::D => final_xform.d = *v,
-                    AffineParam::E => final_xform.e = *v,
-                    AffineParam::F => final_xform.f = *v,
-                    AffineParam::G => final_xform.g = *v,
-                }
+            if let Some(final_xform) = config.flame.final_transforms.first_mut() {
+                apply_affine_param(final_xform, *param, *v);
             }
         }
         (ConfigPath::FinalTransformVariation { variation }, ConfigValue::Float(v)) => {
-            if let Some(ref mut final_xform) = config.flame.final_transform {
+            if let Some(final_xform) = config.flame.final_transforms.first_mut() {
                 final_xform.variations.insert(variation.clone(), *v);
             }
         }
         (ConfigPath::FinalTransformVariationParam { variation, param }, ConfigValue::Float(v)) => {
-            if let Some(ref mut final_xform) = config.flame.final_transform {
+            if let Some(final_xform) = config.flame.final_transforms.first_mut() {
                 let key = format!("{}:{}", variation, param);
                 final_xform.variation_params.insert(key, *v);
             }
         }
         (ConfigPath::FinalTransformOriginX, ConfigValue::Float(v)) => {
-            if let Some(ref mut final_xform) = config.flame.final_transform {
+            if let Some(final_xform) = config.flame.final_transforms.first_mut() {
                 final_xform.set_origin_x(*v);
             }
         }
         (ConfigPath::FinalTransformOriginY, ConfigValue::Float(v)) => {
-            if let Some(ref mut final_xform) = config.flame.final_transform {
+            if let Some(final_xform) = config.flame.final_transforms.first_mut() {
                 final_xform.set_origin_y(*v);
             }
         }
         (ConfigPath::FinalTransformRotation, ConfigValue::Float(v)) => {
-            if let Some(ref mut final_xform) = config.flame.final_transform {
+            if let Some(final_xform) = config.flame.final_transforms.first_mut() {
                 final_xform.set_rotation(*v);
             }
         }
         (ConfigPath::FinalTransformScale, ConfigValue::Float(v)) => {
-            if let Some(ref mut final_xform) = config.flame.final_transform {
+            if let Some(final_xform) = config.flame.final_transforms.first_mut() {
                 final_xform.set_scale(*v);
+            }
+        }
+
+        // Linked pool — animatable per-pool-member parameters.
+        (ConfigPath::LinkedTransformAffine { index, param }, ConfigValue::Float(v)) => {
+            if let Some(xform) = config.flame.linked_transforms.get_mut(*index) {
+                apply_affine_param(xform, *param, *v);
+            }
+        }
+        (ConfigPath::LinkedTransformPostAffineEnabled { index }, ConfigValue::Bool(v)) => {
+            if let Some(xform) = config.flame.linked_transforms.get_mut(*index) {
+                xform.post_affine_enabled = *v;
+            }
+        }
+        (ConfigPath::LinkedTransformPostAffine { index, param }, ConfigValue::Float(v)) => {
+            if let Some(xform) = config.flame.linked_transforms.get_mut(*index) {
+                apply_post_affine_param(xform, *param, *v);
+            }
+        }
+        (ConfigPath::LinkedTransformVariation { index, variation }, ConfigValue::Float(v)) => {
+            if let Some(xform) = config.flame.linked_transforms.get_mut(*index) {
+                xform.variations.insert(variation.clone(), *v);
+            }
+        }
+        (ConfigPath::LinkedTransformVariationParam { index, variation, param }, ConfigValue::Float(v)) => {
+            if let Some(xform) = config.flame.linked_transforms.get_mut(*index) {
+                let key = format!("{}:{}", variation, param);
+                xform.variation_params.insert(key, *v);
+            }
+        }
+
+        // Final pool — animatable per-pool-member parameters.
+        (ConfigPath::PoolFinalTransformAffine { index, param }, ConfigValue::Float(v)) => {
+            if let Some(xform) = config.flame.final_transforms.get_mut(*index) {
+                apply_affine_param(xform, *param, *v);
+            }
+        }
+        (ConfigPath::PoolFinalTransformPostAffineEnabled { index }, ConfigValue::Bool(v)) => {
+            if let Some(xform) = config.flame.final_transforms.get_mut(*index) {
+                xform.post_affine_enabled = *v;
+            }
+        }
+        (ConfigPath::PoolFinalTransformPostAffine { index, param }, ConfigValue::Float(v)) => {
+            if let Some(xform) = config.flame.final_transforms.get_mut(*index) {
+                apply_post_affine_param(xform, *param, *v);
+            }
+        }
+        (ConfigPath::PoolFinalTransformVariation { index, variation }, ConfigValue::Float(v)) => {
+            if let Some(xform) = config.flame.final_transforms.get_mut(*index) {
+                xform.variations.insert(variation.clone(), *v);
+            }
+        }
+        (ConfigPath::PoolFinalTransformVariationParam { index, variation, param }, ConfigValue::Float(v)) => {
+            if let Some(xform) = config.flame.final_transforms.get_mut(*index) {
+                let key = format!("{}:{}", variation, param);
+                xform.variation_params.insert(key, *v);
             }
         }
 

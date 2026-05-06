@@ -39,7 +39,8 @@ pub enum TargetCategory {
     Effects,
     Xaos,
     Transform(usize),
-    FinalTransform,
+    LinkedTransform(usize),
+    FinalTransform(usize),
 }
 
 impl TargetCategory {
@@ -52,7 +53,8 @@ impl TargetCategory {
             TargetCategory::Effects => "Effects".to_string(),
             TargetCategory::Xaos => "Xaos".to_string(),
             TargetCategory::Transform(i) => format!("Transform {}", i + 1),
-            TargetCategory::FinalTransform => "Final Transform".to_string(),
+            TargetCategory::LinkedTransform(i) => format!("Linked {}", i + 1),
+            TargetCategory::FinalTransform(i) => format!("Final {}", i + 1),
         }
     }
 
@@ -65,7 +67,8 @@ impl TargetCategory {
             TargetCategory::Effects => "effects".to_string(),
             TargetCategory::Xaos => "xaos".to_string(),
             TargetCategory::Transform(i) => format!("transform_{}", i),
-            TargetCategory::FinalTransform => "final_transform".to_string(),
+            TargetCategory::LinkedTransform(i) => format!("linked_transform_{}", i),
+            TargetCategory::FinalTransform(i) => format!("final_transform_{}", i),
         }
     }
 }
@@ -217,18 +220,36 @@ pub fn render_target_selector(
                 }
             }
 
-            // Final Transform category (if enabled or for potential enabling)
-            let final_items = get_final_transform_items(flame.final_transform.as_ref());
-            if let Some(path) = render_category(
-                ui,
-                state,
-                TargetCategory::FinalTransform,
-                &final_items,
-                &filter,
-                has_filter,
-                current_selection,
-            ) {
-                selected = Some(path);
+            // Linked transform pool — one category per pool member.
+            for (i, xform) in flame.linked_transforms.iter().enumerate() {
+                let items = get_linked_transform_items(i, xform);
+                if let Some(path) = render_category(
+                    ui,
+                    state,
+                    TargetCategory::LinkedTransform(i),
+                    &items,
+                    &filter,
+                    has_filter,
+                    current_selection,
+                ) {
+                    selected = Some(path);
+                }
+            }
+
+            // Final transform pool — one category per pool member.
+            for (i, xform) in flame.final_transforms.iter().enumerate() {
+                let items = get_pool_final_transform_items(i, xform);
+                if let Some(path) = render_category(
+                    ui,
+                    state,
+                    TargetCategory::FinalTransform(i),
+                    &items,
+                    &filter,
+                    has_filter,
+                    current_selection,
+                ) {
+                    selected = Some(path);
+                }
             }
         });
 
@@ -545,86 +566,95 @@ fn get_transform_items(index: usize, transform: &crate::scene::transforms::Trans
     items
 }
 
-/// Get final transform parameter items
-fn get_final_transform_items(final_transform: Option<&crate::scene::transforms::Transform>) -> Vec<TargetItem> {
+/// Item builder for one Linked-pool transform.
+fn get_linked_transform_items(index: usize, transform: &crate::scene::transforms::Transform) -> Vec<TargetItem> {
     let mut items = Vec::new();
 
-    // Enabled toggle
-    items.push(TargetItem::new(
-        ConfigPath::FinalTransformEnabled,
-        "Enabled",
-    ));
-
-    // High-level transforms
-    items.push(TargetItem::new(ConfigPath::FinalTransformOriginX, "Origin X"));
-    items.push(TargetItem::new(ConfigPath::FinalTransformOriginY, "Origin Y"));
-    items.push(TargetItem::new(ConfigPath::FinalTransformRotation, "Rotation"));
-    items.push(TargetItem::new(ConfigPath::FinalTransformScale, "Scale"));
-
-    // Affine parameters
-    for param in [
-        AffineParam::A,
-        AffineParam::B,
-        AffineParam::C,
-        AffineParam::D,
-        AffineParam::E,
-        AffineParam::F,
-        AffineParam::G,
-    ] {
+    for param in [AffineParam::A, AffineParam::B, AffineParam::C, AffineParam::D,
+                  AffineParam::E, AffineParam::F, AffineParam::G] {
         items.push(TargetItem::new(
-            ConfigPath::FinalTransformAffine { param },
+            ConfigPath::LinkedTransformAffine { index, param },
             &format!("Affine {}", param.to_char()),
         ));
     }
 
-    // Post-affine parameters (only when enabled on final transform)
-    if let Some(transform) = final_transform {
-        if transform.post_affine_enabled {
+    if transform.post_affine_enabled {
+        items.push(TargetItem::new(
+            ConfigPath::LinkedTransformPostAffineEnabled { index },
+            "Post-Affine Enabled",
+        ));
+        for param in [AffineParam::A, AffineParam::B, AffineParam::C, AffineParam::D,
+                      AffineParam::E, AffineParam::F, AffineParam::G] {
             items.push(TargetItem::new(
-                ConfigPath::FinalTransformPostAffineEnabled,
-                "Post-Affine Enabled",
+                ConfigPath::LinkedTransformPostAffine { index, param },
+                &format!("Post-Affine {}", param.to_char()),
             ));
-            for param in [
-                AffineParam::A,
-                AffineParam::B,
-                AffineParam::C,
-                AffineParam::D,
-                AffineParam::E,
-                AffineParam::F,
-                AffineParam::G,
-            ] {
+        }
+    }
+
+    let registry = global_registry();
+    for (var_name, weight) in &transform.variations {
+        if *weight == 0.0 { continue; }
+        items.push(TargetItem::new(
+            ConfigPath::LinkedTransformVariation { index, variation: var_name.clone() },
+            &capitalize_first(var_name),
+        ));
+        if let Some(info) = registry.get(var_name) {
+            for param in &info.parameters {
                 items.push(TargetItem::new(
-                    ConfigPath::FinalTransformPostAffine { param },
-                    &format!("Post-Affine {}", param.to_char()),
+                    ConfigPath::LinkedTransformVariationParam {
+                        index, variation: var_name.clone(), param: param.name.clone(),
+                    },
+                    &format!("{} → {}", capitalize_first(var_name), &param.display_name),
                 ));
             }
         }
     }
 
-    // Active variations (if final transform exists)
-    if let Some(transform) = final_transform {
-        let registry = global_registry();
-        for (var_name, weight) in &transform.variations {
-            if *weight != 0.0 {
-                items.push(TargetItem::new(
-                    ConfigPath::FinalTransformVariation {
-                        variation: var_name.clone(),
-                    },
-                    &format!("{}", capitalize_first(var_name)),
-                ));
+    items
+}
 
-                // Variation parameters
-                if let Some(info) = registry.get(var_name) {
-                    for param in &info.parameters {
-                        items.push(TargetItem::new(
-                            ConfigPath::FinalTransformVariationParam {
-                                variation: var_name.clone(),
-                                param: param.name.clone(),
-                            },
-                            &format!("{} → {}", capitalize_first(var_name), &param.display_name),
-                        ));
-                    }
-                }
+/// Item builder for one Final-pool transform.
+fn get_pool_final_transform_items(index: usize, transform: &crate::scene::transforms::Transform) -> Vec<TargetItem> {
+    let mut items = Vec::new();
+
+    for param in [AffineParam::A, AffineParam::B, AffineParam::C, AffineParam::D,
+                  AffineParam::E, AffineParam::F, AffineParam::G] {
+        items.push(TargetItem::new(
+            ConfigPath::PoolFinalTransformAffine { index, param },
+            &format!("Affine {}", param.to_char()),
+        ));
+    }
+
+    if transform.post_affine_enabled {
+        items.push(TargetItem::new(
+            ConfigPath::PoolFinalTransformPostAffineEnabled { index },
+            "Post-Affine Enabled",
+        ));
+        for param in [AffineParam::A, AffineParam::B, AffineParam::C, AffineParam::D,
+                      AffineParam::E, AffineParam::F, AffineParam::G] {
+            items.push(TargetItem::new(
+                ConfigPath::PoolFinalTransformPostAffine { index, param },
+                &format!("Post-Affine {}", param.to_char()),
+            ));
+        }
+    }
+
+    let registry = global_registry();
+    for (var_name, weight) in &transform.variations {
+        if *weight == 0.0 { continue; }
+        items.push(TargetItem::new(
+            ConfigPath::PoolFinalTransformVariation { index, variation: var_name.clone() },
+            &capitalize_first(var_name),
+        ));
+        if let Some(info) = registry.get(var_name) {
+            for param in &info.parameters {
+                items.push(TargetItem::new(
+                    ConfigPath::PoolFinalTransformVariationParam {
+                        index, variation: var_name.clone(), param: param.name.clone(),
+                    },
+                    &format!("{} → {}", capitalize_first(var_name), &param.display_name),
+                ));
             }
         }
     }

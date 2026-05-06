@@ -338,7 +338,10 @@ pub fn config_to_create_request(config: &FractalConfig, name: Option<&str>) -> C
         name: name.map(|n| n.to_string()).unwrap_or_else(|| flame.name.clone()),
         transforms: flame.transforms.iter().map(transform_to_api).collect(),
         visibility: None, // Set by caller if needed
-        final_transform: flame.final_transform.as_ref().map(transform_to_api),
+        // API DTO still carries a singular Final for compat — emit pool[0]
+        // when present (the rest of the pool isn't yet representable on the
+        // server side).
+        final_transform: flame.final_transforms.first().map(transform_to_api),
         render_mode: Some(flame.render_mode.into()),
         perspective_strength: Some(flame.perspective_strength),
         xaos: flame.xaos.as_ref().map(|x| serde_json::to_value(x).unwrap_or(serde_json::Value::Null)),
@@ -541,29 +544,37 @@ pub fn flame_response_to_config(
         .collect();
     transforms.sort_by_key(|t| t.sort_order);
 
-    let final_transform = resp.final_transform.as_ref().map(transform_from_api);
-
     // Reconstruct xaos from JSON value
     let xaos: Option<Vec<Vec<f32>>> = resp
         .xaos
         .as_ref()
         .and_then(|v| serde_json::from_value(v.clone()).ok());
 
-    let mut flame = Flame {
+    // API DTO carries a singular Final — push it into the new pool with
+    // an attachment on every normal so the rest of the pipeline sees a
+    // consistent shape. (API doesn't yet carry per-transform attachments.)
+    let mut transforms_local: Vec<crate::scene::transforms::Transform> =
+        transforms.iter().map(transform_from_api).collect();
+    let mut final_transforms = Vec::new();
+    if let Some(ft) = resp.final_transform.as_ref().map(transform_from_api) {
+        final_transforms.push(ft);
+        for t in transforms_local.iter_mut() {
+            if !t.final_attachments.contains(&0) {
+                t.final_attachments.push(0);
+            }
+        }
+    }
+
+    let flame = Flame {
         name: resp.name.clone(),
-        transforms: transforms.iter().map(transform_from_api).collect(),
-        final_transform,
+        transforms: transforms_local,
         linked_transforms: Vec::new(),
-        final_transforms: Vec::new(),
+        final_transforms,
         render_mode: resp.render_mode.into(),
         perspective_strength: resp.perspective_strength,
         xaos,
         solo_transform: resp.solo_transform.map(|i| i as usize),
     };
-    // API doesn't yet carry the per-transform attachment lists.
-    // Migrate the legacy singular Final into the new pool so the rest
-    // of the pipeline sees a consistent shape.
-    flame.migrate_legacy_final();
 
     // Reconstruct palette
     let palette = palette_resp

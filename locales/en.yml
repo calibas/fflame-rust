@@ -262,6 +262,8 @@ transform:
   opacity: "Opacity"
   direct_color: "Direct Color"
   add: "➕ Add Transform"
+  add_linked: "➕ Add Linked Transform"
+  add_final: "➕ Add Final Transform"
   delete: "🗑"
   edit_triangle: "Edit 🔺"
   clone: "Clone"
@@ -275,6 +277,9 @@ transform:
   enable_final: "Enable Final Transform"
   no_variations: "No variations enabled"
   solo: "Solo"
+  linked_attachments: "Linked XForms"
+  final_attachments: "Final XForms"
+  no_attachments_pool_empty: "(pool is empty — add a transform above)"
 
   # Affine parameters
   affine_a: "a:"
@@ -1355,6 +1360,8 @@ tooltips:
   transform_edit_triangle: "Select in Triangle Editor"
   transform_clone: "Create a copy"
   transform_delete: "Delete"
+  transform_add_linked: "Add a Linked transform.\nLinked transforms run inside the dynamics; attach them to normals via Advanced → Linked XForms."
+  transform_add_final: "Add a Final transform.\nFinal transforms are post-iteration view filters and auto-attach to every normal."
   remove_variation: "Remove variation"
   final_transform_help: "Post-processing transform applied once to every point after iteration loop.\nUsed for framing, positioning, or global effects."
 

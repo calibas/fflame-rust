@@ -5,47 +5,30 @@
 //! variation categories.
 
 use crate::{
-    config::{ConfigManager, ConfigPath, UpdateType},
+    config::{ConfigManager, TransformRef, UpdateType},
     variations::{ParamType, VariationParameter},
 };
 
-/// Render parameter controls for an active variation
+/// Render parameter controls for an active variation on any pool member.
 ///
-/// This function handles all parameter types (Float, UnlimitedFloat, Integer,
-/// UnlimitedInteger, Boolean, Angle, Enum) and automatically updates the config
-/// via ConfigManager with lazy undo support.
-///
-/// # Arguments
-/// * `ui` - The egui UI context
-/// * `config_manager` - The configuration manager
-/// * `transform_index` - Index of the transform being edited
-/// * `var_name` - Name of the variation (e.g., "julian", "blob")
-/// * `parameters` - List of parameters for this variation
-///
-/// # Returns
-/// The highest UpdateType from all parameter changes
-///
-/// # Example
-/// ```rust,ignore
-/// if value.abs() > 1e-6 && !var_info.parameters.is_empty() {
-///     ui.indent(format!("params_{}", var_info.name), |ui| {
-///         let update = render_variation_params(ui, config_manager, i, &var_info.name, &var_info.parameters);
-///         max_update = max_update.max(update);
-///     });
-/// }
-/// ```
+/// `xref` selects which pool (Normal / Linked / Final) and index the
+/// transform lives in; the right ConfigPath variant is built via
+/// `TransformRef::variation_param_path`.
 pub fn render_variation_params(
     ui: &mut egui::Ui,
     config_manager: &mut ConfigManager,
-    transform_index: usize,
+    xref: TransformRef,
     var_name: &str,
     parameters: &[VariationParameter],
 ) -> UpdateType {
     let mut max_update = UpdateType::None;
 
     for param in parameters {
-        // Get current value from active config (for live preview)
-        let transform = &config_manager.active_config().flame.transforms[transform_index];
+        // Get current value from active config (for live preview).
+        let transform = match xref.get(&config_manager.active_config().flame) {
+            Some(t) => t,
+            None => return max_update, // Pool member missing — bail out.
+        };
         let mut param_value = transform.get_variation_param_or_default(
             var_name,
             &param.name,
@@ -62,14 +45,9 @@ pub fn render_variation_params(
             ParamType::Enum { choices } => render_enum_param(ui, param, &mut param_value, choices),
         };
 
-        let path = ConfigPath::TransformVariationParam {
-            index: transform_index,
-            variation: var_name.to_string(),
-            param: param.name.clone(),
-        };
+        let path = xref.variation_param_path(var_name.to_string(), param.name.clone());
 
         if param_changed {
-            // Update via ConfigManager with lazy undo only during drag
             if let Ok(update_type) = config_manager.update_param(path.clone(), param_value.into()) {
                 max_update = max_update.max(update_type);
             }
@@ -200,65 +178,3 @@ fn render_enum_param(ui: &mut egui::Ui, param: &VariationParameter, value: &mut 
     (changed, false)  // Dropdowns don't have drag states
 }
 
-/// Render parameter controls for an active variation on the final transform
-///
-/// This is a specialized version of `render_variation_params` that uses
-/// `ConfigPath::FinalTransformVariationParam` instead of `ConfigPath::TransformVariationParam`.
-///
-/// # Arguments
-/// * `ui` - The egui UI context
-/// * `config_manager` - The configuration manager
-/// * `var_name` - Name of the variation (e.g., "julian", "blob")
-/// * `parameters` - List of parameters for this variation
-///
-/// # Returns
-/// The highest UpdateType from all parameter changes
-pub fn render_variation_params_final(
-    ui: &mut egui::Ui,
-    config_manager: &mut ConfigManager,
-    var_name: &str,
-    parameters: &[VariationParameter],
-) -> UpdateType {
-    let mut max_update = UpdateType::None;
-
-    for param in parameters {
-        // Get current value from active config (for live preview)
-        let final_transform = match &config_manager.active_config().flame.final_transform {
-            Some(ft) => ft,
-            None => return max_update, // No final transform
-        };
-        let mut param_value = final_transform.get_variation_param_or_default(
-            var_name,
-            &param.name,
-            &crate::variations::global_registry(),
-        );
-
-        let (param_changed, drag_stopped) = match &param.param_type {
-            ParamType::Float => render_float_param(ui, param, &mut param_value),
-            ParamType::UnlimitedFloat => render_unlimited_float_param(ui, param, &mut param_value),
-            ParamType::Integer => render_integer_param(ui, param, &mut param_value),
-            ParamType::UnlimitedInteger => render_unlimited_integer_param(ui, param, &mut param_value),
-            ParamType::Boolean => render_boolean_param(ui, param, &mut param_value),
-            ParamType::Angle => render_angle_param(ui, param, &mut param_value),
-            ParamType::Enum { choices } => render_enum_param(ui, param, &mut param_value, choices),
-        };
-
-        let path = ConfigPath::FinalTransformVariationParam {
-            variation: var_name.to_string(),
-            param: param.name.clone(),
-        };
-
-        if param_changed {
-            // Update via ConfigManager with lazy undo only during drag
-            if let Ok(update_type) = config_manager.update_param(path.clone(), param_value.into()) {
-                max_update = max_update.max(update_type);
-            }
-        }
-
-        if drag_stopped {
-            let _ = config_manager.force_commit_preview(&path);
-        }
-    }
-
-    max_update
-}

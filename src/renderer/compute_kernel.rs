@@ -276,7 +276,7 @@ impl FlameRenderer {
             num_transforms: flame.transforms.len() as u32,
             num_linked_transforms: flame.linked_transforms.len() as u32,
             num_final_transforms: flame.final_transforms.len() as u32,
-            has_final_transform: flame.final_transform.is_some(),
+            has_final_transform: !flame.final_transforms.is_empty(),
             path_filters: Vec::new(), // No filters by default
             min_suffix_filter_length: 0,
         }
@@ -291,7 +291,7 @@ impl FlameRenderer {
         self.num_transforms = flame.transforms.len() as u32;
         self.num_linked_transforms = flame.linked_transforms.len() as u32;
         self.num_final_transforms = flame.final_transforms.len() as u32;
-        self.has_final_transform = flame.final_transform.is_some();
+        self.has_final_transform = !flame.final_transforms.is_empty();
 
         // Recreate buffers with new size (preserve palette_size)
         let palette_size = self.buffers.palette_size();
@@ -353,7 +353,7 @@ impl FlameRenderer {
         ShaderConstants {
             num_transforms: flame.transforms.len() as u32,
             color_mode: self.color_mode as u32,
-            has_final_transform: flame.final_transform.is_some(),
+            has_final_transform: !flame.final_transforms.is_empty(),
             final_transform_index: 0,  // Legacy field — shader uses attachments chain now
             has_post_affine: flame.has_post_affine(),
             // No inlining for incremental updates (would trigger too many shader rebuilds)
@@ -724,7 +724,7 @@ impl FlameRenderer {
         self.num_transforms = config.flame.transforms.len() as u32;
         self.num_linked_transforms = config.flame.linked_transforms.len() as u32;
         self.num_final_transforms = config.flame.final_transforms.len() as u32;
-        self.has_final_transform = config.flame.final_transform.is_some();
+        self.has_final_transform = !config.flame.final_transforms.is_empty();
 
         let params = GpuParams {
             num_transforms: self.num_transforms,
@@ -829,7 +829,7 @@ impl FlameRenderer {
         self.num_transforms = flame.transforms.len() as u32;
         self.num_linked_transforms = flame.linked_transforms.len() as u32;
         self.num_final_transforms = flame.final_transforms.len() as u32;
-        self.has_final_transform = flame.final_transform.is_some();
+        self.has_final_transform = !flame.final_transforms.is_empty();
 
         let params = GpuParams {
             num_transforms: self.num_transforms,

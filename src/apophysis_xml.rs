@@ -245,23 +245,33 @@ fn parse_flame_element(
     // Determine perspective strength from cam_perspective
     let perspective_strength = f32::abs(cam_perspective);
 
+    // Apophysis XML always carries a singular global Final (or none);
+    // emit it directly into the new `final_transforms` pool with an
+    // attachment on every normal so the rest of the pipeline sees a
+    // consistent shape.
+    // See `docs/projects/per-transform-linked-and-final.md`.
+    let mut final_transforms = Vec::new();
+    if let Some(ft) = final_transform {
+        final_transforms.push(ft);
+        let new_idx = 0;
+        for t in transforms.iter_mut() {
+            if !t.final_attachments.contains(&new_idx) {
+                t.final_attachments.push(new_idx);
+            }
+        }
+    }
+
     // Build FractalConfig
-    let mut flame = Flame {
+    let flame = Flame {
         name,
         transforms,
-        final_transform,
         linked_transforms: Vec::new(),
-        final_transforms: Vec::new(),
+        final_transforms,
         render_mode,
         perspective_strength,
         xaos,
         solo_transform: solo_xform,
     };
-    // Apophysis XML always carries a singular global Final (or none);
-    // migrate it into the new per-transform model so the rest of the
-    // pipeline sees a consistent shape.
-    // See `docs/projects/per-transform-linked-and-final.md`.
-    flame.migrate_legacy_final();
 
     // Convert Apophysis scale/center to our zoom/pan
     // Apophysis: scale = pixels per unit, where scale 200 ≈ zoom 1.0
@@ -852,8 +862,8 @@ mod tests {
         assert_eq!(xform1.post_a, 1.0);   // identity
         assert_eq!(xform1.post_d, 1.0);   // identity
 
-        // Final transform has post-affine
-        let final_xform = config.flame.final_transform.as_ref().unwrap();
+        // Final transform has post-affine (now lives in the final_transforms pool).
+        let final_xform = config.flame.final_transforms.first().unwrap();
         assert!(final_xform.post_affine_enabled);
         assert_eq!(final_xform.post_a, 0.5);
         assert_eq!(final_xform.post_c, 0.1);   // parts[1]

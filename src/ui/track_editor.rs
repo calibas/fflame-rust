@@ -1072,6 +1072,36 @@ pub fn open_edit_track_panel(state: &mut TrackEditorState, track_index: usize, t
     state.target_selector_state = TargetSelectorState::default();
 }
 
+/// Read one affine coefficient from a transform — shared across all
+/// pool sites so the match arms only differ in how they look the
+/// transform up.
+fn read_affine(t: &crate::scene::transforms::Transform, param: crate::config::AffineParam) -> f64 {
+    use crate::config::AffineParam;
+    match param {
+        AffineParam::A => t.a as f64,
+        AffineParam::B => t.b as f64,
+        AffineParam::C => t.c as f64,
+        AffineParam::D => t.d as f64,
+        AffineParam::E => t.e as f64,
+        AffineParam::F => t.f as f64,
+        AffineParam::G => t.g as f64,
+    }
+}
+
+/// Same as `read_affine` but for the post-affine half.
+fn read_post_affine(t: &crate::scene::transforms::Transform, param: crate::config::AffineParam) -> f64 {
+    use crate::config::AffineParam;
+    match param {
+        AffineParam::A => t.post_a as f64,
+        AffineParam::B => t.post_b as f64,
+        AffineParam::C => t.post_c as f64,
+        AffineParam::D => t.post_d as f64,
+        AffineParam::E => t.post_e as f64,
+        AffineParam::F => t.post_f as f64,
+        AffineParam::G => t.post_g as f64,
+    }
+}
+
 /// Get the current value for a ConfigPath from the fractal config
 /// Returns None if the path doesn't map to a numeric value
 pub fn get_current_value(config: &FractalConfig, path: &ConfigPath) -> Option<f64> {
@@ -1127,33 +1157,13 @@ pub fn get_current_value(config: &FractalConfig, path: &ConfigPath) -> Option<f6
             config.flame.transforms.get(*index).map(|t| t.opacity as f64)
         }
         ConfigPath::TransformAffine { index, param } => {
-            config.flame.transforms.get(*index).map(|t| {
-                match param {
-                    AffineParam::A => t.a as f64,
-                    AffineParam::B => t.b as f64,
-                    AffineParam::C => t.c as f64,
-                    AffineParam::D => t.d as f64,
-                    AffineParam::E => t.e as f64,
-                    AffineParam::F => t.f as f64,
-                    AffineParam::G => t.g as f64,
-                }
-            })
+            config.flame.transforms.get(*index).map(|t| read_affine(t, *param))
         }
         ConfigPath::TransformPostAffineEnabled { index } => {
             config.flame.transforms.get(*index).map(|t| if t.post_affine_enabled { 1.0 } else { 0.0 })
         }
         ConfigPath::TransformPostAffine { index, param } => {
-            config.flame.transforms.get(*index).map(|t| {
-                match param {
-                    AffineParam::A => t.post_a as f64,
-                    AffineParam::B => t.post_b as f64,
-                    AffineParam::C => t.post_c as f64,
-                    AffineParam::D => t.post_d as f64,
-                    AffineParam::E => t.post_e as f64,
-                    AffineParam::F => t.post_f as f64,
-                    AffineParam::G => t.post_g as f64,
-                }
-            })
+            config.flame.transforms.get(*index).map(|t| read_post_affine(t, *param))
         }
         ConfigPath::TransformOriginX { index } => {
             config.flame.transforms.get(*index).map(|t| t.e as f64)
@@ -1172,48 +1182,83 @@ pub fn get_current_value(config: &FractalConfig, path: &ConfigPath) -> Option<f6
                 t.variations.get(variation).map(|&v| v as f64)
             })
         }
-
-        // Final transform
-        ConfigPath::FinalTransformAffine { param } => {
-            config.flame.final_transform.as_ref().map(|t| {
-                match param {
-                    AffineParam::A => t.a as f64,
-                    AffineParam::B => t.b as f64,
-                    AffineParam::C => t.c as f64,
-                    AffineParam::D => t.d as f64,
-                    AffineParam::E => t.e as f64,
-                    AffineParam::F => t.f as f64,
-                    AffineParam::G => t.g as f64,
-                }
+        ConfigPath::TransformVariationParam { index, variation, param } => {
+            config.flame.transforms.get(*index).map(|t| {
+                t.get_variation_param_or_default(
+                    variation, param, &crate::variations::global_registry()
+                ) as f64
             })
+        }
+
+        // Linked pool — animatable per-pool-member parameters.
+        ConfigPath::LinkedTransformAffine { index, param } => {
+            config.flame.linked_transforms.get(*index).map(|t| read_affine(t, *param))
+        }
+        ConfigPath::LinkedTransformPostAffineEnabled { index } => {
+            config.flame.linked_transforms.get(*index).map(|t| if t.post_affine_enabled { 1.0 } else { 0.0 })
+        }
+        ConfigPath::LinkedTransformPostAffine { index, param } => {
+            config.flame.linked_transforms.get(*index).map(|t| read_post_affine(t, *param))
+        }
+        ConfigPath::LinkedTransformVariation { index, variation } => {
+            config.flame.linked_transforms.get(*index).and_then(|t| {
+                t.variations.get(variation).map(|&v| v as f64)
+            })
+        }
+        ConfigPath::LinkedTransformVariationParam { index, variation, param } => {
+            config.flame.linked_transforms.get(*index).map(|t| {
+                t.get_variation_param_or_default(
+                    variation, param, &crate::variations::global_registry()
+                ) as f64
+            })
+        }
+
+        // Final pool — animatable per-pool-member parameters.
+        ConfigPath::PoolFinalTransformAffine { index, param } => {
+            config.flame.final_transforms.get(*index).map(|t| read_affine(t, *param))
+        }
+        ConfigPath::PoolFinalTransformPostAffineEnabled { index } => {
+            config.flame.final_transforms.get(*index).map(|t| if t.post_affine_enabled { 1.0 } else { 0.0 })
+        }
+        ConfigPath::PoolFinalTransformPostAffine { index, param } => {
+            config.flame.final_transforms.get(*index).map(|t| read_post_affine(t, *param))
+        }
+        ConfigPath::PoolFinalTransformVariation { index, variation } => {
+            config.flame.final_transforms.get(*index).and_then(|t| {
+                t.variations.get(variation).map(|&v| v as f64)
+            })
+        }
+        ConfigPath::PoolFinalTransformVariationParam { index, variation, param } => {
+            config.flame.final_transforms.get(*index).map(|t| {
+                t.get_variation_param_or_default(
+                    variation, param, &crate::variations::global_registry()
+                ) as f64
+            })
+        }
+
+        // Legacy "singular Final" ConfigPath variants — animation tracks
+        // saved against these target the first entry of `final_transforms`
+        // (matches the routing in manager.rs and animation/export.rs).
+        ConfigPath::FinalTransformAffine { param } => {
+            config.flame.final_transforms.first().map(|t| read_affine(t, *param))
         }
         ConfigPath::FinalTransformPostAffineEnabled => {
-            config.flame.final_transform.as_ref().map(|t| if t.post_affine_enabled { 1.0 } else { 0.0 })
+            config.flame.final_transforms.first().map(|t| if t.post_affine_enabled { 1.0 } else { 0.0 })
         }
         ConfigPath::FinalTransformPostAffine { param } => {
-            config.flame.final_transform.as_ref().map(|t| {
-                match param {
-                    AffineParam::A => t.post_a as f64,
-                    AffineParam::B => t.post_b as f64,
-                    AffineParam::C => t.post_c as f64,
-                    AffineParam::D => t.post_d as f64,
-                    AffineParam::E => t.post_e as f64,
-                    AffineParam::F => t.post_f as f64,
-                    AffineParam::G => t.post_g as f64,
-                }
-            })
+            config.flame.final_transforms.first().map(|t| read_post_affine(t, *param))
         }
         ConfigPath::FinalTransformOriginX => {
-            config.flame.final_transform.as_ref().map(|t| t.e as f64)
+            config.flame.final_transforms.first().map(|t| t.e as f64)
         }
         ConfigPath::FinalTransformOriginY => {
-            config.flame.final_transform.as_ref().map(|t| -t.f as f64)
+            config.flame.final_transforms.first().map(|t| -t.f as f64)
         }
         ConfigPath::FinalTransformRotation => {
-            config.flame.final_transform.as_ref().map(|t| t.rotation() as f64)
+            config.flame.final_transforms.first().map(|t| t.rotation() as f64)
         }
         ConfigPath::FinalTransformScale => {
-            config.flame.final_transform.as_ref().map(|t| t.scale() as f64)
+            config.flame.final_transforms.first().map(|t| t.scale() as f64)
         }
 
         // Non-numeric or complex types

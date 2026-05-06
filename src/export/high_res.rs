@@ -342,10 +342,19 @@ impl HighResExporter {
                 }
             }
         }
-        // Include final transform's variations in shader
-        if let Some(ref final_xform) = config.flame.final_transform {
+        // Include all final-pool transforms' variations in shader.
+        for final_xform in &config.flame.final_transforms {
             for name in final_xform.active_variations() {
                 let weight = final_xform.get_variation(&name);
+                if weight != 0.0 {
+                    active_variations.insert(name, weight);
+                }
+            }
+        }
+        // Include all linked-pool transforms' variations in shader.
+        for linked_xform in &config.flame.linked_transforms {
+            for name in linked_xform.active_variations() {
+                let weight = linked_xform.get_variation(&name);
                 if weight != 0.0 {
                     active_variations.insert(name, weight);
                 }
@@ -786,7 +795,7 @@ impl HighResExporter {
                 fog_strength: config.fog_strength,
                 fog_start: config.fog_start,
                 histogram_color_scale: config.histogram_color_scale,
-                has_final_transform: if config.flame.final_transform.is_some() { 1 } else { 0 },
+                has_final_transform: if !config.flame.final_transforms.is_empty() { 1 } else { 0 },
                 final_transform_index: 0,  // Legacy field — shader uses attachments chain now
                 bits_per_transform: crate::gpu::buffers::bits_per_transform(config.flame.transforms.len() as u32),
                 path_map_style: config.path_map_style as u32,
