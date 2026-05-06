@@ -101,9 +101,9 @@ struct SampleCounter {
 
 // Per-normal-transform attachment list — see header.wgsl for full doc.
 struct AttachmentList {
-    linked: array<u32, 100>,
+    linked: array<u32, 32>,
     linked_count: u32,
-    final_: array<u32, 100>,
+    final_: array<u32, 32>,
     final_count: u32,
 }
 

@@ -80,6 +80,7 @@ impl ShaderCache {
             has_final_transform: !flame.final_transforms.is_empty(),
             final_transform_index: flame.transforms.len() as u32,
             has_post_affine: flame.has_post_affine(),
+            has_attachments: !flame.linked_transforms.is_empty() || !flame.final_transforms.is_empty(),
             inlined_transforms: None,
             cumulative_weights: None,
         };
@@ -174,6 +175,7 @@ impl ShaderCache {
                 has_final_transform: !config.flame.final_transforms.is_empty(),
                 final_transform_index: config.flame.transforms.len() as u32,
                 has_post_affine: config.flame.has_post_affine(),
+                has_attachments: !config.flame.linked_transforms.is_empty() || !config.flame.final_transforms.is_empty(),
                 inlined_transforms: None,
                 cumulative_weights: None,
             }

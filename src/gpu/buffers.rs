@@ -20,11 +20,11 @@ pub const MAX_TRANSFORMS: usize = 128;
 
 /// Maximum number of attachments (linked + final) per normal transform.
 /// Per-normal chain length cap — independent of the total transform
-/// budget. Bumped from 32 → 100 during the per-transform-linked-and-final
-/// project to accommodate flames that share many Linked or Final
-/// transforms across normals (e.g., when a Final is auto-attached to
-/// every normal by default, MAX needs to cover the upper bound).
-pub const MAX_ATTACHMENTS_PER_TRANSFORM: usize = 100;
+/// budget. Sized to keep `GpuAttachmentList` small (264 bytes per entry
+/// at 32) so the per-iteration `attachments[xform_idx]` load stays
+/// cheap; was briefly bumped to 100 but reverted after benchmark
+/// regressions traced to the larger struct's bandwidth cost.
+pub const MAX_ATTACHMENTS_PER_TRANSFORM: usize = 32;
 
 /// GPU representation of Transform (must match WGSL struct layout)
 #[repr(C)]
@@ -180,7 +180,7 @@ pub const MAX_VARIATION_PARAM_SLOTS: usize = 1600;
 ///
 /// std430 alignment: `array<u32, N>` is tightly packed, `u32` is
 /// 4-byte aligned. Total size: 32·4 + 4 + 32·4 + 4 = 264 bytes per
-/// entry, or 8.25 KB for the whole buffer at MAX_NORMAL_TRANSFORMS=32.
+/// entry, or 33 KB for the whole buffer at MAX_TRANSFORMS=128.
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
 pub struct GpuAttachmentList {
