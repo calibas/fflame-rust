@@ -21,6 +21,7 @@ impl App {
     pub(super) fn handle_ui_responses(&mut self, ui_response: &UiResponse) {
         self.handle_config_operations(ui_response);
         self.handle_transform_operations(ui_response);
+        self.handle_attachment_edit(ui_response);
         self.handle_new_flame(ui_response);
         self.handle_random_flame(ui_response);
         self.handle_generated_flame(ui_response);
@@ -188,6 +189,144 @@ impl App {
                     self.flame = self.config_manager.active_config().flame.clone();
                 }
             }
+        }
+
+        // ---------- LINKED POOL ----------
+        if ui_response.add_linked_transform {
+            self.apply_pool_full_snapshot("Add Linked Transform", |flame| {
+                let mut t = Transform::default();
+                t.set_variation("linear", 1.0);
+                flame.linked_transforms.push(t);
+            });
+        }
+        if let Some(idx) = ui_response.clone_linked_transform {
+            self.apply_pool_full_snapshot(&format!("Clone Linked {}", idx + 1), |flame| {
+                if let Some(src) = flame.linked_transforms.get(idx).cloned() {
+                    let insert_at = idx + 1;
+                    flame.linked_transforms.insert(insert_at.min(flame.linked_transforms.len()), src);
+                }
+            });
+        }
+        if let Some(idx) = ui_response.delete_linked_transform {
+            self.apply_pool_full_snapshot(&format!("Delete Linked {}", idx + 1), |flame| {
+                if idx < flame.linked_transforms.len() {
+                    flame.linked_transforms.remove(idx);
+                    // Clean up dangling indices in every normal's linked attachment list.
+                    for normal in flame.transforms.iter_mut() {
+                        normal.linked_attachments.retain(|&a| a != idx);
+                        for a in normal.linked_attachments.iter_mut() {
+                            if *a > idx { *a -= 1; }
+                        }
+                    }
+                }
+            });
+        }
+
+        // ---------- FINAL POOL ----------
+        if ui_response.add_final_transform {
+            self.apply_pool_full_snapshot("Add Final Transform", |flame| {
+                let mut t = Transform::default();
+                t.set_variation("linear", 1.0);
+                let new_idx = flame.final_transforms.len();
+                flame.final_transforms.push(t);
+                // Auto-attach to every normal transform (per UI spec).
+                for normal in flame.transforms.iter_mut() {
+                    normal.final_attachments.push(new_idx);
+                }
+            });
+        }
+        if let Some(idx) = ui_response.clone_final_transform {
+            self.apply_pool_full_snapshot(&format!("Clone Final {}", idx + 1), |flame| {
+                if let Some(src) = flame.final_transforms.get(idx).cloned() {
+                    let insert_at = (idx + 1).min(flame.final_transforms.len());
+                    flame.final_transforms.insert(insert_at, src);
+                    // Shift any attachment indices >= insert_at forward.
+                    for normal in flame.transforms.iter_mut() {
+                        for a in normal.final_attachments.iter_mut() {
+                            if *a >= insert_at { *a += 1; }
+                        }
+                    }
+                }
+            });
+        }
+        if let Some(idx) = ui_response.delete_final_transform {
+            self.apply_pool_full_snapshot(&format!("Delete Final {}", idx + 1), |flame| {
+                if idx < flame.final_transforms.len() {
+                    flame.final_transforms.remove(idx);
+                    for normal in flame.transforms.iter_mut() {
+                        normal.final_attachments.retain(|&a| a != idx);
+                        for a in normal.final_attachments.iter_mut() {
+                            if *a > idx { *a -= 1; }
+                        }
+                    }
+                }
+            });
+        }
+    }
+
+    /// Apply a per-normal attachment edit (Linked/Final toggle or reorder).
+    /// Wraps the mutation in a full-config snapshot so undo/redo Just Works.
+    pub(super) fn handle_attachment_edit(&mut self, ui_response: &UiResponse) {
+        use crate::ui::response::{AttachmentEdit, AttachmentKind, AttachmentOp};
+        let Some(edit) = ui_response.attachment_edit.clone() else { return; };
+        let AttachmentEdit { normal_index, kind, op } = edit;
+
+        let description = match (&kind, &op) {
+            (AttachmentKind::Linked, AttachmentOp::Toggle(_)) => "Toggle Linked Attachment",
+            (AttachmentKind::Linked, AttachmentOp::MoveUp(_)) => "Reorder Linked Attachment",
+            (AttachmentKind::Linked, AttachmentOp::MoveDown(_)) => "Reorder Linked Attachment",
+            (AttachmentKind::Final, AttachmentOp::Toggle(_)) => "Toggle Final Attachment",
+            (AttachmentKind::Final, AttachmentOp::MoveUp(_)) => "Reorder Final Attachment",
+            (AttachmentKind::Final, AttachmentOp::MoveDown(_)) => "Reorder Final Attachment",
+        };
+
+        self.apply_pool_full_snapshot(description, |flame| {
+            let Some(normal) = flame.transforms.get_mut(normal_index) else { return; };
+            let list = match kind {
+                AttachmentKind::Linked => &mut normal.linked_attachments,
+                AttachmentKind::Final => &mut normal.final_attachments,
+            };
+            match op {
+                AttachmentOp::Toggle(pool_idx) => {
+                    if let Some(pos) = list.iter().position(|&a| a == pool_idx) {
+                        list.remove(pos);
+                    } else {
+                        list.push(pool_idx);
+                    }
+                }
+                AttachmentOp::MoveUp(pool_idx) => {
+                    if let Some(pos) = list.iter().position(|&a| a == pool_idx) {
+                        if pos > 0 { list.swap(pos, pos - 1); }
+                    }
+                }
+                AttachmentOp::MoveDown(pool_idx) => {
+                    if let Some(pos) = list.iter().position(|&a| a == pool_idx) {
+                        if pos + 1 < list.len() { list.swap(pos, pos + 1); }
+                    }
+                }
+            }
+        });
+    }
+
+    /// Apply a structural change to a Linked/Final pool by mutating the flame
+    /// in `mutate`, then commit a full-config snapshot for clean undo/redo.
+    fn apply_pool_full_snapshot<F: FnOnce(&mut crate::scene::transforms::Flame)>(
+        &mut self,
+        description: &str,
+        mutate: F,
+    ) {
+        let before = self.config_manager.active_config().clone();
+        let mut after = before.clone();
+        mutate(&mut after.flame);
+        let change = crate::config::ConfigChange::full_config_snapshot(
+            before,
+            after,
+            description.to_string(),
+        );
+        if let Err(e) = self.config_manager.apply_structural_change(change) {
+            eprintln!("Failed to apply {description}: {e}");
+        } else {
+            self.flame = self.config_manager.active_config().flame.clone();
         }
     }
 

@@ -199,11 +199,20 @@ pub fn compute_state_layout(
         }
     };
 
-    for (idx, xform) in flame.transforms.iter().enumerate() {
-        emit_xform(idx as u32, xform, &mut cursor);
+    // Emit state slots in the same global xform_id order used by the GPU
+    // transform buffer: normals, then linkeds, then finals.
+    let mut next_idx: u32 = 0;
+    for xform in flame.transforms.iter() {
+        emit_xform(next_idx, xform, &mut cursor);
+        next_idx += 1;
     }
-    if let Some(ref final_xform) = flame.final_transform {
-        emit_xform(flame.transforms.len() as u32, final_xform, &mut cursor);
+    for xform in flame.linked_transforms.iter() {
+        emit_xform(next_idx, xform, &mut cursor);
+        next_idx += 1;
+    }
+    for xform in flame.final_transforms.iter() {
+        emit_xform(next_idx, xform, &mut cursor);
+        next_idx += 1;
     }
 
     if cursor > MAX_STATE_SLOTS_PER_FLAME {
@@ -977,13 +986,13 @@ mod tests {
         flame.transforms.push(Transform::new());
         flame.transforms.push(Transform::new());
         flame.transforms.push(Transform::new());
-        flame.final_transform = Some({
+        let legacy = {
             let mut t = Transform::new();
             t.set_variation("spherical", 0.5);
             t
-        });
+        };
 
-        flame.migrate_legacy_final();
+        flame.migrate_legacy_final(Some(legacy));
 
         // Pool should now contain the legacy final at index 0.
         assert_eq!(flame.final_transforms.len(), 1);
@@ -996,25 +1005,18 @@ mod tests {
     }
 
     #[test]
-    fn test_migration_is_idempotent() {
+    fn test_migration_appends_to_existing_pool() {
         let mut flame = Flame::new();
         flame.transforms.push(Transform::new());
-        flame.final_transform = Some(Transform::new());
 
-        flame.migrate_legacy_final();
+        flame.migrate_legacy_final(Some(Transform::new()));
         let first_pool_len = flame.final_transforms.len();
         let first_attach = flame.transforms[0].final_attachments.clone();
 
-        // Calling again should not duplicate the attachment on already-attached
-        // normals (it WILL append a second copy to the pool, since we don't
-        // dedup pool contents — but per-normal attachments are guarded). The
-        // second call's attachments come back as [0, 1] though, since the new
-        // pool index is 1. So idempotency is per-normal-deduplication only.
-        flame.migrate_legacy_final();
-        // Pool grows by 1 (we don't dedup pool contents — calling twice is a
-        // bug we want to catch, not silently ignore).
+        // Calling again with another legacy final appends to the pool and
+        // adds the new pool index to the attachment list.
+        flame.migrate_legacy_final(Some(Transform::new()));
         assert_eq!(flame.final_transforms.len(), first_pool_len + 1);
-        // The attachment list grows by 1 (new pool index).
         assert_eq!(flame.transforms[0].final_attachments.len(), first_attach.len() + 1);
     }
 
@@ -1022,8 +1024,7 @@ mod tests {
     fn test_migration_no_legacy_final_is_noop() {
         let mut flame = Flame::new();
         flame.transforms.push(Transform::new());
-        // No final_transform set.
-        flame.migrate_legacy_final();
+        flame.migrate_legacy_final(None);
         assert!(flame.final_transforms.is_empty());
         assert!(flame.transforms[0].final_attachments.is_empty());
     }
@@ -1204,15 +1205,6 @@ impl Point {
 pub struct Flame {
     pub name: String,
     pub transforms: Vec<Transform>,
-    /// LEGACY: singular global Final transform. Loaded by the Flame
-    /// deserializer if present in the JSON, then migrated into
-    /// `final_transforms[0]` (with `final_attachments = [0]` on every
-    /// normal). Kept here for now so the existing renderer and UI
-    /// callers continue to work; will be removed once the new chain
-    /// model fully replaces them. Always `None` after migration.
-    /// See `docs/projects/per-transform-linked-and-final.md`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub final_transform: Option<Transform>,
     /// Pool of Linked transforms — referenced by index from each
     /// normal transform's `linked_attachments`. Linked transforms are
     /// part of dynamics (their output feeds the next iteration) and
@@ -1251,7 +1243,6 @@ impl Default for Flame {
         Self {
             name: "Untitled".to_string(),
             transforms: Vec::new(),
-            final_transform: None,
             linked_transforms: Vec::new(),
             final_transforms: Vec::new(),
             render_mode: RenderMode::default(),
@@ -1264,48 +1255,21 @@ impl Default for Flame {
 
 impl Flame {
     /// Total GPU transform slot count: normals + linkeds + finals.
-    /// The legacy `final_transform` field is migrated into
-    /// `final_transforms[0]` at deserialize time and re-synced on
-    /// every UI edit, so it doesn't get its own GPU slot.
     pub fn total_gpu_transform_slots(&self) -> usize {
         self.transforms.len()
             + self.linked_transforms.len()
             + self.final_transforms.len()
     }
 
-    /// Re-sync the legacy `final_transform` field's content into the
-    /// last element of `final_transforms`. Called by UI setters that
-    /// modify the legacy field — without this, edits via the legacy UI
-    /// surface (FinalTransformAffine etc.) wouldn't be visible to the
-    /// chain renderer.
-    ///
-    /// Assumes `migrate_legacy_final` was called once at flame load
-    /// time, so the last `final_transforms` entry is the
-    /// legacy-mirrored copy. Updates that copy in place; pool size
-    /// unchanged. No-op if either field is empty.
-    ///
-    /// Phase 5 will replace the legacy UI surface with per-transform
-    /// attachment UI, after which this helper can be removed.
+    /// Migrate a legacy singular `final_transform` (loaded from JSON
+    /// produced by older versions of the app, or pulled from external
+    /// sources) into the new `final_transforms` pool with an attachment
+    /// on every normal transform. No-op if `legacy` is `None`.
     /// See `docs/projects/per-transform-linked-and-final.md`.
-    pub fn sync_legacy_final_into_pool(&mut self) {
-        if let Some(ref legacy) = self.final_transform {
-            if let Some(last) = self.final_transforms.last_mut() {
-                *last = legacy.clone();
-            }
-        }
-    }
-
-    /// Migrate a legacy singular `final_transform` into the new
-    /// `final_transforms` pool with an attachment on every normal
-    /// transform. The legacy field is left populated for now (so the
-    /// existing UI surface that operates on `flame.final_transform`
-    /// keeps working) and is mirrored into the pool via
-    /// `sync_legacy_final_into_pool` on every UI edit.
-    /// See `docs/projects/per-transform-linked-and-final.md`.
-    pub fn migrate_legacy_final(&mut self) {
-        let Some(ref legacy) = self.final_transform else { return };
+    pub fn migrate_legacy_final(&mut self, legacy: Option<Transform>) {
+        let Some(legacy) = legacy else { return };
         let new_idx = self.final_transforms.len();
-        self.final_transforms.push(legacy.clone());
+        self.final_transforms.push(legacy);
         for t in &mut self.transforms {
             if !t.final_attachments.contains(&new_idx) {
                 t.final_attachments.push(new_idx);
@@ -1339,27 +1303,14 @@ impl Flame {
         for t in &self.linked_transforms { absorb(t, &mut all_variations); }
         for t in &self.final_transforms { absorb(t, &mut all_variations); }
 
-        // Legacy global Final — kept in extract until Phase 4 drops the field.
-        if let Some(final_xform) = &self.final_transform {
-            absorb(final_xform, &mut all_variations);
-        }
-
         all_variations
     }
 
-    /// Check if any transform (regular or final) has post-affine enabled
+    /// Check if any transform (in any pool) has post-affine enabled.
     pub fn has_post_affine(&self) -> bool {
-        for xform in &self.transforms {
-            if xform.post_affine_enabled {
-                return true;
-            }
-        }
-        if let Some(ref final_xform) = self.final_transform {
-            if final_xform.post_affine_enabled {
-                return true;
-            }
-        }
-        false
+        self.transforms.iter().any(|t| t.post_affine_enabled)
+            || self.linked_transforms.iter().any(|t| t.post_affine_enabled)
+            || self.final_transforms.iter().any(|t| t.post_affine_enabled)
     }
 
     /// Get runtime ID mapping for active variations.
@@ -1509,7 +1460,6 @@ impl<'de> Deserialize<'de> for Flame {
                 let mut flame = Flame {
                     name: name.unwrap_or_else(|| default_flame_name()),
                     transforms,
-                    final_transform,
                     linked_transforms,
                     final_transforms,
                     render_mode: render_mode.unwrap_or_default(),
@@ -1517,11 +1467,13 @@ impl<'de> Deserialize<'de> for Flame {
                     xaos,
                     solo_transform: solo_transform.unwrap_or(None),
                 };
-                // Migrate legacy singular `final_transform` into the new
-                // `final_transforms` pool. See
+                // Migrate any legacy singular `final_transform` field
+                // (consumed locally above into `final_transform`) into the
+                // new `final_transforms` pool with auto-attachment on every
+                // normal. See
                 // `docs/projects/per-transform-linked-and-final.md`
                 // §"File format / migration".
-                flame.migrate_legacy_final();
+                flame.migrate_legacy_final(final_transform);
                 Ok(flame)
             }
         }

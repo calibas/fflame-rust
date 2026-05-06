@@ -20,7 +20,7 @@ mod panel_viewer;
 mod path_editor;
 mod performance;
 mod random_generator;
-mod response;
+pub mod response;
 mod settings;
 mod target_selector;
 mod tone_mapping;
@@ -763,6 +763,13 @@ impl EguiLayer {
         let mut add_transform = false;
         let mut delete_transform = None;
         let mut clone_transform = None;
+        let mut add_linked_transform = false;
+        let mut delete_linked_transform = None;
+        let mut clone_linked_transform = None;
+        let mut add_final_transform = false;
+        let mut delete_final_transform = None;
+        let mut clone_final_transform = None;
+        let mut attachment_edit: Option<crate::ui::response::AttachmentEdit> = None;
 
         // Config import/export
         let mut config_export_json = None;
@@ -960,6 +967,13 @@ impl EguiLayer {
                         add_transform: &mut add_transform,
                         delete_transform: &mut delete_transform,
                         clone_transform: &mut clone_transform,
+                        add_linked_transform: &mut add_linked_transform,
+                        delete_linked_transform: &mut delete_linked_transform,
+                        clone_linked_transform: &mut clone_linked_transform,
+                        add_final_transform: &mut add_final_transform,
+                        delete_final_transform: &mut delete_final_transform,
+                        clone_final_transform: &mut clone_final_transform,
+                        attachment_edit: &mut attachment_edit,
                         undo_requested: &mut undo_requested,
                         redo_requested: &mut redo_requested,
                         open_palette_editor: &mut open_palette_editor,
@@ -1532,6 +1546,13 @@ impl EguiLayer {
             add_transform,
             delete_transform,
             clone_transform,
+            add_linked_transform,
+            delete_linked_transform,
+            clone_linked_transform,
+            add_final_transform,
+            delete_final_transform,
+            clone_final_transform,
+            attachment_edit,
             open_palette_editor,
             open_palette_library,
             open_config_dialog,

@@ -767,7 +767,7 @@ impl FlameBuffers {
             fog_strength: crate::config::DEFAULT_FOG_STRENGTH,
             fog_start: crate::config::DEFAULT_FOG_START,
             histogram_color_scale: crate::config::DEFAULT_HISTOGRAM_COLOR_SCALE,
-            has_final_transform: if flame.final_transform.is_some() { 1 } else { 0 },
+            has_final_transform: if !flame.final_transforms.is_empty() { 1 } else { 0 },
             final_transform_index: 0,  // Legacy field — shader uses attachments chain now
             bits_per_transform: bits_per_transform(flame.transforms.len() as u32),
             path_map_style: 0,
@@ -1229,12 +1229,11 @@ impl FlameBuffers {
         let total_transforms = flame.total_gpu_transform_slots();
         if total_transforms > MAX_TRANSFORMS {
             panic!(
-                "Flame has {} total transform slots (normals={} + linkeds={} + finals={} + legacy_final={}) but MAX_TRANSFORMS is {}",
+                "Flame has {} total transform slots (normals={} + linkeds={} + finals={}) but MAX_TRANSFORMS is {}",
                 total_transforms,
                 flame.transforms.len(),
                 flame.linked_transforms.len(),
                 flame.final_transforms.len(),
-                if flame.final_transform.is_some() { 1 } else { 0 },
                 MAX_TRANSFORMS,
             );
         }
@@ -1281,12 +1280,11 @@ impl FlameBuffers {
         let total_transforms = flame.total_gpu_transform_slots();
         if total_transforms > MAX_TRANSFORMS {
             panic!(
-                "Flame has {} total transform slots (normals={} + linkeds={} + finals={} + legacy_final={}) but MAX_TRANSFORMS is {}",
+                "Flame has {} total transform slots (normals={} + linkeds={} + finals={}) but MAX_TRANSFORMS is {}",
                 total_transforms,
                 flame.transforms.len(),
                 flame.linked_transforms.len(),
                 flame.final_transforms.len(),
-                if flame.final_transform.is_some() { 1 } else { 0 },
                 MAX_TRANSFORMS,
             );
         }

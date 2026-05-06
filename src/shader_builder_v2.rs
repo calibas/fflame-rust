@@ -307,7 +307,9 @@ impl ShaderConstants {
     ) -> Self {
         // Ensure at least 1 transform to prevent shader overflow (NUM_TRANSFORMS - 1u)
         let num_transforms = flame.transforms.len().max(1) as u32;
-        let has_final = flame.final_transform.is_some();
+        // Inline-shader path treats `final_transforms[0]` as the singular
+        // final transform — multi-final in inline mode is a Phase 6 follow-on.
+        let has_final = !flame.final_transforms.is_empty();
         let final_idx = num_transforms; // Final comes after regular transforms
 
         // Per-flame local index map. Must match what the buffer populator
@@ -386,8 +388,8 @@ impl ShaderConstants {
             }
         }
 
-        // Handle final transform if present
-        if let Some(final_xform) = &flame.final_transform {
+        // Handle final transform if present (inline mode uses pool[0]).
+        if let Some(final_xform) = flame.final_transforms.first() {
             let mut var_weights = Vec::new();
             for (name, &weight) in &final_xform.variations {
                 if weight.abs() > 1e-6 {
@@ -881,11 +883,21 @@ impl ShaderBuilder {
                 pairs.push((xform_idx, var_name.clone(), offset));
             }
         };
-        for (i, xform) in flame.transforms.iter().enumerate() {
-            emit_variation(i as u32, xform);
+        // Emit per-transform state offsets in the same global xform_id
+        // order used by the GPU transform buffer: normals, then linkeds,
+        // then finals.
+        let mut next_idx: u32 = 0;
+        for xform in flame.transforms.iter() {
+            emit_variation(next_idx, xform);
+            next_idx += 1;
         }
-        if let Some(final_xform) = &flame.final_transform {
-            emit_variation(flame.transforms.len() as u32, final_xform);
+        for xform in flame.linked_transforms.iter() {
+            emit_variation(next_idx, xform);
+            next_idx += 1;
+        }
+        for xform in flame.final_transforms.iter() {
+            emit_variation(next_idx, xform);
+            next_idx += 1;
         }
 
         if pairs.is_empty() {

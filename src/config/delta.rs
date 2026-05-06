@@ -128,6 +128,37 @@ pub enum ConfigPath {
     /// High-level final transform scale (uniform scaling)
     FinalTransformScale,
 
+    // ===== Linked Transform pool (require iteration reset) =====
+    // Linked transforms run sequentially after a normal transform's
+    // variations and feed forward into the next iteration. Pool members
+    // are referenced by index; multiple normals can share via
+    // attachment lists. See per-transform-linked-and-final.md.
+    LinkedTransformAffine { index: usize, param: AffineParam },
+    LinkedTransformPostAffineEnabled { index: usize },
+    LinkedTransformPostAffine { index: usize, param: AffineParam },
+    LinkedTransformVariation { index: usize, variation: String },
+    LinkedTransformVariationParam {
+        index: usize,
+        variation: String,
+        param: String,
+    },
+
+    // ===== Final Transform pool (require iteration reset) =====
+    // Final transforms run sequentially after the Linked chain to
+    // shape the plotted point only (output not fed forward — pure
+    // filter). Pool members referenced by index. PoolFinal* prefix is
+    // transitional; legacy FinalTransform* (no index) variants will be
+    // removed in Phase 5d, then these get renamed.
+    PoolFinalTransformAffine { index: usize, param: AffineParam },
+    PoolFinalTransformPostAffineEnabled { index: usize },
+    PoolFinalTransformPostAffine { index: usize, param: AffineParam },
+    PoolFinalTransformVariation { index: usize, variation: String },
+    PoolFinalTransformVariationParam {
+        index: usize,
+        variation: String,
+        param: String,
+    },
+
     // ===== Flame-level (require iteration reset) =====
     RenderMode,
     PerspectiveStrength,
@@ -178,6 +209,131 @@ pub enum AffineParam {
     E,
     F,
     G, // Z offset for 3D mode
+}
+
+/// Identifies a specific transform across the three pools.
+/// Used by reusable UI render fns to construct the right ConfigPath
+/// variant and read from the right pool when displaying / editing
+/// affine, post-affine, variations, and variation_params.
+///
+/// See `docs/projects/per-transform-linked-and-final.md`.
+/// Which transform pool a path-or-action targets.
+/// Use `TransformRef` when an index is also needed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum TransformKind {
+    Normal,
+    Linked,
+    Final,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum TransformRef {
+    Normal(usize),
+    Linked(usize),
+    Final(usize),
+}
+
+impl TransformKind {
+    pub fn at(self, index: usize) -> TransformRef {
+        match self {
+            TransformKind::Normal => TransformRef::Normal(index),
+            TransformKind::Linked => TransformRef::Linked(index),
+            TransformKind::Final => TransformRef::Final(index),
+        }
+    }
+}
+
+impl TransformRef {
+    pub fn index(&self) -> usize {
+        match self {
+            TransformRef::Normal(i) | TransformRef::Linked(i) | TransformRef::Final(i) => *i,
+        }
+    }
+
+    pub fn kind(&self) -> TransformKind {
+        match self {
+            TransformRef::Normal(_) => TransformKind::Normal,
+            TransformRef::Linked(_) => TransformKind::Linked,
+            TransformRef::Final(_) => TransformKind::Final,
+        }
+    }
+
+    /// Short tag used to disambiguate egui id_salts and log strings across pools.
+    pub fn pool_kind(&self) -> &'static str {
+        match self {
+            TransformRef::Normal(_) => "normal",
+            TransformRef::Linked(_) => "linked",
+            TransformRef::Final(_) => "final",
+        }
+    }
+
+    /// Look up the corresponding transform in the flame.
+    pub fn get<'a>(&self, flame: &'a crate::scene::transforms::Flame)
+        -> Option<&'a crate::scene::transforms::Transform>
+    {
+        match self {
+            TransformRef::Normal(i) => flame.transforms.get(*i),
+            TransformRef::Linked(i) => flame.linked_transforms.get(*i),
+            TransformRef::Final(i) => flame.final_transforms.get(*i),
+        }
+    }
+
+    /// Mutable lookup of the corresponding transform in the flame.
+    pub fn get_mut<'a>(&self, flame: &'a mut crate::scene::transforms::Flame)
+        -> Option<&'a mut crate::scene::transforms::Transform>
+    {
+        match self {
+            TransformRef::Normal(i) => flame.transforms.get_mut(*i),
+            TransformRef::Linked(i) => flame.linked_transforms.get_mut(*i),
+            TransformRef::Final(i) => flame.final_transforms.get_mut(*i),
+        }
+    }
+
+    pub fn affine_path(&self, param: AffineParam) -> ConfigPath {
+        match self {
+            TransformRef::Normal(i) => ConfigPath::TransformAffine { index: *i, param },
+            TransformRef::Linked(i) => ConfigPath::LinkedTransformAffine { index: *i, param },
+            TransformRef::Final(i) => ConfigPath::PoolFinalTransformAffine { index: *i, param },
+        }
+    }
+
+    pub fn post_affine_enabled_path(&self) -> ConfigPath {
+        match self {
+            TransformRef::Normal(i) => ConfigPath::TransformPostAffineEnabled { index: *i },
+            TransformRef::Linked(i) => ConfigPath::LinkedTransformPostAffineEnabled { index: *i },
+            TransformRef::Final(i) => ConfigPath::PoolFinalTransformPostAffineEnabled { index: *i },
+        }
+    }
+
+    pub fn post_affine_path(&self, param: AffineParam) -> ConfigPath {
+        match self {
+            TransformRef::Normal(i) => ConfigPath::TransformPostAffine { index: *i, param },
+            TransformRef::Linked(i) => ConfigPath::LinkedTransformPostAffine { index: *i, param },
+            TransformRef::Final(i) => ConfigPath::PoolFinalTransformPostAffine { index: *i, param },
+        }
+    }
+
+    pub fn variation_path(&self, variation: String) -> ConfigPath {
+        match self {
+            TransformRef::Normal(i) => ConfigPath::TransformVariation { index: *i, variation },
+            TransformRef::Linked(i) => ConfigPath::LinkedTransformVariation { index: *i, variation },
+            TransformRef::Final(i) => ConfigPath::PoolFinalTransformVariation { index: *i, variation },
+        }
+    }
+
+    pub fn variation_param_path(&self, variation: String, param: String) -> ConfigPath {
+        match self {
+            TransformRef::Normal(i) => ConfigPath::TransformVariationParam {
+                index: *i, variation, param,
+            },
+            TransformRef::Linked(i) => ConfigPath::LinkedTransformVariationParam {
+                index: *i, variation, param,
+            },
+            TransformRef::Final(i) => ConfigPath::PoolFinalTransformVariationParam {
+                index: *i, variation, param,
+            },
+        }
+    }
 }
 
 impl Display for ConfigPath {
@@ -312,6 +468,40 @@ impl Display for ConfigPath {
             ConfigPath::FinalTransformPostAffineEnabled => write!(f, "Final Transform → Post-Affine Enabled"),
             ConfigPath::FinalTransformPostAffine { param } => {
                 write!(f, "Final Transform → Post-Affine {:?}", param)
+            }
+
+            // Linked Transform pool
+            ConfigPath::LinkedTransformAffine { index, param } => {
+                write!(f, "Linked Transform {} → Affine {:?}", index + 1, param)
+            }
+            ConfigPath::LinkedTransformPostAffineEnabled { index } => {
+                write!(f, "Linked Transform {} → Post-Affine Enabled", index + 1)
+            }
+            ConfigPath::LinkedTransformPostAffine { index, param } => {
+                write!(f, "Linked Transform {} → Post-Affine {:?}", index + 1, param)
+            }
+            ConfigPath::LinkedTransformVariation { index, variation } => {
+                write!(f, "Linked Transform {} → {} variation", index + 1, variation)
+            }
+            ConfigPath::LinkedTransformVariationParam { index, variation, param } => {
+                write!(f, "Linked Transform {} → {} → {}", index + 1, variation, param)
+            }
+
+            // Final Transform pool
+            ConfigPath::PoolFinalTransformAffine { index, param } => {
+                write!(f, "Final Transform {} → Affine {:?}", index + 1, param)
+            }
+            ConfigPath::PoolFinalTransformPostAffineEnabled { index } => {
+                write!(f, "Final Transform {} → Post-Affine Enabled", index + 1)
+            }
+            ConfigPath::PoolFinalTransformPostAffine { index, param } => {
+                write!(f, "Final Transform {} → Post-Affine {:?}", index + 1, param)
+            }
+            ConfigPath::PoolFinalTransformVariation { index, variation } => {
+                write!(f, "Final Transform {} → {} variation", index + 1, variation)
+            }
+            ConfigPath::PoolFinalTransformVariationParam { index, variation, param } => {
+                write!(f, "Final Transform {} → {} → {}", index + 1, variation, param)
             }
 
             // Flame
@@ -558,6 +748,61 @@ impl ConfigPath {
             ConfigPath::FinalTransformPostAffine { param } => I18nKey::with_params(
                 "history.param.final_transform_post_affine",
                 vec![("param", format!("{:?}", param))],
+            ),
+
+            // Linked Transform pool
+            ConfigPath::LinkedTransformAffine { index, param } => I18nKey::with_params(
+                "history.param.transform_affine",
+                vec![("index", (index + 1).to_string()), ("param", format!("{:?}", param))],
+            ),
+            ConfigPath::LinkedTransformPostAffineEnabled { index } => I18nKey::with_params(
+                "history.param.transform_post_affine_enabled",
+                vec![("index", (index + 1).to_string())],
+            ),
+            ConfigPath::LinkedTransformPostAffine { index, param } => I18nKey::with_params(
+                "history.param.transform_post_affine",
+                vec![("index", (index + 1).to_string()), ("param", format!("{:?}", param))],
+            ),
+            ConfigPath::LinkedTransformVariation { index, variation } => I18nKey::with_params(
+                "history.param.transform_variation",
+                vec![("index", (index + 1).to_string()), ("variation", variation.clone())],
+            ),
+            ConfigPath::LinkedTransformVariationParam { index, variation, param } => I18nKey::with_params(
+                "history.param.transform_variation_param",
+                vec![
+                    ("index", (index + 1).to_string()),
+                    ("variation", variation.clone()),
+                    ("param", param.clone()),
+                ],
+            ),
+
+            // Final Transform pool — reuses transform_* i18n keys; the
+            // user-visible "Linked"/"Final" distinction comes from the
+            // panel header. Phase 5d may split if separate keys are
+            // needed.
+            ConfigPath::PoolFinalTransformAffine { index, param } => I18nKey::with_params(
+                "history.param.transform_affine",
+                vec![("index", (index + 1).to_string()), ("param", format!("{:?}", param))],
+            ),
+            ConfigPath::PoolFinalTransformPostAffineEnabled { index } => I18nKey::with_params(
+                "history.param.transform_post_affine_enabled",
+                vec![("index", (index + 1).to_string())],
+            ),
+            ConfigPath::PoolFinalTransformPostAffine { index, param } => I18nKey::with_params(
+                "history.param.transform_post_affine",
+                vec![("index", (index + 1).to_string()), ("param", format!("{:?}", param))],
+            ),
+            ConfigPath::PoolFinalTransformVariation { index, variation } => I18nKey::with_params(
+                "history.param.transform_variation",
+                vec![("index", (index + 1).to_string()), ("variation", variation.clone())],
+            ),
+            ConfigPath::PoolFinalTransformVariationParam { index, variation, param } => I18nKey::with_params(
+                "history.param.transform_variation_param",
+                vec![
+                    ("index", (index + 1).to_string()),
+                    ("variation", variation.clone()),
+                    ("param", param.clone()),
+                ],
             ),
 
             // Flame
@@ -1296,6 +1541,16 @@ impl ConfigPath {
             | ConfigPath::FinalTransformOriginY
             | ConfigPath::FinalTransformRotation
             | ConfigPath::FinalTransformScale
+            | ConfigPath::LinkedTransformAffine { .. }
+            | ConfigPath::LinkedTransformPostAffineEnabled { .. }
+            | ConfigPath::LinkedTransformPostAffine { .. }
+            | ConfigPath::LinkedTransformVariation { .. }
+            | ConfigPath::LinkedTransformVariationParam { .. }
+            | ConfigPath::PoolFinalTransformAffine { .. }
+            | ConfigPath::PoolFinalTransformPostAffineEnabled { .. }
+            | ConfigPath::PoolFinalTransformPostAffine { .. }
+            | ConfigPath::PoolFinalTransformVariation { .. }
+            | ConfigPath::PoolFinalTransformVariationParam { .. }
             | ConfigPath::RenderMode
             | ConfigPath::PerspectiveStrength
             | ConfigPath::Xaos { .. }
@@ -1427,6 +1682,40 @@ impl ConfigPath {
             ConfigPath::FinalTransformPostAffineEnabled => "FinalTransform.PostAffineEnabled".to_string(),
             ConfigPath::FinalTransformPostAffine { param } => {
                 format!("FinalTransform.PostAffine.{}", param.to_char())
+            }
+
+            // Linked Transform pool
+            ConfigPath::LinkedTransformAffine { index, param } => {
+                format!("LinkedTransform.{}.Affine.{}", index, param.to_char())
+            }
+            ConfigPath::LinkedTransformPostAffineEnabled { index } => {
+                format!("LinkedTransform.{}.PostAffineEnabled", index)
+            }
+            ConfigPath::LinkedTransformPostAffine { index, param } => {
+                format!("LinkedTransform.{}.PostAffine.{}", index, param.to_char())
+            }
+            ConfigPath::LinkedTransformVariation { index, variation } => {
+                format!("LinkedTransform.{}.Variation.{}", index, variation)
+            }
+            ConfigPath::LinkedTransformVariationParam { index, variation, param } => {
+                format!("LinkedTransform.{}.VariationParam.{}.{}", index, variation, param)
+            }
+
+            // Final Transform pool
+            ConfigPath::PoolFinalTransformAffine { index, param } => {
+                format!("PoolFinalTransform.{}.Affine.{}", index, param.to_char())
+            }
+            ConfigPath::PoolFinalTransformPostAffineEnabled { index } => {
+                format!("PoolFinalTransform.{}.PostAffineEnabled", index)
+            }
+            ConfigPath::PoolFinalTransformPostAffine { index, param } => {
+                format!("PoolFinalTransform.{}.PostAffine.{}", index, param.to_char())
+            }
+            ConfigPath::PoolFinalTransformVariation { index, variation } => {
+                format!("PoolFinalTransform.{}.Variation.{}", index, variation)
+            }
+            ConfigPath::PoolFinalTransformVariationParam { index, variation, param } => {
+                format!("PoolFinalTransform.{}.VariationParam.{}.{}", index, variation, param)
             }
 
             // Flame
@@ -1742,6 +2031,14 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::FinalTransformOriginY
         | ConfigPath::FinalTransformRotation
         | ConfigPath::FinalTransformScale
+        | ConfigPath::LinkedTransformAffine { .. }
+        | ConfigPath::LinkedTransformPostAffine { .. }
+        | ConfigPath::LinkedTransformVariation { .. }
+        | ConfigPath::LinkedTransformVariationParam { .. }
+        | ConfigPath::PoolFinalTransformAffine { .. }
+        | ConfigPath::PoolFinalTransformPostAffine { .. }
+        | ConfigPath::PoolFinalTransformVariation { .. }
+        | ConfigPath::PoolFinalTransformVariationParam { .. }
         | ConfigPath::Xaos { .. }
         | ConfigPath::SystemTargetFps
         | ConfigPath::LevelsLow
@@ -1780,6 +2077,8 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::UseDynamicBlend
         | ConfigPath::DeterministicRng
         | ConfigPath::TransformPostAffineEnabled { .. }
+        | ConfigPath::LinkedTransformPostAffineEnabled { .. }
+        | ConfigPath::PoolFinalTransformPostAffineEnabled { .. }
         | ConfigPath::FinalTransformEnabled
         | ConfigPath::FinalTransformPostAffineEnabled
         | ConfigPath::SystemVsyncEnabled

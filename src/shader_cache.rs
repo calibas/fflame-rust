@@ -77,7 +77,7 @@ impl ShaderCache {
         let constants = ShaderConstants {
             num_transforms,
             color_mode: 0,  // Will be updated via ensure_current_full when config loads
-            has_final_transform: flame.final_transform.is_some(),
+            has_final_transform: !flame.final_transforms.is_empty(),
             final_transform_index: flame.transforms.len() as u32,
             has_post_affine: flame.has_post_affine(),
             inlined_transforms: None,
@@ -171,7 +171,7 @@ impl ShaderCache {
             ShaderConstants {
                 num_transforms,
                 color_mode: config.color_mode as u32,
-                has_final_transform: config.flame.final_transform.is_some(),
+                has_final_transform: !config.flame.final_transforms.is_empty(),
                 final_transform_index: config.flame.transforms.len() as u32,
                 has_post_affine: config.flame.has_post_affine(),
                 inlined_transforms: None,
