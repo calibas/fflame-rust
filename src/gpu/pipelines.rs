@@ -135,9 +135,9 @@ impl FlamePipelines {
                     count: None,
                 },
                 // Per-normal-transform attachment list buffer.
-                // Each entry holds up to 32 linked + 32 final GLOBAL
-                // xform_ids; main loop walks them after the chaos game
-                // picks a normal transform.
+                // Each entry holds up to `flame.attachment_cap()` linked +
+                // cap final GLOBAL xform_ids (plus counts); the main loop
+                // walks them after the chaos game picks a normal transform.
                 BindGroupLayoutEntry {
                     binding: 10,
                     visibility: ShaderStages::COMPUTE,

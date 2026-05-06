@@ -550,31 +550,22 @@ pub fn flame_response_to_config(
         .as_ref()
         .and_then(|v| serde_json::from_value(v.clone()).ok());
 
-    // API DTO carries a singular Final — push it into the new pool with
-    // an attachment on every normal so the rest of the pipeline sees a
-    // consistent shape. (API doesn't yet carry per-transform attachments.)
-    let mut transforms_local: Vec<crate::scene::transforms::Transform> =
-        transforms.iter().map(transform_from_api).collect();
-    let mut final_transforms = Vec::new();
-    if let Some(ft) = resp.final_transform.as_ref().map(transform_from_api) {
-        final_transforms.push(ft);
-        for t in transforms_local.iter_mut() {
-            if !t.final_attachments.contains(&0) {
-                t.final_attachments.push(0);
-            }
-        }
-    }
-
-    let flame = Flame {
+    // API DTO carries a singular Final — `Flame::migrate_legacy_final`
+    // pushes it into the new `final_transforms` pool and auto-attaches
+    // to every normal. (API doesn't yet carry per-transform
+    // attachments natively.)
+    let legacy_final = resp.final_transform.as_ref().map(transform_from_api);
+    let mut flame = Flame {
         name: resp.name.clone(),
-        transforms: transforms_local,
+        transforms: transforms.iter().map(transform_from_api).collect(),
         linked_transforms: Vec::new(),
-        final_transforms,
+        final_transforms: Vec::new(),
         render_mode: resp.render_mode.into(),
         perspective_strength: resp.perspective_strength,
         xaos,
         solo_transform: resp.solo_transform.map(|i| i as usize),
     };
+    flame.migrate_legacy_final(legacy_final);
 
     // Reconstruct palette
     let palette = palette_resp

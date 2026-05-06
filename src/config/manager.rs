@@ -1961,8 +1961,6 @@ impl ConfigManager {
             }
         }
 
-        // After any FinalTransform-path edit, mirror the legacy
-        // `flame.final_transform` field into the new
         Ok(())
     }
 

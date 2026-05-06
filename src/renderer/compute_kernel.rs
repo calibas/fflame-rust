@@ -163,13 +163,6 @@ pub struct FlameRenderer {
     target_iterations_per_pixel: u32, // Per-pixel convergence: stop updating pixel after N iterations (0 = disabled)
     overwrite_mode: bool, // When true, replace accumulation buffer instead of blending (for live preview)
     num_transforms: u32, // Number of normal transforms
-    /// Number of transforms in `flame.linked_transforms` pool.
-    /// Tracked alongside `num_transforms` for capacity checks and to
-    /// stay in sync with the GPU buffer's concatenated layout.
-    /// Updated whenever the flame changes.
-    num_linked_transforms: u32,
-    /// Number of transforms in `flame.final_transforms` pool.
-    num_final_transforms: u32,
     has_final_transform: bool, // Whether final transform is present
     path_filters: Vec<crate::gpu::buffers::GpuPathFilter>, // Active path filters
     min_suffix_filter_length: u32, // Minimum length among depth=0 filters (optimization)
@@ -274,8 +267,6 @@ impl FlameRenderer {
             target_iterations_per_pixel: 0, // Default: disabled (no per-pixel convergence)
             overwrite_mode: false, // Default to normal blending (progressive refinement)
             num_transforms: flame.transforms.len() as u32,
-            num_linked_transforms: flame.linked_transforms.len() as u32,
-            num_final_transforms: flame.final_transforms.len() as u32,
             has_final_transform: !flame.final_transforms.is_empty(),
             path_filters: Vec::new(), // No filters by default
             min_suffix_filter_length: 0,
@@ -289,8 +280,6 @@ impl FlameRenderer {
 
         // Update transform tracking from flame (critical for final transform support)
         self.num_transforms = flame.transforms.len() as u32;
-        self.num_linked_transforms = flame.linked_transforms.len() as u32;
-        self.num_final_transforms = flame.final_transforms.len() as u32;
         self.has_final_transform = !flame.final_transforms.is_empty();
 
         // Recreate buffers with new size (preserve palette_size)
@@ -356,7 +345,7 @@ impl FlameRenderer {
             has_final_transform: !flame.final_transforms.is_empty(),
             final_transform_index: 0,  // Legacy field — shader uses attachments chain now
             has_post_affine: flame.has_post_affine(),
-            has_attachments: !flame.linked_transforms.is_empty() || !flame.final_transforms.is_empty(),
+            has_attachments: flame.has_attachments(),
             attachment_cap: flame.attachment_cap() as u32,
             // No inlining for incremental updates (would trigger too many shader rebuilds)
             inlined_transforms: None,
@@ -724,8 +713,6 @@ impl FlameRenderer {
 
         // Update transform tracking
         self.num_transforms = config.flame.transforms.len() as u32;
-        self.num_linked_transforms = config.flame.linked_transforms.len() as u32;
-        self.num_final_transforms = config.flame.final_transforms.len() as u32;
         self.has_final_transform = !config.flame.final_transforms.is_empty();
 
         let params = GpuParams {
@@ -829,8 +816,6 @@ impl FlameRenderer {
 
         // Update transform tracking
         self.num_transforms = flame.transforms.len() as u32;
-        self.num_linked_transforms = flame.linked_transforms.len() as u32;
-        self.num_final_transforms = flame.final_transforms.len() as u32;
         self.has_final_transform = !flame.final_transforms.is_empty();
 
         let params = GpuParams {

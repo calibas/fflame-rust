@@ -1313,11 +1313,20 @@ impl Flame {
             || self.final_transforms.iter().any(|t| t.post_affine_enabled)
     }
 
+    /// True when the flame has any Linked or Final pool members.
+    /// Drives the `HAS_ATTACHMENTS` shader template flag — when false,
+    /// the per-iteration `attachments[xform_idx]` storage load and
+    /// both chain loops are stripped from the compiled shader.
+    pub fn has_attachments(&self) -> bool {
+        !self.linked_transforms.is_empty() || !self.final_transforms.is_empty()
+    }
+
     /// Per-flame cap on the AttachmentList struct's per-side array
-    /// length. Returns the largest single-normal `linked_attachments` or
-    /// `final_attachments` length across all normals, clamped to a
-    /// minimum of 1 (WGSL forbids zero-sized arrays even when the
-    /// struct is unused).
+    /// length. For each normal transform, takes the larger of its
+    /// `linked_attachments` and `final_attachments` lengths, then takes
+    /// the max of those values across all normals. Clamped to a minimum
+    /// of 1 (WGSL forbids zero-sized arrays even when the struct is
+    /// unused).
     ///
     /// The shader builder substitutes this into the `array<u32, N>`
     /// fields of the AttachmentList struct, so a flame whose normals
