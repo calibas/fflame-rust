@@ -1313,6 +1313,28 @@ impl Flame {
             || self.final_transforms.iter().any(|t| t.post_affine_enabled)
     }
 
+    /// Per-flame cap on the AttachmentList struct's per-side array
+    /// length. Returns the largest single-normal `linked_attachments` or
+    /// `final_attachments` length across all normals, clamped to a
+    /// minimum of 1 (WGSL forbids zero-sized arrays even when the
+    /// struct is unused).
+    ///
+    /// The shader builder substitutes this into the `array<u32, N>`
+    /// fields of the AttachmentList struct, so a flame whose normals
+    /// each carry only one Final attachment loads a 16-byte struct per
+    /// iteration instead of a 264-byte one (cap=1 vs the
+    /// MAX_ATTACHMENTS_PER_TRANSFORM=32 worst case). Massive win for the
+    /// migrated-singular-final case (every normal gets exactly one
+    /// final auto-attached) which would otherwise pay the full 32-cap
+    /// load every iteration.
+    pub fn attachment_cap(&self) -> usize {
+        let max_seen = self.transforms.iter()
+            .map(|t| t.linked_attachments.len().max(t.final_attachments.len()))
+            .max()
+            .unwrap_or(0);
+        max_seen.max(1)
+    }
+
     /// Get runtime ID mapping for active variations.
     /// Delegates to `compute_local_index_map` for stable registry-order assignment
     /// and the per-flame cap.

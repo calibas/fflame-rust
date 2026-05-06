@@ -357,6 +357,7 @@ impl FlameRenderer {
             final_transform_index: 0,  // Legacy field — shader uses attachments chain now
             has_post_affine: flame.has_post_affine(),
             has_attachments: !flame.linked_transforms.is_empty() || !flame.final_transforms.is_empty(),
+            attachment_cap: flame.attachment_cap() as u32,
             // No inlining for incremental updates (would trigger too many shader rebuilds)
             inlined_transforms: None,
             cumulative_weights: None,
@@ -678,7 +679,7 @@ impl FlameRenderer {
         // 1. Update transforms and variation parameters in GPU buffer
         self.buffers.update_transforms(queue, &config.flame);
         self.buffers.update_variation_params(queue, &config.flame);
-        self.buffers.update_attachments(queue, &config.flame);
+        self.buffers.update_attachments(queue, &config.flame, config.flame.attachment_cap());
         self.init_dirty = true;
 
         // 1b. Update xaos buffer (create/drop as needed)
@@ -804,7 +805,7 @@ impl FlameRenderer {
 
         self.buffers.update_transforms(queue, flame);
         self.buffers.update_variation_params(queue, flame);
-        self.buffers.update_attachments(queue, flame);
+        self.buffers.update_attachments(queue, flame, flame.attachment_cap());
         self.init_dirty = true;
 
         // Update xaos buffer (create/drop as needed)

@@ -254,31 +254,30 @@ impl HighResExporter {
             queue.write_buffer(&xaos_buffer, 0, bytemuck::cast_slice(&identity));
         }
 
-        // Per-normal attachment lists (Linked + Final chains).
+        // Per-normal attachment lists (Linked + Final chains). The GPU
+        // struct stride matches the per-flame `attachment_cap` — must
+        // agree with the value the shader was built with.
         // See per-transform-linked-and-final.md.
-        let attachments_buffer_size = (crate::gpu::buffers::MAX_TRANSFORMS
-            * std::mem::size_of::<crate::gpu::buffers::GpuAttachmentList>()) as u64;
+        let cap = config.flame.attachment_cap();
+        let stride = crate::gpu::buffers::attachment_stride_bytes(cap);
+        let attachments_buffer_size = (crate::gpu::buffers::MAX_TRANSFORMS * stride) as u64;
         let attachments_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Export Attachments Buffer"),
             size: attachments_buffer_size,
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        // Pack per-normal attachment lists with global xform_id translation.
         let n = config.flame.transforms.len();
         let l = config.flame.linked_transforms.len();
         let f = config.flame.final_transforms.len();
-        let mut attachment_entries: Vec<crate::gpu::buffers::GpuAttachmentList> =
-            Vec::with_capacity(crate::gpu::buffers::MAX_TRANSFORMS);
-        for t in &config.flame.transforms {
-            attachment_entries.push(
-                crate::gpu::buffers::GpuAttachmentList::from_transform(t, n, l, n + l, f),
+        let mut buf = vec![0u8; crate::gpu::buffers::MAX_TRANSFORMS * stride];
+        for (i, t) in config.flame.transforms.iter().enumerate() {
+            crate::gpu::buffers::pack_attachment_entry(
+                &mut buf[i * stride..(i + 1) * stride],
+                t, cap, n, l, n + l, f,
             );
         }
-        while attachment_entries.len() < crate::gpu::buffers::MAX_TRANSFORMS {
-            attachment_entries.push(crate::gpu::buffers::GpuAttachmentList::empty());
-        }
-        queue.write_buffer(&attachments_buffer, 0, bytemuck::cast_slice(&attachment_entries));
+        queue.write_buffer(&attachments_buffer, 0, &buf);
 
         // Create palette texture (palette is always present)
         let palette = &config.palette;

@@ -293,6 +293,16 @@ pub struct ShaderConstants {
     /// up transitions and triggers a rebuild.
     pub has_attachments: bool,
 
+    /// Per-flame `array<u32, N>` length for the AttachmentList struct.
+    /// Substituted into the shader headers via the `{{ATTACHMENT_CAP}}`
+    /// placeholder; also drives the dynamic stride used when the host
+    /// packs the attachments buffer. A flame whose normals each carry
+    /// one Final attachment compiles a 16-byte struct (cap=1) vs the
+    /// worst-case 264 bytes (cap=32) — major per-iteration bandwidth
+    /// reduction for the migrated-singular-final case. See
+    /// `Flame::attachment_cap`.
+    pub attachment_cap: u32,
+
     /// Precomputed cumulative weights for transform selection
     /// Eliminates the weight accumulation loops in select_transform
     pub cumulative_weights: Option<Vec<f32>>,
@@ -307,6 +317,7 @@ impl Default for ShaderConstants {
             final_transform_index: 0,
             has_post_affine: false,
             has_attachments: false,
+            attachment_cap: 1,
             inlined_transforms: None,
             cumulative_weights: None,
         }
@@ -462,6 +473,7 @@ impl ShaderConstants {
             final_transform_index: final_idx,
             has_post_affine: flame.has_post_affine(),
             has_attachments: has_attachments(flame),
+            attachment_cap: flame.attachment_cap() as u32,
             inlined_transforms: Some(inlined),
             cumulative_weights: Some(cumulative),
         }
@@ -721,7 +733,7 @@ impl ShaderBuilder {
     /// same stateful variation get independent state. The switch key is
     /// encoded as `xform_id * 100 + variation_id`, which fits in u32 with
     /// no collisions because `MAX_VARIATIONS_PER_FLAME = 100` and
-    /// `MAX_TRANSFORMS = 32`.
+    /// `MAX_TRANSFORMS = 128`.
     ///
     /// `var<private>` is per-invocation (per-thread) and zero-initialized
     /// by WGSL spec at thread start, persisting across the inner iteration
@@ -1074,8 +1086,12 @@ impl ShaderBuilder {
         // 1. Hard-coded constants (must come first for use in later code)
         shader.push_str(&constants.to_wgsl());
 
-        // 2. Header
-        shader.push_str(include_str!("../shaders/core/header.wgsl"));
+        // 2. Header — substitute {{ATTACHMENT_CAP}} into the AttachmentList
+        // struct definition. Drives both the per-iteration load size and
+        // the host-side packing stride.
+        let header = include_str!("../shaders/core/header.wgsl")
+            .replace("{{ATTACHMENT_CAP}}", &constants.attachment_cap.to_string());
+        shader.push_str(&header);
         shader.push('\n');
 
         // 3. RNG
@@ -1633,8 +1649,11 @@ impl ShaderBuilder {
 
         let mut shader = String::new();
 
-        // 1. Tiled header (includes TileParams binding)
-        shader.push_str(include_str!("../shaders/core/header_tiled.wgsl"));
+        // 1. Tiled header (includes TileParams binding) — substitute
+        // {{ATTACHMENT_CAP}} into the AttachmentList struct.
+        let header = include_str!("../shaders/core/header_tiled.wgsl")
+            .replace("{{ATTACHMENT_CAP}}", &flame.attachment_cap().to_string());
+        shader.push_str(&header);
         shader.push('\n');
 
         // 2. RNG
@@ -1708,8 +1727,11 @@ impl ShaderBuilder {
 
         let mut shader = String::new();
 
-        // 1. Export header
-        shader.push_str(include_str!("../shaders/core/header_export.wgsl"));
+        // 1. Export header — substitute {{ATTACHMENT_CAP}} into the
+        // AttachmentList struct.
+        let header = include_str!("../shaders/core/header_export.wgsl")
+            .replace("{{ATTACHMENT_CAP}}", &flame.attachment_cap().to_string());
+        shader.push_str(&header);
         shader.push('\n');
 
         // 2. RNG
