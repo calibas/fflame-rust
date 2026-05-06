@@ -125,9 +125,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             }
         }
 
+{{#if HAS_ATTACHMENTS}}
         // LINKED CHAIN — deterministic dynamics extension.
         // Each Linked transform's output feeds the next iteration; their
         // variations contribute to color flow (DC writes affect *vc).
+        // Gated by HAS_ATTACHMENTS — when no Linked or Final exists in
+        // the flame, the per-iteration `attachments[xform_idx]` load is
+        // stripped from the compiled shader entirely.
         // See docs/projects/per-transform-linked-and-final.md.
         let attach = attachments[xform_idx];
         for (var li = 0u; li < attach.linked_count; li = li + 1u) {
@@ -145,6 +149,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 }
             }
         }
+{{/if}}
 
         // After Linked chain: current = P_linked (feeds forward as
         // next iteration's input). Speed and color flow use P_linked.
@@ -212,6 +217,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         // Skip burn-in iterations
         if (i >= params.burn_in) {
+{{#if HAS_ATTACHMENTS}}
             // FINAL CHAIN — pure plot-time filter. Each Final's variations
             // and affine reshape what gets plotted but DON'T feed forward.
             // DC writes from Final variations are discarded for color_index
@@ -233,6 +239,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     }
                 }
             }
+{{else}}
+            // No attachments: skip the chain — plot the post-Linked
+            // (== post-Normal) point directly.
+            let final_pos = current;
+{{/if}}
 
             // Convert to pixel coordinates
 {{#if RENDER_3D}}

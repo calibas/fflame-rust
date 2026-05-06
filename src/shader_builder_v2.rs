@@ -34,6 +34,15 @@ pub fn should_use_inlined_constants() -> bool {
     INLINED_CONSTANTS_ENABLED.load(Ordering::Relaxed)
 }
 
+/// True when the flame has any Linked or Final pool members. Drives
+/// the `HAS_ATTACHMENTS` template flag — when false, the per-iteration
+/// `attachments[xform_idx]` storage load and both Linked/Final chain
+/// loops are stripped from the compiled shader entirely, restoring
+/// pre-attachment-feature performance.
+fn has_attachments(flame: &crate::scene::transforms::Flame) -> bool {
+    !flame.linked_transforms.is_empty() || !flame.final_transforms.is_empty()
+}
+
 /// Simple template processor for shader conditional compilation
 ///
 /// Supports:
@@ -276,6 +285,14 @@ pub struct ShaderConstants {
     /// Whether any transform uses post-affine (eliminates branch if false)
     pub has_post_affine: bool,
 
+    /// Whether the flame has any Linked or Final pool members. Drives
+    /// the `HAS_ATTACHMENTS` template flag. False ⇒ the per-iteration
+    /// `attachments[xform_idx]` load and both chain loops are stripped
+    /// from the compiled shader. Tracked here (instead of recomputed
+    /// per-build) so the shader cache's constants-changed check picks
+    /// up transitions and triggers a rebuild.
+    pub has_attachments: bool,
+
     /// Precomputed cumulative weights for transform selection
     /// Eliminates the weight accumulation loops in select_transform
     pub cumulative_weights: Option<Vec<f32>>,
@@ -289,6 +306,7 @@ impl Default for ShaderConstants {
             has_final_transform: false,
             final_transform_index: 0,
             has_post_affine: false,
+            has_attachments: false,
             inlined_transforms: None,
             cumulative_weights: None,
         }
@@ -443,6 +461,7 @@ impl ShaderConstants {
             has_final_transform: has_final,
             final_transform_index: final_idx,
             has_post_affine: flame.has_post_affine(),
+            has_attachments: has_attachments(flame),
             inlined_transforms: Some(inlined),
             cumulative_weights: Some(cumulative),
         }
@@ -1125,6 +1144,12 @@ impl ShaderBuilder {
         processor.set("PATH_TRACKING", path_features_enabled);
         processor.set("XAOS_ENABLED", xaos_enabled);
         processor.set("HAS_DC", has_dc);
+        // HAS_ATTACHMENTS gates the per-iteration `attachments[xform_idx]`
+        // load and the Linked/Final chain loops. False when the flame has
+        // no Linked or Final transforms, restoring pre-attachment-feature
+        // shader cost. Sourced from `constants` so the shader cache picks
+        // up transitions and rebuilds.
+        processor.set("HAS_ATTACHMENTS", constants.has_attachments);
         let mut processed = processor.process(template);
         // Inject per-thread state initialization block at the marker.
         // No-op if no active variation has wgsl_state_init.
@@ -1659,6 +1684,7 @@ impl ShaderBuilder {
         let mut processor = TemplateProcessor::new();
         processor.set("RENDER_3D", render_3d);
         processor.set("HAS_DC", has_dc);
+        processor.set("HAS_ATTACHMENTS", has_attachments(flame));
         let mut processed = processor.process(include_str!("../shaders/core/main_tiled.wgsl"));
         let state_init = self.build_state_init_block(flame, &active);
         processed = processed.replace("//__STATE_INIT_BLOCK__", &state_init);
@@ -1730,6 +1756,7 @@ impl ShaderBuilder {
         // 8. Export main — routed through TemplateProcessor with HAS_DC gate.
         let mut processor = TemplateProcessor::new();
         processor.set("HAS_DC", has_dc);
+        processor.set("HAS_ATTACHMENTS", has_attachments(flame));
         let mut processed = processor.process(include_str!("../shaders/core/main_export.wgsl"));
         let state_init = self.build_state_init_block(flame, &active);
         processed = processed.replace("//__STATE_INIT_BLOCK__", &state_init);

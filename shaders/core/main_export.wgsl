@@ -82,7 +82,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             current = apply_post_affine(xform, current);
         }
 
+{{#if HAS_ATTACHMENTS}}
         // LINKED CHAIN — see main_template.wgsl for full doc.
+        // Gated by HAS_ATTACHMENTS — when no Linked or Final exists in
+        // the flame, the per-iteration `attachments[xform_idx]` load is
+        // stripped from the compiled shader entirely.
         let attach = attachments[xform_idx];
         for (var li = 0u; li < attach.linked_count; li = li + 1u) {
             let lid = attach.linked[li];
@@ -97,6 +101,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 current = apply_post_affine(lxform, current);
             }
         }
+{{/if}}
 
         // Speed uses post-Linked position (= P_linked).
         let speed = length(current - old_pos);
@@ -128,6 +133,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         // Skip burn-in
         if (i >= params.burn_in) {
+{{#if HAS_ATTACHMENTS}}
             // FINAL CHAIN — plot-time filter; output not fed forward.
             var final_pos = current;
             for (var fi = 0u; fi < attach.final_count; fi = fi + 1u) {
@@ -144,6 +150,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     final_pos = apply_post_affine(fxform, final_pos);
                 }
             }
+{{else}}
+            // No attachments: skip the chain — plot the post-Linked
+            // (== post-Normal) point directly.
+            let final_pos = current;
+{{/if}}
 
             // Convert to pixel coordinates (3D projection)
             let pixel = world_to_pixel_3d(final_pos);

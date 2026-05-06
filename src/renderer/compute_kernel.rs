@@ -356,6 +356,7 @@ impl FlameRenderer {
             has_final_transform: !flame.final_transforms.is_empty(),
             final_transform_index: 0,  // Legacy field — shader uses attachments chain now
             has_post_affine: flame.has_post_affine(),
+            has_attachments: !flame.linked_transforms.is_empty() || !flame.final_transforms.is_empty(),
             // No inlining for incremental updates (would trigger too many shader rebuilds)
             inlined_transforms: None,
             cumulative_weights: None,
