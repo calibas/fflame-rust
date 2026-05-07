@@ -367,13 +367,12 @@ fn render_triangle_editor_core(
                                 }
 
                                 // Start modify session if we found a hit.
-                                // Only Normal-pool members participate in
-                                // start_modify_transform today; Linked/Final
-                                // edits coalesce via update_batch instead.
+                                // Modify session brackets the drag — all
+                                // intermediate update_batch calls run silent
+                                // and one ModifyTransform snapshot is recorded
+                                // on commit. Works for any pool member.
                                 if drag_target != DragTarget::None {
-                                    if let TransformRef::Normal(index) = selected_transform {
-                                        let _ = config_manager.start_modify_transform(index);
-                                    }
+                                    let _ = config_manager.start_modify_transform(selected_transform);
                                 }
                             }
                         }
@@ -409,10 +408,8 @@ fn render_triangle_editor_core(
                         // Start drag on any point in canvas
                         if drag_start_pos.is_none() && response.dragged() {
                             drag_start_pos = response.interact_pointer_pos();
-                            // Start modify session
-                            if let TransformRef::Normal(index) = selected_transform {
-                                let _ = config_manager.start_modify_transform(index);
-                            }
+                            // Start modify session — works for any pool member.
+                            let _ = config_manager.start_modify_transform(selected_transform);
                         }
 
                         // Translate entire triangle
@@ -451,10 +448,8 @@ fn render_triangle_editor_core(
                         // Capture initial mouse position
                         if drag_start_pos.is_none() && response.dragged() {
                             drag_start_pos = response.interact_pointer_pos();
-                            // Start modify session
-                            if let TransformRef::Normal(index) = selected_transform {
-                                let _ = config_manager.start_modify_transform(index);
-                            }
+                            // Start modify session — works for any pool member.
+                            let _ = config_manager.start_modify_transform(selected_transform);
                         }
 
                         // Rotate X and Y around O based on angle from O
@@ -507,10 +502,8 @@ fn render_triangle_editor_core(
                         // Capture initial mouse position
                         if drag_start_pos.is_none() && response.dragged() {
                             drag_start_pos = response.interact_pointer_pos();
-                            // Start modify session
-                            if let TransformRef::Normal(index) = selected_transform {
-                                let _ = config_manager.start_modify_transform(index);
-                            }
+                            // Start modify session — works for any pool member.
+                            let _ = config_manager.start_modify_transform(selected_transform);
                         }
 
                         // Scale along perpendicular axis to X-Y line
