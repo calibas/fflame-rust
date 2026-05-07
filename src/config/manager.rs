@@ -83,7 +83,7 @@
 /// ```
 
 use super::delta::{
-    AffineParam, ConfigChange, ConfigDelta, ConfigPath, ConfigValue, UpdateType,
+    AffineParam, ConfigChange, ConfigDelta, ConfigPath, ConfigValue, TransformKind, TransformRef, UpdateType,
 };
 use super::fractal_config::FractalConfig;
 use std::time::Duration;
@@ -239,11 +239,12 @@ pub struct ConfigManager {
     animation_mode: bool,
 }
 
-/// Session state for transform modification (triangle editor, etc.)
+/// Session state for transform modification (triangle editor, etc.).
+/// Spans all three pools — the `xref` selects which one.
 struct ModifySession {
-    /// Index of transform being modified
-    transform_index: usize,
-    /// Initial state captured at session start
+    /// Pool member being modified.
+    xref: TransformRef,
+    /// Initial state captured at session start.
     initial_transform: crate::scene::transforms::Transform,
 }
 
@@ -527,10 +528,11 @@ impl ConfigManager {
                     return Ok(UpdateType::IterationReset);
                 }
 
-                crate::config::SnapshotData::ModifyTransform { index, before, .. } => {
-                    log::debug!("  Undoing modify transform (restore before state at index {})", index);
-                    if *index < self.current.flame.transforms.len() {
-                        self.current.flame.transforms[*index] = before.clone();
+                crate::config::SnapshotData::ModifyTransform { kind, index, before, .. } => {
+                    log::debug!("  Undoing modify transform (restore before state at {:?} index {})", kind, index);
+                    let xref = kind.at(*index);
+                    if let Some(slot) = xref.get_mut(&mut self.current.flame) {
+                        *slot = before.clone();
                     }
                     return Ok(UpdateType::IterationReset);
                 }
@@ -662,10 +664,11 @@ impl ConfigManager {
                     return Ok(UpdateType::IterationReset);
                 }
 
-                crate::config::SnapshotData::ModifyTransform { index, after, .. } => {
-                    log::debug!("  Redoing modify transform (restore after state at index {})", index);
-                    if *index < self.current.flame.transforms.len() {
-                        self.current.flame.transforms[*index] = after.clone();
+                crate::config::SnapshotData::ModifyTransform { kind, index, after, .. } => {
+                    log::debug!("  Redoing modify transform (restore after state at {:?} index {})", kind, index);
+                    let xref = kind.at(*index);
+                    if let Some(slot) = xref.get_mut(&mut self.current.flame) {
+                        *slot = after.clone();
                     }
                     self.position += 1;
                     return Ok(UpdateType::IterationReset);
@@ -2140,9 +2143,10 @@ impl ConfigManager {
                         return Err(ConfigError::InvalidIndex);
                     }
                 }
-                crate::config::SnapshotData::ModifyTransform { index, after, .. } => {
-                    if *index < self.current.flame.transforms.len() {
-                        self.current.flame.transforms[*index] = after.clone();
+                crate::config::SnapshotData::ModifyTransform { kind, index, after, .. } => {
+                    let xref = kind.at(*index);
+                    if let Some(slot) = xref.get_mut(&mut self.current.flame) {
+                        *slot = after.clone();
                     } else {
                         return Err(ConfigError::InvalidIndex);
                     }
@@ -2229,36 +2233,35 @@ impl ConfigManager {
         Ok(())
     }
 
-    /// Start a modify session for a transform
-    /// Captures initial state but doesn't create history entry yet
-    /// All updates during session will apply to config but not create history
-    /// Call commit_modify_transform() to create ModifyTransform snapshot
-    pub fn start_modify_transform(&mut self, index: usize) -> Result<(), ConfigError> {
-        // Can't start a new session if one is already active
+    /// Start a modify session for a pool member (Normal / Linked / Final).
+    /// Captures initial state but doesn't create a history entry yet —
+    /// all updates during the session apply to config silently. Call
+    /// `commit_modify_transform()` to roll the cumulative diff into a
+    /// single ModifyTransform snapshot. This is what gives the Triangle
+    /// Editor "one undo per drag" behavior across all three pools.
+    pub fn start_modify_transform(&mut self, xref: TransformRef) -> Result<(), ConfigError> {
+        // Can't start a new session if one is already active.
         if self.modify_session.is_some() {
             return Err(ConfigError::InvalidOperation);
         }
 
-        // Validate index
-        if index >= self.current.flame.transforms.len() {
-            return Err(ConfigError::InvalidIndex);
-        }
-
-        // Capture initial state
-        let initial_transform = self.current.flame.transforms[index].clone();
+        // Validate the pool member exists; capture its initial state.
+        let initial_transform = xref.get(&self.current.flame)
+            .ok_or(ConfigError::InvalidIndex)?
+            .clone();
 
         self.modify_session = Some(ModifySession {
-            transform_index: index,
+            xref,
             initial_transform,
         });
 
-        log::debug!("Started modify session for transform {}", index);
+        log::debug!("Started modify session for {:?}", xref);
         Ok(())
     }
 
-    /// Commit the active modify session
-    /// Creates ModifyTransform snapshot with before/after states
-    /// Returns error if no session is active
+    /// Commit the active modify session.
+    /// Creates a ModifyTransform snapshot tagged with the session's
+    /// pool kind. Returns error if no session is active.
     pub fn commit_modify_transform(&mut self, description: String) -> Result<UpdateType, ConfigError> {
         let session = self.modify_session.take()
             .ok_or(ConfigError::InvalidOperation)?;
@@ -2266,9 +2269,11 @@ impl ConfigManager {
         // Clear preview state (session is ending)
         self.preview = None;
 
-        let index = session.transform_index;
+        let xref = session.xref;
         let before = session.initial_transform;
-        let after = self.current.flame.transforms[index].clone();
+        let after = xref.get(&self.current.flame)
+            .ok_or(ConfigError::InvalidIndex)?
+            .clone();
 
         // Check if transform actually changed (avoid no-op snapshots)
         let pre_changed = before.a != after.a || before.b != after.b || before.c != after.c
@@ -2286,8 +2291,10 @@ impl ConfigManager {
             return Ok(UpdateType::None);
         }
 
-        // Create ModifyTransform snapshot
-        let change = ConfigChange::modify_transform_snapshot(index, before, after, description);
+        // Create ModifyTransform snapshot tagged with pool kind.
+        let change = ConfigChange::modify_transform_snapshot(
+            xref.kind(), xref.index(), before, after, description,
+        );
 
         // Record in history
         self.push_undo(change);
@@ -2295,7 +2302,7 @@ impl ConfigManager {
         // Record GPU update action
         self.record_action(UpdateType::IterationReset);
 
-        log::debug!("Committed modify session for transform {}", index);
+        log::debug!("Committed modify session for {:?}", xref);
         Ok(UpdateType::IterationReset)
     }
 
@@ -2309,14 +2316,15 @@ impl ConfigManager {
         // Clear preview state (session is ending)
         self.preview = None;
 
-        // Restore initial state
-        let index = session.transform_index;
-        self.current.flame.transforms[index] = session.initial_transform;
+        // Restore initial state via the right pool.
+        if let Some(slot) = session.xref.get_mut(&mut self.current.flame) {
+            *slot = session.initial_transform;
+        }
 
         // Record GPU update action (need to restore visual state)
         self.record_action(UpdateType::IterationReset);
 
-        log::debug!("Cancelled modify session for transform {}", index);
+        log::debug!("Cancelled modify session for {:?}", session.xref);
         Ok(())
     }
 
