@@ -232,15 +232,28 @@ impl TiledRenderer {
             mapped_at_creation: false,
         });
 
-        // Create variation params buffer (same as normal renderer)
-        let max_transforms = 32;
-        let variation_params_size = max_transforms * 1200 * 4; // 1200 floats per transform
+        // Variation params buffer — sized for the worst-case
+        // MAX_TRANSFORMS slots (matches the interactive renderer in
+        // gpu/buffers.rs::FlameBuffers). The previous hard-coded
+        // `32 * 1200 * 4` was wrong on two axes (cap and per-entry
+        // size) AND the buffer was never written, so parameterized
+        // variations got zero params and rendered as degenerate
+        // shapes — the "transforms missing" tiled-export bug.
+        let variation_params_size = (crate::gpu::buffers::MAX_TRANSFORMS
+            * std::mem::size_of::<crate::gpu::buffers::GpuVariationParams>()) as u64;
         let variation_params_buffer = device.create_buffer(&BufferDescriptor {
-            label: Some("Variation Params Buffer"),
+            label: Some("Tiled Variation Params Buffer"),
             size: variation_params_size,
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        // Pack all three pools' variation params and write to the buffer.
+        // Layout matches the transforms-buffer concatenation: normals,
+        // then linkeds, then finals — so xform_id indexes both buffers
+        // identically.
+        let variation_params = crate::gpu::buffers::GpuVariationParams::from_flame(
+            &config.flame, &global_registry());
+        queue.write_buffer(&variation_params_buffer, 0, bytemuck::cast_slice(&variation_params));
 
         // Create xaos buffer (dummy if not used, real weights if xaos enabled)
         // Size: N×N matrix of f32 weights (N = num_transforms)
@@ -332,16 +345,25 @@ impl TiledRenderer {
             ..Default::default()
         });
 
-        // Build active variations map
+        // Build active variations map across ALL THREE POOLS — Linked
+        // and Final pool members reference variations too, and the
+        // shader builder only compiles in the variations that show up
+        // in this map. Iterating only `flame.transforms` (the original
+        // bug) caused Linked/Final transforms to silently no-op in
+        // the tiled export, manifesting as "transforms missing" in
+        // the rendered image.
         let mut active_variations = std::collections::HashMap::new();
-        for transform in &config.flame.transforms {
-            for name in transform.active_variations() {
-                let weight = transform.get_variation(&name);
+        let mut absorb = |xform: &crate::scene::transforms::Transform| {
+            for name in xform.active_variations() {
+                let weight = xform.get_variation(&name);
                 if weight != 0.0 {
                     active_variations.insert(name, weight);
                 }
             }
-        }
+        };
+        for t in &config.flame.transforms { absorb(t); }
+        for t in &config.flame.linked_transforms { absorb(t); }
+        for t in &config.flame.final_transforms { absorb(t); }
 
         // Build shader
         let shader_builder = ShaderBuilder::new(global_registry().clone());
