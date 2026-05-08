@@ -2709,4 +2709,84 @@ mod tests {
         assert_eq!(manager.history[0].deltas.len(), 3);
         assert_eq!(manager.history[0].description, "Reset View");
     }
+
+    /// ModifyTransform snapshot must dispatch on `kind` so undo/redo
+    /// restores into the right pool. Catches any future drift where
+    /// the apply paths assume Normal-only indexing into
+    /// `flame.transforms`. Fresh ConfigManager per kind so each case
+    /// starts from a clean baseline.
+    #[test]
+    fn test_modify_transform_snapshot_roundtrip_all_pools() {
+        use crate::scene::transforms::Transform;
+
+        for kind in [TransformKind::Normal, TransformKind::Linked, TransformKind::Final] {
+            let mut config = FractalConfig::default();
+            config.flame.transforms.push(Transform::new());
+            config.flame.linked_transforms.push(Transform::new());
+            config.flame.final_transforms.push(Transform::new());
+
+            let mut mgr = ConfigManager::new(config);
+            let xref = kind.at(0);
+            let initial_a = 1.0f32; // Transform::new is identity
+
+            // Start session, mutate via ConfigPath (must route to the
+            // right pool), commit.
+            mgr.start_modify_transform(xref).unwrap();
+            mgr.set_value(&xref.affine_path(AffineParam::A), 7.5f32.into()).unwrap();
+            assert_eq!(
+                xref.get(&mgr.active_config().flame).unwrap().a,
+                7.5,
+                "{:?}: live mutation should land in the right pool",
+                kind,
+            );
+            mgr.commit_modify_transform(format!("test {:?}", kind)).unwrap();
+            assert_eq!(
+                mgr.history.len(), 1,
+                "{:?}: commit should produce exactly one history entry",
+                kind,
+            );
+
+            // Undo restores the initial value into the right pool.
+            mgr.undo().unwrap();
+            assert_eq!(
+                xref.get(&mgr.active_config().flame).unwrap().a,
+                initial_a,
+                "{:?} undo: should restore initial.a",
+                kind,
+            );
+            // Other pools must remain at their initial values — undoing
+            // a Linked snapshot must not touch a Normal or Final.
+            for other in [TransformKind::Normal, TransformKind::Linked, TransformKind::Final] {
+                if other == kind { continue; }
+                let other_xref = other.at(0);
+                assert_eq!(
+                    other_xref.get(&mgr.active_config().flame).unwrap().a,
+                    initial_a,
+                    "{:?} undo must not affect {:?}",
+                    kind,
+                    other,
+                );
+            }
+
+            // Redo restores the mutation only on the right pool.
+            mgr.redo().unwrap();
+            assert_eq!(
+                xref.get(&mgr.active_config().flame).unwrap().a,
+                7.5,
+                "{:?} redo: should restore the mutation",
+                kind,
+            );
+            for other in [TransformKind::Normal, TransformKind::Linked, TransformKind::Final] {
+                if other == kind { continue; }
+                let other_xref = other.at(0);
+                assert_eq!(
+                    other_xref.get(&mgr.active_config().flame).unwrap().a,
+                    initial_a,
+                    "{:?} redo must not affect {:?}",
+                    kind,
+                    other,
+                );
+            }
+        }
+    }
 }
