@@ -1712,3 +1712,182 @@ impl FlameBuffers {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scene::transforms::Transform;
+
+    /// Reads a u32 (little-endian) from `buf` at offset `off`.
+    fn rd_u32(buf: &[u8], off: usize) -> u32 {
+        u32::from_le_bytes(buf[off..off + 4].try_into().unwrap())
+    }
+
+    #[test]
+    fn test_attachment_stride_bytes() {
+        // (cap*4 + 4) * 2 — linked array + linked_count + final array + final_count
+        assert_eq!(attachment_stride_bytes(1), 16);
+        assert_eq!(attachment_stride_bytes(8), 72);
+        assert_eq!(attachment_stride_bytes(16), 136);
+        assert_eq!(attachment_stride_bytes(32), 264);
+    }
+
+    #[test]
+    fn test_pack_attachment_entry_layout_cap1() {
+        // Smallest case: one slot per side. Verifies all four fields land
+        // at the right byte offsets and that the final array starts where
+        // the linked count ends.
+        let mut t = Transform::new();
+        t.linked_attachments = vec![0];
+        t.final_attachments = vec![0];
+
+        let cap = 1;
+        let stride = attachment_stride_bytes(cap);
+        let mut buf = vec![0u8; stride];
+
+        // Pool layout: 2 normals, 3 linkeds, 1 final.
+        // linked_offset = 2, final_offset = 5.
+        pack_attachment_entry(&mut buf, &t, cap, 2, 3, 5, 1);
+
+        // [0..4]   linked[0] = global id (2 + 0) = 2
+        // [4..8]   linked_count = 1
+        // [8..12]  final[0]   = global id (5 + 0) = 5
+        // [12..16] final_count = 1
+        assert_eq!(rd_u32(&buf, 0), 2);
+        assert_eq!(rd_u32(&buf, 4), 1);
+        assert_eq!(rd_u32(&buf, 8), 5);
+        assert_eq!(rd_u32(&buf, 12), 1);
+    }
+
+    #[test]
+    fn test_pack_attachment_entry_layout_cap8() {
+        // cap=8, partial fill: verifies that unused tail slots are zero
+        // and that the count field lands after the full cap-sized array
+        // (not after the actually-written entries).
+        let mut t = Transform::new();
+        t.linked_attachments = vec![1, 2];
+        t.final_attachments = vec![0];
+
+        let cap = 8;
+        let stride = attachment_stride_bytes(cap);
+        assert_eq!(stride, 72);
+        let mut buf = vec![0u8; stride];
+
+        // Pool layout: 3 normals, 4 linkeds, 2 finals.
+        pack_attachment_entry(&mut buf, &t, cap, 3, 4, 7, 2);
+
+        // Linked array (cap*4 = 32 bytes), then linked_count (4 bytes).
+        assert_eq!(rd_u32(&buf, 0), 3 + 1, "linked[0]");
+        assert_eq!(rd_u32(&buf, 4), 3 + 2, "linked[1]");
+        // Slots [2..8] of the linked array stay zero (cap=8, only 2 used).
+        for slot in 2..8 {
+            assert_eq!(rd_u32(&buf, slot * 4), 0, "linked[{}] should be zero", slot);
+        }
+        // linked_count at offset cap*4 = 32.
+        assert_eq!(rd_u32(&buf, 32), 2, "linked_count");
+
+        // Final array starts at offset cap*4 + 4 = 36.
+        assert_eq!(rd_u32(&buf, 36), 7 + 0, "final[0]");
+        for slot in 1..8 {
+            assert_eq!(rd_u32(&buf, 36 + slot * 4), 0, "final[{}] should be zero", slot);
+        }
+        // final_count at offset 36 + cap*4 = 68.
+        assert_eq!(rd_u32(&buf, 68), 1, "final_count");
+    }
+
+    #[test]
+    fn test_pack_attachment_entry_layout_cap32() {
+        // Worst-case cap (== MAX_ATTACHMENTS_PER_TRANSFORM). Verifies
+        // the layout math at the upper bound.
+        let mut t = Transform::new();
+        t.linked_attachments = (0..32).collect();
+        t.final_attachments = (0..16).collect();
+
+        let cap = 32;
+        let stride = attachment_stride_bytes(cap);
+        assert_eq!(stride, 264);
+        let mut buf = vec![0u8; stride];
+
+        // Pool layout: 1 normal, 32 linkeds, 16 finals.
+        pack_attachment_entry(&mut buf, &t, cap, 1, 32, 33, 16);
+
+        // Verify a sampling: first, middle, last linked entries.
+        assert_eq!(rd_u32(&buf, 0), 1, "linked[0]");
+        assert_eq!(rd_u32(&buf, 64), 17, "linked[16]");
+        assert_eq!(rd_u32(&buf, 124), 32, "linked[31]");
+        // linked_count at cap*4 = 128.
+        assert_eq!(rd_u32(&buf, 128), 32, "linked_count");
+
+        // Final starts at cap*4 + 4 = 132.
+        assert_eq!(rd_u32(&buf, 132), 33, "final[0]");
+        assert_eq!(rd_u32(&buf, 132 + 15 * 4), 48, "final[15]");
+        // final_count at 132 + cap*4 = 260.
+        assert_eq!(rd_u32(&buf, 260), 16, "final_count");
+    }
+
+    #[test]
+    fn test_pack_attachment_entry_xform_id_translation() {
+        // The most important thing the packer does: translate per-pool
+        // CPU indexes into GLOBAL xform_ids in the concatenated GPU
+        // transforms buffer.
+        //
+        // Flame layout: 2 normals + 3 linkeds + 2 finals.
+        //   slots 0..1 — normals
+        //   slots 2..4 — linkeds (linked_offset = 2)
+        //   slots 5..6 — finals  (final_offset  = 5)
+        //
+        // A normal with linked_attachments=[0, 2] should pack as global
+        // ids [2, 4], and final_attachments=[1] as global id [6].
+        let mut t = Transform::new();
+        t.linked_attachments = vec![0, 2];
+        t.final_attachments = vec![1];
+
+        let cap = 4;
+        let stride = attachment_stride_bytes(cap);
+        let mut buf = vec![0u8; stride];
+
+        pack_attachment_entry(&mut buf, &t, cap, 2, 3, 5, 2);
+
+        // linked[0] = linked_offset(2) + 0 = 2
+        // linked[1] = linked_offset(2) + 2 = 4
+        assert_eq!(rd_u32(&buf, 0), 2);
+        assert_eq!(rd_u32(&buf, 4), 4);
+        // linked_count = 2 at offset cap*4 = 16
+        assert_eq!(rd_u32(&buf, 16), 2);
+
+        // final[0] = final_offset(5) + 1 = 6
+        // Final array starts at cap*4 + 4 = 20.
+        assert_eq!(rd_u32(&buf, 20), 6);
+        // final_count = 1 at 20 + cap*4 = 36.
+        assert_eq!(rd_u32(&buf, 36), 1);
+    }
+
+    #[test]
+    fn test_pack_attachment_entry_drops_out_of_pool_indices() {
+        // Defense in depth: if the CPU-side attachment list contains an
+        // index past its pool's actual size (e.g., from a buggy migration),
+        // the packer drops it with a warning and the count reflects only
+        // the valid entries. Catches accidental buffer writes that would
+        // dispatch a non-existent transform on the GPU.
+        let mut t = Transform::new();
+        t.linked_attachments = vec![0, 99]; // 99 is out of pool range
+        t.final_attachments = vec![5, 0];   // 5 is out, 0 is valid
+
+        let cap = 4;
+        let stride = attachment_stride_bytes(cap);
+        let mut buf = vec![0u8; stride];
+
+        // Linked pool size = 1 (only index 0 is valid).
+        // Final pool size = 2 (indices 0, 1 valid; 5 is out).
+        pack_attachment_entry(&mut buf, &t, cap, 0, 1, 1, 2);
+
+        // Only the valid linked attachment landed.
+        assert_eq!(rd_u32(&buf, 0), 0); // linked_offset(0) + 0
+        assert_eq!(rd_u32(&buf, 4), 0); // unused — out-of-range was dropped
+        assert_eq!(rd_u32(&buf, 16), 1, "linked_count should reflect drop");
+
+        // Final: 5 dropped, 0 kept (becomes final_offset+0 = 1).
+        assert_eq!(rd_u32(&buf, 20), 1);
+        assert_eq!(rd_u32(&buf, 36), 1, "final_count should reflect drop");
+    }
+}

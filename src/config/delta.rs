@@ -1786,9 +1786,15 @@ impl ConfigPath {
             "TonemapMode" => return Some(ConfigPath::TonemapMode),
             "TonemapCurve" => return Some(ConfigPath::TonemapCurve),
             "UseCurve" => return Some(ConfigPath::UseCurve),
+            "LevelsLow" => return Some(ConfigPath::LevelsLow),
+            "LevelsHigh" => return Some(ConfigPath::LevelsHigh),
+            "LevelsGamma" => return Some(ConfigPath::LevelsGamma),
 
             // Color
             "ColorMode" => return Some(ConfigPath::ColorMode),
+            "PathMapStyle" => return Some(ConfigPath::PathMapStyle),
+            "PathCaptureMode" => return Some(ConfigPath::PathCaptureMode),
+            "PathTrackingMode" => return Some(ConfigPath::PathTrackingMode),
             "PaletteIndex" => return Some(ConfigPath::PaletteIndex),
             "Palette" => return Some(ConfigPath::Palette),
             "PaletteRotation" => return Some(ConfigPath::PaletteRotation),
@@ -2448,6 +2454,181 @@ mod tests {
             let parsed = ConfigPath::from_string_key(&key);
             assert_eq!(parsed, Some(path.clone()), "Failed roundtrip for key: {}", key);
         }
+    }
+
+    /// Comprehensive roundtrip enforcement: every ConfigPath variant
+    /// that's reachable as an animation target MUST roundtrip cleanly
+    /// through to_string_key → from_string_key. Adding a new variant
+    /// without updating both directions is a silent break of the
+    /// animation contract — animation tracks targeting that variant
+    /// will fail to parse on load and silently no-op.
+    ///
+    /// Action-only variants (AddColorEffect, RemoveColorEffect,
+    /// AddDensityEffect, RemoveDensityEffect) are intentionally
+    /// excluded — they're one-shot UI actions, never animation
+    /// targets.
+    #[test]
+    fn test_config_path_string_roundtrip_complete() {
+        let paths = vec![
+            // View
+            ConfigPath::Zoom,
+            ConfigPath::Pan,
+            ConfigPath::PanX,
+            ConfigPath::PanY,
+            ConfigPath::Rotation,
+            ConfigPath::CameraRotationX,
+            ConfigPath::CameraRotationY,
+            ConfigPath::CameraZ,
+            ConfigPath::DofFocusDistance,
+            ConfigPath::DofBlurStrength,
+            ConfigPath::FogStrength,
+            ConfigPath::FogStart,
+
+            // Tone mapping
+            ConfigPath::Exposure,
+            ConfigPath::Gamma,
+            ConfigPath::GammaThreshold,
+            ConfigPath::Brightness,
+            ConfigPath::Vibrancy,
+            ConfigPath::Saturation,
+            ConfigPath::HueShift,
+            ConfigPath::AlphaBlendLow,
+            ConfigPath::AlphaBlendHigh,
+            ConfigPath::DensityScale,
+            ConfigPath::TonemapMode,
+            ConfigPath::TonemapCurve,
+            ConfigPath::UseCurve,
+            ConfigPath::LevelsLow,
+            ConfigPath::LevelsHigh,
+            ConfigPath::LevelsGamma,
+
+            // Color
+            ConfigPath::ColorMode,
+            ConfigPath::PathMapStyle,
+            ConfigPath::PathCaptureMode,
+            ConfigPath::PathTrackingMode,
+            ConfigPath::PaletteIndex,
+            ConfigPath::Palette,
+            ConfigPath::PaletteRotation,
+            ConfigPath::PaletteSize,
+            ConfigPath::PaletteSqueeze,
+            ConfigPath::SpeedFactor,
+            ConfigPath::BackgroundColor,
+            ConfigPath::BackgroundColorR,
+            ConfigPath::BackgroundColorG,
+            ConfigPath::BackgroundColorB,
+
+            // Rendering
+            ConfigPath::HistogramColorScale,
+            ConfigPath::BlendFactor,
+            ConfigPath::UseDynamicBlend,
+            ConfigPath::TargetIterationsPerPixel,
+            ConfigPath::MaxIterations,
+            ConfigPath::DeterministicRng,
+
+            // Transform pool (Normal)
+            ConfigPath::TransformCount,
+            ConfigPath::TransformWeight { index: 0 },
+            ConfigPath::TransformColor { index: 1 },
+            ConfigPath::TransformColorSpeed { index: 2 },
+            ConfigPath::TransformOpacity { index: 0 },
+            ConfigPath::TransformDirectColor { index: 0 },
+            ConfigPath::TransformAffine { index: 0, param: AffineParam::A },
+            ConfigPath::TransformAffine { index: 5, param: AffineParam::G },
+            ConfigPath::TransformVariation { index: 0, variation: "linear".to_string() },
+            ConfigPath::TransformVariationParam {
+                index: 0, variation: "julian".to_string(), param: "power".to_string(),
+            },
+            ConfigPath::TransformOriginX { index: 0 },
+            ConfigPath::TransformOriginY { index: 0 },
+            ConfigPath::TransformRotation { index: 0 },
+            ConfigPath::TransformScale { index: 0 },
+            ConfigPath::TransformPostAffineEnabled { index: 0 },
+            ConfigPath::TransformPostAffine { index: 0, param: AffineParam::F },
+
+            // Legacy singular Final (compat aliases for animation tracks
+            // saved before the per-pool model — route to final_transforms[0]).
+            ConfigPath::FinalTransformEnabled,
+            ConfigPath::FinalTransformAffine { param: AffineParam::A },
+            ConfigPath::FinalTransformVariation { variation: "linear".to_string() },
+            ConfigPath::FinalTransformVariationParam {
+                variation: "julian".to_string(), param: "power".to_string(),
+            },
+            ConfigPath::FinalTransformOriginX,
+            ConfigPath::FinalTransformOriginY,
+            ConfigPath::FinalTransformRotation,
+            ConfigPath::FinalTransformScale,
+            ConfigPath::FinalTransformPostAffineEnabled,
+            ConfigPath::FinalTransformPostAffine { param: AffineParam::A },
+
+            // Linked + Final pools (covered separately by
+            // test_config_path_string_roundtrip_pool_transforms — included
+            // again here to keep this test comprehensive).
+            ConfigPath::LinkedTransformAffine { index: 0, param: AffineParam::A },
+            ConfigPath::LinkedTransformPostAffineEnabled { index: 0 },
+            ConfigPath::LinkedTransformPostAffine { index: 0, param: AffineParam::F },
+            ConfigPath::LinkedTransformVariation {
+                index: 0, variation: "spherical".to_string(),
+            },
+            ConfigPath::LinkedTransformVariationParam {
+                index: 0, variation: "julian".to_string(), param: "power".to_string(),
+            },
+            ConfigPath::PoolFinalTransformAffine { index: 0, param: AffineParam::B },
+            ConfigPath::PoolFinalTransformPostAffineEnabled { index: 0 },
+            ConfigPath::PoolFinalTransformPostAffine { index: 0, param: AffineParam::E },
+            ConfigPath::PoolFinalTransformVariation {
+                index: 0, variation: "bipolar".to_string(),
+            },
+            ConfigPath::PoolFinalTransformVariationParam {
+                index: 0, variation: "bipolar".to_string(), param: "shift".to_string(),
+            },
+
+            // Flame
+            ConfigPath::RenderMode,
+            ConfigPath::PerspectiveStrength,
+            ConfigPath::Xaos { src: 0, dst: 1 },
+            ConfigPath::Xaos { src: 3, dst: 7 },
+            ConfigPath::SoloTransform,
+
+            // Effects
+            ConfigPath::DensityEffectEnabled { index: 0 },
+            ConfigPath::DensityEffectParam { index: 0, param: "strength".to_string() },
+            ConfigPath::ColorEffectEnabled { index: 0 },
+            ConfigPath::ColorEffectParam { index: 0, param: "amount".to_string() },
+
+            // System
+            ConfigPath::SystemIterationsPerThread,
+            ConfigPath::SystemBurnIn,
+            ConfigPath::SystemVsyncEnabled,
+            ConfigPath::SystemTargetFps,
+            ConfigPath::SystemExportWidth,
+            ConfigPath::SystemExportHeight,
+            ConfigPath::SystemLanguage,
+            ConfigPath::SystemShowHelpOnStartup,
+        ];
+
+        let mut failed: Vec<String> = Vec::new();
+        for path in paths {
+            let key = path.to_string_key();
+            match ConfigPath::from_string_key(&key) {
+                Some(parsed) if parsed == path => { /* ok */ }
+                Some(parsed) => {
+                    failed.push(format!(
+                        "key={:?} → parsed={:?} but expected={:?}",
+                        key, parsed, path
+                    ));
+                }
+                None => {
+                    failed.push(format!("key={:?} (from {:?}) failed to parse", key, path));
+                }
+            }
+        }
+
+        assert!(
+            failed.is_empty(),
+            "ConfigPath roundtrip failures:\n  {}",
+            failed.join("\n  "),
+        );
     }
 
     #[test]

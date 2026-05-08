@@ -2192,3 +2192,89 @@ fn build_ffmpeg_args(config: &AnimationExportConfig) -> Vec<String> {
 
     args
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{ConfigPath, ConfigValue};
+    use crate::scene::transforms::{Flame, Transform};
+
+    /// Regression test for the colon-vs-dot variation-param key bug.
+    /// `apply_config_value` was writing variation_params keys with `:`
+    /// while reads (via `get_variation_param`) use `.`. After the fix,
+    /// values written via `apply_config_value` for any of the four
+    /// VariationParam ConfigPath variants must be readable via
+    /// `Transform::get_variation_param` (the canonical read path used
+    /// by `GpuVariationParams::from_transform` for shader packing).
+    #[test]
+    fn test_apply_config_value_variation_param_roundtrip() {
+        let mut config = FractalConfig::default();
+        config.flame = Flame::new();
+        config.flame.transforms.push(Transform::new());
+        config.flame.linked_transforms.push(Transform::new());
+        config.flame.final_transforms.push(Transform::new());
+
+        // Normal pool
+        apply_config_value(
+            &mut config,
+            &ConfigPath::TransformVariationParam {
+                index: 0,
+                variation: "julian".to_string(),
+                param: "power".to_string(),
+            },
+            &ConfigValue::Float(2.5),
+        );
+        assert_eq!(
+            config.flame.transforms[0].get_variation_param("julian", "power"),
+            Some(2.5),
+            "Normal pool: param must be readable via canonical key format",
+        );
+
+        // Legacy singular Final pool (compat alias → final_transforms[0])
+        apply_config_value(
+            &mut config,
+            &ConfigPath::FinalTransformVariationParam {
+                variation: "bipolar".to_string(),
+                param: "shift".to_string(),
+            },
+            &ConfigValue::Float(1.5),
+        );
+        assert_eq!(
+            config.flame.final_transforms[0].get_variation_param("bipolar", "shift"),
+            Some(1.5),
+            "Legacy Final: param must reach final_transforms[0]",
+        );
+
+        // Linked pool
+        apply_config_value(
+            &mut config,
+            &ConfigPath::LinkedTransformVariationParam {
+                index: 0,
+                variation: "blob".to_string(),
+                param: "high".to_string(),
+            },
+            &ConfigValue::Float(3.0),
+        );
+        assert_eq!(
+            config.flame.linked_transforms[0].get_variation_param("blob", "high"),
+            Some(3.0),
+            "Linked pool: param must be readable",
+        );
+
+        // PoolFinal pool
+        apply_config_value(
+            &mut config,
+            &ConfigPath::PoolFinalTransformVariationParam {
+                index: 0,
+                variation: "blob".to_string(),
+                param: "low".to_string(),
+            },
+            &ConfigValue::Float(0.5),
+        );
+        assert_eq!(
+            config.flame.final_transforms[0].get_variation_param("blob", "low"),
+            Some(0.5),
+            "PoolFinal: param must be readable",
+        );
+    }
+}
