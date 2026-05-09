@@ -1087,16 +1087,59 @@ impl ShaderBuilder {
     ) -> String {
         let active = self.active_with_local_indices(active_variations, render_3d);
 
+        // Compute has_dc once: drives both the apply_variations signature
+        // (with vs without `vc` param) and the HAS_DC template condition.
+        let has_dc = self.has_dc_variation(&active);
+
+        // Build the template processor up front — both the header and the
+        // main_template body have `{{#if ...}}` blocks (header gates which
+        // bindings get declared at slots 2 and 6; main_template gates the
+        // plot-time output block). Configuring once and processing both
+        // through it keeps the gates in lockstep.
+        let mut processor = TemplateProcessor::new();
+        processor.set("RENDER_3D", render_3d);
+        processor.set("PATH_TRACKING", path_features_enabled);
+        processor.set("XAOS_ENABLED", xaos_enabled);
+        processor.set("HAS_DC", has_dc);
+        // HAS_ATTACHMENTS gates the per-iteration `attachments[xform_idx]`
+        // load and the Linked/Final chain loops. False when the flame has
+        // no Linked or Final transforms, restoring pre-attachment-feature
+        // shader cost. Sourced from `constants` so the shader cache picks
+        // up transitions and rebuilds.
+        processor.set("HAS_ATTACHMENTS", constants.has_attachments);
+        // OUTPUT_HISTOGRAM_DIRECT gates which output strategy the shader
+        // uses for plot-time accumulation:
+        //   true  — atomicAdd into a single full-resolution histogram
+        //           buffer (current behavior; sub-4K single-tile case).
+        //   false — write samples to a sample-stream buffer for a
+        //           later accumulate pass to scatter into per-tile
+        //           histograms (multi-tile case, used by HighResExporter
+        //           starting in Phase 2c).
+        // The header.wgsl gates bindings 2 and 6 on this same flag —
+        // direct mode binds histogram + iteration_counts; sample-emit
+        // mode binds samples + sample_counter. See
+        // docs/projects/unified-render-pipeline.md.
+        // Always true today; flipped to false by the export path in 2c.
+        processor.set("OUTPUT_HISTOGRAM_DIRECT", true);
+        // ITERATION_COUNTS gates the per-iteration `atomicAdd` to the
+        // iteration_counts buffer used for per-pixel convergence
+        // tracking. Set from the flame's `target_iterations_per_pixel`
+        // — when 0 (today's default), strips the atomic from the
+        // compiled shader entirely.
+        processor.set("ITERATION_COUNTS", constants.iteration_counts_enabled);
+
         let mut shader = String::new();
 
         // 1. Hard-coded constants (must come first for use in later code)
         shader.push_str(&constants.to_wgsl());
 
         // 2. Header — substitute {{ATTACHMENT_CAP}} into the AttachmentList
-        // struct definition. Drives both the per-iteration load size and
-        // the host-side packing stride.
+        // struct definition (drives both the per-iteration load size and
+        // the host-side packing stride), then run the template processor
+        // to resolve the binding/struct gates around slots 2 and 6.
         let header = include_str!("../shaders/core/header.wgsl")
             .replace("{{ATTACHMENT_CAP}}", &constants.attachment_cap.to_string());
+        let header = processor.process(&header);
         shader.push_str(&header);
         shader.push('\n');
 
@@ -1115,10 +1158,6 @@ impl ShaderBuilder {
         // 5. Core variations from embedded VariationDef WGSL (only active ones)
         shader.push_str(&self.generate_variation_code(&active, render_3d));
         shader.push('\n');
-
-        // Compute has_dc once: drives both the apply_variations signature
-        // (with vs without `vc` param) and the HAS_DC template condition.
-        let has_dc = self.has_dc_variation(&active);
 
         // 7. Generate apply_variations with fixed registry indices
         // Pass inlined transforms for dead code elimination if available
@@ -1159,36 +1198,10 @@ impl ShaderBuilder {
             shader.push('\n');
         }
 
-        // 10. Main shader from template
+        // 10. Main shader from template — same processor as the header so
+        // OUTPUT_HISTOGRAM_DIRECT picks consistently across declarations
+        // and use-sites.
         let template = include_str!("../shaders/core/main_template.wgsl");
-        let mut processor = TemplateProcessor::new();
-        processor.set("RENDER_3D", render_3d);
-        processor.set("PATH_TRACKING", path_features_enabled);
-        processor.set("XAOS_ENABLED", xaos_enabled);
-        processor.set("HAS_DC", has_dc);
-        // HAS_ATTACHMENTS gates the per-iteration `attachments[xform_idx]`
-        // load and the Linked/Final chain loops. False when the flame has
-        // no Linked or Final transforms, restoring pre-attachment-feature
-        // shader cost. Sourced from `constants` so the shader cache picks
-        // up transitions and rebuilds.
-        processor.set("HAS_ATTACHMENTS", constants.has_attachments);
-        // OUTPUT_HISTOGRAM_DIRECT gates which output strategy the shader
-        // uses for plot-time accumulation:
-        //   true  — atomicAdd into a single full-resolution histogram
-        //           buffer (current behavior; sub-4K single-tile case).
-        //   false — write samples to a sample-stream buffer for a
-        //           later accumulate pass to scatter into per-tile
-        //           histograms (multi-tile case, lands in Phase 2).
-        // Always true in Phase 1; the flag is plumbed but the shader
-        // is byte-identical to today's. See
-        // docs/projects/unified-render-pipeline.md.
-        processor.set("OUTPUT_HISTOGRAM_DIRECT", true);
-        // ITERATION_COUNTS gates the per-iteration `atomicAdd` to the
-        // iteration_counts buffer used for per-pixel convergence
-        // tracking. Set from the flame's `target_iterations_per_pixel`
-        // — when 0 (today's default), strips the atomic from the
-        // compiled shader entirely.
-        processor.set("ITERATION_COUNTS", constants.iteration_counts_enabled);
         let mut processed = processor.process(template);
         // Inject per-thread state initialization block at the marker.
         // No-op if no active variation has wgsl_state_init.
@@ -1916,5 +1929,132 @@ mod tests {
                 "HAS_DC=true shader missing direct_color use");
         assert!(shader.contains("apply_variations(xform, xform_idx, affine_p, &rng, &vc)"),
                 "HAS_DC=true call site missing 5-arg apply_variations");
+    }
+
+    /// OUTPUT_HISTOGRAM_DIRECT toggles the unified template between two
+    /// output strategies: direct-histogram (atomicAdd at slot 2) and
+    /// sample-emit (write Sample at slot 2 + bump counter at slot 6).
+    /// Both modes have to produce valid, distinct WGSL with the right
+    /// bindings declared in the header. This processes header.wgsl and
+    /// main_template.wgsl through the same TemplateProcessor used by
+    /// build_from_template, then asserts on what each branch keeps.
+    #[test]
+    fn unified_template_output_histogram_direct_gates() {
+        let header_src = include_str!("../shaders/core/header.wgsl")
+            .replace("{{ATTACHMENT_CAP}}", "1");
+        let main_src = include_str!("../shaders/core/main_template.wgsl");
+
+        // Shared baseline: 2D, no path tracking, no xaos, no DC, no
+        // attachments — matches the export flow's flag set in 2c.
+        let make_processor = |output_histogram_direct: bool, iteration_counts: bool| {
+            let mut p = TemplateProcessor::new();
+            p.set("RENDER_3D", false);
+            p.set("PATH_TRACKING", false);
+            p.set("XAOS_ENABLED", false);
+            p.set("HAS_DC", false);
+            p.set("HAS_ATTACHMENTS", false);
+            p.set("OUTPUT_HISTOGRAM_DIRECT", output_histogram_direct);
+            p.set("ITERATION_COUNTS", iteration_counts);
+            p
+        };
+
+        // Direct-histogram mode (interactive default).
+        let p = make_processor(true, false);
+        let header_direct = p.process(&header_src);
+        let main_direct = p.process(main_src);
+
+        assert!(
+            header_direct.contains("histogram: array<atomic<u32>>"),
+            "direct mode header missing histogram binding"
+        );
+        assert!(
+            header_direct.contains("iteration_counts: array<atomic<u32>>"),
+            "direct mode header missing iteration_counts binding"
+        );
+        assert!(
+            !header_direct.contains("samples: array<Sample>"),
+            "direct mode header has sample-emit binding leaked"
+        );
+        assert!(
+            !header_direct.contains("sample_counter: SampleCounter"),
+            "direct mode header has sample_counter binding leaked"
+        );
+        assert!(
+            !header_direct.contains("struct Sample {"),
+            "direct mode header has Sample struct leaked"
+        );
+        assert!(
+            main_direct.contains("atomicAdd(&histogram[base_idx + 0u]"),
+            "direct mode main missing histogram atomicAdd"
+        );
+        assert!(
+            !main_direct.contains("atomicAdd(&sample_counter.count"),
+            "direct mode main has sample-emit body leaked"
+        );
+
+        // ITERATION_COUNTS=false strips the per-iteration counter atomic.
+        assert!(
+            !main_direct.contains("atomicAdd(&iteration_counts[pixel_idx]"),
+            "direct mode with ITERATION_COUNTS=false should strip counter atomic"
+        );
+        // ITERATION_COUNTS=true keeps it.
+        let p_with_counts = make_processor(true, true);
+        let main_with_counts = p_with_counts.process(main_src);
+        assert!(
+            main_with_counts.contains("atomicAdd(&iteration_counts[pixel_idx]"),
+            "direct mode with ITERATION_COUNTS=true missing counter atomic"
+        );
+
+        // Sample-emit mode (multi-tile / high-res export). ITERATION_COUNTS
+        // is meaningless here (it's nested inside the direct branch), so
+        // pass false.
+        let p = make_processor(false, false);
+        let header_emit = p.process(&header_src);
+        let main_emit = p.process(main_src);
+
+        assert!(
+            header_emit.contains("samples: array<Sample>"),
+            "emit mode header missing samples binding"
+        );
+        assert!(
+            header_emit.contains("sample_counter: SampleCounter"),
+            "emit mode header missing sample_counter binding"
+        );
+        assert!(
+            header_emit.contains("struct Sample {"),
+            "emit mode header missing Sample struct"
+        );
+        assert!(
+            !header_emit.contains("histogram: array<atomic<u32>>"),
+            "emit mode header has direct-histogram binding leaked"
+        );
+        assert!(
+            !header_emit.contains("iteration_counts: array<atomic<u32>>"),
+            "emit mode header has iteration_counts binding leaked"
+        );
+        assert!(
+            main_emit.contains("atomicAdd(&sample_counter.count"),
+            "emit mode main missing sample_counter atomicAdd"
+        );
+        assert!(
+            main_emit.contains("samples[sample_idx] = Sample("),
+            "emit mode main missing Sample write"
+        );
+        assert!(
+            !main_emit.contains("atomicAdd(&histogram[base_idx"),
+            "emit mode main has direct-histogram body leaked"
+        );
+
+        // Both modes should fully resolve the gates — no leftover tags.
+        for (name, src) in [
+            ("direct-header", &header_direct),
+            ("direct-main", &main_direct),
+            ("emit-header", &header_emit),
+            ("emit-main", &main_emit),
+        ] {
+            assert!(!src.contains("{{#if"), "{} has unprocessed {{#if}}", name);
+            assert!(!src.contains("{{else}}"), "{} has unprocessed {{else}}", name);
+            assert!(!src.contains("{{/if}}"), "{} has unprocessed {{/if}}", name);
+        }
     }
 }
