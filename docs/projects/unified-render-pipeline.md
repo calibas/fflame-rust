@@ -262,13 +262,55 @@ build, all existing tests passing, and benchmarks at-or-better.
 template flag to `main_template.wgsl`. Default value matches today's
 behavior. No call-site changes. Verify benchmarks unchanged.
 
-**Phase 2 — fold `main_export.wgsl` into `main_template.wgsl`.**
-Move the sample-stream output block under the new template flag.
-Delete `main_export.wgsl` and `header_export.wgsl`. `HighResExporter`
-now builds via `build_from_template` with `OUTPUT_MODE = SAMPLES`.
-Verify high-res export produces the same image as before this branch
-(may still be broken at 8K — that's expected; we haven't rewritten
-the dispatch yet).
+**Phase 2 — fold `main_export.wgsl` into `main_template.wgsl`** (broken
+into sub-steps; each ends with a working build).
+
+Treats every "optional" feature in the unified shader as a real
+template flag — strips it from the compiled shader when the flame
+isn't using it. This applies at *every* resolution, not just at
+high-res. The export path's broken behavior of dropping features
+silently for performance gets replaced by explicit gates that turn
+on/off by what the flame and the render request actually need.
+
+The optional features today are:
+
+- **PATH_TRACKING** (already gated; exists for PathMap color mode +
+  path filters) — gates path-buffer reads/writes and the per-iter
+  rolling-window state.
+- **ITERATION_COUNTS** (new gate) — `target_iterations_per_pixel`
+  is a feature; outside of that, the per-pixel atomic counter is
+  pure waste. Gate the binding access to disappear from the
+  compiled shader when unused.
+- **HAS_POST_AFFINE**, **HAS_ATTACHMENTS**, **HAS_DC**, **XAOS_ENABLED**
+  — pre-existing template gates, no changes here.
+
+Sub-steps:
+
+- **2a — template-gate `iteration_counts`.** New `ITERATION_COUNTS`
+  flag in the template processor. Wrap the `atomicAdd(&iteration_counts[…])`
+  in `{{#if ITERATION_COUNTS}}…{{/if}}`. Set the flag from the flame's
+  `target_iterations_per_pixel > 0`. At 0 (today's default), the
+  shader is now slightly faster — fewer atomics per iteration. Inert
+  for any flame currently using per-pixel convergence.
+- **2b — gate sample-stream output under `OUTPUT_HISTOGRAM_DIRECT = false`.**
+  Move `main_export.wgsl`'s sample-emit block into the `{{else}}`
+  branch in `main_template.wgsl`. When `OUTPUT_HISTOGRAM_DIRECT = true`
+  (today, everywhere): unchanged. When false: emits samples instead.
+  Headers also unify — both binding sets in `header.wgsl`, gated.
+- **2c — point `HighResExporter` at `build_from_template`.**
+  Build the export shader via the unified path with
+  `OUTPUT_HISTOGRAM_DIRECT = false`, `PATH_TRACKING = false`,
+  `ITERATION_COUNTS = false`. Provide dummy path/iteration_counts
+  buffers if the bind-group layout still references them; can be
+  pruned in a follow-up. Existing CPU-histogram readback and
+  tonemap stay in place — Phase 4 replaces those.
+- **2d — delete `main_export.wgsl` and `header_export.wgsl`.** Their
+  callers all go through `build_from_template` now.
+
+Per-step verify: build clean, all unit tests pass, sub-4K benchmark
+suite at parity. After 2d: high-res export produces the same output
+as on `main` (still possibly broken at 8K — Phase 7 fixes the
+underlying bug).
 
 **Phase 3 — fold `main_tiled.wgsl` (delete it).** It's used by dead
 code only; just remove. Same for `header_tiled.wgsl`.
