@@ -108,6 +108,21 @@ pub struct HighResExporter {
     compute_pipeline: ComputePipeline,
     bind_group_layout: BindGroupLayout,
 
+    // GPU accumulate pass — when the strategy picker returns `Direct`
+    // for this resolution (full histogram fits one binding on this
+    // device's limits), the per-iterate-dispatch CPU readback +
+    // histogram fill is replaced with a compute dispatch that
+    // atomic-adds samples into a GPU histogram buffer. We read back
+    // the histogram exactly once at the end. When the picker returns
+    // a tiled strategy these fields are `None` and the exporter
+    // falls back to the CPU accumulate path. Phase 6 will wire the
+    // tiled strategies into the GPU path. See
+    // docs/projects/unified-render-pipeline.md.
+    gpu_histogram_buffer: Option<Buffer>,
+    accumulate_pipeline: ComputePipeline,
+    accumulate_bind_group_layout: BindGroupLayout,
+    accumulate_params_buffer: Buffer,
+
     // Variation init pipeline (runs once before sample generation to
     // populate derived params for variations with `wgsl_init` —
     // e.g. Julian's `cpower = dist / |power| / 2`). Mirrors the
@@ -190,8 +205,31 @@ impl HighResExporter {
             .await
             .map_err(|e| format!("Failed to find GPU adapter: {}", e))?;
 
+        // Request the adapter's full storage-buffer binding size (the
+        // default `DeviceDescriptor` uses WebGPU's spec-minimum 128 MB
+        // limit, which forces tile fallback even on desktop GPUs that
+        // support gigabyte-sized bindings). Without this, 8K exports
+        // get classified as SerialTiles on every desktop and miss the
+        // GPU accumulate fast path. Mirrors `gpu/device.rs`'s
+        // initialization for the interactive renderer.
+        let adapter_limits = adapter.limits();
+        log::info!(
+            "Export adapter max_storage_buffer_binding_size: {} MB",
+            adapter_limits.max_storage_buffer_binding_size / (1024 * 1024)
+        );
+        let mut limits = Limits::default();
+        limits.max_storage_buffer_binding_size = adapter_limits.max_storage_buffer_binding_size;
+        limits.max_buffer_size = adapter_limits.max_buffer_size;
+
         let (device, queue) = adapter
-            .request_device(&DeviceDescriptor::default())
+            .request_device(&DeviceDescriptor {
+                label: Some("Export Device"),
+                required_features: Features::empty(),
+                required_limits: limits,
+                memory_hints: MemoryHints::Performance,
+                experimental_features: Default::default(),
+                trace: Default::default(),
+            })
             .await
             .map_err(|e| format!("Failed to create device: {}", e))?;
 
@@ -630,6 +668,49 @@ impl HighResExporter {
             cache: None,
         });
 
+        // ===== Create GPU accumulate pipeline =====
+        // Builds the pipeline regardless of whether this device's
+        // strategy ends up using it — cheap to construct (single
+        // shader module, single pipeline) and lets the export() loop
+        // pick the path based on `gpu_histogram_buffer.is_some()`.
+        let accumulate_bind_group_layout = crate::export::accumulate::create_bind_group_layout(&device);
+        let accumulate_pipeline = crate::export::accumulate::create_pipeline(
+            &device,
+            &accumulate_bind_group_layout,
+        );
+        let accumulate_params_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Export Accumulate Params Buffer"),
+            size: std::mem::size_of::<crate::export::accumulate::AccumulateParams>() as u64,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Allocate the GPU histogram buffer when the strategy picker
+        // says the full-res histogram fits one storage-buffer binding
+        // on this device. When it doesn't we leave the buffer as None
+        // and fall back to the CPU accumulate path; Phase 6 will wire
+        // the tiled GPU strategies to handle that case.
+        let strategy = crate::export::pick_strategy(width, height, &device.limits());
+        let gpu_histogram_buffer = if matches!(strategy, crate::export::RenderStrategy::Direct) {
+            let size = (width as u64) * (height as u64) * 16; // 4× u32 per pixel
+            log::info!(
+                "High-res export: GPU accumulate path enabled ({}x{}, {} MB histogram)",
+                width, height, size / (1024 * 1024)
+            );
+            Some(device.create_buffer(&BufferDescriptor {
+                label: Some("Export GPU Histogram"),
+                size,
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            }))
+        } else {
+            log::info!(
+                "High-res export: CPU accumulate fallback ({}x{}, strategy={:?} not yet GPU-wired)",
+                width, height, strategy
+            );
+            None
+        };
+
         // ===== Create tonemap pipeline for GPU tonemapping =====
         // Use export-specific shader without path buffer/palette bindings (only 5 bindings: 0-4)
         let tonemap_shader = device.create_shader_module(ShaderModuleDescriptor {
@@ -809,6 +890,10 @@ impl HighResExporter {
             palette_sampler,
             compute_pipeline,
             bind_group_layout,
+            gpu_histogram_buffer,
+            accumulate_pipeline,
+            accumulate_bind_group_layout,
+            accumulate_params_buffer,
             init_pipeline,
             init_bind_group_layout,
             init_pair_count,
@@ -832,9 +917,28 @@ impl HighResExporter {
         transparent: bool,
         progress: &mut dyn ExportProgress,
     ) -> Result<Vec<u8>, String> {
-        // Create CPU histogram
+        // Create CPU histogram. The GPU accumulate path leaves this
+        // empty until the final readback; the CPU path fills it
+        // incrementally per-dispatch.
         let num_pixels = (self.width as usize) * (self.height as usize);
         let mut histogram: Vec<HistogramPixel> = vec![HistogramPixel::default(); num_pixels];
+
+        // GPU accumulate path uses this scale to widen the [0,1] sample
+        // RGB into u32 atomic-add precision; we divide back by it on
+        // readback so HistogramPixel's units stay equivalent to the CPU
+        // path's (r,g,b ∈ [0,n], count = sample count).
+        let color_scale_f = config.histogram_color_scale.max(1.0);
+        let use_gpu_accumulate = self.gpu_histogram_buffer.is_some();
+
+        // Pre-zero the GPU histogram once at the start when we're
+        // taking the GPU accumulate path.
+        if let Some(ref hist) = self.gpu_histogram_buffer {
+            let mut clear_encoder = self.device.create_command_encoder(&CommandEncoderDescriptor {
+                label: Some("Export GPU Histogram Clear"),
+            });
+            clear_encoder.clear_buffer(hist, 0, None);
+            self.queue.submit(std::iter::once(clear_encoder.finish()));
+        }
 
         // Create bind group
         let palette_view = self.palette_texture.create_view(&TextureViewDescriptor::default());
@@ -922,7 +1026,33 @@ impl HighResExporter {
             }
         }
 
-        // Create readback buffer for samples
+        // Accumulate bind group lives outside the loop — buffers are
+        // long-lived and the bind group is reusable across dispatches.
+        // None when we're on the CPU fallback path.
+        let accumulate_bind_group = self.gpu_histogram_buffer.as_ref().map(|hist| {
+            self.device.create_bind_group(&BindGroupDescriptor {
+                label: Some("Export Accumulate Bind Group"),
+                layout: &self.accumulate_bind_group_layout,
+                entries: &[
+                    BindGroupEntry {
+                        binding: 0,
+                        resource: self.sample_buffer.as_entire_binding(),
+                    },
+                    BindGroupEntry {
+                        binding: 1,
+                        resource: self.accumulate_params_buffer.as_entire_binding(),
+                    },
+                    BindGroupEntry {
+                        binding: 2,
+                        resource: hist.as_entire_binding(),
+                    },
+                ],
+            })
+        });
+
+        // Create readback buffer for samples (CPU path only). On the
+        // GPU path the samples never leave the GPU; the accumulate
+        // dispatch consumes them in place.
         let readback_buffer = self.device.create_buffer(&BufferDescriptor {
             label: Some("Sample Readback Buffer"),
             size: self.samples_per_dispatch * std::mem::size_of::<Sample>() as u64,
@@ -1029,68 +1159,109 @@ impl HighResExporter {
             let sample_count = self.read_counter(&counter_readback_buffer).await?;
 
             if sample_count > 0 {
-                // Copy samples to readback buffer
-                let bytes_to_copy =
-                    (sample_count as u64 * std::mem::size_of::<Sample>() as u64).min(
-                        self.samples_per_dispatch * std::mem::size_of::<Sample>() as u64,
+                if let Some(ref acc_bind_group) = accumulate_bind_group {
+                    // GPU accumulate path: a single compute dispatch
+                    // scatters the samples into the GPU histogram. No
+                    // sample readback — the data stays GPU-resident
+                    // until the final histogram readback below.
+                    let acc_params = crate::export::accumulate::AccumulateParams {
+                        bound_x: 0,
+                        bound_y: 0,
+                        bound_width: self.width,
+                        bound_height: self.height,
+                        sample_count,
+                        color_scale: color_scale_f,
+                        _pad0: 0,
+                        _pad1: 0,
+                    };
+                    self.queue.write_buffer(
+                        &self.accumulate_params_buffer,
+                        0,
+                        bytemuck::bytes_of(&acc_params),
                     );
 
-                let mut encoder = self
-                    .device
-                    .create_command_encoder(&CommandEncoderDescriptor {
-                        label: Some("Sample Readback Encoder"),
+                    let mut acc_encoder = self.device.create_command_encoder(&CommandEncoderDescriptor {
+                        label: Some("Export Accumulate Encoder"),
                     });
-                encoder.copy_buffer_to_buffer(
-                    &self.sample_buffer,
-                    0,
-                    &readback_buffer,
-                    0,
-                    bytes_to_copy,
-                );
-                self.queue.submit(std::iter::once(encoder.finish()));
-
-                // Read and accumulate samples (parallelized by row)
-                let samples = self
-                    .read_samples(&readback_buffer, sample_count.min(self.samples_per_dispatch as u32))
-                    .await?;
-
-                // Strategy: Bin samples by row, then accumulate each row in parallel
-                // This avoids allocating full histogram copies while still parallelizing
-                let width = self.width as i32;
-                let height = self.height as i32;
-                let width_usize = self.width as usize;
-                let height_usize = self.height as usize;
-
-                // Pre-bin samples by their Y coordinate (row)
-                // Vec of samples for each row
-                let mut row_samples: Vec<Vec<&Sample>> = vec![Vec::new(); height_usize];
-                for sample in &samples {
-                    let y = sample.y as i32;
-                    if y >= 0 && y < height {
-                        row_samples[y as usize].push(sample);
+                    {
+                        let mut acc_pass = acc_encoder.begin_compute_pass(&ComputePassDescriptor {
+                            label: Some("Export Accumulate Pass"),
+                            timestamp_writes: None,
+                        });
+                        acc_pass.set_pipeline(&self.accumulate_pipeline);
+                        acc_pass.set_bind_group(0, acc_bind_group, &[]);
+                        let groups = crate::export::accumulate::accumulate_dispatch_groups(sample_count);
+                        acc_pass.dispatch_workgroups(groups, 1, 1);
                     }
-                }
+                    self.queue.submit(std::iter::once(acc_encoder.finish()));
 
-                // Parallel accumulation: each thread processes a chunk of rows
-                histogram
-                    .par_chunks_mut(width_usize)
-                    .enumerate()
-                    .for_each(|(row_idx, row_pixels)| {
-                        // Process all samples that land in this row
-                        for sample in &row_samples[row_idx] {
-                            let x = sample.x as i32;
-                            if x >= 0 && x < width {
-                                let pixel = &mut row_pixels[x as usize];
-                                pixel.r += sample.r as f64;
-                                pixel.g += sample.g as f64;
-                                pixel.b += sample.b as f64;
-                                pixel.count += 1.0;
-                            }
+                    total_samples_accumulated += sample_count as u64;
+                } else {
+                    // CPU fallback: sample buffer is read back to host
+                    // and binned into the per-row CPU histogram.
+                    let bytes_to_copy =
+                        (sample_count as u64 * std::mem::size_of::<Sample>() as u64).min(
+                            self.samples_per_dispatch * std::mem::size_of::<Sample>() as u64,
+                        );
+
+                    let mut encoder = self
+                        .device
+                        .create_command_encoder(&CommandEncoderDescriptor {
+                            label: Some("Sample Readback Encoder"),
+                        });
+                    encoder.copy_buffer_to_buffer(
+                        &self.sample_buffer,
+                        0,
+                        &readback_buffer,
+                        0,
+                        bytes_to_copy,
+                    );
+                    self.queue.submit(std::iter::once(encoder.finish()));
+
+                    let samples = self
+                        .read_samples(&readback_buffer, sample_count.min(self.samples_per_dispatch as u32))
+                        .await?;
+
+                    let width = self.width as i32;
+                    let height = self.height as i32;
+                    let width_usize = self.width as usize;
+                    let height_usize = self.height as usize;
+
+                    let mut row_samples: Vec<Vec<&Sample>> = vec![Vec::new(); height_usize];
+                    for sample in &samples {
+                        let y = sample.y as i32;
+                        if y >= 0 && y < height {
+                            row_samples[y as usize].push(sample);
                         }
-                    });
+                    }
 
-                total_samples_accumulated += samples.len() as u64;
+                    histogram
+                        .par_chunks_mut(width_usize)
+                        .enumerate()
+                        .for_each(|(row_idx, row_pixels)| {
+                            for sample in &row_samples[row_idx] {
+                                let x = sample.x as i32;
+                                if x >= 0 && x < width {
+                                    let pixel = &mut row_pixels[x as usize];
+                                    pixel.r += sample.r as f64;
+                                    pixel.g += sample.g as f64;
+                                    pixel.b += sample.b as f64;
+                                    pixel.count += 1.0;
+                                }
+                            }
+                        });
+
+                    total_samples_accumulated += samples.len() as u64;
+                }
             }
+        }
+
+        // GPU accumulate path: read the histogram back once and
+        // convert to the same Vec<HistogramPixel> shape the CPU path
+        // produced, so the existing tonemap_gpu code path runs
+        // unchanged.
+        if use_gpu_accumulate {
+            histogram = self.read_gpu_histogram(color_scale_f).await?;
         }
 
         progress.on_accumulating(total_samples_accumulated);
@@ -1150,6 +1321,70 @@ impl HighResExporter {
         buffer.unmap();
 
         Ok(samples)
+    }
+
+    /// Read the GPU histogram buffer back to host and convert to the
+    /// `Vec<HistogramPixel>` shape the existing tonemap_gpu path
+    /// expects. Layout in the GPU buffer matches what
+    /// accumulate_samples.wgsl writes: 4× u32 per pixel —
+    /// `[R_sum, G_sum, B_sum, density_sum]`, each scaled by
+    /// `color_scale`. We divide back by `color_scale` so the
+    /// HistogramPixel units match the CPU path's
+    /// (r,g,b summed in [0,n], count = sample count).
+    async fn read_gpu_histogram(&self, color_scale: f32) -> Result<Vec<HistogramPixel>, String> {
+        let hist = self
+            .gpu_histogram_buffer
+            .as_ref()
+            .ok_or_else(|| "read_gpu_histogram called without a GPU histogram buffer".to_string())?;
+
+        let num_pixels = (self.width as usize) * (self.height as usize);
+        let bytes = (num_pixels * 16) as u64;
+
+        let readback = self.device.create_buffer(&BufferDescriptor {
+            label: Some("Export GPU Histogram Readback"),
+            size: bytes,
+            usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        let mut encoder = self.device.create_command_encoder(&CommandEncoderDescriptor {
+            label: Some("Export GPU Histogram Readback Encoder"),
+        });
+        encoder.copy_buffer_to_buffer(hist, 0, &readback, 0, bytes);
+        self.queue.submit(std::iter::once(encoder.finish()));
+
+        let slice = readback.slice(..);
+        let (tx, rx) = futures::channel::oneshot::channel();
+        slice.map_async(MapMode::Read, move |r| {
+            tx.send(r).ok();
+        });
+        let _ = self.device.poll(PollType::Wait { submission_index: None, timeout: None });
+        rx.await
+            .map_err(|_| "GPU histogram readback receiver dropped".to_string())?
+            .map_err(|e| format!("Failed to map GPU histogram: {:?}", e))?;
+
+        let data = slice.get_mapped_range();
+        let words: &[u32] = bytemuck::cast_slice(&data);
+        let scale = color_scale as f64;
+
+        // Convert in parallel — at 8K we're processing 64M pixels and
+        // serial conversion measurably stretches export time.
+        let pixels: Vec<HistogramPixel> = (0..num_pixels)
+            .into_par_iter()
+            .map(|i| {
+                let base = i * 4;
+                HistogramPixel {
+                    r: (words[base] as f64) / scale,
+                    g: (words[base + 1] as f64) / scale,
+                    b: (words[base + 2] as f64) / scale,
+                    count: (words[base + 3] as f64) / scale,
+                }
+            })
+            .collect();
+
+        drop(data);
+        readback.unmap();
+        Ok(pixels)
     }
 
     /// GPU tonemap: histogram → RGBA pixels using GPU shader
