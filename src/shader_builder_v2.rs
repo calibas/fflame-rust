@@ -25,7 +25,7 @@ pub fn enable_inlined_constants() {
 }
 
 /// Check if shader dumping is enabled
-fn should_dump_shader() -> bool {
+pub fn should_dump_shader() -> bool {
     DUMP_SHADER_ENABLED.load(Ordering::Relaxed)
 }
 
@@ -1083,6 +1083,7 @@ impl ShaderBuilder {
         render_3d: bool,
         path_features_enabled: bool,
         xaos_enabled: bool,
+        output_histogram_direct: bool,
         constants: &ShaderConstants,
     ) -> String {
         let active = self.active_with_local_indices(active_variations, render_3d);
@@ -1110,17 +1111,17 @@ impl ShaderBuilder {
         // OUTPUT_HISTOGRAM_DIRECT gates which output strategy the shader
         // uses for plot-time accumulation:
         //   true  — atomicAdd into a single full-resolution histogram
-        //           buffer (current behavior; sub-4K single-tile case).
+        //           buffer (current interactive behavior; single-tile
+        //           sub-4K case).
         //   false — write samples to a sample-stream buffer for a
         //           later accumulate pass to scatter into per-tile
-        //           histograms (multi-tile case, used by HighResExporter
-        //           starting in Phase 2c).
+        //           histograms (HighResExporter and the multi-tile
+        //           strategies coming in Phases 4–6).
         // The header.wgsl gates bindings 2 and 6 on this same flag —
         // direct mode binds histogram + iteration_counts; sample-emit
         // mode binds samples + sample_counter. See
         // docs/projects/unified-render-pipeline.md.
-        // Always true today; flipped to false by the export path in 2c.
-        processor.set("OUTPUT_HISTOGRAM_DIRECT", true);
+        processor.set("OUTPUT_HISTOGRAM_DIRECT", output_histogram_direct);
         // ITERATION_COUNTS gates the per-iteration `atomicAdd` to the
         // iteration_counts buffer used for per-pixel convergence
         // tracking. Set from the flame's `target_iterations_per_pixel`

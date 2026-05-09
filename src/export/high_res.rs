@@ -91,7 +91,16 @@ pub struct HighResExporter {
     sample_counter_buffer: Buffer,
     variation_params_buffer: Buffer,
     xaos_buffer: Buffer,  // Xaos transition weights (identity if not used)
-    attachments_buffer: Buffer,  // Per-normal Linked + Final attachment lists (binding 8)
+    attachments_buffer: Buffer,  // Per-normal Linked + Final attachment lists
+    // Dummy path-tracking buffers — the unified shader's `header.wgsl`
+    // declares `path_buffer` (binding 7) and `path_filters` (binding 8)
+    // unconditionally, but the export shader builds with
+    // PATH_TRACKING=false so the use-sites are stripped. WebGPU still
+    // requires every declared binding to be bound; minimum-size dummies
+    // (28 bytes for one PathEntry, 16 for one GpuPathFilter) satisfy
+    // the layout. Pruning these bindings is a Phase 2d-or-later cleanup.
+    dummy_path_buffer: Buffer,
+    dummy_path_filter_buffer: Buffer,
     palette_texture: Texture,
     palette_sampler: Sampler,
 
@@ -288,6 +297,25 @@ impl HighResExporter {
         }
         queue.write_buffer(&attachments_buffer, 0, &buf);
 
+        // Dummy path_buffer (binding 7) and path_filters (binding 8). The
+        // unified shader declares these unconditionally in header.wgsl;
+        // PATH_TRACKING=false in the export build strips the use-sites
+        // but the bindings still need a buffer. Sizes match the FlameRenderer
+        // dummies in gpu/buffers.rs: 28 bytes for one PathEntry,
+        // 16 bytes for one GpuPathFilter.
+        let dummy_path_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Export Dummy Path Buffer"),
+            size: 28,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let dummy_path_filter_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Export Dummy Path Filter Buffer"),
+            size: 16,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         // Create palette texture (palette is always present)
         let palette = &config.palette;
         let palette_data = palette.generate_texture_data(256);
@@ -369,10 +397,50 @@ impl HighResExporter {
             }
         }
 
-        // Build shader. The export shader uses the 3D code path regardless
-        // of render_mode — see build_export's doc comment.
+        // Build shader through the unified template path with
+        // OUTPUT_HISTOGRAM_DIRECT=false. The shader writes one Sample per
+        // plotted point to `sample_buffer` (binding 2) and bumps an atomic
+        // count in `sample_counter_buffer` (binding 6) — a host-side
+        // accumulate scatters those into the CPU histogram below.
+        //
+        // render_3d=true regardless of the flame's render_mode: high-res
+        // export reuses the 3D code path so configs with 3D variations
+        // (flatten/hemisphere/zcone) render correctly even from a 2D
+        // flame (Z=0 falls through projection unchanged). This matches
+        // the previous `build_export` behavior.
+        //
+        // path_features_enabled=false: PathMap export was lossy via path
+        // hashing in the old export shader and is gated out here. Configs
+        // exporting in PathMap COLOR_MODE will fall back to the white
+        // default initialized in main_template.wgsl. See
+        // docs/projects/unified-render-pipeline.md.
         let shader_builder = ShaderBuilder::new(global_registry().clone());
-        let shader_source = shader_builder.build_export(&config.flame, &active_variations);
+        let constants = crate::shader_cache::ShaderCache::constants_from_config(config);
+        let shader_source = shader_builder.build_from_template(
+            &config.flame,
+            &active_variations,
+            true,                       // render_3d
+            false,                      // path_features_enabled
+            config.flame.has_xaos(),    // xaos_enabled
+            false,                      // output_histogram_direct → sample-emit
+            &constants,
+        );
+
+        // Mirror build_from_template's debug dump for the export shader.
+        // Writes to a distinct filename so a session that goes through
+        // both the interactive and export paths leaves both shaders on
+        // disk for inspection.
+        if crate::shader_builder_v2::should_dump_shader() {
+            let filename = "debug_shader_export.wgsl";
+            if let Err(e) = std::fs::write(filename, &shader_source) {
+                log::error!("Failed to write export debug shader: {}", e);
+            } else {
+                log::info!(
+                    "Wrote export shader to {} ({} bytes, {} lines)",
+                    filename, shader_source.len(), shader_source.lines().count()
+                );
+            }
+        }
 
         let shader_module = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("Export Compute Shader"),
@@ -418,7 +486,13 @@ impl HighResExporter {
             None => (None, 0),
         };
 
-        // Create bind group layout
+        // Create bind group layout matching the unified template's 11-slot
+        // scheme — same as the interactive renderer's layout but with
+        // sample-emit replacements at slots 2 (samples) and 6 (counter).
+        // Slots 7 and 8 (path_buffer, path_filters) are dummy bindings:
+        // the export shader builds with PATH_TRACKING=false so the
+        // use-sites are stripped, but WebGPU still requires every
+        // declared binding to be bound.
         let bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("Export Bind Group Layout"),
             entries: &[
@@ -433,7 +507,7 @@ impl HighResExporter {
                     },
                     count: None,
                 },
-                // binding 1: params
+                // binding 1: params (uniform)
                 BindGroupLayoutEntry {
                     binding: 1,
                     visibility: ShaderStages::COMPUTE,
@@ -444,7 +518,7 @@ impl HighResExporter {
                     },
                     count: None,
                 },
-                // binding 2: samples (output)
+                // binding 2: samples (sample-emit output)
                 BindGroupLayoutEntry {
                     binding: 2,
                     visibility: ShaderStages::COMPUTE,
@@ -484,7 +558,7 @@ impl HighResExporter {
                     },
                     count: None,
                 },
-                // binding 6: sample counter
+                // binding 6: sample counter (sample-emit write cursor)
                 BindGroupLayoutEntry {
                     binding: 6,
                     visibility: ShaderStages::COMPUTE,
@@ -495,9 +569,20 @@ impl HighResExporter {
                     },
                     count: None,
                 },
-                // binding 7: xaos weights
+                // binding 7: path_buffer (dummy — PATH_TRACKING=false in export)
                 BindGroupLayoutEntry {
                     binding: 7,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // binding 8: path_filters (dummy — PATH_TRACKING=false in export)
+                BindGroupLayoutEntry {
+                    binding: 8,
                     visibility: ShaderStages::COMPUTE,
                     ty: BindingType::Buffer {
                         ty: BufferBindingType::Storage { read_only: true },
@@ -506,9 +591,20 @@ impl HighResExporter {
                     },
                     count: None,
                 },
-                // binding 8: per-normal attachment lists (Linked + Final chains)
+                // binding 9: xaos weights
                 BindGroupLayoutEntry {
-                    binding: 8,
+                    binding: 9,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // binding 10: per-normal attachment lists (Linked + Final chains)
+                BindGroupLayoutEntry {
+                    binding: 10,
                     visibility: ShaderStages::COMPUTE,
                     ty: BindingType::Buffer {
                         ty: BufferBindingType::Storage { read_only: true },
@@ -708,6 +804,8 @@ impl HighResExporter {
             variation_params_buffer,
             xaos_buffer,
             attachments_buffer,
+            dummy_path_buffer,
+            dummy_path_filter_buffer,
             palette_texture,
             palette_sampler,
             compute_pipeline,
@@ -775,10 +873,18 @@ impl HighResExporter {
                 },
                 BindGroupEntry {
                     binding: 7,
-                    resource: self.xaos_buffer.as_entire_binding(),
+                    resource: self.dummy_path_buffer.as_entire_binding(),
                 },
                 BindGroupEntry {
                     binding: 8,
+                    resource: self.dummy_path_filter_buffer.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 9,
+                    resource: self.xaos_buffer.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 10,
                     resource: self.attachments_buffer.as_entire_binding(),
                 },
             ],
