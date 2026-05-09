@@ -1157,6 +1157,17 @@ impl ShaderBuilder {
         // shader cost. Sourced from `constants` so the shader cache picks
         // up transitions and rebuilds.
         processor.set("HAS_ATTACHMENTS", constants.has_attachments);
+        // OUTPUT_HISTOGRAM_DIRECT gates which output strategy the shader
+        // uses for plot-time accumulation:
+        //   true  — atomicAdd into a single full-resolution histogram
+        //           buffer (current behavior; sub-4K single-tile case).
+        //   false — write samples to a sample-stream buffer for a
+        //           later accumulate pass to scatter into per-tile
+        //           histograms (multi-tile case, lands in Phase 2).
+        // Always true in Phase 1; the flag is plumbed but the shader
+        // is byte-identical to today's. See
+        // docs/projects/unified-render-pipeline.md.
+        processor.set("OUTPUT_HISTOGRAM_DIRECT", true);
         let mut processed = processor.process(template);
         // Inject per-thread state initialization block at the marker.
         // No-op if no active variation has wgsl_state_init.
