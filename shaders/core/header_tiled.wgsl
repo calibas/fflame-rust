@@ -93,6 +93,14 @@ struct VariationParams {
     params: array<f32, 1600>,  // 100 variations × 16 params (user + init-derived)
 }
 
+// Per-normal-transform attachment list — see header.wgsl for full doc.
+struct AttachmentList {
+    linked: array<u32, {{ATTACHMENT_CAP}}>,
+    linked_count: u32,
+    final_: array<u32, {{ATTACHMENT_CAP}}>,
+    final_count: u32,
+}
+
 // Bindings - same as non-tiled
 @group(0) @binding(0) var<storage, read> transforms: array<Transform>;
 @group(0) @binding(1) var<uniform> params: Params;
@@ -106,3 +114,5 @@ struct VariationParams {
 // Xaos (chaos) transition weights: xaos_weights[src * num_transforms + dst]
 // Modifies probability of selecting dst transform when coming from src
 @group(0) @binding(8) var<storage, read> xaos_weights: array<f32>;
+// Per-normal-transform attachment lists (Linked + Final chains).
+@group(0) @binding(9) var<storage, read> attachments: array<AttachmentList>;

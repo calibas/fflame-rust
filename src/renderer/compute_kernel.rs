@@ -162,7 +162,7 @@ pub struct FlameRenderer {
     use_dynamic_blend: bool, // true = exponential convergence (old), false = fixed blend rate (new)
     target_iterations_per_pixel: u32, // Per-pixel convergence: stop updating pixel after N iterations (0 = disabled)
     overwrite_mode: bool, // When true, replace accumulation buffer instead of blending (for live preview)
-    num_transforms: u32, // Number of regular transforms (not including final transform)
+    num_transforms: u32, // Number of normal transforms
     has_final_transform: bool, // Whether final transform is present
     path_filters: Vec<crate::gpu::buffers::GpuPathFilter>, // Active path filters
     min_suffix_filter_length: u32, // Minimum length among depth=0 filters (optimization)
@@ -267,7 +267,7 @@ impl FlameRenderer {
             target_iterations_per_pixel: 0, // Default: disabled (no per-pixel convergence)
             overwrite_mode: false, // Default to normal blending (progressive refinement)
             num_transforms: flame.transforms.len() as u32,
-            has_final_transform: flame.final_transform.is_some(),
+            has_final_transform: !flame.final_transforms.is_empty(),
             path_filters: Vec::new(), // No filters by default
             min_suffix_filter_length: 0,
         }
@@ -280,7 +280,7 @@ impl FlameRenderer {
 
         // Update transform tracking from flame (critical for final transform support)
         self.num_transforms = flame.transforms.len() as u32;
-        self.has_final_transform = flame.final_transform.is_some();
+        self.has_final_transform = !flame.final_transforms.is_empty();
 
         // Recreate buffers with new size (preserve palette_size)
         let palette_size = self.buffers.palette_size();
@@ -342,9 +342,11 @@ impl FlameRenderer {
         ShaderConstants {
             num_transforms: flame.transforms.len() as u32,
             color_mode: self.color_mode as u32,
-            has_final_transform: flame.final_transform.is_some(),
-            final_transform_index: flame.transforms.len() as u32,
+            has_final_transform: !flame.final_transforms.is_empty(),
+            final_transform_index: 0,  // Legacy field — shader uses attachments chain now
             has_post_affine: flame.has_post_affine(),
+            has_attachments: flame.has_attachments(),
+            attachment_cap: flame.attachment_cap() as u32,
             // No inlining for incremental updates (would trigger too many shader rebuilds)
             inlined_transforms: None,
             cumulative_weights: None,
@@ -403,7 +405,7 @@ impl FlameRenderer {
             fog_start: self.fog_start,
             histogram_color_scale: self.histogram_color_scale,
             has_final_transform: if self.has_final_transform { 1 } else { 0 },
-            final_transform_index: self.num_transforms, // Final transform is appended after regular transforms
+            final_transform_index: 0,  // Legacy field — shader uses attachments chain now
             bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
             path_map_style: self.path_map_style as u32,
             path_capture_mode: self.path_capture_mode as u32,
@@ -666,6 +668,7 @@ impl FlameRenderer {
         // 1. Update transforms and variation parameters in GPU buffer
         self.buffers.update_transforms(queue, &config.flame);
         self.buffers.update_variation_params(queue, &config.flame);
+        self.buffers.update_attachments(queue, &config.flame, config.flame.attachment_cap());
         self.init_dirty = true;
 
         // 1b. Update xaos buffer (create/drop as needed)
@@ -710,7 +713,7 @@ impl FlameRenderer {
 
         // Update transform tracking
         self.num_transforms = config.flame.transforms.len() as u32;
-        self.has_final_transform = config.flame.final_transform.is_some();
+        self.has_final_transform = !config.flame.final_transforms.is_empty();
 
         let params = GpuParams {
             num_transforms: self.num_transforms,
@@ -740,7 +743,7 @@ impl FlameRenderer {
             fog_start: config.fog_start,
             histogram_color_scale: config.histogram_color_scale,
             has_final_transform: if self.has_final_transform { 1 } else { 0 },
-            final_transform_index: self.num_transforms,
+            final_transform_index: 0,  // Legacy field — shader uses attachments chain now
             bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
             path_map_style: self.path_map_style as u32,
             path_capture_mode: self.path_capture_mode as u32,
@@ -789,6 +792,7 @@ impl FlameRenderer {
 
         self.buffers.update_transforms(queue, flame);
         self.buffers.update_variation_params(queue, flame);
+        self.buffers.update_attachments(queue, flame, flame.attachment_cap());
         self.init_dirty = true;
 
         // Update xaos buffer (create/drop as needed)
@@ -812,7 +816,7 @@ impl FlameRenderer {
 
         // Update transform tracking
         self.num_transforms = flame.transforms.len() as u32;
-        self.has_final_transform = flame.final_transform.is_some();
+        self.has_final_transform = !flame.final_transforms.is_empty();
 
         let params = GpuParams {
             num_transforms: self.num_transforms,
@@ -842,7 +846,7 @@ impl FlameRenderer {
             fog_start: self.fog_start,
             histogram_color_scale: self.histogram_color_scale,
             has_final_transform: if self.has_final_transform { 1 } else { 0 },
-            final_transform_index: self.num_transforms,
+            final_transform_index: 0,  // Legacy field — shader uses attachments chain now
             bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
             path_map_style: self.path_map_style as u32,
             path_capture_mode: self.path_capture_mode as u32,
@@ -1054,7 +1058,7 @@ impl FlameRenderer {
             fog_start: self.fog_start,
             histogram_color_scale: self.histogram_color_scale,
             has_final_transform: if self.has_final_transform { 1 } else { 0 },
-            final_transform_index: self.num_transforms,
+            final_transform_index: 0,  // Legacy field — shader uses attachments chain now
             bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
             path_map_style: self.path_map_style as u32,
             path_capture_mode: self.path_capture_mode as u32,
@@ -1345,7 +1349,7 @@ impl FlameRenderer {
             fog_start: self.fog_start,
             histogram_color_scale: self.histogram_color_scale,
             has_final_transform: if self.has_final_transform { 1 } else { 0 },
-            final_transform_index: self.num_transforms,
+            final_transform_index: 0,  // Legacy field — shader uses attachments chain now
             bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
             path_map_style: self.path_map_style as u32,
             path_capture_mode: self.path_capture_mode as u32,

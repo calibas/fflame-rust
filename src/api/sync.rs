@@ -198,6 +198,11 @@ fn transform_from_api(resp: &TransformResponse) -> Transform {
         post_e: resp.post_e,
         post_f: resp.post_f,
         post_g: resp.post_g,
+        // API contract doesn't yet carry attachment lists. New transforms
+        // start with no attached Linked or Final; the legacy global Final
+        // (if any) gets migrated separately via `Flame::migrate_legacy_final`.
+        linked_attachments: Vec::new(),
+        final_attachments: Vec::new(),
     }
 }
 
@@ -333,7 +338,10 @@ pub fn config_to_create_request(config: &FractalConfig, name: Option<&str>) -> C
         name: name.map(|n| n.to_string()).unwrap_or_else(|| flame.name.clone()),
         transforms: flame.transforms.iter().map(transform_to_api).collect(),
         visibility: None, // Set by caller if needed
-        final_transform: flame.final_transform.as_ref().map(transform_to_api),
+        // API DTO still carries a singular Final for compat — emit pool[0]
+        // when present (the rest of the pool isn't yet representable on the
+        // server side).
+        final_transform: flame.final_transforms.first().map(transform_to_api),
         render_mode: Some(flame.render_mode.into()),
         perspective_strength: Some(flame.perspective_strength),
         xaos: flame.xaos.as_ref().map(|x| serde_json::to_value(x).unwrap_or(serde_json::Value::Null)),
@@ -536,23 +544,28 @@ pub fn flame_response_to_config(
         .collect();
     transforms.sort_by_key(|t| t.sort_order);
 
-    let final_transform = resp.final_transform.as_ref().map(transform_from_api);
-
     // Reconstruct xaos from JSON value
     let xaos: Option<Vec<Vec<f32>>> = resp
         .xaos
         .as_ref()
         .and_then(|v| serde_json::from_value(v.clone()).ok());
 
-    let flame = Flame {
+    // API DTO carries a singular Final — `Flame::migrate_legacy_final`
+    // pushes it into the new `final_transforms` pool and auto-attaches
+    // to every normal. (API doesn't yet carry per-transform
+    // attachments natively.)
+    let legacy_final = resp.final_transform.as_ref().map(transform_from_api);
+    let mut flame = Flame {
         name: resp.name.clone(),
         transforms: transforms.iter().map(transform_from_api).collect(),
-        final_transform,
+        linked_transforms: Vec::new(),
+        final_transforms: Vec::new(),
         render_mode: resp.render_mode.into(),
         perspective_strength: resp.perspective_strength,
         xaos,
         solo_transform: resp.solo_transform.map(|i| i as usize),
     };
+    flame.migrate_legacy_final(legacy_final);
 
     // Reconstruct palette
     let palette = palette_resp

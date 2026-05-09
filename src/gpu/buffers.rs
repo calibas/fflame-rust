@@ -3,8 +3,37 @@ use egui_wgpu::wgpu::util::DeviceExt;
 use crate::scene::transforms::{Transform, Flame};
 use crate::scene::palette::Palette;
 
-/// Maximum number of transforms supported (buffer is pre-allocated for this many)
-pub const MAX_TRANSFORMS: usize = 32;
+/// Maximum total number of transforms per flame, summed across the
+/// normal / linked / final pools. The GPU `transforms` buffer is a
+/// single concatenated array of this size: normals occupy the first
+/// `flame.transforms.len()` slots, linkeds the next
+/// `flame.linked_transforms.len()`, finals the next
+/// `flame.final_transforms.len()`. Per-pool CPU-side indexes are
+/// translated to global xform_ids during GPU packing.
+///
+/// Bumped from the legacy 32 to 128 in the per-transform-linked-and-final
+/// project. Drives the transforms buffer (~60 KB), the variation_params
+/// buffer (~800 KB), and the attachments buffer (~33 KB) — ~893 KB of
+/// always-allocated GPU memory per flame.
+///
+/// Tried 64 as a perf optimization; benchmarks were identical to 128
+/// (per-iteration cost is dominated by the in-loop `attachments[xform_idx]`
+/// load, not by overall buffer size). Kept at 128 for the headroom
+/// (Apophysis-style flames with 30+ normals + auto-attached finals).
+/// `MAX_ATTACHMENTS_PER_TRANSFORM` is the actually-impactful knob for
+/// per-iteration cost — see its doc comment.
+///
+/// Soft cap: panics with a clear message if a flame exceeds it.
+/// See `docs/projects/per-transform-linked-and-final.md`.
+pub const MAX_TRANSFORMS: usize = 128;
+
+/// Maximum number of attachments (linked + final) per normal transform.
+/// Per-normal chain length cap — independent of the total transform
+/// budget. Sized to keep `GpuAttachmentList` small (264 bytes per entry
+/// at 32) so the per-iteration `attachments[xform_idx]` load stays
+/// cheap; was briefly bumped to 100 but reverted after benchmark
+/// regressions traced to the larger struct's bandwidth cost.
+pub const MAX_ATTACHMENTS_PER_TRANSFORM: usize = 32;
 
 /// GPU representation of Transform (must match WGSL struct layout)
 #[repr(C)]
@@ -88,6 +117,27 @@ impl GpuTransform {
     /// Create GPU transforms from a Flame, handling solo mode.
     /// Computes the per-flame local index map once, then populates each
     /// transform's variation slot array against that map.
+    /// Pack the flame's three transform pools (normals, linkeds, finals)
+    /// into a single concatenated GPU array. Layout:
+    ///   slots 0..N                      — normals (N = flame.transforms.len())
+    ///   slots N..N+L                    — linkeds (L = flame.linked_transforms.len())
+    ///   slots N+L..N+L+F                — finals  (F = flame.final_transforms.len())
+    ///
+    /// `xform_id` in the shader is a global index into this array.
+    /// Per-pool CPU indexes (in `Transform::linked_attachments` /
+    /// `final_attachments`) get translated to global xform_ids during
+    /// attachment-list packing — see `GpuAttachmentList::from_transform`.
+    ///
+    /// The legacy `flame.final_transform` field is migrated into
+    /// `flame.final_transforms[0]` at deserialize time and re-synced
+    /// on every UI edit, so chain renderers see it without needing a
+    /// separate GPU slot. See
+    /// `docs/projects/per-transform-linked-and-final.md`.
+    ///
+    /// Solo mode (a normal-only feature) sets effective_opacity to 0
+    /// for non-solo normals; linkeds and finals always run with their
+    /// own opacity (currently irrelevant for them since plot opacity
+    /// inherits from the normal that fired).
     pub fn from_flame(flame: &Flame, registry: &crate::variations::VariationRegistry) -> Vec<Self> {
         let local_map = crate::scene::transforms::compute_local_index_map(
             flame.extract_active_variations().into_keys(),
@@ -95,21 +145,24 @@ impl GpuTransform {
         );
         let solo_idx = flame.solo_transform;
 
-        let mut gpu_transforms: Vec<Self> = flame.transforms
-            .iter()
-            .enumerate()
-            .map(|(i, xform)| {
-                let effective_opacity = match solo_idx {
-                    Some(solo) if i != solo => 0.0,
-                    _ => xform.opacity,
-                };
-                Self::from_transform_with_opacity(xform, effective_opacity, &local_map)
-            })
-            .collect();
+        let mut gpu_transforms: Vec<Self> = Vec::with_capacity(
+            flame.transforms.len()
+                + flame.linked_transforms.len()
+                + flame.final_transforms.len(),
+        );
 
-        // Append final transform if present (not affected by solo mode)
-        if let Some(ref final_xform) = flame.final_transform {
-            gpu_transforms.push(Self::from_transform(final_xform, &local_map));
+        for (i, xform) in flame.transforms.iter().enumerate() {
+            let effective_opacity = match solo_idx {
+                Some(solo) if i != solo => 0.0,
+                _ => xform.opacity,
+            };
+            gpu_transforms.push(Self::from_transform_with_opacity(xform, effective_opacity, &local_map));
+        }
+        for xform in &flame.linked_transforms {
+            gpu_transforms.push(Self::from_transform(xform, &local_map));
+        }
+        for xform in &flame.final_transforms {
+            gpu_transforms.push(Self::from_transform(xform, &local_map));
         }
 
         gpu_transforms
@@ -124,6 +177,185 @@ impl GpuTransform {
 /// not to any single variation. Even pathological flames stay well
 /// below this — typical flames use 30-150 slots.
 pub const MAX_VARIATION_PARAM_SLOTS: usize = 1600;
+
+/// GPU-side per-normal-transform list of attached Linked and Final
+/// indexes. Buffer is `array<GpuAttachmentList, MAX_NORMAL_TRANSFORMS>`
+/// — one entry per normal transform slot, indexed by `xform_id`.
+///
+/// Layout: each list is a fixed-capacity `[u32; 32]` plus a count.
+/// Unused tail entries are zero (the count gates how many are read).
+/// Indices in `linked` reference `linked_transforms[]`; indices in
+/// `final_` reference `final_transforms[]`.
+///
+/// std430 alignment: `array<u32, N>` is tightly packed, `u32` is
+/// 4-byte aligned. Total size: 32·4 + 4 + 32·4 + 4 = 264 bytes per
+/// entry, or 33 KB for the whole buffer at MAX_TRANSFORMS=128.
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct GpuAttachmentList {
+    pub linked: [u32; MAX_ATTACHMENTS_PER_TRANSFORM],
+    pub linked_count: u32,
+    pub final_: [u32; MAX_ATTACHMENTS_PER_TRANSFORM],
+    pub final_count: u32,
+}
+
+unsafe impl bytemuck::Pod for GpuAttachmentList {}
+unsafe impl bytemuck::Zeroable for GpuAttachmentList {}
+
+impl GpuAttachmentList {
+    /// Pack a normal transform's attachment lists into the GPU layout,
+    /// translating per-pool CPU indexes into the GLOBAL xform_id space
+    /// of the concatenated transforms buffer.
+    ///
+    /// Layout convention (set by host packing — see `GpuTransform::from_flame`):
+    ///   slots 0..normal_count                                      — normals
+    ///   slots normal_count..normal_count+linked_count               — linkeds
+    ///   slots normal_count+linked_count..total                      — finals
+    ///
+    /// `linked_offset = flame.transforms.len()`,
+    /// `final_offset  = flame.transforms.len() + flame.linked_transforms.len()`.
+    ///
+    /// Truncates to `MAX_ATTACHMENTS_PER_TRANSFORM` with a warning. Pool
+    /// indexes that overflow their pool's actual size are dropped with a
+    /// warning (host-side validation should catch this earlier).
+    pub fn from_transform(
+        t: &crate::scene::transforms::Transform,
+        linked_offset: usize,
+        linked_count_total: usize,
+        final_offset: usize,
+        final_count_total: usize,
+    ) -> Self {
+        let mut linked = [0u32; MAX_ATTACHMENTS_PER_TRANSFORM];
+        let mut final_ = [0u32; MAX_ATTACHMENTS_PER_TRANSFORM];
+
+        let mut linked_count = 0u32;
+        for &idx in t.linked_attachments.iter() {
+            if linked_count as usize >= MAX_ATTACHMENTS_PER_TRANSFORM {
+                log::warn!(
+                    "Transform has more than {} linked attachments; truncating",
+                    MAX_ATTACHMENTS_PER_TRANSFORM
+                );
+                break;
+            }
+            if idx >= linked_count_total {
+                log::warn!("Linked attachment index {} exceeds linked pool size {}; dropped", idx, linked_count_total);
+                continue;
+            }
+            linked[linked_count as usize] = (linked_offset + idx) as u32;
+            linked_count += 1;
+        }
+
+        let mut final_count = 0u32;
+        for &idx in t.final_attachments.iter() {
+            if final_count as usize >= MAX_ATTACHMENTS_PER_TRANSFORM {
+                log::warn!(
+                    "Transform has more than {} final attachments; truncating",
+                    MAX_ATTACHMENTS_PER_TRANSFORM
+                );
+                break;
+            }
+            if idx >= final_count_total {
+                log::warn!("Final attachment index {} exceeds final pool size {}; dropped", idx, final_count_total);
+                continue;
+            }
+            final_[final_count as usize] = (final_offset + idx) as u32;
+            final_count += 1;
+        }
+
+        Self { linked, linked_count, final_, final_count }
+    }
+
+    pub fn empty() -> Self {
+        Self {
+            linked: [0u32; MAX_ATTACHMENTS_PER_TRANSFORM],
+            linked_count: 0,
+            final_: [0u32; MAX_ATTACHMENTS_PER_TRANSFORM],
+            final_count: 0,
+        }
+    }
+}
+
+/// Byte stride of one AttachmentList entry at the given per-side cap.
+/// Layout matches the WGSL struct (with the same `{{ATTACHMENT_CAP}}`
+/// substituted): `array<u32, cap> + u32 + array<u32, cap> + u32`.
+/// std430 packs u32 arrays tightly, so this is just `(cap * 4 + 4) * 2`.
+#[inline]
+pub fn attachment_stride_bytes(cap: usize) -> usize {
+    (cap * 4 + 4) * 2
+}
+
+/// Pack one normal transform's linked + final attachment lists into a
+/// pre-zeroed `dst` slice sized exactly `attachment_stride_bytes(cap)`.
+/// Translates per-pool CPU indexes into GLOBAL xform_ids in the
+/// concatenated transforms buffer (see `GpuTransform::from_flame` for
+/// the layout convention).
+///
+/// `cap` matches the shader's `array<u32, cap>` length — both the
+/// shader stride and this packing must agree, which is what
+/// `Flame::attachment_cap()` guarantees when the shader is rebuilt on
+/// cap changes.
+pub fn pack_attachment_entry(
+    dst: &mut [u8],
+    t: &crate::scene::transforms::Transform,
+    cap: usize,
+    linked_offset: usize,
+    linked_pool_size: usize,
+    final_offset: usize,
+    final_pool_size: usize,
+) {
+    debug_assert_eq!(dst.len(), attachment_stride_bytes(cap));
+
+    // Linked array (cap × u32) followed by linked_count (u32).
+    let mut linked_count = 0u32;
+    for &idx in t.linked_attachments.iter() {
+        if (linked_count as usize) >= cap {
+            log::warn!(
+                "Transform has more than {} linked attachments; truncating",
+                cap
+            );
+            break;
+        }
+        if idx >= linked_pool_size {
+            log::warn!(
+                "Linked attachment index {} exceeds linked pool size {}; dropped",
+                idx, linked_pool_size
+            );
+            continue;
+        }
+        let global_id = (linked_offset + idx) as u32;
+        let off = (linked_count as usize) * 4;
+        dst[off..off + 4].copy_from_slice(&global_id.to_le_bytes());
+        linked_count += 1;
+    }
+    let linked_count_off = cap * 4;
+    dst[linked_count_off..linked_count_off + 4].copy_from_slice(&linked_count.to_le_bytes());
+
+    // Final array (cap × u32) followed by final_count (u32).
+    let final_array_off = cap * 4 + 4;
+    let mut final_count = 0u32;
+    for &idx in t.final_attachments.iter() {
+        if (final_count as usize) >= cap {
+            log::warn!(
+                "Transform has more than {} final attachments; truncating",
+                cap
+            );
+            break;
+        }
+        if idx >= final_pool_size {
+            log::warn!(
+                "Final attachment index {} exceeds final pool size {}; dropped",
+                idx, final_pool_size
+            );
+            continue;
+        }
+        let global_id = (final_offset + idx) as u32;
+        let off = final_array_off + (final_count as usize) * 4;
+        dst[off..off + 4].copy_from_slice(&global_id.to_le_bytes());
+        final_count += 1;
+    }
+    let final_count_off = final_array_off + cap * 4;
+    dst[final_count_off..final_count_off + 4].copy_from_slice(&final_count.to_le_bytes());
+}
 
 /// GPU representation of variation parameters for ONE transform.
 ///
@@ -218,23 +450,40 @@ impl GpuVariationParams {
                 local_map.keys().collect::<Vec<_>>(),
             );
         }
-        let mut result: Vec<Self> = flame.transforms
-            .iter()
-            .map(|xform| Self::from_transform(xform, &local_map, registry))
-            .collect();
-        if let Some(ref final_xform) = flame.final_transform {
-            result.push(Self::from_transform(final_xform, &local_map, registry));
+        // Concatenated layout: normals, then linkeds, then finals.
+        // Mirror of `GpuTransform::from_flame`. xform_id in the shader
+        // indexes into both the transforms array and this params array
+        // simultaneously, so the orderings must match.
+        let mut result: Vec<Self> = Vec::with_capacity(
+            flame.transforms.len()
+                + flame.linked_transforms.len()
+                + flame.final_transforms.len(),
+        );
+        for xform in &flame.transforms {
+            result.push(Self::from_transform(xform, &local_map, registry));
+        }
+        for xform in &flame.linked_transforms {
+            result.push(Self::from_transform(xform, &local_map, registry));
+        }
+        for xform in &flame.final_transforms {
+            result.push(Self::from_transform(xform, &local_map, registry));
         }
         result
     }
 }
 
-/// Calculate bits needed per transform index based on transform count
+/// Calculate bits needed per (normal) transform index based on the
+/// normal-transform count. Used by the PathMap color mode's per-pixel
+/// path-hash packing (`xform_idx` is the NORMAL transform's index, not
+/// a global xform_id, since chaos-game selection is among normals only).
+///
 /// - 1-2 transforms: 1 bit
 /// - 3-4 transforms: 2 bits
 /// - 5-8 transforms: 3 bits
 /// - 9-16 transforms: 4 bits
 /// - 17-32 transforms: 5 bits
+/// - 33-64 transforms: 6 bits
+/// - 65-128 transforms: 7 bits
 pub fn bits_per_transform(num_transforms: u32) -> u32 {
     if num_transforms <= 2 {
         1
@@ -244,8 +493,12 @@ pub fn bits_per_transform(num_transforms: u32) -> u32 {
         3
     } else if num_transforms <= 16 {
         4
+    } else if num_transforms <= 32 {
+        5
+    } else if num_transforms <= 64 {
+        6
     } else {
-        5  // Up to 32 transforms
+        7  // Up to 128 transforms
     }
 }
 
@@ -447,7 +700,18 @@ pub struct AccumulateParams {
 /// Manages GPU buffers and textures for fractal flame rendering
 pub struct FlameBuffers {
     pub transform_buffer: Buffer,
-    pub variation_params_buffer: Buffer,  // NEW: Parameter buffer for variations
+    pub variation_params_buffer: Buffer,  // Parameter buffer for variations
+    /// Per-normal-transform attachment list buffer:
+    /// `array<AttachmentList, MAX_TRANSFORMS>`. Indexed by the normal's
+    /// xform_id (0..flame.transforms.len()). Each entry holds up to
+    /// `flame.attachment_cap()` linked + cap final GLOBAL xform_ids
+    /// (plus counts) — the per-flame cap is substituted into the
+    /// shader struct via `{{ATTACHMENT_CAP}}` and matched by
+    /// `update_attachments`'s packing stride. Backing storage is
+    /// always allocated at the worst-case `MAX_ATTACHMENTS_PER_TRANSFORM`
+    /// stride; smaller per-flame caps just write fewer bytes per slot.
+    /// See `docs/projects/per-transform-linked-and-final.md`.
+    pub attachments_buffer: Buffer,
     pub params_buffer: Buffer,
     pub tonemap_params_buffer: Buffer,
     pub accumulate_params_buffer: Buffer,
@@ -562,6 +826,18 @@ impl FlameBuffers {
             mapped_at_creation: false,
         });
 
+        // Per-normal-transform attachment list buffer (binding 10).
+        // One GpuAttachmentList entry per normal transform slot;
+        // MAX_TRANSFORMS entries pre-allocated, populated via
+        // update_attachments. See per-transform-linked-and-final.md.
+        let attachments_buffer_size = (MAX_TRANSFORMS * std::mem::size_of::<GpuAttachmentList>()) as u64;
+        let attachments_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Attachments Buffer"),
+            size: attachments_buffer_size,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         // Create params uniform buffer
         let params = GpuParams {
             num_transforms: flame.transforms.len() as u32,
@@ -587,8 +863,8 @@ impl FlameBuffers {
             fog_strength: crate::config::DEFAULT_FOG_STRENGTH,
             fog_start: crate::config::DEFAULT_FOG_START,
             histogram_color_scale: crate::config::DEFAULT_HISTOGRAM_COLOR_SCALE,
-            has_final_transform: if flame.final_transform.is_some() { 1 } else { 0 },
-            final_transform_index: flame.transforms.len() as u32,
+            has_final_transform: if !flame.final_transforms.is_empty() { 1 } else { 0 },
+            final_transform_index: 0,  // Legacy field — shader uses attachments chain now
             bits_per_transform: bits_per_transform(flame.transforms.len() as u32),
             path_map_style: 0,
             path_capture_mode: 0, // FirstHit by default
@@ -849,6 +1125,7 @@ impl FlameBuffers {
         let buffers = Self {
             transform_buffer,
             variation_params_buffer,
+            attachments_buffer,
             params_buffer,
             tonemap_params_buffer,
             accumulate_params_buffer,
@@ -885,6 +1162,7 @@ impl FlameBuffers {
         // with the steady-state write.
         buffers.update_transforms(queue, flame);
         buffers.update_variation_params(queue, flame);
+        buffers.update_attachments(queue, flame, flame.attachment_cap());
 
         buffers
     }
@@ -1043,10 +1321,17 @@ impl FlameBuffers {
 
     /// Update transforms
     pub fn update_transforms(&self, queue: &Queue, flame: &Flame) {
-        // Check space for regular transforms + optional final transform
-        let total_transforms = flame.transforms.len() + if flame.final_transform.is_some() { 1 } else { 0 };
+        // Check space for normals + linkeds + finals + legacy_final.
+        let total_transforms = flame.total_gpu_transform_slots();
         if total_transforms > MAX_TRANSFORMS {
-            panic!("Flame has {} transforms (+ final) but MAX_TRANSFORMS is {}", flame.transforms.len(), MAX_TRANSFORMS);
+            panic!(
+                "Flame has {} total transform slots (normals={} + linkeds={} + finals={}) but MAX_TRANSFORMS is {}",
+                total_transforms,
+                flame.transforms.len(),
+                flame.linked_transforms.len(),
+                flame.final_transforms.len(),
+                MAX_TRANSFORMS,
+            );
         }
 
         // Create transforms with solo mode handling
@@ -1062,12 +1347,53 @@ impl FlameBuffers {
         queue.write_buffer(&self.transform_buffer, 0, bytemuck::cast_slice(&gpu_transforms));
     }
 
+    /// Update the per-normal-transform attachment list buffer using
+    /// the per-flame `cap` (matches the shader's `array<u32, cap>` in
+    /// the AttachmentList struct). Pads to MAX_TRANSFORMS with empty
+    /// lists. Per-pool CPU indexes get translated to global xform_ids
+    /// during packing.
+    ///
+    /// `cap` MUST match the value the shader was compiled with
+    /// (`Flame::attachment_cap()` for the same flame). Mismatch =
+    /// stride mismatch = garbage reads.
+    /// See `docs/projects/per-transform-linked-and-final.md`.
+    pub fn update_attachments(&self, queue: &Queue, flame: &Flame, cap: usize) {
+        let n = flame.transforms.len();
+        let l = flame.linked_transforms.len();
+        let f = flame.final_transforms.len();
+        let linked_offset = n;
+        let final_offset = n + l;
+
+        let stride = attachment_stride_bytes(cap);
+        let mut buf = vec![0u8; MAX_TRANSFORMS * stride];
+
+        for (i, t) in flame.transforms.iter().enumerate() {
+            pack_attachment_entry(
+                &mut buf[i * stride..(i + 1) * stride],
+                t, cap,
+                linked_offset, l,
+                final_offset, f,
+            );
+        }
+        // Slots beyond flame.transforms.len() are left zero (count=0
+        // inside the entry implies no chain to walk).
+
+        queue.write_buffer(&self.attachments_buffer, 0, &buf);
+    }
+
     /// Update variation parameters
     pub fn update_variation_params(&self, queue: &Queue, flame: &Flame) {
-        // Check space for regular transforms + optional final transform
-        let total_transforms = flame.transforms.len() + if flame.final_transform.is_some() { 1 } else { 0 };
+        // Check space for normals + linkeds + finals + legacy_final.
+        let total_transforms = flame.total_gpu_transform_slots();
         if total_transforms > MAX_TRANSFORMS {
-            panic!("Flame has {} transforms (+ final) but MAX_TRANSFORMS is {}", flame.transforms.len(), MAX_TRANSFORMS);
+            panic!(
+                "Flame has {} total transform slots (normals={} + linkeds={} + finals={}) but MAX_TRANSFORMS is {}",
+                total_transforms,
+                flame.transforms.len(),
+                flame.linked_transforms.len(),
+                flame.final_transforms.len(),
+                MAX_TRANSFORMS,
+            );
         }
 
         // Create a fixed-size array with all variation parameters, padding with zeroes
@@ -1384,5 +1710,184 @@ impl FlameBuffers {
                 queue.write_buffer(xaos_buffer, 0, bytemuck::cast_slice(&flat));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scene::transforms::Transform;
+
+    /// Reads a u32 (little-endian) from `buf` at offset `off`.
+    fn rd_u32(buf: &[u8], off: usize) -> u32 {
+        u32::from_le_bytes(buf[off..off + 4].try_into().unwrap())
+    }
+
+    #[test]
+    fn test_attachment_stride_bytes() {
+        // (cap*4 + 4) * 2 — linked array + linked_count + final array + final_count
+        assert_eq!(attachment_stride_bytes(1), 16);
+        assert_eq!(attachment_stride_bytes(8), 72);
+        assert_eq!(attachment_stride_bytes(16), 136);
+        assert_eq!(attachment_stride_bytes(32), 264);
+    }
+
+    #[test]
+    fn test_pack_attachment_entry_layout_cap1() {
+        // Smallest case: one slot per side. Verifies all four fields land
+        // at the right byte offsets and that the final array starts where
+        // the linked count ends.
+        let mut t = Transform::new();
+        t.linked_attachments = vec![0];
+        t.final_attachments = vec![0];
+
+        let cap = 1;
+        let stride = attachment_stride_bytes(cap);
+        let mut buf = vec![0u8; stride];
+
+        // Pool layout: 2 normals, 3 linkeds, 1 final.
+        // linked_offset = 2, final_offset = 5.
+        pack_attachment_entry(&mut buf, &t, cap, 2, 3, 5, 1);
+
+        // [0..4]   linked[0] = global id (2 + 0) = 2
+        // [4..8]   linked_count = 1
+        // [8..12]  final[0]   = global id (5 + 0) = 5
+        // [12..16] final_count = 1
+        assert_eq!(rd_u32(&buf, 0), 2);
+        assert_eq!(rd_u32(&buf, 4), 1);
+        assert_eq!(rd_u32(&buf, 8), 5);
+        assert_eq!(rd_u32(&buf, 12), 1);
+    }
+
+    #[test]
+    fn test_pack_attachment_entry_layout_cap8() {
+        // cap=8, partial fill: verifies that unused tail slots are zero
+        // and that the count field lands after the full cap-sized array
+        // (not after the actually-written entries).
+        let mut t = Transform::new();
+        t.linked_attachments = vec![1, 2];
+        t.final_attachments = vec![0];
+
+        let cap = 8;
+        let stride = attachment_stride_bytes(cap);
+        assert_eq!(stride, 72);
+        let mut buf = vec![0u8; stride];
+
+        // Pool layout: 3 normals, 4 linkeds, 2 finals.
+        pack_attachment_entry(&mut buf, &t, cap, 3, 4, 7, 2);
+
+        // Linked array (cap*4 = 32 bytes), then linked_count (4 bytes).
+        assert_eq!(rd_u32(&buf, 0), 3 + 1, "linked[0]");
+        assert_eq!(rd_u32(&buf, 4), 3 + 2, "linked[1]");
+        // Slots [2..8] of the linked array stay zero (cap=8, only 2 used).
+        for slot in 2..8 {
+            assert_eq!(rd_u32(&buf, slot * 4), 0, "linked[{}] should be zero", slot);
+        }
+        // linked_count at offset cap*4 = 32.
+        assert_eq!(rd_u32(&buf, 32), 2, "linked_count");
+
+        // Final array starts at offset cap*4 + 4 = 36.
+        assert_eq!(rd_u32(&buf, 36), 7 + 0, "final[0]");
+        for slot in 1..8 {
+            assert_eq!(rd_u32(&buf, 36 + slot * 4), 0, "final[{}] should be zero", slot);
+        }
+        // final_count at offset 36 + cap*4 = 68.
+        assert_eq!(rd_u32(&buf, 68), 1, "final_count");
+    }
+
+    #[test]
+    fn test_pack_attachment_entry_layout_cap32() {
+        // Worst-case cap (== MAX_ATTACHMENTS_PER_TRANSFORM). Verifies
+        // the layout math at the upper bound.
+        let mut t = Transform::new();
+        t.linked_attachments = (0..32).collect();
+        t.final_attachments = (0..16).collect();
+
+        let cap = 32;
+        let stride = attachment_stride_bytes(cap);
+        assert_eq!(stride, 264);
+        let mut buf = vec![0u8; stride];
+
+        // Pool layout: 1 normal, 32 linkeds, 16 finals.
+        pack_attachment_entry(&mut buf, &t, cap, 1, 32, 33, 16);
+
+        // Verify a sampling: first, middle, last linked entries.
+        assert_eq!(rd_u32(&buf, 0), 1, "linked[0]");
+        assert_eq!(rd_u32(&buf, 64), 17, "linked[16]");
+        assert_eq!(rd_u32(&buf, 124), 32, "linked[31]");
+        // linked_count at cap*4 = 128.
+        assert_eq!(rd_u32(&buf, 128), 32, "linked_count");
+
+        // Final starts at cap*4 + 4 = 132.
+        assert_eq!(rd_u32(&buf, 132), 33, "final[0]");
+        assert_eq!(rd_u32(&buf, 132 + 15 * 4), 48, "final[15]");
+        // final_count at 132 + cap*4 = 260.
+        assert_eq!(rd_u32(&buf, 260), 16, "final_count");
+    }
+
+    #[test]
+    fn test_pack_attachment_entry_xform_id_translation() {
+        // The most important thing the packer does: translate per-pool
+        // CPU indexes into GLOBAL xform_ids in the concatenated GPU
+        // transforms buffer.
+        //
+        // Flame layout: 2 normals + 3 linkeds + 2 finals.
+        //   slots 0..1 — normals
+        //   slots 2..4 — linkeds (linked_offset = 2)
+        //   slots 5..6 — finals  (final_offset  = 5)
+        //
+        // A normal with linked_attachments=[0, 2] should pack as global
+        // ids [2, 4], and final_attachments=[1] as global id [6].
+        let mut t = Transform::new();
+        t.linked_attachments = vec![0, 2];
+        t.final_attachments = vec![1];
+
+        let cap = 4;
+        let stride = attachment_stride_bytes(cap);
+        let mut buf = vec![0u8; stride];
+
+        pack_attachment_entry(&mut buf, &t, cap, 2, 3, 5, 2);
+
+        // linked[0] = linked_offset(2) + 0 = 2
+        // linked[1] = linked_offset(2) + 2 = 4
+        assert_eq!(rd_u32(&buf, 0), 2);
+        assert_eq!(rd_u32(&buf, 4), 4);
+        // linked_count = 2 at offset cap*4 = 16
+        assert_eq!(rd_u32(&buf, 16), 2);
+
+        // final[0] = final_offset(5) + 1 = 6
+        // Final array starts at cap*4 + 4 = 20.
+        assert_eq!(rd_u32(&buf, 20), 6);
+        // final_count = 1 at 20 + cap*4 = 36.
+        assert_eq!(rd_u32(&buf, 36), 1);
+    }
+
+    #[test]
+    fn test_pack_attachment_entry_drops_out_of_pool_indices() {
+        // Defense in depth: if the CPU-side attachment list contains an
+        // index past its pool's actual size (e.g., from a buggy migration),
+        // the packer drops it with a warning and the count reflects only
+        // the valid entries. Catches accidental buffer writes that would
+        // dispatch a non-existent transform on the GPU.
+        let mut t = Transform::new();
+        t.linked_attachments = vec![0, 99]; // 99 is out of pool range
+        t.final_attachments = vec![5, 0];   // 5 is out, 0 is valid
+
+        let cap = 4;
+        let stride = attachment_stride_bytes(cap);
+        let mut buf = vec![0u8; stride];
+
+        // Linked pool size = 1 (only index 0 is valid).
+        // Final pool size = 2 (indices 0, 1 valid; 5 is out).
+        pack_attachment_entry(&mut buf, &t, cap, 0, 1, 1, 2);
+
+        // Only the valid linked attachment landed.
+        assert_eq!(rd_u32(&buf, 0), 0); // linked_offset(0) + 0
+        assert_eq!(rd_u32(&buf, 4), 0); // unused — out-of-range was dropped
+        assert_eq!(rd_u32(&buf, 16), 1, "linked_count should reflect drop");
+
+        // Final: 5 dropped, 0 kept (becomes final_offset+0 = 1).
+        assert_eq!(rd_u32(&buf, 20), 1);
+        assert_eq!(rd_u32(&buf, 36), 1, "final_count should reflect drop");
     }
 }

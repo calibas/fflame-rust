@@ -72,6 +72,7 @@ pub struct TiledRenderer {
     iteration_counts_buffer: Buffer,
     variation_params_buffer: Buffer,
     xaos_buffer: Buffer,  // Xaos transition weights (dummy if not used)
+    attachments_buffer: Buffer,  // Per-normal Linked + Final attachment lists (binding 9)
     palette_texture: Texture,
     palette_sampler: Sampler,
 
@@ -231,15 +232,28 @@ impl TiledRenderer {
             mapped_at_creation: false,
         });
 
-        // Create variation params buffer (same as normal renderer)
-        let max_transforms = 32;
-        let variation_params_size = max_transforms * 1200 * 4; // 1200 floats per transform
+        // Variation params buffer — sized for the worst-case
+        // MAX_TRANSFORMS slots (matches the interactive renderer in
+        // gpu/buffers.rs::FlameBuffers). The previous hard-coded
+        // `32 * 1200 * 4` was wrong on two axes (cap and per-entry
+        // size) AND the buffer was never written, so parameterized
+        // variations got zero params and rendered as degenerate
+        // shapes — the "transforms missing" tiled-export bug.
+        let variation_params_size = (crate::gpu::buffers::MAX_TRANSFORMS
+            * std::mem::size_of::<crate::gpu::buffers::GpuVariationParams>()) as u64;
         let variation_params_buffer = device.create_buffer(&BufferDescriptor {
-            label: Some("Variation Params Buffer"),
+            label: Some("Tiled Variation Params Buffer"),
             size: variation_params_size,
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        // Pack all three pools' variation params and write to the buffer.
+        // Layout matches the transforms-buffer concatenation: normals,
+        // then linkeds, then finals — so xform_id indexes both buffers
+        // identically.
+        let variation_params = crate::gpu::buffers::GpuVariationParams::from_flame(
+            &config.flame, &global_registry());
+        queue.write_buffer(&variation_params_buffer, 0, bytemuck::cast_slice(&variation_params));
 
         // Create xaos buffer (dummy if not used, real weights if xaos enabled)
         // Size: N×N matrix of f32 weights (N = num_transforms)
@@ -260,6 +274,31 @@ impl TiledRenderer {
             let identity: Vec<f32> = vec![1.0; (num_transforms * num_transforms) as usize];
             queue.write_buffer(&xaos_buffer, 0, bytemuck::cast_slice(&identity));
         }
+
+        // Per-normal attachment lists (Linked + Final chains). The GPU
+        // struct stride matches the per-flame `attachment_cap` — must
+        // agree with the value the shader was built with.
+        // See per-transform-linked-and-final.md.
+        let cap = config.flame.attachment_cap();
+        let stride = crate::gpu::buffers::attachment_stride_bytes(cap);
+        let attachments_buffer_size = (crate::gpu::buffers::MAX_TRANSFORMS * stride) as u64;
+        let attachments_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Tiled Export Attachments Buffer"),
+            size: attachments_buffer_size,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let n = config.flame.transforms.len();
+        let l = config.flame.linked_transforms.len();
+        let f = config.flame.final_transforms.len();
+        let mut buf = vec![0u8; crate::gpu::buffers::MAX_TRANSFORMS * stride];
+        for (i, t) in config.flame.transforms.iter().enumerate() {
+            crate::gpu::buffers::pack_attachment_entry(
+                &mut buf[i * stride..(i + 1) * stride],
+                t, cap, n, l, n + l, f,
+            );
+        }
+        queue.write_buffer(&attachments_buffer, 0, &buf);
 
         // Create palette texture (palette is always present)
         let palette = &config.palette;
@@ -306,16 +345,25 @@ impl TiledRenderer {
             ..Default::default()
         });
 
-        // Build active variations map
+        // Build active variations map across ALL THREE POOLS — Linked
+        // and Final pool members reference variations too, and the
+        // shader builder only compiles in the variations that show up
+        // in this map. Iterating only `flame.transforms` (the original
+        // bug) caused Linked/Final transforms to silently no-op in
+        // the tiled export, manifesting as "transforms missing" in
+        // the rendered image.
         let mut active_variations = std::collections::HashMap::new();
-        for transform in &config.flame.transforms {
-            for name in transform.active_variations() {
-                let weight = transform.get_variation(&name);
+        let mut absorb = |xform: &crate::scene::transforms::Transform| {
+            for name in xform.active_variations() {
+                let weight = xform.get_variation(&name);
                 if weight != 0.0 {
                     active_variations.insert(name, weight);
                 }
             }
-        }
+        };
+        for t in &config.flame.transforms { absorb(t); }
+        for t in &config.flame.linked_transforms { absorb(t); }
+        for t in &config.flame.final_transforms { absorb(t); }
 
         // Build shader
         let shader_builder = ShaderBuilder::new(global_registry().clone());
@@ -420,6 +468,17 @@ impl TiledRenderer {
                 // binding 8: xaos weights
                 BindGroupLayoutEntry {
                     binding: 8,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // binding 9: per-normal attachment lists (Linked + Final chains)
+                BindGroupLayoutEntry {
+                    binding: 9,
                     visibility: ShaderStages::COMPUTE,
                     ty: BindingType::Buffer {
                         ty: BufferBindingType::Storage { read_only: true },
@@ -751,6 +810,7 @@ impl TiledRenderer {
             tiles_x,
             tiles_y,
             transform_buffer,
+            attachments_buffer,
             params_buffer,
             tile_params_buffer,
             histogram_buffer,
@@ -814,6 +874,7 @@ impl TiledRenderer {
                 BindGroupEntry { binding: 6, resource: self.iteration_counts_buffer.as_entire_binding() },
                 BindGroupEntry { binding: 7, resource: self.tile_params_buffer.as_entire_binding() },
                 BindGroupEntry { binding: 8, resource: self.xaos_buffer.as_entire_binding() },
+                BindGroupEntry { binding: 9, resource: self.attachments_buffer.as_entire_binding() },
             ],
         });
 

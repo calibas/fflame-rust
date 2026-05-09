@@ -1,6 +1,6 @@
 use crate::scene::transforms::{Flame, RenderMode};
 use crate::variations::{VariationCategory, global_registry};
-use crate::config::{ConfigManager, ConfigPath, UpdateType, AffineParam};
+use crate::config::{ConfigManager, ConfigPath, UpdateType, AffineParam, TransformRef};
 use super::variation_params::render_variation_params;
 use egui::Color32;
 use rust_i18n::t;
@@ -96,149 +96,70 @@ fn render_color_controls(
 }
 
 /// Render affine matrix controls (in Advanced section)
+/// Render the 6-or-7 affine drag controls for a transform in any pool.
+/// `xref` identifies which pool + index the transform lives in; the
+/// caller passes an up-to-date `&mut Transform` clone to display.
+/// On change the right ConfigPath variant is emitted via the
+/// `TransformRef` path-builder methods.
 fn render_affine_controls(
     ui: &mut egui::Ui,
     config_manager: &mut ConfigManager,
-    index: usize,
+    xref: TransformRef,
     transform: &mut crate::scene::transforms::Transform,
     render_mode: RenderMode,
 ) -> UpdateType {
     let mut max_update = UpdateType::None;
 
-    // Row 1: a, b
-    ui.horizontal(|ui| {
-        ui.label(t!("transform.affine_a")).on_hover_text(t!("tooltips.affine_a"));
-        let mut temp_a = transform.a;
-        let response_a = ui.add(super::VkbDragValue::new(&mut temp_a).speed(0.01)).on_hover_text(t!("tooltips.affine_a"));
-        if response_a.changed() {
-            if let Ok(update_type) = config_manager.update_param(
-                ConfigPath::TransformAffine { index, param: AffineParam::A },
-                temp_a.into()
-            ) {
-                transform.a = config_manager.active_config().flame.transforms[index].a;
-                max_update = max_update.max(update_type);
-            }
-        }
-        if response_a.drag_stopped() {
-            let _ = config_manager.force_commit_preview(&ConfigPath::TransformAffine { index, param: AffineParam::A });
-        }
-
-        ui.label(t!("transform.affine_b")).on_hover_text(t!("tooltips.affine_b"));
-        let mut temp_b = transform.b;
-        let response_b = ui.add(super::VkbDragValue::new(&mut temp_b).speed(0.01)).on_hover_text(t!("tooltips.affine_b"));
-        if response_b.changed() {
-            if let Ok(update_type) = config_manager.update_param(
-                ConfigPath::TransformAffine { index, param: AffineParam::B },
-                temp_b.into()
-            ) {
-                transform.b = config_manager.active_config().flame.transforms[index].b;
-                max_update = max_update.max(update_type);
-            }
-        }
-        if response_b.drag_stopped() {
-            let _ = config_manager.force_commit_preview(&ConfigPath::TransformAffine { index, param: AffineParam::B });
-        }
-    });
-
-    // Row 2: c, d
-    ui.horizontal(|ui| {
-        ui.label(t!("transform.affine_c")).on_hover_text(t!("tooltips.affine_c"));
-        let mut temp_c = transform.c;
-        let response_c = ui.add(super::VkbDragValue::new(&mut temp_c).speed(0.01)).on_hover_text(t!("tooltips.affine_c"));
-        if response_c.changed() {
-            if let Ok(update_type) = config_manager.update_param(
-                ConfigPath::TransformAffine { index, param: AffineParam::C },
-                temp_c.into()
-            ) {
-                transform.c = config_manager.active_config().flame.transforms[index].c;
-                max_update = max_update.max(update_type);
-            }
-        }
-        if response_c.drag_stopped() {
-            let _ = config_manager.force_commit_preview(&ConfigPath::TransformAffine { index, param: AffineParam::C });
-        }
-
-        ui.label(t!("transform.affine_d")).on_hover_text(t!("tooltips.affine_d"));
-        let mut temp_d = transform.d;
-        let response_d = ui.add(super::VkbDragValue::new(&mut temp_d).speed(0.01)).on_hover_text(t!("tooltips.affine_d"));
-        if response_d.changed() {
-            if let Ok(update_type) = config_manager.update_param(
-                ConfigPath::TransformAffine { index, param: AffineParam::D },
-                temp_d.into()
-            ) {
-                transform.d = config_manager.active_config().flame.transforms[index].d;
-                max_update = max_update.max(update_type);
-            }
-        }
-        if response_d.drag_stopped() {
-            let _ = config_manager.force_commit_preview(&ConfigPath::TransformAffine { index, param: AffineParam::D });
-        }
-    });
-
-    // Row 3: e, f
-    ui.horizontal(|ui| {
-        ui.label(t!("transform.affine_e")).on_hover_text(t!("tooltips.affine_e"));
-        let mut temp_e = transform.e;
-        let response_e = ui.add(super::VkbDragValue::new(&mut temp_e).speed(0.01)).on_hover_text(t!("tooltips.affine_e"));
-        if response_e.changed() {
-            if let Ok(update_type) = config_manager.update_param(
-                ConfigPath::TransformAffine { index, param: AffineParam::E },
-                temp_e.into()
-            ) {
-                transform.e = config_manager.active_config().flame.transforms[index].e;
-                max_update = max_update.max(update_type);
-            }
-        }
-        if response_e.drag_stopped() {
-            let _ = config_manager.force_commit_preview(&ConfigPath::TransformAffine { index, param: AffineParam::E });
-        }
-
-        ui.label(t!("transform.affine_f")).on_hover_text(t!("tooltips.affine_f"));
-        let mut temp_f = transform.f;
-        let response_f = ui.add(super::VkbDragValue::new(&mut temp_f).speed(0.01)).on_hover_text(t!("tooltips.affine_f"));
-        if response_f.changed() {
-            if let Ok(update_type) = config_manager.update_param(
-                ConfigPath::TransformAffine { index, param: AffineParam::F },
-                temp_f.into()
-            ) {
-                transform.f = config_manager.active_config().flame.transforms[index].f;
-                max_update = max_update.max(update_type);
-            }
-        }
-        if response_f.drag_stopped() {
-            let _ = config_manager.force_commit_preview(&ConfigPath::TransformAffine { index, param: AffineParam::F });
-        }
-    });
-
-    // Z offset (only in 3D mode)
-    if matches!(render_mode, RenderMode::ThreeD) {
-        ui.horizontal(|ui| {
-            ui.label(t!("transform.affine_g")).on_hover_text(t!("tooltips.affine_g"));
-            let mut temp_g = transform.g;
-            let response_g = ui.add(super::VkbDragValue::new(&mut temp_g).speed(0.01)).on_hover_text(t!("tooltips.affine_g"));
-            if response_g.changed() {
-                if let Ok(update_type) = config_manager.update_param(
-                    ConfigPath::TransformAffine { index, param: AffineParam::G },
-                    temp_g.into()
-                ) {
-                    transform.g = config_manager.active_config().flame.transforms[index].g;
+    // One affine parameter (label, getter for read-back from flame, mut ref to local).
+    // Read-back via xref.get(...) lets the same fn drive Normal/Linked/Final pool members.
+    macro_rules! affine_row {
+        ($ui:expr, $param:expr, $label_key:expr, $tooltip_key:expr, $local_field:ident, $struct_field:ident) => {
+            $ui.label(t!($label_key)).on_hover_text(t!($tooltip_key));
+            let response = $ui.add(super::VkbDragValue::new(&mut transform.$struct_field).speed(0.01))
+                .on_hover_text(t!($tooltip_key));
+            let path = xref.affine_path($param);
+            if response.changed() {
+                if let Ok(update_type) = config_manager.update_param(path.clone(), transform.$struct_field.into()) {
+                    if let Some(t) = xref.get(&config_manager.active_config().flame) {
+                        transform.$struct_field = t.$struct_field;
+                    }
                     max_update = max_update.max(update_type);
                 }
             }
-            if response_g.drag_stopped() {
-                let _ = config_manager.force_commit_preview(&ConfigPath::TransformAffine { index, param: AffineParam::G });
+            if response.drag_stopped() {
+                let _ = config_manager.force_commit_preview(&path);
             }
+        };
+    }
+
+    ui.horizontal(|ui| {
+        affine_row!(ui, AffineParam::A, "transform.affine_a", "tooltips.affine_a", temp_a, a);
+        affine_row!(ui, AffineParam::B, "transform.affine_b", "tooltips.affine_b", temp_b, b);
+    });
+    ui.horizontal(|ui| {
+        affine_row!(ui, AffineParam::C, "transform.affine_c", "tooltips.affine_c", temp_c, c);
+        affine_row!(ui, AffineParam::D, "transform.affine_d", "tooltips.affine_d", temp_d, d);
+    });
+    ui.horizontal(|ui| {
+        affine_row!(ui, AffineParam::E, "transform.affine_e", "tooltips.affine_e", temp_e, e);
+        affine_row!(ui, AffineParam::F, "transform.affine_f", "tooltips.affine_f", temp_f, f);
+    });
+    if matches!(render_mode, RenderMode::ThreeD) {
+        ui.horizontal(|ui| {
+            affine_row!(ui, AffineParam::G, "transform.affine_g", "tooltips.affine_g", temp_g, g);
         });
     }
 
     max_update
 }
 
-/// Render post-affine controls: enable checkbox + matrix (in Advanced section)
+/// Render post-affine controls: enable checkbox + matrix.
+/// `xref` identifies which pool + index — works for Normal / Linked /
+/// Final pool members.
 fn render_post_affine_controls(
     ui: &mut egui::Ui,
     config_manager: &mut ConfigManager,
-    index: usize,
+    xref: TransformRef,
     transform: &mut crate::scene::transforms::Transform,
     render_mode: RenderMode,
 ) -> UpdateType {
@@ -250,11 +171,11 @@ fn render_post_affine_controls(
         .on_hover_text(t!("tooltips.post_affine_enabled"))
         .changed()
     {
-        if let Ok(update_type) = config_manager.update_param(
-            ConfigPath::TransformPostAffineEnabled { index },
-            temp_enabled.into()
-        ) {
-            transform.post_affine_enabled = config_manager.active_config().flame.transforms[index].post_affine_enabled;
+        let path = xref.post_affine_enabled_path();
+        if let Ok(update_type) = config_manager.update_param(path, temp_enabled.into()) {
+            if let Some(t) = xref.get(&config_manager.active_config().flame) {
+                transform.post_affine_enabled = t.post_affine_enabled;
+            }
             max_update = max_update.max(update_type);
         }
     }
@@ -263,129 +184,43 @@ fn render_post_affine_controls(
     if transform.post_affine_enabled {
         ui.label(t!("transform.post_affine_matrix"));
 
-        // Row 1: a, b
-        ui.horizontal(|ui| {
-            ui.label(t!("transform.affine_a")).on_hover_text(t!("tooltips.affine_a"));
-            let mut temp_a = transform.post_a;
-            let response_a = ui.add(super::VkbDragValue::new(&mut temp_a).speed(0.01)).on_hover_text(t!("tooltips.affine_a"));
-            if response_a.changed() {
-                if let Ok(update_type) = config_manager.update_param(
-                    ConfigPath::TransformPostAffine { index, param: AffineParam::A },
-                    temp_a.into()
-                ) {
-                    transform.post_a = config_manager.active_config().flame.transforms[index].post_a;
-                    max_update = max_update.max(update_type);
-                }
-            }
-            if response_a.drag_stopped() {
-                let _ = config_manager.force_commit_preview(&ConfigPath::TransformPostAffine { index, param: AffineParam::A });
-            }
-
-            ui.label(t!("transform.affine_b")).on_hover_text(t!("tooltips.affine_b"));
-            let mut temp_b = transform.post_b;
-            let response_b = ui.add(super::VkbDragValue::new(&mut temp_b).speed(0.01)).on_hover_text(t!("tooltips.affine_b"));
-            if response_b.changed() {
-                if let Ok(update_type) = config_manager.update_param(
-                    ConfigPath::TransformPostAffine { index, param: AffineParam::B },
-                    temp_b.into()
-                ) {
-                    transform.post_b = config_manager.active_config().flame.transforms[index].post_b;
-                    max_update = max_update.max(update_type);
-                }
-            }
-            if response_b.drag_stopped() {
-                let _ = config_manager.force_commit_preview(&ConfigPath::TransformPostAffine { index, param: AffineParam::B });
-            }
-        });
-
-        // Row 2: c, d
-        ui.horizontal(|ui| {
-            ui.label(t!("transform.affine_c")).on_hover_text(t!("tooltips.affine_c"));
-            let mut temp_c = transform.post_c;
-            let response_c = ui.add(super::VkbDragValue::new(&mut temp_c).speed(0.01)).on_hover_text(t!("tooltips.affine_c"));
-            if response_c.changed() {
-                if let Ok(update_type) = config_manager.update_param(
-                    ConfigPath::TransformPostAffine { index, param: AffineParam::C },
-                    temp_c.into()
-                ) {
-                    transform.post_c = config_manager.active_config().flame.transforms[index].post_c;
-                    max_update = max_update.max(update_type);
-                }
-            }
-            if response_c.drag_stopped() {
-                let _ = config_manager.force_commit_preview(&ConfigPath::TransformPostAffine { index, param: AffineParam::C });
-            }
-
-            ui.label(t!("transform.affine_d")).on_hover_text(t!("tooltips.affine_d"));
-            let mut temp_d = transform.post_d;
-            let response_d = ui.add(super::VkbDragValue::new(&mut temp_d).speed(0.01)).on_hover_text(t!("tooltips.affine_d"));
-            if response_d.changed() {
-                if let Ok(update_type) = config_manager.update_param(
-                    ConfigPath::TransformPostAffine { index, param: AffineParam::D },
-                    temp_d.into()
-                ) {
-                    transform.post_d = config_manager.active_config().flame.transforms[index].post_d;
-                    max_update = max_update.max(update_type);
-                }
-            }
-            if response_d.drag_stopped() {
-                let _ = config_manager.force_commit_preview(&ConfigPath::TransformPostAffine { index, param: AffineParam::D });
-            }
-        });
-
-        // Row 3: e, f
-        ui.horizontal(|ui| {
-            ui.label(t!("transform.affine_e")).on_hover_text(t!("tooltips.affine_e"));
-            let mut temp_e = transform.post_e;
-            let response_e = ui.add(super::VkbDragValue::new(&mut temp_e).speed(0.01)).on_hover_text(t!("tooltips.affine_e"));
-            if response_e.changed() {
-                if let Ok(update_type) = config_manager.update_param(
-                    ConfigPath::TransformPostAffine { index, param: AffineParam::E },
-                    temp_e.into()
-                ) {
-                    transform.post_e = config_manager.active_config().flame.transforms[index].post_e;
-                    max_update = max_update.max(update_type);
-                }
-            }
-            if response_e.drag_stopped() {
-                let _ = config_manager.force_commit_preview(&ConfigPath::TransformPostAffine { index, param: AffineParam::E });
-            }
-
-            ui.label(t!("transform.affine_f")).on_hover_text(t!("tooltips.affine_f"));
-            let mut temp_f = transform.post_f;
-            let response_f = ui.add(super::VkbDragValue::new(&mut temp_f).speed(0.01)).on_hover_text(t!("tooltips.affine_f"));
-            if response_f.changed() {
-                if let Ok(update_type) = config_manager.update_param(
-                    ConfigPath::TransformPostAffine { index, param: AffineParam::F },
-                    temp_f.into()
-                ) {
-                    transform.post_f = config_manager.active_config().flame.transforms[index].post_f;
-                    max_update = max_update.max(update_type);
-                }
-            }
-            if response_f.drag_stopped() {
-                let _ = config_manager.force_commit_preview(&ConfigPath::TransformPostAffine { index, param: AffineParam::F });
-            }
-        });
-
-        // Z offset (only in 3D mode)
-        if matches!(render_mode, RenderMode::ThreeD) {
-            ui.horizontal(|ui| {
-                ui.label(t!("transform.affine_g")).on_hover_text(t!("tooltips.affine_g"));
-                let mut temp_g = transform.post_g;
-                let response_g = ui.add(super::VkbDragValue::new(&mut temp_g).speed(0.01)).on_hover_text(t!("tooltips.affine_g"));
-                if response_g.changed() {
-                    if let Ok(update_type) = config_manager.update_param(
-                        ConfigPath::TransformPostAffine { index, param: AffineParam::G },
-                        temp_g.into()
-                    ) {
-                        transform.post_g = config_manager.active_config().flame.transforms[index].post_g;
+        // Same pattern as render_affine_controls but for post_* fields and
+        // post_affine_path for ConfigPath construction.
+        macro_rules! post_affine_row {
+            ($ui:expr, $param:expr, $label_key:expr, $tooltip_key:expr, $struct_field:ident) => {
+                $ui.label(t!($label_key)).on_hover_text(t!($tooltip_key));
+                let response = $ui.add(super::VkbDragValue::new(&mut transform.$struct_field).speed(0.01))
+                    .on_hover_text(t!($tooltip_key));
+                let path = xref.post_affine_path($param);
+                if response.changed() {
+                    if let Ok(update_type) = config_manager.update_param(path.clone(), transform.$struct_field.into()) {
+                        if let Some(t) = xref.get(&config_manager.active_config().flame) {
+                            transform.$struct_field = t.$struct_field;
+                        }
                         max_update = max_update.max(update_type);
                     }
                 }
-                if response_g.drag_stopped() {
-                    let _ = config_manager.force_commit_preview(&ConfigPath::TransformPostAffine { index, param: AffineParam::G });
+                if response.drag_stopped() {
+                    let _ = config_manager.force_commit_preview(&path);
                 }
+            };
+        }
+
+        ui.horizontal(|ui| {
+            post_affine_row!(ui, AffineParam::A, "transform.affine_a", "tooltips.affine_a", post_a);
+            post_affine_row!(ui, AffineParam::B, "transform.affine_b", "tooltips.affine_b", post_b);
+        });
+        ui.horizontal(|ui| {
+            post_affine_row!(ui, AffineParam::C, "transform.affine_c", "tooltips.affine_c", post_c);
+            post_affine_row!(ui, AffineParam::D, "transform.affine_d", "tooltips.affine_d", post_d);
+        });
+        ui.horizontal(|ui| {
+            post_affine_row!(ui, AffineParam::E, "transform.affine_e", "tooltips.affine_e", post_e);
+            post_affine_row!(ui, AffineParam::F, "transform.affine_f", "tooltips.affine_f", post_f);
+        });
+        if matches!(render_mode, RenderMode::ThreeD) {
+            ui.horizontal(|ui| {
+                post_affine_row!(ui, AffineParam::G, "transform.affine_g", "tooltips.affine_g", post_g);
             });
         }
     }
@@ -482,11 +317,12 @@ fn render_advanced_settings(
     max_update
 }
 
-/// Render a single enabled variation with weight slider and delete button
+/// Render a single enabled variation with weight slider and delete button.
+/// `xref` identifies which pool member owns this variation.
 fn render_enabled_variation(
     ui: &mut egui::Ui,
     config_manager: &mut ConfigManager,
-    transform_index: usize,
+    xref: TransformRef,
     variation_name: &str,
     current_weight: f32,
 ) -> (UpdateType, bool) {
@@ -511,23 +347,17 @@ fn render_enabled_variation(
 
         if response.changed() {
             value = value.clamp(f32::MIN, f32::MAX);
-            let path = ConfigPath::TransformVariation {
-                index: transform_index,
-                variation: variation_name.to_string(),
-            };
+            let path = xref.variation_path(variation_name.to_string());
             if let Ok(update_type) = config_manager.update_param(path, value.into()) {
                 max_update = max_update.max(update_type);
             }
         }
 
         if response.drag_stopped() {
-            let path = ConfigPath::TransformVariation {
-                index: transform_index,
-                variation: variation_name.to_string(),
-            };
+            let path = xref.variation_path(variation_name.to_string());
             let _ = config_manager.force_commit_preview(&path);
         }
-        
+
         // Delete button
         if ui.small_button(t!("variations.remove")).on_hover_text(t!("tooltips.remove_variation")).clicked() {
             delete_requested = true;
@@ -538,13 +368,13 @@ fn render_enabled_variation(
     if let Some(var_info) = var_info {
         if !var_info.parameters.is_empty() {
             egui::CollapsingHeader::new(t!("variations.parameters", name = display_name))
-                .id_salt(format!("params_{}_{}", transform_index, variation_name))
+                .id_salt(format!("params_{}_{}_{}", xref.pool_kind(), xref.index(), variation_name))
                 .default_open(false)
                 .show(ui, |ui| {
                     let param_update = render_variation_params(
                         ui,
                         config_manager,
-                        transform_index,
+                        xref,
                         variation_name,
                         &var_info.parameters,
                     );
@@ -556,11 +386,12 @@ fn render_enabled_variation(
     (max_update, delete_requested)
 }
 
-/// Render the variations section for a transform
+/// Render the variations section for a transform.
+/// `xref` identifies which pool member's variations are being shown.
 fn render_variations_section(
     ui: &mut egui::Ui,
     config_manager: &mut ConfigManager,
-    transform_index: usize,
+    xref: TransformRef,
     transform: &crate::scene::transforms::Transform,
     render_mode: RenderMode,
     add_variation_popup_id: egui::Id,
@@ -584,7 +415,7 @@ fn render_variations_section(
             let (update, delete) = render_enabled_variation(
                 ui,
                 config_manager,
-                transform_index,
+                xref,
                 name,
                 *weight,
             );
@@ -671,6 +502,22 @@ fn render_variations_section(
     (max_update, variation_to_delete, variation_to_add)
 }
 
+/// Bundled mutable references for the transform pool actions used by the
+/// Transforms panel. Keeps the call site short and allows new pools to
+/// be added without growing the parameter list.
+pub struct PoolActions<'a> {
+    pub add_normal: &'a mut bool,
+    pub delete_normal: &'a mut Option<usize>,
+    pub clone_normal: &'a mut Option<usize>,
+    pub add_linked: &'a mut bool,
+    pub delete_linked: &'a mut Option<usize>,
+    pub clone_linked: &'a mut Option<usize>,
+    pub add_final: &'a mut bool,
+    pub delete_final: &'a mut Option<usize>,
+    pub clone_final: &'a mut Option<usize>,
+    pub attachment_edit: &'a mut Option<crate::ui::response::AttachmentEdit>,
+}
+
 /// Render the Transforms panel content (transform list, affine, variations)
 ///
 /// This is the panel version without the Window wrapper.
@@ -678,12 +525,22 @@ pub fn render_transforms_content(
     ui: &mut egui::Ui,
     config_manager: &mut ConfigManager,
     flame: &mut Flame,
-    add_transform: &mut bool,
-    delete_transform: &mut Option<usize>,
-    clone_transform: &mut Option<usize>,
+    pool_actions: PoolActions,
     open_triangle_editor: &mut bool,
 ) -> UpdateType {
     let mut max_update = UpdateType::None;
+    let PoolActions {
+        add_normal: add_transform,
+        delete_normal: delete_transform,
+        clone_normal: clone_transform,
+        add_linked,
+        delete_linked,
+        clone_linked,
+        add_final,
+        delete_final,
+        clone_final,
+        attachment_edit,
+    } = pool_actions;
 
     ui.heading(format!("Transforms ({})", flame.transforms.len()));
 
@@ -696,504 +553,438 @@ pub fn render_transforms_content(
 
     ui.separator();
 
-    // Final Transform checkbox
-    ui.horizontal(|ui| {
-        let mut has_final = flame.final_transform.is_some();
-        if ui.checkbox(&mut has_final, t!("transform.enable_final")).on_hover_text(t!("tooltips.final_transform_help")).changed() {
-            if let Ok(update_type) = config_manager.update_param(
-                ConfigPath::FinalTransformEnabled,
-                has_final.into()
-            ) {
-                flame.final_transform = config_manager.active_config().flame.final_transform.clone();
-                max_update = max_update.max(update_type);
-            }
-        }
-        // if ui.button("❓").clicked() {}
-    });
+    let render_mode = flame.render_mode;
+    let num_normals = flame.transforms.len();
+    let num_linked = flame.linked_transforms.len();
+    let num_finals = flame.final_transforms.len();
+    let solo_transform = config_manager.active_config().flame.solo_transform;
+    // Captured-by-render snapshot of the per-normal attachments — needed to
+    // render checkboxes/reorder buttons in the Advanced section while the
+    // borrow on `flame.transforms` is held by the iter_mut loop.
+    let normal_attachments_snapshot: Vec<(Vec<usize>, Vec<usize>)> = flame
+        .transforms
+        .iter()
+        .map(|t| (t.linked_attachments.clone(), t.final_attachments.clone()))
+        .collect();
 
+    // ---------- NORMAL POOL ----------
+    let mut normal_delete = None;
+    let mut normal_clone = None;
+    for (i, transform) in flame.transforms.iter_mut().enumerate() {
+        let (linked_att, final_att) = &normal_attachments_snapshot[i];
+        ui.push_id(("normal", i), |ui| {
+            let block = render_pool_member_block(
+                ui,
+                config_manager,
+                TransformRef::Normal(i),
+                transform,
+                render_mode,
+                PoolMemberOptions {
+                    show_weight: true,
+                    show_color_top: true,
+                    show_color_dynamics: true,
+                    show_solo: true,
+                    show_edit_triangle: true,
+                    can_delete: num_normals > 1,
+                    header_text: format!("Transform {}", i + 1),
+                    header_color: Some(get_transform_color(i)),
+                    default_open: true,
+                    attachments: Some(NormalAttachmentsView {
+                        linked: linked_att,
+                        final_: final_att,
+                        num_linked,
+                        num_finals,
+                        out: attachment_edit,
+                    }),
+                },
+                solo_transform,
+                open_triangle_editor,
+            );
+            max_update = max_update.max(block.update);
+            if block.delete_requested { normal_delete = Some(i); }
+            if block.clone_requested { normal_clone = Some(i); }
+        });
+    }
+    if let Some(idx) = normal_delete { *delete_transform = Some(idx); }
+    if let Some(idx) = normal_clone { *clone_transform = Some(idx); }
+
+    // ---------- LINKED POOL ----------
+    ui.add_space(8.0);
+    ui.heading(format!("Linked Transforms ({})", num_linked));
+    ui.horizontal(|ui| {
+        if ui.button(t!("transform.add_linked"))
+            .on_hover_text(t!("tooltips.transform_add_linked"))
+            .clicked()
+        {
+            *add_linked = true;
+        }
+    });
     ui.separator();
 
-    let mut delete_index = None;
-    let mut clone_index = None;
-    let num_transforms = flame.transforms.len();
-    let render_mode = flame.render_mode;
+    let mut linked_delete = None;
+    let mut linked_clone = None;
+    for (i, transform) in flame.linked_transforms.iter_mut().enumerate() {
+        ui.push_id(("linked", i), |ui| {
+            let block = render_pool_member_block(
+                ui,
+                config_manager,
+                TransformRef::Linked(i),
+                transform,
+                render_mode,
+                PoolMemberOptions {
+                    // Linked transforms run sequentially as part of dynamics
+                    // and inherit color/opacity from the normal that triggered
+                    // them, so weight + color controls don't apply.
+                    show_weight: false,
+                    show_color_top: false,
+                    show_color_dynamics: false,
+                    show_solo: false,
+                    show_edit_triangle: true,
+                    can_delete: true,
+                    header_text: format!("Linked {}", i + 1),
+                    header_color: None,
+                    default_open: true,
+                    attachments: None,
+                },
+                solo_transform,
+                open_triangle_editor,
+            );
+            max_update = max_update.max(block.update);
+            if block.delete_requested { linked_delete = Some(i); }
+            if block.clone_requested { linked_clone = Some(i); }
+        });
+    }
+    if let Some(idx) = linked_delete { *delete_linked = Some(idx); }
+    if let Some(idx) = linked_clone { *clone_linked = Some(idx); }
 
-    // Regular transforms
-    for (i, transform) in flame.transforms.iter_mut().enumerate() {
-        ui.push_id(i, |ui| {
-            // Custom header with bold text and colored circle
-            let transform_color = get_transform_color(i);
+    // ---------- FINAL POOL ----------
+    ui.add_space(8.0);
+    ui.heading(format!("Final Transforms ({})", num_finals));
+    ui.horizontal(|ui| {
+        if ui.button(t!("transform.add_final"))
+            .on_hover_text(t!("tooltips.transform_add_final"))
+            .clicked()
+        {
+            *add_final = true;
+        }
+    });
+    ui.separator();
 
-            // Use a horizontal layout to place circle after header
-            let id = ui.make_persistent_id(format!("transform_header_{}", i));
-            let default_open = true;
-            let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, default_open);
+    let mut final_delete = None;
+    let mut final_clone = None;
+    for (i, transform) in flame.final_transforms.iter_mut().enumerate() {
+        ui.push_id(("final", i), |ui| {
+            let block = render_pool_member_block(
+                ui,
+                config_manager,
+                TransformRef::Final(i),
+                transform,
+                render_mode,
+                PoolMemberOptions {
+                    show_weight: false,
+                    show_color_top: false,
+                    show_color_dynamics: false,
+                    show_solo: false,
+                    show_edit_triangle: true,
+                    can_delete: true,
+                    header_text: format!("Final {}", i + 1),
+                    header_color: None,
+                    default_open: true,
+                    attachments: None,
+                },
+                solo_transform,
+                open_triangle_editor,
+            );
+            max_update = max_update.max(block.update);
+            if block.delete_requested { final_delete = Some(i); }
+            if block.clone_requested { final_clone = Some(i); }
+        });
+    }
+    if let Some(idx) = final_delete { *delete_final = Some(idx); }
+    if let Some(idx) = final_clone { *clone_final = Some(idx); }
 
-            let header_response = ui.horizontal(|ui| {
-                // Toggle button (arrow)
-                let _icon_response = state.show_toggle_button(ui, egui::collapsing_header::paint_default_icon);
+    max_update
+}
 
-                // Bold header text
-                let header_text = egui::RichText::new(format!("Transform {}", i + 1))
-                    .strong()
-                    .size(14.0);
-                let text_response = ui.label(header_text);
+/// Per-pool customization knobs for `render_pool_member_block`.
+struct PoolMemberOptions<'a> {
+    show_weight: bool,
+    show_color_top: bool,
+    show_color_dynamics: bool,
+    show_solo: bool,
+    show_edit_triangle: bool,
+    can_delete: bool,
+    header_text: String,
+    header_color: Option<Color32>,
+    default_open: bool,
+    /// Only meaningful for Normal-pool members — when set, the Advanced
+    /// section gains "Linked XForms" and "Final XForms" subsections that
+    /// drive the per-normal attachment lists.
+    attachments: Option<NormalAttachmentsView<'a>>,
+}
 
-                // Colored circle indicator
-                let (circle_rect, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
-                ui.painter().circle_filled(circle_rect.center(), 5.0, transform_color);
+/// Borrowed view of a normal transform's attachment lists, plus the
+/// out-param channel for any user-driven edits.
+struct NormalAttachmentsView<'a> {
+    linked: &'a [usize],
+    final_: &'a [usize],
+    num_linked: usize,
+    num_finals: usize,
+    out: &'a mut Option<crate::ui::response::AttachmentEdit>,
+}
 
-                // Make entire row clickable
-                text_response
-            });
+/// Output of one pool-member render: aggregated UpdateType and any
+/// row-level button presses that the caller must dispatch.
+struct PoolMemberBlock {
+    update: UpdateType,
+    delete_requested: bool,
+    clone_requested: bool,
+}
 
-            // Toggle on click anywhere in header row
-            if header_response.inner.clicked() {
-                state.toggle(ui);
-            }
+/// Render a single pool member (Normal / Linked / Final) using the
+/// shared affine, post-affine, and variations helpers. The pool kind
+/// comes from `xref` and decides which ConfigPath variants are used;
+/// `opts` controls which extra widgets are shown alongside.
+fn render_pool_member_block(
+    ui: &mut egui::Ui,
+    config_manager: &mut ConfigManager,
+    xref: TransformRef,
+    transform: &mut crate::scene::transforms::Transform,
+    render_mode: RenderMode,
+    mut opts: PoolMemberOptions,
+    solo_transform: Option<usize>,
+    open_triangle_editor: &mut bool,
+) -> PoolMemberBlock {
+    let mut update = UpdateType::None;
+    let mut delete_requested = false;
+    let mut clone_requested = false;
 
-            state.show_body_indented(&header_response.response, ui, |ui| {
-                    // Add padding around transform body
-                    egui::Frame::new()
-                        .inner_margin(egui::Margin {
-                            left: 0,
-                            right: 5,
-                            top: 5,
-                            bottom: 5,
-                        })
-                        .show(ui, |ui| {
+    let id = ui.make_persistent_id(format!("{}_header_{}", xref.pool_kind(), xref.index()));
+    let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, opts.default_open);
 
-                    // === ALWAYS VISIBLE ===
+    let header_response = ui.horizontal(|ui| {
+        let _icon_response = state.show_toggle_button(ui, egui::collapsing_header::paint_default_icon);
+        let header_text = egui::RichText::new(opts.header_text.clone()).strong().size(14.0);
+        let text_response = ui.label(header_text);
+        if let Some(color) = opts.header_color {
+            let (circle_rect, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
+            ui.painter().circle_filled(circle_rect.center(), 5.0, color);
+        }
+        text_response
+    });
 
-                    // Edit Triangle button
-                    ui.horizontal(|ui| {
-                        if ui.button(t!("transform.edit_triangle")).on_hover_text(t!("tooltips.transform_edit_triangle")).clicked() {
-                            // Update the shared selection state that Triangle Editor also reads
+    if header_response.inner.clicked() {
+        state.toggle(ui);
+    }
+
+    state.show_body_indented(&header_response.response, ui, |ui| {
+        egui::Frame::new()
+            .inner_margin(egui::Margin { left: 0, right: 5, top: 5, bottom: 5 })
+            .show(ui, |ui| {
+                // Edit-Triangle / Clone / Delete row
+                ui.horizontal(|ui| {
+                    if opts.show_edit_triangle {
+                        if ui.button(t!("transform.edit_triangle"))
+                            .on_hover_text(t!("tooltips.transform_edit_triangle"))
+                            .clicked()
+                        {
                             ui.ctx().data_mut(|d| {
-                                d.insert_persisted(egui::Id::new("triangle_editor_selected_transform"), Some(i));
+                                d.insert_persisted(egui::Id::new("triangle_editor_selected_transform"), xref);
                             });
-                            // Open Triangle Editor panel if not already open
                             *open_triangle_editor = true;
                         }
+                    }
 
-                        // Clone button
-                        if ui.button(t!("transform.clone")).on_hover_text(t!("tooltips.transform_clone")).clicked() {
-                            clone_index = Some(i);
+                    if ui.button(t!("transform.clone"))
+                        .on_hover_text(t!("tooltips.transform_clone"))
+                        .clicked()
+                    {
+                        clone_requested = true;
+                    }
+
+                    if opts.can_delete {
+                        if ui.button(t!("transform.delete"))
+                            .on_hover_text(t!("tooltips.transform_delete"))
+                            .clicked()
+                        {
+                            delete_requested = true;
                         }
+                    }
+                });
 
-                        // Delete button (only if more than 1 transform)
-                        if num_transforms > 1 {
-                            if ui.button(t!("transform.delete")).on_hover_text(t!("tooltips.transform_delete")).clicked() {
-                                delete_index = Some(i);
+                // Top-level (always-visible) extras: weight + color.
+                // These fields only fire ConfigPath variants for Normal-pool
+                // transforms today (see Phase 5d), so gate on TransformRef::Normal.
+                if let TransformRef::Normal(i) = xref {
+                    if opts.show_weight {
+                        update = update.max(render_weight_control(ui, config_manager, i, transform));
+                    }
+                    if opts.show_color_top {
+                        update = update.max(render_color_controls(ui, config_manager, i, transform));
+                    }
+                }
+
+                // Advanced section: affine + post-affine (always for all pools)
+                // plus pool-specific color dynamics / solo for the Normal pool.
+                egui::CollapsingHeader::new(t!("transform.advanced"))
+                    .id_salt(format!("advanced_{}_{}", xref.pool_kind(), xref.index()))
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        ui.label(t!("transform.affine_matrix"));
+                        update = update.max(render_affine_controls(ui, config_manager, xref, transform, render_mode));
+                        ui.add_space(4.0);
+                        update = update.max(render_post_affine_controls(ui, config_manager, xref, transform, render_mode));
+                        ui.add_space(4.0);
+
+                        // color_speed / opacity / direct_color / solo are only
+                        // wired through ConfigPath::Transform* variants for the
+                        // Normal pool today. Linked/Final pools edit those fields
+                        // directly via ConfigPath variants added in Phase 5d.
+                        if let TransformRef::Normal(i) = xref {
+                            if opts.show_color_dynamics {
+                                let solo = if opts.show_solo { solo_transform } else { None };
+                                update = update.max(render_advanced_settings(ui, config_manager, i, transform, solo));
+                            }
+
+                            // Attachment subsections — Linked XForms / Final XForms.
+                            if let Some(view) = opts.attachments.as_mut() {
+                                ui.add_space(6.0);
+                                render_attachment_subsection(
+                                    ui, i, "transform.linked_attachments",
+                                    crate::ui::response::AttachmentKind::Linked,
+                                    view.linked, view.num_linked, view.out,
+                                );
+                                ui.add_space(4.0);
+                                render_attachment_subsection(
+                                    ui, i, "transform.final_attachments",
+                                    crate::ui::response::AttachmentKind::Final,
+                                    view.final_, view.num_finals, view.out,
+                                );
                             }
                         }
                     });
 
-                    // Weight control
-                    let weight_update = render_weight_control(ui, config_manager, i, transform);
-                    max_update = max_update.max(weight_update);
+                ui.add_space(4.0);
 
-                    // Color controls (palette position + preview)
-                    let color_update = render_color_controls(ui, config_manager, i, transform);
-                    max_update = max_update.max(color_update);
-
-                    // === ADVANCED SECTION (collapsed) ===
-                    egui::CollapsingHeader::new(t!("transform.advanced"))
-                        .id_salt(format!("advanced_{}", i))
-                        .default_open(false)
-                        .show(ui, |ui| {
-                            // Affine Matrix
-                            ui.label(t!("transform.affine_matrix"));
-                            let affine_update = render_affine_controls(ui, config_manager, i, transform, render_mode);
-                            max_update = max_update.max(affine_update);
-
-                            ui.add_space(4.0);
-
-                            // Post-Affine
-                            let post_affine_update = render_post_affine_controls(ui, config_manager, i, transform, render_mode);
-                            max_update = max_update.max(post_affine_update);
-
-                            ui.add_space(4.0);
-
-                            // Color Speed, Opacity, and Solo toggle
-                            let solo_transform = config_manager.active_config().flame.solo_transform;
-                            let advanced_update = render_advanced_settings(ui, config_manager, i, transform, solo_transform);
-                            max_update = max_update.max(advanced_update);
-                        });
-
-                    ui.add_space(4.0);
-
-                    // === VARIATIONS SECTION (with border) ===
-                    let popup_id = ui.id().with("add_var_popup");
-                    let mut var_update = UpdateType::None;
-                    let mut var_to_delete = None;
-                    let mut var_to_add = None;
-
+                // Variations section
+                let popup_id = ui.id().with("add_var_popup");
+                let (var_update, var_to_delete, var_to_add) = {
+                    let mut tmp_update = UpdateType::None;
+                    let mut tmp_del = None;
+                    let mut tmp_add = None;
                     egui::Frame::new()
                         .fill(ui.visuals().extreme_bg_color)
                         .stroke(egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color))
                         .corner_radius(4.0)
                         .inner_margin(6.0)
                         .show(ui, |ui| {
-                            let (update, to_delete, to_add) = render_variations_section(
+                            let (u, d, a) = render_variations_section(
                                 ui,
                                 config_manager,
-                                i,
+                                xref,
                                 transform,
                                 render_mode,
                                 popup_id,
                             );
-                            var_update = update;
-                            var_to_delete = to_delete;
-                            var_to_add = to_add;
+                            tmp_update = u;
+                            tmp_del = d;
+                            tmp_add = a;
                         });
+                    (tmp_update, tmp_del, tmp_add)
+                };
+                update = update.max(var_update);
 
-                    max_update = max_update.max(var_update);
-
-                    // Handle variation deletion
-                    if let Some(var_name) = var_to_delete {
-                        let path = ConfigPath::TransformVariation {
-                            index: i,
-                            variation: var_name,
-                        };
-                        // Use NaN as sentinel value to signal removal
-                        if let Ok(update_type) = config_manager.update_param(path, f32::NAN.into()) {
-                            max_update = max_update.max(update_type);
-                        }
+                if let Some(var_name) = var_to_delete {
+                    let path = xref.variation_path(var_name);
+                    if let Ok(u) = config_manager.update_param(path, f32::NAN.into()) {
+                        update = update.max(u);
                     }
-
-                    // Handle variation addition
-                    if let Some(var_name) = var_to_add {
-                        let path = ConfigPath::TransformVariation {
-                            index: i,
-                            variation: var_name,
-                        };
-                        // Add with weight 1.0 (not 0.0 since that would remove it immediately)
-                        if let Ok(update_type) = config_manager.update_param(path, 1.0f32.into()) {
-                            max_update = max_update.max(update_type);
-                        }
-                    }
-
-                }); // end Frame
-            }); // end show_body_indented
-        });
-    }
-
-    // Final transform (if enabled)
-    if let Some(final_xform) = &mut flame.final_transform {
-        ui.separator();
-        render_final_transform(ui, config_manager, final_xform, render_mode, &mut max_update, open_triangle_editor);
-    }
-
-    // Set delete_transform if a transform was marked for deletion
-    if let Some(idx) = delete_index {
-        *delete_transform = Some(idx);
-    }
-
-    // Set clone_transform if a transform was marked for cloning
-    if let Some(idx) = clone_index {
-        *clone_transform = Some(idx);
-    }
-
-    max_update
-}
-
-/// Render the final transform section
-fn render_final_transform(
-    ui: &mut egui::Ui,
-    config_manager: &mut ConfigManager,
-    final_xform: &mut crate::scene::transforms::Transform,
-    render_mode: RenderMode,
-    max_update: &mut UpdateType,
-    open_triangle_editor: &mut bool,
-) {
-    ui.push_id("final_transform", |ui| {
-        let style = ui.style_mut();
-        style.visuals.collapsing_header_frame = true;
-
-        // Bold header text
-        let header_text = egui::RichText::new(t!("transform.final"))
-            .strong()
-            .size(14.0);
-
-        egui::CollapsingHeader::new(header_text)
-            .default_open(true)
-            .show(ui, |ui| {
-
-                // Note: Weight, Color, Color Speed, and Opacity are NOT used for final transforms.
-                // The final transform only applies affine + variations to position after color is computed.
-
-                ui.add_space(3.0);
-
-                // Edit Triangle button
-                if ui.button(t!("transform.edit_triangle")).on_hover_text(t!("tooltips.transform_edit_triangle")).clicked() {
-                    // Set selection to None (final transform) in the shared state
-                    ui.ctx().data_mut(|d| {
-                        d.insert_persisted(egui::Id::new("triangle_editor_selected_transform"), None::<usize>);
-                    });
-                    // Open Triangle Editor panel if not already open
-                    *open_triangle_editor = true;
                 }
-
-                ui.add_space(3.0);
-
-                // Advanced section for final transform
-                egui::CollapsingHeader::new(t!("transform.advanced"))
-                    .id_salt("advanced_final")
-                    .default_open(false)
-                    .show(ui, |ui| {
-                        // Affine Matrix
-                        ui.label(t!("transform.affine_matrix"));
-                        macro_rules! affine_param_final {
-                            ($label:expr, $tooltip:expr, $field:ident, $param:ident) => {
-                                ui.horizontal(|ui| {
-                                    ui.label($label).on_hover_text($tooltip);
-                                    let mut temp = final_xform.$field;
-                                    let response = ui.add(super::VkbDragValue::new(&mut temp).speed(0.01)).on_hover_text($tooltip);
-                                    if response.changed() {
-                                        if let Ok(update_type) = config_manager.update_param(
-                                            ConfigPath::FinalTransformAffine { param: AffineParam::$param },
-                                            temp.into()
-                                        ) {
-                                            final_xform.$field = config_manager.active_config().flame.final_transform.as_ref().unwrap().$field;
-                                            *max_update = (*max_update).max(update_type);
-                                        }
-                                    }
-                                    if response.drag_stopped() {
-                                        let _ = config_manager.force_commit_preview(&ConfigPath::FinalTransformAffine { param: AffineParam::$param });
-                                    }
-                                });
-                            };
-                        }
-
-                        affine_param_final!(t!("transform.affine_a"), t!("tooltips.affine_a"), a, A);
-                        affine_param_final!(t!("transform.affine_b"), t!("tooltips.affine_b"), b, B);
-                        affine_param_final!(t!("transform.affine_c"), t!("tooltips.affine_c"), c, C);
-                        affine_param_final!(t!("transform.affine_d"), t!("tooltips.affine_d"), d, D);
-                        affine_param_final!(t!("transform.affine_e"), t!("tooltips.affine_e"), e, E);
-                        affine_param_final!(t!("transform.affine_f"), t!("tooltips.affine_f"), f, F);
-
-                        if matches!(render_mode, RenderMode::ThreeD) {
-                            affine_param_final!(t!("transform.affine_g"), t!("tooltips.affine_g"), g, G);
-                        }
-
-                        ui.add_space(4.0);
-
-                        // Post-Affine for final transform
-                        let mut temp_post_enabled = final_xform.post_affine_enabled;
-                        if ui.checkbox(&mut temp_post_enabled, t!("transform.post_affine_enabled"))
-                            .on_hover_text(t!("tooltips.post_affine_enabled"))
-                            .changed()
-                        {
-                            if let Ok(update_type) = config_manager.update_param(
-                                ConfigPath::FinalTransformPostAffineEnabled,
-                                temp_post_enabled.into()
-                            ) {
-                                final_xform.post_affine_enabled = config_manager.active_config().flame.final_transform.as_ref().unwrap().post_affine_enabled;
-                                *max_update = (*max_update).max(update_type);
-                            }
-                        }
-
-                        if final_xform.post_affine_enabled {
-                            ui.label(t!("transform.post_affine_matrix"));
-
-                            macro_rules! post_affine_param_final {
-                                ($label:expr, $tooltip:expr, $field:ident, $param:ident) => {
-                                    ui.horizontal(|ui| {
-                                        ui.label($label).on_hover_text($tooltip);
-                                        let mut temp = final_xform.$field;
-                                        let response = ui.add(super::VkbDragValue::new(&mut temp).speed(0.01)).on_hover_text($tooltip);
-                                        if response.changed() {
-                                            if let Ok(update_type) = config_manager.update_param(
-                                                ConfigPath::FinalTransformPostAffine { param: AffineParam::$param },
-                                                temp.into()
-                                            ) {
-                                                final_xform.$field = config_manager.active_config().flame.final_transform.as_ref().unwrap().$field;
-                                                *max_update = (*max_update).max(update_type);
-                                            }
-                                        }
-                                        if response.drag_stopped() {
-                                            let _ = config_manager.force_commit_preview(&ConfigPath::FinalTransformPostAffine { param: AffineParam::$param });
-                                        }
-                                    });
-                                };
-                            }
-
-                            post_affine_param_final!(t!("transform.affine_a"), t!("tooltips.affine_a"), post_a, A);
-                            post_affine_param_final!(t!("transform.affine_b"), t!("tooltips.affine_b"), post_b, B);
-                            post_affine_param_final!(t!("transform.affine_c"), t!("tooltips.affine_c"), post_c, C);
-                            post_affine_param_final!(t!("transform.affine_d"), t!("tooltips.affine_d"), post_d, D);
-                            post_affine_param_final!(t!("transform.affine_e"), t!("tooltips.affine_e"), post_e, E);
-                            post_affine_param_final!(t!("transform.affine_f"), t!("tooltips.affine_f"), post_f, F);
-
-                            if matches!(render_mode, RenderMode::ThreeD) {
-                                post_affine_param_final!(t!("transform.affine_g"), t!("tooltips.affine_g"), post_g, G);
-                            }
-                        }
-
-                        // Note: Color, Color Speed, Opacity, and Weight are NOT used by the final transform.
-                        // The final transform only applies affine + variations to position after color is computed.
-                    });
-
-                // Variations section for final transform
-                egui::Frame::new()
-                    .fill(ui.visuals().extreme_bg_color)
-                    .stroke(egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color))
-                    .corner_radius(4.0)
-                    .inner_margin(6.0)
-                    .show(ui, |ui| {
-                        ui.label(t!("transform.variations"));
-
-                        let mut enabled: Vec<(String, f32)> = final_xform.variations.iter()
-                            .map(|(k, v)| (k.clone(), *v))
-                            .collect();
-                        enabled.sort_by(|a, b| a.0.cmp(&b.0));
-
-                        let mut var_to_delete: Option<String> = None;
-
-                        if enabled.is_empty() {
-                            ui.label(egui::RichText::new(t!("transform.no_variations")).italics().weak());
-                        } else {
-                            for (name, weight) in &enabled {
-                                let registry = global_registry();
-                                let var_info = registry.get(&name);
-                                let display_name = var_info
-                                    .map(|v| v.display_name.as_str())
-                                    .unwrap_or(&name);
-
-                                ui.horizontal(|ui| {
-                                    let mut value = *weight;
-                                    let response = ui.add(
-                                        super::VkbSlider::new(&mut value, -5.0..=5.0)
-                                            .text(display_name)
-                                            .drag_value_speed(0.1)
-                                            .clamping(egui::SliderClamping::Never)
-                                    );
-
-                                    if response.changed() {
-                                        let path = ConfigPath::FinalTransformVariation {
-                                            variation: name.clone(),
-                                        };
-                                        if let Ok(update_type) = config_manager.update_param(path, value.into()) {
-                                            *max_update = (*max_update).max(update_type);
-                                        }
-                                    }
-                                    if response.drag_stopped() {
-                                        let path = ConfigPath::FinalTransformVariation {
-                                            variation: name.clone(),
-                                        };
-                                        let _ = config_manager.force_commit_preview(&path);
-                                    }
-                                    if ui.small_button("🗑").on_hover_text(t!("tooltips.remove_variation")).clicked() {
-                                        var_to_delete = Some(name.clone());
-                                    }
-                                });
-
-                                // Parameters
-                                if let Some(var_info) = var_info {
-                                    if !var_info.parameters.is_empty() {
-                                        egui::CollapsingHeader::new(t!("variations.parameters", name = display_name))
-                                            .id_salt(format!("final_params_{}", name))
-                                            .default_open(false)
-                                            .show(ui, |ui| {
-                                                let param_update = super::variation_params::render_variation_params_final(
-                                                    ui,
-                                                    config_manager,
-                                                    &name,
-                                                    &var_info.parameters,
-                                                );
-                                                *max_update = (*max_update).max(param_update);
-                                            });
-                                    }
-                                }
-                            }
-                        }
-
-                        // Handle deletion
-                        if let Some(var_name) = var_to_delete {
-                            let path = ConfigPath::FinalTransformVariation {
-                                variation: var_name,
-                            };
-                            // Use NaN as sentinel value to signal removal
-                            if let Ok(update_type) = config_manager.update_param(path, f32::NAN.into()) {
-                                *max_update = (*max_update).max(update_type);
-                            }
-                        }
-
-                        // Add Variation button for final transform
-                        let popup_id = ui.id().with("add_var_popup_final");
-                        let add_btn = ui.button(t!("variations.add"));
-                        if add_btn.clicked() {
-                            ui.memory_mut(|mem| mem.toggle_popup(popup_id));
-                        }
-
-                        egui::popup_below_widget(ui, popup_id, &add_btn, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
-                            ui.set_min_width(250.0);
-                            ui.set_max_height(300.0);
-
-                            let search_id = ui.id().with("search_final");
-                            let mut search_text = ui.data_mut(|d| d.get_temp::<String>(search_id).unwrap_or_default());
-                            ui.horizontal(|ui| {
-                                ui.label(t!("variations.search"));
-                                let r = ui.text_edit_singleline(&mut search_text);
-                                super::vkb_sync(ui, &r, &search_text);
-                            });
-                            ui.data_mut(|d| d.insert_temp(search_id, search_text.clone()));
-
-                            ui.separator();
-
-                            egui::ScrollArea::vertical().show(ui, |ui| {
-                                let registry = global_registry();
-                                let search_lower = search_text.to_lowercase();
-
-                                let categories: Vec<VariationCategory> = if matches!(render_mode, RenderMode::ThreeD) {
-                                    vec![
-                                        VariationCategory::Basic2D,
-                                        VariationCategory::Advanced2D,
-                                        VariationCategory::Depth3D,
-                                        VariationCategory::Rotation3D,
-                                        VariationCategory::Full3D,
-                                    ]
-                                } else {
-                                    vec![
-                                        VariationCategory::Basic2D,
-                                        VariationCategory::Advanced2D,
-                                    ]
-                                };
-
-                                for category in categories {
-                                    let variations = registry.by_category(category);
-                                    let filtered: Vec<_> = variations
-                                        .iter()
-                                        .filter(|v| {
-                                            let matches_search = search_text.is_empty()
-                                                || v.name.to_lowercase().contains(&search_lower)
-                                                || v.display_name.to_lowercase().contains(&search_lower);
-                                            let not_enabled = !final_xform.variations.contains_key(&v.name);
-                                            matches_search && not_enabled
-                                        })
-                                        .collect();
-
-                                    if !filtered.is_empty() {
-                                        ui.label(egui::RichText::new(format!("{:?}", category)).strong());
-                                        for var_info in filtered {
-                                            if ui.selectable_label(false, &var_info.display_name).clicked() {
-                                                let path = ConfigPath::FinalTransformVariation {
-                                                    variation: var_info.name.clone(),
-                                                };
-                                                if let Ok(update_type) = config_manager.update_param(path, 1.0f32.into()) {
-                                                    *max_update = (*max_update).max(update_type);
-                                                }
-                                                ui.memory_mut(|mem| mem.close_popup(popup_id));
-                                            }
-                                        }
-                                        ui.add_space(4.0);
-                                    }
-                                }
-                            });
-                        });
-                    });
-
+                if let Some(var_name) = var_to_add {
+                    let path = xref.variation_path(var_name);
+                    if let Ok(u) = config_manager.update_param(path, 1.0f32.into()) {
+                        update = update.max(u);
+                    }
+                }
             });
     });
+
+    PoolMemberBlock { update, delete_requested, clone_requested }
+}
+
+/// Render the per-normal "Linked XForms" or "Final XForms" subsection: one
+/// row per pool member with a checkbox (toggle attach) and ↑/↓ buttons that
+/// reorder the attachment within this normal's execution list.
+///
+/// `attachments` is the ordered list of pool indices already attached to
+/// this normal; `pool_size` is the size of the linked/final pool. On user
+/// action the resulting `AttachmentEdit` is written to `*out` (last-writer
+/// wins within a frame, which matches the one-click-at-a-time UI).
+fn render_attachment_subsection(
+    ui: &mut egui::Ui,
+    normal_index: usize,
+    label_key: &str,
+    kind: crate::ui::response::AttachmentKind,
+    attachments: &[usize],
+    pool_size: usize,
+    out: &mut Option<crate::ui::response::AttachmentEdit>,
+) {
+    use crate::ui::response::{AttachmentEdit, AttachmentOp};
+
+    ui.label(t!(label_key));
+    if pool_size == 0 {
+        ui.label(egui::RichText::new(t!("transform.no_attachments_pool_empty"))
+            .italics()
+            .weak());
+        return;
+    }
+
+    let pool_kind_tag = match kind {
+        crate::ui::response::AttachmentKind::Linked => "linked",
+        crate::ui::response::AttachmentKind::Final => "final",
+    };
+
+    // Walk the pool order (0..pool_size) so unattached items remain visible
+    // and can be toggled on. For attached items we also draw reorder buttons.
+    for pool_idx in 0..pool_size {
+        let attached_pos = attachments.iter().position(|&a| a == pool_idx);
+        let is_attached = attached_pos.is_some();
+
+        ui.push_id((pool_kind_tag, normal_index, pool_idx), |ui| {
+            ui.horizontal(|ui| {
+                let mut checked = is_attached;
+                let label = format!("{} {}", match kind {
+                    crate::ui::response::AttachmentKind::Linked => "Linked",
+                    crate::ui::response::AttachmentKind::Final => "Final",
+                }, pool_idx + 1);
+                if ui.checkbox(&mut checked, label).changed() {
+                    *out = Some(AttachmentEdit {
+                        normal_index,
+                        kind,
+                        op: AttachmentOp::Toggle(pool_idx),
+                    });
+                }
+                if let Some(pos) = attached_pos {
+                    // Show execution position within this normal's chain.
+                    ui.label(egui::RichText::new(format!("#{}", pos + 1)).weak().small());
+                    let can_up = pos > 0;
+                    let can_down = pos + 1 < attachments.len();
+                    if ui.add_enabled(can_up, egui::Button::new("↑").small()).clicked() {
+                        *out = Some(AttachmentEdit {
+                            normal_index,
+                            kind,
+                            op: AttachmentOp::MoveUp(pool_idx),
+                        });
+                    }
+                    if ui.add_enabled(can_down, egui::Button::new("↓").small()).clicked() {
+                        *out = Some(AttachmentEdit {
+                            normal_index,
+                            kind,
+                            op: AttachmentOp::MoveDown(pool_idx),
+                        });
+                    }
+                }
+            });
+        });
+    }
 }
