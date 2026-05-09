@@ -338,9 +338,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 {{#if OUTPUT_HISTOGRAM_DIRECT}}
                 // Direct-histogram path (sub-4K single-tile render). Atomic
                 // accumulation into a single full-resolution histogram buffer.
-                // Gated by OUTPUT_HISTOGRAM_DIRECT — Phase 1 is inert (flag
-                // is always true today; the alternative sample-stream path
-                // lands in Phase 2). See
+                // Gated by OUTPUT_HISTOGRAM_DIRECT. See
                 // docs/projects/unified-render-pipeline.md.
                 //
                 // Write RGB as 4× u32 (unpacked, full 32-bit precision).
@@ -371,6 +369,29 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 // docs/projects/unified-render-pipeline.md.
                 atomicAdd(&iteration_counts[pixel_idx], 1u);
 {{/if}}
+{{else}}
+                // Sample-emit path (multi-tile render). Stream one Sample
+                // per plotted point to a buffer; a host-driven accumulate
+                // pass scatters samples into per-tile histograms. Used when
+                // the full-resolution histogram exceeds the storage-buffer
+                // binding size limit. See
+                // docs/projects/unified-render-pipeline.md.
+                //
+                // Allocate a slot via atomic counter and write the sample.
+                // Same plot-time coords + final_color the direct path uses
+                // — keeps feature parity (DOF, fog, opacity, path map, etc.)
+                // identical between the two output strategies.
+                let sample_idx = atomicAdd(&sample_counter.count, 1u);
+                if (sample_idx < arrayLength(&samples)) {
+                    samples[sample_idx] = Sample(
+                        f32(pixel.x),
+                        f32(pixel.y),
+                        clamp(final_color.r, 0.0, 1.0),
+                        clamp(final_color.g, 0.0, 1.0),
+                        clamp(final_color.b, 0.0, 1.0),
+                        0.0, 0.0, 0.0
+                    );
+                }
 {{/if}}
             }
         }

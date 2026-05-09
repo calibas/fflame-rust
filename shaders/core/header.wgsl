@@ -117,14 +117,55 @@ struct AttachmentList {
     final_count: u32,
 }
 
+{{#if OUTPUT_HISTOGRAM_DIRECT}}
+{{else}}
+// Sample-emit output: shader writes one Sample per plotted point to a
+// streaming buffer, host-side accumulate pass scatters into per-tile
+// histograms. Used by multi-tile strategies (above the single-binding
+// histogram size limit). See docs/projects/unified-render-pipeline.md.
+//
+// WGSL storage array stride must be a multiple of 16 bytes; 5 floats
+// (20B) padded to 32B (8 floats).
+struct Sample {
+    x: f32,
+    y: f32,
+    r: f32,
+    g: f32,
+    b: f32,
+    _pad1: f32,
+    _pad2: f32,
+    _pad3: f32,
+}
+
+// Atomic counter — host pre-zeros .count, shader bumps it per emitted
+// sample, accumulate pass reads .count to know how many to consume.
+struct SampleCounter {
+    count: atomic<u32>,
+}
+{{/if}}
+
 // Bindings
 @group(0) @binding(0) var<storage, read> transforms: array<Transform>;
 @group(0) @binding(1) var<uniform> params: Params;
+{{#if OUTPUT_HISTOGRAM_DIRECT}}
+// Direct histogram: 4× u32 per pixel (R, G, B, density). Shader does
+// per-iteration atomicAdd into this buffer.
 @group(0) @binding(2) var<storage, read_write> histogram: array<atomic<u32>>;
+{{else}}
+// Sample stream: shader writes one entry per plotted point.
+@group(0) @binding(2) var<storage, read_write> samples: array<Sample>;
+{{/if}}
 @group(0) @binding(3) var palette_texture: texture_2d<f32>;
 @group(0) @binding(4) var palette_sampler: sampler;
 @group(0) @binding(5) var<storage, read> variation_params: array<VariationParams>;
+{{#if OUTPUT_HISTOGRAM_DIRECT}}
+// Per-pixel iteration counter for convergence tracking. Bound but
+// unwritten when ITERATION_COUNTS=false.
 @group(0) @binding(6) var<storage, read_write> iteration_counts: array<atomic<u32>>;
+{{else}}
+// Sample buffer write cursor.
+@group(0) @binding(6) var<storage, read_write> sample_counter: SampleCounter;
+{{/if}}
 @group(0) @binding(7) var<storage, read_write> path_buffer: array<PathEntry>;
 @group(0) @binding(8) var<storage, read> path_filters: array<PathFilter>;
 // Xaos (chaos) transition weights: xaos_weights[src * num_transforms + dst]
