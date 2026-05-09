@@ -312,48 +312,56 @@ suite at parity. After 2d: high-res export produces the same output
 as on `main` (still possibly broken at 8K — Phase 7 fixes the
 underlying bug).
 
-**Phase 3 — fold `main_tiled.wgsl` (delete it).** It's used by dead
-code only; just remove. Same for `header_tiled.wgsl`.
+**Phase 3 — fold `main_tiled.wgsl` (delete it).** ✅ It's used by dead
+code only; just remove. Same for `header_tiled.wgsl`. Also deleted
+`src/export/renderer.rs` (TiledRenderer) and the unused chunks of
+`src/export/tiled.rs`.
 
-**Phase 4 — accumulate pass + strategy picker.** Add an
-`accumulate_samples_to_tiles` compute shader that consumes the sample
-buffer and writes into a *concatenated tile-histogram buffer* (one
-big buffer holding all tiles back-to-back, indexed by tile + local
-pixel coords). Add `pick_strategy(width, height, &Limits)` returning
-`Direct | ParallelTiles | SerialTiles` per the runtime picker above.
-Replace the CPU sample-accumulation loop in `HighResExporter` with
-the GPU accumulate pass.
+**Phase 4 — accumulate pass + strategy picker.** ✅ Added
+`accumulate_samples.wgsl` compute shader (one thread per sample,
+atomic-add into a flat row-major histogram region with bound_x/y/w/h
+sub-tile filtering), Rust companion in `src/export/accumulate.rs`,
+and `RenderStrategy { Direct, ParallelTiles, SerialTiles }` +
+`pick_strategy(width, height, &Limits)` in `src/export/mod.rs`.
 
-**Phase 5 — strategy A path.** Wire up `ParallelTiles`: one big sample
-buffer, single accumulate dispatch scattering to all tiles, readback
-the concatenated tile-histogram buffer at the end. Verify the picker
-selects this for UHD 8K (4 tiles, all GPU-resident).
+**Phase 5 — strategy A path.** ✅ HighResExporter now uses the GPU
+accumulate path when the histogram fits one binding (the common
+desktop case — adapter limits typically support gigabyte-scale
+bindings). Per iterate dispatch: iterate → counter readback (4 B) →
+accumulate dispatch → reset counter; one final histogram readback
+at the end. CPU fallback retained for tight devices.
 
-**Phase 6 — strategy B path.** Add the per-tile RNG re-seed
-machinery to `FlameRenderer::compute_pass`, then sequence per-tile
-dispatches in a wrapper. Verify the picker selects this for
-extreme-res cases that exceed strategy A's budget. `HighResExporter`
-becomes a thin coordinator that calls into the picker; the
-interactive path is unchanged.
+**Phase 6 — strategy B path.** ⏸ Deferred — the user's machine
+reports 2 GB binding size, so the Direct branch handles all
+tested resolutions; a tile-bound iterator is only needed on
+devices reporting the WebGPU spec minimum (128 MB). The CPU
+fallback path covers those cases today.
 
-**Phase 7 — fix the actual 8K bug.** With the unified pipeline,
-the bug should either disappear (if it was a path-specific issue
-specific to the old `HighResExporter`'s sample-stream + CPU-histogram
-flow) or it'll surface in the new strategy-A path, which is much
-easier to diagnose since we control every step on GPU. Likely
-candidates: sample-buffer overflow at the iteration→accumulate
-boundary, atomic-counter saturation in the sample counter, accumulate
-shader miscomputing tile index for samples near canvas edges.
+**Phase 7 — fix the actual 8K bug.** ✅ Closed by Phase 5. The bug
+was specific to the old CPU readback + per-row binning loop in
+HighResExporter; the GPU accumulate path produces correct output
+at 8K (verified visually with both `simple-linear` and
+`bubble-3d` configs).
 
-**Phase 8 — delete `HighResExporter` and `TiledRenderer`.** Replace
-their consumers (`app/export.rs::export_headless_cpu`,
-`app/config.rs::export_high_res_cpu_background`,
-`animation/export.rs`) with the unified path. Remove
-`src/export/renderer.rs` and the bulk of `src/export/high_res.rs`.
+**Phase 8 — delete `HighResExporter` and `TiledRenderer`.** 🚧
+Partial. TiledRenderer is gone (Phase 3). Deleting HighResExporter
+requires routing `app/export.rs::export_headless` through
+FlameRenderer's `render()` instead, but that exposes a calibration
+drift: `FlameRenderer.render()` uses a lerp-blend accumulate
+(`blend_factor = 0.1`, designed for live-preview smoothing) while
+HighResExporter uses pure cumulative add. The tonemap is
+calibrated for cumulative samples; switching to FlameRenderer
+under-exposes the output even though the iteration count and
+sample_density formula match. Resolving it needs either an
+"export accumulate mode" on FlameRenderer that does cumulative
+add, or a tonemap recalibration for the lerp-blend path. Not
+trivial enough to fit a single commit. Routing change reverted;
+HighResExporter remains the >128 MB path.
 
-**Phase 9 — companion cleanups.** Rename `PoolFinalTransform*` →
-`FinalTransform*` with the migration shim. Drop dead
-`has_final_transform`/`final_transform_index` fields. Update docs.
+**Phase 9 — companion cleanups.** ⏸ Pending. Rename
+`PoolFinalTransform*` → `FinalTransform*` with the migration shim.
+Drop dead `has_final_transform`/`final_transform_index` fields
+from `GpuParams`. Update docs.
 
 ## Acceptance criteria
 
