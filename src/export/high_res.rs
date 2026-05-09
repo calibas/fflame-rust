@@ -406,8 +406,7 @@ impl HighResExporter {
         // render_3d=true regardless of the flame's render_mode: high-res
         // export reuses the 3D code path so configs with 3D variations
         // (flatten/hemisphere/zcone) render correctly even from a 2D
-        // flame (Z=0 falls through projection unchanged). This matches
-        // the previous `build_export` behavior.
+        // flame (Z=0 falls through projection unchanged).
         //
         // path_features_enabled=false: PathMap export was lossy via path
         // hashing in the old export shader and is gated out here. Configs
