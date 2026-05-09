@@ -347,6 +347,7 @@ impl FlameRenderer {
             has_post_affine: flame.has_post_affine(),
             has_attachments: flame.has_attachments(),
             attachment_cap: flame.attachment_cap() as u32,
+            iteration_counts_enabled: self.target_iterations_per_pixel > 0,
             // No inlining for incremental updates (would trigger too many shader rebuilds)
             inlined_transforms: None,
             cumulative_weights: None,

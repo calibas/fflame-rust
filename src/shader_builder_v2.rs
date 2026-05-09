@@ -294,6 +294,15 @@ pub struct ShaderConstants {
     /// `Flame::attachment_cap`.
     pub attachment_cap: u32,
 
+    /// Whether the per-pixel `iteration_counts` atomic counter is in
+    /// use. Drives the `ITERATION_COUNTS` template flag — when false,
+    /// the per-iteration `atomicAdd(&iteration_counts[pixel_idx], 1u)`
+    /// at the bottom of the iteration loop is stripped from the
+    /// compiled shader. Set from `target_iterations_per_pixel > 0`;
+    /// flames not using per-pixel convergence pay zero per-iteration
+    /// cost for the counter.
+    pub iteration_counts_enabled: bool,
+
     /// Precomputed cumulative weights for transform selection
     /// Eliminates the weight accumulation loops in select_transform
     pub cumulative_weights: Option<Vec<f32>>,
@@ -309,6 +318,7 @@ impl Default for ShaderConstants {
             has_post_affine: false,
             has_attachments: false,
             attachment_cap: 1,
+            iteration_counts_enabled: false,
             inlined_transforms: None,
             cumulative_weights: None,
         }
@@ -465,6 +475,11 @@ impl ShaderConstants {
             has_post_affine: flame.has_post_affine(),
             has_attachments: flame.has_attachments(),
             attachment_cap: flame.attachment_cap() as u32,
+            // Inlined-export mode never uses per-pixel convergence
+            // (HighResExporter sets target_iterations_per_pixel=0).
+            // If a future inlined-mode caller needs the gate, plumb
+            // target_iterations_per_pixel into this constructor.
+            iteration_counts_enabled: false,
             inlined_transforms: Some(inlined),
             cumulative_weights: Some(cumulative),
         }
@@ -1168,6 +1183,12 @@ impl ShaderBuilder {
         // is byte-identical to today's. See
         // docs/projects/unified-render-pipeline.md.
         processor.set("OUTPUT_HISTOGRAM_DIRECT", true);
+        // ITERATION_COUNTS gates the per-iteration `atomicAdd` to the
+        // iteration_counts buffer used for per-pixel convergence
+        // tracking. Set from the flame's `target_iterations_per_pixel`
+        // — when 0 (today's default), strips the atomic from the
+        // compiled shader entirely.
+        processor.set("ITERATION_COUNTS", constants.iteration_counts_enabled);
         let mut processed = processor.process(template);
         // Inject per-thread state initialization block at the marker.
         // No-op if no active variation has wgsl_state_init.
