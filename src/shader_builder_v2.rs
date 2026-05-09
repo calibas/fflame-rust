@@ -1775,6 +1775,20 @@ impl ShaderBuilder {
         processed = processed.replace("//__STATE_INIT_BLOCK__", &state_init);
         shader.push_str(&processed);
 
+        // DEBUG: Write shader to file for analysis (enabled via --dump-shader).
+        // Mirrors `build_from_template`'s dump so the high-res export path
+        // can also be inspected. Writes to a distinct filename so a single
+        // run that goes through both paths leaves both shaders on disk.
+        if should_dump_shader() {
+            let filename = "debug_shader_export.wgsl";
+            if let Err(e) = std::fs::write(filename, &shader) {
+                log::error!("Failed to write export debug shader: {}", e);
+            } else {
+                log::info!("Wrote export shader to {} ({} bytes, {} lines)",
+                    filename, shader.len(), shader.lines().count());
+            }
+        }
+
         shader
     }
 }

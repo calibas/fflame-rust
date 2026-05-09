@@ -1138,9 +1138,18 @@ impl HighResExporter {
         let pixels_per_unit_zoomed = base_pixels_per_unit * 2.0_f32.powf(apophysis_zoom);
         let area = (self.width as f32 * self.height as f32) / (pixels_per_unit_zoomed * pixels_per_unit_zoomed);
 
-        // Sample density: scaled by iterations_per_thread
-        // NOTE: No resolution normalization here - CPU export was already calibrated for large resolutions
-        let sample_density = 5000.0 * (self.iterations_per_thread as f32 / 256.0);
+        // Sample density: scaled by iterations_per_thread AND resolution.
+        // Mirrors `FlameRenderer::tonemap_for_export` in compute_kernel.rs.
+        // The resolution factor compensates for the fact that at 8000×8000
+        // (64M pixels) the per-pixel density is 64× lower than at 1000×1000
+        // for the same total iteration count — without this factor the
+        // tonemap divides by a too-high sample_density and the image goes
+        // perceptually black.
+        let total_pixels = (self.width * self.height) as f32;
+        let reference_pixels = 1_000_000.0;
+        let sample_density = 5000.0
+            * (self.iterations_per_thread as f32 / 256.0)
+            * (reference_pixels / total_pixels);
 
         let tonemap_mode = match config.tonemap_mode {
             crate::scene::tonemap::ToneMapMode::Linear => 0u32,
