@@ -1094,84 +1094,12 @@ impl ConfigManager {
                 Ok(xform.scale().into())
             }
 
-            // Legacy "singular Final" ConfigPath variants — these used to
-            // operate on `flame.final_transform: Option<Transform>`. The
-            // legacy field is gone; we now route them to the first entry of
-            // the new `final_transforms` pool. Animation tracks saved
-            // against these variants therefore still work — they target
-            // pool index 0.
-            ConfigPath::FinalTransformEnabled => {
-                Ok((!config.flame.final_transforms.is_empty()).into())
-            }
-            ConfigPath::FinalTransformAffine { param } => {
-                let final_xform = config.flame.final_transforms.first()
-                    .ok_or(ConfigError::InvalidIndex)?;
-                let value = match param {
-                    AffineParam::A => final_xform.a,
-                    AffineParam::B => final_xform.b,
-                    AffineParam::C => final_xform.c,
-                    AffineParam::D => final_xform.d,
-                    AffineParam::E => final_xform.e,
-                    AffineParam::F => final_xform.f,
-                    AffineParam::G => final_xform.g,
-                };
-                Ok(value.into())
-            }
-            ConfigPath::FinalTransformPostAffineEnabled => {
-                let final_xform = config.flame.final_transforms.first()
-                    .ok_or(ConfigError::InvalidIndex)?;
-                Ok(final_xform.post_affine_enabled.into())
-            }
-            ConfigPath::FinalTransformPostAffine { param } => {
-                let final_xform = config.flame.final_transforms.first()
-                    .ok_or(ConfigError::InvalidIndex)?;
-                let value = match param {
-                    AffineParam::A => final_xform.post_a,
-                    AffineParam::B => final_xform.post_b,
-                    AffineParam::C => final_xform.post_c,
-                    AffineParam::D => final_xform.post_d,
-                    AffineParam::E => final_xform.post_e,
-                    AffineParam::F => final_xform.post_f,
-                    AffineParam::G => final_xform.post_g,
-                };
-                Ok(value.into())
-            }
-            ConfigPath::FinalTransformVariation { variation } => {
-                let final_xform = config.flame.final_transforms.first()
-                    .ok_or(ConfigError::InvalidIndex)?;
-                let weight = final_xform.variations.get(variation).copied().unwrap_or(0.0);
-                Ok(weight.into())
-            }
-            ConfigPath::FinalTransformVariationParam { variation, param } => {
-                let final_xform = config.flame.final_transforms.first()
-                    .ok_or(ConfigError::InvalidIndex)?;
-                let value = final_xform.get_variation_param_or_default(
-                    variation,
-                    param,
-                    &crate::variations::global_registry()
-                );
-                Ok(value.into())
-            }
-            ConfigPath::FinalTransformOriginX => {
-                let final_xform = config.flame.final_transforms.first()
-                    .ok_or(ConfigError::InvalidIndex)?;
-                Ok(final_xform.origin_x().into())
-            }
-            ConfigPath::FinalTransformOriginY => {
-                let final_xform = config.flame.final_transforms.first()
-                    .ok_or(ConfigError::InvalidIndex)?;
-                Ok(final_xform.origin_y().into())
-            }
-            ConfigPath::FinalTransformRotation => {
-                let final_xform = config.flame.final_transforms.first()
-                    .ok_or(ConfigError::InvalidIndex)?;
-                Ok(final_xform.rotation().into())
-            }
-            ConfigPath::FinalTransformScale => {
-                let final_xform = config.flame.final_transforms.first()
-                    .ok_or(ConfigError::InvalidIndex)?;
-                Ok(final_xform.scale().into())
-            }
+            // Legacy `FinalTransform*` (no index) variants were removed
+            // in Phase 9. The migration shim in
+            // `ConfigPath::from_string_key` maps the legacy string form
+            // to indexed variants at index 0; those go through the
+            // indexed `FinalTransform*` arms in the Final Transform pool
+            // section below.
 
             // Linked Transform pool — same shape as TransformXxx but
             // sourced from flame.linked_transforms[index].
@@ -1216,7 +1144,7 @@ impl ConfigManager {
             }
 
             // Final Transform pool — sourced from flame.final_transforms[index].
-            ConfigPath::PoolFinalTransformAffine { index, param } => {
+            ConfigPath::FinalTransformAffine { index, param } => {
                 let xform = config.flame.final_transforms.get(*index)
                     .ok_or(ConfigError::InvalidIndex)?;
                 let value = match param {
@@ -1227,12 +1155,12 @@ impl ConfigManager {
                 };
                 Ok(value.into())
             }
-            ConfigPath::PoolFinalTransformPostAffineEnabled { index } => {
+            ConfigPath::FinalTransformPostAffineEnabled { index } => {
                 let xform = config.flame.final_transforms.get(*index)
                     .ok_or(ConfigError::InvalidIndex)?;
                 Ok(xform.post_affine_enabled.into())
             }
-            ConfigPath::PoolFinalTransformPostAffine { index, param } => {
+            ConfigPath::FinalTransformPostAffine { index, param } => {
                 let xform = config.flame.final_transforms.get(*index)
                     .ok_or(ConfigError::InvalidIndex)?;
                 let value = match param {
@@ -1243,12 +1171,12 @@ impl ConfigManager {
                 };
                 Ok(value.into())
             }
-            ConfigPath::PoolFinalTransformVariation { index, variation } => {
+            ConfigPath::FinalTransformVariation { index, variation } => {
                 let xform = config.flame.final_transforms.get(*index)
                     .ok_or(ConfigError::InvalidIndex)?;
                 Ok(xform.variations.get(variation).copied().unwrap_or(0.0).into())
             }
-            ConfigPath::PoolFinalTransformVariationParam { index, variation, param } => {
+            ConfigPath::FinalTransformVariationParam { index, variation, param } => {
                 let xform = config.flame.final_transforms.get(*index)
                     .ok_or(ConfigError::InvalidIndex)?;
                 let value = xform.get_variation_param_or_default(
@@ -1693,103 +1621,12 @@ impl ConfigManager {
                 xform.set_scale(new_value);
             }
 
-            // Legacy "singular Final" ConfigPath variants — see the
-            // matching get_value comment. These now operate on the first
-            // entry of `flame.final_transforms`, with FinalTransformEnabled
-            // adding/removing that entry and managing per-normal
-            // attachments. Animation tracks targeting these still work,
-            // routed to pool index 0.
-            ConfigPath::FinalTransformEnabled => {
-                let enabled: bool = value.try_into()?;
-                let already_present = !self.current.flame.final_transforms.is_empty();
-                if enabled && !already_present {
-                    let mut final_xform = crate::scene::transforms::Transform::new();
-                    final_xform.set_variation("linear", 1.0);
-                    let new_idx = self.current.flame.final_transforms.len();
-                    self.current.flame.final_transforms.push(final_xform);
-                    for t in &mut self.current.flame.transforms {
-                        if !t.final_attachments.contains(&new_idx) {
-                            t.final_attachments.push(new_idx);
-                        }
-                    }
-                } else if !enabled && already_present {
-                    // Remove pool[0] and shift all attachments accordingly.
-                    self.current.flame.final_transforms.remove(0);
-                    for t in &mut self.current.flame.transforms {
-                        t.final_attachments.retain(|&i| i != 0);
-                        for a in t.final_attachments.iter_mut() {
-                            if *a > 0 { *a -= 1; }
-                        }
-                    }
-                }
-            }
-            ConfigPath::FinalTransformAffine { param } => {
-                let final_xform = self.current.flame.final_transforms.first_mut()
-                    .ok_or(ConfigError::InvalidIndex)?;
-                let new_value: f32 = value.try_into()?;
-                match param {
-                    AffineParam::A => final_xform.a = new_value,
-                    AffineParam::B => final_xform.b = new_value,
-                    AffineParam::C => final_xform.c = new_value,
-                    AffineParam::D => final_xform.d = new_value,
-                    AffineParam::E => final_xform.e = new_value,
-                    AffineParam::F => final_xform.f = new_value,
-                    AffineParam::G => final_xform.g = new_value,
-                }
-            }
-            ConfigPath::FinalTransformPostAffineEnabled => {
-                let final_xform = self.current.flame.final_transforms.first_mut()
-                    .ok_or(ConfigError::InvalidIndex)?;
-                final_xform.post_affine_enabled = value.try_into()?;
-            }
-            ConfigPath::FinalTransformPostAffine { param } => {
-                let final_xform = self.current.flame.final_transforms.first_mut()
-                    .ok_or(ConfigError::InvalidIndex)?;
-                let new_value: f32 = value.try_into()?;
-                match param {
-                    AffineParam::A => final_xform.post_a = new_value,
-                    AffineParam::B => final_xform.post_b = new_value,
-                    AffineParam::C => final_xform.post_c = new_value,
-                    AffineParam::D => final_xform.post_d = new_value,
-                    AffineParam::E => final_xform.post_e = new_value,
-                    AffineParam::F => final_xform.post_f = new_value,
-                    AffineParam::G => final_xform.post_g = new_value,
-                }
-            }
-            ConfigPath::FinalTransformVariation { variation } => {
-                let xform = self.current.flame.final_transforms.first_mut()
-                    .ok_or(ConfigError::InvalidIndex)?;
-                Self::apply_variation_weight(xform, variation, value)?;
-            }
-            ConfigPath::FinalTransformVariationParam { variation, param } => {
-                let xform = self.current.flame.final_transforms.first_mut()
-                    .ok_or(ConfigError::InvalidIndex)?;
-                Self::apply_variation_param(xform, variation, param, value)?;
-            }
-            ConfigPath::FinalTransformOriginX => {
-                let final_xform = self.current.flame.final_transforms.first_mut()
-                    .ok_or(ConfigError::InvalidIndex)?;
-                let new_value: f32 = value.try_into()?;
-                final_xform.set_origin_x(new_value);
-            }
-            ConfigPath::FinalTransformOriginY => {
-                let final_xform = self.current.flame.final_transforms.first_mut()
-                    .ok_or(ConfigError::InvalidIndex)?;
-                let new_value: f32 = value.try_into()?;
-                final_xform.set_origin_y(new_value);
-            }
-            ConfigPath::FinalTransformRotation => {
-                let final_xform = self.current.flame.final_transforms.first_mut()
-                    .ok_or(ConfigError::InvalidIndex)?;
-                let new_value: f32 = value.try_into()?;
-                final_xform.set_rotation(new_value);
-            }
-            ConfigPath::FinalTransformScale => {
-                let final_xform = self.current.flame.final_transforms.first_mut()
-                    .ok_or(ConfigError::InvalidIndex)?;
-                let new_value: f32 = value.try_into()?;
-                final_xform.set_scale(new_value);
-            }
+            // Legacy `FinalTransform*` (no index) variants were removed
+            // in Phase 9. The migration shim in
+            // `ConfigPath::from_string_key` maps the legacy string form
+            // to indexed variants at index 0; those go through the
+            // indexed `FinalTransform*` arms in the Final Transform pool
+            // section below.
 
             // Linked Transform pool — same shape as TransformXxx but
             // sourced from flame.linked_transforms[index].
@@ -1832,7 +1669,7 @@ impl ConfigManager {
             }
 
             // Final Transform pool — sourced from flame.final_transforms[index].
-            ConfigPath::PoolFinalTransformAffine { index, param } => {
+            ConfigPath::FinalTransformAffine { index, param } => {
                 let xform = self.current.flame.final_transforms.get_mut(*index)
                     .ok_or(ConfigError::InvalidIndex)?;
                 let v: f32 = value.try_into()?;
@@ -1843,12 +1680,12 @@ impl ConfigManager {
                     AffineParam::G => xform.g = v,
                 };
             }
-            ConfigPath::PoolFinalTransformPostAffineEnabled { index } => {
+            ConfigPath::FinalTransformPostAffineEnabled { index } => {
                 let xform = self.current.flame.final_transforms.get_mut(*index)
                     .ok_or(ConfigError::InvalidIndex)?;
                 xform.post_affine_enabled = value.try_into()?;
             }
-            ConfigPath::PoolFinalTransformPostAffine { index, param } => {
+            ConfigPath::FinalTransformPostAffine { index, param } => {
                 let xform = self.current.flame.final_transforms.get_mut(*index)
                     .ok_or(ConfigError::InvalidIndex)?;
                 let v: f32 = value.try_into()?;
@@ -1859,12 +1696,12 @@ impl ConfigManager {
                     AffineParam::G => xform.post_g = v,
                 };
             }
-            ConfigPath::PoolFinalTransformVariation { index, variation } => {
+            ConfigPath::FinalTransformVariation { index, variation } => {
                 let xform = self.current.flame.final_transforms.get_mut(*index)
                     .ok_or(ConfigError::InvalidIndex)?;
                 Self::apply_variation_weight(xform, variation, value)?;
             }
-            ConfigPath::PoolFinalTransformVariationParam { index, variation, param } => {
+            ConfigPath::FinalTransformVariationParam { index, variation, param } => {
                 let xform = self.current.flame.final_transforms.get_mut(*index)
                     .ok_or(ConfigError::InvalidIndex)?;
                 Self::apply_variation_param(xform, variation, param, value)?;
