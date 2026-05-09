@@ -262,12 +262,6 @@ pub struct ShaderConstants {
     /// Enables dead code elimination for unused color mode branches
     pub color_mode: u32,
 
-    /// Whether final transform is enabled (eliminates branch if false)
-    pub has_final_transform: bool,
-
-    /// Index of final transform (only used if has_final_transform is true)
-    pub final_transform_index: u32,
-
     /// Inlined transform data (eliminates buffer reads)
     /// When Some, transform data is compiled as constants
     /// When None, transform data is read from buffers (legacy behavior)
@@ -313,8 +307,6 @@ impl Default for ShaderConstants {
         Self {
             num_transforms: 1,
             color_mode: 0,
-            has_final_transform: false,
-            final_transform_index: 0,
             has_post_affine: false,
             has_attachments: false,
             attachment_cap: 1,
@@ -337,10 +329,6 @@ impl ShaderConstants {
     ) -> Self {
         // Ensure at least 1 transform to prevent shader overflow (NUM_TRANSFORMS - 1u)
         let num_transforms = flame.transforms.len().max(1) as u32;
-        // Inline-shader path treats `final_transforms[0]` as the singular
-        // final transform — multi-final in inline mode is a Phase 6 follow-on.
-        let has_final = !flame.final_transforms.is_empty();
-        let final_idx = num_transforms; // Final comes after regular transforms
 
         // Per-flame local index map. Must match what the buffer populator
         // and the shader builder use, so that var_idx in the inlined weight
@@ -470,8 +458,6 @@ impl ShaderConstants {
         Self {
             num_transforms,
             color_mode,
-            has_final_transform: has_final,
-            final_transform_index: final_idx,
             has_post_affine: flame.has_post_affine(),
             has_attachments: flame.has_attachments(),
             attachment_cap: flame.attachment_cap() as u32,
@@ -493,13 +479,9 @@ impl ShaderConstants {
             "// Hard-coded shader constants (compiled at shader build time)\n\
              const NUM_TRANSFORMS: u32 = {}u;\n\
              const COLOR_MODE: u32 = {}u;\n\
-             const HAS_FINAL_TRANSFORM: bool = {};\n\
-             const FINAL_TRANSFORM_INDEX: u32 = {}u;\n\
              const HAS_POST_AFFINE: bool = {};\n",
             self.num_transforms,
             self.color_mode,
-            self.has_final_transform,
-            self.final_transform_index,
             self.has_post_affine,
         );
 
