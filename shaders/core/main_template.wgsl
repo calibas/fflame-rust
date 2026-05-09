@@ -335,8 +335,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 }
 {{/if}}
 
-                // Atomic accumulation to histogram buffer
-                // Write RGB as 4× u32 (unpacked, full 32-bit precision)
+{{#if OUTPUT_HISTOGRAM_DIRECT}}
+                // Direct-histogram path (sub-4K single-tile render). Atomic
+                // accumulation into a single full-resolution histogram buffer.
+                // Gated by OUTPUT_HISTOGRAM_DIRECT — Phase 1 is inert (flag
+                // is always true today; the alternative sample-stream path
+                // lands in Phase 2). See
+                // docs/projects/unified-render-pipeline.md.
+                //
+                // Write RGB as 4× u32 (unpacked, full 32-bit precision).
                 let base_idx = pixel_idx * 4u;  // 4 words per pixel (R, G, B, density)
 
                 // Use global color scale from params (uniform constant, fast access)
@@ -357,6 +364,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
                 // Increment iteration count for this pixel (for per-pixel convergence tracking)
                 atomicAdd(&iteration_counts[pixel_idx], 1u);
+{{/if}}
             }
         }
     }
