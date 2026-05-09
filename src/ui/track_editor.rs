@@ -1214,21 +1214,21 @@ pub fn get_current_value(config: &FractalConfig, path: &ConfigPath) -> Option<f6
         }
 
         // Final pool — animatable per-pool-member parameters.
-        ConfigPath::PoolFinalTransformAffine { index, param } => {
+        ConfigPath::FinalTransformAffine { index, param } => {
             config.flame.final_transforms.get(*index).map(|t| read_affine(t, *param))
         }
-        ConfigPath::PoolFinalTransformPostAffineEnabled { index } => {
+        ConfigPath::FinalTransformPostAffineEnabled { index } => {
             config.flame.final_transforms.get(*index).map(|t| if t.post_affine_enabled { 1.0 } else { 0.0 })
         }
-        ConfigPath::PoolFinalTransformPostAffine { index, param } => {
+        ConfigPath::FinalTransformPostAffine { index, param } => {
             config.flame.final_transforms.get(*index).map(|t| read_post_affine(t, *param))
         }
-        ConfigPath::PoolFinalTransformVariation { index, variation } => {
+        ConfigPath::FinalTransformVariation { index, variation } => {
             config.flame.final_transforms.get(*index).and_then(|t| {
                 t.variations.get(variation).map(|&v| v as f64)
             })
         }
-        ConfigPath::PoolFinalTransformVariationParam { index, variation, param } => {
+        ConfigPath::FinalTransformVariationParam { index, variation, param } => {
             config.flame.final_transforms.get(*index).map(|t| {
                 t.get_variation_param_or_default(
                     variation, param, &crate::variations::global_registry()
@@ -1236,30 +1236,11 @@ pub fn get_current_value(config: &FractalConfig, path: &ConfigPath) -> Option<f6
             })
         }
 
-        // Legacy "singular Final" ConfigPath variants — animation tracks
-        // saved against these target the first entry of `final_transforms`
-        // (matches the routing in manager.rs and animation/export.rs).
-        ConfigPath::FinalTransformAffine { param } => {
-            config.flame.final_transforms.first().map(|t| read_affine(t, *param))
-        }
-        ConfigPath::FinalTransformPostAffineEnabled => {
-            config.flame.final_transforms.first().map(|t| if t.post_affine_enabled { 1.0 } else { 0.0 })
-        }
-        ConfigPath::FinalTransformPostAffine { param } => {
-            config.flame.final_transforms.first().map(|t| read_post_affine(t, *param))
-        }
-        ConfigPath::FinalTransformOriginX => {
-            config.flame.final_transforms.first().map(|t| t.e as f64)
-        }
-        ConfigPath::FinalTransformOriginY => {
-            config.flame.final_transforms.first().map(|t| -t.f as f64)
-        }
-        ConfigPath::FinalTransformRotation => {
-            config.flame.final_transforms.first().map(|t| t.rotation() as f64)
-        }
-        ConfigPath::FinalTransformScale => {
-            config.flame.final_transforms.first().map(|t| t.scale() as f64)
-        }
+        // Legacy `FinalTransform*` (no index) variants were removed in
+        // Phase 9. Animation tracks saved against the legacy string
+        // form route through the migration shim in
+        // `ConfigPath::from_string_key`, which maps them to indexed
+        // variants at index 0 — they hit the indexed match arms above.
 
         // Non-numeric or complex types
         _ => None,
@@ -1275,7 +1256,6 @@ pub fn get_auto_fill_end_value(path: &ConfigPath, start_value: f64) -> f64 {
     match path {
         // Rotation parameters: add full rotation
         ConfigPath::TransformRotation { .. } |
-        ConfigPath::FinalTransformRotation |
         ConfigPath::Rotation |
         ConfigPath::CameraRotationX |
         ConfigPath::CameraRotationY => start_value + TAU,

@@ -790,45 +790,10 @@ fn apply_config_value(
             }
         }
 
-        // Legacy "singular Final" ConfigPath variants — animation tracks
-        // saved against these target the first entry of `final_transforms`
-        // (the post-Phase-5d migration target). See manager.rs's matching
-        // arms for the same routing.
-        (ConfigPath::FinalTransformAffine { param }, ConfigValue::Float(v)) => {
-            if let Some(final_xform) = config.flame.final_transforms.first_mut() {
-                apply_affine_param(final_xform, *param, *v);
-            }
-        }
-        (ConfigPath::FinalTransformVariation { variation }, ConfigValue::Float(v)) => {
-            if let Some(final_xform) = config.flame.final_transforms.first_mut() {
-                final_xform.variations.insert(variation.clone(), *v);
-            }
-        }
-        (ConfigPath::FinalTransformVariationParam { variation, param }, ConfigValue::Float(v)) => {
-            if let Some(final_xform) = config.flame.final_transforms.first_mut() {
-                final_xform.set_variation_param(variation, param, *v);
-            }
-        }
-        (ConfigPath::FinalTransformOriginX, ConfigValue::Float(v)) => {
-            if let Some(final_xform) = config.flame.final_transforms.first_mut() {
-                final_xform.set_origin_x(*v);
-            }
-        }
-        (ConfigPath::FinalTransformOriginY, ConfigValue::Float(v)) => {
-            if let Some(final_xform) = config.flame.final_transforms.first_mut() {
-                final_xform.set_origin_y(*v);
-            }
-        }
-        (ConfigPath::FinalTransformRotation, ConfigValue::Float(v)) => {
-            if let Some(final_xform) = config.flame.final_transforms.first_mut() {
-                final_xform.set_rotation(*v);
-            }
-        }
-        (ConfigPath::FinalTransformScale, ConfigValue::Float(v)) => {
-            if let Some(final_xform) = config.flame.final_transforms.first_mut() {
-                final_xform.set_scale(*v);
-            }
-        }
+        // Legacy `FinalTransform*` (no index) variants were removed in
+        // Phase 9. The migration shim in `ConfigPath::from_string_key`
+        // maps the legacy string form to indexed variants at index 0;
+        // those go through the indexed `FinalTransform*` arms below.
 
         // Linked pool — animatable per-pool-member parameters.
         (ConfigPath::LinkedTransformAffine { index, param }, ConfigValue::Float(v)) => {
@@ -858,27 +823,27 @@ fn apply_config_value(
         }
 
         // Final pool — animatable per-pool-member parameters.
-        (ConfigPath::PoolFinalTransformAffine { index, param }, ConfigValue::Float(v)) => {
+        (ConfigPath::FinalTransformAffine { index, param }, ConfigValue::Float(v)) => {
             if let Some(xform) = config.flame.final_transforms.get_mut(*index) {
                 apply_affine_param(xform, *param, *v);
             }
         }
-        (ConfigPath::PoolFinalTransformPostAffineEnabled { index }, ConfigValue::Bool(v)) => {
+        (ConfigPath::FinalTransformPostAffineEnabled { index }, ConfigValue::Bool(v)) => {
             if let Some(xform) = config.flame.final_transforms.get_mut(*index) {
                 xform.post_affine_enabled = *v;
             }
         }
-        (ConfigPath::PoolFinalTransformPostAffine { index, param }, ConfigValue::Float(v)) => {
+        (ConfigPath::FinalTransformPostAffine { index, param }, ConfigValue::Float(v)) => {
             if let Some(xform) = config.flame.final_transforms.get_mut(*index) {
                 apply_post_affine_param(xform, *param, *v);
             }
         }
-        (ConfigPath::PoolFinalTransformVariation { index, variation }, ConfigValue::Float(v)) => {
+        (ConfigPath::FinalTransformVariation { index, variation }, ConfigValue::Float(v)) => {
             if let Some(xform) = config.flame.final_transforms.get_mut(*index) {
                 xform.variations.insert(variation.clone(), *v);
             }
         }
-        (ConfigPath::PoolFinalTransformVariationParam { index, variation, param }, ConfigValue::Float(v)) => {
+        (ConfigPath::FinalTransformVariationParam { index, variation, param }, ConfigValue::Float(v)) => {
             if let Some(xform) = config.flame.final_transforms.get_mut(*index) {
                 xform.set_variation_param(variation, param, *v);
             }
@@ -2230,10 +2195,13 @@ mod tests {
             "Normal pool: param must be readable via canonical key format",
         );
 
-        // Legacy singular Final pool (compat alias → final_transforms[0])
+        // Final pool (post-Phase-9 indexed variant; legacy unindexed
+        // form lands here too via the migration shim in
+        // ConfigPath::from_string_key).
         apply_config_value(
             &mut config,
             &ConfigPath::FinalTransformVariationParam {
+                index: 0,
                 variation: "bipolar".to_string(),
                 param: "shift".to_string(),
             },
@@ -2242,7 +2210,7 @@ mod tests {
         assert_eq!(
             config.flame.final_transforms[0].get_variation_param("bipolar", "shift"),
             Some(1.5),
-            "Legacy Final: param must reach final_transforms[0]",
+            "Final pool: param must reach final_transforms[0]",
         );
 
         // Linked pool
@@ -2264,7 +2232,7 @@ mod tests {
         // PoolFinal pool
         apply_config_value(
             &mut config,
-            &ConfigPath::PoolFinalTransformVariationParam {
+            &ConfigPath::FinalTransformVariationParam {
                 index: 0,
                 variation: "blob".to_string(),
                 param: "low".to_string(),
