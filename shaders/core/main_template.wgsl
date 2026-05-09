@@ -10,7 +10,7 @@
 //   {{#if XAOS_ENABLED}} ... {{else}} ... {{/if}}
 //
 // Uses hard-coded constants (compiled at shader build time):
-//   NUM_TRANSFORMS, COLOR_MODE, HAS_FINAL_TRANSFORM, FINAL_TRANSFORM_INDEX
+//   NUM_TRANSFORMS, COLOR_MODE, HAS_POST_AFFINE
 // These enable dead code elimination and loop unrolling optimizations.
 
 @compute @workgroup_size(64, 1, 1)

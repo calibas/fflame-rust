@@ -1113,8 +1113,6 @@ impl HighResExporter {
                 fog_strength: config.fog_strength,
                 fog_start: config.fog_start,
                 histogram_color_scale: config.histogram_color_scale,
-                has_final_transform: if !config.flame.final_transforms.is_empty() { 1 } else { 0 },
-                final_transform_index: 0,  // Legacy field — shader uses attachments chain now
                 bits_per_transform: crate::gpu::buffers::bits_per_transform(config.flame.transforms.len() as u32),
                 path_map_style: config.path_map_style as u32,
                 path_capture_mode: config.path_capture_mode as u32,

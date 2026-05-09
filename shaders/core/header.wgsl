@@ -62,8 +62,6 @@ struct Params {
     fog_strength: f32,  // Depth fog: exponential fog density (0.0 = disabled)
     fog_start: f32,  // Depth fog: distance where fog begins
     histogram_color_scale: f32,  // Precision vs overflow (default: 10.0)
-    has_final_transform: u32,  // 0 = disabled, 1 = enabled
-    final_transform_index: u32,  // Index in transform buffer (after regular transforms)
     bits_per_transform: u32,  // Bits needed per transform index (1-5 based on num_transforms)
     path_map_style: u32,  // 0=Prefix, 1=Suffix, 2=Prefix (Distinct), 3=Suffix (Distinct)
     path_capture_mode: u32,  // 0=FirstHit, 1=FirstAfterBurnIn, 2=LastHit
