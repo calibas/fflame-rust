@@ -279,8 +279,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
                 let pixel_idx = u32(pixel.y) * params.width + u32(pixel.x);
 
-                // Determine final color based on mode (hard-coded COLOR_MODE)
-                var final_color: vec3<f32>;
+                // Determine final color based on mode (hard-coded COLOR_MODE).
+                // Initialized to white so the PathMap COLOR_MODE branch is
+                // always defined: when PATH_TRACKING is true the path-map
+                // body below overwrites it, when PATH_TRACKING is false
+                // (high-res export) the white default falls through. WGSL
+                // requires `var final_color` be initialized on every path
+                // even when COLOR_MODE is a compile-time constant.
+                var final_color: vec3<f32> = vec3<f32>(1.0, 1.0, 1.0);
                 if (COLOR_MODE == 0u) {
                     // Palette mode: sample from palette texture using color_index
                     final_color = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(color_index, 0.5), 0.0).rgb;
