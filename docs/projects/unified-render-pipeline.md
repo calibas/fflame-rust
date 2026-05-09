@@ -82,25 +82,94 @@ bindings (samples, sample_counter, tile_params) gated on the same flag.
 ### Sample-stream → tiled-histogram accumulator
 
 For multi-tile rendering, add a second compute pass that consumes the
-sample buffer and dispatches per-tile histogram writes. Two viable
-layouts:
+sample buffer and writes to per-tile histograms. There are two
+viable layouts; we want to use both, picked at runtime based on
+available GPU resources.
 
-**A) One sample buffer + many tile histograms, accumulator strides.**
-Run `iterate` to fill the sample buffer. Run `accumulate_tile` once per
-tile, each dispatch reads the sample buffer and only writes samples
-landing in this tile's pixel range. Repeat until total iterations done.
+**A) Parallel tiles — one sample buffer, all tile histograms GPU-resident.**
+Run `iterate` to fill the sample buffer. Run a *single* `accumulate`
+pass that scatters each sample into the right tile's histogram (one
+shader thread per sample; the thread computes which tile the sample's
+pixel coords fall into and atomic-adds to that tile's histogram).
+Repeat until total iterations done. Then readback all tile histograms
+once and stitch.
 
-**B) One sample buffer + one tile histogram, sequential per-tile.**
-Run `iterate` and `accumulate` for tile 0 fully; readback that tile's
-histogram → tonemap → store; reset histogram; repeat for tile 1. RNG
-seed is re-set per tile so each tile gets the same sample stream.
+Cost: 1× iteration work. Memory: all tiles GPU-resident
+simultaneously plus the sample buffer.
 
-(A) is bandwidth-heavier (sample buffer read N times for N tiles) but
-finishes all iteration up front and only then accumulates. (B) is
-serial-per-tile but each tile is independent. (B) matches what the
-current dead `TiledRenderer` was designed around. Pick (B) — it
-maps onto today's `HighResExporter` chunked-readback flow with less
-disruption.
+**B) Serial tiles — one sample buffer, one tile histogram, sequential.**
+For each tile in order: re-seed the RNG to a known per-tile-stable
+seed, run `iterate` + `accumulate` (filtering to this tile only),
+readback this tile's histogram, tonemap+stitch it, reset, next tile.
+
+Cost: N× iteration work. Memory: only one tile-sized histogram at a
+time — fits any GPU.
+
+#### Strategy selection at runtime
+
+Query device limits (`max_storage_buffer_binding_size`,
+`max_storage_buffers_per_shader_stage`) and decide:
+
+| Condition | Strategy | Notes |
+|---|---|---|
+| Full histogram fits in one binding | Direct (current behavior) | Sub-4K interactive + most exports. Zero overhead. |
+| All tiles fit in N bindings, N ≤ `max_storage_buffers_per_shader_stage` − (other bindings) | **A — parallel** | Best perf for >4K (~UHD 8K = 4 bindings × 128 MB = 512 MB). |
+| Tiles exceed binding count | **B — serial** | Fallback for very high resolutions or tight GPU memory. Or pack all tiles into one big `array<atomic<u32>>` if `max_buffer_size` permits — this turns "many bindings" into "one big binding" and may bring extreme-res cases back into A. |
+
+Pseudocode for the picker:
+
+```rust
+fn pick_strategy(width: u32, height: u32, limits: &Limits) -> RenderStrategy {
+    let full_hist_bytes = (width as u64) * (height as u64) * 16;
+    let max_binding = limits.max_storage_buffer_binding_size as u64;
+
+    if full_hist_bytes <= max_binding {
+        return RenderStrategy::Direct;
+    }
+
+    // Multi-tile. Tile size = largest square that fits in one binding.
+    let tile_size = compute_tile_size(max_binding);
+    let (tiles_x, tiles_y) = compute_tile_grid(width, height, tile_size);
+    let num_tiles = tiles_x * tiles_y;
+
+    // Reserve some bindings for transforms, params, samples, etc.
+    let reserved_bindings = 8;
+    let available_for_tiles = limits.max_storage_buffers_per_shader_stage
+        .saturating_sub(reserved_bindings);
+
+    if num_tiles <= available_for_tiles {
+        // Could also try packing into a single big buffer if num_tiles
+        // is too high but `num_tiles * tile_bytes <= max_buffer_size`.
+        return RenderStrategy::ParallelTiles { tiles_x, tiles_y, tile_size };
+    }
+
+    RenderStrategy::SerialTiles { tiles_x, tiles_y, tile_size }
+}
+```
+
+The user's math checks out: at 7680×4320 (UHD 8K), the histogram is
+~512 MB → 4 tiles of 128 MB each → 4 bindings. `max_storage_buffers_per_shader_stage`
+is typically 8, so strategy A applies. At 8000×8000 (~1 GB), it's
+8 tiles, which is the typical limit, so we may need to pack into a
+single buffer or fall back to B.
+
+#### A's atomic-write fan-out
+
+Strategy A's accumulate shader needs to atomic-add to the right
+tile's histogram for each sample. Two implementations:
+
+- **Multiple bindings**: bind each tile histogram separately. The
+  shader has `var<storage, read_write> tile_0`, `tile_1`, …, `tile_N`
+  and dispatches via a switch on `which_tile`. Clean WGSL, but
+  binding count is the cap.
+- **Single big buffer**: concatenate all tile histograms into one
+  buffer, shader computes the right offset based on tile index. Caps
+  out at `max_buffer_size` (often gigabytes — much higher than
+  `max_storage_buffer_binding_size`). More flexible.
+
+Going to use the single-big-buffer approach as the default. It
+sidesteps the binding count limit and the "switch over which tile"
+WGSL gymnastics.
 
 ### Single dispatch entry point
 
@@ -194,28 +263,43 @@ the dispatch yet).
 **Phase 3 — fold `main_tiled.wgsl` (delete it).** It's used by dead
 code only; just remove. Same for `header_tiled.wgsl`.
 
-**Phase 4 — accumulate pass.** Add an `accumulate_samples_to_tile`
-compute shader that consumes the sample buffer and writes into a
-single tile-sized histogram. This is new code. Replace the CPU
-sample-accumulation loop in `HighResExporter` with this GPU pass.
+**Phase 4 — accumulate pass + strategy picker.** Add an
+`accumulate_samples_to_tiles` compute shader that consumes the sample
+buffer and writes into a *concatenated tile-histogram buffer* (one
+big buffer holding all tiles back-to-back, indexed by tile + local
+pixel coords). Add `pick_strategy(width, height, &Limits)` returning
+`Direct | ParallelTiles | SerialTiles` per the runtime picker above.
+Replace the CPU sample-accumulation loop in `HighResExporter` with
+the GPU accumulate pass.
 
-**Phase 5 — tile loop.** Sequence per-tile dispatches in a wrapper
-around `FlameRenderer::compute_pass()`. `HighResExporter` becomes a
-thin coordinator; the interactive path is unchanged.
+**Phase 5 — strategy A path.** Wire up `ParallelTiles`: one big sample
+buffer, single accumulate dispatch scattering to all tiles, readback
+the concatenated tile-histogram buffer at the end. Verify the picker
+selects this for UHD 8K (4 tiles, all GPU-resident).
 
-**Phase 6 — fix the actual 8K bug.** With the unified pipeline,
-the bug should either disappear (if it was a path-specific issue) or
-be reproducible in the interactive path at 8K, which makes it much
-easier to diagnose. Likely candidates: sample-buffer overflow,
-atomic-counter saturation, sample readback chunking off-by-one.
+**Phase 6 — strategy B path.** Add the per-tile RNG re-seed
+machinery to `FlameRenderer::compute_pass`, then sequence per-tile
+dispatches in a wrapper. Verify the picker selects this for
+extreme-res cases that exceed strategy A's budget. `HighResExporter`
+becomes a thin coordinator that calls into the picker; the
+interactive path is unchanged.
 
-**Phase 7 — delete `HighResExporter` and `TiledRenderer`.** Replace
+**Phase 7 — fix the actual 8K bug.** With the unified pipeline,
+the bug should either disappear (if it was a path-specific issue
+specific to the old `HighResExporter`'s sample-stream + CPU-histogram
+flow) or it'll surface in the new strategy-A path, which is much
+easier to diagnose since we control every step on GPU. Likely
+candidates: sample-buffer overflow at the iteration→accumulate
+boundary, atomic-counter saturation in the sample counter, accumulate
+shader miscomputing tile index for samples near canvas edges.
+
+**Phase 8 — delete `HighResExporter` and `TiledRenderer`.** Replace
 their consumers (`app/export.rs::export_headless_cpu`,
 `app/config.rs::export_high_res_cpu_background`,
 `animation/export.rs`) with the unified path. Remove
 `src/export/renderer.rs` and the bulk of `src/export/high_res.rs`.
 
-**Phase 8 — companion cleanups.** Rename `PoolFinalTransform*` →
+**Phase 9 — companion cleanups.** Rename `PoolFinalTransform*` →
 `FinalTransform*` with the migration shim. Drop dead
 `has_final_transform`/`final_transform_index` fields. Update docs.
 
@@ -231,6 +315,9 @@ Before merging this branch:
 3. **High-res export works.** Manually verify 8K export of the same
    flame the user tested last branch (`output/simple3.fflame`)
    produces a non-black image with the expected fractal structure.
+   Verify both strategies — A and B — produce visually identical
+   output for a flame whose tile count is borderline (force-flag
+   the picker if needed for the test).
 4. **Test suite green.** All 200+ unit tests pass.
 5. **One render path remains.** `grep -r "FlameRenderer\|HighResExporter\|TiledRenderer"`
    on `src/` should find only `FlameRenderer` (or whatever the unified
