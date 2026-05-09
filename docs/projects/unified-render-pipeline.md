@@ -17,6 +17,16 @@ Hard non-goals for this branch:
   equally-fast or faster shader and dispatch loop for sub-4K rendering.
 - **No new broken-or-not-broken regressions** in the export paths
   beyond what's already broken on `main`. Anything we touch we own.
+- **No stripped-down shader subsets.** Today's `main_export.wgsl` is a
+  reduced version of `main_template.wgsl`: no path tracking, no depth
+  of field, no fog, no opacity check, always-3D projection. That's a
+  bug surface — anyone clicking "Export PNG" at 8K has been getting a
+  *different render* than the app shows, and we have no way to catch
+  the divergence because the stripped shader literally cannot produce
+  what the app does. Post-merge there is one shader, with the full
+  feature set, used by every render route. If a feature is too
+  expensive at high-res, that's a perf problem to solve, not a
+  feature to silently drop.
 
 ## What's actually different across paths today
 
@@ -318,11 +328,19 @@ Before merging this branch:
    Verify both strategies — A and B — produce visually identical
    output for a flame whose tile count is borderline (force-flag
    the picker if needed for the test).
-4. **Test suite green.** All 200+ unit tests pass.
-5. **One render path remains.** `grep -r "FlameRenderer\|HighResExporter\|TiledRenderer"`
+4. **Feature parity export ↔ interactive.** For each visually
+   significant feature gated in `main_template.wgsl` today (path
+   tracking / PathMap color mode, depth of field, depth fog, opacity
+   thresholding, 2D vs 3D projection), construct a flame that
+   exercises it, then verify the high-res export and the interactive
+   view at the same resolution produce visually equivalent output.
+   This is the test that would have caught the stripped
+   `main_export.wgsl` divergence years ago.
+5. **Test suite green.** All 200+ unit tests pass.
+6. **One render path remains.** `grep -r "FlameRenderer\|HighResExporter\|TiledRenderer"`
    on `src/` should find only `FlameRenderer` (or whatever the unified
    name ends up being).
-6. **Shader files reduced.** Only `main_template.wgsl` and
+7. **Shader files reduced.** Only `main_template.wgsl` and
    `header.wgsl` survive (plus the variation/affine/utility includes
    they reference). `main_export.wgsl`, `main_tiled.wgsl`,
    `header_export.wgsl`, `header_tiled.wgsl` deleted.
