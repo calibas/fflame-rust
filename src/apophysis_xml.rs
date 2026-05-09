@@ -245,16 +245,22 @@ fn parse_flame_element(
     // Determine perspective strength from cam_perspective
     let perspective_strength = f32::abs(cam_perspective);
 
-    // Build FractalConfig
-    let flame = Flame {
+    // Apophysis XML always carries a singular global Final (or none).
+    // `Flame::migrate_legacy_final` pushes it into the new
+    // `final_transforms` pool and auto-attaches to every normal so the
+    // rest of the pipeline sees a consistent shape.
+    // See `docs/projects/per-transform-linked-and-final.md`.
+    let mut flame = Flame {
         name,
         transforms,
-        final_transform,
+        linked_transforms: Vec::new(),
+        final_transforms: Vec::new(),
         render_mode,
         perspective_strength,
         xaos,
         solo_transform: solo_xform,
     };
+    flame.migrate_legacy_final(final_transform);
 
     // Convert Apophysis scale/center to our zoom/pan
     // Apophysis: scale = pixels per unit, where scale 200 ≈ zoom 1.0
@@ -845,8 +851,8 @@ mod tests {
         assert_eq!(xform1.post_a, 1.0);   // identity
         assert_eq!(xform1.post_d, 1.0);   // identity
 
-        // Final transform has post-affine
-        let final_xform = config.flame.final_transform.as_ref().unwrap();
+        // Final transform has post-affine (now lives in the final_transforms pool).
+        let final_xform = config.flame.final_transforms.first().unwrap();
         assert!(final_xform.post_affine_enabled);
         assert_eq!(final_xform.post_a, 0.5);
         assert_eq!(final_xform.post_c, 0.1);   // parts[1]

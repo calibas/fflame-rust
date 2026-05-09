@@ -91,12 +91,23 @@ pub struct HighResExporter {
     sample_counter_buffer: Buffer,
     variation_params_buffer: Buffer,
     xaos_buffer: Buffer,  // Xaos transition weights (identity if not used)
+    attachments_buffer: Buffer,  // Per-normal Linked + Final attachment lists (binding 8)
     palette_texture: Texture,
     palette_sampler: Sampler,
 
     // Compute pipeline for sample generation
     compute_pipeline: ComputePipeline,
     bind_group_layout: BindGroupLayout,
+
+    // Variation init pipeline (runs once before sample generation to
+    // populate derived params for variations with `wgsl_init` —
+    // e.g. Julian's `cpower = dist / |power| / 2`). Mirrors the
+    // FlameRenderer init-pass machinery in compute_kernel.rs. None
+    // when no active variation has init, in which case the dispatch
+    // is skipped.
+    init_pipeline: Option<ComputePipeline>,
+    init_bind_group_layout: BindGroupLayout,
+    init_pair_count: u32,
 
     // GPU resources for tonemapping
     tonemap_pipeline: RenderPipeline,
@@ -219,19 +230,18 @@ impl HighResExporter {
             mapped_at_creation: false,
         });
 
-        // Create and populate variation params buffer (include final transform if present)
+        // Variation params buffer — sized for the worst-case
+        // MAX_TRANSFORMS slots so flames whose pool count exceeds the
+        // old 32-slot cap don't overflow the write.
         let variation_params = GpuVariationParams::from_flame(&config.flame, &global_registry());
-
-        let max_transforms = 32;
-        let variation_params_size = max_transforms * std::mem::size_of::<GpuVariationParams>() as u64;
+        let variation_params_size = (crate::gpu::buffers::MAX_TRANSFORMS
+            * std::mem::size_of::<GpuVariationParams>()) as u64;
         let variation_params_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Export Variation Params Buffer"),
             size: variation_params_size,
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-
-        // Upload variation params
         queue.write_buffer(&variation_params_buffer, 0, bytemuck::cast_slice(&variation_params));
 
         // Create xaos buffer (identity weights if not used)
@@ -252,6 +262,31 @@ impl HighResExporter {
             let identity: Vec<f32> = vec![1.0; (num_transforms * num_transforms) as usize];
             queue.write_buffer(&xaos_buffer, 0, bytemuck::cast_slice(&identity));
         }
+
+        // Per-normal attachment lists (Linked + Final chains). The GPU
+        // struct stride matches the per-flame `attachment_cap` — must
+        // agree with the value the shader was built with.
+        // See per-transform-linked-and-final.md.
+        let cap = config.flame.attachment_cap();
+        let stride = crate::gpu::buffers::attachment_stride_bytes(cap);
+        let attachments_buffer_size = (crate::gpu::buffers::MAX_TRANSFORMS * stride) as u64;
+        let attachments_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Export Attachments Buffer"),
+            size: attachments_buffer_size,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let n = config.flame.transforms.len();
+        let l = config.flame.linked_transforms.len();
+        let f = config.flame.final_transforms.len();
+        let mut buf = vec![0u8; crate::gpu::buffers::MAX_TRANSFORMS * stride];
+        for (i, t) in config.flame.transforms.iter().enumerate() {
+            crate::gpu::buffers::pack_attachment_entry(
+                &mut buf[i * stride..(i + 1) * stride],
+                t, cap, n, l, n + l, f,
+            );
+        }
+        queue.write_buffer(&attachments_buffer, 0, &buf);
 
         // Create palette texture (palette is always present)
         let palette = &config.palette;
@@ -315,10 +350,19 @@ impl HighResExporter {
                 }
             }
         }
-        // Include final transform's variations in shader
-        if let Some(ref final_xform) = config.flame.final_transform {
+        // Include all final-pool transforms' variations in shader.
+        for final_xform in &config.flame.final_transforms {
             for name in final_xform.active_variations() {
                 let weight = final_xform.get_variation(&name);
+                if weight != 0.0 {
+                    active_variations.insert(name, weight);
+                }
+            }
+        }
+        // Include all linked-pool transforms' variations in shader.
+        for linked_xform in &config.flame.linked_transforms {
+            for name in linked_xform.active_variations() {
+                let weight = linked_xform.get_variation(&name);
                 if weight != 0.0 {
                     active_variations.insert(name, weight);
                 }
@@ -334,6 +378,45 @@ impl HighResExporter {
             label: Some("Export Compute Shader"),
             source: ShaderSource::Wgsl(shader_source.into()),
         });
+
+        // Build the variation init shader if any active variation has
+        // `wgsl_init`. Mirrors `FlameRenderer`'s init pass in
+        // compute_kernel.rs — without this, init-derived params (like
+        // Julian's `cpower`) stay at 0.0 in the variation_params buffer
+        // and parameterized variations render as their degenerate
+        // defaults. Pre-existing bug only fixed once HighResExporter
+        // was wired up to the same machinery.
+        let init_bind_group_layout = crate::shader_cache::ShaderCache::create_init_bind_group_layout(&device);
+        let (init_pipeline, init_pair_count) = match shader_builder.build_init_shader(&config.flame, &active_variations) {
+            Some(init_source) => {
+                let pair_count = init_source
+                    .lines()
+                    .filter(|l| {
+                        let t = l.trim_start();
+                        t.starts_with("case ") && t.contains("u: {")
+                    })
+                    .count() as u32;
+                let init_module = device.create_shader_module(ShaderModuleDescriptor {
+                    label: Some("Export Variation Init Shader"),
+                    source: ShaderSource::Wgsl(init_source.into()),
+                });
+                let init_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+                    label: Some("Export Init Pipeline Layout"),
+                    bind_group_layouts: &[&init_bind_group_layout],
+                    push_constant_ranges: &[],
+                });
+                let pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
+                    label: Some("Export Variation Init"),
+                    layout: Some(&init_layout),
+                    module: &init_module,
+                    entry_point: Some("init_main"),
+                    compilation_options: Default::default(),
+                    cache: None,
+                });
+                (Some(pipeline), pair_count)
+            }
+            None => (None, 0),
+        };
 
         // Create bind group layout
         let bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
@@ -415,6 +498,17 @@ impl HighResExporter {
                 // binding 7: xaos weights
                 BindGroupLayoutEntry {
                     binding: 7,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // binding 8: per-normal attachment lists (Linked + Final chains)
+                BindGroupLayoutEntry {
+                    binding: 8,
                     visibility: ShaderStages::COMPUTE,
                     ty: BindingType::Buffer {
                         ty: BufferBindingType::Storage { read_only: true },
@@ -613,10 +707,14 @@ impl HighResExporter {
             sample_counter_buffer,
             variation_params_buffer,
             xaos_buffer,
+            attachments_buffer,
             palette_texture,
             palette_sampler,
             compute_pipeline,
             bind_group_layout,
+            init_pipeline,
+            init_bind_group_layout,
+            init_pair_count,
             tonemap_pipeline,
             tonemap_bind_group_layout,
             tonemap_params_buffer,
@@ -679,8 +777,45 @@ impl HighResExporter {
                     binding: 7,
                     resource: self.xaos_buffer.as_entire_binding(),
                 },
+                BindGroupEntry {
+                    binding: 8,
+                    resource: self.attachments_buffer.as_entire_binding(),
+                },
             ],
         });
+
+        // Run the variation init pass once if any active variation has
+        // `wgsl_init`. Populates derived params (e.g. Julian's `cpower`)
+        // in `variation_params_buffer` so the main sample-generation
+        // pass reads correct values via `get_param`. Without this,
+        // parameterized variations render as their degenerate defaults
+        // (Julian collapses to a unit circle, Blob loses its shape, etc).
+        if let Some(init_pipeline) = self.init_pipeline.as_ref() {
+            if self.init_pair_count > 0 {
+                let init_bind_group = self.device.create_bind_group(&BindGroupDescriptor {
+                    label: Some("Export Variation Init Bind Group"),
+                    layout: &self.init_bind_group_layout,
+                    entries: &[BindGroupEntry {
+                        binding: 0,
+                        resource: self.variation_params_buffer.as_entire_binding(),
+                    }],
+                });
+                let mut init_encoder = self.device.create_command_encoder(&CommandEncoderDescriptor {
+                    label: Some("Export Variation Init Encoder"),
+                });
+                {
+                    let mut init_pass = init_encoder.begin_compute_pass(&ComputePassDescriptor {
+                        label: Some("Export Variation Init Pass"),
+                        timestamp_writes: None,
+                    });
+                    init_pass.set_pipeline(init_pipeline);
+                    init_pass.set_bind_group(0, &init_bind_group, &[]);
+                    let workgroups = (self.init_pair_count + 63) / 64;
+                    init_pass.dispatch_workgroups(workgroups, 1, 1);
+                }
+                self.queue.submit(std::iter::once(init_encoder.finish()));
+            }
+        }
 
         // Create readback buffer for samples
         let readback_buffer = self.device.create_buffer(&BufferDescriptor {
@@ -743,8 +878,8 @@ impl HighResExporter {
                 fog_strength: config.fog_strength,
                 fog_start: config.fog_start,
                 histogram_color_scale: config.histogram_color_scale,
-                has_final_transform: if config.flame.final_transform.is_some() { 1 } else { 0 },
-                final_transform_index: config.flame.transforms.len() as u32,
+                has_final_transform: if !config.flame.final_transforms.is_empty() { 1 } else { 0 },
+                final_transform_index: 0,  // Legacy field — shader uses attachments chain now
                 bits_per_transform: crate::gpu::buffers::bits_per_transform(config.flame.transforms.len() as u32),
                 path_map_style: config.path_map_style as u32,
                 path_capture_mode: config.path_capture_mode as u32,
@@ -1003,9 +1138,18 @@ impl HighResExporter {
         let pixels_per_unit_zoomed = base_pixels_per_unit * 2.0_f32.powf(apophysis_zoom);
         let area = (self.width as f32 * self.height as f32) / (pixels_per_unit_zoomed * pixels_per_unit_zoomed);
 
-        // Sample density: scaled by iterations_per_thread
-        // NOTE: No resolution normalization here - CPU export was already calibrated for large resolutions
-        let sample_density = 5000.0 * (self.iterations_per_thread as f32 / 256.0);
+        // Sample density: scaled by iterations_per_thread AND resolution.
+        // Mirrors `FlameRenderer::tonemap_for_export` in compute_kernel.rs.
+        // The resolution factor compensates for the fact that at 8000×8000
+        // (64M pixels) the per-pixel density is 64× lower than at 1000×1000
+        // for the same total iteration count — without this factor the
+        // tonemap divides by a too-high sample_density and the image goes
+        // perceptually black.
+        let total_pixels = (self.width * self.height) as f32;
+        let reference_pixels = 1_000_000.0;
+        let sample_density = 5000.0
+            * (self.iterations_per_thread as f32 / 256.0)
+            * (reference_pixels / total_pixels);
 
         let tonemap_mode = match config.tonemap_mode {
             crate::scene::tonemap::ToneMapMode::Linear => 0u32,

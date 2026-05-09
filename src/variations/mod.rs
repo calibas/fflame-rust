@@ -478,7 +478,7 @@ pub fn global_registry_mut() -> RwLockWriteGuard<'static, VariationRegistry> {
 pub fn missing_variations_in(flame: &crate::scene::transforms::Flame) -> Vec<String> {
     let registry = global_registry();
     let mut missing = std::collections::HashSet::new();
-    for xform in &flame.transforms {
+    let mut scan = |xform: &crate::scene::transforms::Transform| {
         for name in xform.variations.keys() {
             if xform.variations.get(name).copied().unwrap_or(0.0) == 0.0 {
                 continue; // weight 0 — not actually used
@@ -487,17 +487,10 @@ pub fn missing_variations_in(flame: &crate::scene::transforms::Flame) -> Vec<Str
                 missing.insert(name.clone());
             }
         }
-    }
-    if let Some(ref final_xform) = flame.final_transform {
-        for name in final_xform.variations.keys() {
-            if final_xform.variations.get(name).copied().unwrap_or(0.0) == 0.0 {
-                continue;
-            }
-            if !registry.has(name) {
-                missing.insert(name.clone());
-            }
-        }
-    }
+    };
+    for xform in &flame.transforms { scan(xform); }
+    for xform in &flame.linked_transforms { scan(xform); }
+    for xform in &flame.final_transforms { scan(xform); }
     missing.into_iter().collect()
 }
 

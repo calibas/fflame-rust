@@ -276,6 +276,24 @@ pub struct ShaderConstants {
     /// Whether any transform uses post-affine (eliminates branch if false)
     pub has_post_affine: bool,
 
+    /// Whether the flame has any Linked or Final pool members. Drives
+    /// the `HAS_ATTACHMENTS` template flag. False ⇒ the per-iteration
+    /// `attachments[xform_idx]` load and both chain loops are stripped
+    /// from the compiled shader. Tracked here (instead of recomputed
+    /// per-build) so the shader cache's constants-changed check picks
+    /// up transitions and triggers a rebuild.
+    pub has_attachments: bool,
+
+    /// Per-flame `array<u32, N>` length for the AttachmentList struct.
+    /// Substituted into the shader headers via the `{{ATTACHMENT_CAP}}`
+    /// placeholder; also drives the dynamic stride used when the host
+    /// packs the attachments buffer. A flame whose normals each carry
+    /// one Final attachment compiles a 16-byte struct (cap=1) vs the
+    /// worst-case 264 bytes (cap=32) — major per-iteration bandwidth
+    /// reduction for the migrated-singular-final case. See
+    /// `Flame::attachment_cap`.
+    pub attachment_cap: u32,
+
     /// Precomputed cumulative weights for transform selection
     /// Eliminates the weight accumulation loops in select_transform
     pub cumulative_weights: Option<Vec<f32>>,
@@ -289,6 +307,8 @@ impl Default for ShaderConstants {
             has_final_transform: false,
             final_transform_index: 0,
             has_post_affine: false,
+            has_attachments: false,
+            attachment_cap: 1,
             inlined_transforms: None,
             cumulative_weights: None,
         }
@@ -307,7 +327,9 @@ impl ShaderConstants {
     ) -> Self {
         // Ensure at least 1 transform to prevent shader overflow (NUM_TRANSFORMS - 1u)
         let num_transforms = flame.transforms.len().max(1) as u32;
-        let has_final = flame.final_transform.is_some();
+        // Inline-shader path treats `final_transforms[0]` as the singular
+        // final transform — multi-final in inline mode is a Phase 6 follow-on.
+        let has_final = !flame.final_transforms.is_empty();
         let final_idx = num_transforms; // Final comes after regular transforms
 
         // Per-flame local index map. Must match what the buffer populator
@@ -386,8 +408,8 @@ impl ShaderConstants {
             }
         }
 
-        // Handle final transform if present
-        if let Some(final_xform) = &flame.final_transform {
+        // Handle final transform if present (inline mode uses pool[0]).
+        if let Some(final_xform) = flame.final_transforms.first() {
             let mut var_weights = Vec::new();
             for (name, &weight) in &final_xform.variations {
                 if weight.abs() > 1e-6 {
@@ -441,6 +463,8 @@ impl ShaderConstants {
             has_final_transform: has_final,
             final_transform_index: final_idx,
             has_post_affine: flame.has_post_affine(),
+            has_attachments: flame.has_attachments(),
+            attachment_cap: flame.attachment_cap() as u32,
             inlined_transforms: Some(inlined),
             cumulative_weights: Some(cumulative),
         }
@@ -700,7 +724,7 @@ impl ShaderBuilder {
     /// same stateful variation get independent state. The switch key is
     /// encoded as `xform_id * 100 + variation_id`, which fits in u32 with
     /// no collisions because `MAX_VARIATIONS_PER_FLAME = 100` and
-    /// `MAX_TRANSFORMS = 32`.
+    /// `MAX_TRANSFORMS = 128`.
     ///
     /// `var<private>` is per-invocation (per-thread) and zero-initialized
     /// by WGSL spec at thread start, persisting across the inner iteration
@@ -881,11 +905,21 @@ impl ShaderBuilder {
                 pairs.push((xform_idx, var_name.clone(), offset));
             }
         };
-        for (i, xform) in flame.transforms.iter().enumerate() {
-            emit_variation(i as u32, xform);
+        // Emit per-transform state offsets in the same global xform_id
+        // order used by the GPU transform buffer: normals, then linkeds,
+        // then finals.
+        let mut next_idx: u32 = 0;
+        for xform in flame.transforms.iter() {
+            emit_variation(next_idx, xform);
+            next_idx += 1;
         }
-        if let Some(final_xform) = &flame.final_transform {
-            emit_variation(flame.transforms.len() as u32, final_xform);
+        for xform in flame.linked_transforms.iter() {
+            emit_variation(next_idx, xform);
+            next_idx += 1;
+        }
+        for xform in flame.final_transforms.iter() {
+            emit_variation(next_idx, xform);
+            next_idx += 1;
         }
 
         if pairs.is_empty() {
@@ -1043,8 +1077,12 @@ impl ShaderBuilder {
         // 1. Hard-coded constants (must come first for use in later code)
         shader.push_str(&constants.to_wgsl());
 
-        // 2. Header
-        shader.push_str(include_str!("../shaders/core/header.wgsl"));
+        // 2. Header — substitute {{ATTACHMENT_CAP}} into the AttachmentList
+        // struct definition. Drives both the per-iteration load size and
+        // the host-side packing stride.
+        let header = include_str!("../shaders/core/header.wgsl")
+            .replace("{{ATTACHMENT_CAP}}", &constants.attachment_cap.to_string());
+        shader.push_str(&header);
         shader.push('\n');
 
         // 3. RNG
@@ -1113,6 +1151,12 @@ impl ShaderBuilder {
         processor.set("PATH_TRACKING", path_features_enabled);
         processor.set("XAOS_ENABLED", xaos_enabled);
         processor.set("HAS_DC", has_dc);
+        // HAS_ATTACHMENTS gates the per-iteration `attachments[xform_idx]`
+        // load and the Linked/Final chain loops. False when the flame has
+        // no Linked or Final transforms, restoring pre-attachment-feature
+        // shader cost. Sourced from `constants` so the shader cache picks
+        // up transitions and rebuilds.
+        processor.set("HAS_ATTACHMENTS", constants.has_attachments);
         let mut processed = processor.process(template);
         // Inject per-thread state initialization block at the marker.
         // No-op if no active variation has wgsl_state_init.
@@ -1596,8 +1640,11 @@ impl ShaderBuilder {
 
         let mut shader = String::new();
 
-        // 1. Tiled header (includes TileParams binding)
-        shader.push_str(include_str!("../shaders/core/header_tiled.wgsl"));
+        // 1. Tiled header (includes TileParams binding) — substitute
+        // {{ATTACHMENT_CAP}} into the AttachmentList struct.
+        let header = include_str!("../shaders/core/header_tiled.wgsl")
+            .replace("{{ATTACHMENT_CAP}}", &flame.attachment_cap().to_string());
+        shader.push_str(&header);
         shader.push('\n');
 
         // 2. RNG
@@ -1647,6 +1694,7 @@ impl ShaderBuilder {
         let mut processor = TemplateProcessor::new();
         processor.set("RENDER_3D", render_3d);
         processor.set("HAS_DC", has_dc);
+        processor.set("HAS_ATTACHMENTS", flame.has_attachments());
         let mut processed = processor.process(include_str!("../shaders/core/main_tiled.wgsl"));
         let state_init = self.build_state_init_block(flame, &active);
         processed = processed.replace("//__STATE_INIT_BLOCK__", &state_init);
@@ -1670,8 +1718,11 @@ impl ShaderBuilder {
 
         let mut shader = String::new();
 
-        // 1. Export header
-        shader.push_str(include_str!("../shaders/core/header_export.wgsl"));
+        // 1. Export header — substitute {{ATTACHMENT_CAP}} into the
+        // AttachmentList struct.
+        let header = include_str!("../shaders/core/header_export.wgsl")
+            .replace("{{ATTACHMENT_CAP}}", &flame.attachment_cap().to_string());
+        shader.push_str(&header);
         shader.push('\n');
 
         // 2. RNG
@@ -1718,10 +1769,25 @@ impl ShaderBuilder {
         // 8. Export main — routed through TemplateProcessor with HAS_DC gate.
         let mut processor = TemplateProcessor::new();
         processor.set("HAS_DC", has_dc);
+        processor.set("HAS_ATTACHMENTS", flame.has_attachments());
         let mut processed = processor.process(include_str!("../shaders/core/main_export.wgsl"));
         let state_init = self.build_state_init_block(flame, &active);
         processed = processed.replace("//__STATE_INIT_BLOCK__", &state_init);
         shader.push_str(&processed);
+
+        // DEBUG: Write shader to file for analysis (enabled via --dump-shader).
+        // Mirrors `build_from_template`'s dump so the high-res export path
+        // can also be inspected. Writes to a distinct filename so a single
+        // run that goes through both paths leaves both shaders on disk.
+        if should_dump_shader() {
+            let filename = "debug_shader_export.wgsl";
+            if let Err(e) = std::fs::write(filename, &shader) {
+                log::error!("Failed to write export debug shader: {}", e);
+            } else {
+                log::info!("Wrote export shader to {} ({} bytes, {} lines)",
+                    filename, shader.len(), shader.lines().count());
+            }
+        }
 
         shader
     }
@@ -1742,8 +1808,14 @@ mod tests {
         let mut active = HashMap::new();
         active.insert("linear".to_string(), 1.0);
 
-        let shader_2d = builder.build_trajectory_2d_tiled(&active);
-        let shader_3d = builder.build_trajectory_3d_tiled(&active);
+        // Stub flame so the shader builder can compute layouts.
+        let mut flame = crate::scene::transforms::Flame::new();
+        let mut t = crate::scene::transforms::Transform::new();
+        t.set_variation("linear", 1.0);
+        flame.transforms.push(t);
+
+        let shader_2d = builder.build_trajectory_2d_tiled(&flame, &active);
+        let shader_3d = builder.build_trajectory_3d_tiled(&flame, &active);
 
         // utilities_tiled.wgsl defines BOTH world_to_pixel and
         // world_to_pixel_3d functions, so check for the call site
@@ -1786,7 +1858,11 @@ mod tests {
         // Flame using just `linear` — no DC variation
         let mut active_no_dc = HashMap::new();
         active_no_dc.insert("linear".to_string(), 1.0);
-        let shader = builder.build_trajectory_2d_tiled(&active_no_dc);
+        let mut flame_no_dc = crate::scene::transforms::Flame::new();
+        let mut t = crate::scene::transforms::Transform::new();
+        t.set_variation("linear", 1.0);
+        flame_no_dc.transforms.push(t);
+        let shader = builder.build_trajectory_2d_tiled(&flame_no_dc, &active_no_dc);
         assert!(!shader.contains("var c_base"),
                 "HAS_DC=false shader contains c_base");
         assert!(!shader.contains("xform.direct_color"),
@@ -1797,7 +1873,11 @@ mod tests {
         // Flame using dc_linear — has writes_color: true
         let mut active_dc = HashMap::new();
         active_dc.insert("dc_linear".to_string(), 1.0);
-        let shader = builder.build_trajectory_2d_tiled(&active_dc);
+        let mut flame_dc = crate::scene::transforms::Flame::new();
+        let mut t = crate::scene::transforms::Transform::new();
+        t.set_variation("dc_linear", 1.0);
+        flame_dc.transforms.push(t);
+        let shader = builder.build_trajectory_2d_tiled(&flame_dc, &active_dc);
         assert!(shader.contains("var c_base"),
                 "HAS_DC=true shader missing c_base");
         assert!(shader.contains("xform.direct_color"),

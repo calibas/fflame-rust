@@ -1,3 +1,27 @@
+/// One in-frame edit to a normal transform's attachment list (Linked or Final).
+#[derive(Debug, Clone)]
+pub struct AttachmentEdit {
+    pub normal_index: usize,
+    pub kind: AttachmentKind,
+    pub op: AttachmentOp,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum AttachmentKind {
+    Linked,
+    Final,
+}
+
+#[derive(Debug, Clone)]
+pub enum AttachmentOp {
+    /// Toggle attachment at the given pool index (attach if absent, detach if present).
+    Toggle(usize),
+    /// Move the entry whose pool index is `pool_index` one slot earlier in the
+    /// attachment list (changes execution order for that normal only).
+    MoveUp(usize),
+    MoveDown(usize),
+}
+
 /// Response from the UI layer indicating what actions should be taken
 ///
 /// Note: Config-related change tracking has been moved to ConfigManager.get_pending_actions()
@@ -32,6 +56,21 @@ pub struct UiResponse {
     pub add_transform: bool,
     pub delete_transform: Option<usize>,
     pub clone_transform: Option<usize>,
+
+    // Linked-pool transform management (parallel to the normal ones above).
+    pub add_linked_transform: bool,
+    pub delete_linked_transform: Option<usize>,
+    pub clone_linked_transform: Option<usize>,
+
+    // Final-pool transform management. Adding a Final auto-attaches it
+    // to every normal transform; ui_handlers builds the right snapshot.
+    pub add_final_transform: bool,
+    pub delete_final_transform: Option<usize>,
+    pub clone_final_transform: Option<usize>,
+
+    // Per-normal attachment edit (toggle / reorder Linked or Final attachments
+    // on a specific normal transform). Applied as a full-config snapshot.
+    pub attachment_edit: Option<AttachmentEdit>,
 
     // Panel open requests
     pub open_palette_editor: bool,
@@ -153,6 +192,13 @@ impl Default for UiResponse {
             add_transform: false,
             delete_transform: None,
             clone_transform: None,
+            add_linked_transform: false,
+            delete_linked_transform: None,
+            clone_linked_transform: None,
+            add_final_transform: false,
+            delete_final_transform: None,
+            clone_final_transform: None,
+            attachment_edit: None,
             open_palette_editor: false,
             open_palette_library: false,
             open_config_dialog: false,

@@ -159,6 +159,19 @@ pub struct PanelContext<'a> {
     pub add_transform: &'a mut bool,
     pub delete_transform: &'a mut Option<usize>,
     pub clone_transform: &'a mut Option<usize>,
+
+    // Linked-pool actions
+    pub add_linked_transform: &'a mut bool,
+    pub delete_linked_transform: &'a mut Option<usize>,
+    pub clone_linked_transform: &'a mut Option<usize>,
+
+    // Final-pool actions
+    pub add_final_transform: &'a mut bool,
+    pub delete_final_transform: &'a mut Option<usize>,
+    pub clone_final_transform: &'a mut Option<usize>,
+
+    // Per-normal attachment edit (Linked/Final toggle or reorder).
+    pub attachment_edit: &'a mut Option<crate::ui::response::AttachmentEdit>,
     pub undo_requested: &'a mut bool,
     pub redo_requested: &'a mut bool,
     pub open_palette_editor: &'a mut bool,
@@ -451,9 +464,18 @@ impl<'a> PanelViewer<'a> {
             ui,
             self.context.config_manager,
             self.context.flame,
-            self.context.add_transform,
-            self.context.delete_transform,
-            self.context.clone_transform,
+            super::transforms::PoolActions {
+                add_normal: self.context.add_transform,
+                delete_normal: self.context.delete_transform,
+                clone_normal: self.context.clone_transform,
+                add_linked: self.context.add_linked_transform,
+                delete_linked: self.context.delete_linked_transform,
+                clone_linked: self.context.clone_linked_transform,
+                add_final: self.context.add_final_transform,
+                delete_final: self.context.delete_final_transform,
+                clone_final: self.context.clone_final_transform,
+                attachment_edit: self.context.attachment_edit,
+            },
             self.context.open_triangle_editor,
         );
     }

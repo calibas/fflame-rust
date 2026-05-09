@@ -1,5 +1,5 @@
 use crate::scene::transforms::Flame;
-use crate::config::{ConfigManager, ConfigPath, AffineParam, UpdateType};
+use crate::config::{ConfigManager, ConfigPath, AffineParam, TransformRef, UpdateType};
 use egui::{Color32, Pos2, Stroke, Vec2};
 use serde::{Deserialize, Serialize};
 use rust_i18n::t;
@@ -46,23 +46,47 @@ fn render_triangle_editor_core(
                 ui.separator();
             }
 
-            // Transform selector (persisted across frames)
-            // Option<usize>: Some(i) for regular transform, None for final transform
+            // Transform selector (persisted across frames). TransformRef
+            // identifies which pool + index is being edited.
             let mut selected_transform = ui.ctx().data_mut(|d| {
-                d.get_persisted::<Option<usize>>(egui::Id::new("triangle_editor_selected_transform"))
-                    .unwrap_or(Some(0))
+                d.get_persisted::<TransformRef>(egui::Id::new("triangle_editor_selected_transform"))
+                    .unwrap_or(TransformRef::Normal(0))
             });
 
-            // Clamp selection to valid range
-            if flame.transforms.is_empty() {
+            // Bail if nothing is selectable at all.
+            if flame.transforms.is_empty()
+                && flame.linked_transforms.is_empty()
+                && flame.final_transforms.is_empty()
+            {
                 ui.label(t!("triangle_editor.no_transforms"));
                 return max_update;
             }
-            if let Some(idx) = selected_transform {
-                if idx >= flame.transforms.len() {
-                    selected_transform = Some(flame.transforms.len() - 1);
-                }
+
+            // Clamp selection to a valid index in its pool, or fall back to
+            // the first available pool member.
+            let in_range = match selected_transform {
+                TransformRef::Normal(i) => i < flame.transforms.len(),
+                TransformRef::Linked(i) => i < flame.linked_transforms.len(),
+                TransformRef::Final(i) => i < flame.final_transforms.len(),
+            };
+            if !in_range {
+                selected_transform = if !flame.transforms.is_empty() {
+                    TransformRef::Normal(0)
+                } else if !flame.linked_transforms.is_empty() {
+                    TransformRef::Linked(0)
+                } else {
+                    TransformRef::Final(0)
+                };
             }
+
+            // Helper for display text.
+            let xref_display = |xref: TransformRef| -> String {
+                match xref {
+                    TransformRef::Normal(i) => t!("triangle_editor.transform_n", n = i + 1).to_string(),
+                    TransformRef::Linked(i) => format!("Linked {}", i + 1),
+                    TransformRef::Final(i) => format!("Final {}", i + 1),
+                }
+            };
 
             ui.horizontal(|ui| {
                 if !compact {
@@ -70,25 +94,29 @@ fn render_triangle_editor_core(
                         .on_hover_text(t!("triangle_editor.tooltip_transform_selector"));
                 }
                 let old_selection = selected_transform;
-                let display_text = match selected_transform {
-                    Some(i) => t!("triangle_editor.transform_n", n = i + 1).to_string(),
-                    None => t!("triangle_editor.transform_final").to_string(),
-                };
                 egui::ComboBox::new("triangle_editor_transform_selector", "")
-                    .selected_text(display_text)
+                    .selected_text(xref_display(selected_transform))
                     .show_ui(ui, |ui| {
-                        // Regular transforms
                         for i in 0..flame.transforms.len() {
-                            ui.selectable_value(&mut selected_transform, Some(i), t!("triangle_editor.transform_n", n = i + 1).to_string());
+                            let xref = TransformRef::Normal(i);
+                            ui.selectable_value(&mut selected_transform, xref, xref_display(xref));
                         }
-                        // Final transform (if it exists)
-                        if flame.final_transform.is_some() {
+                        if !flame.linked_transforms.is_empty() {
                             ui.separator();
-                            ui.selectable_value(&mut selected_transform, None, t!("triangle_editor.transform_final").to_string());
+                            for i in 0..flame.linked_transforms.len() {
+                                let xref = TransformRef::Linked(i);
+                                ui.selectable_value(&mut selected_transform, xref, xref_display(xref));
+                            }
+                        }
+                        if !flame.final_transforms.is_empty() {
+                            ui.separator();
+                            for i in 0..flame.final_transforms.len() {
+                                let xref = TransformRef::Final(i);
+                                ui.selectable_value(&mut selected_transform, xref, xref_display(xref));
+                            }
                         }
                     });
 
-                // Persist selection if changed
                 if selected_transform != old_selection {
                     ui.ctx().data_mut(|d| {
                         d.insert_persisted(egui::Id::new("triangle_editor_selected_transform"), selected_transform);
@@ -137,10 +165,10 @@ fn render_triangle_editor_core(
             }
 
             // Pre/Post affine toggle - only show when selected transform has post-affine enabled
-            let selected_has_post_affine = match selected_transform {
-                Some(idx) => flame.transforms.get(idx).map(|t| t.post_affine_enabled).unwrap_or(false),
-                None => flame.final_transform.as_ref().map(|t| t.post_affine_enabled).unwrap_or(false),
-            };
+            let selected_has_post_affine = selected_transform
+                .get(flame)
+                .map(|t| t.post_affine_enabled)
+                .unwrap_or(false);
 
             let mut affine_target = ui.ctx().data_mut(|d| {
                 d.get_persisted::<AffineTarget>(egui::Id::new("triangle_editor_affine_target"))
@@ -179,10 +207,7 @@ fn render_triangle_editor_core(
 
             // Calculate dynamic bounds from the selected transform's vertices
             let mut max_extent = 2.0f32; // Minimum bounds
-            let selected_xform = match selected_transform {
-                Some(i) => flame.transforms.get(i),
-                None => flame.final_transform.as_ref(),
-            };
+            let selected_xform = selected_transform.get(flame);
             if let Some(transform) = selected_xform {
                 let (o, x, y) = transform.to_triangle_apophysis();
                 max_extent = max_extent
@@ -280,64 +305,40 @@ fn render_triangle_editor_core(
                     .unwrap_or(None)
             });
 
-            // Helper to create affine changes for either regular or final transform
-            // Supports both pre-affine and post-affine based on affine_target
+            // Helper to build a batch of affine ConfigPaths for the
+            // selected transform, dispatching to the right pool via
+            // `selected_transform.affine_path()` / `post_affine_path()`.
             let make_affine_changes = |xform: &crate::scene::transforms::Transform| -> Vec<(ConfigPath, crate::config::ConfigValue)> {
-                match (selected_transform, affine_target) {
-                    (Some(index), AffineTarget::Pre) => vec![
-                        (ConfigPath::TransformAffine { index, param: AffineParam::A }, xform.a.into()),
-                        (ConfigPath::TransformAffine { index, param: AffineParam::B }, xform.b.into()),
-                        (ConfigPath::TransformAffine { index, param: AffineParam::C }, xform.c.into()),
-                        (ConfigPath::TransformAffine { index, param: AffineParam::D }, xform.d.into()),
-                        (ConfigPath::TransformAffine { index, param: AffineParam::E }, xform.e.into()),
-                        (ConfigPath::TransformAffine { index, param: AffineParam::F }, xform.f.into()),
-                    ],
-                    (Some(index), AffineTarget::Post) => vec![
-                        (ConfigPath::TransformPostAffine { index, param: AffineParam::A }, xform.post_a.into()),
-                        (ConfigPath::TransformPostAffine { index, param: AffineParam::B }, xform.post_b.into()),
-                        (ConfigPath::TransformPostAffine { index, param: AffineParam::C }, xform.post_c.into()),
-                        (ConfigPath::TransformPostAffine { index, param: AffineParam::D }, xform.post_d.into()),
-                        (ConfigPath::TransformPostAffine { index, param: AffineParam::E }, xform.post_e.into()),
-                        (ConfigPath::TransformPostAffine { index, param: AffineParam::F }, xform.post_f.into()),
-                    ],
-                    (None, AffineTarget::Pre) => vec![
-                        (ConfigPath::FinalTransformAffine { param: AffineParam::A }, xform.a.into()),
-                        (ConfigPath::FinalTransformAffine { param: AffineParam::B }, xform.b.into()),
-                        (ConfigPath::FinalTransformAffine { param: AffineParam::C }, xform.c.into()),
-                        (ConfigPath::FinalTransformAffine { param: AffineParam::D }, xform.d.into()),
-                        (ConfigPath::FinalTransformAffine { param: AffineParam::E }, xform.e.into()),
-                        (ConfigPath::FinalTransformAffine { param: AffineParam::F }, xform.f.into()),
-                    ],
-                    (None, AffineTarget::Post) => vec![
-                        (ConfigPath::FinalTransformPostAffine { param: AffineParam::A }, xform.post_a.into()),
-                        (ConfigPath::FinalTransformPostAffine { param: AffineParam::B }, xform.post_b.into()),
-                        (ConfigPath::FinalTransformPostAffine { param: AffineParam::C }, xform.post_c.into()),
-                        (ConfigPath::FinalTransformPostAffine { param: AffineParam::D }, xform.post_d.into()),
-                        (ConfigPath::FinalTransformPostAffine { param: AffineParam::E }, xform.post_e.into()),
-                        (ConfigPath::FinalTransformPostAffine { param: AffineParam::F }, xform.post_f.into()),
-                    ],
-                }
+                let xref = selected_transform;
+                let path = |p: AffineParam| match affine_target {
+                    AffineTarget::Pre => xref.affine_path(p),
+                    AffineTarget::Post => xref.post_affine_path(p),
+                };
+                let (a, b, c, d, e, f) = match affine_target {
+                    AffineTarget::Pre => (xform.a, xform.b, xform.c, xform.d, xform.e, xform.f),
+                    AffineTarget::Post => (xform.post_a, xform.post_b, xform.post_c, xform.post_d, xform.post_e, xform.post_f),
+                };
+                vec![
+                    (path(AffineParam::A), a.into()),
+                    (path(AffineParam::B), b.into()),
+                    (path(AffineParam::C), c.into()),
+                    (path(AffineParam::D), d.into()),
+                    (path(AffineParam::E), e.into()),
+                    (path(AffineParam::F), f.into()),
+                ]
             };
 
-            // Helper to sync transform back from config
+            // Helper to sync the local transform copy back from active_config
+            // (used so live preview during a drag reflects the merged value).
             let sync_transform = |xform: &mut crate::scene::transforms::Transform, cfg_mgr: &ConfigManager| {
-                match selected_transform {
-                    Some(index) => *xform = cfg_mgr.active_config().flame.transforms[index].clone(),
-                    None => *xform = cfg_mgr.active_config().flame.final_transform.as_ref().unwrap().clone(),
+                if let Some(t) = selected_transform.get(&cfg_mgr.active_config().flame) {
+                    *xform = t.clone();
                 }
             };
 
-            // Helper for display text
-            let transform_name = match selected_transform {
-                Some(i) => t!("triangle_editor.transform_n", n = i + 1).to_string(),
-                None => t!("triangle_editor.transform_final").to_string(),
-            };
+            let transform_name = xref_display(selected_transform);
 
-            // Get current triangle for selected transform (regular or final)
-            let transform_mut = match selected_transform {
-                Some(idx) => flame.transforms.get_mut(idx),
-                None => flame.final_transform.as_mut(),
-            };
+            let transform_mut = selected_transform.get_mut(flame);
 
             if let Some(transform) = transform_mut {
                 let (mut o, mut x, mut y) = match affine_target {
@@ -365,11 +366,13 @@ fn render_triangle_editor_core(
                                     drag_target = DragTarget::YPoint;
                                 }
 
-                                // Start modify session if we found a hit
+                                // Start modify session if we found a hit.
+                                // Modify session brackets the drag — all
+                                // intermediate update_batch calls run silent
+                                // and one ModifyTransform snapshot is recorded
+                                // on commit. Works for any pool member.
                                 if drag_target != DragTarget::None {
-                                    if let Some(index) = selected_transform {
-                                        let _ = config_manager.start_modify_transform(index);
-                                    }
+                                    let _ = config_manager.start_modify_transform(selected_transform);
                                 }
                             }
                         }
@@ -405,10 +408,8 @@ fn render_triangle_editor_core(
                         // Start drag on any point in canvas
                         if drag_start_pos.is_none() && response.dragged() {
                             drag_start_pos = response.interact_pointer_pos();
-                            // Start modify session
-                            if let Some(index) = selected_transform {
-                                let _ = config_manager.start_modify_transform(index);
-                            }
+                            // Start modify session — works for any pool member.
+                            let _ = config_manager.start_modify_transform(selected_transform);
                         }
 
                         // Translate entire triangle
@@ -447,10 +448,8 @@ fn render_triangle_editor_core(
                         // Capture initial mouse position
                         if drag_start_pos.is_none() && response.dragged() {
                             drag_start_pos = response.interact_pointer_pos();
-                            // Start modify session
-                            if let Some(index) = selected_transform {
-                                let _ = config_manager.start_modify_transform(index);
-                            }
+                            // Start modify session — works for any pool member.
+                            let _ = config_manager.start_modify_transform(selected_transform);
                         }
 
                         // Rotate X and Y around O based on angle from O
@@ -503,10 +502,8 @@ fn render_triangle_editor_core(
                         // Capture initial mouse position
                         if drag_start_pos.is_none() && response.dragged() {
                             drag_start_pos = response.interact_pointer_pos();
-                            // Start modify session
-                            if let Some(index) = selected_transform {
-                                let _ = config_manager.start_modify_transform(index);
-                            }
+                            // Start modify session — works for any pool member.
+                            let _ = config_manager.start_modify_transform(selected_transform);
                         }
 
                         // Scale along perpendicular axis to X-Y line
@@ -577,10 +574,7 @@ fn render_triangle_editor_core(
                             MouseMode::Rotate => "Rotate",
                             MouseMode::Scale => "Scale",
                         };
-                        let description = match selected_transform {
-                            Some(i) => format!("Triangle Edit {} (Transform {})", mode_name, i + 1),
-                            None => format!("Triangle Edit {} (Final)", mode_name),
-                        };
+                        let description = format!("Triangle Edit {} ({})", mode_name, xref_display(selected_transform));
                         if let Ok(update) = config_manager.commit_modify_transform(description) {
                             max_update = max_update.max(update);
                         }
@@ -596,110 +590,69 @@ fn render_triangle_editor_core(
                 });
             }
 
-            // Draw all transforms as semi-transparent triangles
-            for (i, transform) in flame.transforms.iter().enumerate() {
+            // Single helper that draws one transform's pre-affine triangle
+            // and (if enabled) its post-affine triangle, given the pool color
+            // and whether this is the currently-selected transform.
+            // Used for all three pools (Normal / Linked / Final).
+            let draw_transform = |painter: &egui::Painter,
+                                  transform: &crate::scene::transforms::Transform,
+                                  base_color: Color32,
+                                  is_selected: bool| {
                 let (o, x, y) = transform.to_triangle_apophysis();
-
                 let o_pos = to_canvas(o);
                 let x_pos = to_canvas(x);
                 let y_pos = to_canvas(y);
 
-                // Color per transform
-                let base_color = get_transform_color(i);
-                let alpha = if Some(i) == selected_transform { 255 } else { 80 };
-                let color = Color32::from_rgba_unmultiplied(
-                    base_color.r(),
-                    base_color.g(),
-                    base_color.b(),
-                    alpha,
-                );
+                let alpha = if is_selected { 255 } else { 80 };
+                let color = Color32::from_rgba_unmultiplied(base_color.r(), base_color.g(), base_color.b(), alpha);
 
-                // Draw lines O→X and O→Y
                 painter.line_segment([o_pos, x_pos], Stroke::new(2.0, color));
                 painter.line_segment([o_pos, y_pos], Stroke::new(2.0, color));
 
-                // Draw semi-transparent line between X and Y to complete the triangle
                 let transparent_color = Color32::from_rgba_unmultiplied(
-                    base_color.r(),
-                    base_color.g(),
-                    base_color.b(),
-                    (alpha as f32 * 0.5) as u8,  // 50% of current alpha for semi-transparency
+                    base_color.r(), base_color.g(), base_color.b(),
+                    (alpha as f32 * 0.5) as u8,
                 );
                 painter.line_segment([x_pos, y_pos], Stroke::new(1.5, transparent_color));
 
-                // Draw points with highlighting for active drag target
-                let point_radius = if Some(i) == selected_transform { 6.0 } else { 4.0 };
-
-                // Highlight the point being dragged
-                if Some(i) == selected_transform {
+                let point_radius = if is_selected { 6.0 } else { 4.0 };
+                if is_selected {
                     let highlight_radius = point_radius + 3.0;
                     match drag_target {
-                        DragTarget::Origin => {
-                            painter.circle_stroke(o_pos, highlight_radius, Stroke::new(2.0, Color32::WHITE));
-                        }
-                        DragTarget::XPoint => {
-                            painter.circle_stroke(x_pos, highlight_radius, Stroke::new(2.0, Color32::WHITE));
-                        }
-                        DragTarget::YPoint => {
-                            painter.circle_stroke(y_pos, highlight_radius, Stroke::new(2.0, Color32::WHITE));
-                        }
+                        DragTarget::Origin => { painter.circle_stroke(o_pos, highlight_radius, Stroke::new(2.0, Color32::WHITE)); }
+                        DragTarget::XPoint => { painter.circle_stroke(x_pos, highlight_radius, Stroke::new(2.0, Color32::WHITE)); }
+                        DragTarget::YPoint => { painter.circle_stroke(y_pos, highlight_radius, Stroke::new(2.0, Color32::WHITE)); }
                         DragTarget::None => {}
                     }
                 }
-
                 painter.circle_filled(o_pos, point_radius, color);
                 painter.circle_filled(x_pos, point_radius, color);
                 painter.circle_filled(y_pos, point_radius, color);
 
-                // Labels for selected transform
-                if Some(i) == selected_transform {
-                    painter.text(
-                        o_pos + Vec2::new(-15.0, -15.0),
-                        egui::Align2::CENTER_CENTER,
-                        "O",
-                        egui::FontId::proportional(14.0),
-                        Color32::WHITE,
-                    );
-                    painter.text(
-                        x_pos + Vec2::new(10.0, -10.0),
-                        egui::Align2::CENTER_CENTER,
-                        "X",
-                        egui::FontId::proportional(14.0),
-                        Color32::WHITE,
-                    );
-                    painter.text(
-                        y_pos + Vec2::new(10.0, -10.0),
-                        egui::Align2::CENTER_CENTER,
-                        "Y",
-                        egui::FontId::proportional(14.0),
-                        Color32::WHITE,
-                    );
+                if is_selected {
+                    painter.text(o_pos + Vec2::new(-15.0, -15.0), egui::Align2::CENTER_CENTER, "O",
+                        egui::FontId::proportional(14.0), Color32::WHITE);
+                    painter.text(x_pos + Vec2::new(10.0, -10.0), egui::Align2::CENTER_CENTER, "X",
+                        egui::FontId::proportional(14.0), Color32::WHITE);
+                    painter.text(y_pos + Vec2::new(10.0, -10.0), egui::Align2::CENTER_CENTER, "Y",
+                        egui::FontId::proportional(14.0), Color32::WHITE);
                 }
-            }
+            };
 
-            // Draw post-affine triangles for transforms that have post-affine enabled
-            for (i, transform) in flame.transforms.iter().enumerate() {
-                if !transform.post_affine_enabled {
-                    continue;
-                }
+            // Post-affine drawing helper (dashed lines, square points).
+            let draw_post_affine = |painter: &egui::Painter,
+                                    transform: &crate::scene::transforms::Transform,
+                                    base_color: Color32,
+                                    is_active_post: bool| {
+                if !transform.post_affine_enabled { return; }
                 let (o, x, y) = transform.post_to_triangle_apophysis();
-
                 let o_pos = to_canvas(o);
                 let x_pos = to_canvas(x);
                 let y_pos = to_canvas(y);
 
-                let base_color = get_transform_color(i);
-                // Dimmer than pre-affine, brighter when selected in post mode
-                let is_active_post = Some(i) == selected_transform && affine_target == AffineTarget::Post;
                 let alpha: u8 = if is_active_post { 200 } else { 50 };
-                let color = Color32::from_rgba_unmultiplied(
-                    base_color.r(),
-                    base_color.g(),
-                    base_color.b(),
-                    alpha,
-                );
+                let color = Color32::from_rgba_unmultiplied(base_color.r(), base_color.g(), base_color.b(), alpha);
 
-                // Draw dashed lines for post-affine triangles
                 let draw_dashed = |start: Pos2, end: Pos2| {
                     let dash_length = 6.0;
                     let gap_length = 4.0;
@@ -715,116 +668,63 @@ fn render_triangle_editor_core(
                         pos += dash_length + gap_length;
                     }
                 };
-
                 draw_dashed(o_pos, x_pos);
                 draw_dashed(o_pos, y_pos);
                 draw_dashed(x_pos, y_pos);
 
-                // Draw small square points for post-affine (to distinguish from pre-affine circles)
                 let point_size = if is_active_post { 5.0 } else { 3.0 };
                 let half = point_size / 2.0;
                 for pos in [o_pos, x_pos, y_pos] {
                     painter.rect_filled(
                         egui::Rect::from_min_size(Pos2::new(pos.x - half, pos.y - half), Vec2::splat(point_size)),
-                        0.0,
-                        color,
+                        0.0, color,
                     );
                 }
-
-                // Labels for selected post-affine
                 if is_active_post {
                     for (pos, label) in [(o_pos, "O'"), (x_pos, "X'"), (y_pos, "Y'")] {
-                        painter.text(
-                            pos + Vec2::new(-15.0, -15.0),
-                            egui::Align2::CENTER_CENTER,
-                            label,
-                            egui::FontId::proportional(12.0),
-                            color,
-                        );
+                        painter.text(pos + Vec2::new(-15.0, -15.0), egui::Align2::CENTER_CENTER, label,
+                            egui::FontId::proportional(12.0), color);
                     }
                 }
+            };
+
+            // Visual style per pool: Normal pools cycle through bright colors,
+            // Linked uses a unified cool tone, Final uses a unified warm tone.
+            let linked_pool_color = Color32::from_rgb(180, 180, 220);
+            let final_pool_color = Color32::from_rgb(220, 200, 160);
+
+            // Pre-affine pass for all three pools.
+            for (i, transform) in flame.transforms.iter().enumerate() {
+                let is_selected = selected_transform == TransformRef::Normal(i);
+                draw_transform(&painter, transform, get_transform_color(i), is_selected);
+            }
+            for (i, transform) in flame.linked_transforms.iter().enumerate() {
+                let is_selected = selected_transform == TransformRef::Linked(i);
+                draw_transform(&painter, transform, linked_pool_color, is_selected);
+            }
+            for (i, transform) in flame.final_transforms.iter().enumerate() {
+                let is_selected = selected_transform == TransformRef::Final(i);
+                draw_transform(&painter, transform, final_pool_color, is_selected);
             }
 
-            // Draw final transform if present (light grey, distinct style)
-            if let Some(final_xform) = &flame.final_transform {
-                let (o, x, y) = final_xform.to_triangle_apophysis();
-
-                let o_pos = to_canvas(o);
-                let x_pos = to_canvas(x);
-                let y_pos = to_canvas(y);
-
-                // Light grey color for final transform
-                let final_color = Color32::from_rgb(180, 180, 180);
-                let alpha = 200; // Semi-transparent to distinguish from regular transforms
-
-                let color = Color32::from_rgba_unmultiplied(
-                    final_color.r(),
-                    final_color.g(),
-                    final_color.b(),
-                    alpha,
-                );
-
-                // Draw lines with dashed style (simulated with dots)
-                // Draw O→X and O→Y with dashed appearance
-                let draw_dashed_line = |start: Pos2, end: Pos2| {
-                    let dash_length = 10.0;
-                    let gap_length = 5.0;
-                    let total_length = start.distance(end);
-                    let direction = (end - start) / total_length;
-
-                    let mut pos = 0.0;
-                    while pos < total_length {
-                        let dash_start = start + direction * pos;
-                        let dash_end_pos = (pos + dash_length).min(total_length);
-                        let dash_end = start + direction * dash_end_pos;
-                        painter.line_segment([dash_start, dash_end], Stroke::new(2.0, color));
-                        pos += dash_length + gap_length;
-                    }
-                };
-
-                draw_dashed_line(o_pos, x_pos);
-                draw_dashed_line(o_pos, y_pos);
-                draw_dashed_line(x_pos, y_pos);
-
-                // Draw points (larger to make them stand out)
-                let point_radius = 7.0;
-                painter.circle_filled(o_pos, point_radius, color);
-                painter.circle_filled(x_pos, point_radius, color);
-                painter.circle_filled(y_pos, point_radius, color);
-
-                // Labels only when final transform is selected
-                if selected_transform.is_none() {
-                    painter.text(
-                        o_pos + Vec2::new(-15.0, 15.0),
-                        egui::Align2::CENTER_CENTER,
-                        "O",
-                        egui::FontId::proportional(14.0),
-                        Color32::WHITE,
-                    );
-                    painter.text(
-                        x_pos + Vec2::new(10.0, 10.0),
-                        egui::Align2::CENTER_CENTER,
-                        "X",
-                        egui::FontId::proportional(14.0),
-                        Color32::WHITE,
-                    );
-                    painter.text(
-                        y_pos + Vec2::new(10.0, 10.0),
-                        egui::Align2::CENTER_CENTER,
-                        "Y",
-                        egui::FontId::proportional(14.0),
-                        Color32::WHITE,
-                    );
-                }
+            // Post-affine pass for all three pools (only when post-affine is enabled).
+            for (i, transform) in flame.transforms.iter().enumerate() {
+                let is_active = selected_transform == TransformRef::Normal(i) && affine_target == AffineTarget::Post;
+                draw_post_affine(&painter, transform, get_transform_color(i), is_active);
+            }
+            for (i, transform) in flame.linked_transforms.iter().enumerate() {
+                let is_active = selected_transform == TransformRef::Linked(i) && affine_target == AffineTarget::Post;
+                draw_post_affine(&painter, transform, linked_pool_color, is_active);
+            }
+            for (i, transform) in flame.final_transforms.iter().enumerate() {
+                let is_active = selected_transform == TransformRef::Final(i) && affine_target == AffineTarget::Post;
+                draw_post_affine(&painter, transform, final_pool_color, is_active);
             }
 
             ui.separator();
 
             // Editable coordinates for selected transform
-            let transform_for_coords = match selected_transform {
-                Some(idx) => flame.transforms.get_mut(idx),
-                None => flame.final_transform.as_mut(),
-            };
+            let transform_for_coords = selected_transform.get_mut(flame);
 
             if let Some(transform) = transform_for_coords {
                 // --- Quick action buttons (directly under canvas) ---
@@ -1032,11 +932,9 @@ fn render_triangle_editor_core(
                         let mut drag_stopped = false;
 
                         let make_coeff_path = |param: AffineParam| -> ConfigPath {
-                            match (selected_transform, affine_target) {
-                                (Some(index), AffineTarget::Pre) => ConfigPath::TransformAffine { index, param },
-                                (Some(index), AffineTarget::Post) => ConfigPath::TransformPostAffine { index, param },
-                                (None, AffineTarget::Pre) => ConfigPath::FinalTransformAffine { param },
-                                (None, AffineTarget::Post) => ConfigPath::FinalTransformPostAffine { param },
+                            match affine_target {
+                                AffineTarget::Pre => selected_transform.affine_path(param),
+                                AffineTarget::Post => selected_transform.post_affine_path(param),
                             }
                         };
 
