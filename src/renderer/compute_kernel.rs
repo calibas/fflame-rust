@@ -417,10 +417,22 @@ impl FlameRenderer {
             self.buffers.write_path_filters(queue, &self.path_filters);
         }
 
-        // Track total iterations: workgroups * threads_per_workgroup * iterations_per_thread
-        // Each workgroup has 64 threads (8x8)
+        // Track total iterations as the count of iterations that
+        // actually contribute to the histogram — i.e. dispatched iters
+        // *minus* burn-in. The shader runs `iterations_per_thread`
+        // total iterations per thread but only plots after `burn_in`,
+        // so the plottable fraction is `(iters_per_thread - burn_in) /
+        // iters_per_thread`. Using the plotted count here makes
+        // `sample_density = total_iters / pixel_count` (Phase 8a's
+        // formula) match the *actual* density growth in the
+        // accumulator, which is what keeps the tonemap invariant
+        // across `iterations_per_thread` choices. Counting dispatched
+        // (pre-burn-in) iterations leaks a (1 - burn_in/ipt) factor
+        // into brightness — small ipt with the same burn_in produces
+        // dimmer images.
         let threads_per_workgroup = 64u64;
-        let samples_this_frame = num_workgroups as u64 * threads_per_workgroup * iterations_per_thread as u64;
+        let plotted_per_thread = iterations_per_thread.saturating_sub(burn_in) as u64;
+        let samples_this_frame = num_workgroups as u64 * threads_per_workgroup * plotted_per_thread;
         self.total_iterations += samples_this_frame;
 
         // Clear histogram buffer before each batch (needed for proper accumulation math)
