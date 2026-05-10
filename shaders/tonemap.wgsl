@@ -366,13 +366,30 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     // Chrome WebGPU requires textureSample to be in uniform control flow
     // Any branching on texture data makes subsequent textureSample calls non-uniform
 
-    // Sample accumulation buffer
-    let accum = textureSample(accumulation_texture, accumulation_sampler, input.uv);
+    // Point-fetch the accumulation buffer. The texture is Rgba32Float
+    // (Phase 8c precision fix) which isn't filterable without the
+    // FLOAT32_FILTERABLE feature; for a 1:1 fullscreen pass `textureLoad`
+    // is equivalent to a non-filtering sample anyway.
+    let accum_coord = vec2<i32>(i32(input.uv.x * f32(tonemap_params.width)), i32(input.uv.y * f32(tonemap_params.height)));
+    let accum = textureLoad(accumulation_texture, accum_coord, 0);
 
-    // Extract accumulated RGB and density (analogous to bucket.Red/Green/Blue/Count)
-    // NOTE: Our accumulation buffer stores AVERAGED colors (sum/count), but Apophysis uses raw SUMS
-    // So we need to multiply back by count to get the raw accumulated values
-    let bucket_count = accum.a * 100.0;  // Scale back from 0.01 per hit
+    // Extract accumulated RGB and density (analogous to bucket.Red/Green/Blue/Count).
+    // accum.rgb is the running mean color (sum/count) in [0,1]; accum.a is
+    // the raw cumulative iteration count for this pixel (Phase 8b).
+    //
+    // The 100× factor is a tonemap calibration constant. With the
+    // scale-invariant `sample_density = total_iters / pixel_count`
+    // formula, k2 ≈ 1/(area × white_level × sample_density), so
+    // `count × white_level × k2 ≈ count / (area × sample_density)`
+    // — for a "mid-density" pixel where count ≈ sample_density this
+    // is ≈ 1/area, which on typical viewports is tiny (~1e-3) and
+    // produces dim log() output. Multiplying by 100 here pushes the
+    // log argument into the useful range (~0.1 - 10) so brightness
+    // and exposure defaults map onto perceivable values. Pre-Phase 8b
+    // this same `× 100` was conceptually "undoing the 0.01 scale in
+    // the EMA accumulator's alpha update"; the storage scale is gone
+    // but the calibration role is the same.
+    let bucket_count = accum.a * 100.0;
 
     // Check if pixel is empty (Chrome WebGPU: avoid early return to keep uniform control flow for textureSample)
     let is_empty = bucket_count < 0.001;

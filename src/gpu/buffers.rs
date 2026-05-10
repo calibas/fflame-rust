@@ -925,7 +925,18 @@ impl FlameBuffers {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: TextureDimension::D2,
-                format: TextureFormat::Rgba16Float,
+                // Rgba32Float (was Rgba16Float pre-Phase-8c). f16's
+                // ~11-bit mantissa caps cumulative-mean precision: as
+                // sample count grows, each new batch's per-pixel
+                // contribution shrinks below f16's smallest
+                // representable change and gets quantized to zero, so
+                // the image stops improving past a precision floor
+                // independent of statistical noise. f32's 23-bit
+                // mantissa pushes that floor far enough out that
+                // statistical noise (Monte Carlo 1/√N) dominates
+                // through any practical iteration count. Costs 2× the
+                // accumulation buffer's GPU memory.
+                format: TextureFormat::Rgba32Float,
                 usage,
                 view_formats: &[],
             });
@@ -1095,13 +1106,21 @@ impl FlameBuffers {
         let curve_lut_view = curve_lut_texture.create_view(&TextureViewDescriptor::default());
 
         // Create sampler for tonemap shader (accumulation texture - needs linear filtering)
+        // Non-filtering sampler. Pre-Phase-8c this used Linear so the
+        // tonemap fragment shader could `textureSample` the f16
+        // accumulation texture; the format is now Rgba32Float and
+        // f32 textures aren't filterable without the
+        // FLOAT32_FILTERABLE feature, so the tonemap shader switched
+        // to `textureLoad` instead. The sampler is kept in the bind
+        // group for layout compatibility (the binding is declared in
+        // tonemap.wgsl) but isn't actually used.
         let sampler = device.create_sampler(&SamplerDescriptor {
             label: Some("Accumulation Sampler"),
             address_mode_u: AddressMode::ClampToEdge,
             address_mode_v: AddressMode::ClampToEdge,
             address_mode_w: AddressMode::ClampToEdge,
-            mag_filter: FilterMode::Linear,
-            min_filter: FilterMode::Linear,
+            mag_filter: FilterMode::Nearest,
+            min_filter: FilterMode::Nearest,
             mipmap_filter: FilterMode::Nearest,
             ..Default::default()
         });
