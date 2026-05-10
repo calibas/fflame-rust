@@ -1888,7 +1888,7 @@ impl FlameRenderer {
     /// OLD METHOD - DEPRECATED - Use read_fractal_pixels() instead
     /// Capture pixels from accumulation buffer (for transparent PNG export)
     ///
-    /// This preserves true alpha values by reading raw Rgba16Float accumulation data
+    /// This preserves true alpha values by reading raw Rgba32Float accumulation data
     /// and applying tone mapping on the CPU. The accumulation buffer stores:
     /// - RGB: averaged fractal colors (no background blending)
     /// - A: accumulated density (sum across all frames)
@@ -1900,8 +1900,9 @@ impl FlameRenderer {
             label: Some("Accumulation Capture Encoder"),
         });
 
-        // Create buffer to copy accumulation texture data (Rgba16Float format)
-        let bytes_per_pixel = 8; // Rgba16Float = 4 channels × 2 bytes each
+        // Create buffer to copy accumulation texture data (Rgba32Float
+        // since Phase 8c — was Rgba16Float).
+        let bytes_per_pixel = 16; // Rgba32Float = 4 channels × 4 bytes each
         let unpadded_bytes_per_row = self.width * bytes_per_pixel;
         let align = egui_wgpu::wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
         let padded_bytes_per_row = ((unpadded_bytes_per_row + align - 1) / align) * align;
@@ -1938,7 +1939,7 @@ impl FlameRenderer {
 
         queue.submit(Some(encoder.finish()));
 
-        // Map buffer and read Rgba16Float data
+        // Map buffer and read Rgba32Float data
         let buffer_slice = buffer.slice(..);
         let (tx, rx) = futures::channel::oneshot::channel();
         buffer_slice.map_async(MapMode::Read, move |result| {
@@ -1951,7 +1952,7 @@ impl FlameRenderer {
 
         let data = buffer_slice.get_mapped_range();
 
-        // Convert Rgba16Float to Rgba8 with CPU tone mapping
+        // Convert Rgba32Float to Rgba8 with CPU tone mapping
         let mut rgba_data = Vec::with_capacity((self.width * self.height * 4) as usize);
 
         // Iterate row by row to handle padding
@@ -1959,12 +1960,12 @@ impl FlameRenderer {
             let row_start = (y * padded_bytes_per_row) as usize;
             let row_data = &data[row_start..row_start + (self.width * bytes_per_pixel) as usize];
 
-            for chunk in row_data.chunks_exact(8) {
-                // Read f16 values and convert to f32
-                let r = half::f16::from_le_bytes([chunk[0], chunk[1]]).to_f32();
-                let g = half::f16::from_le_bytes([chunk[2], chunk[3]]).to_f32();
-                let b = half::f16::from_le_bytes([chunk[4], chunk[5]]).to_f32();
-                let density = half::f16::from_le_bytes([chunk[6], chunk[7]]).to_f32();
+            for chunk in row_data.chunks_exact(16) {
+                // Read f32 values directly from 4 bytes each.
+                let r = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+                let g = f32::from_le_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]);
+                let b = f32::from_le_bytes([chunk[8], chunk[9], chunk[10], chunk[11]]);
+                let density = f32::from_le_bytes([chunk[12], chunk[13], chunk[14], chunk[15]]);
 
             // Apply same tone mapping as shader (exposure + log + gamma)
             let exposure = 1.0f32;

@@ -37,7 +37,7 @@ struct AccumulateParams {
 
 @group(0) @binding(0) var previous_accumulation: texture_2d<f32>;
 @group(0) @binding(1) var<storage, read> histogram: array<u32>;
-@group(0) @binding(2) var output_texture: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(2) var output_texture: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(3) var<uniform> params: AccumulateParams;
 @group(0) @binding(4) var<storage, read> iteration_counts: array<u32>;  // Per-pixel iteration counts
 
