@@ -1122,15 +1122,19 @@ impl FlameRenderer {
             crate::scene::tonemap::ToneMapMode::DensityVisualization => 2u32,
         };
 
-        // Calculate area and sample_density (simplified for export)
+        // Calculate area and sample_density (Ember/Apophysis-style).
+        // sample_density = running iterations-per-pixel; recomputed
+        // every tonemap pass so density × k2 stays scale-invariant
+        // as samples accumulate. See
+        // docs/projects/accumulator-unification.md, "How Ember solves
+        // it" — `Source/Ember/Renderer.cpp:618-636`.
         let apophysis_zoom = config.zoom.log2();
         let base_pixels_per_unit = (self.width.min(self.height) as f32) * 0.25;
         let pixels_per_unit_zoomed = base_pixels_per_unit * (2.0_f32).powf(apophysis_zoom);
         let area = (self.width * self.height) as f32 / (pixels_per_unit_zoomed * pixels_per_unit_zoomed);
-        // Resolution normalization: scale inversely with pixel count (reference: 1M pixels)
-        let total_pixels = (self.width * self.height) as f32;
-        let reference_pixels = 1_000_000.0;
-        let sample_density = 5000.0 * (iterations_per_thread as f32 / 256.0) * (reference_pixels / total_pixels);
+        let total_pixels = (self.width as f32) * (self.height as f32);
+        let sample_density = ((self.total_iterations as f32) / total_pixels.max(1.0)).max(1.0);
+        let _ = iterations_per_thread; // formerly part of sample_density; now scale-invariant via total_iterations.
 
         let params = TonemapParams {
             exposure: config.exposure,
@@ -1177,63 +1181,42 @@ impl FlameRenderer {
             crate::scene::tonemap::ToneMapMode::DensityVisualization => 2u32,
         };
 
-        // Calculate area and sample_density for brightness lookup table with Apophysis zoom compensation
-        // Apophysis ImageMaker.pas:448-452:
-        //   sample_density := fcp.actual_density * sqr(power(2, fcp.zoom));
-        //   area := FBitmap.Width * FBitmap.Height / (fcp.ppux * fcp.ppuy);
-        //   where ppux = pixels_per_unit * 2^zoom
+        // Calculate area and sample_density (Ember/Apophysis-style).
+        // Mirrors `Source/Ember/Renderer.cpp:618-636` — `sample_density`
+        // is the *running* iterations-per-pixel, recomputed every
+        // tonemap pass. Combined with `area = pixels / ppu²`, this
+        // makes the product `density × k2` scale-invariant in sample
+        // count: as iteration accumulates, density grows linearly,
+        // k2 shrinks linearly, and `log(1 + density × k2)` stabilizes.
+        // Brightness no longer drifts with sample count, no more
+        // magic-number 5000.0 calibration constant, and
+        // `iterations_per_thread` becomes a pure speed knob with no
+        // brightness side effects. See
+        // docs/projects/accumulator-unification.md.
         //
-        // This normalizes brightness across zoom levels:
-        // - Zoomed in: Higher sample_density → smaller k2 → less brightness boost
-        // - Zoomed out: Lower sample_density → larger k2 → more brightness boost
-        //
-        // NOTE: Our zoom is LINEAR (zoom=1.0 is default, zoom=2.0 is 2x scale)
-        //       Apophysis zoom is LOGARITHMIC (zoom=0 is default, zoom=1 means scale by 2^1=2)
-        //       Convert: apophysis_zoom = log2(our_zoom)
-
-        // Convert our linear zoom to Apophysis logarithmic zoom
-        let apophysis_zoom = zoom.log2();  // our zoom=1.0 → apophysis zoom=0, our zoom=2.0 → apophysis zoom=1
-
-        // Calculate pixels per unit at current zoom (ppux = ppuy for square pixels)
-        // Base pixels_per_unit is chosen to match our coordinate system
-        let base_pixels_per_unit = (width.min(height) as f32) * 0.25;  // From world_to_pixel scale
+        // Apophysis zoom convention: ours is linear (zoom=1.0 default,
+        // 2.0 = 2× scale); Apophysis is logarithmic (zoom=0 default,
+        // 1 = 2× scale). Convert via log2.
+        let apophysis_zoom = zoom.log2();
+        let base_pixels_per_unit = (width.min(height) as f32) * 0.25;
         let pixels_per_unit_zoomed = base_pixels_per_unit * (2.0_f32).powf(apophysis_zoom);
 
-        // Area in fractal space (not pixel space!)
+        // Area in fractal space (not pixel space).
         let area = (width * height) as f32 / (pixels_per_unit_zoomed * pixels_per_unit_zoomed);
 
-        // Sample density: Normalized reference value for consistent brightness
-        //
-        // KEY INSIGHT: bucket_count accumulation rate depends on iterations_per_thread!
-        // - More iterations per frame → more hits per frame → higher bucket_count growth rate
-        // - So sample_density must scale proportionally to match the hit rate
-        //
-        // SOLUTION: Use a reference value normalized to default iterations_per_thread (256)
-        // - Base value: 5000.0 (empirically chosen for good exposure)
-        //   - Much higher than Apophysis (50-100) because we generate ~100x more iterations per batch
-        // - Scale factor: (iterations_per_thread / 256.0)
-        //   - At default (256): sample_density = 5000.0 × 1.0 = 5000.0
-        //   - At half (128): sample_density = 5000.0 × 0.5 = 2500.0
-        //   - At double (512): sample_density = 5000.0 × 2.0 = 10000.0
-        //
-        // This ensures brightness remains consistent when changing iterations_per_thread:
-        // - Both bucket_count growth and sample_density scale together
-        // - The ratio stays constant → brightness stays constant
-        // - iterations_per_thread only affects render speed, not appearance
-        //
-        // Resolution normalization: Scale sample_density inversely with pixel count
-        // to keep area × sample_density constant across different render sizes.
-        // Reference: 1,000,000 pixels (1000×1000)
-        let total_pixels = (width * height) as f32;
-        let reference_pixels = 1_000_000.0;
-        let mut sample_density = 5000.0 * (iterations_per_thread as f32 / 256.0) * (reference_pixels / total_pixels);
+        // Running iterations per pixel. `.max(1.0)` guards against
+        // zero on the very first frame before any iteration has run.
+        let total_pixels = (width as f32) * (height as f32);
+        let sample_density = ((self.total_iterations as f32) / total_pixels.max(1.0)).max(1.0);
 
-        // Live preview mode: Divide by 8 for brighter preview
-        // This compensates for lower density accumulation during live parameter editing
-        // Only applies during active editing (is_live_preview), not when rendering stops
-        if is_live_preview {
-            sample_density /= 8.0;
-        }
+        // `is_live_preview` and `iterations_per_thread` no longer
+        // affect the formula. The old code scaled sample_density by
+        // `iterations_per_thread / 256` and divided by 8 during live
+        // preview to compensate for the EMA accumulator's slower
+        // convergence; with a scale-invariant tonemap, neither knob
+        // is needed for brightness stability.
+        let _ = is_live_preview;
+        let _ = iterations_per_thread;
 
         let params = TonemapParams {
             exposure,
