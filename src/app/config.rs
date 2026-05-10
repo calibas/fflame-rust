@@ -202,9 +202,25 @@ impl App {
 
         println!("Exporting at custom size: {}×{}", self.export_width, self.export_height);
 
-        // Check if we need CPU-based high-res export (for large resolutions)
-        if crate::export::needs_cpu_export(self.export_width, self.export_height) {
-            println!("  Using high-res CPU export (resolution exceeds GPU buffer limits)");
+        // Route based on the device's *actual* storage-buffer-binding
+        // size, not the WebGPU spec floor. The app's device requests
+        // adapter limits at startup (see gpu/device.rs), so on a
+        // typical desktop reporting 2 GB+ bindings, 8K renders
+        // (1 GB histogram) take the fast direct-histogram path
+        // through FlameRenderer instead of falling back to the
+        // CPU-histogram path. The fallback only fires when the
+        // histogram truly exceeds what one storage buffer binding
+        // can hold (e.g. 12K+ on a 2 GB device, 4K+ on WASM's
+        // typical 128 MB limit).
+        let max_binding = self.gpu.device.limits().max_storage_buffer_binding_size as u64;
+        let hist_size = crate::export::histogram_size_bytes(self.export_width, self.export_height);
+        if hist_size > max_binding {
+            println!(
+                "  Routing through HighResExporter for {}x{} (histogram {} MB > device binding {} MB)",
+                self.export_width, self.export_height,
+                hist_size / (1024 * 1024),
+                max_binding / (1024 * 1024)
+            );
             self.export_high_res_cpu_background(transparent, config);
             return;
         }
