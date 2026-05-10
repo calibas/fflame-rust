@@ -101,11 +101,16 @@ pub async fn export_headless_wasm(
     .map_err(|e| format!("Failed to encode PNG: {}", e))
 }
 
-/// Headless PNG export for CLI mode
+/// Headless PNG export for CLI mode.
 ///
-/// Automatically selects between:
-/// - GPU histogram (fast, for resolutions up to ~4000x4000)
-/// - CPU histogram (unlimited resolution, for larger exports)
+/// Routes between FlameRenderer's direct-histogram path (the
+/// interactive renderer, single GPU buffer) and HighResExporter's
+/// sample-emit path (GPU compute samples → CPU histogram for
+/// resolutions whose histogram exceeds one storage-buffer binding).
+/// Decision is made against the *adapter's actual*
+/// `max_storage_buffer_binding_size`, not the WebGPU spec floor of
+/// 128 MB — modern desktops report 2 GB+ which means 8K renders
+/// (1 GB histogram) can take the fast direct-histogram path.
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn export_headless(
     config: &FractalConfig,
@@ -116,14 +121,16 @@ pub async fn export_headless(
     iterations_per_thread: u32,
     transparent: bool,
 ) -> Result<bool, Box<dyn std::error::Error>> {
-    // Check if we need CPU-based export for large resolutions
-    if crate::export::needs_cpu_export(width, height) {
-        let histogram_size = crate::export::histogram_size_bytes(width, height);
+    let max_binding = probe_max_binding_size().await
+        .unwrap_or(128 * 1024 * 1024);
+    let hist_size = crate::export::histogram_size_bytes(width, height);
+
+    if hist_size > max_binding {
         log::info!(
-            "Using CPU histogram export for {}x{} (histogram would be {} MB)",
-            width,
-            height,
-            histogram_size / (1024 * 1024)
+            "Routing through HighResExporter for {}x{} (histogram {} MB > device binding limit {} MB)",
+            width, height,
+            hist_size / (1024 * 1024),
+            max_binding / (1024 * 1024)
         );
         return export_headless_cpu(
             config,
@@ -137,7 +144,12 @@ pub async fn export_headless(
         .await;
     }
 
-    // Use standard GPU-based export for smaller resolutions
+    log::info!(
+        "Routing through FlameRenderer for {}x{} (histogram {} MB ≤ device binding limit {} MB)",
+        width, height,
+        hist_size / (1024 * 1024),
+        max_binding / (1024 * 1024)
+    );
     export_headless_gpu(
         config,
         output_path,
@@ -148,6 +160,27 @@ pub async fn export_headless(
         transparent,
     )
     .await
+}
+
+/// Probe the default adapter to discover how large a single storage
+/// buffer binding it supports. The export router uses this to decide
+/// whether the full-resolution histogram fits in one binding (use
+/// FlameRenderer) or has to be tile-fallbacked (use HighResExporter).
+#[cfg(not(target_arch = "wasm32"))]
+async fn probe_max_binding_size() -> Option<u64> {
+    let instance = egui_wgpu::wgpu::Instance::new(&egui_wgpu::wgpu::InstanceDescriptor {
+        backends: egui_wgpu::wgpu::Backends::all(),
+        ..Default::default()
+    });
+    let adapter = instance
+        .request_adapter(&egui_wgpu::wgpu::RequestAdapterOptions {
+            power_preference: egui_wgpu::wgpu::PowerPreference::HighPerformance,
+            force_fallback_adapter: false,
+            compatible_surface: None,
+        })
+        .await
+        .ok()?;
+    Some(adapter.limits().max_storage_buffer_binding_size as u64)
 }
 
 /// GPU-based export using unified render API
@@ -180,11 +213,24 @@ async fn export_headless_gpu(
         .await
         .map_err(|e| format!("Failed to find adapter: {:?}", e))?;
 
+    // Request the adapter's actual storage-buffer + total-buffer
+    // + texture-dimension limits. The WebGPU spec defaults are
+    // 128 MB binding, 256 MB total, 8K texture dim — those force
+    // 4K+ histograms to fail allocation and 8K+ images to fail
+    // texture creation, even on desktops that natively support
+    // gigabyte buffers and 16K+ textures. Mirrors the limits
+    // expansion HighResExporter::new does for the same reason.
+    let adapter_limits = adapter.limits();
+    let mut limits = egui_wgpu::wgpu::Limits::default();
+    limits.max_storage_buffer_binding_size = adapter_limits.max_storage_buffer_binding_size;
+    limits.max_buffer_size = adapter_limits.max_buffer_size;
+    limits.max_texture_dimension_2d = adapter_limits.max_texture_dimension_2d;
+
     let (device, queue) = adapter
         .request_device(&egui_wgpu::wgpu::DeviceDescriptor {
             label: Some("Headless Device"),
             required_features: egui_wgpu::wgpu::Features::CLEAR_TEXTURE,
-            required_limits: egui_wgpu::wgpu::Limits::default(),
+            required_limits: limits,
             memory_hints: egui_wgpu::wgpu::MemoryHints::Performance,
             experimental_features: Default::default(),
             trace: Default::default(),
