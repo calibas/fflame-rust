@@ -1500,7 +1500,7 @@ impl HighResExporter {
         // yields a scale-invariant `density × k2` so brightness doesn't
         // drift with sample count.
         let total_pixels = (self.width as f32) * (self.height as f32);
-        let sample_density = ((total_iterations as f32) / total_pixels.max(1.0)).max(1.0);
+        let sample_density = ((total_iterations as f32) / total_pixels.max(1.0)).max(1e-6);
 
         let tonemap_mode = match config.tonemap_mode {
             crate::scene::tonemap::ToneMapMode::Linear => 0u32,
