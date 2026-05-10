@@ -498,21 +498,26 @@ impl FlameRenderer {
             self.effective_iterations += samples_this_frame;
         }
 
-        // Calculate blend_factor based on mode
-        let blend_factor = if self.overwrite_mode {
-            // Overwrite mode (live preview): Replace old buffer entirely
-            // Prevents mixing of different fractal states during drag
-            1.0
+        // Pick blend mode + rate for the accumulate shader. See
+        // docs/projects/accumulator-unification.md and the comment on
+        // `AccumulateParams::use_fixed_ema` in gpu/buffers.rs.
+        //   - overwrite (slider drag): blend_factor=1.0 triggers the
+        //     shader's clear-prev branch; mode is irrelevant.
+        //   - use_dynamic_blend=true (default): pure cumulative-mean.
+        //     blend_factor unused.
+        //   - use_dynamic_blend=false: fixed EMA at user's blend_factor.
+        //     Dim early frames as the EMA bootstraps from 0; settles
+        //     to a stable steady-state. Precision-stable indefinitely
+        //     (each batch contributes a constant proportion regardless
+        //     of total sample count). Use ~0.001 for high-quality
+        //     renders past ~10^9 iters/pixel where cumulative-mean
+        //     hits f32's precision floor.
+        let (blend_factor, use_fixed_ema) = if self.overwrite_mode {
+            (1.0, 0u32)
         } else if self.use_dynamic_blend {
-            // Clamped exponential decay: Start at 0.8 for fast initial convergence,
-            // decay over time but never drop below 0.01 so iterations always contribute
-            let raw_blend = samples_this_frame as f32 / self.samples_accumulated as f32;
-            let clamped_blend = raw_blend.max(0.01).min(0.8);
-            clamped_blend
+            (0.0, 0u32)
         } else {
-            // Fixed blend rate: constant blend per frame
-            // Useful for testing density compression effects
-            self.blend_factor
+            (self.blend_factor, 1u32)
         };
 
         let params = AccumulateParams {
@@ -521,7 +526,7 @@ impl FlameRenderer {
             blend_factor,
             histogram_color_scale: self.histogram_color_scale,
             target_iterations_per_pixel: self.target_iterations_per_pixel,
-            _pad0: 0.0,
+            use_fixed_ema,
             background_r: self.background_color[0],
             background_g: self.background_color[1],
             background_b: self.background_color[2],

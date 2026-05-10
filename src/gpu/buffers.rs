@@ -688,7 +688,12 @@ pub struct AccumulateParams {
     pub blend_factor: f32,
     pub histogram_color_scale: f32, // Must match compute shader value
     pub target_iterations_per_pixel: u32, // Per-pixel convergence threshold (0 = disabled)
-    pub _pad0: f32,  // Padding for alignment
+    /// Mode flag — 0 = cumulative-mean (algorithmic ideal,
+    /// precision-limited around 10^9 iters/pixel on f32), 1 = fixed
+    /// EMA at `blend_factor` (precision-stable, dim early frames as
+    /// the EMA bootstraps from 0). Mirrors `accumulate.wgsl`'s
+    /// `use_fixed_ema` field.
+    pub use_fixed_ema: u32,
     pub background_r: f32,  // Background color RGB (for blending when no samples)
     pub background_g: f32,
     pub background_b: f32,
@@ -893,7 +898,7 @@ impl FlameBuffers {
             blend_factor: 1.0,
             histogram_color_scale: crate::config::DEFAULT_HISTOGRAM_COLOR_SCALE,
             target_iterations_per_pixel: 0, // Default: disabled (no per-pixel convergence)
-            _pad0: 0.0,
+            use_fixed_ema: 0, // Default: cumulative-mean
             background_r: 0.0,  // Default black background
             background_g: 0.0,
             background_b: 0.0,
