@@ -542,8 +542,32 @@ impl FlameRenderer {
         self.tonemap_bind_group = self.pipelines.create_tonemap_bind_group(device, &self.buffers);
     }
 
+    /// Refresh the sample-count-dependent fields of the tonemap params
+    /// uniform. Must run every frame before `tonemap_pass` — otherwise
+    /// `sample_density` stays frozen at whatever it was when
+    /// `update_tonemap` last fired (config load / user interaction)
+    /// and the Ember-style scale-invariant formula breaks: density
+    /// keeps growing while k2 stays put, so brightness drifts up
+    /// with sample count and `iterations_per_thread` becomes a
+    /// brightness knob instead of a speed knob.
+    ///
+    /// Cheap — a 4-byte uniform write at the offset of
+    /// `TonemapParams::sample_density`. See
+    /// docs/projects/accumulator-unification.md, Phase 8a.
+    fn refresh_sample_density(&self, queue: &Queue) {
+        let total_pixels = (self.width as f32) * (self.height as f32);
+        let sample_density = ((self.total_iterations as f32) / total_pixels.max(1.0)).max(1.0);
+        let offset = std::mem::offset_of!(TonemapParams, sample_density) as u64;
+        queue.write_buffer(
+            &self.buffers.tonemap_params_buffer,
+            offset,
+            bytemuck::bytes_of(&sample_density),
+        );
+    }
+
     /// Render the accumulation buffer to internal fractal texture with tone mapping
-    pub fn tonemap_pass(&self, encoder: &mut CommandEncoder) {
+    pub fn tonemap_pass(&self, queue: &Queue, encoder: &mut CommandEncoder) {
+        self.refresh_sample_density(queue);
         let mut render_pass = encoder.begin_render_pass(&RenderPassDescriptor {
             label: Some("Tonemap Pass"),
             color_attachments: &[Some(RenderPassColorAttachment {
@@ -572,7 +596,8 @@ impl FlameRenderer {
     /// This creates a temporary bind group with the provided input texture instead of
     /// the accumulation texture. Used when density effects have processed the accumulation
     /// data and we need to tonemap their output.
-    pub fn tonemap_pass_with_input(&self, device: &Device, encoder: &mut CommandEncoder, input_view: &TextureView) {
+    pub fn tonemap_pass_with_input(&self, device: &Device, queue: &Queue, encoder: &mut CommandEncoder, input_view: &TextureView) {
+        self.refresh_sample_density(queue);
         // Create a temporary bind group with the custom input texture
         let bind_group = device.create_bind_group(&BindGroupDescriptor {
             label: Some("Tonemap Bind Group (Density Effect Input)"),
@@ -1994,7 +2019,7 @@ impl FlameRenderer {
         let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
             label: Some("Screenshot Encoder"),
         });
-        self.tonemap_pass(&mut encoder);
+        self.tonemap_pass(queue, &mut encoder);
 
         // Create buffer to copy texture data to
         let bytes_per_pixel = 4; // RGBA8

@@ -1711,7 +1711,7 @@ pub async fn export_animation_fast(
         let mut tonemap_encoder = device.create_command_encoder(&CommandEncoderDescriptor {
             label: Some("Tonemap"),
         });
-        renderer.tonemap_pass(&mut tonemap_encoder);
+        renderer.tonemap_pass(&queue, &mut tonemap_encoder);
         queue.submit(std::iter::once(tonemap_encoder.finish()));
 
         // Run color effects if enabled
