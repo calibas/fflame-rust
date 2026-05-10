@@ -214,12 +214,18 @@ impl HighResExporter {
         // initialization for the interactive renderer.
         let adapter_limits = adapter.limits();
         log::info!(
-            "Export adapter max_storage_buffer_binding_size: {} MB",
-            adapter_limits.max_storage_buffer_binding_size / (1024 * 1024)
+            "Export adapter limits: max_storage_buffer_binding_size = {} MB, max_texture_dimension_2d = {}",
+            adapter_limits.max_storage_buffer_binding_size / (1024 * 1024),
+            adapter_limits.max_texture_dimension_2d,
         );
         let mut limits = Limits::default();
         limits.max_storage_buffer_binding_size = adapter_limits.max_storage_buffer_binding_size;
         limits.max_buffer_size = adapter_limits.max_buffer_size;
+        // The accumulation/output textures in `tonemap_gpu` are sized
+        // to the requested width/height. Default `Limits` caps at the
+        // 8192 WebGPU floor; raise it so 16K+ exports don't fail
+        // texture creation on desktops that natively support 16384+.
+        limits.max_texture_dimension_2d = adapter_limits.max_texture_dimension_2d;
 
         let (device, queue) = adapter
             .request_device(&DeviceDescriptor {
