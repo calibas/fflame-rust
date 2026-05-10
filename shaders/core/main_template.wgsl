@@ -10,7 +10,7 @@
 //   {{#if XAOS_ENABLED}} ... {{else}} ... {{/if}}
 //
 // Uses hard-coded constants (compiled at shader build time):
-//   NUM_TRANSFORMS, COLOR_MODE, HAS_FINAL_TRANSFORM, FINAL_TRANSFORM_INDEX
+//   NUM_TRANSFORMS, COLOR_MODE, HAS_POST_AFFINE
 // These enable dead code elimination and loop unrolling optimizations.
 
 @compute @workgroup_size(64, 1, 1)
@@ -279,8 +279,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
                 let pixel_idx = u32(pixel.y) * params.width + u32(pixel.x);
 
-                // Determine final color based on mode (hard-coded COLOR_MODE)
-                var final_color: vec3<f32>;
+                // Determine final color based on mode (hard-coded COLOR_MODE).
+                // Initialized to white so the PathMap COLOR_MODE branch is
+                // always defined: when PATH_TRACKING is true the path-map
+                // body below overwrites it, when PATH_TRACKING is false
+                // (high-res export) the white default falls through. WGSL
+                // requires `var final_color` be initialized on every path
+                // even when COLOR_MODE is a compile-time constant.
+                var final_color: vec3<f32> = vec3<f32>(1.0, 1.0, 1.0);
                 if (COLOR_MODE == 0u) {
                     // Palette mode: sample from palette texture using color_index
                     final_color = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(color_index, 0.5), 0.0).rgb;
@@ -335,8 +341,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 }
 {{/if}}
 
-                // Atomic accumulation to histogram buffer
-                // Write RGB as 4× u32 (unpacked, full 32-bit precision)
+{{#if OUTPUT_HISTOGRAM_DIRECT}}
+                // Direct-histogram path (sub-4K single-tile render). Atomic
+                // accumulation into a single full-resolution histogram buffer.
+                // Gated by OUTPUT_HISTOGRAM_DIRECT. See
+                // docs/projects/unified-render-pipeline.md.
+                //
+                // Write RGB as 4× u32 (unpacked, full 32-bit precision).
                 let base_idx = pixel_idx * 4u;  // 4 words per pixel (R, G, B, density)
 
                 // Use global color scale from params (uniform constant, fast access)
@@ -355,8 +366,39 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 atomicAdd(&histogram[base_idx + 2u], b_u32);
                 atomicAdd(&histogram[base_idx + 3u], density_u32);
 
-                // Increment iteration count for this pixel (for per-pixel convergence tracking)
+{{#if ITERATION_COUNTS}}
+                // Per-pixel convergence tracking — gated by
+                // ITERATION_COUNTS (which the builder ties to
+                // `target_iterations_per_pixel > 0`). Stripped from the
+                // compiled shader entirely when convergence isn't in
+                // use, eliminating one atomic per iteration. See
+                // docs/projects/unified-render-pipeline.md.
                 atomicAdd(&iteration_counts[pixel_idx], 1u);
+{{/if}}
+{{else}}
+                // Sample-emit path (multi-tile render). Stream one Sample
+                // per plotted point to a buffer; a host-driven accumulate
+                // pass scatters samples into per-tile histograms. Used when
+                // the full-resolution histogram exceeds the storage-buffer
+                // binding size limit. See
+                // docs/projects/unified-render-pipeline.md.
+                //
+                // Allocate a slot via atomic counter and write the sample.
+                // Same plot-time coords + final_color the direct path uses
+                // — keeps feature parity (DOF, fog, opacity, path map, etc.)
+                // identical between the two output strategies.
+                let sample_idx = atomicAdd(&sample_counter.count, 1u);
+                if (sample_idx < arrayLength(&samples)) {
+                    samples[sample_idx] = Sample(
+                        f32(pixel.x),
+                        f32(pixel.y),
+                        clamp(final_color.r, 0.0, 1.0),
+                        clamp(final_color.g, 0.0, 1.0),
+                        clamp(final_color.b, 0.0, 1.0),
+                        0.0, 0.0, 0.0
+                    );
+                }
+{{/if}}
             }
         }
     }

@@ -529,8 +529,6 @@ pub struct GpuParams {
     pub fog_strength: f32, // Depth fog: exponential fog density (0.0 = disabled)
     pub fog_start: f32, // Depth fog: distance where fog begins
     pub histogram_color_scale: f32, // Precision vs overflow (default: 10.0)
-    pub has_final_transform: u32, // 0 = disabled, 1 = enabled
-    pub final_transform_index: u32, // Index in transform buffer (always last slot)
     pub bits_per_transform: u32, // Bits needed per transform index (1-4 based on num_transforms)
     pub path_map_style: u32, // 0=Prefix, 1=Suffix, 2=PrefixDistinct, 3=SuffixDistinct
     pub path_capture_mode: u32, // 0=FirstHit, 1=FirstAfterBurnIn, 2=DeepestHit
@@ -863,8 +861,6 @@ impl FlameBuffers {
             fog_strength: crate::config::DEFAULT_FOG_STRENGTH,
             fog_start: crate::config::DEFAULT_FOG_START,
             histogram_color_scale: crate::config::DEFAULT_HISTOGRAM_COLOR_SCALE,
-            has_final_transform: if !flame.final_transforms.is_empty() { 1 } else { 0 },
-            final_transform_index: 0,  // Legacy field — shader uses attachments chain now
             bits_per_transform: bits_per_transform(flame.transforms.len() as u32),
             path_map_style: 0,
             path_capture_mode: 0, // FirstHit by default
