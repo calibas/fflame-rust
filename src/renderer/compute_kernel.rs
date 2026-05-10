@@ -139,6 +139,16 @@ pub struct FlameRenderer {
     samples_accumulated: u64,
     total_iterations: u64,
     effective_iterations: u64, // For brightness calculation - doesn't reset during overwrite mode
+    /// Iterations whose contribution is *currently in the persistent
+    /// accumulation buffer*. Used by the tonemap's sample_density
+    /// formula. Differs from `total_iterations` during overwrite mode:
+    /// overwrite_mode discards prev each accumulate so the buffer
+    /// only ever holds the latest dispatch, but compute_pass keeps
+    /// incrementing total_iterations every frame. Without this
+    /// separate counter, sample_density grows while bucket_count
+    /// stays put → tonemap reads scale-mismatched data → preview
+    /// mode goes ~N× dimmer than steady-state for N drag frames.
+    samples_in_buffer: u64,
     color_mode: ColorMode,
     path_map_style: PathMapStyle,
     path_capture_mode: PathCaptureMode,
@@ -242,6 +252,7 @@ impl FlameRenderer {
             samples_accumulated: 0,
             total_iterations: 0,
             effective_iterations: 0,
+            samples_in_buffer: 0,
             color_mode: ColorMode::Palette,
             path_map_style: PathMapStyle::default(),
             path_capture_mode: PathCaptureMode::default(),
@@ -329,7 +340,29 @@ impl FlameRenderer {
         self.samples_accumulated = 0;
         self.total_iterations = 0;
         self.effective_iterations = 0; // Reset for new accumulation phase
+        self.samples_in_buffer = 0; // Buffer's contents will be replaced/regrown after the reset
         self.frame_counter = 0; // Reset frame counter for deterministic seed progression
+    }
+
+    /// Whether the renderer is currently in cumulative-mean accumulate
+    /// mode (true) or fixed-EMA mode (false). Mirrors the
+    /// `Dynamic blend` UI checkbox.
+    pub fn use_dynamic_blend(&self) -> bool {
+        self.use_dynamic_blend
+    }
+
+    /// Clear both ping-pong accumulation textures. Both halves of the
+    /// ping-pong are cleared so it doesn't matter which is "current"
+    /// when iteration resumes — the next read of `previous_accumulation`
+    /// returns zeros either way. Used by the overwrite-exit path in
+    /// fixed-EMA mode (see `app/gpu_updates.rs::update_overwrite_mode`),
+    /// where leftover drag-frame samples would otherwise dominate the
+    /// EMA's bootstrap and produce a "way too bright" frame for
+    /// ~1/blend_factor frames before the EMA averages them out.
+    /// Cumulative mode skips this — the leftover drag samples are one
+    /// batch's worth of valid data that dilutes naturally.
+    pub fn clear_accumulation_buffers(&self, encoder: &mut CommandEncoder, queue: &Queue) {
+        self.buffers.clear_all(encoder, queue);
     }
 
     /// Build shader constants from current renderer state
@@ -498,6 +531,19 @@ impl FlameRenderer {
             self.effective_iterations += samples_this_frame;
         }
 
+        // Track what's actually in the accumulation buffer right now,
+        // since the shader's overwrite branch (blend_factor ≥ 0.99)
+        // discards `prev` before adding this dispatch's contribution.
+        // Without this, sample_density (which the tonemap uses) would
+        // reflect cumulative compute work while bucket_count in the
+        // shader only reflects one frame — preview-mode brightness
+        // would drop ~N× across N drag frames.
+        if self.overwrite_mode {
+            self.samples_in_buffer = samples_this_frame;
+        } else {
+            self.samples_in_buffer += samples_this_frame;
+        }
+
         // Pick blend mode + rate for the accumulate shader. See
         // docs/projects/accumulator-unification.md and the comment on
         // `AccumulateParams::use_fixed_ema` in gpu/buffers.rs.
@@ -573,7 +619,18 @@ impl FlameRenderer {
     /// docs/projects/accumulator-unification.md, Phase 8a.
     fn refresh_sample_density(&self, queue: &Queue) {
         let total_pixels = (self.width as f32) * (self.height as f32);
-        let sample_density = ((self.total_iterations as f32) / total_pixels.max(1.0)).max(1.0);
+        // Floor at 1e-6 (defensive non-zero, prevents `k2 = 1/0` in
+        // the tonemap shader). Was `.max(1.0)`, which clamped
+        // sample_density at ~"1 iter per pixel" — fine in steady
+        // state but artificially dimmed early frames at high
+        // resolution: 4K preview-mode at frame 1 has ~0.002
+        // iters/pixel, clamping to 1.0 multiplied k2's denominator
+        // 500× and made the image 500× dimmer than the same flame
+        // at steady state. The clamp also broke the scale-invariance
+        // promise (sample_density should track total_iterations
+        // linearly through any iter count); 1e-6 is small enough to
+        // never bind in practice.
+        let sample_density = ((self.samples_in_buffer as f32) / total_pixels.max(1.0)).max(1e-6);
         let offset = std::mem::offset_of!(TonemapParams, sample_density) as u64;
         queue.write_buffer(
             &self.buffers.tonemap_params_buffer,
@@ -1175,7 +1232,18 @@ impl FlameRenderer {
         let pixels_per_unit_zoomed = base_pixels_per_unit * (2.0_f32).powf(apophysis_zoom);
         let area = (self.width * self.height) as f32 / (pixels_per_unit_zoomed * pixels_per_unit_zoomed);
         let total_pixels = (self.width as f32) * (self.height as f32);
-        let sample_density = ((self.total_iterations as f32) / total_pixels.max(1.0)).max(1.0);
+        // Floor at 1e-6 (defensive non-zero, prevents `k2 = 1/0` in
+        // the tonemap shader). Was `.max(1.0)`, which clamped
+        // sample_density at ~"1 iter per pixel" — fine in steady
+        // state but artificially dimmed early frames at high
+        // resolution: 4K preview-mode at frame 1 has ~0.002
+        // iters/pixel, clamping to 1.0 multiplied k2's denominator
+        // 500× and made the image 500× dimmer than the same flame
+        // at steady state. The clamp also broke the scale-invariance
+        // promise (sample_density should track total_iterations
+        // linearly through any iter count); 1e-6 is small enough to
+        // never bind in practice.
+        let sample_density = ((self.samples_in_buffer as f32) / total_pixels.max(1.0)).max(1e-6);
         let _ = iterations_per_thread; // formerly part of sample_density; now scale-invariant via total_iterations.
 
         let params = TonemapParams {
@@ -1249,7 +1317,18 @@ impl FlameRenderer {
         // Running iterations per pixel. `.max(1.0)` guards against
         // zero on the very first frame before any iteration has run.
         let total_pixels = (width as f32) * (height as f32);
-        let sample_density = ((self.total_iterations as f32) / total_pixels.max(1.0)).max(1.0);
+        // Floor at 1e-6 (defensive non-zero, prevents `k2 = 1/0` in
+        // the tonemap shader). Was `.max(1.0)`, which clamped
+        // sample_density at ~"1 iter per pixel" — fine in steady
+        // state but artificially dimmed early frames at high
+        // resolution: 4K preview-mode at frame 1 has ~0.002
+        // iters/pixel, clamping to 1.0 multiplied k2's denominator
+        // 500× and made the image 500× dimmer than the same flame
+        // at steady state. The clamp also broke the scale-invariance
+        // promise (sample_density should track total_iterations
+        // linearly through any iter count); 1e-6 is small enough to
+        // never bind in practice.
+        let sample_density = ((self.samples_in_buffer as f32) / total_pixels.max(1.0)).max(1e-6);
 
         // `is_live_preview` and `iterations_per_thread` no longer
         // affect the formula. The old code scaled sample_density by
