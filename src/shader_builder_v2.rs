@@ -25,7 +25,7 @@ pub fn enable_inlined_constants() {
 }
 
 /// Check if shader dumping is enabled
-fn should_dump_shader() -> bool {
+pub fn should_dump_shader() -> bool {
     DUMP_SHADER_ENABLED.load(Ordering::Relaxed)
 }
 
@@ -262,12 +262,6 @@ pub struct ShaderConstants {
     /// Enables dead code elimination for unused color mode branches
     pub color_mode: u32,
 
-    /// Whether final transform is enabled (eliminates branch if false)
-    pub has_final_transform: bool,
-
-    /// Index of final transform (only used if has_final_transform is true)
-    pub final_transform_index: u32,
-
     /// Inlined transform data (eliminates buffer reads)
     /// When Some, transform data is compiled as constants
     /// When None, transform data is read from buffers (legacy behavior)
@@ -294,6 +288,15 @@ pub struct ShaderConstants {
     /// `Flame::attachment_cap`.
     pub attachment_cap: u32,
 
+    /// Whether the per-pixel `iteration_counts` atomic counter is in
+    /// use. Drives the `ITERATION_COUNTS` template flag — when false,
+    /// the per-iteration `atomicAdd(&iteration_counts[pixel_idx], 1u)`
+    /// at the bottom of the iteration loop is stripped from the
+    /// compiled shader. Set from `target_iterations_per_pixel > 0`;
+    /// flames not using per-pixel convergence pay zero per-iteration
+    /// cost for the counter.
+    pub iteration_counts_enabled: bool,
+
     /// Precomputed cumulative weights for transform selection
     /// Eliminates the weight accumulation loops in select_transform
     pub cumulative_weights: Option<Vec<f32>>,
@@ -304,11 +307,10 @@ impl Default for ShaderConstants {
         Self {
             num_transforms: 1,
             color_mode: 0,
-            has_final_transform: false,
-            final_transform_index: 0,
             has_post_affine: false,
             has_attachments: false,
             attachment_cap: 1,
+            iteration_counts_enabled: false,
             inlined_transforms: None,
             cumulative_weights: None,
         }
@@ -327,10 +329,6 @@ impl ShaderConstants {
     ) -> Self {
         // Ensure at least 1 transform to prevent shader overflow (NUM_TRANSFORMS - 1u)
         let num_transforms = flame.transforms.len().max(1) as u32;
-        // Inline-shader path treats `final_transforms[0]` as the singular
-        // final transform — multi-final in inline mode is a Phase 6 follow-on.
-        let has_final = !flame.final_transforms.is_empty();
-        let final_idx = num_transforms; // Final comes after regular transforms
 
         // Per-flame local index map. Must match what the buffer populator
         // and the shader builder use, so that var_idx in the inlined weight
@@ -460,11 +458,14 @@ impl ShaderConstants {
         Self {
             num_transforms,
             color_mode,
-            has_final_transform: has_final,
-            final_transform_index: final_idx,
             has_post_affine: flame.has_post_affine(),
             has_attachments: flame.has_attachments(),
             attachment_cap: flame.attachment_cap() as u32,
+            // Inlined-export mode never uses per-pixel convergence
+            // (HighResExporter sets target_iterations_per_pixel=0).
+            // If a future inlined-mode caller needs the gate, plumb
+            // target_iterations_per_pixel into this constructor.
+            iteration_counts_enabled: false,
             inlined_transforms: Some(inlined),
             cumulative_weights: Some(cumulative),
         }
@@ -478,13 +479,9 @@ impl ShaderConstants {
             "// Hard-coded shader constants (compiled at shader build time)\n\
              const NUM_TRANSFORMS: u32 = {}u;\n\
              const COLOR_MODE: u32 = {}u;\n\
-             const HAS_FINAL_TRANSFORM: bool = {};\n\
-             const FINAL_TRANSFORM_INDEX: u32 = {}u;\n\
              const HAS_POST_AFFINE: bool = {};\n",
             self.num_transforms,
             self.color_mode,
-            self.has_final_transform,
-            self.final_transform_index,
             self.has_post_affine,
         );
 
@@ -1068,9 +1065,51 @@ impl ShaderBuilder {
         render_3d: bool,
         path_features_enabled: bool,
         xaos_enabled: bool,
+        output_histogram_direct: bool,
         constants: &ShaderConstants,
     ) -> String {
         let active = self.active_with_local_indices(active_variations, render_3d);
+
+        // Compute has_dc once: drives both the apply_variations signature
+        // (with vs without `vc` param) and the HAS_DC template condition.
+        let has_dc = self.has_dc_variation(&active);
+
+        // Build the template processor up front — both the header and the
+        // main_template body have `{{#if ...}}` blocks (header gates which
+        // bindings get declared at slots 2 and 6; main_template gates the
+        // plot-time output block). Configuring once and processing both
+        // through it keeps the gates in lockstep.
+        let mut processor = TemplateProcessor::new();
+        processor.set("RENDER_3D", render_3d);
+        processor.set("PATH_TRACKING", path_features_enabled);
+        processor.set("XAOS_ENABLED", xaos_enabled);
+        processor.set("HAS_DC", has_dc);
+        // HAS_ATTACHMENTS gates the per-iteration `attachments[xform_idx]`
+        // load and the Linked/Final chain loops. False when the flame has
+        // no Linked or Final transforms, restoring pre-attachment-feature
+        // shader cost. Sourced from `constants` so the shader cache picks
+        // up transitions and rebuilds.
+        processor.set("HAS_ATTACHMENTS", constants.has_attachments);
+        // OUTPUT_HISTOGRAM_DIRECT gates which output strategy the shader
+        // uses for plot-time accumulation:
+        //   true  — atomicAdd into a single full-resolution histogram
+        //           buffer (current interactive behavior; single-tile
+        //           sub-4K case).
+        //   false — write samples to a sample-stream buffer for a
+        //           later accumulate pass to scatter into per-tile
+        //           histograms (HighResExporter and the multi-tile
+        //           strategies coming in Phases 4–6).
+        // The header.wgsl gates bindings 2 and 6 on this same flag —
+        // direct mode binds histogram + iteration_counts; sample-emit
+        // mode binds samples + sample_counter. See
+        // docs/projects/unified-render-pipeline.md.
+        processor.set("OUTPUT_HISTOGRAM_DIRECT", output_histogram_direct);
+        // ITERATION_COUNTS gates the per-iteration `atomicAdd` to the
+        // iteration_counts buffer used for per-pixel convergence
+        // tracking. Set from the flame's `target_iterations_per_pixel`
+        // — when 0 (today's default), strips the atomic from the
+        // compiled shader entirely.
+        processor.set("ITERATION_COUNTS", constants.iteration_counts_enabled);
 
         let mut shader = String::new();
 
@@ -1078,10 +1117,12 @@ impl ShaderBuilder {
         shader.push_str(&constants.to_wgsl());
 
         // 2. Header — substitute {{ATTACHMENT_CAP}} into the AttachmentList
-        // struct definition. Drives both the per-iteration load size and
-        // the host-side packing stride.
+        // struct definition (drives both the per-iteration load size and
+        // the host-side packing stride), then run the template processor
+        // to resolve the binding/struct gates around slots 2 and 6.
         let header = include_str!("../shaders/core/header.wgsl")
             .replace("{{ATTACHMENT_CAP}}", &constants.attachment_cap.to_string());
+        let header = processor.process(&header);
         shader.push_str(&header);
         shader.push('\n');
 
@@ -1100,10 +1141,6 @@ impl ShaderBuilder {
         // 5. Core variations from embedded VariationDef WGSL (only active ones)
         shader.push_str(&self.generate_variation_code(&active, render_3d));
         shader.push('\n');
-
-        // Compute has_dc once: drives both the apply_variations signature
-        // (with vs without `vc` param) and the HAS_DC template condition.
-        let has_dc = self.has_dc_variation(&active);
 
         // 7. Generate apply_variations with fixed registry indices
         // Pass inlined transforms for dead code elimination if available
@@ -1144,19 +1181,10 @@ impl ShaderBuilder {
             shader.push('\n');
         }
 
-        // 10. Main shader from template
+        // 10. Main shader from template — same processor as the header so
+        // OUTPUT_HISTOGRAM_DIRECT picks consistently across declarations
+        // and use-sites.
         let template = include_str!("../shaders/core/main_template.wgsl");
-        let mut processor = TemplateProcessor::new();
-        processor.set("RENDER_3D", render_3d);
-        processor.set("PATH_TRACKING", path_features_enabled);
-        processor.set("XAOS_ENABLED", xaos_enabled);
-        processor.set("HAS_DC", has_dc);
-        // HAS_ATTACHMENTS gates the per-iteration `attachments[xform_idx]`
-        // load and the Linked/Final chain loops. False when the flame has
-        // no Linked or Final transforms, restoring pre-attachment-feature
-        // shader cost. Sourced from `constants` so the shader cache picks
-        // up transitions and rebuilds.
-        processor.set("HAS_ATTACHMENTS", constants.has_attachments);
         let mut processed = processor.process(template);
         // Inject per-thread state initialization block at the marker.
         // No-op if no active variation has wgsl_state_init.
@@ -1607,190 +1635,6 @@ impl ShaderBuilder {
         code
     }
 
-    /// Build 2D TILED trajectory shader with active variations
-    /// Uses full-resolution coordinates and routes samples to tile buffers
-    pub fn build_trajectory_2d_tiled(
-        &self,
-        flame: &crate::scene::transforms::Flame,
-        active_variations: &HashMap<String, f32>,
-    ) -> String {
-        self.build_trajectory_tiled(flame, active_variations, false)
-    }
-
-    /// Build 3D TILED trajectory shader with active variations
-    pub fn build_trajectory_3d_tiled(
-        &self,
-        flame: &crate::scene::transforms::Flame,
-        active_variations: &HashMap<String, f32>,
-    ) -> String {
-        self.build_trajectory_tiled(flame, active_variations, true)
-    }
-
-    /// Build TILED trajectory shader (2D or 3D), with HAS_DC + RENDER_3D
-    /// template conditions. Same shader source for both modes — the
-    /// `{{#if RENDER_3D}}` gates select vec2/vec3 init and the matching
-    /// pixel projection helper.
-    fn build_trajectory_tiled(
-        &self,
-        flame: &crate::scene::transforms::Flame,
-        active_variations: &HashMap<String, f32>,
-        render_3d: bool,
-    ) -> String {
-        let active = self.active_with_local_indices(active_variations, render_3d);
-
-        let mut shader = String::new();
-
-        // 1. Tiled header (includes TileParams binding) — substitute
-        // {{ATTACHMENT_CAP}} into the AttachmentList struct.
-        let header = include_str!("../shaders/core/header_tiled.wgsl")
-            .replace("{{ATTACHMENT_CAP}}", &flame.attachment_cap().to_string());
-        shader.push_str(&header);
-        shader.push('\n');
-
-        // 2. RNG
-        shader.push_str(include_str!("../shaders/core/rng.wgsl"));
-        shader.push('\n');
-
-        // 3. Affine — 3D affine includes rotate_x/rotate_y helpers used by
-        // some 3D variations; 2D affine has just apply_affine + post-affine.
-        if render_3d {
-            shader.push_str(include_str!("../shaders/core/affine_3d.wgsl"));
-        } else {
-            shader.push_str(include_str!("../shaders/core/affine.wgsl"));
-        }
-        shader.push('\n');
-
-        // 4. Core variations from embedded VariationDef WGSL (only active ones)
-        shader.push_str(&self.generate_variation_code(&active, render_3d));
-        shader.push('\n');
-
-        // 5. Generate apply_variations (no inlining for tiled shaders)
-        let has_dc = self.has_dc_variation(&active);
-        if render_3d {
-            shader.push_str(&self.build_apply_variations_3d(&active, None, has_dc));
-        } else {
-            shader.push_str(&self.build_apply_variations_2d(&active, None, has_dc));
-        }
-        shader.push('\n');
-
-        // 6. Per-flame packed get_param (replaces fixed-stride version that
-        //    used to live in utilities_tiled.wgsl).
-        shader.push_str(&self.build_packed_get_param(&active));
-        shader.push('\n');
-
-        // 6a. Per-thread variation state (empty for stateless flames).
-        shader.push_str(&self.build_state_accessors(flame, &active));
-        shader.push('\n');
-
-        // 6b. Complex arithmetic helpers (~90 LoC, dead-code-eliminated).
-        shader.push_str(include_str!("../shaders/core/complex.wgsl"));
-        shader.push('\n');
-
-        // 7. Tiled utilities (uses full_width/full_height)
-        shader.push_str(include_str!("../shaders/core/utilities_tiled.wgsl"));
-        shader.push('\n');
-
-        // 8. Unified tiled main — RENDER_3D + HAS_DC select the variant.
-        let mut processor = TemplateProcessor::new();
-        processor.set("RENDER_3D", render_3d);
-        processor.set("HAS_DC", has_dc);
-        processor.set("HAS_ATTACHMENTS", flame.has_attachments());
-        let mut processed = processor.process(include_str!("../shaders/core/main_tiled.wgsl"));
-        let state_init = self.build_state_init_block(flame, &active);
-        processed = processed.replace("//__STATE_INIT_BLOCK__", &state_init);
-        shader.push_str(&processed);
-
-        shader
-    }
-
-    /// Build the EXPORT shader — outputs samples to a buffer for CPU
-    /// histogram accumulation. Uses the 3D code path regardless of the
-    /// flame's render_mode: the 2D vs 3D distinction only matters for how Z
-    /// is displayed, not for sample collection. Configs with 3D variations
-    /// (e.g. flatten, hemisphere) need the 3D path even when render_mode is
-    /// 2D, which is why there's no separate 2D export shader.
-    pub fn build_export(
-        &self,
-        flame: &crate::scene::transforms::Flame,
-        active_variations: &HashMap<String, f32>,
-    ) -> String {
-        let active = self.active_with_local_indices(active_variations, true);
-
-        let mut shader = String::new();
-
-        // 1. Export header — substitute {{ATTACHMENT_CAP}} into the
-        // AttachmentList struct.
-        let header = include_str!("../shaders/core/header_export.wgsl")
-            .replace("{{ATTACHMENT_CAP}}", &flame.attachment_cap().to_string());
-        shader.push_str(&header);
-        shader.push('\n');
-
-        // 2. RNG
-        shader.push_str(include_str!("../shaders/core/rng.wgsl"));
-        shader.push('\n');
-
-        // 3. Add NUM_TRANSFORMS constant (required by utilities.wgsl even though export uses runtime version)
-        // Set to 32 (max transforms) - this is only used by select_transform_const which export doesn't call
-        shader.push_str("const NUM_TRANSFORMS: u32 = 32u;\n");
-        shader.push('\n');
-
-        // 4. Per-flame packed get_param (MUST come before variations).
-        //    Was previously a fixed-stride function in utilities.wgsl;
-        //    now generated per-flame from the active variation set.
-        shader.push_str(&self.build_packed_get_param(&active));
-        shader.push('\n');
-
-        // 4a. Per-thread variation state (empty for stateless flames).
-        shader.push_str(&self.build_state_accessors(flame, &active));
-        shader.push('\n');
-
-        // 4b. Complex arithmetic helpers (~90 LoC, dead-code-eliminated).
-        shader.push_str(include_str!("../shaders/core/complex.wgsl"));
-        shader.push('\n');
-
-        // 5. Standard utilities (no longer defines get_param, just helpers
-        //    like select_transform / world_to_pixel).
-        shader.push_str(include_str!("../shaders/core/utilities.wgsl"));
-        shader.push('\n');
-
-        // 6. Affine (3D)
-        shader.push_str(include_str!("../shaders/core/affine_3d.wgsl"));
-        shader.push('\n');
-
-        // 6. Core variations (3D) from embedded VariationDef WGSL (only active ones)
-        shader.push_str(&self.generate_variation_code(&active, true));
-        shader.push('\n');
-
-        // 7. Generate apply_variations (no inlining for export shaders)
-        let has_dc = self.has_dc_variation(&active);
-        shader.push_str(&self.build_apply_variations_3d(&active, None, has_dc));
-        shader.push('\n');
-
-        // 8. Export main — routed through TemplateProcessor with HAS_DC gate.
-        let mut processor = TemplateProcessor::new();
-        processor.set("HAS_DC", has_dc);
-        processor.set("HAS_ATTACHMENTS", flame.has_attachments());
-        let mut processed = processor.process(include_str!("../shaders/core/main_export.wgsl"));
-        let state_init = self.build_state_init_block(flame, &active);
-        processed = processed.replace("//__STATE_INIT_BLOCK__", &state_init);
-        shader.push_str(&processed);
-
-        // DEBUG: Write shader to file for analysis (enabled via --dump-shader).
-        // Mirrors `build_from_template`'s dump so the high-res export path
-        // can also be inspected. Writes to a distinct filename so a single
-        // run that goes through both paths leaves both shaders on disk.
-        if should_dump_shader() {
-            let filename = "debug_shader_export.wgsl";
-            if let Err(e) = std::fs::write(filename, &shader) {
-                log::error!("Failed to write export debug shader: {}", e);
-            } else {
-                log::info!("Wrote export shader to {} ({} bytes, {} lines)",
-                    filename, shader.len(), shader.lines().count());
-            }
-        }
-
-        shader
-    }
 }
 
 #[cfg(test)]
@@ -1798,91 +1642,130 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
-    /// Verify the unified main_tiled.wgsl produces the expected 2D and 3D
-    /// variants when run through the TemplateProcessor with RENDER_3D set
-    /// appropriately. Catches the obvious wrong-init / wrong-projection
-    /// regressions if someone ever breaks the {{#if RENDER_3D}} blocks.
+    /// OUTPUT_HISTOGRAM_DIRECT toggles the unified template between two
+    /// output strategies: direct-histogram (atomicAdd at slot 2) and
+    /// sample-emit (write Sample at slot 2 + bump counter at slot 6).
+    /// Both modes have to produce valid, distinct WGSL with the right
+    /// bindings declared in the header. This processes header.wgsl and
+    /// main_template.wgsl through the same TemplateProcessor used by
+    /// build_from_template, then asserts on what each branch keeps.
     #[test]
-    fn tiled_shader_render_3d_gates() {
-        let builder = ShaderBuilder::new(crate::variations::global_registry().clone());
-        let mut active = HashMap::new();
-        active.insert("linear".to_string(), 1.0);
+    fn unified_template_output_histogram_direct_gates() {
+        let header_src = include_str!("../shaders/core/header.wgsl")
+            .replace("{{ATTACHMENT_CAP}}", "1");
+        let main_src = include_str!("../shaders/core/main_template.wgsl");
 
-        // Stub flame so the shader builder can compute layouts.
-        let mut flame = crate::scene::transforms::Flame::new();
-        let mut t = crate::scene::transforms::Transform::new();
-        t.set_variation("linear", 1.0);
-        flame.transforms.push(t);
+        // Shared baseline: 2D, no path tracking, no xaos, no DC, no
+        // attachments — matches the export flow's flag set in 2c.
+        let make_processor = |output_histogram_direct: bool, iteration_counts: bool| {
+            let mut p = TemplateProcessor::new();
+            p.set("RENDER_3D", false);
+            p.set("PATH_TRACKING", false);
+            p.set("XAOS_ENABLED", false);
+            p.set("HAS_DC", false);
+            p.set("HAS_ATTACHMENTS", false);
+            p.set("OUTPUT_HISTOGRAM_DIRECT", output_histogram_direct);
+            p.set("ITERATION_COUNTS", iteration_counts);
+            p
+        };
 
-        let shader_2d = builder.build_trajectory_2d_tiled(&flame, &active);
-        let shader_3d = builder.build_trajectory_3d_tiled(&flame, &active);
+        // Direct-histogram mode (interactive default).
+        let p = make_processor(true, false);
+        let header_direct = p.process(&header_src);
+        let main_direct = p.process(main_src);
 
-        // utilities_tiled.wgsl defines BOTH world_to_pixel and
-        // world_to_pixel_3d functions, so check for the call site
-        // specifically (the `let pixel = ...` line in the main loop).
-        // 2D path: vec2<f32> init, world_to_pixel call (not _3d)
-        assert!(shader_2d.contains("var current = vec2<f32>("),
-                "2D tiled missing vec2 init");
-        assert!(shader_2d.contains("let pixel = world_to_pixel(final_pos);"),
-                "2D tiled missing world_to_pixel call");
-        assert!(!shader_2d.contains("var current = vec3<f32>("),
-                "2D tiled has vec3 init (RENDER_3D leaked)");
-        assert!(!shader_2d.contains("let pixel = world_to_pixel_3d(final_pos);"),
-                "2D tiled has world_to_pixel_3d call site (RENDER_3D leaked)");
+        assert!(
+            header_direct.contains("histogram: array<atomic<u32>>"),
+            "direct mode header missing histogram binding"
+        );
+        assert!(
+            header_direct.contains("iteration_counts: array<atomic<u32>>"),
+            "direct mode header missing iteration_counts binding"
+        );
+        assert!(
+            !header_direct.contains("samples: array<Sample>"),
+            "direct mode header has sample-emit binding leaked"
+        );
+        assert!(
+            !header_direct.contains("sample_counter: SampleCounter"),
+            "direct mode header has sample_counter binding leaked"
+        );
+        assert!(
+            !header_direct.contains("struct Sample {"),
+            "direct mode header has Sample struct leaked"
+        );
+        assert!(
+            main_direct.contains("atomicAdd(&histogram[base_idx + 0u]"),
+            "direct mode main missing histogram atomicAdd"
+        );
+        assert!(
+            !main_direct.contains("atomicAdd(&sample_counter.count"),
+            "direct mode main has sample-emit body leaked"
+        );
 
-        // 3D path: vec3<f32> init, world_to_pixel_3d call
-        assert!(shader_3d.contains("var current = vec3<f32>("),
-                "3D tiled missing vec3 init");
-        assert!(shader_3d.contains("let pixel = world_to_pixel_3d(final_pos);"),
-                "3D tiled missing world_to_pixel_3d call");
-        assert!(!shader_3d.contains("var current = vec2<f32>("),
-                "3D tiled has vec2 init (RENDER_3D leaked)");
-        assert!(!shader_3d.contains("let pixel = world_to_pixel(final_pos);"),
-                "3D tiled has world_to_pixel call site (RENDER_3D leaked)");
+        // ITERATION_COUNTS=false strips the per-iteration counter atomic.
+        assert!(
+            !main_direct.contains("atomicAdd(&iteration_counts[pixel_idx]"),
+            "direct mode with ITERATION_COUNTS=false should strip counter atomic"
+        );
+        // ITERATION_COUNTS=true keeps it.
+        let p_with_counts = make_processor(true, true);
+        let main_with_counts = p_with_counts.process(main_src);
+        assert!(
+            main_with_counts.contains("atomicAdd(&iteration_counts[pixel_idx]"),
+            "direct mode with ITERATION_COUNTS=true missing counter atomic"
+        );
 
-        // Neither should contain unprocessed template tags
-        for (name, src) in [("2d", &shader_2d), ("3d", &shader_3d)] {
-            assert!(!src.contains("{{#if"), "{} tiled has unprocessed {{#if}} tag", name);
-            assert!(!src.contains("{{else}}"), "{} tiled has unprocessed {{else}} tag", name);
-            assert!(!src.contains("{{/if}}"), "{} tiled has unprocessed {{/if}} tag", name);
+        // Sample-emit mode (multi-tile / high-res export). ITERATION_COUNTS
+        // is meaningless here (it's nested inside the direct branch), so
+        // pass false.
+        let p = make_processor(false, false);
+        let header_emit = p.process(&header_src);
+        let main_emit = p.process(main_src);
+
+        assert!(
+            header_emit.contains("samples: array<Sample>"),
+            "emit mode header missing samples binding"
+        );
+        assert!(
+            header_emit.contains("sample_counter: SampleCounter"),
+            "emit mode header missing sample_counter binding"
+        );
+        assert!(
+            header_emit.contains("struct Sample {"),
+            "emit mode header missing Sample struct"
+        );
+        assert!(
+            !header_emit.contains("histogram: array<atomic<u32>>"),
+            "emit mode header has direct-histogram binding leaked"
+        );
+        assert!(
+            !header_emit.contains("iteration_counts: array<atomic<u32>>"),
+            "emit mode header has iteration_counts binding leaked"
+        );
+        assert!(
+            main_emit.contains("atomicAdd(&sample_counter.count"),
+            "emit mode main missing sample_counter atomicAdd"
+        );
+        assert!(
+            main_emit.contains("samples[sample_idx] = Sample("),
+            "emit mode main missing Sample write"
+        );
+        assert!(
+            !main_emit.contains("atomicAdd(&histogram[base_idx"),
+            "emit mode main has direct-histogram body leaked"
+        );
+
+        // Both modes should fully resolve the gates — no leftover tags.
+        for (name, src) in [
+            ("direct-header", &header_direct),
+            ("direct-main", &main_direct),
+            ("emit-header", &header_emit),
+            ("emit-main", &main_emit),
+        ] {
+            assert!(!src.contains("{{#if"), "{} has unprocessed {{#if}}", name);
+            assert!(!src.contains("{{else}}"), "{} has unprocessed {{else}}", name);
+            assert!(!src.contains("{{/if}}"), "{} has unprocessed {{/if}}", name);
         }
-    }
-
-    /// HAS_DC=false should yield a shader with the older 2-step color flow
-    /// (no c_base/vc, no Step 3 lerp, apply_variations called without &vc).
-    /// HAS_DC=true should have the 3-step flow.
-    #[test]
-    fn tiled_shader_has_dc_gates() {
-        let builder = ShaderBuilder::new(crate::variations::global_registry().clone());
-
-        // Flame using just `linear` — no DC variation
-        let mut active_no_dc = HashMap::new();
-        active_no_dc.insert("linear".to_string(), 1.0);
-        let mut flame_no_dc = crate::scene::transforms::Flame::new();
-        let mut t = crate::scene::transforms::Transform::new();
-        t.set_variation("linear", 1.0);
-        flame_no_dc.transforms.push(t);
-        let shader = builder.build_trajectory_2d_tiled(&flame_no_dc, &active_no_dc);
-        assert!(!shader.contains("var c_base"),
-                "HAS_DC=false shader contains c_base");
-        assert!(!shader.contains("xform.direct_color"),
-                "HAS_DC=false shader contains direct_color load");
-        assert!(shader.contains("apply_variations(xform, xform_idx, affine_p, &rng)"),
-                "HAS_DC=false call site missing 4-arg apply_variations");
-
-        // Flame using dc_linear — has writes_color: true
-        let mut active_dc = HashMap::new();
-        active_dc.insert("dc_linear".to_string(), 1.0);
-        let mut flame_dc = crate::scene::transforms::Flame::new();
-        let mut t = crate::scene::transforms::Transform::new();
-        t.set_variation("dc_linear", 1.0);
-        flame_dc.transforms.push(t);
-        let shader = builder.build_trajectory_2d_tiled(&flame_dc, &active_dc);
-        assert!(shader.contains("var c_base"),
-                "HAS_DC=true shader missing c_base");
-        assert!(shader.contains("xform.direct_color"),
-                "HAS_DC=true shader missing direct_color use");
-        assert!(shader.contains("apply_variations(xform, xform_idx, affine_p, &rng, &vc)"),
-                "HAS_DC=true call site missing 5-arg apply_variations");
     }
 }

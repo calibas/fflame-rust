@@ -621,20 +621,20 @@ fn get_pool_final_transform_items(index: usize, transform: &crate::scene::transf
     for param in [AffineParam::A, AffineParam::B, AffineParam::C, AffineParam::D,
                   AffineParam::E, AffineParam::F, AffineParam::G] {
         items.push(TargetItem::new(
-            ConfigPath::PoolFinalTransformAffine { index, param },
+            ConfigPath::FinalTransformAffine { index, param },
             &format!("Affine {}", param.to_char()),
         ));
     }
 
     if transform.post_affine_enabled {
         items.push(TargetItem::new(
-            ConfigPath::PoolFinalTransformPostAffineEnabled { index },
+            ConfigPath::FinalTransformPostAffineEnabled { index },
             "Post-Affine Enabled",
         ));
         for param in [AffineParam::A, AffineParam::B, AffineParam::C, AffineParam::D,
                       AffineParam::E, AffineParam::F, AffineParam::G] {
             items.push(TargetItem::new(
-                ConfigPath::PoolFinalTransformPostAffine { index, param },
+                ConfigPath::FinalTransformPostAffine { index, param },
                 &format!("Post-Affine {}", param.to_char()),
             ));
         }
@@ -644,13 +644,13 @@ fn get_pool_final_transform_items(index: usize, transform: &crate::scene::transf
     for (var_name, weight) in &transform.variations {
         if *weight == 0.0 { continue; }
         items.push(TargetItem::new(
-            ConfigPath::PoolFinalTransformVariation { index, variation: var_name.clone() },
+            ConfigPath::FinalTransformVariation { index, variation: var_name.clone() },
             &capitalize_first(var_name),
         ));
         if let Some(info) = registry.get(var_name) {
             for param in &info.parameters {
                 items.push(TargetItem::new(
-                    ConfigPath::PoolFinalTransformVariationParam {
+                    ConfigPath::FinalTransformVariationParam {
                         index, variation: var_name.clone(), param: param.name.clone(),
                     },
                     &format!("{} → {}", capitalize_first(var_name), &param.display_name),

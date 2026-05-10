@@ -118,7 +118,7 @@ pub async fn export_headless(
 ) -> Result<bool, Box<dyn std::error::Error>> {
     // Check if we need CPU-based export for large resolutions
     if crate::export::needs_cpu_export(width, height) {
-        let histogram_size = crate::export::calculate_histogram_size(width, height);
+        let histogram_size = crate::export::histogram_size_bytes(width, height);
         log::info!(
             "Using CPU histogram export for {}x{} (histogram would be {} MB)",
             width,
