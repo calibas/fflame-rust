@@ -45,6 +45,43 @@ pub struct HistogramPixel {
     pub count: f64,
 }
 
+/// Layout describing how the concatenated tile-histogram buffer is
+/// sliced for the ParallelTiles GPU accumulate path. Tiles are
+/// horizontal slices of the full image — `tile_width` always equals
+/// `image_width`, so each tile's region is a contiguous row-range
+/// in pixel-index space and stitching at the end is just sequential
+/// memcpy with no per-row gymnastics.
+#[derive(Debug, Clone, Copy)]
+pub struct TileLayout {
+    pub num_tiles: u32,
+    pub tile_height: u32,
+    pub image_width: u32,
+    pub image_height: u32,
+}
+
+impl TileLayout {
+    /// Byte offset of `tile_idx` inside the concatenated buffer.
+    /// Each tile is `tile_width × tile_height × 16` bytes (4 u32 per
+    /// pixel: R, G, B, density).
+    pub fn tile_byte_offset(&self, tile_idx: u32) -> u64 {
+        let tile_pixels = (self.image_width as u64) * (self.tile_height as u64);
+        (tile_idx as u64) * tile_pixels * 16
+    }
+
+    /// Y-coordinate of the first row of `tile_idx` in full-image
+    /// pixel space.
+    pub fn tile_y_origin(&self, tile_idx: u32) -> u32 {
+        tile_idx * self.tile_height
+    }
+
+    /// Actual row count of `tile_idx`. The last tile may be shorter
+    /// than `tile_height` when `image_height` doesn't divide evenly.
+    pub fn tile_actual_height(&self, tile_idx: u32) -> u32 {
+        let y0 = self.tile_y_origin(tile_idx);
+        (self.image_height - y0).min(self.tile_height)
+    }
+}
+
 /// Progress callback for high-res export
 pub trait ExportProgress {
     fn on_dispatch(&mut self, current: u64, total: u64);
@@ -108,20 +145,24 @@ pub struct HighResExporter {
     compute_pipeline: ComputePipeline,
     bind_group_layout: BindGroupLayout,
 
-    // GPU accumulate pass — when the strategy picker returns `Direct`
-    // for this resolution (full histogram fits one binding on this
-    // device's limits), the per-iterate-dispatch CPU readback +
-    // histogram fill is replaced with a compute dispatch that
-    // atomic-adds samples into a GPU histogram buffer. We read back
-    // the histogram exactly once at the end. When the picker returns
-    // a tiled strategy these fields are `None` and the exporter
-    // falls back to the CPU accumulate path. Phase 6 will wire the
-    // tiled strategies into the GPU path. See
-    // docs/projects/unified-render-pipeline.md.
-    gpu_histogram_buffer: Option<Buffer>,
+    // GPU accumulate pass. The per-iterate-dispatch CPU readback +
+    // histogram fill is replaced with one or more compute dispatches
+    // that atomic-add samples into a GPU histogram. We read back the
+    // histogram exactly once at the end. When the strategy picker
+    // can't put the whole thing on GPU these fields are `None` and
+    // the exporter falls back to the CPU accumulate path.
+    //
+    // The single histogram is allocated as one concatenated buffer
+    // covering all tile regions (tiles are row-strip slices of the
+    // full image; `tile_layout` describes the slicing). For
+    // num_tiles == 1 this degenerates to a single-binding direct
+    // dispatch; for num_tiles > 1 the accumulate dispatch runs N
+    // times per iterate with offset+size sub-range bindings.
     accumulate_pipeline: ComputePipeline,
     accumulate_bind_group_layout: BindGroupLayout,
     accumulate_params_buffer: Buffer,
+    tile_histograms_buffer: Option<Buffer>,
+    tile_layout: Option<TileLayout>,
 
     // Variation init pipeline (runs once before sample generation to
     // populate derived params for variations with `wgsl_init` —
@@ -678,7 +719,7 @@ impl HighResExporter {
         // Builds the pipeline regardless of whether this device's
         // strategy ends up using it — cheap to construct (single
         // shader module, single pipeline) and lets the export() loop
-        // pick the path based on `gpu_histogram_buffer.is_some()`.
+        // pick the path based on `tile_histograms_buffer.is_some()`.
         let accumulate_bind_group_layout = crate::export::accumulate::create_bind_group_layout(&device);
         let accumulate_pipeline = crate::export::accumulate::create_pipeline(
             &device,
@@ -691,31 +732,90 @@ impl HighResExporter {
             mapped_at_creation: false,
         });
 
-        // Allocate the GPU histogram buffer when the strategy picker
-        // says the full-res histogram fits one storage-buffer binding
-        // on this device. When it doesn't we leave the buffer as None
-        // and fall back to the CPU accumulate path; Phase 6 will wire
-        // the tiled GPU strategies to handle that case.
+        // Pick GPU accumulate strategy based on resolution + device limits.
+        //
+        // The Direct strategy (full histogram fits one binding) was a
+        // path inside HighResExporter pre-P6 of this branch. As of
+        // accumulator-unification's Phase 8d, the routing layer sends
+        // those cases to FlameRenderer.render() instead, so Direct
+        // is unreachable here and the dedicated buffer/bind-group
+        // pair has been removed. ParallelTiles handles `num_tiles==1`
+        // trivially anyway, so the unified path covers every
+        // resolution that fits one buffer.
+        //
+        // `ParallelTiles`: total histogram fits one buffer
+        //                  (≤ max_buffer_size). One concatenated GPU
+        //                  buffer split into N row-strip tiles;
+        //                  per-iterate batch runs N accumulate
+        //                  dispatches, one per tile, bound via
+        //                  offset+size. Single iteration loop.
+        //
+        // `SerialTiles`:   total exceeds one buffer → CPU fallback.
+        //                  See docs/projects/parallel-tiles.md on why
+        //                  we don't build SerialTiles GPU (N× iter
+        //                  cost loses to CPU's 1× iter + main-RAM
+        //                  histogram).
+        //
+        // `Direct`:        also routed to CPU fallback here as a
+        //                  defensive arm — through the production
+        //                  routing this is unreachable, but a future
+        //                  caller hitting HighResExporter::new for a
+        //                  small image (e.g. testing) shouldn't crash.
         let strategy = crate::export::pick_strategy(width, height, &device.limits());
-        let gpu_histogram_buffer = if matches!(strategy, crate::export::RenderStrategy::Direct) {
-            let size = (width as u64) * (height as u64) * 16; // 4× u32 per pixel
-            log::info!(
-                "High-res export: GPU accumulate path enabled ({}x{}, {} MB histogram)",
-                width, height, size / (1024 * 1024)
-            );
-            Some(device.create_buffer(&BufferDescriptor {
-                label: Some("Export GPU Histogram"),
-                size,
-                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
-                mapped_at_creation: false,
-            }))
-        } else {
-            log::info!(
-                "High-res export: CPU accumulate fallback ({}x{}, strategy={:?} not yet GPU-wired)",
-                width, height, strategy
-            );
-            None
-        };
+        let device_limits = device.limits();
+        let total_hist_size = (width as u64) * (height as u64) * 16; // 4× u32 per pixel
+
+        let mut tile_histograms_buffer: Option<Buffer> = None;
+        let mut tile_layout: Option<TileLayout> = None;
+
+        match strategy {
+            crate::export::RenderStrategy::ParallelTiles { tiles_y, tile_height, .. } => {
+                if total_hist_size <= device_limits.max_buffer_size as u64 {
+                    log::info!(
+                        "High-res export: GPU accumulate (ParallelTiles) — {}x{}, \
+                         {} tile{} of {} rows × {} cols, {} MB total",
+                        width, height,
+                        tiles_y, if tiles_y == 1 { "" } else { "s" },
+                        tile_height, width,
+                        total_hist_size / (1024 * 1024),
+                    );
+                    tile_histograms_buffer = Some(device.create_buffer(&BufferDescriptor {
+                        label: Some("Export Concatenated Tile Histograms"),
+                        size: total_hist_size,
+                        usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
+                        mapped_at_creation: false,
+                    }));
+                    tile_layout = Some(TileLayout {
+                        num_tiles: tiles_y,
+                        tile_height,
+                        image_width: width,
+                        image_height: height,
+                    });
+                } else {
+                    log::info!(
+                        "High-res export: CPU accumulate fallback ({}x{}, \
+                         total {} MB > max_buffer_size {} MB — too big for one GPU buffer)",
+                        width, height,
+                        total_hist_size / (1024 * 1024),
+                        device_limits.max_buffer_size / (1024 * 1024),
+                    );
+                }
+            }
+            crate::export::RenderStrategy::SerialTiles { .. } => {
+                log::info!(
+                    "High-res export: CPU accumulate fallback ({}x{}, strategy=SerialTiles — \
+                     CPU path is faster than SerialTiles GPU per parallel-tiles.md)",
+                    width, height,
+                );
+            }
+            crate::export::RenderStrategy::Direct => {
+                log::warn!(
+                    "High-res export: unexpected Direct strategy at {}x{} — \
+                     routing should have sent this to FlameRenderer. Using CPU fallback.",
+                    width, height,
+                );
+            }
+        }
 
         // ===== Create tonemap pipeline for GPU tonemapping =====
         // Use export-specific shader without path buffer/palette bindings (only 5 bindings: 0-4)
@@ -896,10 +996,11 @@ impl HighResExporter {
             palette_sampler,
             compute_pipeline,
             bind_group_layout,
-            gpu_histogram_buffer,
             accumulate_pipeline,
             accumulate_bind_group_layout,
             accumulate_params_buffer,
+            tile_histograms_buffer,
+            tile_layout,
             init_pipeline,
             init_bind_group_layout,
             init_pair_count,
@@ -934,11 +1035,13 @@ impl HighResExporter {
         // readback so HistogramPixel's units stay equivalent to the CPU
         // path's (r,g,b ∈ [0,n], count = sample count).
         let color_scale_f = config.histogram_color_scale.max(1.0);
-        let use_gpu_accumulate = self.gpu_histogram_buffer.is_some();
+        let use_gpu_accumulate = self.tile_histograms_buffer.is_some();
 
-        // Pre-zero the GPU histogram once at the start when we're
-        // taking the GPU accumulate path.
-        if let Some(ref hist) = self.gpu_histogram_buffer {
+        // Pre-zero the concatenated tile-histogram buffer. The per-tile
+        // accumulate dispatches below treat their sub-range bindings as
+        // independent histograms, so the whole buffer needs to start at
+        // zero exactly once per export.
+        if let Some(hist) = self.tile_histograms_buffer.as_ref() {
             let mut clear_encoder = self.device.create_command_encoder(&CommandEncoderDescriptor {
                 label: Some("Export GPU Histogram Clear"),
             });
@@ -1032,29 +1135,59 @@ impl HighResExporter {
             }
         }
 
-        // Accumulate bind group lives outside the loop — buffers are
-        // long-lived and the bind group is reusable across dispatches.
-        // None when we're on the CPU fallback path.
-        let accumulate_bind_group = self.gpu_histogram_buffer.as_ref().map(|hist| {
-            self.device.create_bind_group(&BindGroupDescriptor {
-                label: Some("Export Accumulate Bind Group"),
-                layout: &self.accumulate_bind_group_layout,
-                entries: &[
-                    BindGroupEntry {
-                        binding: 0,
-                        resource: self.sample_buffer.as_entire_binding(),
-                    },
-                    BindGroupEntry {
-                        binding: 1,
-                        resource: self.accumulate_params_buffer.as_entire_binding(),
-                    },
-                    BindGroupEntry {
-                        binding: 2,
-                        resource: hist.as_entire_binding(),
-                    },
-                ],
-            })
-        });
+        // Accumulate bind groups. Created once outside the loop —
+        // buffer handles are long-lived and bind groups are reusable
+        // across iterate dispatches.
+        //
+        // ParallelTiles path: one bind group per tile, each binding
+        // a sub-range of the concatenated buffer at the tile's byte
+        // offset with size equal to the tile's pixel-count × 16
+        // bytes. The shader's bound_x/bound_y/bound_width/bound_height
+        // uniform filters out samples that don't belong to the
+        // currently-bound tile, and `local_pixel_idx` indexes into
+        // the sub-range as if it were a fresh tile-sized buffer.
+        // For `num_tiles == 1` this degenerates to a single
+        // full-image bind group — the path that used to live behind
+        // the dedicated Direct branch.
+        //
+        // CPU fallback path: empty vec; the dispatch loop reads back
+        // samples and bins them on the host instead.
+        let tile_accumulate_bind_groups: Vec<BindGroup> = match (
+            self.tile_histograms_buffer.as_ref(),
+            self.tile_layout,
+        ) {
+            (Some(hist), Some(layout)) => (0..layout.num_tiles)
+                .map(|tile_idx| {
+                    let offset = layout.tile_byte_offset(tile_idx);
+                    let tile_pixels = (layout.image_width as u64)
+                        * (layout.tile_actual_height(tile_idx) as u64);
+                    let size = tile_pixels * 16;
+                    self.device.create_bind_group(&BindGroupDescriptor {
+                        label: Some("Export Accumulate Bind Group (Tile)"),
+                        layout: &self.accumulate_bind_group_layout,
+                        entries: &[
+                            BindGroupEntry {
+                                binding: 0,
+                                resource: self.sample_buffer.as_entire_binding(),
+                            },
+                            BindGroupEntry {
+                                binding: 1,
+                                resource: self.accumulate_params_buffer.as_entire_binding(),
+                            },
+                            BindGroupEntry {
+                                binding: 2,
+                                resource: BindingResource::Buffer(BufferBinding {
+                                    buffer: hist,
+                                    offset,
+                                    size: std::num::NonZeroU64::new(size),
+                                }),
+                            },
+                        ],
+                    })
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
 
         // Create readback buffer for samples (CPU path only). On the
         // GPU path the samples never leave the GPU; the accumulate
@@ -1163,41 +1296,66 @@ impl HighResExporter {
             let sample_count = self.read_counter(&counter_readback_buffer).await?;
 
             if sample_count > 0 {
-                if let Some(ref acc_bind_group) = accumulate_bind_group {
-                    // GPU accumulate path: a single compute dispatch
-                    // scatters the samples into the GPU histogram. No
-                    // sample readback — the data stays GPU-resident
-                    // until the final histogram readback below.
-                    let acc_params = crate::export::accumulate::AccumulateParams {
-                        bound_x: 0,
-                        bound_y: 0,
-                        bound_width: self.width,
-                        bound_height: self.height,
-                        sample_count,
-                        color_scale: color_scale_f,
-                        _pad0: 0,
-                        _pad1: 0,
-                    };
-                    self.queue.write_buffer(
-                        &self.accumulate_params_buffer,
-                        0,
-                        bytemuck::bytes_of(&acc_params),
-                    );
+                if !tile_accumulate_bind_groups.is_empty() {
+                    // GPU ParallelTiles path: the histogram is sliced
+                    // into N tile regions (N=1 for sub-binding sizes,
+                    // N>1 above). The same sample stream is dispatched
+                    // through the accumulate shader once per tile with
+                    // `bound_x/y/width/height` set to the tile's region.
+                    // Samples landing outside the bound region get
+                    // rejected by the shader's bounds check, so each
+                    // dispatch only writes to its own tile. No sample
+                    // readback — the data stays GPU-resident until the
+                    // final histogram readback below.
+                    //
+                    // Per-tile submit (rather than one encoder with N
+                    // passes) is needed because `queue.write_buffer`
+                    // calls between encoded compute passes coalesce —
+                    // every dispatch in a single submit would see the
+                    // *last* params write. Separate submits sequence the
+                    // write → dispatch pairs in queue order.
+                    //
+                    // Wall time at N>1: a constant N× factor on the
+                    // accumulate-pass time only — iteration is unchanged.
+                    // Accumulate is much cheaper than iteration so this
+                    // is fine in practice; the alternative (multi-binding
+                    // shader templated for N tiles) caps at
+                    // max_storage_buffers_per_shader_stage (often 8),
+                    // doesn't scale, and adds shader-codegen complexity.
+                    let layout = self.tile_layout.expect("tile_layout present when bind groups are");
+                    for (tile_idx, tile_bg) in tile_accumulate_bind_groups.iter().enumerate() {
+                        let tile_idx_u32 = tile_idx as u32;
+                        let acc_params = crate::export::accumulate::AccumulateParams {
+                            bound_x: 0,
+                            bound_y: layout.tile_y_origin(tile_idx_u32),
+                            bound_width: layout.image_width,
+                            bound_height: layout.tile_actual_height(tile_idx_u32),
+                            sample_count,
+                            color_scale: color_scale_f,
+                            _pad0: 0,
+                            _pad1: 0,
+                        };
+                        self.queue.write_buffer(
+                            &self.accumulate_params_buffer,
+                            0,
+                            bytemuck::bytes_of(&acc_params),
+                        );
 
-                    let mut acc_encoder = self.device.create_command_encoder(&CommandEncoderDescriptor {
-                        label: Some("Export Accumulate Encoder"),
-                    });
-                    {
-                        let mut acc_pass = acc_encoder.begin_compute_pass(&ComputePassDescriptor {
-                            label: Some("Export Accumulate Pass"),
-                            timestamp_writes: None,
+                        let mut acc_encoder = self.device.create_command_encoder(&CommandEncoderDescriptor {
+                            label: Some("Export Accumulate Encoder (Tile)"),
                         });
-                        acc_pass.set_pipeline(&self.accumulate_pipeline);
-                        acc_pass.set_bind_group(0, acc_bind_group, &[]);
-                        let groups = crate::export::accumulate::accumulate_dispatch_groups(sample_count);
-                        acc_pass.dispatch_workgroups(groups, 1, 1);
+                        {
+                            let mut acc_pass = acc_encoder.begin_compute_pass(&ComputePassDescriptor {
+                                label: Some("Export Accumulate Pass (Tile)"),
+                                timestamp_writes: None,
+                            });
+                            acc_pass.set_pipeline(&self.accumulate_pipeline);
+                            acc_pass.set_bind_group(0, tile_bg, &[]);
+                            let groups = crate::export::accumulate::accumulate_dispatch_groups(sample_count);
+                            acc_pass.dispatch_workgroups(groups, 1, 1);
+                        }
+                        self.queue.submit(std::iter::once(acc_encoder.finish()));
                     }
-                    self.queue.submit(std::iter::once(acc_encoder.finish()));
 
                     total_samples_accumulated += sample_count as u64;
                 } else {
@@ -1340,8 +1498,12 @@ impl HighResExporter {
     /// HistogramPixel units match the CPU path's
     /// (r,g,b summed in [0,n], count = sample count).
     async fn read_gpu_histogram(&self, color_scale: f32) -> Result<Vec<HistogramPixel>, String> {
+        // ParallelTiles tiles are horizontal slices laid out
+        // back-to-back in the concatenated buffer, which is exactly
+        // the natural image row order — no stitching needed at the
+        // byte level, just a single full-buffer readback.
         let hist = self
-            .gpu_histogram_buffer
+            .tile_histograms_buffer
             .as_ref()
             .ok_or_else(|| "read_gpu_histogram called without a GPU histogram buffer".to_string())?;
 
