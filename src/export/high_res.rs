@@ -1045,11 +1045,19 @@ impl HighResExporter {
         // readback so HistogramPixel's units stay equivalent to the CPU
         // path's (r,g,b ∈ [0,n], count = sample count).
         let color_scale_f = config.histogram_color_scale.max(1.0);
-        let use_gpu_accumulate = self.gpu_histogram_buffer.is_some();
+        let use_gpu_direct = self.gpu_histogram_buffer.is_some();
+        let use_gpu_parallel_tiles = self.tile_histograms_buffer.is_some();
+        let use_gpu_accumulate = use_gpu_direct || use_gpu_parallel_tiles;
 
-        // Pre-zero the GPU histogram once at the start when we're
-        // taking the GPU accumulate path.
-        if let Some(ref hist) = self.gpu_histogram_buffer {
+        // Pre-zero whichever GPU histogram buffer the chosen path uses.
+        // Direct: single full-image buffer. ParallelTiles: concatenated
+        // tile buffer (same total bytes, just sliced by per-tile
+        // accumulate dispatches in the loop below).
+        let zero_target: Option<&Buffer> = self
+            .gpu_histogram_buffer
+            .as_ref()
+            .or(self.tile_histograms_buffer.as_ref());
+        if let Some(hist) = zero_target {
             let mut clear_encoder = self.device.create_command_encoder(&CommandEncoderDescriptor {
                 label: Some("Export GPU Histogram Clear"),
             });
@@ -1143,12 +1151,22 @@ impl HighResExporter {
             }
         }
 
-        // Accumulate bind group lives outside the loop — buffers are
-        // long-lived and the bind group is reusable across dispatches.
-        // None when we're on the CPU fallback path.
-        let accumulate_bind_group = self.gpu_histogram_buffer.as_ref().map(|hist| {
+        // Accumulate bind groups. Created once outside the loop —
+        // buffer handles are long-lived and bind groups are reusable
+        // across iterate dispatches.
+        //
+        // Direct path: one bind group, single full-buffer binding.
+        // ParallelTiles path: one bind group per tile, each binding
+        // a sub-range of the concatenated buffer at the tile's byte
+        // offset with size equal to the tile's pixel-count × 16
+        // bytes. The shader's bound_x/bound_y/bound_width/bound_height
+        // uniform filters out samples that don't belong to the
+        // currently-bound tile, and `local_pixel_idx` indexes into
+        // the sub-range as if it were a fresh tile-sized buffer.
+        // CPU fallback path: both are None.
+        let direct_accumulate_bind_group = self.gpu_histogram_buffer.as_ref().map(|hist| {
             self.device.create_bind_group(&BindGroupDescriptor {
-                label: Some("Export Accumulate Bind Group"),
+                label: Some("Export Accumulate Bind Group (Direct)"),
                 layout: &self.accumulate_bind_group_layout,
                 entries: &[
                     BindGroupEntry {
@@ -1166,6 +1184,43 @@ impl HighResExporter {
                 ],
             })
         });
+
+        let tile_accumulate_bind_groups: Vec<BindGroup> = match (
+            self.tile_histograms_buffer.as_ref(),
+            self.tile_layout,
+        ) {
+            (Some(hist), Some(layout)) => (0..layout.num_tiles)
+                .map(|tile_idx| {
+                    let offset = layout.tile_byte_offset(tile_idx);
+                    let tile_pixels = (layout.image_width as u64)
+                        * (layout.tile_actual_height(tile_idx) as u64);
+                    let size = tile_pixels * 16;
+                    self.device.create_bind_group(&BindGroupDescriptor {
+                        label: Some("Export Accumulate Bind Group (Tile)"),
+                        layout: &self.accumulate_bind_group_layout,
+                        entries: &[
+                            BindGroupEntry {
+                                binding: 0,
+                                resource: self.sample_buffer.as_entire_binding(),
+                            },
+                            BindGroupEntry {
+                                binding: 1,
+                                resource: self.accumulate_params_buffer.as_entire_binding(),
+                            },
+                            BindGroupEntry {
+                                binding: 2,
+                                resource: BindingResource::Buffer(BufferBinding {
+                                    buffer: hist,
+                                    offset,
+                                    size: std::num::NonZeroU64::new(size),
+                                }),
+                            },
+                        ],
+                    })
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
 
         // Create readback buffer for samples (CPU path only). On the
         // GPU path the samples never leave the GPU; the accumulate
@@ -1274,8 +1329,8 @@ impl HighResExporter {
             let sample_count = self.read_counter(&counter_readback_buffer).await?;
 
             if sample_count > 0 {
-                if let Some(ref acc_bind_group) = accumulate_bind_group {
-                    // GPU accumulate path: a single compute dispatch
+                if let Some(ref acc_bind_group) = direct_accumulate_bind_group {
+                    // GPU Direct path: a single compute dispatch
                     // scatters the samples into the GPU histogram. No
                     // sample readback — the data stays GPU-resident
                     // until the final histogram readback below.
@@ -1309,6 +1364,66 @@ impl HighResExporter {
                         acc_pass.dispatch_workgroups(groups, 1, 1);
                     }
                     self.queue.submit(std::iter::once(acc_encoder.finish()));
+
+                    total_samples_accumulated += sample_count as u64;
+                } else if !tile_accumulate_bind_groups.is_empty() {
+                    // GPU ParallelTiles path: same iterate cost as Direct
+                    // (1× iteration), but the histogram is sliced into N
+                    // tile regions. The same sample stream is dispatched
+                    // through the accumulate shader N times — once per
+                    // tile — with `bound_x/y/width/height` set to the
+                    // tile's region. Samples landing outside the bound
+                    // region get rejected by the shader's bounds check,
+                    // so each dispatch only writes to its own tile.
+                    //
+                    // Per-tile submit (rather than one encoder with N
+                    // passes) is needed because `queue.write_buffer`
+                    // calls between encoded compute passes coalesce —
+                    // every dispatch in a single submit would see the
+                    // *last* params write. Separate submits sequence the
+                    // write → dispatch pairs in queue order.
+                    //
+                    // Wall time vs Direct: a constant N× factor on the
+                    // accumulate-pass time only — iteration is unchanged.
+                    // Accumulate is much cheaper than iteration so this
+                    // is fine in practice; the alternative (multi-binding
+                    // shader templated for N tiles) caps at
+                    // max_storage_buffers_per_shader_stage (often 8),
+                    // doesn't scale, and adds shader-codegen complexity.
+                    let layout = self.tile_layout.expect("tile_layout present when bind groups are");
+                    for (tile_idx, tile_bg) in tile_accumulate_bind_groups.iter().enumerate() {
+                        let tile_idx_u32 = tile_idx as u32;
+                        let acc_params = crate::export::accumulate::AccumulateParams {
+                            bound_x: 0,
+                            bound_y: layout.tile_y_origin(tile_idx_u32),
+                            bound_width: layout.image_width,
+                            bound_height: layout.tile_actual_height(tile_idx_u32),
+                            sample_count,
+                            color_scale: color_scale_f,
+                            _pad0: 0,
+                            _pad1: 0,
+                        };
+                        self.queue.write_buffer(
+                            &self.accumulate_params_buffer,
+                            0,
+                            bytemuck::bytes_of(&acc_params),
+                        );
+
+                        let mut acc_encoder = self.device.create_command_encoder(&CommandEncoderDescriptor {
+                            label: Some("Export Accumulate Encoder (Tile)"),
+                        });
+                        {
+                            let mut acc_pass = acc_encoder.begin_compute_pass(&ComputePassDescriptor {
+                                label: Some("Export Accumulate Pass (Tile)"),
+                                timestamp_writes: None,
+                            });
+                            acc_pass.set_pipeline(&self.accumulate_pipeline);
+                            acc_pass.set_bind_group(0, tile_bg, &[]);
+                            let groups = crate::export::accumulate::accumulate_dispatch_groups(sample_count);
+                            acc_pass.dispatch_workgroups(groups, 1, 1);
+                        }
+                        self.queue.submit(std::iter::once(acc_encoder.finish()));
+                    }
 
                     total_samples_accumulated += sample_count as u64;
                 } else {
@@ -1451,9 +1566,16 @@ impl HighResExporter {
     /// HistogramPixel units match the CPU path's
     /// (r,g,b summed in [0,n], count = sample count).
     async fn read_gpu_histogram(&self, color_scale: f32) -> Result<Vec<HistogramPixel>, String> {
+        // The Direct buffer and the ParallelTiles concatenated buffer
+        // share the same byte layout: row-major full-image histogram,
+        // 4× u32 per pixel. ParallelTiles tiles are horizontal slices
+        // laid out back-to-back, which is exactly the natural image
+        // row order — no stitching needed at the byte level. Pick
+        // whichever buffer the dispatch loop populated.
         let hist = self
             .gpu_histogram_buffer
             .as_ref()
+            .or(self.tile_histograms_buffer.as_ref())
             .ok_or_else(|| "read_gpu_histogram called without a GPU histogram buffer".to_string())?;
 
         let num_pixels = (self.width as usize) * (self.height as usize);
