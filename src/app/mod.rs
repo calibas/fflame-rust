@@ -1225,7 +1225,7 @@ impl App {
                         let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
                             label: Some("Transparent Export Tonemap"),
                         });
-                        renderer.tonemap_pass(&mut encoder);
+                        renderer.tonemap_pass(&self.gpu.queue, &mut encoder);
 
                         // Re-run color effects if enabled (they need to process the new tonemapped output)
                         if has_color_effects {
@@ -1298,7 +1298,7 @@ impl App {
                         let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
                             label: Some("Restore Normal Tonemap"),
                         });
-                        renderer.tonemap_pass(&mut encoder);
+                        renderer.tonemap_pass(&self.gpu.queue, &mut encoder);
 
                         // Re-run color effects with normal tonemap output
                         if has_color_effects {
@@ -1427,7 +1427,7 @@ impl App {
                     let mut final_encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
                         label: Some("WASM Export Final Tonemap"),
                     });
-                    temp_renderer.tonemap_pass(&mut final_encoder);
+                    temp_renderer.tonemap_pass(&self.gpu.queue, &mut final_encoder);
                     self.gpu.queue.submit(std::iter::once(final_encoder.finish()));
 
                     // Run color effects if enabled
@@ -1547,7 +1547,7 @@ impl App {
                         let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
                             label: Some("Transparent Export Tonemap"),
                         });
-                        renderer.tonemap_pass(&mut encoder);
+                        renderer.tonemap_pass(&self.gpu.queue, &mut encoder);
 
                         // Re-run color effects if enabled
                         if has_color_effects {
@@ -1887,12 +1887,12 @@ impl App {
             // If density effects ran, use their output; otherwise use accumulation directly
             if density_effects_ran {
                 if let Some(density_output) = self.effect_chain.get_density_output() {
-                    renderer.tonemap_pass_with_input(&self.gpu.device, &mut render_encoder, density_output);
+                    renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut render_encoder, density_output);
                 } else {
-                    renderer.tonemap_pass(&mut render_encoder);
+                    renderer.tonemap_pass(&self.gpu.queue, &mut render_encoder);
                 }
             } else {
-                renderer.tonemap_pass(&mut render_encoder);
+                renderer.tonemap_pass(&self.gpu.queue, &mut render_encoder);
             }
 
             self.metrics.record_tonemap_time(t_tonemap.elapsed().as_secs_f64() * 1000.0);

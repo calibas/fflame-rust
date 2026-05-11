@@ -688,7 +688,12 @@ pub struct AccumulateParams {
     pub blend_factor: f32,
     pub histogram_color_scale: f32, // Must match compute shader value
     pub target_iterations_per_pixel: u32, // Per-pixel convergence threshold (0 = disabled)
-    pub _pad0: f32,  // Padding for alignment
+    /// Mode flag — 0 = cumulative-mean (algorithmic ideal,
+    /// precision-limited around 10^9 iters/pixel on f32), 1 = fixed
+    /// EMA at `blend_factor` (precision-stable, dim early frames as
+    /// the EMA bootstraps from 0). Mirrors `accumulate.wgsl`'s
+    /// `use_fixed_ema` field.
+    pub use_fixed_ema: u32,
     pub background_r: f32,  // Background color RGB (for blending when no samples)
     pub background_g: f32,
     pub background_b: f32,
@@ -893,7 +898,7 @@ impl FlameBuffers {
             blend_factor: 1.0,
             histogram_color_scale: crate::config::DEFAULT_HISTOGRAM_COLOR_SCALE,
             target_iterations_per_pixel: 0, // Default: disabled (no per-pixel convergence)
-            _pad0: 0.0,
+            use_fixed_ema: 0, // Default: cumulative-mean
             background_r: 0.0,  // Default black background
             background_g: 0.0,
             background_b: 0.0,
@@ -925,7 +930,18 @@ impl FlameBuffers {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: TextureDimension::D2,
-                format: TextureFormat::Rgba16Float,
+                // Rgba32Float (was Rgba16Float pre-Phase-8c). f16's
+                // ~11-bit mantissa caps cumulative-mean precision: as
+                // sample count grows, each new batch's per-pixel
+                // contribution shrinks below f16's smallest
+                // representable change and gets quantized to zero, so
+                // the image stops improving past a precision floor
+                // independent of statistical noise. f32's 23-bit
+                // mantissa pushes that floor far enough out that
+                // statistical noise (Monte Carlo 1/√N) dominates
+                // through any practical iteration count. Costs 2× the
+                // accumulation buffer's GPU memory.
+                format: TextureFormat::Rgba32Float,
                 usage,
                 view_formats: &[],
             });
@@ -1095,13 +1111,21 @@ impl FlameBuffers {
         let curve_lut_view = curve_lut_texture.create_view(&TextureViewDescriptor::default());
 
         // Create sampler for tonemap shader (accumulation texture - needs linear filtering)
+        // Non-filtering sampler. Pre-Phase-8c this used Linear so the
+        // tonemap fragment shader could `textureSample` the f16
+        // accumulation texture; the format is now Rgba32Float and
+        // f32 textures aren't filterable without the
+        // FLOAT32_FILTERABLE feature, so the tonemap shader switched
+        // to `textureLoad` instead. The sampler is kept in the bind
+        // group for layout compatibility (the binding is declared in
+        // tonemap.wgsl) but isn't actually used.
         let sampler = device.create_sampler(&SamplerDescriptor {
             label: Some("Accumulation Sampler"),
             address_mode_u: AddressMode::ClampToEdge,
             address_mode_v: AddressMode::ClampToEdge,
             address_mode_w: AddressMode::ClampToEdge,
-            mag_filter: FilterMode::Linear,
-            min_filter: FilterMode::Linear,
+            mag_filter: FilterMode::Nearest,
+            min_filter: FilterMode::Nearest,
             mipmap_filter: FilterMode::Nearest,
             ..Default::default()
         });

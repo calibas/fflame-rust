@@ -309,15 +309,15 @@ pub async fn render(
 
         if density_ran {
             if let Some(density_output) = effect_chain.get_density_output() {
-                renderer.tonemap_pass_with_input(device, &mut tonemap_encoder, density_output);
+                renderer.tonemap_pass_with_input(device, queue, &mut tonemap_encoder, density_output);
             } else {
-                renderer.tonemap_pass(&mut tonemap_encoder);
+                renderer.tonemap_pass(queue, &mut tonemap_encoder);
             }
         } else {
-            renderer.tonemap_pass(&mut tonemap_encoder);
+            renderer.tonemap_pass(queue, &mut tonemap_encoder);
         }
     } else {
-        renderer.tonemap_pass(&mut tonemap_encoder);
+        renderer.tonemap_pass(queue, &mut tonemap_encoder);
     }
 
     queue.submit(std::iter::once(tonemap_encoder.finish()));

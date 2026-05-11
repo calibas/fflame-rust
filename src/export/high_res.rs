@@ -1271,8 +1271,12 @@ impl HighResExporter {
         progress.on_accumulating(total_samples_accumulated);
         progress.on_tonemapping();
 
-        // Tonemap histogram to RGBA using GPU
-        let pixels = self.tonemap_gpu(&histogram, config, transparent).await?;
+        // Tonemap histogram to RGBA using GPU. The actual iteration
+        // count is the loop's ceiling-rounded `num_dispatches × per-dispatch`,
+        // not the user-passed target — feed that to the scale-invariant
+        // sample_density formula (Phase 8a).
+        let total_iters_dispatched = num_dispatches * iterations_per_dispatch;
+        let pixels = self.tonemap_gpu(&histogram, config, transparent, total_iters_dispatched).await?;
 
         progress.on_complete();
 
@@ -1392,12 +1396,18 @@ impl HighResExporter {
     }
 
     /// GPU tonemap: histogram → RGBA pixels using GPU shader
-    /// Uploads CPU histogram to GPU texture, runs tonemap shader, reads back result
+    /// Uploads CPU histogram to GPU texture, runs tonemap shader, reads back result.
+    ///
+    /// `total_iterations` is the cumulative iteration count across all
+    /// dispatches in this export — used by the scale-invariant
+    /// sample_density formula (Phase 8a). See
+    /// docs/projects/accumulator-unification.md.
     async fn tonemap_gpu(
         &self,
         histogram: &[HistogramPixel],
         config: &FractalConfig,
         transparent: bool,
+        total_iterations: u64,
     ) -> Result<Vec<u8>, String> {
         use crate::config::defaults::{DEFAULT_WHITE_LEVEL, PREFILTER_WHITE, BRIGHT_ADJUST};
 
@@ -1482,18 +1492,15 @@ impl HighResExporter {
         let pixels_per_unit_zoomed = base_pixels_per_unit * 2.0_f32.powf(apophysis_zoom);
         let area = (self.width as f32 * self.height as f32) / (pixels_per_unit_zoomed * pixels_per_unit_zoomed);
 
-        // Sample density: scaled by iterations_per_thread AND resolution.
-        // Mirrors `FlameRenderer::tonemap_for_export` in compute_kernel.rs.
-        // The resolution factor compensates for the fact that at 8000×8000
-        // (64M pixels) the per-pixel density is 64× lower than at 1000×1000
-        // for the same total iteration count — without this factor the
-        // tonemap divides by a too-high sample_density and the image goes
-        // perceptually black.
-        let total_pixels = (self.width * self.height) as f32;
-        let reference_pixels = 1_000_000.0;
-        let sample_density = 5000.0
-            * (self.iterations_per_thread as f32 / 256.0)
-            * (reference_pixels / total_pixels);
+        // Sample density: running iterations-per-pixel (Ember/Apophysis
+        // formula). See docs/projects/accumulator-unification.md and
+        // the matching site in compute_kernel.rs::update_tonemap. The
+        // shader's `k2 = 1 / (area × white_level × sample_density)`
+        // combined with `area = pixels / ppu²` and this `sample_density`
+        // yields a scale-invariant `density × k2` so brightness doesn't
+        // drift with sample count.
+        let total_pixels = (self.width as f32) * (self.height as f32);
+        let sample_density = ((total_iterations as f32) / total_pixels.max(1.0)).max(1e-6);
 
         let tonemap_mode = match config.tonemap_mode {
             crate::scene::tonemap::ToneMapMode::Linear => 0u32,

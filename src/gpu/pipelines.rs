@@ -154,22 +154,27 @@ impl FlamePipelines {
         let tonemap_bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("Tonemap Bind Group Layout"),
             entries: &[
-                // Accumulation texture (sampled)
+                // Accumulation texture (point-fetched via textureLoad
+                // — Rgba32Float is non-filterable without the
+                // FLOAT32_FILTERABLE feature, and a 1:1 fullscreen
+                // pass doesn't benefit from filtering anyway).
                 BindGroupLayoutEntry {
                     binding: 0,
                     visibility: ShaderStages::FRAGMENT,
                     ty: BindingType::Texture {
-                        sample_type: TextureSampleType::Float { filterable: true },
+                        sample_type: TextureSampleType::Float { filterable: false },
                         view_dimension: TextureViewDimension::D2,
                         multisampled: false,
                     },
                     count: None,
                 },
-                // Sampler
+                // Sampler — kept for binding-layout compatibility with
+                // the shader's `accumulation_sampler` declaration but
+                // unused (textureLoad takes no sampler).
                 BindGroupLayoutEntry {
                     binding: 1,
                     visibility: ShaderStages::FRAGMENT,
-                    ty: BindingType::Sampler(SamplerBindingType::Filtering),
+                    ty: BindingType::Sampler(SamplerBindingType::NonFiltering),
                     count: None,
                 },
                 // Tonemap params (uniform)
@@ -240,12 +245,16 @@ impl FlamePipelines {
         let accumulate_bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("Accumulate Bind Group Layout"),
             entries: &[
-                // Previous accumulation (sampled texture)
+                // Previous accumulation. Read via `textureLoad` in
+                // accumulate.wgsl, so it just needs to be a typed
+                // texture binding — non-filterable, since the
+                // accumulation texture is Rgba32Float (Phase 8c) and
+                // the FLOAT32_FILTERABLE feature isn't requested.
                 BindGroupLayoutEntry {
                     binding: 0,
                     visibility: ShaderStages::COMPUTE,
                     ty: BindingType::Texture {
-                        sample_type: TextureSampleType::Float { filterable: true },
+                        sample_type: TextureSampleType::Float { filterable: false },
                         view_dimension: TextureViewDimension::D2,
                         multisampled: false,
                     },
@@ -262,13 +271,15 @@ impl FlamePipelines {
                     },
                     count: None,
                 },
-                // Output texture (storage, write)
+                // Output texture (storage, write) — Rgba32Float to
+                // match the accumulation texture format change in
+                // gpu/buffers.rs (Phase 8c precision fix).
                 BindGroupLayoutEntry {
                     binding: 2,
                     visibility: ShaderStages::COMPUTE,
                     ty: BindingType::StorageTexture {
                         access: StorageTextureAccess::WriteOnly,
-                        format: TextureFormat::Rgba16Float,
+                        format: TextureFormat::Rgba32Float,
                         view_dimension: TextureViewDimension::D2,
                     },
                     count: None,

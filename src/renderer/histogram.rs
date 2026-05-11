@@ -57,7 +57,9 @@ impl DensityHistogram {
     /// Compute histogram from raw accumulation buffer data (f16 RGBA format)
     ///
     /// The accumulation buffer stores density in the alpha channel as f16.
-    /// Density is stored as: actual_density * 0.01 per hit (see accumulate.wgsl)
+    /// Density is stored as raw cumulative iteration count per pixel
+    /// (see accumulate.wgsl Phase 8b — was previously
+    /// `count × 0.01 × blend_factor`).
     pub fn compute_from_f16_data(&mut self, data: &[u8], width: u32, height: u32, padded_bytes_per_row: u32) {
         // Reset
         self.bins = [0; HISTOGRAM_BINS];
@@ -66,22 +68,27 @@ impl DensityHistogram {
         self.min_density = f32::MAX;
         self.max_density = 0.0;
 
-        let bytes_per_pixel = 8; // Rgba16Float = 4 channels × 2 bytes
+        // Rgba32Float = 4 channels × 4 bytes (Phase 8c — was
+        // Rgba16Float = 8 bytes; cumulative-mean precision floor on
+        // f16 forced the upgrade).
+        let bytes_per_pixel = 16usize;
 
         // First pass: find min/max density
         let mut densities: Vec<f32> = Vec::with_capacity((width * height) as usize);
 
         for y in 0..height {
             let row_start = (y * padded_bytes_per_row) as usize;
-            let row_data = &data[row_start..row_start + (width * bytes_per_pixel) as usize];
+            let row_data = &data[row_start..row_start + width as usize * bytes_per_pixel];
 
-            for chunk in row_data.chunks_exact(8) {
-                // Density is in alpha channel (bytes 6-7)
-                let density_f16 = half::f16::from_le_bytes([chunk[6], chunk[7]]);
-                let density = density_f16.to_f32();
+            for chunk in row_data.chunks_exact(bytes_per_pixel) {
+                // Density is in alpha channel (last 4 bytes of each pixel).
+                let density = f32::from_le_bytes([chunk[12], chunk[13], chunk[14], chunk[15]]);
 
-                // Scale back from 0.01 per hit to actual hit count
-                let hit_count = density * 100.0;
+                // Density is now stored as raw count per pixel
+                // (Phase 8b cumulative add). The previous EMA-style
+                // accumulator stored `count × 0.01 × blend_factor`
+                // and required a `× 100` correction here.
+                let hit_count = density;
 
                 if hit_count < 0.001 {
                     self.empty_pixels += 1;
@@ -207,8 +214,10 @@ pub fn submit_histogram_readback(
         label: Some("Histogram Compute Encoder"),
     });
 
-    // Create buffer to copy accumulation texture data (Rgba16Float format)
-    let bytes_per_pixel = 8; // Rgba16Float = 4 channels × 2 bytes each
+    // Create buffer to copy accumulation texture data (Rgba32Float
+    // since Phase 8c — was Rgba16Float, upgraded for cumulative-mean
+    // precision).
+    let bytes_per_pixel = 16; // Rgba32Float = 4 channels × 4 bytes each
     let unpadded_bytes_per_row = width * bytes_per_pixel;
     let align = COPY_BYTES_PER_ROW_ALIGNMENT;
     let padded_bytes_per_row = ((unpadded_bytes_per_row + align - 1) / align) * align;

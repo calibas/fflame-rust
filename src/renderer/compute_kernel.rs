@@ -139,6 +139,16 @@ pub struct FlameRenderer {
     samples_accumulated: u64,
     total_iterations: u64,
     effective_iterations: u64, // For brightness calculation - doesn't reset during overwrite mode
+    /// Iterations whose contribution is *currently in the persistent
+    /// accumulation buffer*. Used by the tonemap's sample_density
+    /// formula. Differs from `total_iterations` during overwrite mode:
+    /// overwrite_mode discards prev each accumulate so the buffer
+    /// only ever holds the latest dispatch, but compute_pass keeps
+    /// incrementing total_iterations every frame. Without this
+    /// separate counter, sample_density grows while bucket_count
+    /// stays put → tonemap reads scale-mismatched data → preview
+    /// mode goes ~N× dimmer than steady-state for N drag frames.
+    samples_in_buffer: u64,
     color_mode: ColorMode,
     path_map_style: PathMapStyle,
     path_capture_mode: PathCaptureMode,
@@ -242,6 +252,7 @@ impl FlameRenderer {
             samples_accumulated: 0,
             total_iterations: 0,
             effective_iterations: 0,
+            samples_in_buffer: 0,
             color_mode: ColorMode::Palette,
             path_map_style: PathMapStyle::default(),
             path_capture_mode: PathCaptureMode::default(),
@@ -329,7 +340,29 @@ impl FlameRenderer {
         self.samples_accumulated = 0;
         self.total_iterations = 0;
         self.effective_iterations = 0; // Reset for new accumulation phase
+        self.samples_in_buffer = 0; // Buffer's contents will be replaced/regrown after the reset
         self.frame_counter = 0; // Reset frame counter for deterministic seed progression
+    }
+
+    /// Whether the renderer is currently in cumulative-mean accumulate
+    /// mode (true) or fixed-EMA mode (false). Mirrors the
+    /// `Dynamic blend` UI checkbox.
+    pub fn use_dynamic_blend(&self) -> bool {
+        self.use_dynamic_blend
+    }
+
+    /// Clear both ping-pong accumulation textures. Both halves of the
+    /// ping-pong are cleared so it doesn't matter which is "current"
+    /// when iteration resumes — the next read of `previous_accumulation`
+    /// returns zeros either way. Used by the overwrite-exit path in
+    /// fixed-EMA mode (see `app/gpu_updates.rs::update_overwrite_mode`),
+    /// where leftover drag-frame samples would otherwise dominate the
+    /// EMA's bootstrap and produce a "way too bright" frame for
+    /// ~1/blend_factor frames before the EMA averages them out.
+    /// Cumulative mode skips this — the leftover drag samples are one
+    /// batch's worth of valid data that dilutes naturally.
+    pub fn clear_accumulation_buffers(&self, encoder: &mut CommandEncoder, queue: &Queue) {
+        self.buffers.clear_all(encoder, queue);
     }
 
     /// Build shader constants from current renderer state
@@ -417,10 +450,22 @@ impl FlameRenderer {
             self.buffers.write_path_filters(queue, &self.path_filters);
         }
 
-        // Track total iterations: workgroups * threads_per_workgroup * iterations_per_thread
-        // Each workgroup has 64 threads (8x8)
+        // Track total iterations as the count of iterations that
+        // actually contribute to the histogram — i.e. dispatched iters
+        // *minus* burn-in. The shader runs `iterations_per_thread`
+        // total iterations per thread but only plots after `burn_in`,
+        // so the plottable fraction is `(iters_per_thread - burn_in) /
+        // iters_per_thread`. Using the plotted count here makes
+        // `sample_density = total_iters / pixel_count` (Phase 8a's
+        // formula) match the *actual* density growth in the
+        // accumulator, which is what keeps the tonemap invariant
+        // across `iterations_per_thread` choices. Counting dispatched
+        // (pre-burn-in) iterations leaks a (1 - burn_in/ipt) factor
+        // into brightness — small ipt with the same burn_in produces
+        // dimmer images.
         let threads_per_workgroup = 64u64;
-        let samples_this_frame = num_workgroups as u64 * threads_per_workgroup * iterations_per_thread as u64;
+        let plotted_per_thread = iterations_per_thread.saturating_sub(burn_in) as u64;
+        let samples_this_frame = num_workgroups as u64 * threads_per_workgroup * plotted_per_thread;
         self.total_iterations += samples_this_frame;
 
         // Clear histogram buffer before each batch (needed for proper accumulation math)
@@ -486,21 +531,39 @@ impl FlameRenderer {
             self.effective_iterations += samples_this_frame;
         }
 
-        // Calculate blend_factor based on mode
-        let blend_factor = if self.overwrite_mode {
-            // Overwrite mode (live preview): Replace old buffer entirely
-            // Prevents mixing of different fractal states during drag
-            1.0
-        } else if self.use_dynamic_blend {
-            // Clamped exponential decay: Start at 0.8 for fast initial convergence,
-            // decay over time but never drop below 0.01 so iterations always contribute
-            let raw_blend = samples_this_frame as f32 / self.samples_accumulated as f32;
-            let clamped_blend = raw_blend.max(0.01).min(0.8);
-            clamped_blend
+        // Track what's actually in the accumulation buffer right now,
+        // since the shader's overwrite branch (blend_factor ≥ 0.99)
+        // discards `prev` before adding this dispatch's contribution.
+        // Without this, sample_density (which the tonemap uses) would
+        // reflect cumulative compute work while bucket_count in the
+        // shader only reflects one frame — preview-mode brightness
+        // would drop ~N× across N drag frames.
+        if self.overwrite_mode {
+            self.samples_in_buffer = samples_this_frame;
         } else {
-            // Fixed blend rate: constant blend per frame
-            // Useful for testing density compression effects
-            self.blend_factor
+            self.samples_in_buffer += samples_this_frame;
+        }
+
+        // Pick blend mode + rate for the accumulate shader. See
+        // docs/projects/accumulator-unification.md and the comment on
+        // `AccumulateParams::use_fixed_ema` in gpu/buffers.rs.
+        //   - overwrite (slider drag): blend_factor=1.0 triggers the
+        //     shader's clear-prev branch; mode is irrelevant.
+        //   - use_dynamic_blend=true (default): pure cumulative-mean.
+        //     blend_factor unused.
+        //   - use_dynamic_blend=false: fixed EMA at user's blend_factor.
+        //     Dim early frames as the EMA bootstraps from 0; settles
+        //     to a stable steady-state. Precision-stable indefinitely
+        //     (each batch contributes a constant proportion regardless
+        //     of total sample count). Use ~0.001 for high-quality
+        //     renders past ~10^9 iters/pixel where cumulative-mean
+        //     hits f32's precision floor.
+        let (blend_factor, use_fixed_ema) = if self.overwrite_mode {
+            (1.0, 0u32)
+        } else if self.use_dynamic_blend {
+            (0.0, 0u32)
+        } else {
+            (self.blend_factor, 1u32)
         };
 
         let params = AccumulateParams {
@@ -509,7 +572,7 @@ impl FlameRenderer {
             blend_factor,
             histogram_color_scale: self.histogram_color_scale,
             target_iterations_per_pixel: self.target_iterations_per_pixel,
-            _pad0: 0.0,
+            use_fixed_ema,
             background_r: self.background_color[0],
             background_g: self.background_color[1],
             background_b: self.background_color[2],
@@ -542,8 +605,43 @@ impl FlameRenderer {
         self.tonemap_bind_group = self.pipelines.create_tonemap_bind_group(device, &self.buffers);
     }
 
+    /// Refresh the sample-count-dependent fields of the tonemap params
+    /// uniform. Must run every frame before `tonemap_pass` — otherwise
+    /// `sample_density` stays frozen at whatever it was when
+    /// `update_tonemap` last fired (config load / user interaction)
+    /// and the Ember-style scale-invariant formula breaks: density
+    /// keeps growing while k2 stays put, so brightness drifts up
+    /// with sample count and `iterations_per_thread` becomes a
+    /// brightness knob instead of a speed knob.
+    ///
+    /// Cheap — a 4-byte uniform write at the offset of
+    /// `TonemapParams::sample_density`. See
+    /// docs/projects/accumulator-unification.md, Phase 8a.
+    fn refresh_sample_density(&self, queue: &Queue) {
+        let total_pixels = (self.width as f32) * (self.height as f32);
+        // Floor at 1e-6 (defensive non-zero, prevents `k2 = 1/0` in
+        // the tonemap shader). Was `.max(1.0)`, which clamped
+        // sample_density at ~"1 iter per pixel" — fine in steady
+        // state but artificially dimmed early frames at high
+        // resolution: 4K preview-mode at frame 1 has ~0.002
+        // iters/pixel, clamping to 1.0 multiplied k2's denominator
+        // 500× and made the image 500× dimmer than the same flame
+        // at steady state. The clamp also broke the scale-invariance
+        // promise (sample_density should track total_iterations
+        // linearly through any iter count); 1e-6 is small enough to
+        // never bind in practice.
+        let sample_density = ((self.samples_in_buffer as f32) / total_pixels.max(1.0)).max(1e-6);
+        let offset = std::mem::offset_of!(TonemapParams, sample_density) as u64;
+        queue.write_buffer(
+            &self.buffers.tonemap_params_buffer,
+            offset,
+            bytemuck::bytes_of(&sample_density),
+        );
+    }
+
     /// Render the accumulation buffer to internal fractal texture with tone mapping
-    pub fn tonemap_pass(&self, encoder: &mut CommandEncoder) {
+    pub fn tonemap_pass(&self, queue: &Queue, encoder: &mut CommandEncoder) {
+        self.refresh_sample_density(queue);
         let mut render_pass = encoder.begin_render_pass(&RenderPassDescriptor {
             label: Some("Tonemap Pass"),
             color_attachments: &[Some(RenderPassColorAttachment {
@@ -572,7 +670,8 @@ impl FlameRenderer {
     /// This creates a temporary bind group with the provided input texture instead of
     /// the accumulation texture. Used when density effects have processed the accumulation
     /// data and we need to tonemap their output.
-    pub fn tonemap_pass_with_input(&self, device: &Device, encoder: &mut CommandEncoder, input_view: &TextureView) {
+    pub fn tonemap_pass_with_input(&self, device: &Device, queue: &Queue, encoder: &mut CommandEncoder, input_view: &TextureView) {
+        self.refresh_sample_density(queue);
         // Create a temporary bind group with the custom input texture
         let bind_group = device.create_bind_group(&BindGroupDescriptor {
             label: Some("Tonemap Bind Group (Density Effect Input)"),
@@ -1122,15 +1221,30 @@ impl FlameRenderer {
             crate::scene::tonemap::ToneMapMode::DensityVisualization => 2u32,
         };
 
-        // Calculate area and sample_density (simplified for export)
+        // Calculate area and sample_density (Ember/Apophysis-style).
+        // sample_density = running iterations-per-pixel; recomputed
+        // every tonemap pass so density × k2 stays scale-invariant
+        // as samples accumulate. See
+        // docs/projects/accumulator-unification.md, "How Ember solves
+        // it" — `Source/Ember/Renderer.cpp:618-636`.
         let apophysis_zoom = config.zoom.log2();
         let base_pixels_per_unit = (self.width.min(self.height) as f32) * 0.25;
         let pixels_per_unit_zoomed = base_pixels_per_unit * (2.0_f32).powf(apophysis_zoom);
         let area = (self.width * self.height) as f32 / (pixels_per_unit_zoomed * pixels_per_unit_zoomed);
-        // Resolution normalization: scale inversely with pixel count (reference: 1M pixels)
-        let total_pixels = (self.width * self.height) as f32;
-        let reference_pixels = 1_000_000.0;
-        let sample_density = 5000.0 * (iterations_per_thread as f32 / 256.0) * (reference_pixels / total_pixels);
+        let total_pixels = (self.width as f32) * (self.height as f32);
+        // Floor at 1e-6 (defensive non-zero, prevents `k2 = 1/0` in
+        // the tonemap shader). Was `.max(1.0)`, which clamped
+        // sample_density at ~"1 iter per pixel" — fine in steady
+        // state but artificially dimmed early frames at high
+        // resolution: 4K preview-mode at frame 1 has ~0.002
+        // iters/pixel, clamping to 1.0 multiplied k2's denominator
+        // 500× and made the image 500× dimmer than the same flame
+        // at steady state. The clamp also broke the scale-invariance
+        // promise (sample_density should track total_iterations
+        // linearly through any iter count); 1e-6 is small enough to
+        // never bind in practice.
+        let sample_density = ((self.samples_in_buffer as f32) / total_pixels.max(1.0)).max(1e-6);
+        let _ = iterations_per_thread; // formerly part of sample_density; now scale-invariant via total_iterations.
 
         let params = TonemapParams {
             exposure: config.exposure,
@@ -1177,63 +1291,53 @@ impl FlameRenderer {
             crate::scene::tonemap::ToneMapMode::DensityVisualization => 2u32,
         };
 
-        // Calculate area and sample_density for brightness lookup table with Apophysis zoom compensation
-        // Apophysis ImageMaker.pas:448-452:
-        //   sample_density := fcp.actual_density * sqr(power(2, fcp.zoom));
-        //   area := FBitmap.Width * FBitmap.Height / (fcp.ppux * fcp.ppuy);
-        //   where ppux = pixels_per_unit * 2^zoom
+        // Calculate area and sample_density (Ember/Apophysis-style).
+        // Mirrors `Source/Ember/Renderer.cpp:618-636` — `sample_density`
+        // is the *running* iterations-per-pixel, recomputed every
+        // tonemap pass. Combined with `area = pixels / ppu²`, this
+        // makes the product `density × k2` scale-invariant in sample
+        // count: as iteration accumulates, density grows linearly,
+        // k2 shrinks linearly, and `log(1 + density × k2)` stabilizes.
+        // Brightness no longer drifts with sample count, no more
+        // magic-number 5000.0 calibration constant, and
+        // `iterations_per_thread` becomes a pure speed knob with no
+        // brightness side effects. See
+        // docs/projects/accumulator-unification.md.
         //
-        // This normalizes brightness across zoom levels:
-        // - Zoomed in: Higher sample_density → smaller k2 → less brightness boost
-        // - Zoomed out: Lower sample_density → larger k2 → more brightness boost
-        //
-        // NOTE: Our zoom is LINEAR (zoom=1.0 is default, zoom=2.0 is 2x scale)
-        //       Apophysis zoom is LOGARITHMIC (zoom=0 is default, zoom=1 means scale by 2^1=2)
-        //       Convert: apophysis_zoom = log2(our_zoom)
-
-        // Convert our linear zoom to Apophysis logarithmic zoom
-        let apophysis_zoom = zoom.log2();  // our zoom=1.0 → apophysis zoom=0, our zoom=2.0 → apophysis zoom=1
-
-        // Calculate pixels per unit at current zoom (ppux = ppuy for square pixels)
-        // Base pixels_per_unit is chosen to match our coordinate system
-        let base_pixels_per_unit = (width.min(height) as f32) * 0.25;  // From world_to_pixel scale
+        // Apophysis zoom convention: ours is linear (zoom=1.0 default,
+        // 2.0 = 2× scale); Apophysis is logarithmic (zoom=0 default,
+        // 1 = 2× scale). Convert via log2.
+        let apophysis_zoom = zoom.log2();
+        let base_pixels_per_unit = (width.min(height) as f32) * 0.25;
         let pixels_per_unit_zoomed = base_pixels_per_unit * (2.0_f32).powf(apophysis_zoom);
 
-        // Area in fractal space (not pixel space!)
+        // Area in fractal space (not pixel space).
         let area = (width * height) as f32 / (pixels_per_unit_zoomed * pixels_per_unit_zoomed);
 
-        // Sample density: Normalized reference value for consistent brightness
-        //
-        // KEY INSIGHT: bucket_count accumulation rate depends on iterations_per_thread!
-        // - More iterations per frame → more hits per frame → higher bucket_count growth rate
-        // - So sample_density must scale proportionally to match the hit rate
-        //
-        // SOLUTION: Use a reference value normalized to default iterations_per_thread (256)
-        // - Base value: 5000.0 (empirically chosen for good exposure)
-        //   - Much higher than Apophysis (50-100) because we generate ~100x more iterations per batch
-        // - Scale factor: (iterations_per_thread / 256.0)
-        //   - At default (256): sample_density = 5000.0 × 1.0 = 5000.0
-        //   - At half (128): sample_density = 5000.0 × 0.5 = 2500.0
-        //   - At double (512): sample_density = 5000.0 × 2.0 = 10000.0
-        //
-        // This ensures brightness remains consistent when changing iterations_per_thread:
-        // - Both bucket_count growth and sample_density scale together
-        // - The ratio stays constant → brightness stays constant
-        // - iterations_per_thread only affects render speed, not appearance
-        //
-        // Resolution normalization: Scale sample_density inversely with pixel count
-        // to keep area × sample_density constant across different render sizes.
-        // Reference: 1,000,000 pixels (1000×1000)
-        let total_pixels = (width * height) as f32;
-        let reference_pixels = 1_000_000.0;
-        let mut sample_density = 5000.0 * (iterations_per_thread as f32 / 256.0) * (reference_pixels / total_pixels);
+        // Running iterations per pixel. `.max(1.0)` guards against
+        // zero on the very first frame before any iteration has run.
+        let total_pixels = (width as f32) * (height as f32);
+        // Floor at 1e-6 (defensive non-zero, prevents `k2 = 1/0` in
+        // the tonemap shader). Was `.max(1.0)`, which clamped
+        // sample_density at ~"1 iter per pixel" — fine in steady
+        // state but artificially dimmed early frames at high
+        // resolution: 4K preview-mode at frame 1 has ~0.002
+        // iters/pixel, clamping to 1.0 multiplied k2's denominator
+        // 500× and made the image 500× dimmer than the same flame
+        // at steady state. The clamp also broke the scale-invariance
+        // promise (sample_density should track total_iterations
+        // linearly through any iter count); 1e-6 is small enough to
+        // never bind in practice.
+        let sample_density = ((self.samples_in_buffer as f32) / total_pixels.max(1.0)).max(1e-6);
 
-        // Live preview mode: Divide by 8 for brighter preview
-        // This compensates for lower density accumulation during live parameter editing
-        // Only applies during active editing (is_live_preview), not when rendering stops
-        if is_live_preview {
-            sample_density /= 8.0;
-        }
+        // `is_live_preview` and `iterations_per_thread` no longer
+        // affect the formula. The old code scaled sample_density by
+        // `iterations_per_thread / 256` and divided by 8 during live
+        // preview to compensate for the EMA accumulator's slower
+        // convergence; with a scale-invariant tonemap, neither knob
+        // is needed for brightness stability.
+        let _ = is_live_preview;
+        let _ = iterations_per_thread;
 
         let params = TonemapParams {
             exposure,
@@ -1868,7 +1972,7 @@ impl FlameRenderer {
     /// OLD METHOD - DEPRECATED - Use read_fractal_pixels() instead
     /// Capture pixels from accumulation buffer (for transparent PNG export)
     ///
-    /// This preserves true alpha values by reading raw Rgba16Float accumulation data
+    /// This preserves true alpha values by reading raw Rgba32Float accumulation data
     /// and applying tone mapping on the CPU. The accumulation buffer stores:
     /// - RGB: averaged fractal colors (no background blending)
     /// - A: accumulated density (sum across all frames)
@@ -1880,8 +1984,9 @@ impl FlameRenderer {
             label: Some("Accumulation Capture Encoder"),
         });
 
-        // Create buffer to copy accumulation texture data (Rgba16Float format)
-        let bytes_per_pixel = 8; // Rgba16Float = 4 channels × 2 bytes each
+        // Create buffer to copy accumulation texture data (Rgba32Float
+        // since Phase 8c — was Rgba16Float).
+        let bytes_per_pixel = 16; // Rgba32Float = 4 channels × 4 bytes each
         let unpadded_bytes_per_row = self.width * bytes_per_pixel;
         let align = egui_wgpu::wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
         let padded_bytes_per_row = ((unpadded_bytes_per_row + align - 1) / align) * align;
@@ -1918,7 +2023,7 @@ impl FlameRenderer {
 
         queue.submit(Some(encoder.finish()));
 
-        // Map buffer and read Rgba16Float data
+        // Map buffer and read Rgba32Float data
         let buffer_slice = buffer.slice(..);
         let (tx, rx) = futures::channel::oneshot::channel();
         buffer_slice.map_async(MapMode::Read, move |result| {
@@ -1931,7 +2036,7 @@ impl FlameRenderer {
 
         let data = buffer_slice.get_mapped_range();
 
-        // Convert Rgba16Float to Rgba8 with CPU tone mapping
+        // Convert Rgba32Float to Rgba8 with CPU tone mapping
         let mut rgba_data = Vec::with_capacity((self.width * self.height * 4) as usize);
 
         // Iterate row by row to handle padding
@@ -1939,12 +2044,12 @@ impl FlameRenderer {
             let row_start = (y * padded_bytes_per_row) as usize;
             let row_data = &data[row_start..row_start + (self.width * bytes_per_pixel) as usize];
 
-            for chunk in row_data.chunks_exact(8) {
-                // Read f16 values and convert to f32
-                let r = half::f16::from_le_bytes([chunk[0], chunk[1]]).to_f32();
-                let g = half::f16::from_le_bytes([chunk[2], chunk[3]]).to_f32();
-                let b = half::f16::from_le_bytes([chunk[4], chunk[5]]).to_f32();
-                let density = half::f16::from_le_bytes([chunk[6], chunk[7]]).to_f32();
+            for chunk in row_data.chunks_exact(16) {
+                // Read f32 values directly from 4 bytes each.
+                let r = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+                let g = f32::from_le_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]);
+                let b = f32::from_le_bytes([chunk[8], chunk[9], chunk[10], chunk[11]]);
+                let density = f32::from_le_bytes([chunk[12], chunk[13], chunk[14], chunk[15]]);
 
             // Apply same tone mapping as shader (exposure + log + gamma)
             let exposure = 1.0f32;
@@ -2011,7 +2116,7 @@ impl FlameRenderer {
         let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
             label: Some("Screenshot Encoder"),
         });
-        self.tonemap_pass(&mut encoder);
+        self.tonemap_pass(queue, &mut encoder);
 
         // Create buffer to copy texture data to
         let bytes_per_pixel = 4; // RGBA8
