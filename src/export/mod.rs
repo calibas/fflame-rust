@@ -77,31 +77,38 @@ pub enum RenderStrategy {
 pub fn pick_strategy(width: u32, height: u32, limits: &Limits) -> RenderStrategy {
     let total_bytes = histogram_size_bytes(width, height);
     let max_binding = limits.max_storage_buffer_binding_size as u64;
+    let max_buffer = limits.max_buffer_size as u64;
 
     if total_bytes <= max_binding {
         return RenderStrategy::Direct;
     }
 
     // Tile by rows so the layout matches the flat row-major histogram
-    // the rest of the pipeline already speaks.
+    // the rest of the pipeline already speaks. Tile height is chosen
+    // so each tile's region fits one storage-buffer binding.
     let bytes_per_row = (width as u64) * 16;
     let tile_height = (max_binding / bytes_per_row).max(1) as u32;
     let tile_width = width;
     let tiles_y = (height + tile_height - 1) / tile_height;
     let tiles_x = 1;
-    let num_tiles = tiles_x * tiles_y;
 
-    // Reserve bindings for the sample-emit shader's needs (transforms,
-    // params, samples, sample_counter, palette texture+sampler,
-    // variation_params, dummy path/path_filters, xaos, attachments).
-    // Whatever's left over is what the accumulate dispatch can use to
-    // hold tile histograms simultaneously.
-    let reserved = 11u32;
-    let available = limits
-        .max_storage_buffers_per_shader_stage
-        .saturating_sub(reserved);
-
-    if num_tiles <= available {
+    // ParallelTiles vs SerialTiles: ParallelTiles puts the entire
+    // concatenated histogram in *one* GPU buffer and binds tile
+    // regions via offset+size for the accumulate dispatch (1× iter
+    // cost — iteration runs once, accumulate dispatch loop runs N
+    // times reading the same sample stream). That only works when
+    // the total size fits one buffer (`max_buffer_size`, typically
+    // 2 GB on desktop).
+    //
+    // SerialTiles would mean re-iterating the chaos game per tile
+    // — N× iter cost, only worth it if even tile-sized GPU
+    // histograms aren't workable. Per
+    // docs/projects/parallel-tiles.md we don't actually build it:
+    // when total exceeds one buffer, HighResExporter's CPU path
+    // (1× iter cost, main-RAM histogram) beats SerialTiles on
+    // wall time. The SerialTiles enum variant survives as a
+    // "fall through to CPU" signal.
+    if total_bytes <= max_buffer {
         RenderStrategy::ParallelTiles {
             tiles_x,
             tiles_y,
@@ -150,11 +157,11 @@ mod strategy_tests {
     }
 
     #[test]
-    fn parallel_tiles_when_budget_allows() {
-        // Bump per-stage binding count high enough that 8K UHD's
-        // 4 tiles fit even after the 11-binding reservation.
+    fn parallel_tiles_when_buffer_fits() {
+        // Bump max_buffer_size high enough that 8K UHD's 506 MB
+        // total histogram fits in one buffer.
         let l = Limits {
-            max_storage_buffers_per_shader_stage: 16,
+            max_buffer_size: 1024 * 1024 * 1024, // 1 GB
             ..typical_limits()
         };
         let s = pick_strategy(7680, 4320, &l);
@@ -170,14 +177,19 @@ mod strategy_tests {
                 assert!(tiles_y >= 2);
                 assert!(tile_height < 4320);
             }
-            other => panic!("expected ParallelTiles for 8K UHD on 16-binding device, got {:?}", other),
+            other => panic!(
+                "expected ParallelTiles for 8K UHD when total fits one buffer, got {:?}",
+                other
+            ),
         }
     }
 
     #[test]
     fn extreme_resolutions_fall_back_to_serial() {
-        // Same 8K UHD on a typical 8-binding device — 4 tiles needed,
-        // 0 bindings available after reserving 11 (saturating). Serial.
+        // 8K UHD's 506 MB total exceeds typical_limits' default
+        // max_buffer_size (256 MB Limits::default floor) so it can't
+        // be one buffer → SerialTiles, which the routing treats as
+        // CPU-fallback per parallel-tiles.md.
         let l = typical_limits();
         let s = pick_strategy(7680, 4320, &l);
         assert!(matches!(s, RenderStrategy::SerialTiles { .. }));
