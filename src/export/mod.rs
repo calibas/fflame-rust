@@ -22,16 +22,6 @@ pub fn histogram_size_bytes(width: u32, height: u32) -> u64 {
     (width as u64) * (height as u64) * 16
 }
 
-/// Check if high-res CPU export is needed (histogram would exceed GPU
-/// buffer-binding limits).
-pub fn needs_cpu_export(width: u32, height: u32) -> bool {
-    // Most GPUs cap max_storage_buffer_binding_size at 128–134 MB; we
-    // use the conservative end. Phases 5/6 swap this for `pick_strategy`
-    // at the call sites once the GPU accumulate paths are wired up.
-    const MAX_GPU_HISTOGRAM_SIZE: u64 = 128 * 1024 * 1024;
-    histogram_size_bytes(width, height) > MAX_GPU_HISTOGRAM_SIZE
-}
-
 /// Render strategy chosen at runtime based on resolution + device limits.
 ///
 /// The driver of the choice is whether the full-resolution histogram fits

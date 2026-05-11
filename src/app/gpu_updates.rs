@@ -237,10 +237,35 @@ impl App {
 
                     if let Some(ref mut renderer) = self.flame_renderer {
                         renderer.reset_iteration_counter();
+
+                        // In fixed-EMA mode, also clear the
+                        // accumulation textures. Without this, the
+                        // last drag-frame's data sits in the buffer
+                        // and dominates the EMA's post-drag
+                        // bootstrap — the user reported it looking
+                        // "way too bright" until ~1/blend_factor
+                        // frames had averaged it out. Clearing both
+                        // ping-pong halves (clear_accumulation_buffers
+                        // wraps clear_all) makes the next frame read
+                        // zero from previous_accumulation regardless
+                        // of which texture is current. Cumulative
+                        // mode skips this — there the leftover is one
+                        // batch's worth of valid samples that dilutes
+                        // naturally.
+                        if !renderer.use_dynamic_blend() {
+                            let mut clear_encoder = self.gpu.device.create_command_encoder(
+                                &egui_wgpu::wgpu::CommandEncoderDescriptor {
+                                    label: Some("Overwrite-exit accumulation clear"),
+                                },
+                            );
+                            renderer.clear_accumulation_buffers(&mut clear_encoder, &self.gpu.queue);
+                            self.gpu.queue.submit(std::iter::once(clear_encoder.finish()));
+                        }
+
                         self.rendering_complete = false; // Reset completion flag
                         self.clear_paths_next_frame = true; // Clear path buffer for clean rebuild
                         log::debug!(
-                            "Overwrite window expired → reset iteration counter for clean rebuild"
+                            "Overwrite window expired → reset iteration counter (and accumulation in fixed-EMA mode)"
                         );
                     }
                 }
