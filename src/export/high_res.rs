@@ -818,13 +818,24 @@ impl HighResExporter {
         }
 
         // ===== Create tonemap pipeline for GPU tonemapping =====
-        // Use export-specific shader without path buffer/palette bindings (only 5 bindings: 0-4)
+        // Unified with the interactive renderer's tonemap shader so
+        // there's a single source of truth for tonemap math. The
+        // interactive shader (tonemap.wgsl) has PathMap color overrides
+        // and Levels logic that the export path used to silently
+        // skip — meaning >binding-size renders produced different
+        // images than sub-binding-size renders for the same config.
+        // Now both paths run the same shader; path_buffer is bound to
+        // the dummy buffer in export (PathMap color mode would produce
+        // garbage there, but it was already broken for that case since
+        // the compute pass doesn't track paths in export).
         let tonemap_shader = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("Export Tonemap Shader"),
-            source: ShaderSource::Wgsl(include_str!("../../shaders/tonemap_export.wgsl").into()),
+            source: ShaderSource::Wgsl(include_str!("../../shaders/tonemap.wgsl").into()),
         });
 
-        // Tonemap bind group layout (matches FlamePipelines)
+        // Tonemap bind group layout (matches FlamePipelines exactly —
+        // bindings 0-4 are the basic tonemap inputs; 5-7 are the
+        // path/palette bindings that PathMap color mode needs).
         let tonemap_bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("Export Tonemap Bind Group Layout"),
             entries: &[
@@ -871,6 +882,35 @@ impl HighResExporter {
                 // Curve LUT sampler
                 BindGroupLayoutEntry {
                     binding: 4,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Sampler(SamplerBindingType::Filtering),
+                    count: None,
+                },
+                // Path buffer (storage, read-only — PathMap mode only)
+                BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Palette texture
+                BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: true },
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                // Palette sampler
+                BindGroupLayoutEntry {
+                    binding: 7,
                     visibility: ShaderStages::FRAGMENT,
                     ty: BindingType::Sampler(SamplerBindingType::Filtering),
                     count: None,
@@ -1737,6 +1777,7 @@ impl HighResExporter {
 
         // ===== Step 4: Create bind group and output texture =====
         let curve_lut_view = self.curve_lut_texture.create_view(&TextureViewDescriptor::default());
+        let palette_view = self.palette_texture.create_view(&TextureViewDescriptor::default());
 
         let tonemap_bind_group = self.device.create_bind_group(&BindGroupDescriptor {
             label: Some("Export Tonemap Bind Group"),
@@ -1761,6 +1802,23 @@ impl HighResExporter {
                 BindGroupEntry {
                     binding: 4,
                     resource: BindingResource::Sampler(&self.curve_lut_sampler),
+                },
+                // Bindings 5-7: required by the unified tonemap.wgsl,
+                // used only when color_mode == 2 (PathMap). Export uses
+                // a dummy path buffer (compute pass doesn't track paths
+                // in export); PathMap export was already broken
+                // pre-unification.
+                BindGroupEntry {
+                    binding: 5,
+                    resource: self.dummy_path_buffer.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 6,
+                    resource: BindingResource::TextureView(&palette_view),
+                },
+                BindGroupEntry {
+                    binding: 7,
+                    resource: BindingResource::Sampler(&self.palette_sampler),
                 },
             ],
         });
