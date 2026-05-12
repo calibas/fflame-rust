@@ -1698,9 +1698,10 @@ impl HighResExporter {
             burn_in: 20, // Default burn-in for export
             num_transforms: config.flame.transforms.len() as u32,
             palette_size: config.palette_size,
-            // Levels defaults for export (no histogram-based adjustment)
+            // Levels defaults: × mean density (sample_density) units.
+            // levels_high=1.0 clips at the mean.
             levels_low: 0.0,
-            levels_high: 1000.0,
+            levels_high: 1.0,
             levels_gamma: 1.0,
         };
 
