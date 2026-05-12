@@ -28,6 +28,13 @@ pub struct DensityHistogram {
     pub percentile_50: f32,
     /// Density at 99th percentile (for auto white point)
     pub percentile_99: f32,
+    /// Mean iterations per pixel at the moment this histogram was
+    /// captured (i.e., `total_iterations / total_pixels`). Same
+    /// value the shader uses to normalize Levels into "× mean
+    /// density" units. Stored on the histogram so UI consumers can
+    /// translate raw-density values (percentiles, max_density) into
+    /// the same units the levels sliders speak.
+    pub sample_density: f32,
     /// Whether the histogram is valid (has been computed)
     pub valid: bool,
 }
@@ -43,6 +50,7 @@ impl Default for DensityHistogram {
             percentile_1: 0.0,
             percentile_50: 0.0,
             percentile_99: 0.0,
+            sample_density: 1.0,
             valid: false,
         }
     }
@@ -60,13 +68,28 @@ impl DensityHistogram {
     /// Density is stored as raw cumulative iteration count per pixel
     /// (see accumulate.wgsl Phase 8b — was previously
     /// `count × 0.01 × blend_factor`).
-    pub fn compute_from_f16_data(&mut self, data: &[u8], width: u32, height: u32, padded_bytes_per_row: u32) {
+    pub fn compute_from_f16_data(
+        &mut self,
+        data: &[u8],
+        width: u32,
+        height: u32,
+        padded_bytes_per_row: u32,
+        total_iterations: u64,
+    ) {
         // Reset
         self.bins = [0; HISTOGRAM_BINS];
         self.total_pixels = width * height;
         self.empty_pixels = 0;
         self.min_density = f32::MAX;
         self.max_density = 0.0;
+        // sample_density = mean iterations per pixel. Stored so UI
+        // can normalize percentile values into "× mean density"
+        // units (matching the Levels slider semantics).
+        self.sample_density = if self.total_pixels > 0 {
+            (total_iterations as f64 / self.total_pixels as f64) as f32
+        } else {
+            1.0
+        };
 
         // Rgba32Float = 4 channels × 4 bytes (Phase 8c — was
         // Rgba16Float = 8 bytes; cumulative-mean precision floor on
@@ -196,6 +219,7 @@ pub struct HistogramReadback {
     width: u32,
     height: u32,
     padded_bytes_per_row: u32,
+    total_iterations: u64,
 }
 
 /// Submit a GPU texture-to-buffer copy for histogram computation.
@@ -209,6 +233,7 @@ pub fn submit_histogram_readback(
     accumulation_texture: &Texture,
     width: u32,
     height: u32,
+    total_iterations: u64,
 ) -> HistogramReadback {
     let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
         label: Some("Histogram Compute Encoder"),
@@ -262,6 +287,7 @@ pub fn submit_histogram_readback(
         width,
         height,
         padded_bytes_per_row,
+        total_iterations,
     }
 }
 
@@ -291,7 +317,13 @@ impl HistogramReadback {
 
         // Compute histogram
         let mut histogram = DensityHistogram::new();
-        histogram.compute_from_f16_data(&data, self.width, self.height, self.padded_bytes_per_row);
+        histogram.compute_from_f16_data(
+            &data,
+            self.width,
+            self.height,
+            self.padded_bytes_per_row,
+            self.total_iterations,
+        );
 
         drop(data);
         self.buffer.unmap();
@@ -310,8 +342,16 @@ pub async fn compute_histogram_async(
     accumulation_texture: &Texture,
     width: u32,
     height: u32,
+    total_iterations: u64,
 ) -> Result<DensityHistogram, String> {
-    let readback = submit_histogram_readback(device, queue, accumulation_texture, width, height);
+    let readback = submit_histogram_readback(
+        device,
+        queue,
+        accumulation_texture,
+        width,
+        height,
+        total_iterations,
+    );
     readback.compute().await
 }
 

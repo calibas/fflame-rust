@@ -210,13 +210,19 @@ fn draw_levels_markers(
     );
 }
 
-/// Convert a levels value (density) to screen X coordinate
-fn levels_to_screen_x(density: f32, histogram: &DensityHistogram, rect: Rect) -> f32 {
+/// Convert a levels value (in × mean density units) to screen X
+/// coordinate on the raw-density histogram.
+///
+/// Levels values are stored in "× mean density" units after the
+/// scale-invariance change. To position the marker on a histogram
+/// whose x-axis is raw density, multiply by `sample_density` first.
+fn levels_to_screen_x(density_x_mean: f32, histogram: &DensityHistogram, rect: Rect) -> f32 {
     if !histogram.valid || histogram.max_density <= 0.0 {
         return rect.left();
     }
 
-    let bin = histogram.density_to_bin(density);
+    let raw_density = density_x_mean * histogram.sample_density.max(f32::EPSILON);
+    let bin = histogram.density_to_bin(raw_density);
     let normalized = bin as f32 / (HISTOGRAM_BINS - 1) as f32;
     rect.left() + normalized * rect.width()
 }
@@ -281,8 +287,8 @@ impl Default for LevelsState {
     fn default() -> Self {
         Self {
             input_black: 0.0,
-            input_white: 1000.0, // Will be auto-set from histogram
-            midpoint: 0.5,       // Linear (gamma = 1.0)
+            input_white: 1.0, // × mean density; will be auto-set from histogram
+            midpoint: 0.5,    // Linear (gamma = 1.0)
             auto_enabled: true,
         }
     }
@@ -294,15 +300,17 @@ impl LevelsState {
         Self::default()
     }
 
-    /// Update from histogram percentiles (auto-levels)
+    /// Update from histogram percentiles (auto-levels). Values are
+    /// normalized into "× mean density" units to match the shader's
+    /// scale-invariant Levels semantics.
     pub fn update_from_histogram(&mut self, histogram: &DensityHistogram) {
         if !histogram.valid || !self.auto_enabled {
             return;
         }
 
-        // Use 1st and 99th percentiles for auto black/white points
-        self.input_black = histogram.percentile_1;
-        self.input_white = histogram.percentile_99;
+        let mean = histogram.sample_density.max(f32::EPSILON);
+        self.input_black = histogram.percentile_1 / mean;
+        self.input_white = histogram.percentile_99 / mean;
     }
 
     /// Convert midpoint position (0-1) to gamma value
@@ -389,22 +397,32 @@ pub fn render_levels_controls_managed(
     let levels_high = config.levels_high;
     let levels_gamma = config.levels_gamma;
 
+    // Slider values are in "× mean density" units (matching the
+    // shader's scale-invariant Levels). `histogram.sample_density`
+    // is the mean iterations per pixel captured at readback; divide
+    // raw-density numbers (percentiles, max_density) by it to land
+    // in the same units the slider speaks.
+    let mean = histogram.sample_density.max(f32::EPSILON);
+    // Practical slider ceiling: max observed density relative to mean.
+    // Default to 10× mean as a sane upper bound if max_density is
+    // suspiciously low or zero (e.g. on first frame).
+    let slider_max = (histogram.max_density / mean).max(10.0);
+
     ui.horizontal(|ui| {
         ui.label(t!("levels.title"));
 
-        // Auto button - one-shot apply histogram percentiles
+        // Auto button - one-shot apply histogram percentiles (× mean)
         ui.add_enabled_ui(histogram.valid, |ui| {
             if ui.button(t!("levels.auto")).clicked() {
-                // Set low to 1st percentile, high to 99th percentile
                 if let Ok(update) = config_manager.update_param(
                     ConfigPath::LevelsLow,
-                    histogram.percentile_1.into()
+                    (histogram.percentile_1 / mean).into()
                 ) {
                     max_update = max_update.max(update);
                 }
                 if let Ok(update) = config_manager.update_param(
                     ConfigPath::LevelsHigh,
-                    histogram.percentile_99.into()
+                    (histogram.percentile_99 / mean).into()
                 ) {
                     max_update = max_update.max(update);
                 }
@@ -412,10 +430,10 @@ pub fn render_levels_controls_managed(
         });
     });
 
-    // Low threshold slider (density threshold for background)
+    // Low threshold slider (× mean density)
     ui.horizontal(|ui| {
         ui.label(t!("levels.low"));
-        let range = 0.0..=histogram.max_density.max(100.0);
+        let range = 0.0..=slider_max;
         let mut temp_low = levels_low;
         if ui.add(super::VkbSlider::new(&mut temp_low, range).logarithmic(true)
             .clamping(egui::SliderClamping::Never)).changed() {
@@ -425,10 +443,10 @@ pub fn render_levels_controls_managed(
         }
     });
 
-    // High threshold slider (density threshold for full opacity)
+    // High threshold slider (× mean density)
     ui.horizontal(|ui| {
         ui.label(t!("levels.high"));
-        let range = 0.0..=histogram.max_density.max(100.0);
+        let range = 0.0..=slider_max;
         let mut temp_high = levels_high;
         if ui.add(super::VkbSlider::new(&mut temp_high, range).logarithmic(true)
             .clamping(egui::SliderClamping::Never)).changed() {
