@@ -985,7 +985,7 @@ impl FlameRenderer {
             num_transforms: self.num_transforms,
             palette_size: self.buffers.palette_size(),
             levels_low: 0.0,
-            levels_high: 1000.0,
+            levels_high: 1.0,  // × mean density (sample_density)
             levels_gamma: 1.0,
         };
         self.buffers.update_tonemap_params(queue, &params);
@@ -1192,7 +1192,7 @@ impl FlameRenderer {
             num_transforms: self.num_transforms,
             palette_size: self.buffers.palette_size(),
             levels_low: 0.0,
-            levels_high: 1000.0,
+            levels_high: 1.0,  // × mean density (sample_density)
             levels_gamma: 1.0,
         };
         self.buffers.update_tonemap_params(queue, &params);
@@ -1275,7 +1275,7 @@ impl FlameRenderer {
             num_transforms: self.num_transforms,
             palette_size: self.buffers.palette_size(),
             levels_low: 0.0,
-            levels_high: 1000.0,
+            levels_high: 1.0,  // × mean density (sample_density)
             levels_gamma: 1.0,
         };
         self.buffers.update_tonemap_params(queue, &params);

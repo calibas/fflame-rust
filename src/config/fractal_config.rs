@@ -217,7 +217,10 @@ fn default_dof_focus_distance() -> f32 {
 }
 
 fn default_levels_high() -> f32 {
-    1000.0  // High value, will be auto-set from histogram
+    // 1.0 = clip at mean density (sample_density). Levels values are
+    // in "× mean density" units after the scale-invariance change,
+    // independent of total iteration count.
+    1.0
 }
 
 fn default_levels_gamma() -> f32 {
@@ -276,7 +279,7 @@ fn is_default_levels_low(v: &f32) -> bool {
 }
 
 fn is_default_levels_high(v: &f32) -> bool {
-    (*v - 1000.0).abs() < FLOAT_EPSILON  // Default is 1000.0
+    (*v - 1.0).abs() < FLOAT_EPSILON  // Default is 1.0 (× mean density)
 }
 
 fn is_default_levels_gamma(v: &f32) -> bool {

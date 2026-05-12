@@ -271,19 +271,34 @@ fn brightness_scale(count: f32) -> f32 {
 // Note: This affects transparency/opacity, NOT brightness!
 // - Low density → background color (transparent)
 // - High density → fractal color (opaque)
+//
+// `levels_low` / `levels_high` are expressed in multiples of mean
+// density (i.e., × `sample_density = total_iters / pixel_count`),
+// not in raw cumulative-count units. This makes the slider's effect
+// invariant to iteration count: `levels_high = 1.0` means "clip at
+// the mean" whether the render has accumulated 1M or 200B iterations.
 fn apply_levels(density: f32) -> f32 {
-    // Get levels parameters
+    // Get levels parameters (in × mean density units)
     let low = tonemap_params.levels_low;
     let high = tonemap_params.levels_high;
     let gamma = tonemap_params.levels_gamma;
+    let mean = tonemap_params.sample_density;
+
+    // First frame / empty buffer: no clipping (let base_alpha decide)
+    if (mean <= 0.0) {
+        return 1.0;
+    }
+
+    // Normalize density into "× mean density" units
+    let normalized_density = density / mean;
 
     // Avoid division by zero
     if (high <= low) {
-        return select(0.0, 1.0, density > low);
+        return select(0.0, 1.0, normalized_density > low);
     }
 
-    // Remap density from [low, high] to [0, 1]
-    let normalized = (density - low) / (high - low);
+    // Remap normalized density from [low, high] to [0, 1]
+    let normalized = (normalized_density - low) / (high - low);
     let clamped = clamp(normalized, 0.0, 1.0);
 
     // Apply gamma curve (gamma=1.0 is linear, <1.0 compresses toward opaque, >1.0 compresses toward transparent)
@@ -614,12 +629,13 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     //
     // Apply Levels transformation to density for opacity control
     // Note: Levels affect OPACITY, not color brightness!
-    // - levels_low: density below this becomes fully transparent (shows background)
-    // - levels_high: density above this becomes fully opaque (shows fractal color)
+    // - levels_low: pixels below this density (× mean) become fully transparent
+    // - levels_high: pixels above this density (× mean) become fully opaque
     // - levels_gamma: curve adjustment between the two thresholds
     //
-    // When levels are at defaults (low=0, high=1000, gamma=1), this has minimal effect
-    // and the original alpha blending behavior is preserved.
+    // Units are multiples of mean density (sample_density), not raw
+    // counts. Defaults (low=0, high=1.0, gamma=1) clip at the mean,
+    // independent of iteration count.
     let leveled_opacity = apply_levels(bucket_count);
 
     // Original alpha blending strategy (kept for backward compatibility):

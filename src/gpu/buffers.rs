@@ -635,9 +635,12 @@ pub struct TonemapParams {
     pub burn_in: u32,  // Burn-in iterations (for Depth gradient: start depth)
     pub num_transforms: u32,  // Number of transforms (for path coloring entropy)
     pub palette_size: u32,  // Palette texture size (256-4096), for shader index calculations
-    // Levels controls (histogram-based density remapping)
-    pub levels_low: f32,  // Density below this becomes fully transparent/background
-    pub levels_high: f32,  // Density above this becomes fully opaque
+    // Levels controls (histogram-based density remapping).
+    // levels_low / levels_high are in "× mean density" units
+    // (i.e., multiples of sample_density), making the slider effect
+    // invariant to total iteration count.
+    pub levels_low: f32,  // Density (× mean) below this → fully transparent
+    pub levels_high: f32,  // Density (× mean) above this → fully opaque
     pub levels_gamma: f32,  // Gamma/midpoint for density curve (1.0 = linear)
 }
 
@@ -673,7 +676,7 @@ impl Default for TonemapParams {
             num_transforms: 3,  // Default 3 transforms
             palette_size: 256,  // Default palette size
             levels_low: 0.0,  // No low clipping by default
-            levels_high: 1000.0,  // High value (will be auto-set from histogram)
+            levels_high: 1.0,  // Clip at mean density (× sample_density)
             levels_gamma: 1.0,  // Linear (no gamma adjustment)
         }
     }
