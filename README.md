@@ -57,3 +57,4 @@ Fractal renderers:
 - [Fractal Path Tracer](https://github.com/adam-pa/FPT)
 - [Fred's Fractal Factory](https://www.torpor.com/fred/fred.htm)
 - [FractalSet](https://www.fractalset.com/)
+- [IFS Construction Kit](https://larryriddle.agnesscott.org/ifskit/index.htm)
