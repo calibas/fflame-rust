@@ -344,6 +344,30 @@ impl FlameRenderer {
         self.frame_counter = 0; // Reset frame counter for deterministic seed progression
     }
 
+    /// Like `reset_iteration_counter`, but preserves `samples_in_buffer`.
+    ///
+    /// Use this at overwrite-exit in cumulative-mean mode, where the
+    /// accumulator texture is intentionally NOT cleared (the leftover
+    /// drag-frame samples dilute naturally as new iterations arrive).
+    /// `samples_in_buffer` must stay aligned with what's actually in
+    /// the accumulator, or the next `refresh_sample_density()` writes
+    /// `sample_density ≈ 0` while density values in the buffer are
+    /// non-zero — making `density / sample_density` huge in the
+    /// shader, clamping `apply_levels` to 1, and briefly disabling
+    /// Levels for one frame. Visible as a bright flash at
+    /// preview-to-normal transitions.
+    ///
+    /// Fixed-EMA mode keeps using `reset_iteration_counter` (which
+    /// zeros samples_in_buffer) because that path also clears the
+    /// accumulator immediately afterward — both go to zero together.
+    pub fn reset_iteration_counter_keep_buffer(&mut self) {
+        self.samples_accumulated = 0;
+        self.total_iterations = 0;
+        self.effective_iterations = 0;
+        self.frame_counter = 0;
+        // NOT zeroed: self.samples_in_buffer
+    }
+
     /// Whether the renderer is currently in cumulative-mean accumulate
     /// mode (true) or fixed-EMA mode (false). Mirrors the
     /// `Dynamic blend` UI checkbox.
@@ -850,9 +874,14 @@ impl FlameRenderer {
         self.deterministic_rng = config.deterministic_rng;
 
         // 8. Update tone mapping settings from config
-        // Not in live preview mode (loading config), levels at defaults
+        // Pass config's levels values through — the previous hardcoded
+        // (0.0, 1000.0, 1.0) was the legacy raw-density default and
+        // diverged from the live path's update_tonemap (which uses
+        // config.levels_*). Headless renders and the in-app viewport
+        // would otherwise render the same flame with different Levels
+        // settings.
         self.update_tonemap(queue, config.tonemap_mode, config.use_curve, config.exposure, config.gamma, config.gamma_threshold, config.brightness, config.vibrancy, config.saturation, config.hue_shift, config.alpha_blend_low, config.alpha_blend_high, self.width, self.height, self.total_iterations, config.max_iterations, config.zoom, iterations_per_thread, 1, false,
-            0.0, 1000.0, 1.0);
+            config.levels_low, config.levels_high, config.levels_gamma);
         self.update_curve_lut(queue, &config.tonemap_curve);
 
         // 9. Clear accumulation buffers
@@ -985,7 +1014,7 @@ impl FlameRenderer {
             num_transforms: self.num_transforms,
             palette_size: self.buffers.palette_size(),
             levels_low: 0.0,
-            levels_high: 1000.0,
+            levels_high: 1.0,  // × mean density (sample_density)
             levels_gamma: 1.0,
         };
         self.buffers.update_tonemap_params(queue, &params);
@@ -1192,7 +1221,7 @@ impl FlameRenderer {
             num_transforms: self.num_transforms,
             palette_size: self.buffers.palette_size(),
             levels_low: 0.0,
-            levels_high: 1000.0,
+            levels_high: 1.0,  // × mean density (sample_density)
             levels_gamma: 1.0,
         };
         self.buffers.update_tonemap_params(queue, &params);
@@ -1275,7 +1304,7 @@ impl FlameRenderer {
             num_transforms: self.num_transforms,
             palette_size: self.buffers.palette_size(),
             levels_low: 0.0,
-            levels_high: 1000.0,
+            levels_high: 1.0,  // × mean density (sample_density)
             levels_gamma: 1.0,
         };
         self.buffers.update_tonemap_params(queue, &params);
