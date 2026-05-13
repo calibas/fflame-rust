@@ -334,6 +334,7 @@ fn parse_flame_element(
         palette_squeeze: crate::config::defaults::DEFAULT_PALETTE_SQUEEZE,
         palette_squeeze_mode: crate::scene::palette::SqueezeMode::Linear,
         palette_squeeze_falloff: 0.5,
+        palette_log_strength: 0.0,
         palette_reverse: false,
         // Levels controls - use defaults (× mean density units)
         levels_low: 0.0,

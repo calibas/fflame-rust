@@ -616,6 +616,7 @@ pub fn flame_response_to_config(
         // compatible. Future API rev can add them.
         palette_squeeze_mode: crate::scene::palette::SqueezeMode::Linear,
         palette_squeeze_falloff: 0.5,
+        palette_log_strength: 0.0,
         palette_reverse: false,
         background_color,
         tonemap_mode: resp.tonemap_mode.into(),

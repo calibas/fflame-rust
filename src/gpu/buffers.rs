@@ -1446,6 +1446,7 @@ impl FlameBuffers {
         palette_squeeze: f32,
         palette_squeeze_mode: crate::scene::palette::SqueezeMode,
         palette_squeeze_falloff: f32,
+        palette_log_strength: f32,
         palette_reverse: bool,
     ) {
         use crate::scene::palette::{render_palette_lookup, PaletteTransform, SqueezeMode};
@@ -1461,7 +1462,7 @@ impl FlameBuffers {
         let transform = PaletteTransform {
             squeeze_mode: palette_squeeze_mode,
             squeeze_factor,
-            log_strength: 0.0,
+            log_strength: palette_log_strength,
             rotation: palette_rotation,
             reverse: palette_reverse,
         };
