@@ -413,6 +413,62 @@ pub fn render_colors_content(
                     }
                 });
 
+                // Live preview of the effective palette (post pipeline:
+                // squeeze → log → rotation → reverse). Reuses the same
+                // `render_palette_lookup` helper the GPU upload path
+                // calls, so the preview can never disagree with what
+                // the renderer actually does.
+                //
+                // We materialize a fixed-size 512-entry LUT regardless
+                // of `palette_size` (which can be up to 4096). The
+                // preview then resamples that LUT to the panel's
+                // available pixel width — cheap and crisp at any
+                // panel size, and decouples preview cost from the
+                // user's chosen palette resolution.
+                {
+                    use crate::scene::palette::{render_palette_lookup, PaletteTransform, SqueezeMode};
+                    let config = config_manager.active_config();
+                    let squeeze_factor = match config.palette_squeeze_mode {
+                        SqueezeMode::Linear => config.palette_squeeze,
+                        SqueezeMode::Geometric => config.palette_squeeze_falloff,
+                    };
+                    let transform = PaletteTransform {
+                        squeeze_mode: config.palette_squeeze_mode,
+                        squeeze_factor,
+                        log_strength: config.palette_log_strength,
+                        rotation: config.palette_rotation,
+                        reverse: config.palette_reverse,
+                    };
+                    const PREVIEW_LUT_LEN: usize = 512;
+                    const PREVIEW_HEIGHT: f32 = 24.0;
+                    let lut = render_palette_lookup(&config.palette, &transform, PREVIEW_LUT_LEN);
+
+                    let (rect, _) = ui.allocate_exact_size(
+                        egui::vec2(ui.available_width(), PREVIEW_HEIGHT),
+                        egui::Sense::hover(),
+                    );
+                    if ui.is_rect_visible(rect) {
+                        let painter = ui.painter();
+                        let pixel_count = rect.width() as usize;
+                        for i in 0..pixel_count {
+                            // Map screen pixel → LUT entry.
+                            let lut_idx = (i * PREVIEW_LUT_LEN / pixel_count.max(1)).min(PREVIEW_LUT_LEN - 1);
+                            let base = lut_idx * 4;
+                            let color = egui::Color32::from_rgb(
+                                (lut[base].clamp(0.0, 1.0) * 255.0) as u8,
+                                (lut[base + 1].clamp(0.0, 1.0) * 255.0) as u8,
+                                (lut[base + 2].clamp(0.0, 1.0) * 255.0) as u8,
+                            );
+                            let x = rect.left() + i as f32;
+                            painter.rect_filled(
+                                egui::Rect::from_min_size(egui::pos2(x, rect.top()), egui::vec2(1.0, PREVIEW_HEIGHT)),
+                                0.0,
+                                color,
+                            );
+                        }
+                    }
+                }
+
                 if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::PaletteRotation, 0.0..=1.0, t!("tonemap.palette_rotation").as_ref(), Some(t!("tonemap.tooltip_palette_rotation").as_ref())) {
                     max_update = max_update.max(result.update_type);
                 }
