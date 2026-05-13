@@ -440,13 +440,14 @@ impl Palette {
 
 /// Squeeze mode for the palette lookup pipeline.
 ///
-/// - `Linear`: uniform repeats of the palette. `factor = 1.0` is identity;
-///   `factor = N` repeats N times across [0, 1).
-/// - `Geometric`: octave-based packing — first `r` of the t range maps to
-///   the full palette, next `r²` maps to the full palette again at smaller
-///   scale, next `r³` after that, etc. `factor` here means the geometric
-///   ratio `r` (typically 0.5).
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// - `Linear`: uniform repeats of the palette. Driven by `squeeze_factor`
+///   (a repeat count); 1.0 is identity, >1 repeats N times, <1 shows a
+///   portion of the palette.
+/// - `Geometric`: octave-based packing — the first `r` fraction of t maps
+///   to the full palette, the next `r²` fraction maps to the full palette
+///   again at smaller scale, the next `r³` after that, etc. The geometric
+///   ratio `r` lives in `squeeze_factor` for this mode (typically ~0.5).
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum SqueezeMode {
     Linear,
     Geometric,
@@ -504,6 +505,48 @@ impl PaletteTransform {
     }
 }
 
+/// Map a normalized input `t ∈ [0, 1)` to a normalized palette
+/// coordinate using the geometric octave packing with ratio `r`.
+///
+/// Octave `n` covers `t ∈ [1 − rⁿ, 1 − rⁿ⁺¹)` and remaps to the
+/// full palette via `(t − (1 − rⁿ)) / (rⁿ × (1 − r))`. The iterative
+/// formulation below is robust against edge cases at `r → 1` and
+/// `t → 1` and stays in f32 precision; the closed form via `log(1-t)/log(r)`
+/// is mathematically equivalent but more fragile near boundaries.
+fn geometric_squeeze_lookup(t: f32, r: f32) -> f32 {
+    // r → 1 degenerates to no compression (linear identity).
+    if r >= 0.999 {
+        return t;
+    }
+    // r → 0 collapses everything into the first octave.
+    if r <= 0.001 {
+        return (t / r.max(1e-6)).clamp(0.0, 1.0);
+    }
+    if t <= 0.0 {
+        return 0.0;
+    }
+
+    let mut octave_start = 0.0_f32;
+    let mut r_pow_n = 1.0_f32; // r^n at iteration n
+    for _ in 0..64 {
+        let octave_width = r_pow_n * (1.0 - r);
+        let octave_end = octave_start + octave_width;
+        if t < octave_end {
+            if octave_width <= 0.0 {
+                return 0.0;
+            }
+            return ((t - octave_start) / octave_width).clamp(0.0, 1.0);
+        }
+        octave_start = octave_end;
+        r_pow_n *= r;
+        if r_pow_n < 1e-10 {
+            // Precision exhausted past this point of t; clamp to end.
+            return 1.0;
+        }
+    }
+    1.0
+}
+
 /// Render the palette into an RGBA-f32 lookup table after applying
 /// the full transform pipeline. Output length is `size * 4`.
 ///
@@ -542,8 +585,25 @@ pub fn render_palette_lookup(
             out
         }
         SqueezeMode::Geometric => {
-            // Phase 3 will fill this in; until then mirror Linear as a placeholder.
-            base.clone()
+            // Octave-based packing: the first `r` of t maps to the
+            // full palette; the next `r²` of t maps to the full
+            // palette again at smaller scale; the next `r³` after
+            // that, etc. With r = 0.5 this gives the "first half,
+            // next quarter, next eighth" pattern from the project
+            // doc. `factor` is the ratio r here.
+            let r = transform.squeeze_factor;
+            let mut out = vec![0.0f32; size * 4];
+            for i in 0..size {
+                let t = i as f32 / size as f32;
+                let src_t = geometric_squeeze_lookup(t, r);
+                let src_idx = ((src_t * size as f32) as usize).min(size - 1);
+                let (dst_base, src_base) = (i * 4, src_idx * 4);
+                out[dst_base] = base[src_base];
+                out[dst_base + 1] = base[src_base + 1];
+                out[dst_base + 2] = base[src_base + 2];
+                out[dst_base + 3] = base[src_base + 3];
+            }
+            out
         }
     };
 

@@ -417,9 +417,47 @@ pub fn render_colors_content(
                     max_update = max_update.max(result.update_type);
                 }
 
-                // Palette squeeze slider (0.1 to 16.0)
-                if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::PaletteSqueeze, 0.1..=16.0, t!("tonemap.palette_squeeze").as_ref(), Some(t!("tonemap.tooltip_palette_squeeze").as_ref())) {
-                    max_update = max_update.max(result.update_type);
+                // Squeeze mode dropdown (Linear vs Geometric)
+                ui.horizontal(|ui| {
+                    ui.label(t!("tonemap.palette_squeeze_mode").as_ref());
+                    let current_mode = config_manager.active_config().palette_squeeze_mode;
+                    use crate::scene::palette::SqueezeMode;
+                    egui::ComboBox::from_id_salt("palette_squeeze_mode_combo")
+                        .selected_text(match current_mode {
+                            SqueezeMode::Linear => t!("tonemap.palette_squeeze_mode_linear").to_string(),
+                            SqueezeMode::Geometric => t!("tonemap.palette_squeeze_mode_geometric").to_string(),
+                        })
+                        .show_ui(ui, |ui| {
+                            for &mode in &[SqueezeMode::Linear, SqueezeMode::Geometric] {
+                                let label = match mode {
+                                    SqueezeMode::Linear => t!("tonemap.palette_squeeze_mode_linear"),
+                                    SqueezeMode::Geometric => t!("tonemap.palette_squeeze_mode_geometric"),
+                                };
+                                if ui.selectable_label(current_mode == mode, label.as_ref()).clicked() {
+                                    if let Err(e) = config_manager.update_param(ConfigPath::PaletteSqueezeMode, mode.into()) {
+                                        log::error!("Failed to update palette squeeze mode: {}", e);
+                                    } else {
+                                        max_update = max_update.max(UpdateType::ColorOnly);
+                                    }
+                                }
+                            }
+                        });
+                }).response.on_hover_text(t!("tonemap.tooltip_palette_squeeze_mode").as_ref());
+
+                // The squeeze slider's meaning depends on the active mode:
+                // Linear shows the existing repeat-count slider; Geometric
+                // shows the octave-ratio (falloff) slider in a different range.
+                match config_manager.active_config().palette_squeeze_mode {
+                    crate::scene::palette::SqueezeMode::Linear => {
+                        if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::PaletteSqueeze, 0.1..=16.0, t!("tonemap.palette_squeeze").as_ref(), Some(t!("tonemap.tooltip_palette_squeeze").as_ref())) {
+                            max_update = max_update.max(result.update_type);
+                        }
+                    }
+                    crate::scene::palette::SqueezeMode::Geometric => {
+                        if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::PaletteSqueezeFalloff, 0.1..=0.95, t!("tonemap.palette_squeeze_falloff").as_ref(), Some(t!("tonemap.tooltip_palette_squeeze_falloff").as_ref())) {
+                            max_update = max_update.max(result.update_type);
+                        }
+                    }
                 }
 
                 // Reverse palette toggle (composes with rotation+squeeze; applied last)

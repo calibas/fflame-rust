@@ -103,6 +103,8 @@ impl App {
                         &update_config.palette,
                         update_config.palette_rotation,
                         update_config.palette_squeeze,
+                        update_config.palette_squeeze_mode,
+                        update_config.palette_squeeze_falloff,
                         update_config.palette_reverse,
                     );
 
