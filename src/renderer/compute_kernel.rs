@@ -850,9 +850,14 @@ impl FlameRenderer {
         self.deterministic_rng = config.deterministic_rng;
 
         // 8. Update tone mapping settings from config
-        // Not in live preview mode (loading config), levels at defaults
+        // Pass config's levels values through — the previous hardcoded
+        // (0.0, 1000.0, 1.0) was the legacy raw-density default and
+        // diverged from the live path's update_tonemap (which uses
+        // config.levels_*). Headless renders and the in-app viewport
+        // would otherwise render the same flame with different Levels
+        // settings.
         self.update_tonemap(queue, config.tonemap_mode, config.use_curve, config.exposure, config.gamma, config.gamma_threshold, config.brightness, config.vibrancy, config.saturation, config.hue_shift, config.alpha_blend_low, config.alpha_blend_high, self.width, self.height, self.total_iterations, config.max_iterations, config.zoom, iterations_per_thread, 1, false,
-            0.0, 1000.0, 1.0);
+            config.levels_low, config.levels_high, config.levels_gamma);
         self.update_curve_lut(queue, &config.tonemap_curve);
 
         // 9. Clear accumulation buffers
