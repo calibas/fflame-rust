@@ -101,6 +101,12 @@ pub struct FractalConfig {
     /// "first half, next quarter, next eighth" example.
     #[serde(default = "default_palette_squeeze_falloff", skip_serializing_if = "is_default_palette_squeeze_falloff")]
     pub palette_squeeze_falloff: f32,
+    /// Logarithmic (exponential) redistribution of the squeezed lookup.
+    /// 0.0 = identity (no-op). Positive bunches the palette toward
+    /// the end of the input range; negative bunches toward the start.
+    /// Composes with squeeze (applied after).
+    #[serde(default, skip_serializing_if = "is_default_palette_log_strength")]
+    pub palette_log_strength: f32,
     /// Flip the palette as the last step of the lookup pipeline.
     /// Composes with rotation/squeeze; does not modify the base palette stops.
     #[serde(default, skip_serializing_if = "is_default_palette_reverse")]
@@ -270,6 +276,10 @@ fn is_default_palette_squeeze_mode(v: &crate::scene::palette::SqueezeMode) -> bo
     matches!(v, crate::scene::palette::SqueezeMode::Linear)
 }
 
+fn is_default_palette_log_strength(v: &f32) -> bool {
+    v.abs() < FLOAT_EPSILON
+}
+
 fn default_palette() -> Palette {
     Palette::fire()
 }
@@ -364,6 +374,7 @@ impl Default for FractalConfig {
             palette_squeeze: default_palette_squeeze(),
             palette_squeeze_mode: crate::scene::palette::SqueezeMode::Linear,
             palette_squeeze_falloff: default_palette_squeeze_falloff(),
+            palette_log_strength: 0.0,
             palette_reverse: false,
             background_color: [0.0, 0.0, 0.0],
             tonemap_mode: ToneMapMode::default(),
@@ -451,6 +462,7 @@ impl FractalConfig {
         if config.palette_squeeze == defaults.palette_squeeze { obj.remove("palette_squeeze"); }
         if config.palette_squeeze_mode == defaults.palette_squeeze_mode { obj.remove("palette_squeeze_mode"); }
         if config.palette_squeeze_falloff == defaults.palette_squeeze_falloff { obj.remove("palette_squeeze_falloff"); }
+        if config.palette_log_strength == defaults.palette_log_strength { obj.remove("palette_log_strength"); }
         if config.palette_reverse == defaults.palette_reverse { obj.remove("palette_reverse"); }
         if config.background_color == defaults.background_color { obj.remove("background_color"); }
 

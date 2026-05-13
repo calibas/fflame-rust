@@ -829,6 +829,7 @@ impl FlameRenderer {
             config.palette_squeeze,
             config.palette_squeeze_mode,
             config.palette_squeeze_falloff,
+            config.palette_log_strength,
             config.palette_reverse,
         );
 
@@ -1426,6 +1427,7 @@ impl FlameRenderer {
         palette_squeeze: f32,
         palette_squeeze_mode: crate::scene::palette::SqueezeMode,
         palette_squeeze_falloff: f32,
+        palette_log_strength: f32,
         palette_reverse: bool,
     ) {
         self.buffers.update_palette(
@@ -1435,6 +1437,7 @@ impl FlameRenderer {
             palette_squeeze,
             palette_squeeze_mode,
             palette_squeeze_falloff,
+            palette_log_strength,
             palette_reverse,
         );
         // Recreate compute bind group to ensure palette texture is bound

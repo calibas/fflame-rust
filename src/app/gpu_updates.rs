@@ -105,6 +105,7 @@ impl App {
                         update_config.palette_squeeze,
                         update_config.palette_squeeze_mode,
                         update_config.palette_squeeze_falloff,
+                        update_config.palette_log_strength,
                         update_config.palette_reverse,
                     );
 

@@ -460,6 +460,12 @@ pub fn render_colors_content(
                     }
                 }
 
+                // Logarithmic redistribution slider (composes after squeeze).
+                // Range −5..5 covers practical curves; center detent at 0 = no-op.
+                if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::PaletteLogStrength, -5.0..=5.0, t!("tonemap.palette_log_strength").as_ref(), Some(t!("tonemap.tooltip_palette_log_strength").as_ref())) {
+                    max_update = max_update.max(result.update_type);
+                }
+
                 // Reverse palette toggle (composes with rotation+squeeze; applied last)
                 ui.horizontal(|ui| {
                     let mut reverse = config_manager.active_config().palette_reverse;

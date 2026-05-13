@@ -61,6 +61,7 @@ pub enum ConfigPath {
     PaletteSqueeze, // Palette squeeze: 1.0 = normal, >1 = repeat, <1 = portion
     PaletteSqueezeMode, // Linear vs Geometric squeeze algorithm
     PaletteSqueezeFalloff, // Geometric squeeze octave ratio (typically ~0.5)
+    PaletteLogStrength, // Exponential redistribution of the squeezed palette
     PaletteReverse, // Flip the resulting palette lookup table (toggle)
     SpeedFactor,
     BackgroundColor,
@@ -368,6 +369,7 @@ impl Display for ConfigPath {
             ConfigPath::PaletteSqueeze => write!(f, "Palette Squeeze"),
             ConfigPath::PaletteSqueezeMode => write!(f, "Palette Squeeze Mode"),
             ConfigPath::PaletteSqueezeFalloff => write!(f, "Palette Squeeze Falloff"),
+            ConfigPath::PaletteLogStrength => write!(f, "Palette Log Strength"),
             ConfigPath::PaletteReverse => write!(f, "Palette Reverse"),
             ConfigPath::SpeedFactor => write!(f, "Speed Blend Factor"),
             ConfigPath::BackgroundColor => write!(f, "Background Color"),
@@ -610,6 +612,7 @@ impl ConfigPath {
             ConfigPath::PaletteSqueeze => I18nKey::simple("history.param.palette_squeeze"),
             ConfigPath::PaletteSqueezeMode => I18nKey::simple("history.param.palette_squeeze_mode"),
             ConfigPath::PaletteSqueezeFalloff => I18nKey::simple("history.param.palette_squeeze_falloff"),
+            ConfigPath::PaletteLogStrength => I18nKey::simple("history.param.palette_log_strength"),
             ConfigPath::PaletteReverse => I18nKey::simple("history.param.palette_reverse"),
             ConfigPath::SpeedFactor => I18nKey::simple("history.param.speed_blend_factor"),
             ConfigPath::BackgroundColor => I18nKey::simple("history.param.background_color"),
@@ -1459,6 +1462,7 @@ impl ConfigPath {
             | ConfigPath::PaletteSqueeze
             | ConfigPath::PaletteSqueezeMode
             | ConfigPath::PaletteSqueezeFalloff
+            | ConfigPath::PaletteLogStrength
             | ConfigPath::PaletteReverse
             | ConfigPath::SpeedFactor
             // PathMapStyle affects color computation in compute shader, needs accumulation reset
@@ -1578,6 +1582,7 @@ impl ConfigPath {
             ConfigPath::PaletteSqueeze => "PaletteSqueeze".to_string(),
             ConfigPath::PaletteSqueezeMode => "PaletteSqueezeMode".to_string(),
             ConfigPath::PaletteSqueezeFalloff => "PaletteSqueezeFalloff".to_string(),
+            ConfigPath::PaletteLogStrength => "PaletteLogStrength".to_string(),
             ConfigPath::PaletteReverse => "PaletteReverse".to_string(),
             ConfigPath::SpeedFactor => "SpeedFactor".to_string(),
             ConfigPath::BackgroundColor => "BackgroundColor".to_string(),
@@ -1734,6 +1739,7 @@ impl ConfigPath {
             "PaletteSqueeze" => return Some(ConfigPath::PaletteSqueeze),
             "PaletteSqueezeMode" => return Some(ConfigPath::PaletteSqueezeMode),
             "PaletteSqueezeFalloff" => return Some(ConfigPath::PaletteSqueezeFalloff),
+            "PaletteLogStrength" => return Some(ConfigPath::PaletteLogStrength),
             "PaletteReverse" => return Some(ConfigPath::PaletteReverse),
             "SpeedFactor" => return Some(ConfigPath::SpeedFactor),
             "BackgroundColor" => return Some(ConfigPath::BackgroundColor),
@@ -2036,6 +2042,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::PaletteSize
         | ConfigPath::PaletteSqueeze
         | ConfigPath::PaletteSqueezeFalloff
+        | ConfigPath::PaletteLogStrength
         | ConfigPath::SpeedFactor
         | ConfigPath::BackgroundColorR
         | ConfigPath::BackgroundColorG
@@ -2508,6 +2515,7 @@ mod tests {
             ConfigPath::PaletteSqueeze,
             ConfigPath::PaletteSqueezeMode,
             ConfigPath::PaletteSqueezeFalloff,
+            ConfigPath::PaletteLogStrength,
             ConfigPath::PaletteReverse,
             ConfigPath::SpeedFactor,
             ConfigPath::BackgroundColor,

@@ -547,6 +547,37 @@ fn geometric_squeeze_lookup(t: f32, r: f32) -> f32 {
     1.0
 }
 
+/// Map a normalized input `t ∈ [0, 1]` to a normalized palette
+/// coordinate using an exponential redistribution.
+///
+/// `strength > 0`: `t → (exp(s·t) − 1) / (exp(s) − 1)`, which curves
+/// the mapping so input values near 1 cover more palette range and
+/// values near 0 cover less. Bunches the palette toward the *end* of
+/// t when viewed as palette[apply(t)].
+///
+/// `strength < 0`: symmetric — bunches toward the *start* of t.
+///
+/// `strength == 0`: identity (the caller is expected to short-circuit
+/// this case, but we handle it defensively).
+fn log_redistribute_lookup(t: f32, strength: f32) -> f32 {
+    if strength.abs() < f32::EPSILON {
+        return t;
+    }
+    // `exp_m1` (i.e. `exp(x) - 1`) is the numerically-stable form
+    // when `x` is small; matters at low `strength` magnitudes where
+    // exp(s) - 1 would otherwise lose precision.
+    if strength > 0.0 {
+        let denom = strength.exp_m1();
+        if denom == 0.0 { return t; }
+        ((strength * t).exp_m1() / denom).clamp(0.0, 1.0)
+    } else {
+        let s = -strength;
+        let denom = s.exp_m1();
+        if denom == 0.0 { return t; }
+        (1.0 - (s * (1.0 - t)).exp_m1() / denom).clamp(0.0, 1.0)
+    }
+}
+
 /// Render the palette into an RGBA-f32 lookup table after applying
 /// the full transform pipeline. Output length is `size * 4`.
 ///
@@ -607,11 +638,27 @@ pub fn render_palette_lookup(
         }
     };
 
-    // Stage 2: Logarithmic redistribution. Phase 4 lands here.
-    let redistributed = if transform.log_strength == 0.0 {
+    // Stage 2: Logarithmic redistribution. Remaps the squeezed
+    // lookup nonlinearly so the resulting palette bunches toward
+    // one end of t. `log_strength` controls magnitude + direction:
+    // positive bunches toward end (high t = small palette steps,
+    // low t = large palette steps); negative is the mirror.
+    let redistributed = if transform.log_strength.abs() < f32::EPSILON {
         squeezed
     } else {
-        squeezed // Phase 4 placeholder.
+        let strength = transform.log_strength;
+        let mut out = vec![0.0f32; size * 4];
+        for i in 0..size {
+            let t = i as f32 / size as f32;
+            let src_t = log_redistribute_lookup(t, strength);
+            let src_idx = ((src_t * size as f32) as usize).min(size - 1);
+            let (dst_base, src_base) = (i * 4, src_idx * 4);
+            out[dst_base] = squeezed[src_base];
+            out[dst_base + 1] = squeezed[src_base + 1];
+            out[dst_base + 2] = squeezed[src_base + 2];
+            out[dst_base + 3] = squeezed[src_base + 3];
+        }
+        out
     };
 
     // Stage 3: Rotation. Cyclic shift by `rotation * size` entries.
