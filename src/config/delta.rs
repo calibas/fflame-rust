@@ -59,6 +59,7 @@ pub enum ConfigPath {
     PaletteRotation,
     PaletteSize, // Palette texture resolution (256-4096)
     PaletteSqueeze, // Palette squeeze: 1.0 = normal, >1 = repeat, <1 = portion
+    PaletteReverse, // Flip the resulting palette lookup table (toggle)
     SpeedFactor,
     BackgroundColor,
     BackgroundColorR, // Separate R component for animation
@@ -363,6 +364,7 @@ impl Display for ConfigPath {
             ConfigPath::PaletteRotation => write!(f, "Palette Rotation"),
             ConfigPath::PaletteSize => write!(f, "Palette Size"),
             ConfigPath::PaletteSqueeze => write!(f, "Palette Squeeze"),
+            ConfigPath::PaletteReverse => write!(f, "Palette Reverse"),
             ConfigPath::SpeedFactor => write!(f, "Speed Blend Factor"),
             ConfigPath::BackgroundColor => write!(f, "Background Color"),
             ConfigPath::BackgroundColorR => write!(f, "Background Red"),
@@ -602,6 +604,7 @@ impl ConfigPath {
             ConfigPath::PaletteRotation => I18nKey::simple("history.param.palette_rotation"),
             ConfigPath::PaletteSize => I18nKey::simple("history.param.palette_size"),
             ConfigPath::PaletteSqueeze => I18nKey::simple("history.param.palette_squeeze"),
+            ConfigPath::PaletteReverse => I18nKey::simple("history.param.palette_reverse"),
             ConfigPath::SpeedFactor => I18nKey::simple("history.param.speed_blend_factor"),
             ConfigPath::BackgroundColor => I18nKey::simple("history.param.background_color"),
             ConfigPath::BackgroundColorR => I18nKey::simple("history.param.background_red"),
@@ -1439,6 +1442,7 @@ impl ConfigPath {
             | ConfigPath::PaletteRotation
             | ConfigPath::PaletteSize
             | ConfigPath::PaletteSqueeze
+            | ConfigPath::PaletteReverse
             | ConfigPath::SpeedFactor
             // PathMapStyle affects color computation in compute shader, needs accumulation reset
             | ConfigPath::PathMapStyle => UpdateType::ColorOnly,
@@ -1555,6 +1559,7 @@ impl ConfigPath {
             ConfigPath::PaletteRotation => "PaletteRotation".to_string(),
             ConfigPath::PaletteSize => "PaletteSize".to_string(),
             ConfigPath::PaletteSqueeze => "PaletteSqueeze".to_string(),
+            ConfigPath::PaletteReverse => "PaletteReverse".to_string(),
             ConfigPath::SpeedFactor => "SpeedFactor".to_string(),
             ConfigPath::BackgroundColor => "BackgroundColor".to_string(),
             ConfigPath::BackgroundColorR => "BackgroundColorR".to_string(),
@@ -1708,6 +1713,7 @@ impl ConfigPath {
             "PaletteRotation" => return Some(ConfigPath::PaletteRotation),
             "PaletteSize" => return Some(ConfigPath::PaletteSize),
             "PaletteSqueeze" => return Some(ConfigPath::PaletteSqueeze),
+            "PaletteReverse" => return Some(ConfigPath::PaletteReverse),
             "SpeedFactor" => return Some(ConfigPath::SpeedFactor),
             "BackgroundColor" => return Some(ConfigPath::BackgroundColor),
             "BackgroundColorR" => return Some(ConfigPath::BackgroundColorR),
@@ -2073,6 +2079,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         ConfigPath::UseCurve
         | ConfigPath::UseDynamicBlend
         | ConfigPath::DeterministicRng
+        | ConfigPath::PaletteReverse
         | ConfigPath::TransformPostAffineEnabled { .. }
         | ConfigPath::LinkedTransformPostAffineEnabled { .. }
         | ConfigPath::FinalTransformPostAffineEnabled { .. }
@@ -2464,6 +2471,7 @@ mod tests {
             ConfigPath::PaletteRotation,
             ConfigPath::PaletteSize,
             ConfigPath::PaletteSqueeze,
+            ConfigPath::PaletteReverse,
             ConfigPath::SpeedFactor,
             ConfigPath::BackgroundColor,
             ConfigPath::BackgroundColorR,

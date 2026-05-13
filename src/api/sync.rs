@@ -611,6 +611,9 @@ pub fn flame_response_to_config(
         palette_rotation: resp.palette_rotation,
         palette_size: resp.palette_size as u32,
         palette_squeeze: resp.palette_squeeze,
+        // API doesn't carry palette_reverse yet — default to off on inbound configs
+        // so existing wire format stays compatible. Future API rev can add it.
+        palette_reverse: false,
         background_color,
         tonemap_mode: resp.tonemap_mode.into(),
         tonemap_curve: tonecurve_from_json(resp.tonemap_curve.as_ref()),

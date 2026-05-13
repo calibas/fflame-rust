@@ -422,6 +422,21 @@ pub fn render_colors_content(
                     max_update = max_update.max(result.update_type);
                 }
 
+                // Reverse palette toggle (composes with rotation+squeeze; applied last)
+                ui.horizontal(|ui| {
+                    let mut reverse = config_manager.active_config().palette_reverse;
+                    if ui.checkbox(&mut reverse, t!("tonemap.palette_reverse").as_ref())
+                        .on_hover_text(t!("tonemap.tooltip_palette_reverse").as_ref())
+                        .changed()
+                    {
+                        if let Err(e) = config_manager.update_param(ConfigPath::PaletteReverse, reverse.into()) {
+                            log::error!("Failed to update palette reverse: {}", e);
+                        } else {
+                            max_update = max_update.max(UpdateType::ColorOnly);
+                        }
+                    }
+                });
+
                 // Palette size slider (256-4096, step by power of 2)
                 ui.horizontal(|ui| {
                     ui.label(t!("tonemap.palette_size").as_ref());
