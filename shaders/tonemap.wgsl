@@ -636,7 +636,15 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     // Units are multiples of mean density (sample_density), not raw
     // counts. Defaults (low=0, high=1.0, gamma=1) clip at the mean,
     // independent of iteration count.
-    let leveled_opacity = apply_levels(bucket_count);
+    //
+    // Pass `accum.a` (raw density per pixel), NOT `bucket_count`.
+    // `bucket_count = accum.a × 100` is a calibration scale for log/
+    // brightness math elsewhere in this shader. `sample_density`
+    // is in raw mean-density units (no ×100), so dividing
+    // `bucket_count` by `sample_density` would inflate the ratio by
+    // 100× — effectively disabling Levels at any reasonable
+    // `levels_high` setting.
+    let leveled_opacity = apply_levels(accum.a);
 
     // Original alpha blending strategy (kept for backward compatibility):
     // Blend between gamma-corrected alpha (good edges) and linear (good detail)
