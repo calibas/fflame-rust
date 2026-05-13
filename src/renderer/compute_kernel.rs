@@ -822,7 +822,15 @@ impl FlameRenderer {
         }
 
         // 5b. Update palette with rotation and squeeze
-        self.buffers.update_palette(queue, palette, config.palette_rotation, config.palette_squeeze, config.palette_reverse);
+        self.buffers.update_palette(
+            queue,
+            palette,
+            config.palette_rotation,
+            config.palette_squeeze,
+            config.palette_squeeze_mode,
+            config.palette_squeeze_falloff,
+            config.palette_reverse,
+        );
 
         // Note: scale_buffer removed - scale is now in params.histogram_color_scale
 
@@ -1409,8 +1417,26 @@ impl FlameRenderer {
     }
 
     /// Update palette texture
-    pub fn update_palette(&mut self, device: &Device, queue: &Queue, palette: &Palette, palette_rotation: f32, palette_squeeze: f32, palette_reverse: bool) {
-        self.buffers.update_palette(queue, palette, palette_rotation, palette_squeeze, palette_reverse);
+    pub fn update_palette(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        palette: &Palette,
+        palette_rotation: f32,
+        palette_squeeze: f32,
+        palette_squeeze_mode: crate::scene::palette::SqueezeMode,
+        palette_squeeze_falloff: f32,
+        palette_reverse: bool,
+    ) {
+        self.buffers.update_palette(
+            queue,
+            palette,
+            palette_rotation,
+            palette_squeeze,
+            palette_squeeze_mode,
+            palette_squeeze_falloff,
+            palette_reverse,
+        );
         // Recreate compute bind group to ensure palette texture is bound
         self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
         self.init_bind_group = self.pipelines.create_init_bind_group(device, &self.buffers);

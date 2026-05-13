@@ -1438,18 +1438,29 @@ impl FlameBuffers {
     /// `scene::palette::render_palette_lookup` — both this GPU upload
     /// path and the UI preview call into the same helper so they can't
     /// drift apart.
-    ///
-    /// # Arguments
-    /// * `palette_rotation` - Rotation amount (-1.0 to 1.0), shifts palette indices
-    /// * `palette_squeeze` - Linear squeeze factor: 1.0 = normal, >1 = repeat palette N times, <1 = show only N% of palette
-    /// * `palette_reverse` - Flip the resulting palette as the final pipeline stage
-    pub fn update_palette(&self, queue: &Queue, palette: &Palette, palette_rotation: f32, palette_squeeze: f32, palette_reverse: bool) {
+    pub fn update_palette(
+        &self,
+        queue: &Queue,
+        palette: &Palette,
+        palette_rotation: f32,
+        palette_squeeze: f32,
+        palette_squeeze_mode: crate::scene::palette::SqueezeMode,
+        palette_squeeze_falloff: f32,
+        palette_reverse: bool,
+    ) {
         use crate::scene::palette::{render_palette_lookup, PaletteTransform, SqueezeMode};
 
         let size = self.palette_size as usize;
+        // For geometric mode, `squeeze_factor` carries the octave ratio
+        // (`palette_squeeze_falloff`). For linear mode it carries the
+        // existing repeat count (`palette_squeeze`).
+        let squeeze_factor = match palette_squeeze_mode {
+            SqueezeMode::Linear => palette_squeeze,
+            SqueezeMode::Geometric => palette_squeeze_falloff,
+        };
         let transform = PaletteTransform {
-            squeeze_mode: SqueezeMode::Linear,
-            squeeze_factor: palette_squeeze,
+            squeeze_mode: palette_squeeze_mode,
+            squeeze_factor,
             log_strength: 0.0,
             rotation: palette_rotation,
             reverse: palette_reverse,

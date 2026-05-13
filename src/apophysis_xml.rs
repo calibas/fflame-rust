@@ -332,6 +332,8 @@ fn parse_flame_element(
         alpha_blend_high: crate::config::defaults::DEFAULT_ALPHA_BLEND_HIGH,
         palette_size: crate::config::defaults::DEFAULT_PALETTE_SIZE,
         palette_squeeze: crate::config::defaults::DEFAULT_PALETTE_SQUEEZE,
+        palette_squeeze_mode: crate::scene::palette::SqueezeMode::Linear,
+        palette_squeeze_falloff: 0.5,
         palette_reverse: false,
         // Levels controls - use defaults (× mean density units)
         levels_low: 0.0,

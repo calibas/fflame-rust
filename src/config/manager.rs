@@ -930,6 +930,8 @@ impl ConfigManager {
             ConfigPath::PaletteRotation => Ok(config.palette_rotation.into()),
             ConfigPath::PaletteSize => Ok((config.palette_size as f32).into()),
             ConfigPath::PaletteSqueeze => Ok(config.palette_squeeze.into()),
+            ConfigPath::PaletteSqueezeMode => Ok(config.palette_squeeze_mode.into()),
+            ConfigPath::PaletteSqueezeFalloff => Ok(config.palette_squeeze_falloff.into()),
             ConfigPath::PaletteReverse => Ok(config.palette_reverse.into()),
             ConfigPath::SpeedFactor => Ok(config.speed_factor.into()),
             ConfigPath::BackgroundColor => Ok(config.background_color.into()),
@@ -1430,6 +1432,13 @@ impl ConfigManager {
             ConfigPath::PaletteSqueeze => {
                 let v: f32 = value.try_into()?;
                 self.current.palette_squeeze = v.clamp(0.1, 16.0);
+            }
+            ConfigPath::PaletteSqueezeMode => {
+                self.current.palette_squeeze_mode = value.try_into()?;
+            }
+            ConfigPath::PaletteSqueezeFalloff => {
+                let v: f32 = value.try_into()?;
+                self.current.palette_squeeze_falloff = v.clamp(0.05, 0.99);
             }
             ConfigPath::PaletteReverse => {
                 self.current.palette_reverse = value.try_into()?;
@@ -2366,6 +2375,16 @@ impl TryFrom<ConfigValue> for ColorMode {
     fn try_from(v: ConfigValue) -> Result<Self, Self::Error> {
         match v {
             ConfigValue::ColorMode(m) => Ok(m),
+            _ => Err(ConfigError::TypeMismatch),
+        }
+    }
+}
+
+impl TryFrom<ConfigValue> for crate::scene::palette::SqueezeMode {
+    type Error = ConfigError;
+    fn try_from(v: ConfigValue) -> Result<Self, Self::Error> {
+        match v {
+            ConfigValue::SqueezeMode(m) => Ok(m),
             _ => Err(ConfigError::TypeMismatch),
         }
     }
