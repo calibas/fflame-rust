@@ -74,7 +74,7 @@ breakage is nil.
 
 ## What changes
 
-### Shader (`shaders/tonemap.wgsl`, `shaders/tonemap_export.wgsl`)
+### Shader (`shaders/tonemap.wgsl`)
 
 `apply_levels()` normalizes density by `sample_density` before
 applying the linear remap. Guard against `sample_density == 0` (empty
@@ -104,8 +104,27 @@ fn apply_levels(density: f32) -> f32 {
 }
 ```
 
-Both `tonemap.wgsl` and `tonemap_export.wgsl` carry copies. Both need
-the same change.
+`tonemap_export.wgsl` (HighResExporter's tonemap path) is missing
+`apply_levels` entirely — so >binding-size exports silently ignore
+Levels, producing different output than the same flame rendered
+through `FlameRenderer.render()`. Two paths, one config, different
+images. That's a worse problem than scale-invariance alone.
+
+**In-scope expansion: delete `tonemap_export.wgsl`, unify on `tonemap.wgsl`.**
+
+The export shader's only divergences are (a) missing path/palette
+bindings, (b) missing PathMap color-override helpers (~165 lines of
+dead code when `color_mode != 2`), (c) missing Levels. HighResExporter
+already holds the resources needed to bind 5-7 (`dummy_path_buffer`,
+`palette_texture`, `palette_sampler` — all exist for the compute pass).
+Adding three bind-group entries + swapping the `include_str!` source
+unifies the two paths and deletes ~290 lines of duplicated/divergent
+shader code.
+
+PathMap mode through HighResExporter remains broken after unification
+(compute side doesn't track paths; dummy buffer reads as zeros), but
+it was broken before too — silently producing palette-mode-ish output
+instead of failing loudly. Out of scope to fix here.
 
 ### Default (`src/config/fractal_config.rs`)
 
@@ -180,19 +199,25 @@ their personal flames break in a worse way than expected.
 
 ## Phases
 
-1. **Shader + default change.** Both tonemap shaders, both sentinel
-   functions. No UI changes yet — slider still displays whatever
-   number is in the field; with the new defaults that number is now
-   `1.0` and the math interprets it correctly.
-2. **UI bounds + Auto-button normalization.** Slider range becomes
+1. **Shader scale-invariance + default change.** `tonemap.wgsl`
+   `apply_levels` normalizes by `sample_density`; defaults in
+   `fractal_config.rs`, `gpu/buffers.rs`, `compute_kernel.rs` (×3),
+   `apophysis_xml.rs`, and `high_res.rs` switch from `1000.0` → `1.0`.
+2. **Unify the export tonemap path.** Update HighResExporter's
+   tonemap bind group layout to bind path_buffer/palette_texture/
+   palette_sampler. Swap the `include_str!` from `tonemap_export.wgsl`
+   to `tonemap.wgsl`. Delete `tonemap_export.wgsl`.
+3. **UI bounds + Auto-button normalization.** Slider range becomes
    sensible. Auto button writes correct values. `update_from_histogram`
    takes `sample_density` parameter.
-3. **Histogram marker alignment.** `levels_to_screen_x` adjusted so
+4. **Histogram marker alignment.** `levels_to_screen_x` adjusted so
    markers display correctly against the raw-density histogram.
-4. **Validation.** Visual smoke test on `simple3.fflame`,
+5. **Validation.** Visual smoke test on `simple3.fflame`,
    `bubble-3d.fflame`, and at least one Apophysis-import flame.
    Confirm default Levels now usefully clips; confirm slider feels
    reasonable across iteration counts (1M preview vs 40B export).
+   Run a high-res export (>binding-size) and confirm Levels behavior
+   matches a sub-binding-size render of the same config.
 
 Should land as one PR — the phases are sequenced inside the branch
 but each one breaks the next; there's no useful intermediate state

@@ -1951,6 +1951,7 @@ impl App {
 
                 if let Some(ref renderer) = self.flame_renderer {
                     let texture = renderer.accumulation_texture();
+                    let total_iterations = renderer.samples_accumulated();
 
                     // Desktop: blocking readback via pollster
                     #[cfg(not(target_arch = "wasm32"))]
@@ -1961,6 +1962,7 @@ impl App {
                             texture,
                             renderer.width,
                             renderer.height,
+                            total_iterations,
                         )) {
                             Ok(histogram) => {
                                 self.egui_layer.update_histogram(histogram);
@@ -1980,6 +1982,7 @@ impl App {
                             texture,
                             renderer.width,
                             renderer.height,
+                            total_iterations,
                         );
 
                         let slot = self.histogram_result_slot.get_or_insert_with(|| {

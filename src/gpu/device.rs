@@ -143,9 +143,26 @@ impl GpuContext {
 
         // Request adapter's max storage buffer size (for 4K+ resolutions)
         limits.max_storage_buffer_binding_size = adapter_limits.max_storage_buffer_binding_size;
+        // Also expand max_buffer_size and max_texture_dimension_2d:
+        // the WebGPU spec floors (256 MB buffer, 8K texture) are
+        // smaller than typical desktop adapters' actual capabilities,
+        // and leaving them at default crashes "Save as PNG" at
+        // resolutions like 8K² where the histogram (1 GB) fits one
+        // storage-buffer binding but not the smaller buffer floor.
+        // CLI export path already expands these — mirror it here so
+        // the in-app export hits the same effective limits.
+        limits.max_buffer_size = adapter_limits.max_buffer_size;
+        limits.max_texture_dimension_2d = adapter_limits.max_texture_dimension_2d;
 
-        log::info!("Requesting device with limits: max_storage_buffer_binding_size = {} MB",
-            limits.max_storage_buffer_binding_size / (1024 * 1024));
+        log::info!(
+            "Requesting device with limits: \
+             max_storage_buffer_binding_size = {} MB, \
+             max_buffer_size = {} MB, \
+             max_texture_dimension_2d = {}",
+            limits.max_storage_buffer_binding_size / (1024 * 1024),
+            limits.max_buffer_size / (1024 * 1024),
+            limits.max_texture_dimension_2d,
+        );
 
         // Check adapter features for timestamp query support
         let adapter_features = adapter.features();
