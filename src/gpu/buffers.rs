@@ -1442,7 +1442,8 @@ impl FlameBuffers {
     /// # Arguments
     /// * `palette_rotation` - Rotation amount (-1.0 to 1.0), shifts palette indices
     /// * `palette_squeeze` - Linear squeeze factor: 1.0 = normal, >1 = repeat palette N times, <1 = show only N% of palette
-    pub fn update_palette(&self, queue: &Queue, palette: &Palette, palette_rotation: f32, palette_squeeze: f32) {
+    /// * `palette_reverse` - Flip the resulting palette as the final pipeline stage
+    pub fn update_palette(&self, queue: &Queue, palette: &Palette, palette_rotation: f32, palette_squeeze: f32, palette_reverse: bool) {
         use crate::scene::palette::{render_palette_lookup, PaletteTransform, SqueezeMode};
 
         let size = self.palette_size as usize;
@@ -1451,7 +1452,7 @@ impl FlameBuffers {
             squeeze_factor: palette_squeeze,
             log_strength: 0.0,
             rotation: palette_rotation,
-            reverse: false,
+            reverse: palette_reverse,
         };
         let rotated_data = render_palette_lookup(palette, &transform, size);
 

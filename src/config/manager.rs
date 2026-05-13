@@ -930,6 +930,7 @@ impl ConfigManager {
             ConfigPath::PaletteRotation => Ok(config.palette_rotation.into()),
             ConfigPath::PaletteSize => Ok((config.palette_size as f32).into()),
             ConfigPath::PaletteSqueeze => Ok(config.palette_squeeze.into()),
+            ConfigPath::PaletteReverse => Ok(config.palette_reverse.into()),
             ConfigPath::SpeedFactor => Ok(config.speed_factor.into()),
             ConfigPath::BackgroundColor => Ok(config.background_color.into()),
             ConfigPath::BackgroundColorR => Ok(config.background_color[0].into()),
@@ -1429,6 +1430,9 @@ impl ConfigManager {
             ConfigPath::PaletteSqueeze => {
                 let v: f32 = value.try_into()?;
                 self.current.palette_squeeze = v.clamp(0.1, 16.0);
+            }
+            ConfigPath::PaletteReverse => {
+                self.current.palette_reverse = value.try_into()?;
             }
             ConfigPath::SpeedFactor => {
                 self.current.speed_factor = value.try_into()?;
