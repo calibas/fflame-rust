@@ -438,6 +438,156 @@ impl Palette {
     }
 }
 
+/// Squeeze mode for the palette lookup pipeline.
+///
+/// - `Linear`: uniform repeats of the palette. `factor = 1.0` is identity;
+///   `factor = N` repeats N times across [0, 1).
+/// - `Geometric`: octave-based packing — first `r` of the t range maps to
+///   the full palette, next `r²` maps to the full palette again at smaller
+///   scale, next `r³` after that, etc. `factor` here means the geometric
+///   ratio `r` (typically 0.5).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SqueezeMode {
+    Linear,
+    Geometric,
+}
+
+impl Default for SqueezeMode {
+    fn default() -> Self {
+        SqueezeMode::Linear
+    }
+}
+
+/// Composite description of every transform that sits between the
+/// raw `Palette` and the final lookup table the GPU uses.
+///
+/// Pipeline: `t → squeeze (linear|geometric) → log redistribution →
+/// rotation → reverse → palette[idx]`. Phases beyond the initial
+/// extraction add the new fields; defaults make every transform a
+/// no-op so existing configs deserialize to byte-identical behavior.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PaletteTransform {
+    pub squeeze_mode: SqueezeMode,
+    /// Linear: repeat count (1.0 = no-op). Geometric: octave ratio (0.5 = halving).
+    pub squeeze_factor: f32,
+    /// Logarithmic redistribution strength. 0.0 = linear (no-op);
+    /// positive bunches toward palette end, negative toward start.
+    pub log_strength: f32,
+    /// Rotation amount in [-1.0, 1.0]; shifts palette indices.
+    pub rotation: f32,
+    /// Flip the resulting palette. Applied last.
+    pub reverse: bool,
+}
+
+impl Default for PaletteTransform {
+    fn default() -> Self {
+        Self {
+            squeeze_mode: SqueezeMode::Linear,
+            squeeze_factor: 1.0,
+            log_strength: 0.0,
+            rotation: 0.0,
+            reverse: false,
+        }
+    }
+}
+
+impl PaletteTransform {
+    /// True if this transform is the identity — every stage is a no-op.
+    /// `update_palette` and the UI preview can skip the helper entirely
+    /// in this case, and consumers can short-circuit reupload work.
+    pub fn is_identity(&self) -> bool {
+        matches!(self.squeeze_mode, SqueezeMode::Linear)
+            && self.squeeze_factor == 1.0
+            && self.log_strength == 0.0
+            && self.rotation == 0.0
+            && !self.reverse
+    }
+}
+
+/// Render the palette into an RGBA-f32 lookup table after applying
+/// the full transform pipeline. Output length is `size * 4`.
+///
+/// This is the single source of truth for "what does the palette
+/// look like after rotation/squeeze/etc." — both the GPU upload
+/// path (`Buffers::update_palette`) and the UI preview call this.
+///
+/// Pipeline order:
+///   1. Squeeze (Linear OR Geometric, mutually exclusive)
+///   2. Logarithmic redistribution (optional; off when `log_strength = 0`)
+///   3. Rotation (cyclic shift)
+///   4. Reverse (flip the resulting table)
+pub fn render_palette_lookup(
+    palette: &Palette,
+    transform: &PaletteTransform,
+    size: usize,
+) -> Vec<f32> {
+    let base = palette.generate_texture_data(size);
+
+    // Stage 1: Squeeze. Maps output index → source index in the base table.
+    let squeezed = match transform.squeeze_mode {
+        SqueezeMode::Linear if transform.squeeze_factor == 1.0 => base.clone(),
+        SqueezeMode::Linear => {
+            let factor = transform.squeeze_factor;
+            let mut out = vec![0.0f32; size * 4];
+            for i in 0..size {
+                let t = i as f32 / size as f32;
+                let src_t = (t * factor).fract();
+                let src_idx = ((src_t * size as f32) as usize).min(size - 1);
+                let (dst_base, src_base) = (i * 4, src_idx * 4);
+                out[dst_base] = base[src_base];
+                out[dst_base + 1] = base[src_base + 1];
+                out[dst_base + 2] = base[src_base + 2];
+                out[dst_base + 3] = base[src_base + 3];
+            }
+            out
+        }
+        SqueezeMode::Geometric => {
+            // Phase 3 will fill this in; until then mirror Linear as a placeholder.
+            base.clone()
+        }
+    };
+
+    // Stage 2: Logarithmic redistribution. Phase 4 lands here.
+    let redistributed = if transform.log_strength == 0.0 {
+        squeezed
+    } else {
+        squeezed // Phase 4 placeholder.
+    };
+
+    // Stage 3: Rotation. Cyclic shift by `rotation * size` entries.
+    let rotated = if transform.rotation != 0.0 {
+        let rotation_amount = (transform.rotation * size as f32).round() as i32;
+        let mut out = vec![0.0f32; size * 4];
+        for i in 0..size {
+            let src_idx = ((i as i32 + rotation_amount).rem_euclid(size as i32)) as usize;
+            let (dst_base, src_base) = (i * 4, src_idx * 4);
+            out[dst_base] = redistributed[src_base];
+            out[dst_base + 1] = redistributed[src_base + 1];
+            out[dst_base + 2] = redistributed[src_base + 2];
+            out[dst_base + 3] = redistributed[src_base + 3];
+        }
+        out
+    } else {
+        redistributed
+    };
+
+    // Stage 4: Reverse. Phase 2 lands here.
+    if transform.reverse {
+        let mut out = vec![0.0f32; size * 4];
+        for i in 0..size {
+            let src_idx = size - 1 - i;
+            let (dst_base, src_base) = (i * 4, src_idx * 4);
+            out[dst_base] = rotated[src_base];
+            out[dst_base + 1] = rotated[src_base + 1];
+            out[dst_base + 2] = rotated[src_base + 2];
+            out[dst_base + 3] = rotated[src_base + 3];
+        }
+        out
+    } else {
+        rotated
+    }
+}
+
 // Custom serialization/deserialization for compact indexed palette format
 impl serde::Serialize for Palette {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
