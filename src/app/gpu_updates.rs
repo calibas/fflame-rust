@@ -236,7 +236,22 @@ impl App {
                     self.render_mode.exit_overwrite();
 
                     if let Some(ref mut renderer) = self.flame_renderer {
-                        renderer.reset_iteration_counter();
+                        // Cumulative-mean mode keeps `samples_in_buffer`
+                        // aligned with the (un-cleared) accumulator
+                        // texture; fixed-EMA mode zeros both together
+                        // since the next step clears the buffer too.
+                        // Misaligning these in cumulative mode produces
+                        // a one-frame bright flash at overwrite-exit:
+                        // sample_density goes to ~0 while accumulator
+                        // density values remain non-zero, the shader's
+                        // `density / sample_density` ratio explodes,
+                        // apply_levels saturates to 1, Levels briefly
+                        // disables for that frame.
+                        if renderer.use_dynamic_blend() {
+                            renderer.reset_iteration_counter_keep_buffer();
+                        } else {
+                            renderer.reset_iteration_counter();
+                        }
 
                         // In fixed-EMA mode, also clear the
                         // accumulation textures. Without this, the
