@@ -205,6 +205,40 @@ pub fn render_colors_content(
                 }
             });
 
+            // Preset dropdown — snaps brightness/curve fields to a named
+            // "look" without touching the flame, palette, or background.
+            // Each selection is one batch update (single undo step).
+            ui.horizontal(|ui| {
+                ui.label(t!("tonemap.preset"));
+                egui::ComboBox::from_id_salt("tonemap_preset_combo")
+                    .selected_text(t!("tonemap.preset_pick"))
+                    .show_ui(ui, |ui| {
+                        for preset in crate::scene::tonemap_presets::TONEMAP_PRESETS {
+                            if ui.selectable_label(false, preset.name).clicked() {
+                                let changes = vec![
+                                    (ConfigPath::Exposure, preset.exposure.into()),
+                                    (ConfigPath::Gamma, preset.gamma.into()),
+                                    (ConfigPath::GammaThreshold, preset.gamma_threshold.into()),
+                                    (ConfigPath::Brightness, preset.brightness.into()),
+                                    (ConfigPath::Vibrancy, preset.vibrancy.into()),
+                                    (ConfigPath::Saturation, preset.saturation.into()),
+                                    (ConfigPath::HueShift, preset.hue_shift.into()),
+                                    (ConfigPath::UseCurve, preset.use_curve.into()),
+                                    (ConfigPath::LevelsLow, preset.levels_low.into()),
+                                    (ConfigPath::LevelsHigh, preset.levels_high.into()),
+                                    (ConfigPath::LevelsGamma, preset.levels_gamma.into()),
+                                    (ConfigPath::AlphaBlendLow, preset.alpha_blend_low.into()),
+                                    (ConfigPath::AlphaBlendHigh, preset.alpha_blend_high.into()),
+                                ];
+                                match config_manager.update_batch(changes, format!("Apply tonemap preset: {}", preset.name)) {
+                                    Ok(update) => max_update = max_update.max(update),
+                                    Err(e) => log::error!("Failed to apply tonemap preset '{}': {}", preset.name, e),
+                                }
+                            }
+                        }
+                    });
+            }).response.on_hover_text(t!("tonemap.tooltip_preset").as_ref());
+
             ui.separator();
 
             if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::Exposure, 0.01..=10.0, t!("tonemap.exposure").as_ref(), Some(t!("tonemap.tooltip_exposure").as_ref())) {
