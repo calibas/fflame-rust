@@ -259,6 +259,10 @@ fn parse_flame_element(
         perspective_strength,
         xaos,
         solo_transform: solo_xform,
+        // Subflames populated by the subflame_wf importer in Phase 5;
+        // empty Vec here is the post-import default for flames that
+        // don't use subflame_wf.
+        subflames: Vec::new(),
     };
     flame.migrate_legacy_final(final_transform);
 
@@ -291,10 +295,6 @@ fn parse_flame_element(
 
     Ok(FractalConfig {
         flame,
-        // Subflames are populated by the subflame_wf importer in Phase 5;
-        // empty Vec here is the post-import default for flames that
-        // don't use subflame_wf.
-        subflames: Vec::new(),
         zoom,
         pan_x,
         pan_y,
