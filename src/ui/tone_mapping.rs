@@ -205,9 +205,43 @@ pub fn render_colors_content(
                 }
             });
 
+            // Preset dropdown — snaps brightness/curve fields to a named
+            // "look" without touching the flame, palette, or background.
+            // Each selection is one batch update (single undo step).
+            ui.horizontal(|ui| {
+                ui.label(t!("tonemap.preset"));
+                egui::ComboBox::from_id_salt("tonemap_preset_combo")
+                    .selected_text(t!("tonemap.preset_pick"))
+                    .show_ui(ui, |ui| {
+                        for preset in crate::scene::tonemap_presets::TONEMAP_PRESETS {
+                            if ui.selectable_label(false, preset.name).clicked() {
+                                let changes = vec![
+                                    (ConfigPath::Exposure, preset.exposure.into()),
+                                    (ConfigPath::Gamma, preset.gamma.into()),
+                                    (ConfigPath::GammaThreshold, preset.gamma_threshold.into()),
+                                    (ConfigPath::Brightness, preset.brightness.into()),
+                                    (ConfigPath::Vibrancy, preset.vibrancy.into()),
+                                    (ConfigPath::Saturation, preset.saturation.into()),
+                                    (ConfigPath::HueShift, preset.hue_shift.into()),
+                                    (ConfigPath::UseCurve, preset.use_curve.into()),
+                                    (ConfigPath::LevelsLow, preset.levels_low.into()),
+                                    (ConfigPath::LevelsHigh, preset.levels_high.into()),
+                                    (ConfigPath::LevelsGamma, preset.levels_gamma.into()),
+                                    (ConfigPath::AlphaBlendLow, preset.alpha_blend_low.into()),
+                                    (ConfigPath::AlphaBlendHigh, preset.alpha_blend_high.into()),
+                                ];
+                                match config_manager.update_batch(changes, format!("Apply tonemap preset: {}", preset.name)) {
+                                    Ok(update) => max_update = max_update.max(update),
+                                    Err(e) => log::error!("Failed to apply tonemap preset '{}': {}", preset.name, e),
+                                }
+                            }
+                        }
+                    });
+            }).response.on_hover_text(t!("tonemap.tooltip_preset").as_ref());
+
             ui.separator();
 
-            if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::Exposure, 0.01..=10.0, t!("tonemap.exposure").as_ref(), Some(t!("tonemap.tooltip_exposure").as_ref())) {
+            if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::Exposure, 0.001..=10.0, t!("tonemap.exposure").as_ref(), Some(t!("tonemap.tooltip_exposure").as_ref())) {
                 max_update = max_update.max(result.update_type);
             }
 
@@ -413,14 +447,129 @@ pub fn render_colors_content(
                     }
                 });
 
+                // Live preview of the effective palette (post pipeline:
+                // squeeze → log → rotation → reverse). Reuses the same
+                // `render_palette_lookup` helper the GPU upload path
+                // calls, so the preview can never disagree with what
+                // the renderer actually does.
+                //
+                // We materialize a fixed-size 512-entry LUT regardless
+                // of `palette_size` (which can be up to 4096). The
+                // preview then resamples that LUT to the panel's
+                // available pixel width — cheap and crisp at any
+                // panel size, and decouples preview cost from the
+                // user's chosen palette resolution.
+                {
+                    use crate::scene::palette::{render_palette_lookup, PaletteTransform, SqueezeMode};
+                    let config = config_manager.active_config();
+                    let squeeze_factor = match config.palette_squeeze_mode {
+                        SqueezeMode::Linear => config.palette_squeeze,
+                        SqueezeMode::Geometric => config.palette_squeeze_falloff,
+                    };
+                    let transform = PaletteTransform {
+                        squeeze_mode: config.palette_squeeze_mode,
+                        squeeze_factor,
+                        log_strength: config.palette_log_strength,
+                        rotation: config.palette_rotation,
+                        reverse: config.palette_reverse,
+                    };
+                    const PREVIEW_LUT_LEN: usize = 512;
+                    const PREVIEW_HEIGHT: f32 = 24.0;
+                    let lut = render_palette_lookup(&config.palette, &transform, PREVIEW_LUT_LEN);
+
+                    let (rect, _) = ui.allocate_exact_size(
+                        egui::vec2(ui.available_width(), PREVIEW_HEIGHT),
+                        egui::Sense::hover(),
+                    );
+                    if ui.is_rect_visible(rect) {
+                        let painter = ui.painter();
+                        let pixel_count = rect.width() as usize;
+                        for i in 0..pixel_count {
+                            // Map screen pixel → LUT entry.
+                            let lut_idx = (i * PREVIEW_LUT_LEN / pixel_count.max(1)).min(PREVIEW_LUT_LEN - 1);
+                            let base = lut_idx * 4;
+                            let color = egui::Color32::from_rgb(
+                                (lut[base].clamp(0.0, 1.0) * 255.0) as u8,
+                                (lut[base + 1].clamp(0.0, 1.0) * 255.0) as u8,
+                                (lut[base + 2].clamp(0.0, 1.0) * 255.0) as u8,
+                            );
+                            let x = rect.left() + i as f32;
+                            painter.rect_filled(
+                                egui::Rect::from_min_size(egui::pos2(x, rect.top()), egui::vec2(1.0, PREVIEW_HEIGHT)),
+                                0.0,
+                                color,
+                            );
+                        }
+                    }
+                }
+
                 if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::PaletteRotation, 0.0..=1.0, t!("tonemap.palette_rotation").as_ref(), Some(t!("tonemap.tooltip_palette_rotation").as_ref())) {
                     max_update = max_update.max(result.update_type);
                 }
 
-                // Palette squeeze slider (0.1 to 16.0)
-                if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::PaletteSqueeze, 0.1..=16.0, t!("tonemap.palette_squeeze").as_ref(), Some(t!("tonemap.tooltip_palette_squeeze").as_ref())) {
+                // Squeeze mode dropdown (Linear vs Geometric)
+                ui.horizontal(|ui| {
+                    ui.label(t!("tonemap.palette_squeeze_mode").as_ref());
+                    let current_mode = config_manager.active_config().palette_squeeze_mode;
+                    use crate::scene::palette::SqueezeMode;
+                    egui::ComboBox::from_id_salt("palette_squeeze_mode_combo")
+                        .selected_text(match current_mode {
+                            SqueezeMode::Linear => t!("tonemap.palette_squeeze_mode_linear").to_string(),
+                            SqueezeMode::Geometric => t!("tonemap.palette_squeeze_mode_geometric").to_string(),
+                        })
+                        .show_ui(ui, |ui| {
+                            for &mode in &[SqueezeMode::Linear, SqueezeMode::Geometric] {
+                                let label = match mode {
+                                    SqueezeMode::Linear => t!("tonemap.palette_squeeze_mode_linear"),
+                                    SqueezeMode::Geometric => t!("tonemap.palette_squeeze_mode_geometric"),
+                                };
+                                if ui.selectable_label(current_mode == mode, label.as_ref()).clicked() {
+                                    if let Err(e) = config_manager.update_param(ConfigPath::PaletteSqueezeMode, mode.into()) {
+                                        log::error!("Failed to update palette squeeze mode: {}", e);
+                                    } else {
+                                        max_update = max_update.max(UpdateType::ColorOnly);
+                                    }
+                                }
+                            }
+                        });
+                }).response.on_hover_text(t!("tonemap.tooltip_palette_squeeze_mode").as_ref());
+
+                // The squeeze slider's meaning depends on the active mode:
+                // Linear shows the existing repeat-count slider; Geometric
+                // shows the octave-ratio (falloff) slider in a different range.
+                match config_manager.active_config().palette_squeeze_mode {
+                    crate::scene::palette::SqueezeMode::Linear => {
+                        if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::PaletteSqueeze, 0.1..=16.0, t!("tonemap.palette_squeeze").as_ref(), Some(t!("tonemap.tooltip_palette_squeeze").as_ref())) {
+                            max_update = max_update.max(result.update_type);
+                        }
+                    }
+                    crate::scene::palette::SqueezeMode::Geometric => {
+                        if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::PaletteSqueezeFalloff, 0.1..=0.95, t!("tonemap.palette_squeeze_falloff").as_ref(), Some(t!("tonemap.tooltip_palette_squeeze_falloff").as_ref())) {
+                            max_update = max_update.max(result.update_type);
+                        }
+                    }
+                }
+
+                // Logarithmic redistribution slider (composes after squeeze).
+                // Range −5..5 covers practical curves; center detent at 0 = no-op.
+                if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::PaletteLogStrength, -5.0..=5.0, t!("tonemap.palette_log_strength").as_ref(), Some(t!("tonemap.tooltip_palette_log_strength").as_ref())) {
                     max_update = max_update.max(result.update_type);
                 }
+
+                // Reverse palette toggle (composes with rotation+squeeze; applied last)
+                ui.horizontal(|ui| {
+                    let mut reverse = config_manager.active_config().palette_reverse;
+                    if ui.checkbox(&mut reverse, t!("tonemap.palette_reverse").as_ref())
+                        .on_hover_text(t!("tonemap.tooltip_palette_reverse").as_ref())
+                        .changed()
+                    {
+                        if let Err(e) = config_manager.update_param(ConfigPath::PaletteReverse, reverse.into()) {
+                            log::error!("Failed to update palette reverse: {}", e);
+                        } else {
+                            max_update = max_update.max(UpdateType::ColorOnly);
+                        }
+                    }
+                });
 
                 // Palette size slider (256-4096, step by power of 2)
                 ui.horizontal(|ui| {

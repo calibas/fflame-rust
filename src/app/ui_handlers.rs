@@ -520,7 +520,7 @@ impl App {
                     // Update renderer
                     let config = self.config_manager.active_config();
                     if let Some(ref mut renderer) = self.flame_renderer {
-                        renderer.update_palette(&self.gpu.device, &self.gpu.queue, &palette, config.palette_rotation, config.palette_squeeze);
+                        renderer.update_palette(&self.gpu.device, &self.gpu.queue, &palette, config.palette_rotation, config.palette_squeeze, config.palette_squeeze_mode, config.palette_squeeze_falloff, config.palette_log_strength, config.palette_reverse);
                     }
                 }
                 Err(e) => {
@@ -556,7 +556,7 @@ impl App {
                                     // Update renderer
                                     let config = self.config_manager.active_config();
                                     if let Some(ref mut renderer) = self.flame_renderer {
-                                        renderer.update_palette(&self.gpu.device, &self.gpu.queue, &palette, config.palette_rotation, config.palette_squeeze);
+                                        renderer.update_palette(&self.gpu.device, &self.gpu.queue, &palette, config.palette_rotation, config.palette_squeeze, config.palette_squeeze_mode, config.palette_squeeze_falloff, config.palette_log_strength, config.palette_reverse);
                                     }
 
                                     println!("Palette loaded from: {}", path.display());

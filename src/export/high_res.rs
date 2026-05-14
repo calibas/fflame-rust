@@ -1739,10 +1739,9 @@ impl HighResExporter {
             num_transforms: config.flame.transforms.len() as u32,
             palette_size: config.palette_size,
             // Levels defaults: × mean density (sample_density) units.
-            // levels_high=1.0 clips at the mean.
             levels_low: 0.0,
-            levels_high: 1.0,
-            levels_gamma: 1.0,
+            levels_high: crate::config::defaults::DEFAULT_LEVELS_HIGH,
+            levels_gamma: crate::config::defaults::DEFAULT_LEVELS_GAMMA,
         };
 
         self.queue.write_buffer(
