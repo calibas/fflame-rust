@@ -456,6 +456,9 @@ impl<'a> PanelViewer<'a> {
                     *self.context.clear_variation_cache_requested = true;
                 }
             }
+            PanelType::Subflames => {
+                super::subflames::render_subflames_content(ui, self.context.config_manager);
+            }
         }
     }
     /// Render Transforms panel (transform list, affine, variations)
