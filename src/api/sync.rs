@@ -585,6 +585,8 @@ pub fn flame_response_to_config(
 
     FractalConfig {
         flame,
+        // API wire format doesn't carry subflames yet; future API rev can add them.
+        subflames: Vec::new(),
         zoom: resp.zoom,
         pan_x: resp.pan_x,
         pan_y: resp.pan_y,
