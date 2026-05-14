@@ -624,7 +624,7 @@ pub struct TonemapParams {
     pub sample_density: f32,  // Iterations per pixel
     pub saturation: f32,  // Color saturation boost (1.0 = no change, >1.0 = more saturated)
     pub hue_shift: f32,  // Hue rotation in degrees (-180.0 to 180.0)
-    pub gamma_threshold: f32,  // Smooths gamma curve at low densities (default 0.0025)
+    pub gamma_threshold: f32,  // Smooths gamma curve at low densities (see DEFAULT_GAMMA_THRESHOLD)
     pub alpha_blend_low: f32,  // Start blending toward linear alpha at this gamma-corrected value
     pub alpha_blend_high: f32,  // Full linear alpha above this value
     pub transparent_mode: u32,  // 0 = normal (blend with background), 1 = transparent export
@@ -676,8 +676,8 @@ impl Default for TonemapParams {
             num_transforms: 3,  // Default 3 transforms
             palette_size: 256,  // Default palette size
             levels_low: 0.0,  // No low clipping by default
-            levels_high: 1.0,  // Clip at mean density (× sample_density)
-            levels_gamma: 1.0,  // Linear (no gamma adjustment)
+            levels_high: crate::config::defaults::DEFAULT_LEVELS_HIGH,
+            levels_gamma: crate::config::defaults::DEFAULT_LEVELS_GAMMA,
         }
     }
 }

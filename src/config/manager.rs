@@ -2455,9 +2455,9 @@ mod tests {
         let config = FractalConfig::default();
         let mut manager = ConfigManager::new(config);
 
-        // Get initial value
+        // Get initial value (must match DEFAULT_EXPOSURE)
         let value = manager.get_value(&ConfigPath::Exposure).unwrap();
-        assert!(value.approx_eq(&ConfigValue::Float(1.0)));
+        assert!(value.approx_eq(&ConfigValue::Float(crate::config::defaults::DEFAULT_EXPOSURE)));
 
         // Set new value
         manager
@@ -2493,11 +2493,16 @@ mod tests {
         let config = FractalConfig::default();
         let mut manager = ConfigManager::new(config);
 
-        // Initial state
-        assert!(manager.config().exposure == 1.0);
-        assert!(manager.config().gamma == 2.2);
-        assert!(manager.config().brightness == 1.0);
-        assert!(manager.config().zoom == 1.0);
+        // Initial state — track DEFAULT_* so test stays correct when
+        // tonemap defaults shift.
+        use crate::config::defaults::*;
+        let initial_exposure = DEFAULT_EXPOSURE;
+        let initial_gamma = DEFAULT_GAMMA;
+        let initial_brightness = DEFAULT_BRIGHTNESS;
+        assert_eq!(manager.config().exposure, initial_exposure);
+        assert_eq!(manager.config().gamma, initial_gamma);
+        assert_eq!(manager.config().brightness, initial_brightness);
+        assert_eq!(manager.config().zoom, 1.0);
 
         // Change 1: exposure
         manager.update_param(ConfigPath::Exposure, 2.0.into()).unwrap();
@@ -2520,9 +2525,9 @@ mod tests {
         assert!(manager.config().zoom == 1.0, "After 1st undo, expected zoom=1.0, got {}", manager.config().zoom);
         assert!(manager.config().brightness == 1.5);
 
-        // Undo: should revert brightness
+        // Undo: should revert brightness (back to default)
         manager.undo().unwrap();
-        assert!(manager.config().brightness == 1.0, "After 2nd undo, expected brightness=1.0, got {}", manager.config().brightness);
+        assert_eq!(manager.config().brightness, initial_brightness, "After 2nd undo, expected brightness={}, got {}", initial_brightness, manager.config().brightness);
         assert!(manager.config().gamma == 3.0);
 
         // Redo: should restore brightness
@@ -2545,9 +2550,9 @@ mod tests {
             .unwrap();
         assert_eq!(manager.current.exposure, 2.0);
 
-        // Undo
+        // Undo (back to default)
         manager.undo().unwrap();
-        assert_eq!(manager.current.exposure, 1.0);
+        assert_eq!(manager.current.exposure, crate::config::defaults::DEFAULT_EXPOSURE);
 
         // Redo
         manager.redo().unwrap();

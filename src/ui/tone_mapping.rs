@@ -241,7 +241,7 @@ pub fn render_colors_content(
 
             ui.separator();
 
-            if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::Exposure, 0.01..=10.0, t!("tonemap.exposure").as_ref(), Some(t!("tonemap.tooltip_exposure").as_ref())) {
+            if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::Exposure, 0.001..=10.0, t!("tonemap.exposure").as_ref(), Some(t!("tonemap.tooltip_exposure").as_ref())) {
                 max_update = max_update.max(result.update_type);
             }
 
