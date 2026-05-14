@@ -14,6 +14,17 @@ pub struct FractalConfig {
     /// The flame (transforms) - always required
     pub flame: Flame,
 
+    /// Subflames — additional `Flame` definitions that variations can
+    /// reference by index (currently only the `subflame_wf` variation).
+    /// A subflame's chaos game runs as a *nested* IFS inside the
+    /// parent flame's iteration loop; it is not a separate render.
+    /// Empty Vec (the default) preserves existing FractalConfig
+    /// semantics — old `.fflame` files deserialize unchanged.
+    ///
+    /// See `docs/projects/subflames.md`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subflames: Vec<Flame>,
+
     /// View settings
     #[serde(default = "default_zoom")]
     pub zoom: f32,
@@ -348,6 +359,7 @@ impl Default for FractalConfig {
 
         Self {
             flame: Flame::default(),
+            subflames: Vec::new(),
             zoom: 1.0,
             pan_x: 0.0,
             pan_y: 0.0,
