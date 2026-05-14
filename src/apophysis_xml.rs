@@ -338,8 +338,8 @@ fn parse_flame_element(
         palette_reverse: false,
         // Levels controls - use defaults (× mean density units)
         levels_low: 0.0,
-        levels_high: 1.0,
-        levels_gamma: 1.0,
+        levels_high: crate::config::defaults::DEFAULT_LEVELS_HIGH,
+        levels_gamma: crate::config::defaults::DEFAULT_LEVELS_GAMMA,
         // Effects - empty by default (zero cost)
         density_effects: Vec::new(),
         color_effects: Vec::new(),

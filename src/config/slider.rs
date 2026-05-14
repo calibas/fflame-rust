@@ -288,7 +288,7 @@ mod tests {
         assert!(slider.is_ok());
 
         let slider = slider.unwrap();
-        assert_eq!(slider.current_value, 1.0); // Default exposure
+        assert_eq!(slider.current_value, crate::config::defaults::DEFAULT_EXPOSURE);
         assert!(!slider.lazy); // Default is not lazy
     }
 

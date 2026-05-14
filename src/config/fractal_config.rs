@@ -126,8 +126,8 @@ pub struct FractalConfig {
     pub exposure: f32,
     #[serde(default = "default_gamma")]
     pub gamma: f32,
-    /// Gamma threshold: smooths gamma curve at low densities (Apophysis compatibility)
-    /// Default 0.0025 prevents harsh darkening in sparse areas
+    /// Gamma threshold: smooths gamma curve at low densities (Apophysis compatibility).
+    /// See `DEFAULT_GAMMA_THRESHOLD` in `defaults.rs` for the current value.
     #[serde(default = "default_gamma_threshold")]
     pub gamma_threshold: f32,
     /// Brightness: logarithmic brightness scaling (Apophysis compatibility)
@@ -202,7 +202,7 @@ fn default_exposure() -> f32 {
 }
 
 fn default_gamma() -> f32 {
-    2.2
+    super::defaults::DEFAULT_GAMMA
 }
 
 fn default_gamma_threshold() -> f32 {
@@ -238,10 +238,12 @@ fn default_dof_focus_distance() -> f32 {
 }
 
 fn default_levels_high() -> f32 {
-    // 1.0 = clip at mean density (sample_density). Levels values are
-    // in "× mean density" units after the scale-invariance change,
-    // independent of total iteration count.
-    1.0
+    // Clip at `× mean density` units after the scale-invariance change,
+    // independent of total iteration count. The 10× default was
+    // recalibrated alongside DEFAULT_EXPOSURE / DEFAULT_GAMMA /
+    // DEFAULT_GAMMA_THRESHOLD to produce a sensible image for flames
+    // that don't override tonemap fields.
+    super::defaults::DEFAULT_LEVELS_HIGH
 }
 
 fn default_levels_gamma() -> f32 {
@@ -320,7 +322,7 @@ fn is_default_levels_low(v: &f32) -> bool {
 }
 
 fn is_default_levels_high(v: &f32) -> bool {
-    (*v - 1.0).abs() < FLOAT_EPSILON  // Default is 1.0 (× mean density)
+    (*v - super::defaults::DEFAULT_LEVELS_HIGH).abs() < FLOAT_EPSILON
 }
 
 fn is_default_levels_gamma(v: &f32) -> bool {
