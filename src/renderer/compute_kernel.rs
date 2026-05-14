@@ -893,10 +893,18 @@ impl FlameRenderer {
             config.levels_low, config.levels_high, config.levels_gamma);
         self.update_curve_lut(queue, &config.tonemap_curve);
 
-        // 9. Clear accumulation buffers
+        // 9. Clear accumulation buffers + reset ALL iteration counters
+        // (not just samples_accumulated + total_iterations). Leaving
+        // samples_in_buffer at its pre-clear value desyncs the next
+        // frame's `refresh_sample_density()` from the (now-empty)
+        // accumulator: it writes `stale_value / area` into the
+        // tonemap uniform, the shader's `apply_levels` divides by
+        // that inflated mean, and the image renders ~N× dimmer than
+        // it should until samples_in_buffer naturally catches up
+        // over the next many frames. Most visible after undo/redo
+        // restores a config that load_config processes.
         self.buffers.clear_all(encoder, queue);
-        self.samples_accumulated = 0;
-        self.total_iterations = 0;
+        self.reset_iteration_counter();
     }
 
     /// Update the flame being rendered
