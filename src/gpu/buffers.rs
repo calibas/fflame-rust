@@ -1237,13 +1237,15 @@ impl FlameBuffers {
             mapped_at_creation: false,
         });
 
-        // Subflame metadata: `array<SubflameMeta, MAX_SUBFLAMES>`
-        // uniform with per-subflame offsets + counts. Indexed by
-        // `subflame_id` (the variation parameter). All-zero by default.
+        // Subflame metadata: `array<SubflameMeta>` storage buffer with
+        // per-subflame offsets + counts. Indexed by `subflame_id` (the
+        // variation parameter). All-zero by default. Storage rather
+        // than uniform so the WGSL array is runtime-sized — same
+        // access pattern as the other bindings in this layout.
         let subflame_metadata_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Subflame Metadata Buffer"),
             size: (MAX_SUBFLAMES * std::mem::size_of::<SubflameMeta>()) as u64,
-            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
