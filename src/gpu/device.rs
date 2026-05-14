@@ -153,15 +153,27 @@ impl GpuContext {
         // the in-app export hits the same effective limits.
         limits.max_buffer_size = adapter_limits.max_buffer_size;
         limits.max_texture_dimension_2d = adapter_limits.max_texture_dimension_2d;
+        // The compute bind group now holds 10 storage buffers
+        // (transforms, histogram, variation_params, iteration_counts,
+        // path_buffer, path_filters, xaos_weights, attachments,
+        // subflame_transforms, subflame_metadata). The WebGPU spec
+        // floor of 8 forces a layout-creation failure; modern desktops
+        // report ≥10 (often 16 or 32). Mirror the adapter's actual
+        // limit, same pattern as the binding-size / buffer-size
+        // expansions above.
+        limits.max_storage_buffers_per_shader_stage =
+            adapter_limits.max_storage_buffers_per_shader_stage;
 
         log::info!(
             "Requesting device with limits: \
              max_storage_buffer_binding_size = {} MB, \
              max_buffer_size = {} MB, \
-             max_texture_dimension_2d = {}",
+             max_texture_dimension_2d = {}, \
+             max_storage_buffers_per_shader_stage = {}",
             limits.max_storage_buffer_binding_size / (1024 * 1024),
             limits.max_buffer_size / (1024 * 1024),
             limits.max_texture_dimension_2d,
+            limits.max_storage_buffers_per_shader_stage,
         );
 
         // Check adapter features for timestamp query support

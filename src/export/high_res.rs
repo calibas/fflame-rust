@@ -267,6 +267,9 @@ impl HighResExporter {
         // 8192 WebGPU floor; raise it so 16K+ exports don't fail
         // texture creation on desktops that natively support 16384+.
         limits.max_texture_dimension_2d = adapter_limits.max_texture_dimension_2d;
+        // Compute bind group has 10 storage buffers post-subflames; spec floor is 8.
+        limits.max_storage_buffers_per_shader_stage =
+            adapter_limits.max_storage_buffers_per_shader_stage;
 
         let (device, queue) = adapter
             .request_device(&DeviceDescriptor {
