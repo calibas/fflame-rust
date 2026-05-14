@@ -22,6 +22,7 @@ mod performance;
 mod random_generator;
 pub mod response;
 mod settings;
+mod subflames;
 mod target_selector;
 mod tone_mapping;
 pub mod track_editor;
