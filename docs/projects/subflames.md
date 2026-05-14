@@ -82,22 +82,26 @@ The current renderer's shape makes this cheaper than expected:
 
 ## Data model
 
-`FractalConfig` gains:
+`Flame` gains:
 
 ```rust
 #[serde(default, skip_serializing_if = "Vec::is_empty")]
 pub subflames: Vec<Flame>,
 ```
 
+(Originally planned for `FractalConfig`, moved to `Flame` during P4
+implementation — the shader-building APIs all take `Flame`, so
+keeping subflames on the parent flame avoids threading a separate
+subflames slice through every call site. The `extract_active_variations`
+method naturally returns the union of parent + subflame variations.)
+
 Each entry is a complete `Flame` — transforms, palette index, color
 mode, render mode, etc. Subflames referenced by index from the
 `subflame_wf` variation's `subflame_id` parameter. An empty `Vec`
 matches today's behavior; old `.fflame` files deserialize unchanged.
 
-Naming chosen for specificity: `subflames` instead of `flames` or
-`layers`. If layered rendering arrives later it goes in a separate
-`layers: Vec<Layer>` field; the two concepts don't compete for the
-same slot.
+Future layered rendering: each layer would carry its own `Flame` with
+its own `subflames`. The two concepts compose cleanly.
 
 ## Variation registration
 

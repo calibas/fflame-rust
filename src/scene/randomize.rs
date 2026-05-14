@@ -200,6 +200,7 @@ pub fn generate_random_flame_with_rng<R: Rng>(settings: &RandomGeneratorSettings
         perspective_strength,
         xaos: None,
         solo_transform: None,
+        subflames: Vec::new(),
     }
 }
 
