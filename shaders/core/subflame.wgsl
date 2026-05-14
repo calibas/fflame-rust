@@ -1,0 +1,166 @@
+// Subflame iteration helper — runs ONE step of a nested chaos game
+// using the subflame's transform pool. Called from the
+// `subflame_wf` variation body.
+//
+// State storage: the (point, current_xform_idx, color) tuple lives
+// in the parent variation's 5 state slots, keyed by the *parent*
+// (xform_id, variation_id) pair. The state mechanism gives each
+// `subflame_wf` instance its own independent chaos-game state, so
+// the same subflame used by two parent transforms gets two
+// independent observers.
+//
+// v1 limitations (documented in `docs/projects/subflames.md`):
+//   - Subflame xforms use a synthetic xform_id (= 128 + offset)
+//     that falls outside the parent's get_param/get_state switch
+//     range. So subflame xforms see variation defaults for any
+//     parameter (julian power → defaults to 2, etc.) and zero state
+//     for stateful variations. This makes parameterless +
+//     stateless variations render correctly (linear, sinusoidal,
+//     spherical, swirl, etc.), and parameterized variations render
+//     with their *default* params rather than the .flame's
+//     specified ones. v2 will allocate real slots for subflame
+//     xforms.
+//   - No xaos in subflames — transforms are picked by raw weight.
+
+{{#if RENDER_3D}}
+fn subflame_iterate(
+    subflame_id: u32,
+    parent_xform_id: u32,
+    parent_variation_id: u32,
+    rng: ptr<function, RngState>,
+) -> vec4<f32> {
+    let sf_meta = subflame_metadata[subflame_id];
+    if (sf_meta.normals_count == 0u) {
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+
+    // Restore (point, color) from state slots. Slot 3 (xform idx) is
+    // written below but doesn't need to be read — each iteration picks
+    // a fresh transform.
+    var current = vec3<f32>(
+        get_state(parent_xform_id, parent_variation_id, 0u),
+        get_state(parent_xform_id, parent_variation_id, 1u),
+        get_state(parent_xform_id, parent_variation_id, 2u),
+    );
+    var color = get_state(parent_xform_id, parent_variation_id, 4u);
+
+    // Pick next transform by weight (v1: no xaos).
+    var total_weight: f32 = 0.0;
+    for (var i: u32 = 0u; i < sf_meta.normals_count; i = i + 1u) {
+        total_weight = total_weight + subflame_transforms[sf_meta.normals_offset + i].weight;
+    }
+    let r = rng_nextf(rng) * max(total_weight, 1e-6);
+    var cumulative: f32 = 0.0;
+    var picked: u32 = 0u;
+    for (var i: u32 = 0u; i < sf_meta.normals_count; i = i + 1u) {
+        cumulative = cumulative + subflame_transforms[sf_meta.normals_offset + i].weight;
+        if (r < cumulative) {
+            picked = i;
+            break;
+        }
+    }
+
+    let xform = subflame_transforms[sf_meta.normals_offset + picked];
+    let sub_xform_id = 128u + sf_meta.normals_offset + picked;
+
+    // Color blend — Apophysis-standard color_speed lerp.
+    let symmetry = xform.color_speed;
+    color = color * (1.0 + symmetry) * 0.5 + xform.color * (1.0 - symmetry) * 0.5;
+    var vc: f32 = color;
+
+    // Apply pre-affine, variations, post-affine.
+    let affine_p = apply_affine(xform, current);
+    current = apply_subflame_variations(xform, sub_xform_id, affine_p, rng, &vc);
+    if (xform.post_enabled > 0.5) {
+        current = apply_post_affine(xform, current);
+    }
+
+    // Apply subflame's final transforms (if any).
+    for (var i: u32 = 0u; i < sf_meta.finals_count; i = i + 1u) {
+        let f_xform = subflame_transforms[sf_meta.finals_offset + i];
+        let f_xform_id = 128u + sf_meta.finals_offset + i;
+        let f_affine_p = apply_affine(f_xform, current);
+        current = apply_subflame_variations(f_xform, f_xform_id, f_affine_p, rng, &vc);
+        if (f_xform.post_enabled > 0.5) {
+            current = apply_post_affine(f_xform, current);
+        }
+    }
+
+    // Write state back for the next iteration.
+    set_state(parent_xform_id, parent_variation_id, 0u, current.x);
+    set_state(parent_xform_id, parent_variation_id, 1u, current.y);
+    set_state(parent_xform_id, parent_variation_id, 2u, current.z);
+    set_state(parent_xform_id, parent_variation_id, 3u, f32(picked));
+    set_state(parent_xform_id, parent_variation_id, 4u, color);
+
+    return vec4<f32>(current.x, current.y, current.z, color);
+}
+{{else}}
+fn subflame_iterate(
+    subflame_id: u32,
+    parent_xform_id: u32,
+    parent_variation_id: u32,
+    rng: ptr<function, RngState>,
+) -> vec4<f32> {
+    let sf_meta = subflame_metadata[subflame_id];
+    if (sf_meta.normals_count == 0u) {
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+
+    // 2D: state slot 2 (Z) is still stored but unused; keep the same
+    // layout as 3D for code symmetry.
+    var current = vec2<f32>(
+        get_state(parent_xform_id, parent_variation_id, 0u),
+        get_state(parent_xform_id, parent_variation_id, 1u),
+    );
+    var color = get_state(parent_xform_id, parent_variation_id, 4u);
+
+    var total_weight: f32 = 0.0;
+    for (var i: u32 = 0u; i < sf_meta.normals_count; i = i + 1u) {
+        total_weight = total_weight + subflame_transforms[sf_meta.normals_offset + i].weight;
+    }
+    let r = rng_nextf(rng) * max(total_weight, 1e-6);
+    var cumulative: f32 = 0.0;
+    var picked: u32 = 0u;
+    for (var i: u32 = 0u; i < sf_meta.normals_count; i = i + 1u) {
+        cumulative = cumulative + subflame_transforms[sf_meta.normals_offset + i].weight;
+        if (r < cumulative) {
+            picked = i;
+            break;
+        }
+    }
+
+    let xform = subflame_transforms[sf_meta.normals_offset + picked];
+    let sub_xform_id = 128u + sf_meta.normals_offset + picked;
+
+    let symmetry = xform.color_speed;
+    color = color * (1.0 + symmetry) * 0.5 + xform.color * (1.0 - symmetry) * 0.5;
+    var vc: f32 = color;
+
+    let affine_p = apply_affine(xform, current);
+    current = apply_subflame_variations(xform, sub_xform_id, affine_p, rng, &vc);
+    if (xform.post_enabled > 0.5) {
+        current = apply_post_affine(xform, current);
+    }
+
+    for (var i: u32 = 0u; i < sf_meta.finals_count; i = i + 1u) {
+        let f_xform = subflame_transforms[sf_meta.finals_offset + i];
+        let f_xform_id = 128u + sf_meta.finals_offset + i;
+        let f_affine_p = apply_affine(f_xform, current);
+        current = apply_subflame_variations(f_xform, f_xform_id, f_affine_p, rng, &vc);
+        if (f_xform.post_enabled > 0.5) {
+            current = apply_post_affine(f_xform, current);
+        }
+    }
+
+    set_state(parent_xform_id, parent_variation_id, 0u, current.x);
+    set_state(parent_xform_id, parent_variation_id, 1u, current.y);
+    set_state(parent_xform_id, parent_variation_id, 2u, 0.0);
+    set_state(parent_xform_id, parent_variation_id, 3u, f32(picked));
+    set_state(parent_xform_id, parent_variation_id, 4u, color);
+
+    // Return (x, y, 0, color) for 2D — the variation body keeps the
+    // shape consistent across 2D/3D.
+    return vec4<f32>(current.x, current.y, 0.0, color);
+}
+{{/if}}

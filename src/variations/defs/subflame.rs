@@ -83,23 +83,77 @@ pub static SUBFLAME_WF: VariationDef = VariationDef {
     state_count: 5,
     wgsl_state_init: None,
     needs_accum: false,
-    // P3 STUB. The 2D and 3D bodies return (0, 0[, 0]) which makes
-    // the variation contribute nothing visible. P4 replaces these
-    // with the real subflame_iterate() call.
+    // P4b: real subflame_wf body. Calls subflame_iterate() to advance
+    // the nested chaos game one step, then applies scale/rotate/offset
+    // and the color_mode rule. Forward-references subflame_iterate
+    // (defined in `shaders/core/subflame.wgsl`, injected after this
+    // variation by the shader builder when subflame_wf is active).
+    //
+    // "Blur" semantics: input `p` is ignored. The variation amount is
+    // also ignored (the apply_variations dispatcher multiplies our
+    // output by amount, but JWildfire's spec is explicit that amount
+    // shouldn't affect output — users scale via the parent xform's
+    // post-affine instead). For perfect parity we'd return early at
+    // amount=0; since the dispatcher gates on amount != 0 before
+    // calling us, that's effectively the case.
     wgsl_2d: r#"
 fn variation_subflame_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec2<f32> {
-    // P4 will fill this in with subflame_iterate(...) + post-rotate
-    // + offset_x/y + color_mode handling. For P3 the variation is
-    // registered but contributes nothing.
-    return vec2<f32>(0.0, 0.0);
+    let subflame_id = u32(get_param(xform_id, variation_id, 0u));
+    let scale = get_param(xform_id, variation_id, 1u);
+    let angle_deg = get_param(xform_id, variation_id, 2u);
+    let offset_x = get_param(xform_id, variation_id, 3u);
+    let offset_y = get_param(xform_id, variation_id, 4u);
+    let color_mode = i32(get_param(xform_id, variation_id, 7u));
+
+    let q = subflame_iterate(subflame_id, xform_id, variation_id, rng);
+
+    let angle_rad = angle_deg * 0.017453292519943295;
+    let cos_a = cos(angle_rad);
+    let sin_a = sin(angle_rad);
+    let sx = scale * q.x;
+    let sy = scale * q.y;
+
+    // color_mode == 0 (Direct) overrides parent's vc with subflame color.
+    // Other modes are listed in the spec but rarely used; v1 treats
+    // them as Off (no-op). Spec ref: jwfsanctuary.club/variation-information/subflame.
+    if (color_mode == 0) {
+        *vc = q.w;
+    }
+
+    return vec2<f32>(
+        sx * cos_a - sy * sin_a + offset_x,
+        sx * sin_a + sy * cos_a + offset_y,
+    );
 }
 "#,
     wgsl_3d: Some(r#"
 fn variation_subflame_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec3<f32> {
-    // P4 will fill this in with subflame_iterate(...) + post-rotate
-    // + offset_x/y/z + colorscale_z + color_mode handling. For P3 the
-    // variation is registered but contributes nothing.
-    return vec3<f32>(0.0, 0.0, 0.0);
+    let subflame_id = u32(get_param(xform_id, variation_id, 0u));
+    let scale = get_param(xform_id, variation_id, 1u);
+    let angle_deg = get_param(xform_id, variation_id, 2u);
+    let offset_x = get_param(xform_id, variation_id, 3u);
+    let offset_y = get_param(xform_id, variation_id, 4u);
+    let offset_z = get_param(xform_id, variation_id, 5u);
+    let colorscale_z = get_param(xform_id, variation_id, 6u);
+    let color_mode = i32(get_param(xform_id, variation_id, 7u));
+
+    let q = subflame_iterate(subflame_id, xform_id, variation_id, rng);
+
+    let angle_rad = angle_deg * 0.017453292519943295;
+    let cos_a = cos(angle_rad);
+    let sin_a = sin(angle_rad);
+    let sx = scale * q.x;
+    let sy = scale * q.y;
+
+    if (color_mode == 0) {
+        *vc = q.w;
+    }
+
+    return vec3<f32>(
+        sx * cos_a - sy * sin_a + offset_x,
+        sx * sin_a + sy * cos_a + offset_y,
+        scale * q.z + offset_z + colorscale_z * q.w,
+    );
 }
 "#),
 };

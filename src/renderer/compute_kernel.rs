@@ -786,6 +786,17 @@ impl FlameRenderer {
         self.buffers.update_transforms(queue, &config.flame);
         self.buffers.update_variation_params(queue, &config.flame);
         self.buffers.update_attachments(queue, &config.flame, config.flame.attachment_cap());
+        // Pack subflames against the same local_map the parent transforms used.
+        // `get_id_mapping()` returns the union map (extract_active_variations
+        // already recurses into subflames), so parent and subflame xforms see
+        // consistent variation indices.
+        if let Err(e) = self.buffers.update_subflames(
+            queue,
+            &config.flame.subflames,
+            &config.flame.get_id_mapping(),
+        ) {
+            log::error!("Failed to update subflames: {}", e);
+        }
         self.init_dirty = true;
 
         // 1b. Update xaos buffer (create/drop as needed)
@@ -929,6 +940,13 @@ impl FlameRenderer {
         self.buffers.update_transforms(queue, flame);
         self.buffers.update_variation_params(queue, flame);
         self.buffers.update_attachments(queue, flame, flame.attachment_cap());
+        if let Err(e) = self.buffers.update_subflames(
+            queue,
+            &flame.subflames,
+            &flame.get_id_mapping(),
+        ) {
+            log::error!("Failed to update subflames: {}", e);
+        }
         self.init_dirty = true;
 
         // Update xaos buffer (create/drop as needed)
