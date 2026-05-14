@@ -87,9 +87,30 @@ pub struct FractalConfig {
     /// Palette texture size: 256-4096, higher values give smoother gradients
     #[serde(default = "default_palette_size")]
     pub palette_size: u32,
-    /// Palette squeeze: 1.0 = no change, >1 = repeat palette N times, <1 = show only N% of palette
+    /// Palette squeeze (linear-mode meaning): 1.0 = no change, >1 = repeat
+    /// palette N times, <1 = show only N% of palette
     #[serde(default = "default_palette_squeeze")]
     pub palette_squeeze: f32,
+    /// Which squeeze algorithm to use: `Linear` (the existing behavior,
+    /// uniform N repeats) or `Geometric` (octave-based packing with the
+    /// ratio held in `palette_squeeze_falloff`).
+    #[serde(default, skip_serializing_if = "is_default_palette_squeeze_mode")]
+    pub palette_squeeze_mode: crate::scene::palette::SqueezeMode,
+    /// Geometric squeeze ratio. Only consulted when `palette_squeeze_mode`
+    /// is `Geometric`. Typical values 0.3–0.7; default 0.5 reproduces the
+    /// "first half, next quarter, next eighth" example.
+    #[serde(default = "default_palette_squeeze_falloff", skip_serializing_if = "is_default_palette_squeeze_falloff")]
+    pub palette_squeeze_falloff: f32,
+    /// Logarithmic (exponential) redistribution of the squeezed lookup.
+    /// 0.0 = identity (no-op). Positive bunches the palette toward
+    /// the end of the input range; negative bunches toward the start.
+    /// Composes with squeeze (applied after).
+    #[serde(default, skip_serializing_if = "is_default_palette_log_strength")]
+    pub palette_log_strength: f32,
+    /// Flip the palette as the last step of the lookup pipeline.
+    /// Composes with rotation/squeeze; does not modify the base palette stops.
+    #[serde(default, skip_serializing_if = "is_default_palette_reverse")]
+    pub palette_reverse: bool,
     #[serde(default)]
     pub background_color: [f32; 3],
 
@@ -105,8 +126,8 @@ pub struct FractalConfig {
     pub exposure: f32,
     #[serde(default = "default_gamma")]
     pub gamma: f32,
-    /// Gamma threshold: smooths gamma curve at low densities (Apophysis compatibility)
-    /// Default 0.0025 prevents harsh darkening in sparse areas
+    /// Gamma threshold: smooths gamma curve at low densities (Apophysis compatibility).
+    /// See `DEFAULT_GAMMA_THRESHOLD` in `defaults.rs` for the current value.
     #[serde(default = "default_gamma_threshold")]
     pub gamma_threshold: f32,
     /// Brightness: logarithmic brightness scaling (Apophysis compatibility)
@@ -181,7 +202,7 @@ fn default_exposure() -> f32 {
 }
 
 fn default_gamma() -> f32 {
-    2.2
+    super::defaults::DEFAULT_GAMMA
 }
 
 fn default_gamma_threshold() -> f32 {
@@ -217,10 +238,12 @@ fn default_dof_focus_distance() -> f32 {
 }
 
 fn default_levels_high() -> f32 {
-    // 1.0 = clip at mean density (sample_density). Levels values are
-    // in "× mean density" units after the scale-invariance change,
-    // independent of total iteration count.
-    1.0
+    // Clip at `× mean density` units after the scale-invariance change,
+    // independent of total iteration count. The 10× default was
+    // recalibrated alongside DEFAULT_EXPOSURE / DEFAULT_GAMMA /
+    // DEFAULT_GAMMA_THRESHOLD to produce a sensible image for flames
+    // that don't override tonemap fields.
+    super::defaults::DEFAULT_LEVELS_HIGH
 }
 
 fn default_levels_gamma() -> f32 {
@@ -237,6 +260,26 @@ fn default_palette_size() -> u32 {
 
 fn default_palette_squeeze() -> f32 {
     super::defaults::DEFAULT_PALETTE_SQUEEZE
+}
+
+fn is_default_palette_reverse(v: &bool) -> bool {
+    !*v
+}
+
+fn default_palette_squeeze_falloff() -> f32 {
+    0.5
+}
+
+fn is_default_palette_squeeze_falloff(v: &f32) -> bool {
+    (*v - 0.5).abs() < FLOAT_EPSILON
+}
+
+fn is_default_palette_squeeze_mode(v: &crate::scene::palette::SqueezeMode) -> bool {
+    matches!(v, crate::scene::palette::SqueezeMode::Linear)
+}
+
+fn is_default_palette_log_strength(v: &f32) -> bool {
+    v.abs() < FLOAT_EPSILON
 }
 
 fn default_palette() -> Palette {
@@ -279,7 +322,7 @@ fn is_default_levels_low(v: &f32) -> bool {
 }
 
 fn is_default_levels_high(v: &f32) -> bool {
-    (*v - 1.0).abs() < FLOAT_EPSILON  // Default is 1.0 (× mean density)
+    (*v - super::defaults::DEFAULT_LEVELS_HIGH).abs() < FLOAT_EPSILON
 }
 
 fn is_default_levels_gamma(v: &f32) -> bool {
@@ -331,6 +374,10 @@ impl Default for FractalConfig {
             palette_rotation: default_palette_rotation(),
             palette_size: default_palette_size(),
             palette_squeeze: default_palette_squeeze(),
+            palette_squeeze_mode: crate::scene::palette::SqueezeMode::Linear,
+            palette_squeeze_falloff: default_palette_squeeze_falloff(),
+            palette_log_strength: 0.0,
+            palette_reverse: false,
             background_color: [0.0, 0.0, 0.0],
             tonemap_mode: ToneMapMode::default(),
             tonemap_curve: ToneCurve::default(),
@@ -415,6 +462,10 @@ impl FractalConfig {
         if config.palette_rotation == defaults.palette_rotation { obj.remove("palette_rotation"); }
         if config.palette_size == defaults.palette_size { obj.remove("palette_size"); }
         if config.palette_squeeze == defaults.palette_squeeze { obj.remove("palette_squeeze"); }
+        if config.palette_squeeze_mode == defaults.palette_squeeze_mode { obj.remove("palette_squeeze_mode"); }
+        if config.palette_squeeze_falloff == defaults.palette_squeeze_falloff { obj.remove("palette_squeeze_falloff"); }
+        if config.palette_log_strength == defaults.palette_log_strength { obj.remove("palette_log_strength"); }
+        if config.palette_reverse == defaults.palette_reverse { obj.remove("palette_reverse"); }
         if config.background_color == defaults.background_color { obj.remove("background_color"); }
 
         // Tone mapping settings

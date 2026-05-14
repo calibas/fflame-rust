@@ -624,7 +624,7 @@ pub struct TonemapParams {
     pub sample_density: f32,  // Iterations per pixel
     pub saturation: f32,  // Color saturation boost (1.0 = no change, >1.0 = more saturated)
     pub hue_shift: f32,  // Hue rotation in degrees (-180.0 to 180.0)
-    pub gamma_threshold: f32,  // Smooths gamma curve at low densities (default 0.0025)
+    pub gamma_threshold: f32,  // Smooths gamma curve at low densities (see DEFAULT_GAMMA_THRESHOLD)
     pub alpha_blend_low: f32,  // Start blending toward linear alpha at this gamma-corrected value
     pub alpha_blend_high: f32,  // Full linear alpha above this value
     pub transparent_mode: u32,  // 0 = normal (blend with background), 1 = transparent export
@@ -676,8 +676,8 @@ impl Default for TonemapParams {
             num_transforms: 3,  // Default 3 transforms
             palette_size: 256,  // Default palette size
             levels_low: 0.0,  // No low clipping by default
-            levels_high: 1.0,  // Clip at mean density (× sample_density)
-            levels_gamma: 1.0,  // Linear (no gamma adjustment)
+            levels_high: crate::config::defaults::DEFAULT_LEVELS_HIGH,
+            levels_gamma: crate::config::defaults::DEFAULT_LEVELS_GAMMA,
         }
     }
 }
@@ -1431,64 +1431,42 @@ impl FlameBuffers {
         queue.write_buffer(&self.variation_params_buffer, 0, bytemuck::cast_slice(&gpu_params));
     }
 
-    /// Update palette texture
-    /// Uses the palette_size set during FlameBuffers creation
+    /// Update palette texture.
     ///
-    /// # Arguments
-    /// * `palette_rotation` - Rotation amount (-1.0 to 1.0), shifts palette indices
-    /// * `palette_squeeze` - Squeeze factor: 1.0 = normal, >1 = repeat palette N times, <1 = show only N% of palette
-    pub fn update_palette(&self, queue: &Queue, palette: &Palette, palette_rotation: f32, palette_squeeze: f32) {
+    /// Uses the palette_size set during FlameBuffers creation. The
+    /// rotation/squeeze pipeline lives in
+    /// `scene::palette::render_palette_lookup` — both this GPU upload
+    /// path and the UI preview call into the same helper so they can't
+    /// drift apart.
+    pub fn update_palette(
+        &self,
+        queue: &Queue,
+        palette: &Palette,
+        palette_rotation: f32,
+        palette_squeeze: f32,
+        palette_squeeze_mode: crate::scene::palette::SqueezeMode,
+        palette_squeeze_falloff: f32,
+        palette_log_strength: f32,
+        palette_reverse: bool,
+    ) {
+        use crate::scene::palette::{render_palette_lookup, PaletteTransform, SqueezeMode};
+
         let size = self.palette_size as usize;
-        let palette_data = palette.generate_texture_data(size);
-
-        // Apply squeeze transformation first
-        // squeeze > 1: palette repeats N times (e.g., 16x means palette repeats 16 times)
-        // squeeze < 1: only shows portion of palette (e.g., 0.1 shows 10% stretched to fill)
-        // Formula: src_t = (dst_t * squeeze) % 1.0
-        let squeezed_data = if palette_squeeze != 1.0 {
-            let mut squeezed = vec![0.0f32; size * 4];
-
-            for i in 0..size {
-                let t = i as f32 / size as f32;
-                let src_t = (t * palette_squeeze).fract(); // fract() handles modulo for floats
-                let src_idx = ((src_t * size as f32) as usize).min(size - 1);
-
-                let dst_base = i * 4;
-                let src_base = src_idx * 4;
-
-                squeezed[dst_base] = palette_data[src_base];
-                squeezed[dst_base + 1] = palette_data[src_base + 1];
-                squeezed[dst_base + 2] = palette_data[src_base + 2];
-                squeezed[dst_base + 3] = palette_data[src_base + 3];
-            }
-            squeezed
-        } else {
-            palette_data
+        // For geometric mode, `squeeze_factor` carries the octave ratio
+        // (`palette_squeeze_falloff`). For linear mode it carries the
+        // existing repeat count (`palette_squeeze`).
+        let squeeze_factor = match palette_squeeze_mode {
+            SqueezeMode::Linear => palette_squeeze,
+            SqueezeMode::Geometric => palette_squeeze_falloff,
         };
-
-        // Apply palette rotation by shifting indices
-        // Rotation range: -1.0 to 1.0 (Apophysis uses -128 to 128, we normalize)
-        // Negative rotation: colors shift left (color at 0 comes from 1, at 1 from 2, ..., at N-1 from 0)
-        // Positive rotation: colors shift right (color at 0 comes from N-1, at 1 from 0, ..., at N-1 from N-2)
-        let rotated_data = if palette_rotation != 0.0 {
-            let rotation_amount = (palette_rotation * size as f32).round() as i32;
-            let mut rotated = vec![0.0f32; size * 4];
-
-            for i in 0..size {
-                // Calculate source index with wrapping
-                let src_idx = ((i as i32 + rotation_amount).rem_euclid(size as i32)) as usize;
-                let dst_idx = i * 4;
-                let src_base = src_idx * 4;
-
-                rotated[dst_idx] = squeezed_data[src_base];
-                rotated[dst_idx + 1] = squeezed_data[src_base + 1];
-                rotated[dst_idx + 2] = squeezed_data[src_base + 2];
-                rotated[dst_idx + 3] = squeezed_data[src_base + 3];
-            }
-            rotated
-        } else {
-            squeezed_data
+        let transform = PaletteTransform {
+            squeeze_mode: palette_squeeze_mode,
+            squeeze_factor,
+            log_strength: palette_log_strength,
+            rotation: palette_rotation,
+            reverse: palette_reverse,
         };
+        let rotated_data = render_palette_lookup(palette, &transform, size);
 
         // Convert f32 [0.0, 1.0] to u8 [0, 255] for Rgba8Unorm
         let palette_data_u8: Vec<u8> = rotated_data

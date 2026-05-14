@@ -1151,7 +1151,7 @@ impl App {
                     self.effect_chain.resize(&self.gpu.device, viewport_size.0, viewport_size.1);
 
                     // Restore palette and color mode after buffer recreation
-                    renderer.update_palette(&self.gpu.device, &self.gpu.queue, &resize_config.palette, resize_config.palette_rotation, resize_config.palette_squeeze);
+                    renderer.update_palette(&self.gpu.device, &self.gpu.queue, &resize_config.palette, resize_config.palette_rotation, resize_config.palette_squeeze, resize_config.palette_squeeze_mode, resize_config.palette_squeeze_falloff, resize_config.palette_log_strength, resize_config.palette_reverse);
                     renderer.set_color_mode(&self.gpu.queue, resize_config.color_mode, self.config_manager.system_settings().iterations_per_thread, self.config_manager.system_settings().burn_in,
                         resize_config.zoom, resize_config.pan_x, resize_config.pan_y, resize_config.rotation,
                         resize_config.camera_rotation_x, resize_config.camera_rotation_y, resize_config.camera_z, resize_config.speed_factor);

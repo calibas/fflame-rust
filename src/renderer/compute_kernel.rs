@@ -822,7 +822,16 @@ impl FlameRenderer {
         }
 
         // 5b. Update palette with rotation and squeeze
-        self.buffers.update_palette(queue, palette, config.palette_rotation, config.palette_squeeze);
+        self.buffers.update_palette(
+            queue,
+            palette,
+            config.palette_rotation,
+            config.palette_squeeze,
+            config.palette_squeeze_mode,
+            config.palette_squeeze_falloff,
+            config.palette_log_strength,
+            config.palette_reverse,
+        );
 
         // Note: scale_buffer removed - scale is now in params.histogram_color_scale
 
@@ -884,10 +893,18 @@ impl FlameRenderer {
             config.levels_low, config.levels_high, config.levels_gamma);
         self.update_curve_lut(queue, &config.tonemap_curve);
 
-        // 9. Clear accumulation buffers
+        // 9. Clear accumulation buffers + reset ALL iteration counters
+        // (not just samples_accumulated + total_iterations). Leaving
+        // samples_in_buffer at its pre-clear value desyncs the next
+        // frame's `refresh_sample_density()` from the (now-empty)
+        // accumulator: it writes `stale_value / area` into the
+        // tonemap uniform, the shader's `apply_levels` divides by
+        // that inflated mean, and the image renders ~N× dimmer than
+        // it should until samples_in_buffer naturally catches up
+        // over the next many frames. Most visible after undo/redo
+        // restores a config that load_config processes.
         self.buffers.clear_all(encoder, queue);
-        self.samples_accumulated = 0;
-        self.total_iterations = 0;
+        self.reset_iteration_counter();
     }
 
     /// Update the flame being rendered
@@ -1014,7 +1031,7 @@ impl FlameRenderer {
             num_transforms: self.num_transforms,
             palette_size: self.buffers.palette_size(),
             levels_low: 0.0,
-            levels_high: 1.0,  // × mean density (sample_density)
+            levels_high: crate::config::defaults::DEFAULT_LEVELS_HIGH,
             levels_gamma: 1.0,
         };
         self.buffers.update_tonemap_params(queue, &params);
@@ -1221,7 +1238,7 @@ impl FlameRenderer {
             num_transforms: self.num_transforms,
             palette_size: self.buffers.palette_size(),
             levels_low: 0.0,
-            levels_high: 1.0,  // × mean density (sample_density)
+            levels_high: crate::config::defaults::DEFAULT_LEVELS_HIGH,
             levels_gamma: 1.0,
         };
         self.buffers.update_tonemap_params(queue, &params);
@@ -1304,7 +1321,7 @@ impl FlameRenderer {
             num_transforms: self.num_transforms,
             palette_size: self.buffers.palette_size(),
             levels_low: 0.0,
-            levels_high: 1.0,  // × mean density (sample_density)
+            levels_high: crate::config::defaults::DEFAULT_LEVELS_HIGH,
             levels_gamma: 1.0,
         };
         self.buffers.update_tonemap_params(queue, &params);
@@ -1409,8 +1426,28 @@ impl FlameRenderer {
     }
 
     /// Update palette texture
-    pub fn update_palette(&mut self, device: &Device, queue: &Queue, palette: &Palette, palette_rotation: f32, palette_squeeze: f32) {
-        self.buffers.update_palette(queue, palette, palette_rotation, palette_squeeze);
+    pub fn update_palette(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        palette: &Palette,
+        palette_rotation: f32,
+        palette_squeeze: f32,
+        palette_squeeze_mode: crate::scene::palette::SqueezeMode,
+        palette_squeeze_falloff: f32,
+        palette_log_strength: f32,
+        palette_reverse: bool,
+    ) {
+        self.buffers.update_palette(
+            queue,
+            palette,
+            palette_rotation,
+            palette_squeeze,
+            palette_squeeze_mode,
+            palette_squeeze_falloff,
+            palette_log_strength,
+            palette_reverse,
+        );
         // Recreate compute bind group to ensure palette texture is bound
         self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
         self.init_bind_group = self.pipelines.create_init_bind_group(device, &self.buffers);
