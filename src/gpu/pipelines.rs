@@ -148,6 +148,34 @@ impl FlamePipelines {
                     },
                     count: None,
                 },
+                // Subflame transform pool (subflame_wf nested IFS).
+                // Concatenated GpuTransform array spanning all subflames'
+                // normals + finals; indexed via subflame_metadata.
+                BindGroupLayoutEntry {
+                    binding: 11,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Subflame metadata: array<SubflameMeta> with per-subflame
+                // (normals_offset/count, finals_offset/count, render_mode).
+                // Indexed by `subflame_id` (variation param). Storage rather
+                // than uniform so the WGSL array is runtime-sized — same
+                // access pattern as the other bindings in this layout.
+                BindGroupLayoutEntry {
+                    binding: 12,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -508,6 +536,16 @@ impl FlamePipelines {
                 BindGroupEntry {
                     binding: 10,
                     resource: buffers.attachments_buffer.as_entire_binding(),
+                },
+                // Subflame transform pool (subflame_wf nested IFS).
+                BindGroupEntry {
+                    binding: 11,
+                    resource: buffers.subflame_transforms_buffer.as_entire_binding(),
+                },
+                // Subflame metadata uniform.
+                BindGroupEntry {
+                    binding: 12,
+                    resource: buffers.subflame_metadata_buffer.as_entire_binding(),
                 },
             ],
         })

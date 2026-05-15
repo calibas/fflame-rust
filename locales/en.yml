@@ -141,6 +141,7 @@ panels:
   xaos_editor: "Xaos Editor"
   signal: "Signals"
   variations: "Variations"
+  subflames: "Subflames"
 
 variations_panel:
   total: "%{count} total"

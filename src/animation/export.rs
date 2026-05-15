@@ -1092,6 +1092,9 @@ pub async fn export_animation(
     let adapter_limits = adapter.limits();
     let mut limits = egui_wgpu::wgpu::Limits::default();
     limits.max_storage_buffer_binding_size = adapter_limits.max_storage_buffer_binding_size;
+    // Compute bind group has 10 storage buffers post-subflames; spec floor is 8.
+    limits.max_storage_buffers_per_shader_stage =
+        adapter_limits.max_storage_buffers_per_shader_stage;
 
     let (device, queue) = adapter
         .request_device(
@@ -1549,6 +1552,9 @@ pub async fn export_animation_fast(
     let adapter_limits = adapter.limits();
     let mut limits = wgpu::Limits::default();
     limits.max_storage_buffer_binding_size = adapter_limits.max_storage_buffer_binding_size;
+    // Compute bind group has 10 storage buffers post-subflames; spec floor is 8.
+    limits.max_storage_buffers_per_shader_stage =
+        adapter_limits.max_storage_buffers_per_shader_stage;
 
     let (device, queue) = adapter
         .request_device(&wgpu::DeviceDescriptor {

@@ -27,6 +27,29 @@ use crate::scene::palette::Palette;
 /// See `docs/projects/per-transform-linked-and-final.md`.
 pub const MAX_TRANSFORMS: usize = 128;
 
+/// Maximum number of subflames in a single FractalConfig.
+///
+/// Each subflame is a complete `Flame` definition referenced by index
+/// from a `subflame_wf` variation's `subflame_id` parameter. The cap
+/// is intentionally small for v1 (most real-world flames use 1–2
+/// subflames; the JWildfire ecosystem rarely exceeds 4). Bumping this
+/// later costs proportional GPU memory in the subflame transform
+/// buffer + metadata uniform.
+pub const MAX_SUBFLAMES: usize = 8;
+
+/// Maximum combined transform count across all subflames in one config.
+///
+/// Subflame transforms are stored back-to-back in a single GPU buffer
+/// (binding 11 once Phase 4 wires it). This cap bounds that buffer's
+/// size: `MAX_SUBFLAME_TRANSFORMS_TOTAL × sizeof(GpuTransform)` ≈
+/// 139 KB at 256 × 544 B/transform. Validation at config load fails
+/// if a config's subflames collectively exceed it.
+///
+/// A single subflame can have up to `MAX_TRANSFORMS` (128) transforms
+/// in principle, but in practice subflames are small (3–10 transforms);
+/// this cap is set so 8 typical subflames fit comfortably.
+pub const MAX_SUBFLAME_TRANSFORMS_TOTAL: usize = 256;
+
 /// Maximum number of attachments (linked + final) per normal transform.
 /// Per-normal chain length cap — independent of the total transform
 /// budget. Sized to keep `GpuAttachmentList` small (264 bytes per entry
@@ -72,6 +95,45 @@ pub struct GpuTransform {
 // Manual implementation for bytemuck (arrays of size 50 not auto-derived)
 unsafe impl bytemuck::Pod for GpuTransform {}
 unsafe impl bytemuck::Zeroable for GpuTransform {}
+
+/// GPU representation of a single subflame's transform-pool offsets.
+///
+/// One `SubflameMeta` per subflame, indexed by `subflame_id` (the
+/// variation parameter). The fields describe where this subflame's
+/// transforms live inside the concatenated `subflame_transforms`
+/// storage buffer. The shader's `subflame_iterate(id, ...)` helper
+/// reads from `subflame_transforms[normals_offset .. normals_offset
+/// + normals_count]` for the chaos-game step + `final_offset`/`final_count`
+/// for the optional final-xform chain.
+///
+/// Linked transforms (the "attachment" mechanism the parent flame
+/// uses) are intentionally **not** part of subflames in v1 — the
+/// JWildfire reference port doesn't use them, and they'd add another
+/// shader-codegen path for a feature that nobody serializes today.
+/// Future v2 can add linked support by extending this struct.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct SubflameMeta {
+    /// Index into `subflame_transforms` where this subflame's normal
+    /// (regular, non-final) transforms begin.
+    pub normals_offset: u32,
+    /// Number of normal transforms for this subflame.
+    pub normals_count: u32,
+    /// Index into `subflame_transforms` where this subflame's final
+    /// transforms begin. `final_count = 0` means the subflame has no
+    /// final-xform chain.
+    pub finals_offset: u32,
+    /// Number of final transforms for this subflame.
+    pub finals_count: u32,
+    /// Subflame's render mode: 0 = TwoD, 1 = ThreeD (Z is meaningful).
+    pub render_mode: u32,
+    pub _pad0: u32,
+    pub _pad1: u32,
+    pub _pad2: u32,
+}
+
+unsafe impl bytemuck::Pod for SubflameMeta {}
+unsafe impl bytemuck::Zeroable for SubflameMeta {}
 
 impl GpuTransform {
     /// Create from Transform using a per-flame local index map.
@@ -718,6 +780,23 @@ pub struct FlameBuffers {
     /// stride; smaller per-flame caps just write fewer bytes per slot.
     /// See `docs/projects/per-transform-linked-and-final.md`.
     pub attachments_buffer: Buffer,
+
+    /// Concatenated `GpuTransform` array holding every subflame's
+    /// normal + final transforms, packed back-to-back. Indexed via
+    /// the per-subflame offsets in `subflame_metadata_buffer`. Allocated
+    /// at worst-case size (`MAX_SUBFLAME_TRANSFORMS_TOTAL`) so the
+    /// buffer never needs reallocation when subflames change.
+    ///
+    /// Phase 4 wires this into the shader bind group at binding 11 and
+    /// the `subflame_iterate()` helper reads from it. v1 leaves it
+    /// zero-allocated when `subflames` is empty.
+    pub subflame_transforms_buffer: Buffer,
+
+    /// `array<SubflameMeta, MAX_SUBFLAMES>` uniform with per-subflame
+    /// transform-pool offsets + counts. Indexed by `subflame_id` (the
+    /// variation parameter). Unused slots remain zero.
+    pub subflame_metadata_buffer: Buffer,
+
     pub params_buffer: Buffer,
     pub tonemap_params_buffer: Buffer,
     pub accumulate_params_buffer: Buffer,
@@ -1145,10 +1224,37 @@ impl FlameBuffers {
             ..Default::default()
         });
 
+        // Subflame transform pool: concatenated GpuTransform array
+        // covering every subflame's normal + final transforms. Sized
+        // for worst case (`MAX_SUBFLAME_TRANSFORMS_TOTAL`) so we don't
+        // have to reallocate when subflames change. Initial contents
+        // are zero (no subflames in a freshly-created FlameBuffers);
+        // `update_subflames` later in this branch will write real data.
+        let subflame_transforms_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Subflame Transforms Buffer"),
+            size: (MAX_SUBFLAME_TRANSFORMS_TOTAL * std::mem::size_of::<GpuTransform>()) as u64,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Subflame metadata: `array<SubflameMeta>` storage buffer with
+        // per-subflame offsets + counts. Indexed by `subflame_id` (the
+        // variation parameter). All-zero by default. Storage rather
+        // than uniform so the WGSL array is runtime-sized — same
+        // access pattern as the other bindings in this layout.
+        let subflame_metadata_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Subflame Metadata Buffer"),
+            size: (MAX_SUBFLAMES * std::mem::size_of::<SubflameMeta>()) as u64,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         let buffers = Self {
             transform_buffer,
             variation_params_buffer,
             attachments_buffer,
+            subflame_transforms_buffer,
+            subflame_metadata_buffer,
             params_buffer,
             tonemap_params_buffer,
             accumulate_params_buffer,
@@ -1368,6 +1474,92 @@ impl FlameBuffers {
         }
 
         queue.write_buffer(&self.transform_buffer, 0, bytemuck::cast_slice(&gpu_transforms));
+    }
+
+    /// Pack a config's subflames into the GPU buffers (binding 11 + the
+    /// metadata uniform).
+    ///
+    /// The packing concatenates each subflame's normal transforms
+    /// followed by its final transforms back-to-back, and records
+    /// per-subflame offsets/counts in the metadata array. Each
+    /// transform is packed against the same `local_map` the parent
+    /// flame uses, so the shader's variation indices are valid for
+    /// both parent and subflame transforms. Phase 4's shader-builder
+    /// computes the union local-map across parent + subflames.
+    ///
+    /// `local_map`: variation name → shader-local index (same mapping
+    /// the parent's transforms were packed against — passing a
+    /// mismatched map silently desyncs subflame variation IDs).
+    ///
+    /// Validation: returns `Err(...)` if the total transform count
+    /// exceeds `MAX_SUBFLAME_TRANSFORMS_TOTAL` or the subflame count
+    /// exceeds `MAX_SUBFLAMES`. The caller is expected to surface this
+    /// as a user-visible config error rather than panic.
+    pub fn update_subflames(
+        &self,
+        queue: &Queue,
+        subflames: &[Flame],
+        local_map: &std::collections::HashMap<String, u32>,
+    ) -> Result<(), String> {
+        if subflames.len() > MAX_SUBFLAMES {
+            return Err(format!(
+                "Config has {} subflames but MAX_SUBFLAMES is {}",
+                subflames.len(),
+                MAX_SUBFLAMES,
+            ));
+        }
+
+        // Pack every subflame's (normals, finals) back-to-back into one
+        // big GpuTransform vec; record per-subflame offsets as we go.
+        let mut gpu_transforms: Vec<GpuTransform> = Vec::new();
+        let mut metas: [SubflameMeta; MAX_SUBFLAMES] = Default::default();
+
+        for (sf_idx, sf) in subflames.iter().enumerate() {
+            let normals_offset = gpu_transforms.len() as u32;
+            for xform in &sf.transforms {
+                gpu_transforms.push(GpuTransform::from_transform(xform, local_map));
+            }
+            let normals_count = gpu_transforms.len() as u32 - normals_offset;
+
+            let finals_offset = gpu_transforms.len() as u32;
+            for xform in &sf.final_transforms {
+                gpu_transforms.push(GpuTransform::from_transform(xform, local_map));
+            }
+            let finals_count = gpu_transforms.len() as u32 - finals_offset;
+
+            metas[sf_idx] = SubflameMeta {
+                normals_offset,
+                normals_count,
+                finals_offset,
+                finals_count,
+                render_mode: match sf.render_mode {
+                    crate::scene::transforms::RenderMode::TwoD => 0,
+                    crate::scene::transforms::RenderMode::ThreeD => 1,
+                },
+                _pad0: 0,
+                _pad1: 0,
+                _pad2: 0,
+            };
+        }
+
+        if gpu_transforms.len() > MAX_SUBFLAME_TRANSFORMS_TOTAL {
+            return Err(format!(
+                "Subflames have {} total transforms but MAX_SUBFLAME_TRANSFORMS_TOTAL is {}",
+                gpu_transforms.len(),
+                MAX_SUBFLAME_TRANSFORMS_TOTAL,
+            ));
+        }
+
+        // Pad to capacity so stale GPU memory from a previous (larger)
+        // subflame set doesn't bleed into the current render.
+        while gpu_transforms.len() < MAX_SUBFLAME_TRANSFORMS_TOTAL {
+            gpu_transforms.push(bytemuck::Zeroable::zeroed());
+        }
+
+        queue.write_buffer(&self.subflame_transforms_buffer, 0, bytemuck::cast_slice(&gpu_transforms));
+        queue.write_buffer(&self.subflame_metadata_buffer, 0, bytemuck::cast_slice(&metas));
+
+        Ok(())
     }
 
     /// Update the per-normal-transform attachment list buffer using

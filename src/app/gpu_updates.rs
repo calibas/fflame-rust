@@ -44,6 +44,12 @@ impl App {
 
                 // Update flame if UpdateAction indicates (includes preview mode live updates)
                 if actions.update_flame {
+                    // Sync App's working flame copy from ConfigManager before
+                    // we hand it to the renderer. Without this, swapping the
+                    // editing_target (Phase 6) wouldn't take effect: the
+                    // renderer would keep rendering the previously-synced
+                    // flame even though ConfigManager points elsewhere.
+                    self.flame = update_config.flame.clone();
                     renderer.update_flame(
                         &self.gpu.device,
                         &self.gpu.queue,

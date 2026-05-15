@@ -58,6 +58,10 @@ pub async fn export_headless_wasm(
     let adapter_limits = adapter.limits();
     let mut limits = egui_wgpu::wgpu::Limits::downlevel_webgl2_defaults();
     limits.max_storage_buffer_binding_size = adapter_limits.max_storage_buffer_binding_size;
+    // Compute bind group needs 10 storage buffers per stage
+    // (subflame_transforms + subflame_metadata pushed the count to 10).
+    limits.max_storage_buffers_per_shader_stage =
+        adapter_limits.max_storage_buffers_per_shader_stage;
 
     let (device, queue) = adapter
         .request_device(&egui_wgpu::wgpu::DeviceDescriptor {
@@ -225,6 +229,10 @@ async fn export_headless_gpu(
     limits.max_storage_buffer_binding_size = adapter_limits.max_storage_buffer_binding_size;
     limits.max_buffer_size = adapter_limits.max_buffer_size;
     limits.max_texture_dimension_2d = adapter_limits.max_texture_dimension_2d;
+    // Compute bind group needs 10 storage buffers (see gpu/device.rs
+    // for the running count); WebGPU spec floor is 8.
+    limits.max_storage_buffers_per_shader_stage =
+        adapter_limits.max_storage_buffers_per_shader_stage;
 
     let (device, queue) = adapter
         .request_device(&egui_wgpu::wgpu::DeviceDescriptor {

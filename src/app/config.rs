@@ -74,8 +74,13 @@ impl App {
     }
 
     pub fn export_config(&self) -> FractalConfig {
-        // ConfigManager is the single source of truth - just return its config
-        self.config_manager.active_config().clone()
+        // Use the *logical* config (un-swap any active subflame edit) so
+        // what we serialize matches the user's mental model. When editing
+        // the main flame, this is just active_config().clone(); when
+        // editing a subflame, it puts the active subflame back at its
+        // original index so saved JSON has the parent as `flame` and the
+        // subflames as `flame.subflames`.
+        self.config_manager.logical_config()
     }
 
     /// Import configuration from FractalConfig
