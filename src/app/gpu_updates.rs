@@ -44,16 +44,37 @@ impl App {
 
                 // Update flame if UpdateAction indicates (includes preview mode live updates)
                 if actions.update_flame {
-                    // Sync App's working flame copy from ConfigManager before
-                    // we hand it to the renderer. Without this, swapping the
-                    // editing_target (Phase 6) wouldn't take effect: the
-                    // renderer would keep rendering the previously-synced
-                    // flame even though ConfigManager points elsewhere.
+                    // App.flame is always the main flame (since the
+                    // un-swap refactor) — Triangle Editor / Transforms
+                    // panels read it for the parent's transforms,
+                    // and ConfigManager routes edits to subflames via
+                    // editing_target.
                     self.flame = update_config.flame.clone();
+
+                    // Decide what the *renderer* sees. Default: the
+                    // main flame, so the user watches the parent's
+                    // chaos game pick up live subflame edits via the
+                    // subflames buffer + subflame_wf. When the
+                    // user has ticked "View subflame in isolation"
+                    // and is editing a subflame, hand the renderer
+                    // that subflame standalone (its IFS on its own).
+                    use crate::config::manager::EditingTarget;
+                    let render_source: &crate::scene::transforms::Flame = match self
+                        .config_manager
+                        .editing_target()
+                    {
+                        EditingTarget::Subflame { index }
+                            if self.view_subflame_in_isolation
+                                && index < self.flame.subflames.len() =>
+                        {
+                            &self.flame.subflames[index]
+                        }
+                        _ => &self.flame,
+                    };
                     renderer.update_flame(
                         &self.gpu.device,
                         &self.gpu.queue,
-                        &self.flame,
+                        render_source,
                         self.config_manager.system_settings().iterations_per_thread,
                         self.config_manager.system_settings().burn_in,
                         update_config.zoom,

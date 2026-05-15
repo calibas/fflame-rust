@@ -652,6 +652,7 @@ impl EguiLayer {
         preset_library: &crate::scene::presets::PresetLibrary,
         animation_controller: &mut crate::animation::AnimationController,
         paused: &mut bool,
+        view_subflame_in_isolation: &mut bool,
         quit_requested: &mut bool,
         can_undo: bool,
         can_redo: bool,
@@ -985,6 +986,7 @@ impl EguiLayer {
 
                         // UI state
                         paused,
+                        view_subflame_in_isolation,
                         png_export_with_background: &mut png_export_with_background,
                         png_export_transparent: &mut png_export_transparent,
                         export_width,
