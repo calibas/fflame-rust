@@ -91,29 +91,24 @@ use std::time::Duration;
 
 /// Which flame the editor is currently focused on.
 ///
-/// `Main` is the FractalConfig's main flame (the default). `Subflame(i)`
-/// indicates the user is editing `config.flame.subflames[i]` — but the
-/// implementation physically swaps that subflame into `config.flame` so
-/// every existing read site (renderer, UI panels) operates on the
-/// active flame transparently. The original main is stashed in
-/// `stashed_main` until the user swaps back.
+/// `Main` is the FractalConfig's main flame (the default). `Subflame { index }`
+/// indicates the user is editing `current.flame.subflames[index]`. The
+/// data is **not** physically moved — `current.flame` is always the
+/// main flame. Apply/get machinery routes through `target_flame` /
+/// `target_flame_mut` to pick the right `Flame` based on this enum,
+/// and UI panels likewise dereference the right slice based on the
+/// active target.
+///
+/// History entries carry their target (`ConfigChange::target`), so
+/// undo/redo applies the inverse delta to the flame it was authored
+/// against, even if the user has since switched contexts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EditingTarget {
     Main,
-    /// The user is editing what was originally `config.flame.subflames[index]`.
-    /// While in this state, `config.flame` IS that subflame's data; the
-    /// original main flame lives in `ConfigManager::stashed_main`.
+    /// The user is editing `current.flame.subflames[index]`. The
+    /// subflames list is untouched; only this field changes when the
+    /// user picks a subflame in the Subflames panel.
     Subflame { index: usize },
-}
-
-/// Saved state of the main flame while the user is editing a subflame.
-///
-/// Holds the main flame plus the index that the currently-active
-/// subflame was pulled from, so swapping back restores both into the
-/// right slot.
-struct StashedMain {
-    flame: Flame,
-    subflame_index: usize,
 }
 
 /// Maximum duration for coalescing - total span from first to last change
@@ -267,16 +262,10 @@ pub struct ConfigManager {
     animation_mode: bool,
 
     /// Which flame is currently being edited. See `EditingTarget`.
-    /// Invariant: when this is `Subflame { index }`, `stashed_main` is
-    /// `Some` and `current.flame` holds the subflame's data; the user-
-    /// visible "subflames list" is therefore stashed_main.flame.subflames
-    /// (with the index slot temporarily removed). When this is `Main`,
-    /// `stashed_main` is `None` and `current.flame` is the real main.
+    /// Data is never physically moved — this is purely a routing hint
+    /// for the apply/get machinery (`target_flame[_mut]`) and the UI
+    /// panels.
     editing_target: EditingTarget,
-
-    /// Stashed main flame, present iff `editing_target` is `Subflame(_)`.
-    /// See `EditingTarget` doc for the swap invariant.
-    stashed_main: Option<StashedMain>,
 }
 
 /// Session state for transform modification (triangle editor, etc.).
@@ -304,7 +293,6 @@ impl ConfigManager {
             modify_session: None,
             animation_mode: false,
             editing_target: EditingTarget::Main,
-            stashed_main: None,
         }
     }
 
@@ -320,32 +308,80 @@ impl ConfigManager {
         matches!(self.editing_target, EditingTarget::Subflame { .. })
     }
 
-    /// The user-visible subflames list — independent of swap state.
-    /// When editing the main flame, this is `current.flame.subflames`.
-    /// When editing a subflame, this is `stashed_main.flame.subflames`
-    /// (with the index of the active subflame logically "missing").
+    /// The user-visible subflames list. There's no swap anymore — this
+    /// is always `current.flame.subflames`. (Kept as a method so the
+    /// existing Subflames panel doesn't need a touchup.)
     pub fn visible_subflames(&self) -> &[Flame] {
-        match self.editing_target {
-            EditingTarget::Main => &self.current.flame.subflames,
-            EditingTarget::Subflame { .. } => {
-                &self.stashed_main
-                    .as_ref()
-                    .expect("stashed_main must exist when editing a subflame")
-                    .flame
-                    .subflames
-            }
+        &self.current.flame.subflames
+    }
+
+    /// Total number of subflames as seen by the user. Equivalent to
+    /// `visible_subflames().len()`; kept as a method for the same
+    /// reason as `visible_subflames`.
+    pub fn logical_subflame_count(&self) -> usize {
+        self.current.flame.subflames.len()
+    }
+
+    /// Resolve an `EditingTarget` to the `Flame` it refers to. `Main`
+    /// returns the main flame; `Subflame { index }` returns the
+    /// nested subflame at that index. Used by the apply/get machinery
+    /// to route writes/reads to the right slot without physically
+    /// swapping data.
+    fn target_flame(&self, target: EditingTarget) -> Option<&Flame> {
+        match target {
+            EditingTarget::Main => Some(&self.current.flame),
+            EditingTarget::Subflame { index } => self.current.flame.subflames.get(index),
         }
     }
 
-    /// The total number of subflames as seen by the user, including the
-    /// currently-edited one. While editing subflame N, `visible_subflames()`
-    /// has the active slot removed, so the logical count is `len + 1` in
-    /// that case.
-    pub fn logical_subflame_count(&self) -> usize {
-        match self.editing_target {
-            EditingTarget::Main => self.current.flame.subflames.len(),
-            EditingTarget::Subflame { .. } => self.visible_subflames().len() + 1,
+    /// Mutable counterpart to `target_flame`.
+    fn target_flame_mut(&mut self, target: EditingTarget) -> Option<&mut Flame> {
+        match target {
+            EditingTarget::Main => Some(&mut self.current.flame),
+            EditingTarget::Subflame { index } => self.current.flame.subflames.get_mut(index),
         }
+    }
+
+    /// Resolve a target on an arbitrary FractalConfig. Used by
+    /// snapshot apply paths that operate on a passed-in config rather
+    /// than `self.current`.
+    fn target_flame_in(config: &FractalConfig, target: EditingTarget) -> Option<&Flame> {
+        match target {
+            EditingTarget::Main => Some(&config.flame),
+            EditingTarget::Subflame { index } => config.flame.subflames.get(index),
+        }
+    }
+
+    /// Get a mutable Normal-pool transform on the active editing
+    /// target. Returns InvalidIndex if the target flame is missing
+    /// (subflame index out of range) or the transform index is out of
+    /// range. Used by `set_value` to keep the per-variant call site
+    /// short.
+    fn normal_transform_mut(&mut self, index: usize) -> Result<&mut crate::scene::transforms::Transform, ConfigError> {
+        let target = self.editing_target;
+        let flame = self.target_flame_mut(target).ok_or(ConfigError::InvalidIndex)?;
+        flame.transforms.get_mut(index).ok_or(ConfigError::InvalidIndex)
+    }
+
+    fn linked_transform_mut(&mut self, index: usize) -> Result<&mut crate::scene::transforms::Transform, ConfigError> {
+        let target = self.editing_target;
+        let flame = self.target_flame_mut(target).ok_or(ConfigError::InvalidIndex)?;
+        flame.linked_transforms.get_mut(index).ok_or(ConfigError::InvalidIndex)
+    }
+
+    fn final_transform_mut(&mut self, index: usize) -> Result<&mut crate::scene::transforms::Transform, ConfigError> {
+        let target = self.editing_target;
+        let flame = self.target_flame_mut(target).ok_or(ConfigError::InvalidIndex)?;
+        flame.final_transforms.get_mut(index).ok_or(ConfigError::InvalidIndex)
+    }
+
+    /// Get a mutable reference to the flame the editor is currently
+    /// focused on. Returns InvalidIndex if Subflame{i} but i is out of
+    /// range. Used by `set_value` for flame-metadata variants
+    /// (RenderMode, Xaos, etc.) that aren't per-transform.
+    fn active_flame_mut(&mut self) -> Result<&mut Flame, ConfigError> {
+        let target = self.editing_target;
+        self.target_flame_mut(target).ok_or(ConfigError::InvalidIndex)
     }
 
     /// Switch to editing the given target and push a SwapTarget undo
@@ -367,27 +403,21 @@ impl ConfigManager {
     }
 
     /// Switch editing target without pushing an undo entry. Used by
-    /// undo/redo apply paths (which already have an entry) and by
-    /// `delete_subflame` (which packages the swap into a single
-    /// DeleteSubflame entry, not a separate SwapTarget).
+    /// undo/redo apply paths (which already have an entry).
+    /// No data is moved — just updates the routing field and signals
+    /// the renderer to re-upload + reset accumulation.
     fn set_editing_target_silent(&mut self, target: EditingTarget) -> Result<(), ConfigError> {
         if self.editing_target == target {
             return Ok(());
         }
         if let EditingTarget::Subflame { index } = target {
-            if index >= self.logical_subflame_count() {
+            if index >= self.current.flame.subflames.len() {
                 return Err(ConfigError::InvalidPath(format!(
                     "subflame {} out of bounds", index
                 )));
             }
         }
-
-        if let EditingTarget::Subflame { .. } = self.editing_target {
-            self.swap_back_to_main_internal();
-        }
-        if let EditingTarget::Subflame { index } = target {
-            self.swap_to_subflame_internal(index);
-        }
+        self.editing_target = target;
 
         let mut action = UpdateAction::none();
         action.update_flame = true;
@@ -397,42 +427,11 @@ impl ConfigManager {
         Ok(())
     }
 
-    /// Swap the main flame's subflame at `index` into `current.flame`,
-    /// stashing the main. Caller guarantees we're currently in Main mode.
-    fn swap_to_subflame_internal(&mut self, index: usize) {
-        debug_assert!(matches!(self.editing_target, EditingTarget::Main));
-        debug_assert!(self.stashed_main.is_none());
-        // Pop subflame i out; the main's subflames list loses that entry
-        // for the duration of the edit (it gets reinserted on swap-back).
-        let subflame = self.current.flame.subflames.remove(index);
-        let original_main = std::mem::replace(&mut self.current.flame, subflame);
-        self.stashed_main = Some(StashedMain {
-            flame: original_main,
-            subflame_index: index,
-        });
-        self.editing_target = EditingTarget::Subflame { index };
-    }
-
-    /// Inverse of `swap_to_subflame_internal`: restore the main flame and
-    /// reinsert the edited subflame at its original index. Caller
-    /// guarantees we're currently in a Subflame state.
-    fn swap_back_to_main_internal(&mut self) {
-        debug_assert!(matches!(self.editing_target, EditingTarget::Subflame { .. }));
-        let stashed = self.stashed_main.take().expect("stashed_main must be Some when editing subflame");
-        let edited_subflame = std::mem::replace(&mut self.current.flame, stashed.flame);
-        self.current.flame.subflames.insert(stashed.subflame_index, edited_subflame);
-        self.editing_target = EditingTarget::Main;
-    }
-
-    /// Add a new empty subflame and return its index. Only allowed when
-    /// editing the main flame (the UI disables Add when editing a
-    /// subflame to keep the index space stable).
+    /// Add a new empty subflame and return its index. Always lands at
+    /// the end of the subflames list. Unlike the previous swap-based
+    /// implementation, this works regardless of the current editing
+    /// target.
     pub fn add_subflame(&mut self) -> Result<usize, ConfigError> {
-        if self.is_editing_subflame() {
-            return Err(ConfigError::InvalidPath(
-                "switch to Main before adding a subflame".to_string(),
-            ));
-        }
         // Seed with one identity-affine linear transform so the new
         // subflame is renderable on day one. (An empty flame would
         // make NUM_TRANSFORMS=0 and trip the shader builder's
@@ -469,30 +468,37 @@ impl ConfigManager {
         Ok(index)
     }
 
-    /// Delete the subflame at the user-visible `index`.
-    ///
-    /// If the user is currently editing a subflame (anywhere in the
-    /// list, not just the one being deleted), we first swap back to
-    /// Main so the subflames list is intact, *then* remove. The
-    /// visible-index → Vec-index mapping is preserved by the swap-
-    /// back, so the caller can pass the index they saw in the panel.
+    /// Delete the subflame at `index`. If the user is currently
+    /// editing that subflame, automatically reset the editing target
+    /// to Main so we're not pointing at a stale slot. Editing a
+    /// *different* subflame is fine; the index of THAT one shifts if
+    /// the deleted index is lower (the editing_target is updated in
+    /// that case too).
     pub fn delete_subflame(&mut self, index: usize) -> Result<(), ConfigError> {
-        // Capture target_before so the undo restores both the flame at
-        // its slot AND the user's prior editing context.
-        let target_before = self.editing_target;
-        if self.is_editing_subflame() {
-            self.swap_back_to_main_internal();
-        }
         if index >= self.current.flame.subflames.len() {
             return Err(ConfigError::InvalidPath(format!(
                 "subflame {} out of bounds", index
             )));
         }
+
+        // Capture target_before so undo restores the editing context.
+        let target_before = self.editing_target;
+
         let removed = self.current.flame.subflames.remove(index);
 
+        // Update editing_target to reflect the new index space.
+        if let EditingTarget::Subflame { index: active } = self.editing_target {
+            if active == index {
+                // The active subflame was deleted; fall back to Main.
+                self.editing_target = EditingTarget::Main;
+            } else if active > index {
+                // A subflame at a lower index was deleted; shift down.
+                self.editing_target = EditingTarget::Subflame { index: active - 1 };
+            }
+        }
+
         // Push undo entry — full Flame stored so undo restores it
-        // byte-for-byte, even with all its transforms, variations, and
-        // parameters intact.
+        // byte-for-byte.
         let change = ConfigChange::delete_subflame_snapshot(
             index,
             removed,
@@ -509,62 +515,25 @@ impl ConfigManager {
         Ok(())
     }
 
-    /// Rename the subflame at `index`. Index is into the user-visible
-    /// list, so this works whether editing the main or another subflame.
+    /// Rename the subflame at `index`. With the un-swap refactor the
+    /// list is always intact, so this is a straightforward index
+    /// into `current.flame.subflames`.
     pub fn rename_subflame(&mut self, index: usize, name: String) -> Result<(), ConfigError> {
-        match self.editing_target {
-            EditingTarget::Main => {
-                if index >= self.current.flame.subflames.len() {
-                    return Err(ConfigError::InvalidPath(format!(
-                        "subflame {} out of bounds", index
-                    )));
-                }
-                self.current.flame.subflames[index].name = name;
-            }
-            EditingTarget::Subflame { index: active } => {
-                if index == active {
-                    self.current.flame.name = name;
-                } else {
-                    // Map visible-index back to stashed-list index.
-                    // visible_subflames excludes the active slot, so
-                    // anything >= active in the visible list maps to
-                    // stashed_index + 1.
-                    let stashed_index = if index < active { index } else { index + 1 };
-                    let stashed = self.stashed_main.as_mut()
-                        .expect("stashed_main must be Some when editing subflame");
-                    if stashed_index >= stashed.flame.subflames.len() {
-                        return Err(ConfigError::InvalidPath(format!(
-                            "subflame {} out of bounds", index
-                        )));
-                    }
-                    stashed.flame.subflames[stashed_index].name = name;
-                }
-            }
+        if index >= self.current.flame.subflames.len() {
+            return Err(ConfigError::InvalidPath(format!(
+                "subflame {} out of bounds", index
+            )));
         }
+        self.current.flame.subflames[index].name = name;
         Ok(())
     }
 
-    /// Read-only snapshot of the *logical* FractalConfig — with the
-    /// edit-time swap undone. Use this for serialization (save to disk,
-    /// export config). Returns a clone to keep the borrow story simple.
-    ///
-    /// When editing the main flame, this is just `config().clone()`.
-    /// When editing a subflame, the active subflame is reinserted into
-    /// the stashed main's subflames at its original index, and the
-    /// stashed main becomes `flame` in the returned config.
+    /// Read-only snapshot of the FractalConfig as it logically exists.
+    /// Since data is no longer physically swapped, this is just a
+    /// clone of `current`. Kept as a method so callers that used to
+    /// rely on the un-swap reconstruction don't need to change.
     pub fn logical_config(&self) -> FractalConfig {
-        match self.editing_target {
-            EditingTarget::Main => self.current.clone(),
-            EditingTarget::Subflame { .. } => {
-                let stashed = self.stashed_main.as_ref()
-                    .expect("stashed_main must be Some when editing subflame");
-                let mut cfg = self.current.clone();
-                // Put the active subflame (currently sitting in cfg.flame) back into the main's subflames list
-                let edited_subflame = std::mem::replace(&mut cfg.flame, stashed.flame.clone());
-                cfg.flame.subflames.insert(stashed.subflame_index, edited_subflame);
-                cfg
-            }
-        }
+        self.current.clone()
     }
 
     /// Set animation mode
@@ -821,30 +790,36 @@ impl ConfigManager {
                     log::debug!("  Restoring full config snapshot (before)");
                     self.current = (**before).clone();
                     // FullConfig restoration replaces the entire current
-                    // state, which may include subflames. We drop any
-                    // active stash because it referenced the
-                    // pre-replacement flame. The user lands on Main.
-                    self.stashed_main = None;
+                    // state; the previous subflames list is gone, so
+                    // reset the editing target to Main. (No stash to
+                    // clean up — un-swap refactor removed that.)
                     self.editing_target = EditingTarget::Main;
                     return Ok(UpdateType::IterationReset);
                 }
 
                 crate::config::SnapshotData::AddTransform { index, xaos_before, .. } => {
                     log::debug!("  Undoing add transform at index {}", index);
-                    if *index < self.current.flame.transforms.len() {
-                        self.current.flame.transforms.remove(*index);
+                    let index = *index;
+                    let xaos_before = xaos_before.clone();
+                    let flame = self.active_flame_mut()?;
+                    if index < flame.transforms.len() {
+                        flame.transforms.remove(index);
                         // Restore xaos matrix to pre-add state (not incremental delete)
-                        self.current.flame.xaos = xaos_before.clone();
+                        flame.xaos = xaos_before;
                     }
                     return Ok(UpdateType::IterationReset);
                 }
 
                 crate::config::SnapshotData::DeleteTransform { index, transform, xaos_before } => {
                     log::debug!("  Undoing delete transform (re-insert at index {})", index);
-                    if *index <= self.current.flame.transforms.len() {
-                        self.current.flame.transforms.insert(*index, transform.clone());
+                    let index = *index;
+                    let transform = transform.clone();
+                    let xaos_before = xaos_before.clone();
+                    let flame = self.active_flame_mut()?;
+                    if index <= flame.transforms.len() {
+                        flame.transforms.insert(index, transform);
                         // Restore xaos matrix to pre-delete state (not incremental add)
-                        self.current.flame.xaos = xaos_before.clone();
+                        flame.xaos = xaos_before;
                     }
                     return Ok(UpdateType::IterationReset);
                 }
@@ -852,8 +827,10 @@ impl ConfigManager {
                 crate::config::SnapshotData::ModifyTransform { kind, index, before, .. } => {
                     log::debug!("  Undoing modify transform (restore before state at {:?} index {})", kind, index);
                     let xref = kind.at(*index);
-                    if let Some(slot) = xref.get_mut(&mut self.current.flame) {
-                        *slot = before.clone();
+                    let before = before.clone();
+                    let flame = self.active_flame_mut()?;
+                    if let Some(slot) = xref.get_mut(flame) {
+                        *slot = before;
                     }
                     return Ok(UpdateType::IterationReset);
                 }
@@ -1006,7 +983,6 @@ impl ConfigManager {
                 crate::config::SnapshotData::FullConfig { after, .. } => {
                     log::debug!("  Restoring full config snapshot (after)");
                     self.current = (**after).clone();
-                    self.stashed_main = None;
                     self.editing_target = EditingTarget::Main;
                     self.position += 1;
                     return Ok(UpdateType::IterationReset);
@@ -1014,13 +990,17 @@ impl ConfigManager {
 
                 crate::config::SnapshotData::AddTransform { index, transform, clone_from, .. } => {
                     log::debug!("  Redoing add transform at index {}", index);
-                    if *index <= self.current.flame.transforms.len() {
+                    let index = *index;
+                    let transform = transform.clone();
+                    let clone_from = *clone_from;
+                    let flame = self.active_flame_mut()?;
+                    if index <= flame.transforms.len() {
                         if let Some(source_idx) = clone_from {
-                            self.current.flame.on_transform_cloned(*index, *source_idx);
+                            flame.on_transform_cloned(index, source_idx);
                         } else {
-                            self.current.flame.on_transform_added(*index);
+                            flame.on_transform_added(index);
                         }
-                        self.current.flame.transforms.insert(*index, transform.clone());
+                        flame.transforms.insert(index, transform);
                     }
                     self.position += 1;
                     return Ok(UpdateType::IterationReset);
@@ -1028,9 +1008,11 @@ impl ConfigManager {
 
                 crate::config::SnapshotData::DeleteTransform { index, .. } => {
                     log::debug!("  Redoing delete transform (remove at index {})", index);
-                    if *index < self.current.flame.transforms.len() {
-                        self.current.flame.transforms.remove(*index);
-                        self.current.flame.on_transform_deleted(*index);
+                    let index = *index;
+                    let flame = self.active_flame_mut()?;
+                    if index < flame.transforms.len() {
+                        flame.transforms.remove(index);
+                        flame.on_transform_deleted(index);
                     }
                     self.position += 1;
                     return Ok(UpdateType::IterationReset);
@@ -1039,8 +1021,10 @@ impl ConfigManager {
                 crate::config::SnapshotData::ModifyTransform { kind, index, after, .. } => {
                     log::debug!("  Redoing modify transform (restore after state at {:?} index {})", kind, index);
                     let xref = kind.at(*index);
-                    if let Some(slot) = xref.get_mut(&mut self.current.flame) {
-                        *slot = after.clone();
+                    let after = after.clone();
+                    let flame = self.active_flame_mut()?;
+                    if let Some(slot) = xref.get_mut(flame) {
+                        *slot = after;
                     }
                     self.position += 1;
                     return Ok(UpdateType::IterationReset);
@@ -1303,7 +1287,13 @@ impl ConfigManager {
     fn get_value_from_config(
         config: &FractalConfig,
         path: &ConfigPath,
+        target: EditingTarget,
     ) -> Result<ConfigValue, ConfigError> {
+        // Resolve the active flame once. For per-flame paths
+        // (transforms, render_mode, xaos, etc.) we read from this;
+        // for FractalConfig-level paths (zoom, exposure, ...) we
+        // continue reading from `config` directly.
+        let flame = Self::target_flame_in(config, target).ok_or(ConfigError::InvalidIndex)?;
         match path {
             // View
             ConfigPath::Zoom => Ok(config.zoom.into()),
@@ -1376,51 +1366,45 @@ impl ConfigManager {
 
             // Transforms
             ConfigPath::TransformCount => {
-                Ok((config.flame.transforms.len() as u32).into())
+                Ok((flame.transforms.len() as u32).into())
             }
             ConfigPath::TransformWeight { index } => {
-                let xform = config
-                    .flame
+                let xform = flame
                     .transforms
                     .get(*index)
                     .ok_or(ConfigError::InvalidIndex)?;
                 Ok(xform.weight.into())
             }
             ConfigPath::TransformColor { index } => {
-                let xform = config
-                    .flame
+                let xform = flame
                     .transforms
                     .get(*index)
                     .ok_or(ConfigError::InvalidIndex)?;
                 Ok(xform.color.into())
             }
             ConfigPath::TransformColorSpeed { index } => {
-                let xform = config
-                    .flame
+                let xform = flame
                     .transforms
                     .get(*index)
                     .ok_or(ConfigError::InvalidIndex)?;
                 Ok(xform.color_speed.into())
             }
             ConfigPath::TransformOpacity { index } => {
-                let xform = config
-                    .flame
+                let xform = flame
                     .transforms
                     .get(*index)
                     .ok_or(ConfigError::InvalidIndex)?;
                 Ok(xform.opacity.into())
             }
             ConfigPath::TransformDirectColor { index } => {
-                let xform = config
-                    .flame
+                let xform = flame
                     .transforms
                     .get(*index)
                     .ok_or(ConfigError::InvalidIndex)?;
                 Ok(xform.direct_color.into())
             }
             ConfigPath::TransformAffine { index, param } => {
-                let xform = config
-                    .flame
+                let xform = flame
                     .transforms
                     .get(*index)
                     .ok_or(ConfigError::InvalidIndex)?;
@@ -1436,16 +1420,14 @@ impl ConfigManager {
                 Ok(value.into())
             }
             ConfigPath::TransformPostAffineEnabled { index } => {
-                let xform = config
-                    .flame
+                let xform = flame
                     .transforms
                     .get(*index)
                     .ok_or(ConfigError::InvalidIndex)?;
                 Ok(xform.post_affine_enabled.into())
             }
             ConfigPath::TransformPostAffine { index, param } => {
-                let xform = config
-                    .flame
+                let xform = flame
                     .transforms
                     .get(*index)
                     .ok_or(ConfigError::InvalidIndex)?;
@@ -1461,8 +1443,7 @@ impl ConfigManager {
                 Ok(value.into())
             }
             ConfigPath::TransformVariation { index, variation } => {
-                let xform = config
-                    .flame
+                let xform = flame
                     .transforms
                     .get(*index)
                     .ok_or(ConfigError::InvalidIndex)?;
@@ -1474,8 +1455,7 @@ impl ConfigManager {
                 variation,
                 param,
             } => {
-                let xform = config
-                    .flame
+                let xform = flame
                     .transforms
                     .get(*index)
                     .ok_or(ConfigError::InvalidIndex)?;
@@ -1490,32 +1470,28 @@ impl ConfigManager {
             }
             // High-level transform operations (translate, rotate, scale)
             ConfigPath::TransformOriginX { index } => {
-                let xform = config
-                    .flame
+                let xform = flame
                     .transforms
                     .get(*index)
                     .ok_or(ConfigError::InvalidIndex)?;
                 Ok(xform.origin_x().into())
             }
             ConfigPath::TransformOriginY { index } => {
-                let xform = config
-                    .flame
+                let xform = flame
                     .transforms
                     .get(*index)
                     .ok_or(ConfigError::InvalidIndex)?;
                 Ok(xform.origin_y().into())
             }
             ConfigPath::TransformRotation { index } => {
-                let xform = config
-                    .flame
+                let xform = flame
                     .transforms
                     .get(*index)
                     .ok_or(ConfigError::InvalidIndex)?;
                 Ok(xform.rotation().into())
             }
             ConfigPath::TransformScale { index } => {
-                let xform = config
-                    .flame
+                let xform = flame
                     .transforms
                     .get(*index)
                     .ok_or(ConfigError::InvalidIndex)?;
@@ -1532,7 +1508,7 @@ impl ConfigManager {
             // Linked Transform pool — same shape as TransformXxx but
             // sourced from flame.linked_transforms[index].
             ConfigPath::LinkedTransformAffine { index, param } => {
-                let xform = config.flame.linked_transforms.get(*index)
+                let xform = flame.linked_transforms.get(*index)
                     .ok_or(ConfigError::InvalidIndex)?;
                 let value = match param {
                     AffineParam::A => xform.a, AffineParam::B => xform.b,
@@ -1543,12 +1519,12 @@ impl ConfigManager {
                 Ok(value.into())
             }
             ConfigPath::LinkedTransformPostAffineEnabled { index } => {
-                let xform = config.flame.linked_transforms.get(*index)
+                let xform = flame.linked_transforms.get(*index)
                     .ok_or(ConfigError::InvalidIndex)?;
                 Ok(xform.post_affine_enabled.into())
             }
             ConfigPath::LinkedTransformPostAffine { index, param } => {
-                let xform = config.flame.linked_transforms.get(*index)
+                let xform = flame.linked_transforms.get(*index)
                     .ok_or(ConfigError::InvalidIndex)?;
                 let value = match param {
                     AffineParam::A => xform.post_a, AffineParam::B => xform.post_b,
@@ -1559,12 +1535,12 @@ impl ConfigManager {
                 Ok(value.into())
             }
             ConfigPath::LinkedTransformVariation { index, variation } => {
-                let xform = config.flame.linked_transforms.get(*index)
+                let xform = flame.linked_transforms.get(*index)
                     .ok_or(ConfigError::InvalidIndex)?;
                 Ok(xform.variations.get(variation).copied().unwrap_or(0.0).into())
             }
             ConfigPath::LinkedTransformVariationParam { index, variation, param } => {
-                let xform = config.flame.linked_transforms.get(*index)
+                let xform = flame.linked_transforms.get(*index)
                     .ok_or(ConfigError::InvalidIndex)?;
                 let value = xform.get_variation_param_or_default(
                     variation, param, &crate::variations::global_registry());
@@ -1573,7 +1549,7 @@ impl ConfigManager {
 
             // Final Transform pool — sourced from flame.final_transforms[index].
             ConfigPath::FinalTransformAffine { index, param } => {
-                let xform = config.flame.final_transforms.get(*index)
+                let xform = flame.final_transforms.get(*index)
                     .ok_or(ConfigError::InvalidIndex)?;
                 let value = match param {
                     AffineParam::A => xform.a, AffineParam::B => xform.b,
@@ -1584,12 +1560,12 @@ impl ConfigManager {
                 Ok(value.into())
             }
             ConfigPath::FinalTransformPostAffineEnabled { index } => {
-                let xform = config.flame.final_transforms.get(*index)
+                let xform = flame.final_transforms.get(*index)
                     .ok_or(ConfigError::InvalidIndex)?;
                 Ok(xform.post_affine_enabled.into())
             }
             ConfigPath::FinalTransformPostAffine { index, param } => {
-                let xform = config.flame.final_transforms.get(*index)
+                let xform = flame.final_transforms.get(*index)
                     .ok_or(ConfigError::InvalidIndex)?;
                 let value = match param {
                     AffineParam::A => xform.post_a, AffineParam::B => xform.post_b,
@@ -1600,21 +1576,21 @@ impl ConfigManager {
                 Ok(value.into())
             }
             ConfigPath::FinalTransformVariation { index, variation } => {
-                let xform = config.flame.final_transforms.get(*index)
+                let xform = flame.final_transforms.get(*index)
                     .ok_or(ConfigError::InvalidIndex)?;
                 Ok(xform.variations.get(variation).copied().unwrap_or(0.0).into())
             }
             ConfigPath::FinalTransformVariationParam { index, variation, param } => {
-                let xform = config.flame.final_transforms.get(*index)
+                let xform = flame.final_transforms.get(*index)
                     .ok_or(ConfigError::InvalidIndex)?;
                 let value = xform.get_variation_param_or_default(
                     variation, param, &crate::variations::global_registry());
                 Ok(value.into())
             }
 
-            // Flame
-            ConfigPath::RenderMode => Ok(config.flame.render_mode.into()),
-            ConfigPath::PerspectiveStrength => Ok(config.flame.perspective_strength.into()),
+            // Flame metadata — per-flame, so read from the resolved target.
+            ConfigPath::RenderMode => Ok(flame.render_mode.into()),
+            ConfigPath::PerspectiveStrength => Ok(flame.perspective_strength.into()),
 
             // Effects
             ConfigPath::DensityEffectEnabled { index } => {
@@ -1654,15 +1630,15 @@ impl ConfigManager {
                 Err(ConfigError::InvalidOperation)
             }
 
-            // Xaos (chaos-weighted transform transitions)
+            // Xaos (chaos-weighted transform transitions) — per-flame
             ConfigPath::Xaos { src, dst } => {
-                let weight = config.flame.get_xaos(*src, *dst);
+                let weight = flame.get_xaos(*src, *dst);
                 Ok(weight.into())
             }
 
-            // Solo transform (-1 = None, 0+ = Some(index))
+            // Solo transform (-1 = None, 0+ = Some(index)) — per-flame
             ConfigPath::SoloTransform => {
-                let value = match config.flame.solo_transform {
+                let value = match flame.solo_transform {
                     None => -1i32,
                     Some(idx) => idx as i32,
                 };
@@ -1689,7 +1665,7 @@ impl ConfigManager {
     pub fn get_value(&self, path: &ConfigPath) -> Result<ConfigValue, ConfigError> {
         // Use preview if available, otherwise current
         let config = self.preview.as_ref().unwrap_or(&self.current);
-        Self::get_value_from_config(config, path)
+        Self::get_value_from_config(config, path, self.editing_target)
     }
 
     /// Apply a variation-weight change to a single transform, regardless of
@@ -1922,57 +1898,27 @@ impl ConfigManager {
                 return Err(ConfigError::ReadOnlyParameter);
             }
             ConfigPath::TransformWeight { index } => {
-                let xform = self
-                    .current
-                    .flame
-                    .transforms
-                    .get_mut(*index)
-                    .ok_or(ConfigError::InvalidIndex)?;
+                let xform = self.normal_transform_mut(*index)?;
                 xform.weight = value.try_into()?;
             }
             ConfigPath::TransformColor { index } => {
-                let xform = self
-                    .current
-                    .flame
-                    .transforms
-                    .get_mut(*index)
-                    .ok_or(ConfigError::InvalidIndex)?;
+                let xform = self.normal_transform_mut(*index)?;
                 xform.color = value.try_into()?;
             }
             ConfigPath::TransformColorSpeed { index } => {
-                let xform = self
-                    .current
-                    .flame
-                    .transforms
-                    .get_mut(*index)
-                    .ok_or(ConfigError::InvalidIndex)?;
+                let xform = self.normal_transform_mut(*index)?;
                 xform.color_speed = value.try_into()?;
             }
             ConfigPath::TransformOpacity { index } => {
-                let xform = self
-                    .current
-                    .flame
-                    .transforms
-                    .get_mut(*index)
-                    .ok_or(ConfigError::InvalidIndex)?;
+                let xform = self.normal_transform_mut(*index)?;
                 xform.opacity = value.try_into()?;
             }
             ConfigPath::TransformDirectColor { index } => {
-                let xform = self
-                    .current
-                    .flame
-                    .transforms
-                    .get_mut(*index)
-                    .ok_or(ConfigError::InvalidIndex)?;
+                let xform = self.normal_transform_mut(*index)?;
                 xform.direct_color = value.try_into()?;
             }
             ConfigPath::TransformAffine { index, param } => {
-                let xform = self
-                    .current
-                    .flame
-                    .transforms
-                    .get_mut(*index)
-                    .ok_or(ConfigError::InvalidIndex)?;
+                let xform = self.normal_transform_mut(*index)?;
                 let new_value: f32 = value.try_into()?;
                 match param {
                     AffineParam::A => xform.a = new_value,
@@ -1985,21 +1931,11 @@ impl ConfigManager {
                 }
             }
             ConfigPath::TransformPostAffineEnabled { index } => {
-                let xform = self
-                    .current
-                    .flame
-                    .transforms
-                    .get_mut(*index)
-                    .ok_or(ConfigError::InvalidIndex)?;
+                let xform = self.normal_transform_mut(*index)?;
                 xform.post_affine_enabled = value.try_into()?;
             }
             ConfigPath::TransformPostAffine { index, param } => {
-                let xform = self
-                    .current
-                    .flame
-                    .transforms
-                    .get_mut(*index)
-                    .ok_or(ConfigError::InvalidIndex)?;
+                let xform = self.normal_transform_mut(*index)?;
                 let new_value: f32 = value.try_into()?;
                 match param {
                     AffineParam::A => xform.post_a = new_value,
@@ -2012,53 +1948,31 @@ impl ConfigManager {
                 }
             }
             ConfigPath::TransformVariation { index, variation } => {
-                let xform = self.current.flame.transforms.get_mut(*index)
-                    .ok_or(ConfigError::InvalidIndex)?;
+                let xform = self.normal_transform_mut(*index)?;
                 Self::apply_variation_weight(xform, variation, value)?;
             }
             ConfigPath::TransformVariationParam { index, variation, param } => {
-                let xform = self.current.flame.transforms.get_mut(*index)
-                    .ok_or(ConfigError::InvalidIndex)?;
+                let xform = self.normal_transform_mut(*index)?;
                 Self::apply_variation_param(xform, variation, param, value)?;
             }
             // High-level transform operations (translate, rotate, scale)
             ConfigPath::TransformOriginX { index } => {
-                let xform = self
-                    .current
-                    .flame
-                    .transforms
-                    .get_mut(*index)
-                    .ok_or(ConfigError::InvalidIndex)?;
+                let xform = self.normal_transform_mut(*index)?;
                 let new_value: f32 = value.try_into()?;
                 xform.set_origin_x(new_value);
             }
             ConfigPath::TransformOriginY { index } => {
-                let xform = self
-                    .current
-                    .flame
-                    .transforms
-                    .get_mut(*index)
-                    .ok_or(ConfigError::InvalidIndex)?;
+                let xform = self.normal_transform_mut(*index)?;
                 let new_value: f32 = value.try_into()?;
                 xform.set_origin_y(new_value);
             }
             ConfigPath::TransformRotation { index } => {
-                let xform = self
-                    .current
-                    .flame
-                    .transforms
-                    .get_mut(*index)
-                    .ok_or(ConfigError::InvalidIndex)?;
+                let xform = self.normal_transform_mut(*index)?;
                 let new_value: f32 = value.try_into()?;
                 xform.set_rotation(new_value);
             }
             ConfigPath::TransformScale { index } => {
-                let xform = self
-                    .current
-                    .flame
-                    .transforms
-                    .get_mut(*index)
-                    .ok_or(ConfigError::InvalidIndex)?;
+                let xform = self.normal_transform_mut(*index)?;
                 let new_value: f32 = value.try_into()?;
                 xform.set_scale(new_value);
             }
@@ -2073,8 +1987,7 @@ impl ConfigManager {
             // Linked Transform pool — same shape as TransformXxx but
             // sourced from flame.linked_transforms[index].
             ConfigPath::LinkedTransformAffine { index, param } => {
-                let xform = self.current.flame.linked_transforms.get_mut(*index)
-                    .ok_or(ConfigError::InvalidIndex)?;
+                let xform = self.linked_transform_mut(*index)?;
                 let v: f32 = value.try_into()?;
                 match param {
                     AffineParam::A => xform.a = v, AffineParam::B => xform.b = v,
@@ -2084,13 +1997,11 @@ impl ConfigManager {
                 };
             }
             ConfigPath::LinkedTransformPostAffineEnabled { index } => {
-                let xform = self.current.flame.linked_transforms.get_mut(*index)
-                    .ok_or(ConfigError::InvalidIndex)?;
+                let xform = self.linked_transform_mut(*index)?;
                 xform.post_affine_enabled = value.try_into()?;
             }
             ConfigPath::LinkedTransformPostAffine { index, param } => {
-                let xform = self.current.flame.linked_transforms.get_mut(*index)
-                    .ok_or(ConfigError::InvalidIndex)?;
+                let xform = self.linked_transform_mut(*index)?;
                 let v: f32 = value.try_into()?;
                 match param {
                     AffineParam::A => xform.post_a = v, AffineParam::B => xform.post_b = v,
@@ -2100,20 +2011,17 @@ impl ConfigManager {
                 };
             }
             ConfigPath::LinkedTransformVariation { index, variation } => {
-                let xform = self.current.flame.linked_transforms.get_mut(*index)
-                    .ok_or(ConfigError::InvalidIndex)?;
+                let xform = self.linked_transform_mut(*index)?;
                 Self::apply_variation_weight(xform, variation, value)?;
             }
             ConfigPath::LinkedTransformVariationParam { index, variation, param } => {
-                let xform = self.current.flame.linked_transforms.get_mut(*index)
-                    .ok_or(ConfigError::InvalidIndex)?;
+                let xform = self.linked_transform_mut(*index)?;
                 Self::apply_variation_param(xform, variation, param, value)?;
             }
 
             // Final Transform pool — sourced from flame.final_transforms[index].
             ConfigPath::FinalTransformAffine { index, param } => {
-                let xform = self.current.flame.final_transforms.get_mut(*index)
-                    .ok_or(ConfigError::InvalidIndex)?;
+                let xform = self.final_transform_mut(*index)?;
                 let v: f32 = value.try_into()?;
                 match param {
                     AffineParam::A => xform.a = v, AffineParam::B => xform.b = v,
@@ -2123,13 +2031,11 @@ impl ConfigManager {
                 };
             }
             ConfigPath::FinalTransformPostAffineEnabled { index } => {
-                let xform = self.current.flame.final_transforms.get_mut(*index)
-                    .ok_or(ConfigError::InvalidIndex)?;
+                let xform = self.final_transform_mut(*index)?;
                 xform.post_affine_enabled = value.try_into()?;
             }
             ConfigPath::FinalTransformPostAffine { index, param } => {
-                let xform = self.current.flame.final_transforms.get_mut(*index)
-                    .ok_or(ConfigError::InvalidIndex)?;
+                let xform = self.final_transform_mut(*index)?;
                 let v: f32 = value.try_into()?;
                 match param {
                     AffineParam::A => xform.post_a = v, AffineParam::B => xform.post_b = v,
@@ -2139,22 +2045,22 @@ impl ConfigManager {
                 };
             }
             ConfigPath::FinalTransformVariation { index, variation } => {
-                let xform = self.current.flame.final_transforms.get_mut(*index)
-                    .ok_or(ConfigError::InvalidIndex)?;
+                let xform = self.final_transform_mut(*index)?;
                 Self::apply_variation_weight(xform, variation, value)?;
             }
             ConfigPath::FinalTransformVariationParam { index, variation, param } => {
-                let xform = self.current.flame.final_transforms.get_mut(*index)
-                    .ok_or(ConfigError::InvalidIndex)?;
+                let xform = self.final_transform_mut(*index)?;
                 Self::apply_variation_param(xform, variation, param, value)?;
             }
 
-            // Flame
+            // Flame metadata (per-flame, so target-aware)
             ConfigPath::RenderMode => {
-                self.current.flame.render_mode = value.try_into()?;
+                let v = value.try_into()?;
+                self.active_flame_mut()?.render_mode = v;
             }
             ConfigPath::PerspectiveStrength => {
-                self.current.flame.perspective_strength = value.try_into()?;
+                let v = value.try_into()?;
+                self.active_flame_mut()?.perspective_strength = v;
             }
 
             // Effects
@@ -2213,16 +2119,18 @@ impl ConfigManager {
                 self.current.density_effects.remove(*index);
             }
 
-            // Xaos (chaos-weighted transform transitions)
+            // Xaos (chaos-weighted transform transitions) — per-flame
             ConfigPath::Xaos { src, dst } => {
                 let weight: f32 = value.try_into()?;
-                self.current.flame.set_xaos(*src, *dst, weight);
+                let src = *src;
+                let dst = *dst;
+                self.active_flame_mut()?.set_xaos(src, dst, weight);
             }
 
-            // Solo transform (-1 = None, 0+ = Some(index))
+            // Solo transform (-1 = None, 0+ = Some(index)) — per-flame
             ConfigPath::SoloTransform => {
                 let idx: i32 = value.try_into()?;
-                self.current.flame.solo_transform = if idx < 0 {
+                self.active_flame_mut()?.solo_transform = if idx < 0 {
                     None
                 } else {
                     Some(idx as usize)
@@ -2254,8 +2162,8 @@ impl ConfigManager {
             log::debug!("Force commit for path: {:?}", path);
 
             // Check if preview actually differs from current
-            let current_value = Self::get_value_from_config(&self.current, path)?;
-            let preview_value = Self::get_value_from_config(&preview, path)?;
+            let current_value = Self::get_value_from_config(&self.current, path, self.editing_target)?;
+            let preview_value = Self::get_value_from_config(&preview, path, self.editing_target)?;
 
             log::debug!("Force commit: Comparing {} (current) vs {} (preview)", current_value, preview_value);
 
@@ -2321,10 +2229,9 @@ impl ConfigManager {
         // Clear any preview state
         self.preview = None;
 
-        // Drop subflame edit state — the new config has its own
-        // subflames list; the old stash references a flame that's
-        // about to be replaced.
-        self.stashed_main = None;
+        // Reset editing target — the new config has its own subflames
+        // list, so any prior Subflame{i} target may now be out of
+        // bounds. Land on Main.
         self.editing_target = EditingTarget::Main;
 
         // Create single bidirectional snapshot
@@ -2358,8 +2265,7 @@ impl ConfigManager {
         // Clear any preview state
         self.preview = None;
 
-        // Drop subflame edit state — see load_config for rationale.
-        self.stashed_main = None;
+        // Reset editing target — see load_config for rationale.
         self.editing_target = EditingTarget::Main;
 
         // Replace current config (no undo entry)
@@ -2405,37 +2311,48 @@ impl ConfigManager {
     }
 
     /// Apply a structural change (transform add/delete)
-    /// Creates specialized snapshot and updates config atomically
+    /// Creates specialized snapshot and updates config atomically.
+    /// Structural changes apply to the current editing target — adding
+    /// a transform while editing Subflame{i} appends to that
+    /// subflame's transforms list, not the parent's.
     pub fn apply_structural_change(&mut self, change: ConfigChange) -> Result<(), ConfigError> {
         // Apply the change based on snapshot type
         if let Some(snapshot) = &change.snapshot {
             match snapshot {
                 crate::config::SnapshotData::AddTransform { index, transform, clone_from, .. } => {
-                    if *index <= self.current.flame.transforms.len() {
+                    let index = *index;
+                    let transform = transform.clone();
+                    let clone_from = *clone_from;
+                    let flame = self.active_flame_mut()?;
+                    if index <= flame.transforms.len() {
                         // Update xaos matrix before inserting
                         if let Some(source_idx) = clone_from {
-                            self.current.flame.on_transform_cloned(*index, *source_idx);
+                            flame.on_transform_cloned(index, source_idx);
                         } else {
-                            self.current.flame.on_transform_added(*index);
+                            flame.on_transform_added(index);
                         }
-                        self.current.flame.transforms.insert(*index, transform.clone());
+                        flame.transforms.insert(index, transform);
                     } else {
                         return Err(ConfigError::InvalidIndex);
                     }
                 }
                 crate::config::SnapshotData::DeleteTransform { index, .. } => {
-                    if *index < self.current.flame.transforms.len() {
-                        self.current.flame.transforms.remove(*index);
+                    let index = *index;
+                    let flame = self.active_flame_mut()?;
+                    if index < flame.transforms.len() {
+                        flame.transforms.remove(index);
                         // Update xaos matrix after removing (needs new transform list)
-                        self.current.flame.on_transform_deleted(*index);
+                        flame.on_transform_deleted(index);
                     } else {
                         return Err(ConfigError::InvalidIndex);
                     }
                 }
                 crate::config::SnapshotData::ModifyTransform { kind, index, after, .. } => {
                     let xref = kind.at(*index);
-                    if let Some(slot) = xref.get_mut(&mut self.current.flame) {
-                        *slot = after.clone();
+                    let after = after.clone();
+                    let flame = self.active_flame_mut()?;
+                    if let Some(slot) = xref.get_mut(flame) {
+                        *slot = after;
                     } else {
                         return Err(ConfigError::InvalidIndex);
                     }
@@ -3104,21 +3021,21 @@ mod tests {
         }
     }
 
-    /// Swapping to a subflame, mutating its transforms, then swapping
-    /// back must preserve the mutation in the right slot — and must
-    /// not corrupt the main flame or the other subflames.
+    /// Editing target is now a routing field, not a physical swap.
+    /// `current.flame` stays as the main flame regardless of what's
+    /// being edited. Writes routed via `target_flame_mut` land on the
+    /// right slot, and the subflames list is always intact in
+    /// `current.flame.subflames`.
     #[test]
-    fn editing_target_roundtrip_preserves_edits() {
+    fn editing_target_routes_writes_without_swapping_data() {
         use crate::scene::transforms::{Flame, Transform};
+        use crate::config::{ConfigPath, AffineParam};
 
         let mut config = FractalConfig::default();
-        // Main flame with a known marker (transform a-coef = 11.0).
-        // Default config may have zero transforms — push one if so.
         if config.flame.transforms.is_empty() {
             config.flame.transforms.push(Transform::new());
         }
-        config.flame.transforms[0].a = 11.0;
-        // Three subflames, each tagged by transform a-coef
+        config.flame.transforms[0].a = 11.0;  // Main marker
         for marker in [101.0, 102.0, 103.0] {
             let mut sf = Flame::new();
             sf.transforms.push({
@@ -3134,91 +3051,100 @@ mod tests {
         assert_eq!(mgr.current.flame.transforms[0].a, 11.0);
         assert_eq!(mgr.visible_subflames().len(), 3);
 
-        // Swap to subflame 1
+        // Switch target to subflame 1 — no data movement, just the
+        // routing field changes.
         mgr.set_editing_target(EditingTarget::Subflame { index: 1 }).unwrap();
-        assert_eq!(mgr.current.flame.transforms[0].a, 102.0,
-            "subflame 1 should now occupy current.flame");
-        // visible_subflames now excludes the active slot
-        assert_eq!(mgr.visible_subflames().len(), 2);
-        assert_eq!(mgr.logical_subflame_count(), 3);
-
-        // Mutate the active subflame
-        mgr.current.flame.transforms[0].a = 999.0;
-
-        // Swap to subflame 2 (must un-swap subflame 1 first, then swap subflame 2 in)
-        mgr.set_editing_target(EditingTarget::Subflame { index: 2 }).unwrap();
-        assert_eq!(mgr.current.flame.transforms[0].a, 103.0,
-            "subflame 2 should now occupy current.flame");
-
-        // Swap back to Main — the 999.0 edit must be preserved at index 1
-        mgr.set_editing_target(EditingTarget::Main).unwrap();
+        assert_eq!(mgr.editing_target(), EditingTarget::Subflame { index: 1 });
+        // current.flame stays as the main flame:
         assert_eq!(mgr.current.flame.transforms[0].a, 11.0,
-            "main flame restored");
+            "current.flame remains the main flame after target switch");
+        // All three subflames remain in place:
         assert_eq!(mgr.current.flame.subflames.len(), 3);
-        assert_eq!(mgr.current.flame.subflames[0].transforms[0].a, 101.0);
+        assert_eq!(mgr.current.flame.subflames[1].transforms[0].a, 102.0);
+
+        // Writing via update_param routes to subflame 1.
+        mgr.update_param(
+            ConfigPath::TransformAffine { index: 0, param: AffineParam::A },
+            999.0f32.into(),
+        ).unwrap();
         assert_eq!(mgr.current.flame.subflames[1].transforms[0].a, 999.0,
-            "edit to subflame 1 must persist");
+            "write while editing subflame 1 lands on subflames[1]");
+        assert_eq!(mgr.current.flame.transforms[0].a, 11.0,
+            "main flame's transform stays unchanged");
+
+        // Switch to subflame 2 — same story, no data swap.
+        mgr.set_editing_target(EditingTarget::Subflame { index: 2 }).unwrap();
+        assert_eq!(mgr.current.flame.transforms[0].a, 11.0);
+        assert_eq!(mgr.current.flame.subflames[1].transforms[0].a, 999.0,
+            "edit to subflame 1 persists across target switches");
         assert_eq!(mgr.current.flame.subflames[2].transforms[0].a, 103.0);
     }
 
-    /// Add is rejected while editing a subflame (would shift the index
-    /// space mid-edit). Delete auto-swaps to Main first, then deletes.
-    /// logical_config must always reflect the un-swapped state.
+    /// In the un-swap world add/delete subflame work regardless of
+    /// the current editing target. Deleting a subflame either *is*
+    /// the active one (target falls back to Main) or has a lower
+    /// index than the active one (target index shifts down).
     #[test]
-    fn add_delete_rules_and_logical_config() {
+    fn add_delete_subflame_in_any_target() {
         use crate::scene::transforms::Transform;
 
         let config = FractalConfig::default();
         let mut mgr = ConfigManager::new(config);
 
-        // Add three subflames; tag each with a distinct marker so we can
-        // verify which one gets deleted.
+        // Add three subflames, marker each one.
         for marker in [100.0, 200.0, 300.0] {
             mgr.add_subflame().unwrap();
             let idx = mgr.current.flame.subflames.len() - 1;
-            // add_subflame seeds one transform with the linear variation;
-            // overwrite `a` as the marker so we can identify it later.
             mgr.current.flame.subflames[idx].transforms[0].a = marker;
         }
         assert_eq!(mgr.current.flame.subflames.len(), 3);
 
-        // Swap to subflame 1 — add must still be rejected (would shift
-        // the index space and confuse the stash invariant).
+        // Adding while editing a subflame is now allowed — un-swap removes
+        // the index-stability concern that originally gated it.
         mgr.set_editing_target(EditingTarget::Subflame { index: 1 }).unwrap();
-        assert!(mgr.add_subflame().is_err(), "add must be rejected while editing a subflame");
+        let new_idx = mgr.add_subflame().unwrap();
+        assert_eq!(new_idx, 3);
+        assert_eq!(mgr.current.flame.subflames.len(), 4);
+        // Editing target is unchanged — we're still on subflame 1:
+        assert_eq!(mgr.editing_target(), EditingTarget::Subflame { index: 1 });
 
-        // logical_config must look as if we never swapped.
+        // logical_config matches current (no swap to undo).
         let logical = mgr.logical_config();
-        assert_eq!(logical.flame.subflames.len(), 3);
+        assert_eq!(logical.flame.subflames.len(), 4);
 
-        // Delete the active subflame (index 1, marker 200.0) while
-        // editing it. Must auto-swap to Main and remove the right entry.
+        // Delete the ACTIVE subflame (index 1, marker 200.0). Target
+        // falls back to Main; subsequent subflames shift down.
         mgr.delete_subflame(1).unwrap();
         assert_eq!(mgr.editing_target(), EditingTarget::Main,
-            "delete from subflame mode must return to Main");
-        assert_eq!(mgr.current.flame.subflames.len(), 2);
+            "deleting the active subflame falls back to Main");
+        assert_eq!(mgr.current.flame.subflames.len(), 3);
         assert_eq!(mgr.current.flame.subflames[0].transforms[0].a, 100.0);
         assert_eq!(mgr.current.flame.subflames[1].transforms[0].a, 300.0,
-            "subflame 1 should be removed; subflame 2 shifts down");
+            "subflame 2 shifts to index 1 after deleting index 1");
 
-        // Deleting a non-active subflame from subflame mode also works.
-        // Re-add to get back to 3 subflames, then test the cross-delete.
+        // Re-add a marker subflame at the end so we have 4 again.
         mgr.add_subflame().unwrap();
         let last = mgr.current.flame.subflames.len() - 1;
-        mgr.current.flame.subflames[last].transforms[0].a = 400.0;
-        mgr.set_editing_target(EditingTarget::Subflame { index: 0 }).unwrap();
-        mgr.delete_subflame(2).unwrap();  // delete marker 400.0 while editing subflame 0
-        assert_eq!(mgr.editing_target(), EditingTarget::Main);
-        assert_eq!(mgr.current.flame.subflames.len(), 2);
-        assert_eq!(mgr.current.flame.subflames[0].transforms[0].a, 100.0);
-        assert_eq!(mgr.current.flame.subflames[1].transforms[0].a, 300.0);
+        mgr.current.flame.subflames[last].transforms[0].a = 500.0;
+
+        // Now editing subflame 2 (marker 500.0 lives at index 3).
+        // Delete a LOWER index — the active index should shift down.
+        mgr.set_editing_target(EditingTarget::Subflame { index: 3 }).unwrap();
+        mgr.delete_subflame(0).unwrap();
+        assert_eq!(mgr.editing_target(), EditingTarget::Subflame { index: 2 },
+            "deleting a lower-index subflame shifts the active index down by 1");
+        assert_eq!(mgr.current.flame.subflames.len(), 3);
+        // subflames[2] is now the one we were editing (marker 500.0):
+        assert_eq!(mgr.current.flame.subflames[2].transforms[0].a, 500.0);
     }
 
-    /// Undo/redo must thread through editing-target swaps correctly:
-    /// edits made while editing a subflame must apply to that subflame
-    /// on undo, never silently to whatever flame is swapped in at undo
-    /// time. This is the corruption the target-aware history is
-    /// supposed to prevent.
+    /// Undo/redo must thread through editing-target switches:
+    /// edits made while editing a subflame apply to *that subflame* on
+    /// undo, never to whichever flame happens to be active at undo
+    /// time. The target stamp on each ConfigChange is what makes this
+    /// work — silent_swap aligns `self.editing_target` to the entry's
+    /// target before the inverse delta is applied, so the routing
+    /// machinery picks the right slot.
     #[test]
     fn undo_redo_threads_through_target_swaps() {
         use crate::scene::transforms::{Flame, Transform};
@@ -3239,7 +3165,7 @@ mod tests {
 
         // Three actions across the target boundary:
         //   1. Edit Main's transform 0 a-coef: 1.0 → 2.0
-        //   2. Swap to Subflame 0
+        //   2. Switch to Subflame 0
         //   3. Edit Subflame's transform 0 a-coef: 100.0 → 200.0
         mgr.update_param(
             ConfigPath::TransformAffine {
@@ -3257,44 +3183,49 @@ mod tests {
             200.0f32.into(),
         ).unwrap();
 
-        // Sanity: we're on the subflame, both edits stuck on their respective flames.
+        // Sanity: edits landed on their respective flames (no swap).
         assert_eq!(mgr.editing_target(), EditingTarget::Subflame { index: 0 });
-        assert_eq!(mgr.current.flame.transforms[0].a, 200.0);  // subflame's value
-        let logical = mgr.logical_config();
-        assert_eq!(logical.flame.transforms[0].a, 2.0);  // main's value
-        assert_eq!(logical.flame.subflames[0].transforms[0].a, 200.0);
+        assert_eq!(mgr.current.flame.transforms[0].a, 2.0,
+            "main flame still holds main edit (no swap)");
+        assert_eq!(mgr.current.flame.subflames[0].transforms[0].a, 200.0,
+            "subflame edit landed on subflame slot");
 
-        // Undo 3 times: revert the subflame edit, revert the swap,
-        // revert the main edit.
+        // Undo 3 times: revert subflame edit, revert target switch, revert main edit.
         mgr.undo().unwrap();  // undo subflame edit
         assert_eq!(mgr.editing_target(), EditingTarget::Subflame { index: 0 });
-        assert_eq!(mgr.current.flame.transforms[0].a, 100.0,
-            "subflame edit must undo on the subflame, not on whatever is swapped in");
-
-        mgr.undo().unwrap();  // undo target swap
-        assert_eq!(mgr.editing_target(), EditingTarget::Main,
-            "undoing the swap must return us to Main");
+        assert_eq!(mgr.current.flame.subflames[0].transforms[0].a, 100.0,
+            "subflame edit reverts on the subflame slot");
         assert_eq!(mgr.current.flame.transforms[0].a, 2.0,
-            "main's edit must still be in place — it was made before the swap");
+            "main flame's value is unaffected by undoing a subflame edit");
+
+        mgr.undo().unwrap();  // undo target switch
+        assert_eq!(mgr.editing_target(), EditingTarget::Main,
+            "undoing the swap returns us to Main");
+        assert_eq!(mgr.current.flame.transforms[0].a, 2.0,
+            "main edit is still in place");
 
         mgr.undo().unwrap();  // undo main edit
         assert_eq!(mgr.editing_target(), EditingTarget::Main);
         assert_eq!(mgr.current.flame.transforms[0].a, 1.0,
-            "main edit must revert; subflame data must still be intact in subflames[0]");
-        assert_eq!(mgr.current.flame.subflames[0].transforms[0].a, 100.0);
+            "main edit reverts");
+        assert_eq!(mgr.current.flame.subflames[0].transforms[0].a, 100.0,
+            "subflame data intact");
 
-        // Redo all three back to where we were.
+        // Redo all three back to the final state.
         mgr.redo().unwrap();
         assert_eq!(mgr.editing_target(), EditingTarget::Main);
         assert_eq!(mgr.current.flame.transforms[0].a, 2.0);
 
         mgr.redo().unwrap();
         assert_eq!(mgr.editing_target(), EditingTarget::Subflame { index: 0 });
-        assert_eq!(mgr.current.flame.transforms[0].a, 100.0);  // pre-edit subflame value
+        assert_eq!(mgr.current.flame.subflames[0].transforms[0].a, 100.0);
 
         mgr.redo().unwrap();
         assert_eq!(mgr.editing_target(), EditingTarget::Subflame { index: 0 });
-        assert_eq!(mgr.current.flame.transforms[0].a, 200.0);
+        assert_eq!(mgr.current.flame.subflames[0].transforms[0].a, 200.0,
+            "redo lands the subflame edit on the subflame slot");
+        assert_eq!(mgr.current.flame.transforms[0].a, 2.0,
+            "main flame unaffected by redoing a subflame edit");
     }
 
     /// Add/delete subflame snapshots must roundtrip without losing
