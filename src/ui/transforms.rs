@@ -455,7 +455,12 @@ fn render_variations_section(
             let registry = global_registry();
             let search_lower = search_text.to_lowercase();
 
-            // Collect categories to show based on render mode
+            // Collect categories to show based on render mode.
+            // Plugin variations are surfaced in 3D mode (subflame_wf, etc.);
+            // 2D is still gated because the shader builder's
+            // active_with_local_indices filters out non-Basic2D/Advanced2D
+            // variations from 2D shaders. Lifting that gate is a separate
+            // change.
             let categories: Vec<VariationCategory> = if matches!(render_mode, RenderMode::ThreeD) {
                 vec![
                     VariationCategory::Basic2D,
@@ -463,6 +468,7 @@ fn render_variations_section(
                     VariationCategory::Depth3D,
                     VariationCategory::Rotation3D,
                     VariationCategory::Full3D,
+                    VariationCategory::Plugin,
                 ]
             } else {
                 vec![
