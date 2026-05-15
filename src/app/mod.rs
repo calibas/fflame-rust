@@ -369,6 +369,14 @@ pub struct App {
     pub(super) paused: bool,
     pub(super) modifiers: winit::keyboard::ModifiersState,
     pub(super) quit_requested: bool,  // Graceful quit requested (check unsaved changes, etc.)
+    /// Renderer-side view toggle: when true and a subflame is being
+    /// edited, the viewport renders the active subflame in isolation
+    /// (its IFS standalone). When false (default), the viewport
+    /// renders the parent flame with the live-edited subflame
+    /// inlined via `subflame_wf`. This is purely a render-source
+    /// decision now — App.flame and ConfigManager state are
+    /// unchanged regardless of the toggle.
+    pub(super) view_subflame_in_isolation: bool,
 
     // Libraries (not saved in config)
     pub(super) palette_library: PaletteLibrary,
@@ -556,6 +564,7 @@ impl App {
             workspace: crate::ui::Workspace::new(),
             view_changed_by_keyboard: false,
             paused: false,
+            view_subflame_in_isolation: false,
             modifiers: winit::keyboard::ModifiersState::default(),
             quit_requested: false,
             palette_library,
@@ -1086,6 +1095,7 @@ impl App {
             &self.preset_library,
             &mut self.animation_controller,
             &mut self.paused,
+            &mut self.view_subflame_in_isolation,
             &mut self.quit_requested,
             can_undo,
             can_redo,

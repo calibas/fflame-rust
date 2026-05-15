@@ -303,6 +303,19 @@ impl ConfigManager {
         self.editing_target
     }
 
+    /// Force a flame re-upload + accumulation reset on the next GPU
+    /// update cycle, without changing any config state. Used by UI
+    /// surfaces that change *how* the flame is sourced (e.g. the
+    /// "view subflame in isolation" toggle) but not the flame data
+    /// itself. Goes through the same pending-actions pipeline as
+    /// normal edits.
+    pub fn request_flame_refresh(&mut self) {
+        let mut action = UpdateAction::none();
+        action.update_flame = true;
+        action.reset_accumulation = true;
+        self.pending_actions.merge(&action);
+    }
+
     /// True when the user is editing a subflame (not the main flame).
     pub fn is_editing_subflame(&self) -> bool {
         matches!(self.editing_target, EditingTarget::Subflame { .. })
