@@ -421,7 +421,19 @@ impl ConfigManager {
                 "switch to Main before adding a subflame".to_string(),
             ));
         }
-        let new = Flame::new();
+        // Seed with one identity-affine linear transform so the new
+        // subflame is renderable on day one. (An empty flame would
+        // make NUM_TRANSFORMS=0 and trip the shader builder's
+        // NUM_TRANSFORMS-1u underflow check; the builder has a
+        // .max(1) guard for that, but a single-transform default
+        // is much more useful to the user.)
+        let mut new = Flame::new();
+        new.name = format!("Subflame {}", self.current.flame.subflames.len() + 1);
+        let mut seed = crate::scene::transforms::Transform::default();
+        seed.set_variation("linear", 1.0);
+        seed.color = 0.5;
+        seed.color_speed = 0.5;
+        new.transforms.push(seed);
         self.current.flame.subflames.push(new);
         let mut action = UpdateAction::none();
         action.update_flame = true;

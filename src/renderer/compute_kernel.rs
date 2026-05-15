@@ -394,7 +394,13 @@ impl FlameRenderer {
     /// Note: This creates non-inlined constants (legacy mode) for compatibility
     fn build_shader_constants(&self, flame: &Flame) -> ShaderConstants {
         ShaderConstants {
-            num_transforms: flame.transforms.len() as u32,
+            // .max(1): empty flames (e.g., a freshly-added empty subflame
+            // before the user has populated it) would compile a shader
+            // with `NUM_TRANSFORMS - 1u` underflowing to u32::MAX, which
+            // WGSL catches at compile time and aborts the device on.
+            // The other constants path (`with_inlined_transforms`)
+            // already applies the same guard.
+            num_transforms: (flame.transforms.len() as u32).max(1),
             color_mode: self.color_mode as u32,
             has_post_affine: flame.has_post_affine(),
             has_attachments: flame.has_attachments(),
