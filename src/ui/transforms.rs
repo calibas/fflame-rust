@@ -455,12 +455,12 @@ fn render_variations_section(
             let registry = global_registry();
             let search_lower = search_text.to_lowercase();
 
-            // Collect categories to show based on render mode.
-            // Plugin variations are surfaced in 3D mode (subflame_wf, etc.);
-            // 2D is still gated because the shader builder's
-            // active_with_local_indices filters out non-Basic2D/Advanced2D
-            // variations from 2D shaders. Lifting that gate is a separate
-            // change.
+            // Collect categories to show based on render mode. Plugin
+            // variations are surfaced in both 2D and 3D — their wgsl_2d
+            // body is expected to be a sensible 2D implementation
+            // (subflame_wf is the current sole plugin and has one). The
+            // strictly-3D categories (Depth3D, Rotation3D, Full3D)
+            // remain 3D-only since their 2D bodies are stubs.
             let categories: Vec<VariationCategory> = if matches!(render_mode, RenderMode::ThreeD) {
                 vec![
                     VariationCategory::Basic2D,
@@ -474,6 +474,7 @@ fn render_variations_section(
                 vec![
                     VariationCategory::Basic2D,
                     VariationCategory::Advanced2D,
+                    VariationCategory::Plugin,
                 ]
             };
 
