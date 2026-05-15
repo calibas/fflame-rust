@@ -58,69 +58,90 @@ pub fn render_subflames_content(ui: &mut egui::Ui, config_manager: &mut ConfigMa
 
         ui.separator();
 
-        // Subflame rows
+        // Subflame rows — each row has the selectable label on the left
+        // and a trashcan delete button on the right. Deletion auto-swaps
+        // back to Main (in ConfigManager::delete_subflame), so it's safe
+        // to invoke from any editing context, including on the active
+        // subflame.
+        let mut delete_request: Option<usize> = None;
+        let mut select_request: Option<usize> = None;
         if logical_count == 0 {
             ui.label(egui::RichText::new("No subflames.").weak());
         } else {
             for i in 0..logical_count {
                 let row_selected = matches!(active, EditingTarget::Subflame { index } if index == i);
-                // Resolve display name without holding a borrow across set_editing_target
                 let name = subflame_display_name(config_manager, i);
                 let label = if name.is_empty() {
-                    format!("Subflame {}", i)
+                    "Subflame".to_string()
                 } else {
-                    format!("Subflame {} — {}", i, name)
+                    format!("Subflame — {}", name)
                 };
-                if ui.selectable_label(row_selected, label).clicked() && !row_selected {
-                    if let Err(e) =
-                        config_manager.set_editing_target(EditingTarget::Subflame { index: i })
-                    {
-                        log::warn!("set_editing_target(Subflame {}) failed: {}", i, e);
-                    }
-                }
+                ui.push_id(("subflame_row", i), |ui| {
+                    ui.horizontal(|ui| {
+                        // Trash on the right; place it first via
+                        // right-to-left layout so the selectable_label
+                        // expands to fill the remaining width.
+                        ui.with_layout(
+                            egui::Layout::right_to_left(egui::Align::Center),
+                            |ui| {
+                                if ui
+                                    .small_button("🗑")
+                                    .on_hover_text("Delete this subflame")
+                                    .clicked()
+                                {
+                                    delete_request = Some(i);
+                                }
+                                ui.with_layout(
+                                    egui::Layout::left_to_right(egui::Align::Center),
+                                    |ui| {
+                                        let resp = ui.selectable_label(row_selected, label);
+                                        if resp.clicked() && !row_selected {
+                                            select_request = Some(i);
+                                        }
+                                    },
+                                );
+                            },
+                        );
+                    });
+                });
+            }
+        }
+
+        // Apply requested deletion/selection after the loop so we don't
+        // mutate the manager mid-iteration over its visible state.
+        if let Some(i) = delete_request {
+            if let Err(e) = config_manager.delete_subflame(i) {
+                log::warn!("delete_subflame({}) failed: {}", i, e);
+            }
+        } else if let Some(i) = select_request {
+            if let Err(e) =
+                config_manager.set_editing_target(EditingTarget::Subflame { index: i })
+            {
+                log::warn!("set_editing_target(Subflame {}) failed: {}", i, e);
             }
         }
 
         ui.add_space(8.0);
         ui.separator();
 
-        // Add / Delete row. Disabled while editing a subflame.
-        ui.horizontal(|ui| {
-            let can_modify = !is_subflame;
-            if ui
-                .add_enabled(can_modify, egui::Button::new("+ Add subflame"))
-                .clicked()
-            {
-                if let Err(e) = config_manager.add_subflame() {
-                    log::warn!("add_subflame failed: {}", e);
-                }
+        // Add button — disabled while editing a subflame because adding
+        // mid-edit would shift the index space and break the stash
+        // invariant. (Delete is fine; it auto-swaps to Main first.)
+        let can_add = !is_subflame;
+        if ui
+            .add_enabled(can_add, egui::Button::new("+ Add subflame"))
+            .clicked()
+        {
+            if let Err(e) = config_manager.add_subflame() {
+                log::warn!("add_subflame failed: {}", e);
             }
-
-            // Delete: only sensible when editing Main and at least one
-            // subflame exists. Deletes the LAST one — simple, predictable.
-            // (Per-row delete would require a confirmation pattern we
-            // don't have in this panel yet.)
-            let has_any = logical_count > 0;
-            if ui
-                .add_enabled(can_modify && has_any, egui::Button::new("− Delete last"))
-                .clicked()
-            {
-                if logical_count > 0 {
-                    if let Err(e) = config_manager.delete_subflame(logical_count - 1) {
-                        log::warn!("delete_subflame failed: {}", e);
-                    }
-                }
-            }
-        });
-
+        }
         if is_subflame {
             ui.add_space(4.0);
             ui.label(
-                egui::RichText::new(
-                    "Switch to Main before adding or deleting subflames.",
-                )
-                .small()
-                .weak(),
+                egui::RichText::new("Switch to Main before adding a subflame.")
+                    .small()
+                    .weak(),
             );
         }
 
