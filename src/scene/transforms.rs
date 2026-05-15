@@ -1232,6 +1232,21 @@ pub struct Flame {
     /// Matches Apophysis XML attribute: soloxform="N"
     #[serde(skip_serializing_if = "Option::is_none")]
     pub solo_transform: Option<usize>,
+
+    /// Subflames — additional `Flame` definitions that the
+    /// `subflame_wf` variation references by index. A subflame's chaos
+    /// game runs as a *nested* IFS during this flame's iteration loop;
+    /// it is not a separate render.
+    ///
+    /// Owned by the parent `Flame` (not by `FractalConfig`) because the
+    /// active-variation set + shader-builder local index map need to
+    /// include the subflames' variations alongside the parent's. Future
+    /// layered rendering (separate `Flame` per layer) naturally gets a
+    /// per-layer subflame pool this way.
+    ///
+    /// See `docs/projects/subflames.md`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subflames: Vec<Flame>,
 }
 
 fn default_flame_name() -> String {
@@ -1249,6 +1264,7 @@ impl Default for Flame {
             perspective_strength: 0.0,  // Default to orthographic (flat)
             xaos: None,  // Default: no xaos (all weights implicitly 1.0)
             solo_transform: None,  // Default: no solo (all transforms active)
+            subflames: Vec::new(),  // Default: no subflames
         }
     }
 }
@@ -1302,6 +1318,21 @@ impl Flame {
         for t in &self.transforms { absorb(t, &mut all_variations); }
         for t in &self.linked_transforms { absorb(t, &mut all_variations); }
         for t in &self.final_transforms { absorb(t, &mut all_variations); }
+
+        // Include subflames' active variations in the union — the shader
+        // builder uses this set to pick which variation functions to
+        // include and what the local index map is. Subflames share the
+        // parent's variation pool so a subflame transform's variation
+        // dispatch lands at the same shader-local index the parent's
+        // dispatch would. v1 disallows nested subflames (see config
+        // validation in P4), so this recursion only goes one level deep
+        // in practice; the `.subflames` field of a subflame is empty.
+        for sf in &self.subflames {
+            for (name, weight) in sf.extract_active_variations() {
+                let existing = all_variations.entry(name).or_insert(0.0);
+                *existing = f32::max(*existing, weight);
+            }
+        }
 
         all_variations
     }
@@ -1400,6 +1431,7 @@ impl<'de> Deserialize<'de> for Flame {
             Projection, // Old field name for backward compatibility
             Xaos,
             SoloTransform,
+            Subflames,
         }
 
         struct FlameVisitor;
@@ -1424,6 +1456,7 @@ impl<'de> Deserialize<'de> for Flame {
                 let mut perspective_strength = None;
                 let mut xaos = None;
                 let mut solo_transform = None;
+                let mut subflames: Option<Vec<Flame>> = None;
 
                 while let Some(key) = map.next_key()? {
                     match key {
@@ -1480,6 +1513,9 @@ impl<'de> Deserialize<'de> for Flame {
                         Field::SoloTransform => {
                             solo_transform = Some(map.next_value()?);
                         }
+                        Field::Subflames => {
+                            subflames = Some(map.next_value()?);
+                        }
                     }
                 }
 
@@ -1497,6 +1533,7 @@ impl<'de> Deserialize<'de> for Flame {
                     perspective_strength: perspective_strength.unwrap_or(0.0),
                     xaos,
                     solo_transform: solo_transform.unwrap_or(None),
+                    subflames: subflames.unwrap_or_default(),
                 };
                 // Migrate any legacy singular `final_transform` field
                 // (consumed locally above into `final_transform`) into the
@@ -1509,7 +1546,7 @@ impl<'de> Deserialize<'de> for Flame {
             }
         }
 
-        const FIELDS: &[&str] = &["name", "transforms", "final_transform", "linked_transforms", "final_transforms", "render_mode", "perspective_strength", "projection", "xaos", "solo_transform"];
+        const FIELDS: &[&str] = &["name", "transforms", "final_transform", "linked_transforms", "final_transforms", "render_mode", "perspective_strength", "projection", "xaos", "solo_transform", "subflames"];
         deserializer.deserialize_struct("Flame", FIELDS, FlameVisitor)
     }
 }

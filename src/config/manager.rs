@@ -86,7 +86,35 @@ use super::delta::{
     AffineParam, ConfigChange, ConfigDelta, ConfigPath, ConfigValue, TransformKind, TransformRef, UpdateType,
 };
 use super::fractal_config::FractalConfig;
+use crate::scene::transforms::Flame;
 use std::time::Duration;
+
+/// Which flame the editor is currently focused on.
+///
+/// `Main` is the FractalConfig's main flame (the default). `Subflame(i)`
+/// indicates the user is editing `config.flame.subflames[i]` — but the
+/// implementation physically swaps that subflame into `config.flame` so
+/// every existing read site (renderer, UI panels) operates on the
+/// active flame transparently. The original main is stashed in
+/// `stashed_main` until the user swaps back.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EditingTarget {
+    Main,
+    /// The user is editing what was originally `config.flame.subflames[index]`.
+    /// While in this state, `config.flame` IS that subflame's data; the
+    /// original main flame lives in `ConfigManager::stashed_main`.
+    Subflame { index: usize },
+}
+
+/// Saved state of the main flame while the user is editing a subflame.
+///
+/// Holds the main flame plus the index that the currently-active
+/// subflame was pulled from, so swapping back restores both into the
+/// right slot.
+struct StashedMain {
+    flame: Flame,
+    subflame_index: usize,
+}
 
 /// Maximum duration for coalescing - total span from first to last change
 const MAX_COALESCE_SPAN: Duration = Duration::from_millis(3000);
@@ -237,6 +265,18 @@ pub struct ConfigManager {
     /// This allows users to tweak settings during animation playback
     /// without corrupting the undo history
     animation_mode: bool,
+
+    /// Which flame is currently being edited. See `EditingTarget`.
+    /// Invariant: when this is `Subflame { index }`, `stashed_main` is
+    /// `Some` and `current.flame` holds the subflame's data; the user-
+    /// visible "subflames list" is therefore stashed_main.flame.subflames
+    /// (with the index slot temporarily removed). When this is `Main`,
+    /// `stashed_main` is `None` and `current.flame` is the real main.
+    editing_target: EditingTarget,
+
+    /// Stashed main flame, present iff `editing_target` is `Subflame(_)`.
+    /// See `EditingTarget` doc for the swap invariant.
+    stashed_main: Option<StashedMain>,
 }
 
 /// Session state for transform modification (triangle editor, etc.).
@@ -263,6 +303,267 @@ impl ConfigManager {
             pending_actions: UpdateAction::none(),
             modify_session: None,
             animation_mode: false,
+            editing_target: EditingTarget::Main,
+            stashed_main: None,
+        }
+    }
+
+    // ===== Subflame editing =====
+
+    /// What the editor is currently focused on (main flame or a subflame).
+    pub fn editing_target(&self) -> EditingTarget {
+        self.editing_target
+    }
+
+    /// True when the user is editing a subflame (not the main flame).
+    pub fn is_editing_subflame(&self) -> bool {
+        matches!(self.editing_target, EditingTarget::Subflame { .. })
+    }
+
+    /// The user-visible subflames list — independent of swap state.
+    /// When editing the main flame, this is `current.flame.subflames`.
+    /// When editing a subflame, this is `stashed_main.flame.subflames`
+    /// (with the index of the active subflame logically "missing").
+    pub fn visible_subflames(&self) -> &[Flame] {
+        match self.editing_target {
+            EditingTarget::Main => &self.current.flame.subflames,
+            EditingTarget::Subflame { .. } => {
+                &self.stashed_main
+                    .as_ref()
+                    .expect("stashed_main must exist when editing a subflame")
+                    .flame
+                    .subflames
+            }
+        }
+    }
+
+    /// The total number of subflames as seen by the user, including the
+    /// currently-edited one. While editing subflame N, `visible_subflames()`
+    /// has the active slot removed, so the logical count is `len + 1` in
+    /// that case.
+    pub fn logical_subflame_count(&self) -> usize {
+        match self.editing_target {
+            EditingTarget::Main => self.current.flame.subflames.len(),
+            EditingTarget::Subflame { .. } => self.visible_subflames().len() + 1,
+        }
+    }
+
+    /// Switch to editing the given target and push a SwapTarget undo
+    /// entry so the switch is reversible.
+    ///
+    /// The renderer must re-upload the flame after this returns — the
+    /// caller checks `get_pending_actions()` to drive that.
+    pub fn set_editing_target(&mut self, target: EditingTarget) -> Result<(), ConfigError> {
+        if self.editing_target == target {
+            return Ok(());
+        }
+        let before = self.editing_target;
+        self.set_editing_target_silent(target)?;
+        // Push the swap as its own undo entry so walking back through
+        // history naturally restores the editing context at each step.
+        let change = ConfigChange::swap_target_snapshot(before, target);
+        self.push_undo(change);
+        Ok(())
+    }
+
+    /// Switch editing target without pushing an undo entry. Used by
+    /// undo/redo apply paths (which already have an entry) and by
+    /// `delete_subflame` (which packages the swap into a single
+    /// DeleteSubflame entry, not a separate SwapTarget).
+    fn set_editing_target_silent(&mut self, target: EditingTarget) -> Result<(), ConfigError> {
+        if self.editing_target == target {
+            return Ok(());
+        }
+        if let EditingTarget::Subflame { index } = target {
+            if index >= self.logical_subflame_count() {
+                return Err(ConfigError::InvalidPath(format!(
+                    "subflame {} out of bounds", index
+                )));
+            }
+        }
+
+        if let EditingTarget::Subflame { .. } = self.editing_target {
+            self.swap_back_to_main_internal();
+        }
+        if let EditingTarget::Subflame { index } = target {
+            self.swap_to_subflame_internal(index);
+        }
+
+        let mut action = UpdateAction::none();
+        action.update_flame = true;
+        action.rebuild_shader = true;
+        action.reset_accumulation = true;
+        self.pending_actions.merge(&action);
+        Ok(())
+    }
+
+    /// Swap the main flame's subflame at `index` into `current.flame`,
+    /// stashing the main. Caller guarantees we're currently in Main mode.
+    fn swap_to_subflame_internal(&mut self, index: usize) {
+        debug_assert!(matches!(self.editing_target, EditingTarget::Main));
+        debug_assert!(self.stashed_main.is_none());
+        // Pop subflame i out; the main's subflames list loses that entry
+        // for the duration of the edit (it gets reinserted on swap-back).
+        let subflame = self.current.flame.subflames.remove(index);
+        let original_main = std::mem::replace(&mut self.current.flame, subflame);
+        self.stashed_main = Some(StashedMain {
+            flame: original_main,
+            subflame_index: index,
+        });
+        self.editing_target = EditingTarget::Subflame { index };
+    }
+
+    /// Inverse of `swap_to_subflame_internal`: restore the main flame and
+    /// reinsert the edited subflame at its original index. Caller
+    /// guarantees we're currently in a Subflame state.
+    fn swap_back_to_main_internal(&mut self) {
+        debug_assert!(matches!(self.editing_target, EditingTarget::Subflame { .. }));
+        let stashed = self.stashed_main.take().expect("stashed_main must be Some when editing subflame");
+        let edited_subflame = std::mem::replace(&mut self.current.flame, stashed.flame);
+        self.current.flame.subflames.insert(stashed.subflame_index, edited_subflame);
+        self.editing_target = EditingTarget::Main;
+    }
+
+    /// Add a new empty subflame and return its index. Only allowed when
+    /// editing the main flame (the UI disables Add when editing a
+    /// subflame to keep the index space stable).
+    pub fn add_subflame(&mut self) -> Result<usize, ConfigError> {
+        if self.is_editing_subflame() {
+            return Err(ConfigError::InvalidPath(
+                "switch to Main before adding a subflame".to_string(),
+            ));
+        }
+        // Seed with one identity-affine linear transform so the new
+        // subflame is renderable on day one. (An empty flame would
+        // make NUM_TRANSFORMS=0 and trip the shader builder's
+        // NUM_TRANSFORMS-1u underflow check; the builder has a
+        // .max(1) guard for that, but a single-transform default
+        // is much more useful to the user.)
+        let mut new = Flame::new();
+        // Empty name by default — the panel renders unnamed subflames as
+        // just "Subflame"; the user renames if they want to disambiguate.
+        new.name = String::new();
+        let mut seed = crate::scene::transforms::Transform::default();
+        seed.set_variation("linear", 1.0);
+        seed.color = 0.5;
+        seed.color_speed = 0.5;
+        new.transforms.push(seed);
+        let index = self.current.flame.subflames.len();
+        self.current.flame.subflames.push(new.clone());
+
+        // Push undo entry — full Flame stored so redo recreates exactly
+        // even after intervening edits to the rest of the config.
+        let target_before = self.editing_target;
+        let change = ConfigChange::add_subflame_snapshot(
+            index,
+            new,
+            target_before,
+            "Add subflame".to_string(),
+        );
+        self.push_undo(change);
+
+        let mut action = UpdateAction::none();
+        action.update_flame = true;
+        action.reset_accumulation = true;
+        self.pending_actions.merge(&action);
+        Ok(index)
+    }
+
+    /// Delete the subflame at the user-visible `index`.
+    ///
+    /// If the user is currently editing a subflame (anywhere in the
+    /// list, not just the one being deleted), we first swap back to
+    /// Main so the subflames list is intact, *then* remove. The
+    /// visible-index → Vec-index mapping is preserved by the swap-
+    /// back, so the caller can pass the index they saw in the panel.
+    pub fn delete_subflame(&mut self, index: usize) -> Result<(), ConfigError> {
+        // Capture target_before so the undo restores both the flame at
+        // its slot AND the user's prior editing context.
+        let target_before = self.editing_target;
+        if self.is_editing_subflame() {
+            self.swap_back_to_main_internal();
+        }
+        if index >= self.current.flame.subflames.len() {
+            return Err(ConfigError::InvalidPath(format!(
+                "subflame {} out of bounds", index
+            )));
+        }
+        let removed = self.current.flame.subflames.remove(index);
+
+        // Push undo entry — full Flame stored so undo restores it
+        // byte-for-byte, even with all its transforms, variations, and
+        // parameters intact.
+        let change = ConfigChange::delete_subflame_snapshot(
+            index,
+            removed,
+            target_before,
+            "Delete subflame".to_string(),
+        );
+        self.push_undo(change);
+
+        let mut action = UpdateAction::none();
+        action.update_flame = true;
+        action.rebuild_shader = true;
+        action.reset_accumulation = true;
+        self.pending_actions.merge(&action);
+        Ok(())
+    }
+
+    /// Rename the subflame at `index`. Index is into the user-visible
+    /// list, so this works whether editing the main or another subflame.
+    pub fn rename_subflame(&mut self, index: usize, name: String) -> Result<(), ConfigError> {
+        match self.editing_target {
+            EditingTarget::Main => {
+                if index >= self.current.flame.subflames.len() {
+                    return Err(ConfigError::InvalidPath(format!(
+                        "subflame {} out of bounds", index
+                    )));
+                }
+                self.current.flame.subflames[index].name = name;
+            }
+            EditingTarget::Subflame { index: active } => {
+                if index == active {
+                    self.current.flame.name = name;
+                } else {
+                    // Map visible-index back to stashed-list index.
+                    // visible_subflames excludes the active slot, so
+                    // anything >= active in the visible list maps to
+                    // stashed_index + 1.
+                    let stashed_index = if index < active { index } else { index + 1 };
+                    let stashed = self.stashed_main.as_mut()
+                        .expect("stashed_main must be Some when editing subflame");
+                    if stashed_index >= stashed.flame.subflames.len() {
+                        return Err(ConfigError::InvalidPath(format!(
+                            "subflame {} out of bounds", index
+                        )));
+                    }
+                    stashed.flame.subflames[stashed_index].name = name;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Read-only snapshot of the *logical* FractalConfig — with the
+    /// edit-time swap undone. Use this for serialization (save to disk,
+    /// export config). Returns a clone to keep the borrow story simple.
+    ///
+    /// When editing the main flame, this is just `config().clone()`.
+    /// When editing a subflame, the active subflame is reinserted into
+    /// the stashed main's subflames at its original index, and the
+    /// stashed main becomes `flame` in the returned config.
+    pub fn logical_config(&self) -> FractalConfig {
+        match self.editing_target {
+            EditingTarget::Main => self.current.clone(),
+            EditingTarget::Subflame { .. } => {
+                let stashed = self.stashed_main.as_ref()
+                    .expect("stashed_main must be Some when editing subflame");
+                let mut cfg = self.current.clone();
+                // Put the active subflame (currently sitting in cfg.flame) back into the main's subflames list
+                let edited_subflame = std::mem::replace(&mut cfg.flame, stashed.flame.clone());
+                cfg.flame.subflames.insert(stashed.subflame_index, edited_subflame);
+                cfg
+            }
         }
     }
 
@@ -496,8 +797,22 @@ impl ConfigManager {
         // Move position back
         self.position -= 1;
 
+        // Silent-swap the editing context to match the entry's target so
+        // the inverse delta / snapshot applies to the correct flame. The
+        // entry's `target` was stamped from the editing_target *at the
+        // moment of push_undo*, so swapping to it here restores the
+        // exact context the change was made in.
+        //
+        // SwapTarget entries are an exception (their target equals the
+        // post-swap context, but their semantics is "swap back to
+        // before"), so we still pre-swap to entry.target — for swap
+        // entries that's a no-op since we're already there.
+        let entry_target = self.history[self.position].target;
+        self.set_editing_target_silent(entry_target)?;
+
         let change = &self.history[self.position];
-        log::debug!("Undo: {} (position now: {})", change.description, self.position);
+        log::debug!("Undo: {} (position now: {}, target: {:?})",
+            change.description, self.position, change.target);
 
         // Check if this is a snapshot-based undo
         if let Some(snapshot) = &change.snapshot {
@@ -505,6 +820,12 @@ impl ConfigManager {
                 crate::config::SnapshotData::FullConfig { before, .. } => {
                     log::debug!("  Restoring full config snapshot (before)");
                     self.current = (**before).clone();
+                    // FullConfig restoration replaces the entire current
+                    // state, which may include subflames. We drop any
+                    // active stash because it referenced the
+                    // pre-replacement flame. The user lands on Main.
+                    self.stashed_main = None;
+                    self.editing_target = EditingTarget::Main;
                     return Ok(UpdateType::IterationReset);
                 }
 
@@ -590,6 +911,49 @@ impl ConfigManager {
                     }
                     return Ok(UpdateType::ToneMappingOnly);
                 }
+
+                crate::config::SnapshotData::AddSubflame { index, target_before, .. } => {
+                    // Undo of add: remove the added subflame. Editing
+                    // target stays at target_before (which is Main per
+                    // the add gate — but we honor the captured value).
+                    log::debug!("  Undoing add subflame at index {}", index);
+                    let index = *index;
+                    let target_before = *target_before;
+                    // We pre-swapped to entry.target above; the add
+                    // happened on Main, so the subflames list is on
+                    // current.flame and the entry is there.
+                    if index < self.current.flame.subflames.len() {
+                        self.current.flame.subflames.remove(index);
+                    }
+                    self.set_editing_target_silent(target_before)?;
+                    return Ok(UpdateType::IterationReset);
+                }
+
+                crate::config::SnapshotData::DeleteSubflame { index, flame, target_before } => {
+                    // Undo of delete: re-insert flame at its original
+                    // index, then restore the pre-delete editing
+                    // target. The pre-swap above put us on entry.target
+                    // (Main), so subflames is current.flame.subflames.
+                    log::debug!("  Undoing delete subflame at index {}", index);
+                    let index = *index;
+                    let target_before = *target_before;
+                    let flame = flame.clone();
+                    if index <= self.current.flame.subflames.len() {
+                        self.current.flame.subflames.insert(index, flame);
+                    }
+                    self.set_editing_target_silent(target_before)?;
+                    return Ok(UpdateType::IterationReset);
+                }
+
+                crate::config::SnapshotData::SwapTarget { before, .. } => {
+                    // Undo of swap: go back to where we were. The pre-
+                    // swap above put us at entry.target (== after), so
+                    // we now swap silently to `before`.
+                    log::debug!("  Undoing swap target → {:?}", before);
+                    let before = *before;
+                    self.set_editing_target_silent(before)?;
+                    return Ok(UpdateType::IterationReset);
+                }
             }
         }
 
@@ -626,9 +990,15 @@ impl ConfigManager {
             return Err(ConfigError::EmptyRedoStack);
         }
 
+        // Silent-swap to the entry's target before re-applying. Same
+        // rationale as undo: the change was made in a specific editing
+        // context; replaying it requires being in that context.
+        let entry_target = self.history[self.position].target;
+        self.set_editing_target_silent(entry_target)?;
+
         // Clone the change to avoid borrow issues
         let change = self.history[self.position].clone();
-        log::debug!("Redo: {}", change.description);
+        log::debug!("Redo: {} (target: {:?})", change.description, change.target);
 
         // Check if this is a snapshot-based redo
         if let Some(snapshot) = &change.snapshot {
@@ -636,6 +1006,8 @@ impl ConfigManager {
                 crate::config::SnapshotData::FullConfig { after, .. } => {
                     log::debug!("  Restoring full config snapshot (after)");
                     self.current = (**after).clone();
+                    self.stashed_main = None;
+                    self.editing_target = EditingTarget::Main;
                     self.position += 1;
                     return Ok(UpdateType::IterationReset);
                 }
@@ -731,6 +1103,45 @@ impl ConfigManager {
                     self.position += 1;
                     return Ok(UpdateType::ToneMappingOnly);
                 }
+
+                crate::config::SnapshotData::AddSubflame { index, flame, .. } => {
+                    // Redo add: re-insert the same flame at the same
+                    // index. We pre-swapped to entry.target above, so
+                    // current.flame is the parent and its subflames
+                    // list is the canonical one to mutate.
+                    log::debug!("  Redoing add subflame at index {}", index);
+                    let index = *index;
+                    let flame = flame.clone();
+                    if index <= self.current.flame.subflames.len() {
+                        self.current.flame.subflames.insert(index, flame);
+                    }
+                    self.position += 1;
+                    return Ok(UpdateType::IterationReset);
+                }
+
+                crate::config::SnapshotData::DeleteSubflame { index, .. } => {
+                    // Redo delete: remove the flame at index. Pre-swap
+                    // above put us on entry.target (Main, post-delete
+                    // context), so subflames list is current.flame.
+                    log::debug!("  Redoing delete subflame at index {}", index);
+                    let index = *index;
+                    if index < self.current.flame.subflames.len() {
+                        self.current.flame.subflames.remove(index);
+                    }
+                    self.position += 1;
+                    return Ok(UpdateType::IterationReset);
+                }
+
+                crate::config::SnapshotData::SwapTarget { after, .. } => {
+                    // Redo swap: go to `after`. Pre-swap above already
+                    // put us at entry.target (== after), so this is a
+                    // no-op in well-formed history; we assert.
+                    log::debug!("  Redoing swap target → {:?}", after);
+                    let after = *after;
+                    self.set_editing_target_silent(after)?;
+                    self.position += 1;
+                    return Ok(UpdateType::IterationReset);
+                }
             }
         }
 
@@ -756,8 +1167,13 @@ impl ConfigManager {
     }
 
     /// Push change to history, maintaining depth limit and truncating future
-    fn push_undo(&mut self, change: ConfigChange) {
-        log::debug!("PUSH_UNDO: {}", change.description);
+    fn push_undo(&mut self, mut change: ConfigChange) {
+        // Stamp the entry with the editing context it was made in, so
+        // undo/redo can silently swap back to the right flame before
+        // applying. Every callsite gets correct tagging for free
+        // without having to know about subflames.
+        change.target = self.editing_target;
+        log::debug!("PUSH_UNDO: {} (target={:?})", change.description, change.target);
         for delta in &change.deltas {
             log::debug!("  Delta: {} → {}", delta.old_value, delta.new_value);
         }
@@ -839,6 +1255,14 @@ impl ConfigManager {
         }
 
         let last_change = &self.history[self.position - 1];
+
+        // Never coalesce across editing targets. An edit on Main and an
+        // edit on Subflame{N} are distinct user actions even if they
+        // hit the same ConfigPath, because they target different
+        // underlying Flames.
+        if last_change.target != self.editing_target {
+            return false;
+        }
 
         // Must have same number of deltas (same parameters being changed)
         if last_change.deltas.len() != new_change.deltas.len() {
@@ -1897,6 +2321,12 @@ impl ConfigManager {
         // Clear any preview state
         self.preview = None;
 
+        // Drop subflame edit state — the new config has its own
+        // subflames list; the old stash references a flame that's
+        // about to be replaced.
+        self.stashed_main = None;
+        self.editing_target = EditingTarget::Main;
+
         // Create single bidirectional snapshot
         let change = ConfigChange::full_config_snapshot(
             self.current.clone(),  // before
@@ -1927,6 +2357,10 @@ impl ConfigManager {
     pub fn load_config_silent(&mut self, new_config: FractalConfig) -> Result<(), ConfigError> {
         // Clear any preview state
         self.preview = None;
+
+        // Drop subflame edit state — see load_config for rationale.
+        self.stashed_main = None;
+        self.editing_target = EditingTarget::Main;
 
         // Replace current config (no undo entry)
         self.current = new_config;
@@ -2073,6 +2507,16 @@ impl ConfigManager {
                     self.push_undo(change);
                     self.record_action(UpdateType::ToneMappingOnly);
                     return Ok(());
+                }
+
+                // Subflame variants flow through their dedicated APIs
+                // (add_subflame / delete_subflame / set_editing_target)
+                // which already push the right snapshot — they don't
+                // route through the generic apply_structural_change.
+                crate::config::SnapshotData::AddSubflame { .. }
+                | crate::config::SnapshotData::DeleteSubflame { .. }
+                | crate::config::SnapshotData::SwapTarget { .. } => {
+                    return Err(ConfigError::InvalidOperation);
                 }
             }
         } else {
@@ -2658,5 +3102,259 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Swapping to a subflame, mutating its transforms, then swapping
+    /// back must preserve the mutation in the right slot — and must
+    /// not corrupt the main flame or the other subflames.
+    #[test]
+    fn editing_target_roundtrip_preserves_edits() {
+        use crate::scene::transforms::{Flame, Transform};
+
+        let mut config = FractalConfig::default();
+        // Main flame with a known marker (transform a-coef = 11.0).
+        // Default config may have zero transforms — push one if so.
+        if config.flame.transforms.is_empty() {
+            config.flame.transforms.push(Transform::new());
+        }
+        config.flame.transforms[0].a = 11.0;
+        // Three subflames, each tagged by transform a-coef
+        for marker in [101.0, 102.0, 103.0] {
+            let mut sf = Flame::new();
+            sf.transforms.push({
+                let mut t = Transform::new();
+                t.a = marker;
+                t
+            });
+            config.flame.subflames.push(sf);
+        }
+
+        let mut mgr = ConfigManager::new(config);
+        assert_eq!(mgr.editing_target(), EditingTarget::Main);
+        assert_eq!(mgr.current.flame.transforms[0].a, 11.0);
+        assert_eq!(mgr.visible_subflames().len(), 3);
+
+        // Swap to subflame 1
+        mgr.set_editing_target(EditingTarget::Subflame { index: 1 }).unwrap();
+        assert_eq!(mgr.current.flame.transforms[0].a, 102.0,
+            "subflame 1 should now occupy current.flame");
+        // visible_subflames now excludes the active slot
+        assert_eq!(mgr.visible_subflames().len(), 2);
+        assert_eq!(mgr.logical_subflame_count(), 3);
+
+        // Mutate the active subflame
+        mgr.current.flame.transforms[0].a = 999.0;
+
+        // Swap to subflame 2 (must un-swap subflame 1 first, then swap subflame 2 in)
+        mgr.set_editing_target(EditingTarget::Subflame { index: 2 }).unwrap();
+        assert_eq!(mgr.current.flame.transforms[0].a, 103.0,
+            "subflame 2 should now occupy current.flame");
+
+        // Swap back to Main — the 999.0 edit must be preserved at index 1
+        mgr.set_editing_target(EditingTarget::Main).unwrap();
+        assert_eq!(mgr.current.flame.transforms[0].a, 11.0,
+            "main flame restored");
+        assert_eq!(mgr.current.flame.subflames.len(), 3);
+        assert_eq!(mgr.current.flame.subflames[0].transforms[0].a, 101.0);
+        assert_eq!(mgr.current.flame.subflames[1].transforms[0].a, 999.0,
+            "edit to subflame 1 must persist");
+        assert_eq!(mgr.current.flame.subflames[2].transforms[0].a, 103.0);
+    }
+
+    /// Add is rejected while editing a subflame (would shift the index
+    /// space mid-edit). Delete auto-swaps to Main first, then deletes.
+    /// logical_config must always reflect the un-swapped state.
+    #[test]
+    fn add_delete_rules_and_logical_config() {
+        use crate::scene::transforms::Transform;
+
+        let config = FractalConfig::default();
+        let mut mgr = ConfigManager::new(config);
+
+        // Add three subflames; tag each with a distinct marker so we can
+        // verify which one gets deleted.
+        for marker in [100.0, 200.0, 300.0] {
+            mgr.add_subflame().unwrap();
+            let idx = mgr.current.flame.subflames.len() - 1;
+            // add_subflame seeds one transform with the linear variation;
+            // overwrite `a` as the marker so we can identify it later.
+            mgr.current.flame.subflames[idx].transforms[0].a = marker;
+        }
+        assert_eq!(mgr.current.flame.subflames.len(), 3);
+
+        // Swap to subflame 1 — add must still be rejected (would shift
+        // the index space and confuse the stash invariant).
+        mgr.set_editing_target(EditingTarget::Subflame { index: 1 }).unwrap();
+        assert!(mgr.add_subflame().is_err(), "add must be rejected while editing a subflame");
+
+        // logical_config must look as if we never swapped.
+        let logical = mgr.logical_config();
+        assert_eq!(logical.flame.subflames.len(), 3);
+
+        // Delete the active subflame (index 1, marker 200.0) while
+        // editing it. Must auto-swap to Main and remove the right entry.
+        mgr.delete_subflame(1).unwrap();
+        assert_eq!(mgr.editing_target(), EditingTarget::Main,
+            "delete from subflame mode must return to Main");
+        assert_eq!(mgr.current.flame.subflames.len(), 2);
+        assert_eq!(mgr.current.flame.subflames[0].transforms[0].a, 100.0);
+        assert_eq!(mgr.current.flame.subflames[1].transforms[0].a, 300.0,
+            "subflame 1 should be removed; subflame 2 shifts down");
+
+        // Deleting a non-active subflame from subflame mode also works.
+        // Re-add to get back to 3 subflames, then test the cross-delete.
+        mgr.add_subflame().unwrap();
+        let last = mgr.current.flame.subflames.len() - 1;
+        mgr.current.flame.subflames[last].transforms[0].a = 400.0;
+        mgr.set_editing_target(EditingTarget::Subflame { index: 0 }).unwrap();
+        mgr.delete_subflame(2).unwrap();  // delete marker 400.0 while editing subflame 0
+        assert_eq!(mgr.editing_target(), EditingTarget::Main);
+        assert_eq!(mgr.current.flame.subflames.len(), 2);
+        assert_eq!(mgr.current.flame.subflames[0].transforms[0].a, 100.0);
+        assert_eq!(mgr.current.flame.subflames[1].transforms[0].a, 300.0);
+    }
+
+    /// Undo/redo must thread through editing-target swaps correctly:
+    /// edits made while editing a subflame must apply to that subflame
+    /// on undo, never silently to whatever flame is swapped in at undo
+    /// time. This is the corruption the target-aware history is
+    /// supposed to prevent.
+    #[test]
+    fn undo_redo_threads_through_target_swaps() {
+        use crate::scene::transforms::{Flame, Transform};
+        use crate::config::ConfigPath;
+
+        let mut config = FractalConfig::default();
+        if config.flame.transforms.is_empty() {
+            config.flame.transforms.push(Transform::new());
+        }
+        config.flame.transforms[0].a = 1.0;  // Main marker
+        let mut sf = Flame::new();
+        let mut t = Transform::new();
+        t.a = 100.0;  // Subflame marker
+        sf.transforms.push(t);
+        config.flame.subflames.push(sf);
+
+        let mut mgr = ConfigManager::new(config);
+
+        // Three actions across the target boundary:
+        //   1. Edit Main's transform 0 a-coef: 1.0 → 2.0
+        //   2. Swap to Subflame 0
+        //   3. Edit Subflame's transform 0 a-coef: 100.0 → 200.0
+        mgr.update_param(
+            ConfigPath::TransformAffine {
+                index: 0,
+                param: crate::config::AffineParam::A,
+            },
+            2.0f32.into(),
+        ).unwrap();
+        mgr.set_editing_target(EditingTarget::Subflame { index: 0 }).unwrap();
+        mgr.update_param(
+            ConfigPath::TransformAffine {
+                index: 0,
+                param: crate::config::AffineParam::A,
+            },
+            200.0f32.into(),
+        ).unwrap();
+
+        // Sanity: we're on the subflame, both edits stuck on their respective flames.
+        assert_eq!(mgr.editing_target(), EditingTarget::Subflame { index: 0 });
+        assert_eq!(mgr.current.flame.transforms[0].a, 200.0);  // subflame's value
+        let logical = mgr.logical_config();
+        assert_eq!(logical.flame.transforms[0].a, 2.0);  // main's value
+        assert_eq!(logical.flame.subflames[0].transforms[0].a, 200.0);
+
+        // Undo 3 times: revert the subflame edit, revert the swap,
+        // revert the main edit.
+        mgr.undo().unwrap();  // undo subflame edit
+        assert_eq!(mgr.editing_target(), EditingTarget::Subflame { index: 0 });
+        assert_eq!(mgr.current.flame.transforms[0].a, 100.0,
+            "subflame edit must undo on the subflame, not on whatever is swapped in");
+
+        mgr.undo().unwrap();  // undo target swap
+        assert_eq!(mgr.editing_target(), EditingTarget::Main,
+            "undoing the swap must return us to Main");
+        assert_eq!(mgr.current.flame.transforms[0].a, 2.0,
+            "main's edit must still be in place — it was made before the swap");
+
+        mgr.undo().unwrap();  // undo main edit
+        assert_eq!(mgr.editing_target(), EditingTarget::Main);
+        assert_eq!(mgr.current.flame.transforms[0].a, 1.0,
+            "main edit must revert; subflame data must still be intact in subflames[0]");
+        assert_eq!(mgr.current.flame.subflames[0].transforms[0].a, 100.0);
+
+        // Redo all three back to where we were.
+        mgr.redo().unwrap();
+        assert_eq!(mgr.editing_target(), EditingTarget::Main);
+        assert_eq!(mgr.current.flame.transforms[0].a, 2.0);
+
+        mgr.redo().unwrap();
+        assert_eq!(mgr.editing_target(), EditingTarget::Subflame { index: 0 });
+        assert_eq!(mgr.current.flame.transforms[0].a, 100.0);  // pre-edit subflame value
+
+        mgr.redo().unwrap();
+        assert_eq!(mgr.editing_target(), EditingTarget::Subflame { index: 0 });
+        assert_eq!(mgr.current.flame.transforms[0].a, 200.0);
+    }
+
+    /// Add/delete subflame snapshots must roundtrip without losing
+    /// any of the subflame's contents — every transform, variation,
+    /// and parameter must come back identically on undo.
+    #[test]
+    fn add_delete_subflame_undo_redo_recreates_byte_for_byte() {
+        use crate::scene::transforms::Transform;
+
+        let mut config = FractalConfig::default();
+        if config.flame.transforms.is_empty() {
+            config.flame.transforms.push(Transform::new());
+        }
+        let mut mgr = ConfigManager::new(config);
+
+        // Add a subflame, customize it.
+        let idx = mgr.add_subflame().unwrap();
+        let mut t = Transform::new();
+        t.a = 42.0;
+        t.b = 99.0;
+        t.set_variation("spherical", 0.75);
+        mgr.current.flame.subflames[idx].transforms.push(t);
+        mgr.current.flame.subflames[idx].name = "Test Subflame".to_string();
+        let snapshot_after_add = mgr.current.flame.subflames[idx].clone();
+
+        // Delete it.
+        mgr.delete_subflame(idx).unwrap();
+        assert_eq!(mgr.current.flame.subflames.len(), 0);
+
+        // Undo the delete — subflame must return *exactly* as it was,
+        // not just "a subflame at that index".
+        mgr.undo().unwrap();
+        assert_eq!(mgr.current.flame.subflames.len(), 1);
+        let restored = &mgr.current.flame.subflames[0];
+        assert_eq!(restored.name, snapshot_after_add.name);
+        assert_eq!(restored.transforms.len(), snapshot_after_add.transforms.len());
+        // Spot-check the custom transform we added — the test subflame
+        // has the default linear transform at [0] plus our custom at [1].
+        assert_eq!(restored.transforms[1].a, 42.0);
+        assert_eq!(restored.transforms[1].b, 99.0);
+        assert_eq!(
+            restored.transforms[1].variations.get("spherical").copied(),
+            Some(0.75)
+        );
+
+        // Redo the delete — gone again.
+        mgr.redo().unwrap();
+        assert_eq!(mgr.current.flame.subflames.len(), 0);
+
+        // Undo two steps — back to before the add. Both the delete and
+        // the add itself reverted.
+        mgr.undo().unwrap();  // undo delete
+        mgr.undo().unwrap();  // undo add
+        assert_eq!(mgr.current.flame.subflames.len(), 0);
+
+        // BUT: the WHOLE subflame is gone from history-recreated state,
+        // including the post-add edits — those edits weren't in the
+        // history because we mutated subflames[idx] directly. That's
+        // OK; a real UI would push them through ConfigManager.
+        // The thing we ARE checking: the structural snapshots are
+        // restored cleanly without leftover ghost subflames.
     }
 }

@@ -564,6 +564,8 @@ pub fn flame_response_to_config(
         perspective_strength: resp.perspective_strength,
         xaos,
         solo_transform: resp.solo_transform.map(|i| i as usize),
+        // API wire format doesn't carry subflames yet; future API rev can add them.
+        subflames: Vec::new(),
     };
     flame.migrate_legacy_final(legacy_final);
 

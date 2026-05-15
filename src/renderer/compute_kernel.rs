@@ -394,7 +394,13 @@ impl FlameRenderer {
     /// Note: This creates non-inlined constants (legacy mode) for compatibility
     fn build_shader_constants(&self, flame: &Flame) -> ShaderConstants {
         ShaderConstants {
-            num_transforms: flame.transforms.len() as u32,
+            // .max(1): empty flames (e.g., a freshly-added empty subflame
+            // before the user has populated it) would compile a shader
+            // with `NUM_TRANSFORMS - 1u` underflowing to u32::MAX, which
+            // WGSL catches at compile time and aborts the device on.
+            // The other constants path (`with_inlined_transforms`)
+            // already applies the same guard.
+            num_transforms: (flame.transforms.len() as u32).max(1),
             color_mode: self.color_mode as u32,
             has_post_affine: flame.has_post_affine(),
             has_attachments: flame.has_attachments(),
@@ -786,6 +792,17 @@ impl FlameRenderer {
         self.buffers.update_transforms(queue, &config.flame);
         self.buffers.update_variation_params(queue, &config.flame);
         self.buffers.update_attachments(queue, &config.flame, config.flame.attachment_cap());
+        // Pack subflames against the same local_map the parent transforms used.
+        // `get_id_mapping()` returns the union map (extract_active_variations
+        // already recurses into subflames), so parent and subflame xforms see
+        // consistent variation indices.
+        if let Err(e) = self.buffers.update_subflames(
+            queue,
+            &config.flame.subflames,
+            &config.flame.get_id_mapping(),
+        ) {
+            log::error!("Failed to update subflames: {}", e);
+        }
         self.init_dirty = true;
 
         // 1b. Update xaos buffer (create/drop as needed)
@@ -929,6 +946,13 @@ impl FlameRenderer {
         self.buffers.update_transforms(queue, flame);
         self.buffers.update_variation_params(queue, flame);
         self.buffers.update_attachments(queue, flame, flame.attachment_cap());
+        if let Err(e) = self.buffers.update_subflames(
+            queue,
+            &flame.subflames,
+            &flame.get_id_mapping(),
+        ) {
+            log::error!("Failed to update subflames: {}", e);
+        }
         self.init_dirty = true;
 
         // Update xaos buffer (create/drop as needed)

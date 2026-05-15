@@ -1134,6 +1134,45 @@ pub enum SnapshotData {
     /// Undo: move from to_index back to from_index
     /// Redo: move from from_index to to_index
     MoveDensityEffect { from_index: usize, to_index: usize },
+
+    /// Subflame added.
+    /// Undo: swap editing_target to `target_before`, remove subflame at `index`.
+    /// Redo: swap to Main, append subflame at `index` (always end of list at
+    /// time of add per the add-only-on-Main gate).
+    /// `flame` is the *full* added Flame so redo recreates byte-for-byte
+    /// even after intervening edits to the rest of the config.
+    AddSubflame {
+        index: usize,
+        flame: crate::scene::transforms::Flame,
+        /// Editing context at the moment of the add. Always Main today
+        /// (the public API gates add on Main), but stored for future
+        /// flexibility and so the undo can confidently restore context.
+        target_before: super::manager::EditingTarget,
+    },
+
+    /// Subflame deleted.
+    /// Undo: re-insert `flame` at `index`, swap editing_target to `target_before`.
+    /// Redo: silent-swap to Main, remove subflame at `index`.
+    /// `flame` holds the entire deleted Flame so undo restores it
+    /// exactly — every transform, variation, parameter, even nested
+    /// state — independent of any subsequent edits.
+    DeleteSubflame {
+        index: usize,
+        flame: crate::scene::transforms::Flame,
+        /// Editing context before the delete. Can be Main or any
+        /// Subflame{i} (delete_subflame auto-swaps to Main internally,
+        /// so we capture the pre-swap state here).
+        target_before: super::manager::EditingTarget,
+    },
+
+    /// Editing target swapped (user clicked Main / Subflame N in the
+    /// Subflames panel).
+    /// Undo: swap to `before`. Redo: swap to `after`.
+    /// No state-data change — only the editing context.
+    SwapTarget {
+        before: super::manager::EditingTarget,
+        after: super::manager::EditingTarget,
+    },
 }
 
 /// A batch of related changes (single undo point)
@@ -1150,6 +1189,14 @@ pub struct ConfigChange {
     /// When coalescing: timestamp = first change, last_update_time = most recent change
     /// This allows checking both inactivity (time since last update) and total span (time since first)
     pub last_update_time: Instant,
+    /// Which flame this change was made against. Undo/redo silently
+    /// swaps the editing context to match this target before applying
+    /// the inverse delta or snapshot. Without this tag, an edit made
+    /// while on Subflame{N} would be replayed against whatever flame
+    /// happens to be swapped in at undo time, silently corrupting
+    /// state. Stamped by `ConfigManager::push_undo` from the manager's
+    /// current `editing_target`.
+    pub target: super::manager::EditingTarget,
 }
 
 impl ConfigChange {
@@ -1163,6 +1210,10 @@ impl ConfigChange {
             description,
             snapshot: None,
             last_update_time: timestamp,  // Initially same as timestamp
+            // Stamped by push_undo with the manager's editing_target —
+            // this default only matters for any direct ConfigChange use
+            // outside the manager (e.g., tests).
+            target: super::manager::EditingTarget::Main,
         }
     }
 
@@ -1178,6 +1229,10 @@ impl ConfigChange {
             description,
             snapshot: None,
             last_update_time: timestamp,  // Initially same as timestamp
+            // Stamped by push_undo with the manager's editing_target —
+            // this default only matters for any direct ConfigChange use
+            // outside the manager (e.g., tests).
+            target: super::manager::EditingTarget::Main,
         }
     }
 
@@ -1198,6 +1253,7 @@ impl ConfigChange {
                 after: Box::new(after),
             }),
             last_update_time: now,
+            target: super::manager::EditingTarget::Main,
         }
     }
 
@@ -1216,6 +1272,7 @@ impl ConfigChange {
             description,
             snapshot: Some(SnapshotData::AddTransform { index, transform, xaos_before, clone_from: None }),
             last_update_time: now,
+            target: super::manager::EditingTarget::Main,
         }
     }
 
@@ -1235,6 +1292,7 @@ impl ConfigChange {
             description,
             snapshot: Some(SnapshotData::AddTransform { index, transform, xaos_before, clone_from: Some(clone_from) }),
             last_update_time: now,
+            target: super::manager::EditingTarget::Main,
         }
     }
 
@@ -1253,6 +1311,7 @@ impl ConfigChange {
             description,
             snapshot: Some(SnapshotData::DeleteTransform { index, transform, xaos_before }),
             last_update_time: now,
+            target: super::manager::EditingTarget::Main,
         }
     }
 
@@ -1273,6 +1332,7 @@ impl ConfigChange {
             description,
             snapshot: Some(SnapshotData::ModifyTransform { kind, index, before, after }),
             last_update_time: now,
+            target: super::manager::EditingTarget::Main,
         }
     }
 
@@ -1289,6 +1349,7 @@ impl ConfigChange {
             description,
             snapshot: Some(SnapshotData::AddColorEffect { index, effect }),
             last_update_time: now,
+            target: super::manager::EditingTarget::Main,
         }
     }
 
@@ -1305,6 +1366,7 @@ impl ConfigChange {
             description,
             snapshot: Some(SnapshotData::DeleteColorEffect { index, effect }),
             last_update_time: now,
+            target: super::manager::EditingTarget::Main,
         }
     }
 
@@ -1321,6 +1383,7 @@ impl ConfigChange {
             description,
             snapshot: Some(SnapshotData::AddDensityEffect { index, effect }),
             last_update_time: now,
+            target: super::manager::EditingTarget::Main,
         }
     }
 
@@ -1337,6 +1400,7 @@ impl ConfigChange {
             description,
             snapshot: Some(SnapshotData::DeleteDensityEffect { index, effect }),
             last_update_time: now,
+            target: super::manager::EditingTarget::Main,
         }
     }
 
@@ -1353,6 +1417,7 @@ impl ConfigChange {
             description,
             snapshot: Some(SnapshotData::MoveColorEffect { from_index, to_index }),
             last_update_time: now,
+            target: super::manager::EditingTarget::Main,
         }
     }
 
@@ -1369,6 +1434,60 @@ impl ConfigChange {
             description,
             snapshot: Some(SnapshotData::MoveDensityEffect { from_index, to_index }),
             last_update_time: now,
+            target: super::manager::EditingTarget::Main,
+        }
+    }
+
+    /// Subflame added.
+    pub fn add_subflame_snapshot(
+        index: usize,
+        flame: crate::scene::transforms::Flame,
+        target_before: super::manager::EditingTarget,
+        description: String,
+    ) -> Self {
+        let now = Instant::now();
+        Self {
+            deltas: vec![],
+            timestamp: now,
+            description,
+            snapshot: Some(SnapshotData::AddSubflame { index, flame, target_before }),
+            last_update_time: now,
+            target: super::manager::EditingTarget::Main,
+        }
+    }
+
+    /// Subflame deleted. `flame` must hold the FULL removed Flame so
+    /// undo restores it byte-for-byte.
+    pub fn delete_subflame_snapshot(
+        index: usize,
+        flame: crate::scene::transforms::Flame,
+        target_before: super::manager::EditingTarget,
+        description: String,
+    ) -> Self {
+        let now = Instant::now();
+        Self {
+            deltas: vec![],
+            timestamp: now,
+            description,
+            snapshot: Some(SnapshotData::DeleteSubflame { index, flame, target_before }),
+            last_update_time: now,
+            target: super::manager::EditingTarget::Main,
+        }
+    }
+
+    /// Editing target switched (Main ↔ Subflame{N}).
+    pub fn swap_target_snapshot(
+        before: super::manager::EditingTarget,
+        after: super::manager::EditingTarget,
+    ) -> Self {
+        let now = Instant::now();
+        Self {
+            deltas: vec![],
+            timestamp: now,
+            description: format!("Switch editing target ({:?} → {:?})", before, after),
+            snapshot: Some(SnapshotData::SwapTarget { before, after }),
+            last_update_time: now,
+            target: super::manager::EditingTarget::Main,
         }
     }
 
@@ -1381,6 +1500,7 @@ impl ConfigChange {
             description: format!("Undo: {}", self.description),
             snapshot: self.snapshot.clone(),
             last_update_time: now,
+            target: super::manager::EditingTarget::Main,
         }
     }
 

@@ -628,8 +628,18 @@ impl ShaderBuilder {
             .filter_map(|name| {
                 let local_idx = *local_map.get(name)?;
                 if !render_3d {
+                    // 2D shaders: drop variations whose body is only
+                    // meaningful in 3D (Z-only depth manipulation, 3D
+                    // rotation matrices, full-3D projections). Plugin
+                    // variations are allowed — their wgsl_2d body is
+                    // expected to be a sensible 2D implementation.
                     let info = self.registry.get(name)?;
-                    if !matches!(info.category, VariationCategory::Basic2D | VariationCategory::Advanced2D) {
+                    if matches!(
+                        info.category,
+                        VariationCategory::Depth3D
+                            | VariationCategory::Rotation3D
+                            | VariationCategory::Full3D,
+                    ) {
                         return None;
                     }
                 }
@@ -1145,11 +1155,30 @@ impl ShaderBuilder {
         // 7. Generate apply_variations with fixed registry indices
         // Pass inlined transforms for dead code elimination if available
         if render_3d {
-            shader.push_str(&self.build_apply_variations_3d(&active, constants.inlined_transforms.as_ref(), has_dc));
+            shader.push_str(&self.build_apply_variations_3d(&active, constants.inlined_transforms.as_ref(), has_dc, false));
         } else {
-            shader.push_str(&self.build_apply_variations_2d(&active, constants.inlined_transforms.as_ref(), has_dc));
+            shader.push_str(&self.build_apply_variations_2d(&active, constants.inlined_transforms.as_ref(), has_dc, false));
         }
         shader.push('\n');
+
+        // 7a. If subflame_wf is active, emit a parallel apply_subflame_variations
+        //     function and inject subflame.wgsl. The parallel function excludes
+        //     subflame_wf dispatch — required to break the otherwise-recursive
+        //     call graph (apply_variations → variation_subflame_wf →
+        //     subflame_iterate → apply_*). v1 disallows nested subflames anyway,
+        //     so dropping that case is the right semantics.
+        let has_subflame = active.iter().any(|(name, _)| name == "subflame_wf");
+        if has_subflame {
+            if render_3d {
+                shader.push_str(&self.build_apply_variations_3d(&active, constants.inlined_transforms.as_ref(), has_dc, true));
+            } else {
+                shader.push_str(&self.build_apply_variations_2d(&active, constants.inlined_transforms.as_ref(), has_dc, true));
+            }
+            shader.push('\n');
+            let subflame_src = include_str!("../shaders/core/subflame.wgsl");
+            shader.push_str(&processor.process(subflame_src));
+            shader.push('\n');
+        }
 
         // 8. Per-flame packed get_param (must come before utilities, which
         //    references it in some places via inlined comments). The packed
@@ -1213,21 +1242,33 @@ impl ShaderBuilder {
     /// When `has_dc` is true, the function takes a `vc: ptr<function, f32>` parameter for
     /// direct-color variations to write to; when false, the parameter is omitted entirely
     /// (zero-cost path when no DC variation is in the active set).
+    ///
+    /// When `is_subflame` is true, generates a parallel `apply_subflame_variations`
+    /// function instead, which excludes any `subflame_wf` dispatch (breaking the
+    /// otherwise-recursive call cycle: apply_variations → variation_subflame_wf →
+    /// subflame_iterate → apply_*). v1 disallows nested subflames, so this is
+    /// the right semantics. Inlined transforms are also disabled in subflame
+    /// mode since subflame xforms use synthetic xform_ids outside the parent's
+    /// inlined range.
     fn build_apply_variations_2d(
         &self,
         active_variations: &[(String, u32)],
         inlined_transforms: Option<&Vec<InlinedTransform>>,
         has_dc: bool,
+        is_subflame: bool,
     ) -> String {
         use crate::variations::VariationPhase;
 
-        // When inlined, we generate per-transform specialized code
-        let use_inlined = inlined_transforms.is_some();
+        // When inlined, we generate per-transform specialized code.
+        // Subflame mode forces buffer reads (synthetic xform_ids fall outside
+        // the parent's inlined transform set).
+        let use_inlined = !is_subflame && inlined_transforms.is_some();
 
+        let fn_name = if is_subflame { "apply_subflame_variations" } else { "apply_variations" };
         let signature = if has_dc {
-            "fn apply_variations(xform: Transform, xform_id: u32, p: vec2<f32>, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec2<f32> {\n"
+            format!("fn {}(xform: Transform, xform_id: u32, p: vec2<f32>, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec2<f32> {{\n", fn_name)
         } else {
-            "fn apply_variations(xform: Transform, xform_id: u32, p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {\n"
+            format!("fn {}(xform: Transform, xform_id: u32, p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {{\n", fn_name)
         };
         let mut code = String::from(
             "// Apply all variations with Apophysis 4-phase execution model (XForm.pas:343-383)\n\
@@ -1236,14 +1277,18 @@ impl ShaderBuilder {
              // When has_dc=false, the parameter is omitted — no DC variation in the active\n\
              // set means no inner call references vc, so it's pure overhead.\n",
         );
-        code.push_str(signature);
+        code.push_str(&signature);
 
-        // Separate variations by phase
+        // Separate variations by phase. In subflame mode, exclude subflame_wf
+        // entirely to break the recursive call cycle (see fn doc).
         let mut pre_variations = Vec::new();
         let mut normal_variations = Vec::new();
         let mut post_variations = Vec::new();
 
         for (name, idx) in active_variations {
+            if is_subflame && name == "subflame_wf" {
+                continue;
+            }
             if let Some(info) = self.registry.get(name) {
                 match info.phase {
                     VariationPhase::Pre => pre_variations.push((name.clone(), *idx, info)),
@@ -1389,34 +1434,43 @@ impl ShaderBuilder {
     ///
     /// When `inlined_transforms` is provided, generates code with compile-time constant
     /// variation weights, enabling dead code elimination for unused variations per-transform.
+    /// See the 2D variant's doc for `is_subflame` semantics.
     fn build_apply_variations_3d(
         &self,
         active_variations: &[(String, u32)],
         inlined_transforms: Option<&Vec<InlinedTransform>>,
         has_dc: bool,
+        is_subflame: bool,
     ) -> String {
         use crate::variations::VariationPhase;
 
-        // When inlined, we generate per-transform specialized code
-        let use_inlined = inlined_transforms.is_some();
+        // When inlined, we generate per-transform specialized code.
+        // Subflame mode forces buffer reads — synthetic xform_ids fall outside
+        // the parent's inlined transform set.
+        let use_inlined = !is_subflame && inlined_transforms.is_some();
 
+        let fn_name = if is_subflame { "apply_subflame_variations" } else { "apply_variations" };
         let signature = if has_dc {
-            "fn apply_variations(xform: Transform, xform_id: u32, p: vec3<f32>, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec3<f32> {\n"
+            format!("fn {}(xform: Transform, xform_id: u32, p: vec3<f32>, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec3<f32> {{\n", fn_name)
         } else {
-            "fn apply_variations(xform: Transform, xform_id: u32, p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {\n"
+            format!("fn {}(xform: Transform, xform_id: u32, p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {{\n", fn_name)
         };
         let mut code = String::from(
             "// Apply all variations with Apophysis 4-phase execution model (XForm.pas:343-383)\n\
              // See 2D variant for the meaning of the `vc` pointer.\n",
         );
-        code.push_str(signature);
+        code.push_str(&signature);
 
-        // Separate variations by phase
+        // Separate variations by phase. In subflame mode, exclude subflame_wf
+        // entirely to break the recursive call cycle (see fn doc).
         let mut pre_variations = Vec::new();
         let mut normal_variations = Vec::new();
         let mut post_variations = Vec::new();
 
         for (name, idx) in active_variations {
+            if is_subflame && name == "subflame_wf" {
+                continue;
+            }
             if let Some(info) = self.registry.get(name) {
                 match info.phase {
                     VariationPhase::Pre => pre_variations.push((name.clone(), *idx, info)),
@@ -1766,6 +1820,75 @@ mod tests {
             assert!(!src.contains("{{#if"), "{} has unprocessed {{#if}}", name);
             assert!(!src.contains("{{else}}"), "{} has unprocessed {{else}}", name);
             assert!(!src.contains("{{/if}}"), "{} has unprocessed {{/if}}", name);
+        }
+    }
+
+    /// When subflame_wf is active, the shader must emit BOTH apply_variations
+    /// (the parent dispatcher, which contains a subflame_wf case) AND
+    /// apply_subflame_variations (the parallel dispatcher used inside
+    /// subflame_iterate, which excludes subflame_wf to break the recursive
+    /// call cycle). subflame.wgsl is injected after both, so subflame_iterate
+    /// is defined and references apply_subflame_variations.
+    #[test]
+    fn shader_has_subflame_iterate_when_subflame_wf_active() {
+        // Covers both render modes — Plugin variations are now allowed
+        // in 2D shaders (the filter in active_with_local_indices only
+        // drops the strictly-3D categories now).
+        for render_3d in [false, true] {
+            use crate::scene::transforms::{Flame, Transform};
+            let registry = crate::variations::global_registry().clone();
+            let builder = ShaderBuilder::new(registry);
+
+            // Minimal parent flame: one transform with subflame_wf active.
+            let mut flame = Flame::new();
+            let mut xform = Transform::new();
+            xform.variations.insert("subflame_wf".to_string(), 1.0);
+            flame.transforms.push(xform);
+
+            // Active set = union of parent + subflames (subflames is empty
+            // here, but extract_active_variations correctly handles that).
+            // We pass subflame_wf explicitly to exercise the injection path.
+            let mut active = HashMap::new();
+            active.insert("subflame_wf".to_string(), 1.0);
+
+            let constants = ShaderConstants::default();
+            let shader = builder.build_from_template(
+                &flame,
+                &active,
+                render_3d,
+                false, // no path features
+                false, // no xaos
+                true,  // direct-histogram
+                &constants,
+            );
+
+            assert!(
+                shader.contains("fn apply_variations("),
+                "expected parent apply_variations function (render_3d={})",
+                render_3d
+            );
+            assert!(
+                shader.contains("fn apply_subflame_variations("),
+                "expected parallel apply_subflame_variations function (render_3d={})",
+                render_3d
+            );
+            assert!(
+                shader.contains("fn subflame_iterate("),
+                "expected subflame_iterate function (render_3d={})",
+                render_3d
+            );
+            // The parallel dispatcher must NOT contain a subflame_wf
+            // dispatch (breaking the recursive call cycle).
+            let sub_start = shader.find("fn apply_subflame_variations(").unwrap();
+            let sub_end = shader[sub_start..].find("\n}\n").unwrap() + sub_start;
+            let sub_body = &shader[sub_start..sub_end];
+            assert!(
+                !sub_body.contains("variation_subflame_wf"),
+                "apply_subflame_variations must not dispatch subflame_wf (render_3d={})",
+                render_3d
+            );
+            assert!(!shader.contains("{{#if"), "unprocessed {{{{#if}} in shader (render_3d={})", render_3d);
+            assert!(!shader.contains("{{/if}}"), "unprocessed {{{{/if}} in shader (render_3d={})", render_3d);
         }
     }
 }

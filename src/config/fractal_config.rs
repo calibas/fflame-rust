@@ -11,7 +11,9 @@ pub const CURRENT_CONFIG_VERSION: u32 = 1;
 /// All fields except `flame` have defaults for compact serialization
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FractalConfig {
-    /// The flame (transforms) - always required
+    /// The flame (transforms) - always required.
+    /// Subflames (referenced by `subflame_wf` variations) live on the
+    /// `Flame` struct itself, not here — see `Flame::subflames`.
     pub flame: Flame,
 
     /// View settings
