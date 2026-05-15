@@ -428,7 +428,9 @@ impl ConfigManager {
         // .max(1) guard for that, but a single-transform default
         // is much more useful to the user.)
         let mut new = Flame::new();
-        new.name = format!("Subflame {}", self.current.flame.subflames.len() + 1);
+        // Empty name by default — the panel renders unnamed subflames as
+        // just "Subflame"; the user renames if they want to disambiguate.
+        new.name = String::new();
         let mut seed = crate::scene::transforms::Transform::default();
         seed.set_variation("linear", 1.0);
         seed.color = 0.5;
@@ -442,14 +444,16 @@ impl ConfigManager {
         Ok(self.current.flame.subflames.len() - 1)
     }
 
-    /// Delete the subflame at `index`. Only allowed when editing the
-    /// main flame (deleting the currently-edited subflame would be
-    /// confusing).
+    /// Delete the subflame at the user-visible `index`.
+    ///
+    /// If the user is currently editing a subflame (anywhere in the
+    /// list, not just the one being deleted), we first swap back to
+    /// Main so the subflames list is intact, *then* remove. The
+    /// visible-index → Vec-index mapping is preserved by the swap-
+    /// back, so the caller can pass the index they saw in the panel.
     pub fn delete_subflame(&mut self, index: usize) -> Result<(), ConfigError> {
         if self.is_editing_subflame() {
-            return Err(ConfigError::InvalidPath(
-                "switch to Main before deleting a subflame".to_string(),
-            ));
+            self.swap_back_to_main_internal();
         }
         if index >= self.current.flame.subflames.len() {
             return Err(ConfigError::InvalidPath(format!(
@@ -2984,31 +2988,56 @@ mod tests {
         assert_eq!(mgr.current.flame.subflames[2].transforms[0].a, 103.0);
     }
 
-    /// Add and delete only work while on Main. logical_config must
-    /// always reflect the un-swapped logical state.
+    /// Add is rejected while editing a subflame (would shift the index
+    /// space mid-edit). Delete auto-swaps to Main first, then deletes.
+    /// logical_config must always reflect the un-swapped state.
     #[test]
     fn add_delete_rules_and_logical_config() {
+        use crate::scene::transforms::Transform;
+
         let config = FractalConfig::default();
         let mut mgr = ConfigManager::new(config);
 
-        // Add three subflames
-        for _ in 0..3 {
+        // Add three subflames; tag each with a distinct marker so we can
+        // verify which one gets deleted.
+        for marker in [100.0, 200.0, 300.0] {
             mgr.add_subflame().unwrap();
+            let idx = mgr.current.flame.subflames.len() - 1;
+            // add_subflame seeds one transform with the linear variation;
+            // overwrite `a` as the marker so we can identify it later.
+            mgr.current.flame.subflames[idx].transforms[0].a = marker;
         }
         assert_eq!(mgr.current.flame.subflames.len(), 3);
 
-        // Swap to subflame 1 — add/delete should now be rejected
+        // Swap to subflame 1 — add must still be rejected (would shift
+        // the index space and confuse the stash invariant).
         mgr.set_editing_target(EditingTarget::Subflame { index: 1 }).unwrap();
         assert!(mgr.add_subflame().is_err(), "add must be rejected while editing a subflame");
-        assert!(mgr.delete_subflame(0).is_err(), "delete must be rejected while editing a subflame");
 
-        // logical_config must look as if we never swapped
+        // logical_config must look as if we never swapped.
         let logical = mgr.logical_config();
         assert_eq!(logical.flame.subflames.len(), 3);
 
-        // Swap back, delete subflame 0
-        mgr.set_editing_target(EditingTarget::Main).unwrap();
-        mgr.delete_subflame(0).unwrap();
+        // Delete the active subflame (index 1, marker 200.0) while
+        // editing it. Must auto-swap to Main and remove the right entry.
+        mgr.delete_subflame(1).unwrap();
+        assert_eq!(mgr.editing_target(), EditingTarget::Main,
+            "delete from subflame mode must return to Main");
         assert_eq!(mgr.current.flame.subflames.len(), 2);
+        assert_eq!(mgr.current.flame.subflames[0].transforms[0].a, 100.0);
+        assert_eq!(mgr.current.flame.subflames[1].transforms[0].a, 300.0,
+            "subflame 1 should be removed; subflame 2 shifts down");
+
+        // Deleting a non-active subflame from subflame mode also works.
+        // Re-add to get back to 3 subflames, then test the cross-delete.
+        mgr.add_subflame().unwrap();
+        let last = mgr.current.flame.subflames.len() - 1;
+        mgr.current.flame.subflames[last].transforms[0].a = 400.0;
+        mgr.set_editing_target(EditingTarget::Subflame { index: 0 }).unwrap();
+        mgr.delete_subflame(2).unwrap();  // delete marker 400.0 while editing subflame 0
+        assert_eq!(mgr.editing_target(), EditingTarget::Main);
+        assert_eq!(mgr.current.flame.subflames.len(), 2);
+        assert_eq!(mgr.current.flame.subflames[0].transforms[0].a, 100.0);
+        assert_eq!(mgr.current.flame.subflames[1].transforms[0].a, 300.0);
     }
 }
