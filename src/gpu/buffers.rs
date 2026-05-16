@@ -1292,6 +1292,18 @@ impl FlameBuffers {
         buffers.update_transforms(queue, flame);
         buffers.update_variation_params(queue, flame);
         buffers.update_attachments(queue, flame, flame.attachment_cap());
+        // Populate subflame buffers too. Without this, a flame whose
+        // parent uses `subflame_wf` reads zeroes from the metadata
+        // buffer on the first frame after construction — including
+        // after a window resize, which recreates FlameBuffers via this
+        // same path. The result was a chaos game stuck at the origin
+        // (single bright pixel at center). Errors from this call are
+        // logged but non-fatal: subflame data being absent just means
+        // subflame_wf renders as zero output, which is the same as
+        // the buffer's zero-initialized state.
+        if let Err(e) = buffers.update_subflames(queue, &flame.subflames, &flame.get_id_mapping()) {
+            log::error!("Failed to initialize subflame buffers: {}", e);
+        }
 
         buffers
     }
