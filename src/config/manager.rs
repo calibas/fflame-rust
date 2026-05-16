@@ -320,17 +320,17 @@ impl ConfigManager {
         }
     }
 
-    /// Force a flame re-upload + accumulation reset on the next GPU
-    /// update cycle, without changing any config state. Used by UI
-    /// surfaces that change *how* the flame is sourced (e.g. the
-    /// "view subflame in isolation" toggle) but not the flame data
-    /// itself. Goes through the same pending-actions pipeline as
-    /// normal edits.
+    /// Force a flame re-upload (full IterationReset action set:
+    /// update_flame + update_view + update_palette + update_tone_curve,
+    /// but no buffer clear). Used by UI surfaces that change *how*
+    /// the flame is sourced (e.g. the "view subflame in isolation"
+    /// toggle) but not the flame data itself. Matching IterationReset
+    /// here keeps the renderer in the same state machine path as
+    /// normal transform edits — buffer-clearing turned out to
+    /// interact badly with the renderer's iteration-count tracking
+    /// at high max_iterations values (black-screen bug).
     pub fn request_flame_refresh(&mut self) {
-        let mut action = UpdateAction::none();
-        action.update_flame = true;
-        action.reset_accumulation = true;
-        self.pending_actions.merge(&action);
+        self.pending_actions.merge(&UpdateAction::from_update_type(UpdateType::IterationReset));
     }
 
     /// True when the user is editing a subflame (not the main flame).
@@ -434,8 +434,10 @@ impl ConfigManager {
 
     /// Switch editing target without pushing an undo entry. Used by
     /// undo/redo apply paths (which already have an entry).
-    /// No data is moved — just updates the routing field and signals
-    /// the renderer to re-upload + reset accumulation.
+    /// No data is moved — just updates the routing field and asks
+    /// the renderer to re-sync the flame state via the standard
+    /// IterationReset action set (no buffer clear; smooth transition
+    /// like a transform edit).
     fn set_editing_target_silent(&mut self, target: EditingTarget) -> Result<(), ConfigError> {
         if self.editing_target == target {
             return Ok(());
@@ -449,11 +451,16 @@ impl ConfigManager {
         }
         self.editing_target = target;
 
-        let mut action = UpdateAction::none();
-        action.update_flame = true;
-        action.rebuild_shader = true;
-        action.reset_accumulation = true;
-        self.pending_actions.merge(&action);
+        // Match IterationReset semantics. update_flame uploads the
+        // new flame state to GPU; the rest are belt-and-suspenders
+        // so any texture/buffer that needs a refresh gets one. NO
+        // reset_accumulation — keeps the accumulator alive, letting
+        // overwrite mode smooth the transition like a transform
+        // edit does. (Previously we set reset_accumulation=true,
+        // which interacted badly with the renderer's iteration-count
+        // state machine at high max_iterations values — black-screen
+        // bug.)
+        self.pending_actions.merge(&UpdateAction::from_update_type(UpdateType::IterationReset));
         Ok(())
     }
 
@@ -491,10 +498,12 @@ impl ConfigManager {
         );
         self.push_undo(change);
 
-        let mut action = UpdateAction::none();
-        action.update_flame = true;
-        action.reset_accumulation = true;
-        self.pending_actions.merge(&action);
+        // IterationReset semantics (no buffer clear). The new
+        // subflame's data is uploaded; the rendered parent flame
+        // visually unchanged unless one of its transforms references
+        // this subflame via subflame_wf. See set_editing_target_silent
+        // for the rationale on avoiding reset_accumulation here.
+        self.pending_actions.merge(&UpdateAction::from_update_type(UpdateType::IterationReset));
         Ok(index)
     }
 
@@ -537,11 +546,8 @@ impl ConfigManager {
         );
         self.push_undo(change);
 
-        let mut action = UpdateAction::none();
-        action.update_flame = true;
-        action.rebuild_shader = true;
-        action.reset_accumulation = true;
-        self.pending_actions.merge(&action);
+        // IterationReset semantics — same reasoning as add_subflame.
+        self.pending_actions.merge(&UpdateAction::from_update_type(UpdateType::IterationReset));
         Ok(())
     }
 
