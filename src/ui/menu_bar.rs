@@ -283,7 +283,7 @@ pub fn render_menu_bar(
 
                 // Subflames panel
                 let subflames_open = workspace.panel_exists(super::workspace::PanelType::Subflames);
-                if ui.selectable_label(subflames_open, t!("panels.subflames").as_ref()).clicked() {
+                if ui.selectable_label(subflames_open, t!("menu.window_subflames").as_ref()).clicked() {
                     workspace.open_floating_panel(super::workspace::PanelType::Subflames, ctx);
                 }
 

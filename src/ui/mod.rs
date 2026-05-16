@@ -652,6 +652,7 @@ impl EguiLayer {
         preset_library: &crate::scene::presets::PresetLibrary,
         animation_controller: &mut crate::animation::AnimationController,
         paused: &mut bool,
+        view_subflame_in_isolation: &mut bool,
         quit_requested: &mut bool,
         can_undo: bool,
         can_redo: bool,
@@ -855,7 +856,7 @@ impl EguiLayer {
             can_undo,
             can_redo,
             is_paused: *paused,
-            render_mode_2d: config_manager.active_config().flame.render_mode == crate::scene::transforms::RenderMode::TwoD,
+            render_mode_2d: config_manager.active_flame().render_mode == crate::scene::transforms::RenderMode::TwoD,
             online_mode: config_manager.system_settings().online_mode,
             has_api_flame_id: api_state.flame_id.is_some(),
             api_flame_id: api_state.flame_id.clone(),
@@ -985,6 +986,7 @@ impl EguiLayer {
 
                         // UI state
                         paused,
+                        view_subflame_in_isolation,
                         png_export_with_background: &mut png_export_with_background,
                         png_export_transparent: &mut png_export_transparent,
                         export_width,
