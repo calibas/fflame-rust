@@ -42,35 +42,46 @@ impl App {
                             label: Some("Update Encoder"),
                         });
 
+                // Sync App.flame from ConfigManager whenever ANY renderer
+                // update is happening this frame. App.flame is always
+                // the main flame (un-swap invariant); the Triangle
+                // Editor and Transforms panels read it for the parent's
+                // transforms.
+                self.flame = update_config.flame.clone();
+
+                // Decide what the *renderer* sees this frame. Default:
+                // the main flame, so the user watches the parent's
+                // chaos game pick up live subflame edits via the
+                // subflames buffer + subflame_wf. When the user has
+                // ticked "View subflame in isolation" and is editing
+                // a subflame, hand the renderer that subflame standalone.
+                //
+                // CRUCIAL: this `render_source` MUST be used everywhere
+                // we hand a flame to the renderer this frame (not just
+                // in the update_flame branch). Calls like
+                // `update_path_features` and `set_palette_size` also
+                // run shader-cache checks against the flame they
+                // receive — if any of them gets the main flame while
+                // update_flame got the subflame, the shader recompiles
+                // back and forth and the GPU ends up running the wrong
+                // shader for the wrong data (chaos game stuck →
+                // single-pixel rendering).
+                use crate::config::manager::EditingTarget;
+                let render_source: &crate::scene::transforms::Flame = match self
+                    .config_manager
+                    .editing_target()
+                {
+                    EditingTarget::Subflame { index }
+                        if self.view_subflame_in_isolation
+                            && index < self.flame.subflames.len() =>
+                    {
+                        &self.flame.subflames[index]
+                    }
+                    _ => &self.flame,
+                };
+
                 // Update flame if UpdateAction indicates (includes preview mode live updates)
                 if actions.update_flame {
-                    // App.flame is always the main flame (since the
-                    // un-swap refactor) — Triangle Editor / Transforms
-                    // panels read it for the parent's transforms,
-                    // and ConfigManager routes edits to subflames via
-                    // editing_target.
-                    self.flame = update_config.flame.clone();
-
-                    // Decide what the *renderer* sees. Default: the
-                    // main flame, so the user watches the parent's
-                    // chaos game pick up live subflame edits via the
-                    // subflames buffer + subflame_wf. When the
-                    // user has ticked "View subflame in isolation"
-                    // and is editing a subflame, hand the renderer
-                    // that subflame standalone (its IFS on its own).
-                    use crate::config::manager::EditingTarget;
-                    let render_source: &crate::scene::transforms::Flame = match self
-                        .config_manager
-                        .editing_target()
-                    {
-                        EditingTarget::Subflame { index }
-                            if self.view_subflame_in_isolation
-                                && index < self.flame.subflames.len() =>
-                        {
-                            &self.flame.subflames[index]
-                        }
-                        _ => &self.flame,
-                    };
                     renderer.update_flame(
                         &self.gpu.device,
                         &self.gpu.queue,
@@ -113,12 +124,15 @@ impl App {
 
                 // Update palette if needed (also handles color mode changes)
                 if actions.update_palette {
-                    // Check if palette texture size needs to change
+                    // Check if palette texture size needs to change.
+                    // set_palette_size's `_flame` parameter is unused
+                    // today, but pass render_source for consistency in
+                    // case it ever starts caring about flame state.
                     if renderer.palette_size() != update_config.palette_size {
                         renderer.set_palette_size(
                             &self.gpu.device,
                             &self.gpu.queue,
-                            &update_config.flame,
+                            render_source,
                             update_config.palette_size,
                         );
                     }
@@ -152,11 +166,19 @@ impl App {
                         update_config.speed_factor,
                     );
 
-                    // Update path buffer allocation and shaders based on color_mode (PathMap needs buffers)
+                    // Update path buffer allocation and shaders based
+                    // on color_mode. CRUCIAL: pass render_source (the
+                    // flame the renderer is currently rendering), not
+                    // update_config.flame (always the main). This
+                    // method's internal `ensure_shaders_current_with_constants`
+                    // would otherwise force a recompile against the
+                    // main flame, wiping the subflame shader we just
+                    // built in update_flame — leaving the GPU running
+                    // the main's 3D shader against subflame data.
                     renderer.update_path_features(
                         &self.gpu.device,
                         &self.gpu.queue,
-                        &update_config.flame,
+                        render_source,
                     );
                 }
 
