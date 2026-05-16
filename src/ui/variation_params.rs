@@ -24,8 +24,11 @@ pub fn render_variation_params(
     let mut max_update = UpdateType::None;
 
     for param in parameters {
-        // Get current value from active config (for live preview).
-        let transform = match xref.get(&config_manager.active_config().flame) {
+        // Get current value from the active editing target (for live
+        // preview). Routes through `active_flame()` — when editing a
+        // subflame, that's the subflame's slot; otherwise it's the
+        // main flame.
+        let transform = match xref.get(config_manager.active_flame()) {
             Some(t) => t,
             None => return max_update, // Pool member missing — bail out.
         };

@@ -39,7 +39,7 @@ fn render_weight_control(
             ConfigPath::TransformWeight { index },
             temp_weight.into()
         ) {
-            transform.weight = config_manager.active_config().flame.transforms[index].weight;
+            transform.weight = config_manager.active_flame().transforms[index].weight;
             max_update = max_update.max(update_type);
         }
     }
@@ -72,7 +72,7 @@ fn render_color_controls(
                 ConfigPath::TransformColor { index },
                 temp_color.into()
             ) {
-                transform.color = config_manager.active_config().flame.transforms[index].color;
+                transform.color = config_manager.active_flame().transforms[index].color;
                 max_update = max_update.max(update_type);
             }
         }
@@ -272,7 +272,7 @@ fn render_advanced_settings(
             ConfigPath::TransformColorSpeed { index },
             temp_speed.into()
         ) {
-            transform.color_speed = config_manager.active_config().flame.transforms[index].color_speed;
+            transform.color_speed = config_manager.active_flame().transforms[index].color_speed;
             max_update = max_update.max(update_type);
         }
     }
@@ -289,7 +289,7 @@ fn render_advanced_settings(
             ConfigPath::TransformOpacity { index },
             temp_opacity.into()
         ) {
-            transform.opacity = config_manager.active_config().flame.transforms[index].opacity;
+            transform.opacity = config_manager.active_flame().transforms[index].opacity;
             max_update = max_update.max(update_type);
         }
     }
@@ -306,7 +306,7 @@ fn render_advanced_settings(
             ConfigPath::TransformDirectColor { index },
             temp_dc.into()
         ) {
-            transform.direct_color = config_manager.active_config().flame.transforms[index].direct_color;
+            transform.direct_color = config_manager.active_flame().transforms[index].direct_color;
             max_update = max_update.max(update_type);
         }
     }
@@ -564,7 +564,7 @@ pub fn render_transforms_content(
     let num_normals = flame.transforms.len();
     let num_linked = flame.linked_transforms.len();
     let num_finals = flame.final_transforms.len();
-    let solo_transform = config_manager.active_config().flame.solo_transform;
+    let solo_transform = config_manager.active_flame().solo_transform;
     // Captured-by-render snapshot of the per-normal attachments — needed to
     // render checkboxes/reorder buttons in the Advanced section while the
     // borrow on `flame.transforms` is held by the iter_mut loop.
