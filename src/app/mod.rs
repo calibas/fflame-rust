@@ -1152,8 +1152,34 @@ impl App {
                     let mut resize_encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
                         label: Some("Viewport Resize Encoder"),
                     });
+
+                    // Pick the flame the renderer should be configured
+                    // against — same routing as `process_gpu_updates`.
+                    // When the user has ticked "View subflame in
+                    // isolation" while editing a subflame, resize must
+                    // build buffers + bind groups for that subflame,
+                    // not the main flame. Otherwise resize hands the
+                    // main flame to renderer.resize() and
+                    // update_path_features(), and both run shader-cache
+                    // checks that recompile the shader for the main —
+                    // wiping the in-isolation shader and producing the
+                    // single-pixel chaos-game-stuck rendering.
+                    use crate::config::manager::EditingTarget;
+                    let resize_source: &crate::scene::transforms::Flame = match self
+                        .config_manager
+                        .editing_target()
+                    {
+                        EditingTarget::Subflame { index }
+                            if self.view_subflame_in_isolation
+                                && index < self.flame.subflames.len() =>
+                        {
+                            &self.flame.subflames[index]
+                        }
+                        _ => &self.flame,
+                    };
+
                     renderer.resize(&self.gpu.device, &mut resize_encoder, &self.gpu.queue, viewport_size.0, viewport_size.1,
-                        &self.flame, self.config_manager.system_settings().iterations_per_thread, resize_config.zoom, resize_config.pan_x, resize_config.pan_y, resize_config.rotation,
+                        resize_source, self.config_manager.system_settings().iterations_per_thread, resize_config.zoom, resize_config.pan_x, resize_config.pan_y, resize_config.rotation,
                         resize_config.camera_rotation_x, resize_config.camera_rotation_y, resize_config.camera_z, resize_config.speed_factor);
                     self.gpu.queue.submit(std::iter::once(resize_encoder.finish()));
 
@@ -1167,8 +1193,10 @@ impl App {
                         resize_config.camera_rotation_x, resize_config.camera_rotation_y, resize_config.camera_z, resize_config.speed_factor);
                     renderer.set_path_map_style(resize_config.path_map_style);
 
-                    // Update path buffer allocation based on color_mode and filters (after resize recreates buffers)
-                    renderer.update_path_features(&self.gpu.device, &self.gpu.queue, &resize_config.flame);
+                    // Update path buffer allocation based on color_mode and filters (after resize recreates buffers).
+                    // Same routing as above — must use resize_source so the internal shader-cache check
+                    // doesn't recompile back to the main flame's spec.
+                    renderer.update_path_features(&self.gpu.device, &self.gpu.queue, resize_source);
 
                     // Restore tonemap parameters after buffer recreation (not in live preview mode)
                     renderer.update_tonemap(&self.gpu.queue, resize_config.tonemap_mode, resize_config.use_curve, resize_config.exposure, resize_config.gamma,
