@@ -303,6 +303,23 @@ impl ConfigManager {
         self.editing_target
     }
 
+    /// Read-only reference to the flame the editor is currently
+    /// focused on. UI sites that read back from the config *after*
+    /// calling `update_param` (e.g. to sync a local slider variable
+    /// to the canonical value) should use this — `active_config()
+    /// .flame` is always the main and would return the wrong slot
+    /// while editing a subflame. Falls back to the main flame if
+    /// the target index is out of bounds.
+    pub fn active_flame(&self) -> &Flame {
+        let cfg = self.active_config();
+        match self.editing_target {
+            EditingTarget::Subflame { index } if index < cfg.flame.subflames.len() => {
+                &cfg.flame.subflames[index]
+            }
+            _ => &cfg.flame,
+        }
+    }
+
     /// Force a flame re-upload + accumulation reset on the next GPU
     /// update cycle, without changing any config state. Used by UI
     /// surfaces that change *how* the flame is sourced (e.g. the

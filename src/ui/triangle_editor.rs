@@ -328,10 +328,14 @@ fn render_triangle_editor_core(
                 ]
             };
 
-            // Helper to sync the local transform copy back from active_config
-            // (used so live preview during a drag reflects the merged value).
+            // Helper to sync the local transform copy back from the
+            // active editing target (used so live preview during a
+            // drag reflects the merged value). Routing through
+            // `active_flame()` is essential when editing a subflame —
+            // `active_config().flame` is always the main and would
+            // read the wrong slot.
             let sync_transform = |xform: &mut crate::scene::transforms::Transform, cfg_mgr: &ConfigManager| {
-                if let Some(t) = selected_transform.get(&cfg_mgr.active_config().flame) {
+                if let Some(t) = selected_transform.get(cfg_mgr.active_flame()) {
                     *xform = t.clone();
                 }
             };
