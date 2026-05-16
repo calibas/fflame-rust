@@ -3,6 +3,26 @@
 use egui_dock::{egui, TabViewer};
 use rust_i18n::t;
 use super::workspace::PanelType;
+use crate::config::manager::EditingTarget;
+
+/// Resolve which `Flame` slice the editor panels should operate on,
+/// given the active editing target. Triangle Editor and Transforms
+/// panels each get a `&mut Flame`; for `Main` that's the parent
+/// flame itself, for `Subflame { index }` it's
+/// `parent.subflames[index]`. Falls back to the parent flame if the
+/// target index is out of bounds (defensive — UI shouldn't have set
+/// such a target).
+fn active_target_flame_mut<'a>(
+    parent: &'a mut crate::scene::transforms::Flame,
+    target: EditingTarget,
+) -> &'a mut crate::scene::transforms::Flame {
+    match target {
+        EditingTarget::Subflame { index } if index < parent.subflames.len() => {
+            &mut parent.subflames[index]
+        }
+        _ => parent,
+    }
+}
 
 /// Result of processing touch events each frame.
 pub enum TouchGesture {
@@ -182,6 +202,11 @@ pub struct PanelContext<'a> {
 
     // UI state
     pub paused: &'a mut bool,
+    /// Subflames panel checkbox: when true and a subflame is being
+    /// edited, the viewport renders that subflame's IFS in
+    /// isolation; otherwise the parent flame is rendered (default).
+    /// App reads this in `gpu_updates` to pick the render source.
+    pub view_subflame_in_isolation: &'a mut bool,
     pub png_export_with_background: &'a mut bool,
     pub png_export_transparent: &'a mut bool,
     pub export_width: &'a mut u32,
@@ -457,16 +482,28 @@ impl<'a> PanelViewer<'a> {
                 }
             }
             PanelType::Subflames => {
-                super::subflames::render_subflames_content(ui, self.context.config_manager);
+                super::subflames::render_subflames_content(
+                    ui,
+                    self.context.config_manager,
+                    self.context.view_subflame_in_isolation,
+                );
             }
         }
     }
-    /// Render Transforms panel (transform list, affine, variations)
+    /// Render Transforms panel (transform list, affine, variations).
+    /// Passes the target flame slice based on the active editing
+    /// target: Main → App.flame (parent), Subflame{i} →
+    /// App.flame.subflames[i]. ConfigManager handles the mirroring
+    /// for writes via `target_flame_mut` routed by editing_target.
     fn render_transforms_panel(&mut self, ui: &mut egui::Ui) {
+        let target_flame = active_target_flame_mut(
+            self.context.flame,
+            self.context.config_manager.editing_target(),
+        );
         let _ = super::transforms::render_transforms_content(
             ui,
             self.context.config_manager,
-            self.context.flame,
+            target_flame,
             super::transforms::PoolActions {
                 add_normal: self.context.add_transform,
                 delete_normal: self.context.delete_transform,
@@ -483,12 +520,17 @@ impl<'a> PanelViewer<'a> {
         );
     }
 
-    /// Render Triangle Editor panel (visual triangle editing)
+    /// Render Triangle Editor panel (visual triangle editing). Sees
+    /// the active editing target's flame, same as Transforms.
     fn render_triangle_editor_panel(&mut self, ui: &mut egui::Ui) {
+        let target_flame = active_target_flame_mut(
+            self.context.flame,
+            self.context.config_manager.editing_target(),
+        );
         let _ = super::triangle_editor::render_triangle_editor_content(
             ui,
             self.context.config_manager,
-            self.context.flame,
+            target_flame,
         );
     }
 

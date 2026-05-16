@@ -101,9 +101,13 @@ impl App {
     fn handle_transform_operations(&mut self, ui_response: &UiResponse) {
         // Handle add transform
         if ui_response.add_transform {
-            let config = self.config_manager.active_config();
-            let insert_index = config.flame.transforms.len();
-            let xaos_before = config.flame.xaos.clone();
+            // Pull length + xaos from the active editing target so an
+            // "Add Transform" while editing a subflame inserts at the
+            // subflame's end, not the parent's.
+            let (insert_index, xaos_before) = {
+                let target_flame = self.active_target_flame();
+                (target_flame.transforms.len(), target_flame.xaos.clone())
+            };
 
             // Create a new default transform with identity affine and linear variation
             let mut new_transform = Transform::default();
@@ -130,14 +134,21 @@ impl App {
 
         // Handle delete transform
         if let Some(idx) = ui_response.delete_transform {
-            let config = self.config_manager.active_config();
+            // Same routing: read from the active editing target.
+            let (target_count, xaos_before, deleted_transform) = {
+                let target_flame = self.active_target_flame();
+                if idx >= target_flame.transforms.len() {
+                    return;
+                }
+                (
+                    target_flame.transforms.len(),
+                    target_flame.xaos.clone(),
+                    target_flame.transforms[idx].clone(),
+                )
+            };
 
-            if config.flame.transforms.len() > 1 && idx < config.flame.transforms.len() {
-                // Get the transform before deleting
-                let deleted_transform = config.flame.transforms[idx].clone();
-
+            if target_count > 1 {
                 // Create specialized snapshot for efficient undo/redo
-                let xaos_before = config.flame.xaos.clone();
                 let change = crate::config::ConfigChange::delete_transform_snapshot(
                     idx,
                     deleted_transform,
@@ -164,16 +175,19 @@ impl App {
 
         // Handle clone transform
         if let Some(idx) = ui_response.clone_transform {
-            let config = self.config_manager.active_config();
+            // Source the cloned transform + xaos from the active
+            // editing target, same as add/delete.
+            let cloned_transform_with_xaos = {
+                let target_flame = self.active_target_flame();
+                if idx < target_flame.transforms.len() {
+                    Some((target_flame.transforms[idx].clone(), target_flame.xaos.clone()))
+                } else {
+                    None
+                }
+            };
 
-            if idx < config.flame.transforms.len() {
-                // Clone the transform
-                let cloned_transform = config.flame.transforms[idx].clone();
-                // Insert after the original transform
+            if let Some((cloned_transform, xaos_before)) = cloned_transform_with_xaos {
                 let insert_idx = idx + 1;
-
-                // Create specialized snapshot — clone duplicates the source's xaos relationships
-                let xaos_before = config.flame.xaos.clone();
                 let change = crate::config::ConfigChange::clone_transform_snapshot(
                     insert_idx,
                     cloned_transform,
@@ -310,14 +324,43 @@ impl App {
 
     /// Apply a structural change to a Linked/Final pool by mutating the flame
     /// in `mutate`, then commit a full-config snapshot for clean undo/redo.
+    /// Read-only reference to the flame the user is currently
+    /// editing. With un-swap, `active_config().flame` is always the
+    /// main; this routes to `flame.subflames[i]` when the editing
+    /// target is a subflame. Falls back to the main flame on
+    /// out-of-bounds (defensive — UI shouldn't have set such a
+    /// target).
+    pub(super) fn active_target_flame(&self) -> &crate::scene::transforms::Flame {
+        use crate::config::manager::EditingTarget;
+        let cfg = self.config_manager.active_config();
+        match self.config_manager.editing_target() {
+            EditingTarget::Subflame { index } if index < cfg.flame.subflames.len() => {
+                &cfg.flame.subflames[index]
+            }
+            _ => &cfg.flame,
+        }
+    }
+
     fn apply_pool_full_snapshot<F: FnOnce(&mut crate::scene::transforms::Flame)>(
         &mut self,
         description: &str,
         mutate: F,
     ) {
+        use crate::config::manager::EditingTarget;
+
         let before = self.config_manager.active_config().clone();
         let mut after = before.clone();
-        mutate(&mut after.flame);
+        // Route the mutation to the active editing target so
+        // "Add Linked Transform" etc. land on the right flame when
+        // the user is editing a subflame.
+        let target = self.config_manager.editing_target();
+        let target_flame: &mut crate::scene::transforms::Flame = match target {
+            EditingTarget::Subflame { index } if index < after.flame.subflames.len() => {
+                &mut after.flame.subflames[index]
+            }
+            _ => &mut after.flame,
+        };
+        mutate(target_flame);
         let change = crate::config::ConfigChange::full_config_snapshot(
             before,
             after,
