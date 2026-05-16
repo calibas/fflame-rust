@@ -9,6 +9,21 @@
 // the same subflame used by two parent transforms gets two
 // independent observers.
 //
+// Lazy per-thread prefuse: the chaos game starts at (0,0) per
+// thread (var<private> thread_state zero-init). For low-weight
+// parent transforms — where subflame_wf is dispatched only a
+// handful of times across the parent's 256 iterations — the
+// subflame's chaos game never converges per-thread, and the
+// plotted points are biased toward the chaos game's starting
+// neighborhood. That bias is visible as a hot edge on the
+// rendered subflame. JWildfire's reference does an explicit
+// 42-iteration prefuse once at init time; we do the same on the
+// FIRST subflame_iterate call per thread (detected via the
+// position being exactly (0,0)). Cost is amortized — only the
+// first call pays it. After prefuse the position lives in the
+// attractor and the (0,0) check is essentially guaranteed false
+// for subsequent calls.
+//
 // v1 limitations (documented in `docs/projects/subflames.md`):
 //   - Subflame xforms use a synthetic xform_id (= 128 + offset)
 //     that falls outside the parent's get_param/get_state switch
@@ -21,6 +36,8 @@
 //     specified ones. v2 will allocate real slots for subflame
 //     xforms.
 //   - No xaos in subflames — transforms are picked by raw weight.
+
+const SUBFLAME_PREFUSE_ITERS: u32 = 20u;
 
 {{#if RENDER_3D}}
 fn subflame_iterate(
@@ -44,45 +61,61 @@ fn subflame_iterate(
     );
     var color = get_state(parent_xform_id, parent_variation_id, 4u);
 
-    // Pick next transform by weight (v1: no xaos).
+    // First-call prefuse detection (see header comment). After at
+    // least one chaos-game step, exact (0,0,0) is overwhelmingly
+    // unlikely; treating that state as "fresh" is the cheapest
+    // sentinel.
+    let needs_prefuse = current.x == 0.0 && current.y == 0.0 && current.z == 0.0;
+    let total_steps = select(1u, SUBFLAME_PREFUSE_ITERS + 1u, needs_prefuse);
+
+    // Total weight is constant across iterations (transforms don't
+    // change during this dispatch). Hoist it out.
     var total_weight: f32 = 0.0;
     for (var i: u32 = 0u; i < sf_meta.normals_count; i = i + 1u) {
         total_weight = total_weight + subflame_transforms[sf_meta.normals_offset + i].weight;
     }
-    let r = rng_nextf(rng) * max(total_weight, 1e-6);
-    var cumulative: f32 = 0.0;
+    let total_weight_safe = max(total_weight, 1e-6);
+
     var picked: u32 = 0u;
-    for (var i: u32 = 0u; i < sf_meta.normals_count; i = i + 1u) {
-        cumulative = cumulative + subflame_transforms[sf_meta.normals_offset + i].weight;
-        if (r < cumulative) {
-            picked = i;
-            break;
-        }
-    }
-
-    let xform = subflame_transforms[sf_meta.normals_offset + picked];
-    let sub_xform_id = 128u + sf_meta.normals_offset + picked;
-
-    // Color blend — Apophysis-standard color_speed lerp.
-    let symmetry = xform.color_speed;
-    color = color * (1.0 + symmetry) * 0.5 + xform.color * (1.0 - symmetry) * 0.5;
     var vc: f32 = color;
 
-    // Apply pre-affine, variations, post-affine.
-    let affine_p = apply_affine(xform, current);
-    current = apply_subflame_variations(xform, sub_xform_id, affine_p, rng, &vc);
-    if (xform.post_enabled > 0.5) {
-        current = apply_post_affine(xform, current);
-    }
+    for (var k: u32 = 0u; k < total_steps; k = k + 1u) {
+        // Pick next transform by weight (v1: no xaos).
+        let r = rng_nextf(rng) * total_weight_safe;
+        var cumulative: f32 = 0.0;
+        picked = sf_meta.normals_count - 1u;
+        for (var i: u32 = 0u; i < sf_meta.normals_count; i = i + 1u) {
+            cumulative = cumulative + subflame_transforms[sf_meta.normals_offset + i].weight;
+            if (r < cumulative) {
+                picked = i;
+                break;
+            }
+        }
 
-    // Apply subflame's final transforms (if any).
-    for (var i: u32 = 0u; i < sf_meta.finals_count; i = i + 1u) {
-        let f_xform = subflame_transforms[sf_meta.finals_offset + i];
-        let f_xform_id = 128u + sf_meta.finals_offset + i;
-        let f_affine_p = apply_affine(f_xform, current);
-        current = apply_subflame_variations(f_xform, f_xform_id, f_affine_p, rng, &vc);
-        if (f_xform.post_enabled > 0.5) {
-            current = apply_post_affine(f_xform, current);
+        let xform = subflame_transforms[sf_meta.normals_offset + picked];
+        let sub_xform_id = 128u + sf_meta.normals_offset + picked;
+
+        // Color blend — Apophysis-standard color_speed lerp.
+        let symmetry = xform.color_speed;
+        color = color * (1.0 + symmetry) * 0.5 + xform.color * (1.0 - symmetry) * 0.5;
+        vc = color;
+
+        // Apply pre-affine, variations, post-affine.
+        let affine_p = apply_affine(xform, current);
+        current = apply_subflame_variations(xform, sub_xform_id, affine_p, rng, &vc);
+        if (xform.post_enabled > 0.5) {
+            current = apply_post_affine(xform, current);
+        }
+
+        // Apply subflame's final transforms (if any).
+        for (var i: u32 = 0u; i < sf_meta.finals_count; i = i + 1u) {
+            let f_xform = subflame_transforms[sf_meta.finals_offset + i];
+            let f_xform_id = 128u + sf_meta.finals_offset + i;
+            let f_affine_p = apply_affine(f_xform, current);
+            current = apply_subflame_variations(f_xform, f_xform_id, f_affine_p, rng, &vc);
+            if (f_xform.post_enabled > 0.5) {
+                current = apply_post_affine(f_xform, current);
+            }
         }
     }
 
@@ -115,41 +148,52 @@ fn subflame_iterate(
     );
     var color = get_state(parent_xform_id, parent_variation_id, 4u);
 
+    // First-call prefuse detection — see header comment.
+    let needs_prefuse = current.x == 0.0 && current.y == 0.0;
+    let total_steps = select(1u, SUBFLAME_PREFUSE_ITERS + 1u, needs_prefuse);
+
     var total_weight: f32 = 0.0;
     for (var i: u32 = 0u; i < sf_meta.normals_count; i = i + 1u) {
         total_weight = total_weight + subflame_transforms[sf_meta.normals_offset + i].weight;
     }
-    let r = rng_nextf(rng) * max(total_weight, 1e-6);
-    var cumulative: f32 = 0.0;
+    let total_weight_safe = max(total_weight, 1e-6);
+
     var picked: u32 = 0u;
-    for (var i: u32 = 0u; i < sf_meta.normals_count; i = i + 1u) {
-        cumulative = cumulative + subflame_transforms[sf_meta.normals_offset + i].weight;
-        if (r < cumulative) {
-            picked = i;
-            break;
-        }
-    }
-
-    let xform = subflame_transforms[sf_meta.normals_offset + picked];
-    let sub_xform_id = 128u + sf_meta.normals_offset + picked;
-
-    let symmetry = xform.color_speed;
-    color = color * (1.0 + symmetry) * 0.5 + xform.color * (1.0 - symmetry) * 0.5;
     var vc: f32 = color;
 
-    let affine_p = apply_affine(xform, current);
-    current = apply_subflame_variations(xform, sub_xform_id, affine_p, rng, &vc);
-    if (xform.post_enabled > 0.5) {
-        current = apply_post_affine(xform, current);
-    }
+    for (var k: u32 = 0u; k < total_steps; k = k + 1u) {
+        let r = rng_nextf(rng) * total_weight_safe;
+        var cumulative: f32 = 0.0;
+        picked = sf_meta.normals_count - 1u;
+        for (var i: u32 = 0u; i < sf_meta.normals_count; i = i + 1u) {
+            cumulative = cumulative + subflame_transforms[sf_meta.normals_offset + i].weight;
+            if (r < cumulative) {
+                picked = i;
+                break;
+            }
+        }
 
-    for (var i: u32 = 0u; i < sf_meta.finals_count; i = i + 1u) {
-        let f_xform = subflame_transforms[sf_meta.finals_offset + i];
-        let f_xform_id = 128u + sf_meta.finals_offset + i;
-        let f_affine_p = apply_affine(f_xform, current);
-        current = apply_subflame_variations(f_xform, f_xform_id, f_affine_p, rng, &vc);
-        if (f_xform.post_enabled > 0.5) {
-            current = apply_post_affine(f_xform, current);
+        let xform = subflame_transforms[sf_meta.normals_offset + picked];
+        let sub_xform_id = 128u + sf_meta.normals_offset + picked;
+
+        let symmetry = xform.color_speed;
+        color = color * (1.0 + symmetry) * 0.5 + xform.color * (1.0 - symmetry) * 0.5;
+        vc = color;
+
+        let affine_p = apply_affine(xform, current);
+        current = apply_subflame_variations(xform, sub_xform_id, affine_p, rng, &vc);
+        if (xform.post_enabled > 0.5) {
+            current = apply_post_affine(xform, current);
+        }
+
+        for (var i: u32 = 0u; i < sf_meta.finals_count; i = i + 1u) {
+            let f_xform = subflame_transforms[sf_meta.finals_offset + i];
+            let f_xform_id = 128u + sf_meta.finals_offset + i;
+            let f_affine_p = apply_affine(f_xform, current);
+            current = apply_subflame_variations(f_xform, f_xform_id, f_affine_p, rng, &vc);
+            if (f_xform.post_enabled > 0.5) {
+                current = apply_post_affine(f_xform, current);
+            }
         }
     }
 
