@@ -122,15 +122,21 @@ impl App {
     fn apply_animated_values(&mut self) {
         let frame_values = self.animation_controller.evaluate_frame(Some(&self.signal_manager));
 
-        for (path_str, json_value) in frame_values {
+        for (flame_target, path_str, json_value) in frame_values {
             // Parse the string key back to ConfigPath
             if let Some(path) = crate::config::ConfigPath::from_string_key(&path_str) {
                 // Convert JSON value to ConfigValue
                 if let Some(config_value) = crate::config::json_to_config_value(&json_value, &path)
                 {
-                    // Apply silently (no undo point)
-                    if let Err(e) = self.config_manager.update_param_silent(path, config_value) {
-                        log::warn!("Animation: failed to update {}: {}", path_str, e);
+                    // Apply silently (no undo point) against the track's target flame
+                    if let Err(e) = self
+                        .config_manager
+                        .update_param_silent_on(flame_target, path, config_value)
+                    {
+                        log::warn!(
+                            "Animation: failed to update {:?}/{}: {}",
+                            flame_target, path_str, e
+                        );
                     }
                 }
             } else {

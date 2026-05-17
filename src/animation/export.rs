@@ -13,7 +13,8 @@
 use std::path::PathBuf;
 
 use crate::animation::{Animation, AnimationController};
-use crate::config::{ConfigPath, FractalConfig, json_to_config_value};
+use crate::config::{ConfigPath, EditingTarget, FractalConfig, json_to_config_value};
+use crate::scene::transforms::Flame;
 use crate::signal::{Signal, SignalManager};
 
 /// Video codec options for ffmpeg encoding
@@ -640,24 +641,37 @@ impl ExportProgressCallback for UiProgressCallback {
     }
 }
 
-/// Apply animation values to a FractalConfig
+/// Apply animation values to a FractalConfig.
 ///
 /// Takes the evaluated animation values and applies them to the config.
+/// Each entry carries an `EditingTarget` selecting which flame
+/// (Main or a specific subflame) the path resolves against.
 pub fn apply_animation_values(
     config: &mut FractalConfig,
-    values: &[(String, serde_json::Value)],
+    values: &[(EditingTarget, String, serde_json::Value)],
 ) {
-    for (path_str, json_value) in values {
+    for (flame_target, path_str, json_value) in values {
         // Parse the path string to ConfigPath
         if let Some(path) = ConfigPath::from_string_key(path_str) {
             // Convert JSON value to ConfigValue
             if let Some(config_value) = json_to_config_value(json_value, &path) {
-                // Apply to config
-                apply_config_value(config, &path, &config_value);
+                // Apply to config, routed via the track's flame target.
+                apply_config_value(config, *flame_target, &path, &config_value);
             }
         } else {
             log::warn!("Unknown animation path: {}", path_str);
         }
+    }
+}
+
+/// Resolve a mutable reference to the flame slot a track targets
+/// inside the given `FractalConfig`. Returns `None` when the subflame
+/// index is out of range — apply paths treat this as a broken track
+/// and skip the write.
+fn resolve_flame_mut(config: &mut FractalConfig, target: EditingTarget) -> Option<&mut Flame> {
+    match target {
+        EditingTarget::Main => Some(&mut config.flame),
+        EditingTarget::Subflame { index } => config.flame.subflames.get_mut(index),
     }
 }
 
@@ -691,9 +705,11 @@ fn apply_post_affine_param(xform: &mut crate::scene::transforms::Transform, para
     }
 }
 
-/// Apply a single ConfigValue to a FractalConfig
+/// Apply a single ConfigValue to a FractalConfig, routed via `target`
+/// for flame-scoped paths.
 fn apply_config_value(
     config: &mut FractalConfig,
+    target: EditingTarget,
     path: &ConfigPath,
     value: &crate::config::ConfigValue,
 ) {
@@ -731,125 +747,9 @@ fn apply_config_value(
         (ConfigPath::BackgroundColorG, ConfigValue::Float(v)) => config.background_color[1] = *v,
         (ConfigPath::BackgroundColorB, ConfigValue::Float(v)) => config.background_color[2] = *v,
 
-        // Transform parameters
-        (ConfigPath::TransformWeight { index }, ConfigValue::Float(v)) => {
-            if let Some(xform) = config.flame.transforms.get_mut(*index) {
-                xform.weight = *v;
-            }
-        }
-        (ConfigPath::TransformColor { index }, ConfigValue::Float(v)) => {
-            if let Some(xform) = config.flame.transforms.get_mut(*index) {
-                xform.color = *v;
-            }
-        }
-        (ConfigPath::TransformColorSpeed { index }, ConfigValue::Float(v)) => {
-            if let Some(xform) = config.flame.transforms.get_mut(*index) {
-                xform.color_speed = *v;
-            }
-        }
-        (ConfigPath::TransformOpacity { index }, ConfigValue::Float(v)) => {
-            if let Some(xform) = config.flame.transforms.get_mut(*index) {
-                xform.opacity = *v;
-            }
-        }
-        (ConfigPath::TransformAffine { index, param }, ConfigValue::Float(v)) => {
-            if let Some(xform) = config.flame.transforms.get_mut(*index) {
-                apply_affine_param(xform, *param, *v);
-            }
-        }
-        (ConfigPath::TransformVariation { index, variation }, ConfigValue::Float(v)) => {
-            if let Some(xform) = config.flame.transforms.get_mut(*index) {
-                xform.variations.insert(variation.clone(), *v);
-            }
-        }
-        (ConfigPath::TransformVariationParam { index, variation, param }, ConfigValue::Float(v)) => {
-            if let Some(xform) = config.flame.transforms.get_mut(*index) {
-                xform.set_variation_param(variation, param, *v);
-            }
-        }
-
-        // High-level transform operations
-        (ConfigPath::TransformOriginX { index }, ConfigValue::Float(v)) => {
-            if let Some(xform) = config.flame.transforms.get_mut(*index) {
-                xform.set_origin_x(*v);
-            }
-        }
-        (ConfigPath::TransformOriginY { index }, ConfigValue::Float(v)) => {
-            if let Some(xform) = config.flame.transforms.get_mut(*index) {
-                xform.set_origin_y(*v);
-            }
-        }
-        (ConfigPath::TransformRotation { index }, ConfigValue::Float(v)) => {
-            if let Some(xform) = config.flame.transforms.get_mut(*index) {
-                xform.set_rotation(*v);
-            }
-        }
-        (ConfigPath::TransformScale { index }, ConfigValue::Float(v)) => {
-            if let Some(xform) = config.flame.transforms.get_mut(*index) {
-                xform.set_scale(*v);
-            }
-        }
-
-        // Legacy `FinalTransform*` (no index) variants were removed in
-        // Phase 9. The migration shim in `ConfigPath::from_string_key`
-        // maps the legacy string form to indexed variants at index 0;
-        // those go through the indexed `FinalTransform*` arms below.
-
-        // Linked pool — animatable per-pool-member parameters.
-        (ConfigPath::LinkedTransformAffine { index, param }, ConfigValue::Float(v)) => {
-            if let Some(xform) = config.flame.linked_transforms.get_mut(*index) {
-                apply_affine_param(xform, *param, *v);
-            }
-        }
-        (ConfigPath::LinkedTransformPostAffineEnabled { index }, ConfigValue::Bool(v)) => {
-            if let Some(xform) = config.flame.linked_transforms.get_mut(*index) {
-                xform.post_affine_enabled = *v;
-            }
-        }
-        (ConfigPath::LinkedTransformPostAffine { index, param }, ConfigValue::Float(v)) => {
-            if let Some(xform) = config.flame.linked_transforms.get_mut(*index) {
-                apply_post_affine_param(xform, *param, *v);
-            }
-        }
-        (ConfigPath::LinkedTransformVariation { index, variation }, ConfigValue::Float(v)) => {
-            if let Some(xform) = config.flame.linked_transforms.get_mut(*index) {
-                xform.variations.insert(variation.clone(), *v);
-            }
-        }
-        (ConfigPath::LinkedTransformVariationParam { index, variation, param }, ConfigValue::Float(v)) => {
-            if let Some(xform) = config.flame.linked_transforms.get_mut(*index) {
-                xform.set_variation_param(variation, param, *v);
-            }
-        }
-
-        // Final pool — animatable per-pool-member parameters.
-        (ConfigPath::FinalTransformAffine { index, param }, ConfigValue::Float(v)) => {
-            if let Some(xform) = config.flame.final_transforms.get_mut(*index) {
-                apply_affine_param(xform, *param, *v);
-            }
-        }
-        (ConfigPath::FinalTransformPostAffineEnabled { index }, ConfigValue::Bool(v)) => {
-            if let Some(xform) = config.flame.final_transforms.get_mut(*index) {
-                xform.post_affine_enabled = *v;
-            }
-        }
-        (ConfigPath::FinalTransformPostAffine { index, param }, ConfigValue::Float(v)) => {
-            if let Some(xform) = config.flame.final_transforms.get_mut(*index) {
-                apply_post_affine_param(xform, *param, *v);
-            }
-        }
-        (ConfigPath::FinalTransformVariation { index, variation }, ConfigValue::Float(v)) => {
-            if let Some(xform) = config.flame.final_transforms.get_mut(*index) {
-                xform.variations.insert(variation.clone(), *v);
-            }
-        }
-        (ConfigPath::FinalTransformVariationParam { index, variation, param }, ConfigValue::Float(v)) => {
-            if let Some(xform) = config.flame.final_transforms.get_mut(*index) {
-                xform.set_variation_param(variation, param, *v);
-            }
-        }
-
-        // Density effect parameters
+        // Effect parameters (FractalConfig-level, not per-flame).
+        // These intentionally stay outside the per-flame match below
+        // because effects live on the FractalConfig directly.
         (ConfigPath::DensityEffectEnabled { index }, ConfigValue::Bool(v)) => {
             if let Some(effect) = config.density_effects.get_mut(*index) {
                 effect.enabled = *v;
@@ -860,8 +760,6 @@ fn apply_config_value(
                 effect.params.insert(param.clone(), *v);
             }
         }
-
-        // Color effect parameters
         (ConfigPath::ColorEffectEnabled { index }, ConfigValue::Bool(v)) => {
             if let Some(effect) = config.color_effects.get_mut(*index) {
                 effect.enabled = *v;
@@ -870,6 +768,147 @@ fn apply_config_value(
         (ConfigPath::ColorEffectParam { index, param }, ConfigValue::Float(v)) => {
             if let Some(effect) = config.color_effects.get_mut(*index) {
                 effect.params.insert(param.clone(), *v);
+            }
+        }
+
+        // Everything else is per-flame. Resolve the target flame and
+        // delegate to apply_flame_value. Broken targets (missing
+        // subflame) silently drop — UI surfaces these.
+        _ => {
+            if let Some(flame) = resolve_flame_mut(config, target) {
+                apply_flame_value(flame, path, value);
+            } else {
+                log::debug!(
+                    "apply_animation: skipping {} — flame target {:?} not found",
+                    path, target,
+                );
+            }
+        }
+    }
+}
+
+/// Apply a per-flame ConfigPath to a specific Flame.
+///
+/// Mirrors the per-flame arms of `ConfigManager::set_value` but
+/// operates on a `Flame` directly so it works on subflames too.
+fn apply_flame_value(
+    flame: &mut Flame,
+    path: &ConfigPath,
+    value: &crate::config::ConfigValue,
+) {
+    use crate::config::ConfigValue;
+
+    match (path, value) {
+        // Transform parameters
+        (ConfigPath::TransformWeight { index }, ConfigValue::Float(v)) => {
+            if let Some(xform) = flame.transforms.get_mut(*index) {
+                xform.weight = *v;
+            }
+        }
+        (ConfigPath::TransformColor { index }, ConfigValue::Float(v)) => {
+            if let Some(xform) = flame.transforms.get_mut(*index) {
+                xform.color = *v;
+            }
+        }
+        (ConfigPath::TransformColorSpeed { index }, ConfigValue::Float(v)) => {
+            if let Some(xform) = flame.transforms.get_mut(*index) {
+                xform.color_speed = *v;
+            }
+        }
+        (ConfigPath::TransformOpacity { index }, ConfigValue::Float(v)) => {
+            if let Some(xform) = flame.transforms.get_mut(*index) {
+                xform.opacity = *v;
+            }
+        }
+        (ConfigPath::TransformAffine { index, param }, ConfigValue::Float(v)) => {
+            if let Some(xform) = flame.transforms.get_mut(*index) {
+                apply_affine_param(xform, *param, *v);
+            }
+        }
+        (ConfigPath::TransformVariation { index, variation }, ConfigValue::Float(v)) => {
+            if let Some(xform) = flame.transforms.get_mut(*index) {
+                xform.variations.insert(variation.clone(), *v);
+            }
+        }
+        (ConfigPath::TransformVariationParam { index, variation, param }, ConfigValue::Float(v)) => {
+            if let Some(xform) = flame.transforms.get_mut(*index) {
+                xform.set_variation_param(variation, param, *v);
+            }
+        }
+
+        // High-level transform operations
+        (ConfigPath::TransformOriginX { index }, ConfigValue::Float(v)) => {
+            if let Some(xform) = flame.transforms.get_mut(*index) {
+                xform.set_origin_x(*v);
+            }
+        }
+        (ConfigPath::TransformOriginY { index }, ConfigValue::Float(v)) => {
+            if let Some(xform) = flame.transforms.get_mut(*index) {
+                xform.set_origin_y(*v);
+            }
+        }
+        (ConfigPath::TransformRotation { index }, ConfigValue::Float(v)) => {
+            if let Some(xform) = flame.transforms.get_mut(*index) {
+                xform.set_rotation(*v);
+            }
+        }
+        (ConfigPath::TransformScale { index }, ConfigValue::Float(v)) => {
+            if let Some(xform) = flame.transforms.get_mut(*index) {
+                xform.set_scale(*v);
+            }
+        }
+
+        // Linked pool — animatable per-pool-member parameters.
+        (ConfigPath::LinkedTransformAffine { index, param }, ConfigValue::Float(v)) => {
+            if let Some(xform) = flame.linked_transforms.get_mut(*index) {
+                apply_affine_param(xform, *param, *v);
+            }
+        }
+        (ConfigPath::LinkedTransformPostAffineEnabled { index }, ConfigValue::Bool(v)) => {
+            if let Some(xform) = flame.linked_transforms.get_mut(*index) {
+                xform.post_affine_enabled = *v;
+            }
+        }
+        (ConfigPath::LinkedTransformPostAffine { index, param }, ConfigValue::Float(v)) => {
+            if let Some(xform) = flame.linked_transforms.get_mut(*index) {
+                apply_post_affine_param(xform, *param, *v);
+            }
+        }
+        (ConfigPath::LinkedTransformVariation { index, variation }, ConfigValue::Float(v)) => {
+            if let Some(xform) = flame.linked_transforms.get_mut(*index) {
+                xform.variations.insert(variation.clone(), *v);
+            }
+        }
+        (ConfigPath::LinkedTransformVariationParam { index, variation, param }, ConfigValue::Float(v)) => {
+            if let Some(xform) = flame.linked_transforms.get_mut(*index) {
+                xform.set_variation_param(variation, param, *v);
+            }
+        }
+
+        // Final pool — animatable per-pool-member parameters.
+        (ConfigPath::FinalTransformAffine { index, param }, ConfigValue::Float(v)) => {
+            if let Some(xform) = flame.final_transforms.get_mut(*index) {
+                apply_affine_param(xform, *param, *v);
+            }
+        }
+        (ConfigPath::FinalTransformPostAffineEnabled { index }, ConfigValue::Bool(v)) => {
+            if let Some(xform) = flame.final_transforms.get_mut(*index) {
+                xform.post_affine_enabled = *v;
+            }
+        }
+        (ConfigPath::FinalTransformPostAffine { index, param }, ConfigValue::Float(v)) => {
+            if let Some(xform) = flame.final_transforms.get_mut(*index) {
+                apply_post_affine_param(xform, *param, *v);
+            }
+        }
+        (ConfigPath::FinalTransformVariation { index, variation }, ConfigValue::Float(v)) => {
+            if let Some(xform) = flame.final_transforms.get_mut(*index) {
+                xform.variations.insert(variation.clone(), *v);
+            }
+        }
+        (ConfigPath::FinalTransformVariationParam { index, variation, param }, ConfigValue::Float(v)) => {
+            if let Some(xform) = flame.final_transforms.get_mut(*index) {
+                xform.set_variation_param(variation, param, *v);
             }
         }
 
@@ -2188,6 +2227,7 @@ mod tests {
         // Normal pool
         apply_config_value(
             &mut config,
+            EditingTarget::Main,
             &ConfigPath::TransformVariationParam {
                 index: 0,
                 variation: "julian".to_string(),
@@ -2206,6 +2246,7 @@ mod tests {
         // ConfigPath::from_string_key).
         apply_config_value(
             &mut config,
+            EditingTarget::Main,
             &ConfigPath::FinalTransformVariationParam {
                 index: 0,
                 variation: "bipolar".to_string(),
@@ -2222,6 +2263,7 @@ mod tests {
         // Linked pool
         apply_config_value(
             &mut config,
+            EditingTarget::Main,
             &ConfigPath::LinkedTransformVariationParam {
                 index: 0,
                 variation: "blob".to_string(),
@@ -2238,6 +2280,7 @@ mod tests {
         // PoolFinal pool
         apply_config_value(
             &mut config,
+            EditingTarget::Main,
             &ConfigPath::FinalTransformVariationParam {
                 index: 0,
                 variation: "blob".to_string(),

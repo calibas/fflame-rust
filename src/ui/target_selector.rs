@@ -6,7 +6,7 @@
 
 use egui::{CollapsingHeader, ScrollArea, TextEdit, Ui};
 use crate::config::delta::{AffineParam, ConfigPath};
-use crate::config::FractalConfig;
+use crate::config::{EditingTarget, FractalConfig};
 use crate::effects::global_effect_registry;
 use crate::scene::transforms::Flame;
 use crate::variations::global_registry;
@@ -88,17 +88,22 @@ impl TargetItem {
     }
 }
 
-/// Render the hierarchical target selector
+/// Render the hierarchical target selector.
 ///
-/// Returns `Some(ConfigPath)` if a target was selected, `None` otherwise.
+/// Returns `Some((flame_target, path))` if a target was selected, `None` otherwise.
+///
+/// Categories are grouped by flame: Main flame at the top with the
+/// full set of categories (View / Color / Tone / Rendering / Effects /
+/// Xaos / Transforms / Linked / Final), then one collapsible group
+/// per subflame containing only the flame-local categories
+/// (Xaos / Transforms / Linked / Final).
 pub fn render_target_selector(
     ui: &mut Ui,
     state: &mut TargetSelectorState,
-    flame: &Flame,
     config: &FractalConfig,
-    current_selection: Option<&str>,
-) -> Option<ConfigPath> {
-    let mut selected: Option<ConfigPath> = None;
+    current_selection: Option<(EditingTarget, &str)>,
+) -> Option<(EditingTarget, ConfigPath)> {
+    let mut selected: Option<(EditingTarget, ConfigPath)> = None;
 
     // Search filter
     ui.horizontal(|ui| {
@@ -120,138 +125,163 @@ pub fn render_target_selector(
             let filter = state.search_filter.to_lowercase();
             let has_filter = !filter.is_empty();
 
-            // View category
-            if let Some(path) = render_category(
+            // === Main flame ===
+            // Always rendered at the top, not wrapped in a "Main"
+            // collapsible header — the main flame's categories are
+            // first-class so non-subflame users never see extra
+            // nesting.
+            if let Some(path) = render_flame_group(
                 ui,
                 state,
-                TargetCategory::View,
-                &get_view_items(),
+                EditingTarget::Main,
+                &config.flame,
+                config,
+                true, // include FractalConfig-level categories
                 &filter,
                 has_filter,
                 current_selection,
             ) {
-                selected = Some(path);
+                selected = Some((EditingTarget::Main, path));
             }
 
-            // Color category
-            if let Some(path) = render_category(
-                ui,
-                state,
-                TargetCategory::Color,
-                &get_color_items(),
-                &filter,
-                has_filter,
-                current_selection,
-            ) {
-                selected = Some(path);
-            }
+            // === Subflames ===
+            // One CollapsingHeader per subflame so they can be
+            // collapsed independently. Subflames only get the
+            // per-flame categories (Xaos / Transforms / Linked /
+            // Final); FractalConfig-level state (view, palette, tone
+            // mapping, effects) lives on Main only.
+            for (i, subflame) in config.flame.subflames.iter().enumerate() {
+                let target = EditingTarget::Subflame { index: i };
+                let header_label = if subflame.name.is_empty() {
+                    format!("Subflame {}", i)
+                } else {
+                    format!("Subflame {} — {}", i, subflame.name)
+                };
+                let header_id = format!("flame_subflame_{}", i);
+                let is_expanded = state.expanded.contains(&header_id) || has_filter;
 
-            // Tone Mapping category
-            if let Some(path) = render_category(
-                ui,
-                state,
-                TargetCategory::ToneMapping,
-                &get_tonemapping_items(),
-                &filter,
-                has_filter,
-                current_selection,
-            ) {
-                selected = Some(path);
-            }
+                let header = CollapsingHeader::new(header_label)
+                    .id_salt(&header_id)
+                    .default_open(is_expanded)
+                    .show(ui, |ui| {
+                        if let Some(path) = render_flame_group(
+                            ui,
+                            state,
+                            target,
+                            subflame,
+                            config,
+                            false, // subflames don't get FractalConfig-level categories
+                            &filter,
+                            has_filter,
+                            current_selection,
+                        ) {
+                            selected = Some((target, path));
+                        }
+                    });
 
-            // Rendering category
-            if let Some(path) = render_category(
-                ui,
-                state,
-                TargetCategory::Rendering,
-                &get_rendering_items(),
-                &filter,
-                has_filter,
-                current_selection,
-            ) {
-                selected = Some(path);
-            }
-
-            // Effects category (dynamic based on current effects)
-            let effects_items = get_effects_items(config);
-            if !effects_items.is_empty() {
-                if let Some(path) = render_category(
-                    ui,
-                    state,
-                    TargetCategory::Effects,
-                    &effects_items,
-                    &filter,
-                    has_filter,
-                    current_selection,
-                ) {
-                    selected = Some(path);
-                }
-            }
-
-            // Xaos category (only shown if flame has xaos enabled or multiple transforms)
-            let xaos_items = get_xaos_items(flame);
-            if !xaos_items.is_empty() {
-                if let Some(path) = render_category(
-                    ui,
-                    state,
-                    TargetCategory::Xaos,
-                    &xaos_items,
-                    &filter,
-                    has_filter,
-                    current_selection,
-                ) {
-                    selected = Some(path);
-                }
-            }
-
-            // Transform categories (one per transform)
-            for i in 0..flame.transforms.len() {
-                let items = get_transform_items(i, &flame.transforms[i]);
-                if let Some(path) = render_category(
-                    ui,
-                    state,
-                    TargetCategory::Transform(i),
-                    &items,
-                    &filter,
-                    has_filter,
-                    current_selection,
-                ) {
-                    selected = Some(path);
-                }
-            }
-
-            // Linked transform pool — one category per pool member.
-            for (i, xform) in flame.linked_transforms.iter().enumerate() {
-                let items = get_linked_transform_items(i, xform);
-                if let Some(path) = render_category(
-                    ui,
-                    state,
-                    TargetCategory::LinkedTransform(i),
-                    &items,
-                    &filter,
-                    has_filter,
-                    current_selection,
-                ) {
-                    selected = Some(path);
-                }
-            }
-
-            // Final transform pool — one category per pool member.
-            for (i, xform) in flame.final_transforms.iter().enumerate() {
-                let items = get_pool_final_transform_items(i, xform);
-                if let Some(path) = render_category(
-                    ui,
-                    state,
-                    TargetCategory::FinalTransform(i),
-                    &items,
-                    &filter,
-                    has_filter,
-                    current_selection,
-                ) {
-                    selected = Some(path);
+                if header.header_response.clicked() {
+                    if state.expanded.contains(&header_id) {
+                        state.expanded.remove(&header_id);
+                    } else {
+                        state.expanded.insert(header_id);
+                    }
                 }
             }
         });
+
+    selected
+}
+
+/// Render the categories belonging to one flame (Main or a subflame).
+///
+/// `include_fractal_categories` selects whether FractalConfig-level
+/// categories (View/Color/Tone/Rendering/Effects) should be drawn —
+/// only Main gets these.
+fn render_flame_group(
+    ui: &mut Ui,
+    state: &mut TargetSelectorState,
+    flame_target: EditingTarget,
+    flame: &Flame,
+    config: &FractalConfig,
+    include_fractal_categories: bool,
+    filter: &str,
+    has_filter: bool,
+    current_selection: Option<(EditingTarget, &str)>,
+) -> Option<ConfigPath> {
+    let mut selected: Option<ConfigPath> = None;
+
+    // Only the current selection that matches this flame_target should
+    // light up its row. Pass through the path key when targets match.
+    let local_selection: Option<&str> = match current_selection {
+        Some((t, key)) if t == flame_target => Some(key),
+        _ => None,
+    };
+
+    if include_fractal_categories {
+        if let Some(path) = render_category(
+            ui, state, flame_target, TargetCategory::View,
+            &get_view_items(), filter, has_filter, local_selection,
+        ) { selected = Some(path); }
+
+        if let Some(path) = render_category(
+            ui, state, flame_target, TargetCategory::Color,
+            &get_color_items(), filter, has_filter, local_selection,
+        ) { selected = Some(path); }
+
+        if let Some(path) = render_category(
+            ui, state, flame_target, TargetCategory::ToneMapping,
+            &get_tonemapping_items(), filter, has_filter, local_selection,
+        ) { selected = Some(path); }
+
+        if let Some(path) = render_category(
+            ui, state, flame_target, TargetCategory::Rendering,
+            &get_rendering_items(), filter, has_filter, local_selection,
+        ) { selected = Some(path); }
+
+        let effects_items = get_effects_items(config);
+        if !effects_items.is_empty() {
+            if let Some(path) = render_category(
+                ui, state, flame_target, TargetCategory::Effects,
+                &effects_items, filter, has_filter, local_selection,
+            ) { selected = Some(path); }
+        }
+    }
+
+    // Xaos
+    let xaos_items = get_xaos_items(flame);
+    if !xaos_items.is_empty() {
+        if let Some(path) = render_category(
+            ui, state, flame_target, TargetCategory::Xaos,
+            &xaos_items, filter, has_filter, local_selection,
+        ) { selected = Some(path); }
+    }
+
+    // Normal pool
+    for i in 0..flame.transforms.len() {
+        let items = get_transform_items(i, &flame.transforms[i]);
+        if let Some(path) = render_category(
+            ui, state, flame_target, TargetCategory::Transform(i),
+            &items, filter, has_filter, local_selection,
+        ) { selected = Some(path); }
+    }
+
+    // Linked pool
+    for (i, xform) in flame.linked_transforms.iter().enumerate() {
+        let items = get_linked_transform_items(i, xform);
+        if let Some(path) = render_category(
+            ui, state, flame_target, TargetCategory::LinkedTransform(i),
+            &items, filter, has_filter, local_selection,
+        ) { selected = Some(path); }
+    }
+
+    // Final pool
+    for (i, xform) in flame.final_transforms.iter().enumerate() {
+        let items = get_pool_final_transform_items(i, xform);
+        if let Some(path) = render_category(
+            ui, state, flame_target, TargetCategory::FinalTransform(i),
+            &items, filter, has_filter, local_selection,
+        ) { selected = Some(path); }
+    }
 
     selected
 }
@@ -260,6 +290,7 @@ pub fn render_target_selector(
 fn render_category(
     ui: &mut Ui,
     state: &mut TargetSelectorState,
+    flame_target: EditingTarget,
     category: TargetCategory,
     items: &[TargetItem],
     filter: &str,
@@ -283,7 +314,13 @@ fn render_category(
         return None;
     }
 
-    let category_id = category.id();
+    // Per-flame category id so expansion state doesn't bleed across
+    // flames — e.g. "Transform 1" on Main and on Subflame 0 are
+    // independently expandable.
+    let category_id = match flame_target {
+        EditingTarget::Main => format!("main_{}", category.id()),
+        EditingTarget::Subflame { index } => format!("sub{}_{}", index, category.id()),
+    };
     let is_expanded = state.expanded.contains(&category_id) || has_filter;
 
     let header = CollapsingHeader::new(category.label())

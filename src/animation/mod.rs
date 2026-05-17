@@ -4,7 +4,7 @@
 //! During playback, the animation controller updates ConfigManager silently
 //! (without creating undo points).
 
-use crate::config::FractalConfig;
+use crate::config::{EditingTarget, FractalConfig};
 use serde::{Deserialize, Deserializer, Serialize};
 
 mod controller;
@@ -51,6 +51,8 @@ struct LegacyTrack {
     source: TrackSource,
     #[serde(default)]
     interpolation: Interpolation,
+    #[serde(default)]
+    flame_target: EditingTarget,
 }
 
 /// Deserialize tracks from either Vec<Track> (new) or HashMap<String, LegacyTrack> (old)
@@ -91,6 +93,7 @@ where
             while let Some((target, legacy)) = map.next_entry::<String, LegacyTrack>()? {
                 tracks.push(Track {
                     target,
+                    flame_target: legacy.flame_target,
                     source: legacy.source,
                     interpolation: legacy.interpolation,
                 });
@@ -107,6 +110,14 @@ where
 pub struct Track {
     /// Target parameter path (ConfigPath string key)
     pub target: String,
+
+    /// Which flame the parameter lives on. `Main` is the main flame;
+    /// `Subflame { index }` references a subflame by its position in
+    /// the flame's `subflames` list. Defaults to `Main` so older
+    /// `.anim` files (predating subflame support) deserialize against
+    /// the main flame exactly as they used to.
+    #[serde(default)]
+    pub flame_target: EditingTarget,
 
     /// Source of track values (keyframes or procedural)
     pub source: TrackSource,
@@ -357,35 +368,49 @@ impl Animation {
 }
 
 impl Track {
-    /// Create a new track with the given target and source
+    /// Create a new track with the given target and source.
+    /// Defaults to `EditingTarget::Main` — use `with_flame_target` to
+    /// retarget at a subflame.
     pub fn new(target: String, source: TrackSource) -> Self {
         Self {
             target,
+            flame_target: EditingTarget::Main,
             source,
             interpolation: Interpolation::Linear,
         }
     }
 
+    /// Builder: set the flame this track targets. Use this for tracks
+    /// that animate a subflame parameter:
+    ///
+    /// ```ignore
+    /// let track = Track::new(path, source)
+    ///     .with_flame_target(EditingTarget::Subflame { index: 0 });
+    /// ```
+    pub fn with_flame_target(mut self, flame_target: EditingTarget) -> Self {
+        self.flame_target = flame_target;
+        self
+    }
+
     /// Create keyframe track with single keyframe (constant value)
     pub fn constant(target: String, value: serde_json::Value) -> Self {
-        Self {
+        Self::new(
             target,
-            source: TrackSource::Keyframes {
+            TrackSource::Keyframes {
                 keyframes: vec![Keyframe {
                     time: 0.0,
                     value,
                     easing: EasingFunction::Linear,
                 }],
             },
-            interpolation: Interpolation::Linear,
-        }
+        )
     }
 
     /// Create keyframe track with two keyframes (start → end)
     pub fn linear(target: String, start_value: serde_json::Value, end_value: serde_json::Value, duration: f64) -> Self {
-        Self {
+        Self::new(
             target,
-            source: TrackSource::Keyframes {
+            TrackSource::Keyframes {
                 keyframes: vec![
                     Keyframe {
                         time: 0.0,
@@ -399,17 +424,16 @@ impl Track {
                     },
                 ],
             },
-            interpolation: Interpolation::Linear,
-        }
+        )
     }
 
     /// Create signal-driven track
     ///
     /// Maps signal values (normalized 0-1) to output range [min_output, max_output]
     pub fn signal(target: String, signal_name: String, min_output: f64, max_output: f64) -> Self {
-        Self {
+        Self::new(
             target,
-            source: TrackSource::Signal {
+            TrackSource::Signal {
                 signal_name,
                 min_output,
                 max_output,
@@ -421,8 +445,7 @@ impl Track {
                 fade_out: 0.0,
                 fade_out_easing: EasingFunction::Linear,
             },
-            interpolation: Interpolation::Linear, // Not used for signals
-        }
+        )
     }
 
     /// Create signal-driven track with smoothing
@@ -433,9 +456,9 @@ impl Track {
         max_output: f64,
         smoothing: f64,
     ) -> Self {
-        Self {
+        Self::new(
             target,
-            source: TrackSource::Signal {
+            TrackSource::Signal {
                 signal_name,
                 min_output,
                 max_output,
@@ -447,8 +470,7 @@ impl Track {
                 fade_out: 0.0,
                 fade_out_easing: EasingFunction::Linear,
             },
-            interpolation: Interpolation::Linear,
-        }
+        )
     }
 
     /// Add keyframe in time-sorted order (only works for Keyframes source)

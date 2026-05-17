@@ -11,8 +11,7 @@ use crate::animation::{
     Animation, AnimationController, EasingFunction, Interpolation,
     Keyframe, Track, TrackSource,
 };
-use crate::config::{ConfigPath, FractalConfig};
-use crate::scene::transforms::Flame;
+use crate::config::{ConfigPath, EditingTarget, FractalConfig};
 use super::animation_panel::TimelineLayout;
 use super::target_selector::{TargetSelectorState, render_target_selector};
 
@@ -21,8 +20,10 @@ use super::target_selector::{TargetSelectorState, render_target_selector};
 pub struct TrackEditorState {
     /// Selected track type for new track
     pub new_track_type: NewTrackType,
-    /// Selected target for new track
+    /// Selected target parameter path for new track
     pub new_track_target: String,
+    /// Selected flame (Main or Subflame{i}) for the new track
+    pub new_track_flame_target: EditingTarget,
     /// Unified Track Editor panel state
     pub track_editor_panel_open: bool,
     /// Track index being edited in the unified panel (None = adding new track)
@@ -101,6 +102,103 @@ fn path_to_display(path: &str) -> String {
     path.to_string()
 }
 
+/// Human-readable prefix for a track's flame target — `"Main"` or
+/// `"Subflame 0"`. Subflame indices are displayed 0-based to match
+/// the Subflames panel.
+fn flame_target_prefix(flame_target: EditingTarget) -> String {
+    match flame_target {
+        EditingTarget::Main => "Main".to_string(),
+        EditingTarget::Subflame { index } => format!("Subflame {}", index),
+    }
+}
+
+/// Compose the full display string for a track row:
+/// `"{flame} / {path}"` where `{path}` is the 1-based-display path.
+fn target_display(flame_target: EditingTarget, path: &str) -> String {
+    format!("{} / {}", flame_target_prefix(flame_target), path_to_display(path))
+}
+
+/// Resolve the flame referenced by `flame_target` inside `config`.
+/// Returns `None` when the target's subflame index is out of range —
+/// i.e. the track is broken because the subflame was deleted.
+fn resolve_flame<'a>(config: &'a FractalConfig, flame_target: EditingTarget) -> Option<&'a crate::scene::transforms::Flame> {
+    match flame_target {
+        EditingTarget::Main => Some(&config.flame),
+        EditingTarget::Subflame { index } => config.flame.subflames.get(index),
+    }
+}
+
+/// Check whether a track's `(flame_target, path)` resolves to a valid
+/// parameter in the current config. Returns `true` if broken (target
+/// missing or transform/effect/etc. index out of range).
+///
+/// This is a cheap scan — used by the track-list UI to mark broken
+/// rows and by the panel header to tally them.
+pub fn is_track_broken(config: &FractalConfig, flame_target: EditingTarget, path_str: &str) -> bool {
+    let Some(flame) = resolve_flame(config, flame_target) else {
+        return true;
+    };
+    let Some(path) = ConfigPath::from_string_key(path_str) else {
+        // Unparseable path strings are treated as broken so the user
+        // can see them and choose to delete or fix.
+        return true;
+    };
+    match &path {
+        // Transform-pool paths: index must exist on the resolved flame.
+        ConfigPath::TransformWeight { index }
+        | ConfigPath::TransformColor { index }
+        | ConfigPath::TransformColorSpeed { index }
+        | ConfigPath::TransformOpacity { index }
+        | ConfigPath::TransformAffine { index, .. }
+        | ConfigPath::TransformPostAffineEnabled { index }
+        | ConfigPath::TransformPostAffine { index, .. }
+        | ConfigPath::TransformOriginX { index }
+        | ConfigPath::TransformOriginY { index }
+        | ConfigPath::TransformRotation { index }
+        | ConfigPath::TransformScale { index }
+        | ConfigPath::TransformVariation { index, .. }
+        | ConfigPath::TransformVariationParam { index, .. } => {
+            *index >= flame.transforms.len()
+        }
+        ConfigPath::LinkedTransformAffine { index, .. }
+        | ConfigPath::LinkedTransformPostAffineEnabled { index }
+        | ConfigPath::LinkedTransformPostAffine { index, .. }
+        | ConfigPath::LinkedTransformVariation { index, .. }
+        | ConfigPath::LinkedTransformVariationParam { index, .. } => {
+            *index >= flame.linked_transforms.len()
+        }
+        ConfigPath::FinalTransformAffine { index, .. }
+        | ConfigPath::FinalTransformPostAffineEnabled { index }
+        | ConfigPath::FinalTransformPostAffine { index, .. }
+        | ConfigPath::FinalTransformVariation { index, .. }
+        | ConfigPath::FinalTransformVariationParam { index, .. } => {
+            *index >= flame.final_transforms.len()
+        }
+        ConfigPath::Xaos { src, dst } => {
+            *src >= flame.transforms.len() || *dst >= flame.transforms.len()
+        }
+        // Effects only live on Main; we already check that flame resolved.
+        ConfigPath::ColorEffectEnabled { index } | ConfigPath::ColorEffectParam { index, .. } => {
+            *index >= config.color_effects.len()
+        }
+        ConfigPath::DensityEffectEnabled { index } | ConfigPath::DensityEffectParam { index, .. } => {
+            *index >= config.density_effects.len()
+        }
+        _ => false,
+    }
+}
+
+/// Count how many tracks in the animation are broken given the
+/// current config. Surfaced in the Animation panel header so the
+/// user sees a "(N broken)" hint at a glance.
+pub fn count_broken_tracks(animation: &Animation, config: &FractalConfig) -> usize {
+    animation
+        .tracks
+        .iter()
+        .filter(|t| is_track_broken(config, t.flame_target, &t.target))
+        .count()
+}
+
 /// Render the track editor section with visual timeline bars aligned with the scrubber.
 ///
 /// Returns a response containing any seek requests from clicking on tracks.
@@ -108,19 +206,35 @@ pub fn render_track_editor(
     ui: &mut Ui,
     controller: &mut AnimationController,
     state: &mut TrackEditorState,
-    _config: &FractalConfig,
+    config: &FractalConfig,
     timeline_layout: Option<TimelineLayout>,
 ) -> TrackEditorResponse {
     let has_animation = controller.animation.is_some();
     let mut response = TrackEditorResponse::default();
 
-    // Track list header with Add Track button
-    let track_count = controller.animation.as_ref()
-        .map(|a| a.tracks.len())
-        .unwrap_or(0);
+    // Track list header with Add Track button.
+    // If any tracks are broken, append a "(N broken)" hint so the
+    // user notices at a glance — they can then open each row to
+    // see the warning icon.
+    let (track_count, broken_count) = controller
+        .animation
+        .as_ref()
+        .map(|a| (a.tracks.len(), count_broken_tracks(a, config)))
+        .unwrap_or((0, 0));
 
     ui.horizontal(|ui| {
         ui.strong(t!("track_editor.tracks_header", count = track_count));
+        if broken_count > 0 {
+            ui.colored_label(
+                egui::Color32::from_rgb(220, 140, 60),
+                format!("⚠ {} broken", broken_count),
+            )
+            .on_hover_text(
+                "Tracks targeting parameters that don't exist in the current config \
+                 (e.g. transform was deleted, subflame is missing). They still load \
+                 but won't apply until rebound.",
+            );
+        }
         ui.separator();
         let add_button = egui::Button::new(t!("track_editor.add_track"))
             .fill(egui::Color32::from_rgb(60, 120, 60));
@@ -133,7 +247,7 @@ pub fn render_track_editor(
 
     // Render tracks as visual timeline bars
     if let (Some(ref mut animation), Some(layout)) = (&mut controller.animation, timeline_layout) {
-        response = render_tracks_visual(ui, animation, state, layout);
+        response = render_tracks_visual(ui, animation, state, config, layout);
     }
 
     response
@@ -158,6 +272,7 @@ fn render_tracks_visual(
     ui: &mut Ui,
     animation: &mut Animation,
     state: &mut TrackEditorState,
+    config: &FractalConfig,
     layout: TimelineLayout,
 ) -> TrackEditorResponse {
     let mut track_to_delete: Option<usize> = None;
@@ -332,25 +447,44 @@ fn render_tracks_visual(
                     rect.left_top(),
                     Pos2::new(rect.left() + LABEL_WIDTH - 4.0, rect.bottom()),
                 );
-                // Convert to 1-based display (internal paths use 0-based for compatibility)
-                let display_path = path_to_display(&path);
+                let flame_target = track.flame_target;
+                let is_broken = is_track_broken(config, flame_target, &path);
+                // Convert to 1-based display + prepend flame prefix
+                let full_display = target_display(flame_target, &path);
                 // Truncate label if too long (show more characters)
-                let display_name = if display_path.len() > 14 {
-                    format!("{}...", &display_path[..14])
+                let display_name = if full_display.len() > 14 {
+                    format!("{}...", &full_display[..14])
                 } else {
-                    display_path.clone()
+                    full_display.clone()
+                };
+                let label_color = if is_broken {
+                    Color32::from_rgb(220, 140, 60)
+                } else {
+                    ui.visuals().text_color()
+                };
+                let label_text = if is_broken {
+                    format!("⚠ {}", display_name)
+                } else {
+                    display_name
                 };
                 painter.text(
                     label_rect.right_center(),
                     egui::Align2::RIGHT_CENTER,
-                    &display_name,
+                    &label_text,
                     egui::FontId::proportional(12.0),
-                    ui.visuals().text_color(),
+                    label_color,
                 );
                 // Add tooltip with full track name on hover
                 let label_response = ui.interact(label_rect, egui::Id::new(format!("track_label_{}", track_index)), Sense::hover());
                 if label_response.hovered() {
-                    label_response.on_hover_text(&display_path);
+                    if is_broken {
+                        label_response.on_hover_text(format!(
+                            "{}\n\n⚠ Broken: target parameter doesn't exist in the current config.",
+                            full_display,
+                        ));
+                    } else {
+                        label_response.on_hover_text(&full_display);
+                    }
                 }
 
                 all_track_rects.push(bg_rect);
@@ -421,7 +555,6 @@ pub fn render_track_editor_panel(
     ctx: &egui::Context,
     controller: &mut AnimationController,
     state: &mut TrackEditorState,
-    flame: &Flame,
     config: &FractalConfig,
     current_time: f64,
     signal_names: &[String],
@@ -458,7 +591,7 @@ pub fn render_track_editor_panel(
         .default_height(450.0)
         .frame(highlight_frame)
         .show(ctx, |ui| {
-            render_track_editor_panel_content(ui, controller, state, flame, config, current_time, signal_names);
+            render_track_editor_panel_content(ui, controller, state, config, current_time, signal_names);
         });
 
     // Close if either X button clicked (open=false) or explicitly closed by code
@@ -470,7 +603,6 @@ fn render_track_editor_panel_content(
     ui: &mut Ui,
     controller: &mut AnimationController,
     state: &mut TrackEditorState,
-    flame: &Flame,
     config: &FractalConfig,
     current_time: f64,
     signal_names: &[String],
@@ -509,10 +641,10 @@ fn render_track_editor_panel_content(
     ui.label(t!("track_editor.target"));
 
     if is_editing {
-        // Edit mode: Show target as read-only label
+        // Edit mode: Show target as read-only label, with flame prefix
         ui.horizontal(|ui| {
             ui.add_space(8.0);
-            ui.strong(path_to_display(&state.new_track_target));
+            ui.strong(target_display(state.new_track_flame_target, &state.new_track_target));
         });
     } else {
         // Add mode: Show editable target selector
@@ -520,9 +652,10 @@ fn render_track_editor_panel_content(
         if !state.new_track_target.is_empty() {
             ui.horizontal(|ui| {
                 ui.add_space(8.0);
-                ui.strong(path_to_display(&state.new_track_target));
+                ui.strong(target_display(state.new_track_flame_target, &state.new_track_target));
                 if ui.small_button("🗑").clicked() {
                     state.new_track_target.clear();
+                    state.new_track_flame_target = EditingTarget::Main;
                 }
             });
         }
@@ -535,19 +668,24 @@ fn render_track_editor_panel_content(
         })
         .default_open(state.new_track_target.is_empty())
         .show(ui, |ui| {
-            if let Some(path) = render_target_selector(
+            let current = if state.new_track_target.is_empty() {
+                None
+            } else {
+                Some((state.new_track_flame_target, state.new_track_target.as_str()))
+            };
+            if let Some((flame_target, path)) = render_target_selector(
                 ui,
                 &mut state.target_selector_state,
-                flame,
                 config,
-                if state.new_track_target.is_empty() { None } else { Some(&state.new_track_target) },
+                current,
             ) {
                 state.new_track_target = path.to_string_key();
+                state.new_track_flame_target = flame_target;
                 // Auto-initialize values based on track type (Add mode only)
                 if !is_editing {
                     match state.new_track_type {
                         NewTrackType::Keyframe => {
-                            initialize_preview_keyframes(state, config, duration);
+                            initialize_preview_keyframes(state, config, flame_target, duration);
                         }
                         NewTrackType::Signal => {
                             // Signal tracks don't need initialization from config
@@ -686,7 +824,7 @@ fn render_keyframe_subpanel(
                 ui.horizontal(|ui| {
                     if ui.button(t!("track_editor.add_at_current")).clicked() {
                         let current_value = ConfigPath::from_string_key(&state.new_track_target)
-                            .and_then(|p| get_current_value(config, &p))
+                            .and_then(|p| get_current_value(config, state.new_track_flame_target, &p))
                             .unwrap_or(0.0);
                         keyframes.push(Keyframe {
                             time: current_time.clamp(0.0, duration),
@@ -789,7 +927,7 @@ fn render_keyframe_subpanel(
         ui.horizontal(|ui| {
             if ui.button(t!("track_editor.add_at_current")).clicked() {
                 let current_value = ConfigPath::from_string_key(&state.new_track_target)
-                    .and_then(|p| get_current_value(config, &p))
+                    .and_then(|p| get_current_value(config, state.new_track_flame_target, &p))
                     .unwrap_or(0.0);
                 state.preview_keyframes.push(Keyframe {
                     time: current_time.clamp(0.0, duration),
@@ -944,6 +1082,7 @@ fn update_or_create_track(
                 // Update existing track
                 if let Some(track) = animation.get_track_mut(track_index) {
                     track.target = state.new_track_target.clone();
+                    track.flame_target = state.new_track_flame_target;
                     // Keep existing keyframes, just update target
                 }
                 Some(track_index)
@@ -952,7 +1091,7 @@ fn update_or_create_track(
                 let keyframes = if state.preview_keyframes.is_empty() {
                     // Fallback if no preview keyframes
                     let initial_value = ConfigPath::from_string_key(&state.new_track_target)
-                        .and_then(|p| get_current_value(config, &p))
+                        .and_then(|p| get_current_value(config, state.new_track_flame_target, &p))
                         .unwrap_or(0.0);
                     vec![
                         Keyframe {
@@ -972,7 +1111,8 @@ fn update_or_create_track(
                 let mut track = Track::new(
                     state.new_track_target.clone(),
                     TrackSource::Keyframes { keyframes },
-                );
+                )
+                .with_flame_target(state.new_track_flame_target);
                 track.interpolation = state.preview_interpolation;
                 let new_index = animation.add_track(track);
                 Some(new_index)
@@ -983,6 +1123,7 @@ fn update_or_create_track(
                 // Update existing track
                 if let Some(track) = animation.get_track_mut(track_index) {
                     track.target = state.new_track_target.clone();
+                    track.flame_target = state.new_track_flame_target;
                     track.source = TrackSource::Signal {
                         signal_name: state.signal_params.signal_name.clone(),
                         min_output: state.signal_params.min_output,
@@ -1013,7 +1154,8 @@ fn update_or_create_track(
                         fade_out: state.signal_params.fade_out,
                         fade_out_easing: state.signal_params.fade_out_easing,
                     },
-                );
+                )
+                .with_flame_target(state.new_track_flame_target);
                 let new_index = animation.add_track(track);
                 Some(new_index)
             }
@@ -1026,6 +1168,7 @@ fn close_track_editor_panel(state: &mut TrackEditorState) {
     state.track_editor_panel_open = false;
     state.editing_track_index = None;
     state.new_track_target.clear();
+    state.new_track_flame_target = EditingTarget::Main;
     state.target_selector_state = TargetSelectorState::default();
     state.preview_keyframes.clear();
     state.preview_interpolation = Interpolation::Linear;
@@ -1036,6 +1179,7 @@ pub fn open_add_track_panel(state: &mut TrackEditorState) {
     state.track_editor_panel_open = true;
     state.editing_track_index = None;
     state.new_track_target.clear();
+    state.new_track_flame_target = EditingTarget::Main;
     state.new_track_type = NewTrackType::Keyframe;
     state.signal_params = SignalParams::default();
     state.target_selector_state = TargetSelectorState::default();
@@ -1048,6 +1192,7 @@ pub fn open_edit_track_panel(state: &mut TrackEditorState, track_index: usize, t
     state.track_editor_panel_open = true;
     state.editing_track_index = Some(track_index);
     state.new_track_target = track.target.clone();
+    state.new_track_flame_target = track.flame_target;
     state.new_track_type = match &track.source {
         TrackSource::Keyframes { .. } => NewTrackType::Keyframe,
         TrackSource::Signal {
@@ -1102,10 +1247,20 @@ fn read_post_affine(t: &crate::scene::transforms::Transform, param: crate::confi
     }
 }
 
-/// Get the current value for a ConfigPath from the fractal config
-/// Returns None if the path doesn't map to a numeric value
-pub fn get_current_value(config: &FractalConfig, path: &ConfigPath) -> Option<f64> {
+/// Get the current value for a ConfigPath from the fractal config,
+/// routed through `flame_target` for per-flame paths. Returns None if
+/// the path doesn't map to a numeric value or the target flame
+/// doesn't exist.
+pub fn get_current_value(
+    config: &FractalConfig,
+    flame_target: EditingTarget,
+    path: &ConfigPath,
+) -> Option<f64> {
     use crate::config::AffineParam;
+
+    // Per-flame paths need the resolved flame; resolve up front so
+    // the per-flame arms below can index into it directly.
+    let flame = resolve_flame(config, flame_target)?;
 
     match path {
         // View parameters
@@ -1145,45 +1300,45 @@ pub fn get_current_value(config: &FractalConfig, path: &ConfigPath) -> Option<f6
 
         // Transform parameters
         ConfigPath::TransformWeight { index } => {
-            config.flame.transforms.get(*index).map(|t| t.weight as f64)
+            flame.transforms.get(*index).map(|t| t.weight as f64)
         }
         ConfigPath::TransformColor { index } => {
-            config.flame.transforms.get(*index).map(|t| t.color as f64)
+            flame.transforms.get(*index).map(|t| t.color as f64)
         }
         ConfigPath::TransformColorSpeed { index } => {
-            config.flame.transforms.get(*index).map(|t| t.color_speed as f64)
+            flame.transforms.get(*index).map(|t| t.color_speed as f64)
         }
         ConfigPath::TransformOpacity { index } => {
-            config.flame.transforms.get(*index).map(|t| t.opacity as f64)
+            flame.transforms.get(*index).map(|t| t.opacity as f64)
         }
         ConfigPath::TransformAffine { index, param } => {
-            config.flame.transforms.get(*index).map(|t| read_affine(t, *param))
+            flame.transforms.get(*index).map(|t| read_affine(t, *param))
         }
         ConfigPath::TransformPostAffineEnabled { index } => {
-            config.flame.transforms.get(*index).map(|t| if t.post_affine_enabled { 1.0 } else { 0.0 })
+            flame.transforms.get(*index).map(|t| if t.post_affine_enabled { 1.0 } else { 0.0 })
         }
         ConfigPath::TransformPostAffine { index, param } => {
-            config.flame.transforms.get(*index).map(|t| read_post_affine(t, *param))
+            flame.transforms.get(*index).map(|t| read_post_affine(t, *param))
         }
         ConfigPath::TransformOriginX { index } => {
-            config.flame.transforms.get(*index).map(|t| t.e as f64)
+            flame.transforms.get(*index).map(|t| t.e as f64)
         }
         ConfigPath::TransformOriginY { index } => {
-            config.flame.transforms.get(*index).map(|t| -t.f as f64)
+            flame.transforms.get(*index).map(|t| -t.f as f64)
         }
         ConfigPath::TransformRotation { index } => {
-            config.flame.transforms.get(*index).map(|t| t.rotation() as f64)
+            flame.transforms.get(*index).map(|t| t.rotation() as f64)
         }
         ConfigPath::TransformScale { index } => {
-            config.flame.transforms.get(*index).map(|t| t.scale() as f64)
+            flame.transforms.get(*index).map(|t| t.scale() as f64)
         }
         ConfigPath::TransformVariation { index, variation } => {
-            config.flame.transforms.get(*index).and_then(|t| {
+            flame.transforms.get(*index).and_then(|t| {
                 t.variations.get(variation).map(|&v| v as f64)
             })
         }
         ConfigPath::TransformVariationParam { index, variation, param } => {
-            config.flame.transforms.get(*index).map(|t| {
+            flame.transforms.get(*index).map(|t| {
                 t.get_variation_param_or_default(
                     variation, param, &crate::variations::global_registry()
                 ) as f64
@@ -1192,21 +1347,21 @@ pub fn get_current_value(config: &FractalConfig, path: &ConfigPath) -> Option<f6
 
         // Linked pool — animatable per-pool-member parameters.
         ConfigPath::LinkedTransformAffine { index, param } => {
-            config.flame.linked_transforms.get(*index).map(|t| read_affine(t, *param))
+            flame.linked_transforms.get(*index).map(|t| read_affine(t, *param))
         }
         ConfigPath::LinkedTransformPostAffineEnabled { index } => {
-            config.flame.linked_transforms.get(*index).map(|t| if t.post_affine_enabled { 1.0 } else { 0.0 })
+            flame.linked_transforms.get(*index).map(|t| if t.post_affine_enabled { 1.0 } else { 0.0 })
         }
         ConfigPath::LinkedTransformPostAffine { index, param } => {
-            config.flame.linked_transforms.get(*index).map(|t| read_post_affine(t, *param))
+            flame.linked_transforms.get(*index).map(|t| read_post_affine(t, *param))
         }
         ConfigPath::LinkedTransformVariation { index, variation } => {
-            config.flame.linked_transforms.get(*index).and_then(|t| {
+            flame.linked_transforms.get(*index).and_then(|t| {
                 t.variations.get(variation).map(|&v| v as f64)
             })
         }
         ConfigPath::LinkedTransformVariationParam { index, variation, param } => {
-            config.flame.linked_transforms.get(*index).map(|t| {
+            flame.linked_transforms.get(*index).map(|t| {
                 t.get_variation_param_or_default(
                     variation, param, &crate::variations::global_registry()
                 ) as f64
@@ -1215,21 +1370,21 @@ pub fn get_current_value(config: &FractalConfig, path: &ConfigPath) -> Option<f6
 
         // Final pool — animatable per-pool-member parameters.
         ConfigPath::FinalTransformAffine { index, param } => {
-            config.flame.final_transforms.get(*index).map(|t| read_affine(t, *param))
+            flame.final_transforms.get(*index).map(|t| read_affine(t, *param))
         }
         ConfigPath::FinalTransformPostAffineEnabled { index } => {
-            config.flame.final_transforms.get(*index).map(|t| if t.post_affine_enabled { 1.0 } else { 0.0 })
+            flame.final_transforms.get(*index).map(|t| if t.post_affine_enabled { 1.0 } else { 0.0 })
         }
         ConfigPath::FinalTransformPostAffine { index, param } => {
-            config.flame.final_transforms.get(*index).map(|t| read_post_affine(t, *param))
+            flame.final_transforms.get(*index).map(|t| read_post_affine(t, *param))
         }
         ConfigPath::FinalTransformVariation { index, variation } => {
-            config.flame.final_transforms.get(*index).and_then(|t| {
+            flame.final_transforms.get(*index).and_then(|t| {
                 t.variations.get(variation).map(|&v| v as f64)
             })
         }
         ConfigPath::FinalTransformVariationParam { index, variation, param } => {
-            config.flame.final_transforms.get(*index).map(|t| {
+            flame.final_transforms.get(*index).map(|t| {
                 t.get_variation_param_or_default(
                     variation, param, &crate::variations::global_registry()
                 ) as f64
@@ -1275,6 +1430,7 @@ pub fn get_auto_fill_end_value(path: &ConfigPath, start_value: f64) -> f64 {
 pub fn initialize_preview_keyframes(
     state: &mut TrackEditorState,
     config: &FractalConfig,
+    flame_target: EditingTarget,
     duration: f64,
 ) {
     // Parse the target string to ConfigPath
@@ -1290,8 +1446,9 @@ pub fn initialize_preview_keyframes(
         }
     };
 
-    // Get current value
-    let start_value = get_current_value(config, &path).unwrap_or(0.0);
+    // Get current value (routed via flame_target so per-flame paths
+    // pick up the right Flame slice for subflame targets).
+    let start_value = get_current_value(config, flame_target, &path).unwrap_or(0.0);
     let end_value = get_auto_fill_end_value(&path, start_value);
 
     state.preview_keyframes = vec![

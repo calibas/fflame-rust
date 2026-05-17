@@ -102,13 +102,19 @@ use std::time::Duration;
 /// History entries carry their target (`ConfigChange::target`), so
 /// undo/redo applies the inverse delta to the flame it was authored
 /// against, even if the user has since switched contexts.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum EditingTarget {
     Main,
     /// The user is editing `current.flame.subflames[index]`. The
     /// subflames list is untouched; only this field changes when the
     /// user picks a subflame in the Subflames panel.
     Subflame { index: usize },
+}
+
+impl Default for EditingTarget {
+    fn default() -> Self {
+        EditingTarget::Main
+    }
 }
 
 /// Maximum duration for coalescing - total span from first to last change
@@ -788,6 +794,30 @@ impl ConfigManager {
         self.record_action(update_type);
 
         Ok(update_type)
+    }
+
+    /// Silent update routed against an explicit editing target.
+    ///
+    /// Same as `update_param_silent` but applies the change to the
+    /// `target` flame rather than the current editing target. Used by
+    /// the animation system so a track can target Main or any
+    /// subflame independent of what the editor panels are focused on.
+    ///
+    /// Implemented by temporarily swapping `editing_target` and
+    /// restoring it on the way out — the per-pool helpers
+    /// (`normal_transform_mut`, etc.) read `editing_target` to pick
+    /// the right `Flame`, so the swap reroutes them transparently.
+    pub fn update_param_silent_on(
+        &mut self,
+        target: EditingTarget,
+        path: ConfigPath,
+        new_value: ConfigValue,
+    ) -> Result<UpdateType, ConfigError> {
+        let saved = self.editing_target;
+        self.editing_target = target;
+        let result = self.update_param_silent(path, new_value);
+        self.editing_target = saved;
+        result
     }
 
     /// Undo last change

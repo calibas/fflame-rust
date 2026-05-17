@@ -1,6 +1,7 @@
 //! Animation playback controller
 
 use super::{Animation, EasingFunction, Interpolation, Keyframe, LoopMode, PlaybackState, Track, TrackSource};
+use crate::config::EditingTarget;
 use crate::signal::SignalManager;
 
 /// Controls animation playback and evaluates frame values
@@ -141,19 +142,21 @@ impl AnimationController {
         }
     }
 
-    /// Evaluate all tracks at current time
+    /// Evaluate all tracks at current time.
     ///
-    /// Returns vec of (path_string, value) pairs for parameters that should be updated
-    pub fn evaluate_frame(&mut self, signal_manager: Option<&SignalManager>) -> Vec<(String, serde_json::Value)> {
+    /// Returns vec of `(flame_target, path_string, value)` triples for
+    /// parameters that should be updated. The flame_target tells the
+    /// apply path which flame (Main or a specific subflame) the path
+    /// resolves against.
+    pub fn evaluate_frame(&mut self, signal_manager: Option<&SignalManager>) -> Vec<(EditingTarget, String, serde_json::Value)> {
         self.evaluate_at_time_with_signals(self.current_time, signal_manager)
     }
 
-    /// Evaluate all tracks at a specific time (for export, no signal support)
+    /// Evaluate all tracks at a specific time (for export, no signal support).
     ///
-    /// This is the core evaluation function used by both real-time playback
-    /// and animation export. Returns vec of (path_string, value) pairs.
+    /// Returns vec of `(flame_target, path_string, value)` triples.
     /// Signal tracks are skipped when no SignalManager is provided.
-    pub fn evaluate_at_time(&self, time: f64) -> Vec<(String, serde_json::Value)> {
+    pub fn evaluate_at_time(&self, time: f64) -> Vec<(EditingTarget, String, serde_json::Value)> {
         let Some(ref animation) = self.animation else {
             return Vec::new();
         };
@@ -166,21 +169,21 @@ impl AnimationController {
                 continue; // Skip signal tracks when no manager available
             }
             if let Some(value) = Self::evaluate_track_pure(track, time) {
-                values.push((track.target.clone(), value));
+                values.push((track.flame_target, track.target.clone(), value));
             }
         }
 
         values
     }
 
-    /// Evaluate all tracks at a specific time with signal support
+    /// Evaluate all tracks at a specific time with signal support.
     ///
     /// This version supports Signal tracks when a SignalManager is provided.
     pub fn evaluate_at_time_with_signals(
         &mut self,
         time: f64,
         signal_manager: Option<&SignalManager>,
-    ) -> Vec<(String, serde_json::Value)> {
+    ) -> Vec<(EditingTarget, String, serde_json::Value)> {
         let Some(ref animation) = self.animation else {
             return Vec::new();
         };
@@ -190,7 +193,7 @@ impl AnimationController {
             .tracks
             .iter()
             .enumerate()
-            .map(|(idx, track)| (idx, track.target.clone(), track.source.clone(), track.interpolation))
+            .map(|(idx, track)| (idx, track.flame_target, track.target.clone(), track.source.clone(), track.interpolation))
             .collect();
 
         let duration = animation.duration;
@@ -198,7 +201,7 @@ impl AnimationController {
         let mut values = Vec::new();
 
         // Evaluate regular tracks
-        for (track_idx, target, source, interpolation) in track_info {
+        for (track_idx, flame_target, target, source, interpolation) in track_info {
             if let Some(value) = self.evaluate_source(
                 &source,
                 interpolation,
@@ -207,7 +210,7 @@ impl AnimationController {
                 signal_manager,
                 Some(track_idx),
             ) {
-                values.push((target, value));
+                values.push((flame_target, target, value));
             }
         }
 
@@ -542,17 +545,17 @@ mod tests {
 
         // At start
         let values = controller.evaluate_at_time(0.0);
-        let val = values.iter().find(|(k, _)| k == "Test").unwrap().1.as_f64().unwrap();
+        let val = values.iter().find(|(_, k, _)| k == "Test").unwrap().2.as_f64().unwrap();
         assert_eq!(val, 0.0);
 
         // At middle
         let values = controller.evaluate_at_time(5.0);
-        let val = values.iter().find(|(k, _)| k == "Test").unwrap().1.as_f64().unwrap();
+        let val = values.iter().find(|(_, k, _)| k == "Test").unwrap().2.as_f64().unwrap();
         assert_eq!(val, 5.0);
 
         // At end
         let values = controller.evaluate_at_time(10.0);
-        let val = values.iter().find(|(k, _)| k == "Test").unwrap().1.as_f64().unwrap();
+        let val = values.iter().find(|(_, k, _)| k == "Test").unwrap().2.as_f64().unwrap();
         assert_eq!(val, 10.0);
     }
 
@@ -579,17 +582,17 @@ mod tests {
         // Test signal evaluation at different times
         // At t=0.0, signal=0.0, output=0.0
         let values = controller.evaluate_at_time_with_signals(0.0, Some(&signal_manager));
-        let val = values.iter().find(|(k, _)| k == "Test").unwrap().1.as_f64().unwrap();
+        let val = values.iter().find(|(_, k, _)| k == "Test").unwrap().2.as_f64().unwrap();
         assert!((val - 0.0).abs() < 0.01);
 
         // At t=0.2, signal=1.0, output=10.0
         let values = controller.evaluate_at_time_with_signals(0.2, Some(&signal_manager));
-        let val = values.iter().find(|(k, _)| k == "Test").unwrap().1.as_f64().unwrap();
+        let val = values.iter().find(|(_, k, _)| k == "Test").unwrap().2.as_f64().unwrap();
         assert!((val - 10.0).abs() < 0.01);
 
         // At t=0.1, signal=0.5, output=5.0
         let values = controller.evaluate_at_time_with_signals(0.1, Some(&signal_manager));
-        let val = values.iter().find(|(k, _)| k == "Test").unwrap().1.as_f64().unwrap();
+        let val = values.iter().find(|(_, k, _)| k == "Test").unwrap().2.as_f64().unwrap();
         assert!((val - 5.0).abs() < 0.01);
     }
 
