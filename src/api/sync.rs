@@ -176,6 +176,7 @@ fn transform_to_api(t: &Transform) -> CreateTransformInput {
 
 fn transform_from_api(resp: &TransformResponse) -> Transform {
     Transform {
+        id: crate::scene::transforms::next_id(),
         a: resp.a,
         b: resp.b,
         c: resp.c,
@@ -233,6 +234,7 @@ fn effect_from_api(resp: &ConfigEffectResponse) -> EffectInstance {
         .unwrap_or_default();
 
     EffectInstance {
+        id: crate::scene::transforms::next_id(),
         effect_type: resp.effect_name.clone(),
         enabled: resp.enabled,
         params,
@@ -556,6 +558,7 @@ pub fn flame_response_to_config(
     // attachments natively.)
     let legacy_final = resp.final_transform.as_ref().map(transform_from_api);
     let mut flame = Flame {
+        id: crate::scene::transforms::next_id(),
         name: resp.name.clone(),
         transforms: transforms.iter().map(transform_from_api).collect(),
         linked_transforms: Vec::new(),

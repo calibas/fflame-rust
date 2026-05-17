@@ -162,13 +162,9 @@ impl App {
                     // Update app state from config
                     self.flame = self.config_manager.active_config().flame.clone();
 
-                    // Update animation track paths to reflect the removed transform
-                    if let Some(ref mut animation) = self.animation_controller.animation {
-                        let removed_count = animation.on_transform_removed(idx);
-                        if removed_count > 0 {
-                            log::info!("Removed {} animation tracks targeting deleted transform {}", removed_count, idx + 1);
-                        }
-                    }
+                    // Animation tracks targeting the deleted transform
+                    // are rebound automatically by the structural_changed
+                    // hook in gpu_updates — no per-site call needed.
                 }
             }
         }
@@ -1006,7 +1002,7 @@ impl App {
                 data.remove_temp::<String>(egui::Id::new("pending_animation_load_raw"))
             }) {
                 match crate::animation::Animation::from_json(&json) {
-                    Ok(animation) => {
+                    Ok(mut animation) => {
                         // If animation has embedded config, load it first
                         if let Some(ref config) = animation.base_config {
                             log::info!("Animation '{}' has embedded config, loading it", animation.name);
@@ -1017,6 +1013,10 @@ impl App {
                         }
                         let generators = animation.generators.clone();
                         let duration = animation.duration;
+                        // Bind tracks against the (possibly just-loaded
+                        // embedded base_config) so structural changes
+                        // mid-session keep them pointing at the right items.
+                        animation.bind_to_config(self.config_manager.active_config());
                         self.animation_controller.load(animation);
                         self.egui_layer.signal_panel_state.restore_generators(
                             generators, &mut self.signal_manager, duration,
@@ -1808,7 +1808,7 @@ impl App {
                     false,
                 );
             }
-            Ok(UrlLoadedData::Animation { animation, animation_id, flame_id, flame_meta }) => {
+            Ok(UrlLoadedData::Animation { mut animation, animation_id, flame_id, flame_meta }) => {
                 let anim_name = animation.name.clone();
                 log::info!("URL load: animation '{}' ({})", anim_name, animation_id);
 
@@ -1844,6 +1844,7 @@ impl App {
                 // Load the animation
                 let generators = animation.generators.clone();
                 let duration = animation.duration;
+                animation.bind_to_config(self.config_manager.active_config());
                 self.animation_controller.load(animation);
                 self.egui_layer.signal_panel_state.restore_generators(
                     generators, &mut self.signal_manager, duration,
@@ -1977,7 +1978,7 @@ async fn load_from_url(
 
     if let Some(animation_id) = animation_id {
         // Load animation with embedded flame config (single request)
-        let (animation, _flame_config, resp_flame_id) = api.load_animation_full(&animation_id).await
+        let (mut animation, _flame_config, resp_flame_id) = api.load_animation_full(&animation_id).await
             .map_err(|e| format!("Failed to load animation: {}", e))?;
 
         // Use flame_id from URL param, or fall back to the one from the animation response

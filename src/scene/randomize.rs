@@ -192,6 +192,7 @@ pub fn generate_random_flame_with_rng<R: Rng>(settings: &RandomGeneratorSettings
     };
 
     Flame {
+        id: crate::scene::transforms::next_id(),
         name: "Random".to_string(),
         transforms,
         linked_transforms: Vec::new(),

@@ -135,48 +135,55 @@ every existing track's string, and `ConfigPath` already encodes a
 typed identity that's better expressed as a separate field than
 folded into a string key.
 
-### Stable transform IDs
+### Stable transform IDs (runtime-only)
 
-Index-based references break under any structural change. Replace
-with stable IDs:
+Index-based references break under in-session structural changes
+(add / delete / reorder). The save file is fine — indices are static
+once written — so IDs are needed *only* during an editing session.
+Don't persist them.
 
 ```rust
 pub struct Transform {
-    #[serde(default = "Transform::new_id")]
+    #[serde(skip, default = "next_transform_id")]
     pub id: u64,
     // ... existing fields
 }
 
-impl Transform {
-    fn new_id() -> u64 { /* monotonic counter on creation */ }
+pub struct Track {
+    pub target: String,                 // stays index-based
+    pub flame_target: EditingTarget,
+    #[serde(skip)]
+    pub bound_id: Option<u64>,          // resolved on load, dropped on save
+    // ... existing fields
 }
 ```
 
-New ID-based ConfigPath variants alongside existing index variants:
-- `TransformAffineById { id, param }`, `TransformWeightById { id }`, etc.
-- Mirror for Linked / Final / Subflame pools.
+**Flow:**
 
-Resolution at apply time: walk the target flame's transforms looking
-for the ID, return `InvalidIndex` if not found.
+1. **On load** of `FractalConfig`: walk every pool (normal / linked /
+   final, on Main and each subflame) and assign IDs to any transform
+   whose `id == 0` (the serde default). Monotonic counter.
+2. **On load** of `Animation`: for each track, parse its target,
+   find the referenced transform in the current config, store its ID
+   as `bound_id`. Tracks with non-transform paths (View, Color, etc.)
+   leave `bound_id = None`.
+3. **On structural change** (add / delete / reorder in the editor):
+   walk all tracks with a `bound_id`; find that ID in the current
+   pool; rewrite the index inside `track.target` to the new
+   position. ID gone → leave as-is, mark broken.
+4. **On save**: `bound_id` is skipped by serde. `track.target` is
+   already current.
 
-Animation tracks use ID-based paths exclusively going forward.
-Index-based paths still work for the UI's own use (Triangle Editor,
-Transforms panel) where the user *is* operating on "the third
-transform in the list" by visual position.
+**No new ConfigPath variants.** No `*ById` parallel enum. The existing
+`Transform.{N}.X` string path is the source of truth on disk; IDs are
+purely an in-flight handle so we can rewrite the string when N
+shifts.
 
-#### `on_transform_removed` etc. become redundant for animations
-
-These helpers were patching string-encoded indices on
-delete/reorder. With ID-based paths in animation tracks, structural
-changes don't invalidate targets. A track whose target ID no longer
-exists is a *broken* track (visibly so, see UI plan below), not a
-silently-rewritten one.
-
-We keep `on_transform_removed` until all tracks have migrated to IDs;
-afterwards we can delete it. Same for `on_color_effect_removed` /
-`on_density_effect_removed` — these are about effects not transforms,
-but the same pattern applies if we want stable effect IDs (not in
-scope for this overhaul).
+**Existing `on_transform_removed` etc. get replaced.** Today those
+helpers do string-prefix matching to shift indices on delete. With
+ID-keyed rebinding, the same hooks handle delete + reorder + pool
+moves uniformly, and tracks that lose their target surface as broken
+in the UI instead of being silently retargeted to the wrong slot.
 
 ### Missing affine high-level ops
 
@@ -287,28 +294,24 @@ New files have:
 `#[serde(default)]` on `flame_target` with default = `Main` covers
 old files. No file-format version bump needed.
 
-#### Index → ID migration (animations applied at load)
-On load, after both the embedded `base_config` and the animation are
-deserialized, walk every track:
-1. Parse the path string.
-2. If it's a `Transform.{N}.X` / `LinkedTransform.{N}.X` /
-   `FinalTransform.{N}.X` variant, resolve `N` in the corresponding
-   pool of the track's `flame_target` flame.
-3. Replace the path string with the ID-based variant.
+#### Bind-on-load (in-memory only)
+On load, after the `FractalConfig` and `Animation` are deserialized:
+1. Walk every pool (main + each subflame, normal + linked + final),
+   assign a fresh ID to any transform whose `id == 0`.
+2. Walk every track: parse its target string, find the referenced
+   transform in the track's `flame_target` flame, store its ID as
+   `bound_id`. Tracks with no resolvable transform leave
+   `bound_id = None` and surface as broken.
 
-Tracks whose index doesn't resolve (out of range) stay as-is and
-will surface as broken in the UI.
+Newly-created transforms (from `Transform::new()` /
+[`scene::transforms::Transform`](../../src/scene/transforms.rs))
+also get fresh IDs from the same counter.
 
-For animations *without* an embedded `base_config`, the migration
-happens against whatever fractal is currently loaded. Same logic.
-
-#### Transform IDs
-On load of any `FractalConfig`, walk all four pools (main + each
-subflame, normal + linked + final) and assign IDs to any
-transform with `id == 0` (the serde default). Use a monotonic
-counter scoped to the config. Newly-created transforms also get
-unique IDs via `Transform::new()` /
-[`scene::transforms::Transform`](../../src/scene/transforms.rs).
+No file format changes. No migration logic for existing `.fflame` /
+`.anim` files — they round-trip through serde untouched. IDs are
+session-local; a save written today loads identically tomorrow
+because indices in the file were correct by construction at save
+time.
 
 ## Phasing
 
@@ -348,41 +351,150 @@ animations migrate via serde defaults.
 **Scope:** ~600-800 LOC across 7-8 files. The bulk is the UI
 selector rework — the apply-path change is small.
 
-### PR 2 — Stable transform IDs
+### PR 2 — Stable identity for every index-based list
 
-**What:** Add `id: u64` field on `Transform`. Add `*ById` ConfigPath
-variants. Migrate animation tracks from index-based paths to ID-based
-paths on animation load. Index-based paths still exist for in-editor
-use (Transforms panel, Triangle Editor).
+**What:** Add session-local IDs to every list whose entries can be
+animated: the three transform pools, the subflames list, and the two
+effect lists. Each animation track gets a `bound` field (runtime-only)
+that records the ID of the thing it's targeting. When the user adds /
+deletes / reorders any of these lists, a rebind hook rewrites the
+index inside `track.target` (and inside `track.flame_target` for
+subflame moves) so the track keeps pointing at the same item.
+
+Track strings stay index-based on disk; IDs are the in-memory handle
+that lets the rewrite happen. ConfigPath does not gain new variants.
+
+**Six lists in scope:**
+
+| List | Items get `id: u64` on | `Track.bound` variant |
+|---|---|---|
+| `flame.transforms` | `Transform` | `TargetBinding::Transform(id)` |
+| `flame.linked_transforms` | `Transform` (same struct) | `TargetBinding::Linked(id)` |
+| `flame.final_transforms` | `Transform` (same struct) | `TargetBinding::Final(id)` |
+| `flame.subflames` | `Flame` | `TrackBinding.flame: Option<u64>` |
+| `color_effects` | `ColorEffect` | `TargetBinding::ColorEffect(id)` |
+| `density_effects` | `DensityEffect` | `TargetBinding::DensityEffect(id)` |
+
+**Deferred:** `Xaos { src, dst }` tracks and `SoloTransform` tracks
+both reference transforms-by-index but aren't commonly animated;
+they'll continue to silently misbind when transforms reorder.
+Follow-up if it becomes an issue.
+
+**Track binding model:**
+
+```rust
+pub struct Track {
+    pub target: String,                  // on-disk: "Transform.0.Rotation"
+    pub flame_target: EditingTarget,     // on-disk: Main | Subflame{i}
+    #[serde(skip)]
+    pub bound: TrackBinding,             // runtime: what to follow
+    // ...
+}
+
+#[derive(Default, Clone, Copy)]
+pub struct TrackBinding {
+    /// Subflame ID when flame_target is Subflame{i}. None for Main.
+    pub flame: Option<u64>,
+    /// The list-item the path resolves to. None for non-list paths
+    /// (View, Color, Tone, etc.).
+    pub target: Option<TargetBinding>,
+}
+
+#[derive(Clone, Copy)]
+pub enum TargetBinding {
+    Transform(u64),
+    Linked(u64),
+    Final(u64),
+    ColorEffect(u64),
+    DensityEffect(u64),
+}
+```
+
+**Flow:**
+
+1. **ID assignment.** Process-global atomic counter. `Transform::new()`,
+   `Flame::new()`, `*Effect::new()` each pull a fresh ID. A
+   `fixup_ids(config: &mut FractalConfig)` pass runs after any
+   `FractalConfig` deserialize and assigns IDs to anything with
+   `id == 0` (the serde-skip default), walking every pool of every
+   flame plus the two effect lists.
+2. **Bind-on-load.** When an `Animation` is loaded (against a
+   `FractalConfig` that's already had IDs assigned), walk every track:
+   parse the `target` and `flame_target`, look up the referenced item,
+   store its ID in `track.bound`. Tracks whose target is non-list
+   (View, Color, Tone, Rendering) leave `bound = Default::default()`.
+3. **Rebind-on-mutation.** After any structural change to one of the
+   six lists, the rebind hook walks all tracks:
+   - For each track with a `bound.flame = Some(id)`: find the subflame
+     with that id in `config.flame.subflames`; if found, rewrite the
+     index inside `track.flame_target = Subflame{new_index}`.
+   - For each track with a `bound.target = Some(TargetBinding::X(id))`:
+     find item with that id in the relevant pool *of the bound flame*;
+     if found, rewrite the index inside `track.target`.
+   - If an id doesn't resolve: leave both fields as-is. Track is
+     "broken" in the UI sense (visibly flagged) but `bound` stays set
+     so a future undo / restore can naturally rebind it.
 
 **Files:**
 
 | File | Change |
 |---|---|
-| [`src/scene/transforms.rs`](../../src/scene/transforms.rs) | `Transform.id`, monotonic counter, on-load assignment for `id == 0`. |
-| [`src/config/delta.rs`](../../src/config/delta.rs) | New `*ById` variants for every existing index-based transform path (normal/linked/final, pre/post, affine/rotation/scale/origin/weight/color/color_speed/opacity/variation/variation_param). Apply/get handlers resolve ID → index, then dispatch to existing logic. |
-| [`src/animation/mod.rs`](../../src/animation/mod.rs) | On `Animation::from_json`, migrate index-based paths to ID-based paths (where the ID is resolvable against `base_config` or the live config). |
-| [`src/app/animation_update.rs`](../../src/app/animation_update.rs) | Broken-track logging when ID doesn't resolve. |
+| [`src/scene/transforms.rs`](../../src/scene/transforms.rs) | `Transform.id: u64` with `#[serde(skip)]`; `Flame.id: u64` same. Process-global atomic counter (`next_id()`). `Transform::new()` and `Flame::new()` allocate. |
+| [`src/effects/`](../../src/effects/) | `ColorEffect.id`, `DensityEffect.id` same treatment. |
+| [`src/config/fractal_config.rs`](../../src/config/fractal_config.rs) | `fixup_ids(config: &mut FractalConfig)` walks every pool + every subflame + effect lists, allocates fresh IDs where `id == 0`. Called from any place we load a `FractalConfig` from disk (config loader, preset loader, animation `base_config` load). |
+| [`src/animation/mod.rs`](../../src/animation/mod.rs) | `Track.bound: TrackBinding` with `#[serde(skip)]`; `TrackBinding` and `TargetBinding` enum. Bind-on-load helper invoked from `AnimationController::load`. |
+| [`src/config/manager.rs`](../../src/config/manager.rs) | New `rebind_animation_tracks(animation: &mut Animation)` method on `ConfigManager`. Called from `add_transform` / `delete_transform` / `clone_transform` / reorder paths for normal/linked/final pools, from `add_subflame` / `delete_subflame`, from `AddColorEffect` / `RemoveColorEffect` (& density), and from `undo()` / `redo()` after snapshot restore. |
+| [`src/ui/track_editor.rs`](../../src/ui/track_editor.rs) | `is_track_broken` switches to checking `bound` against the current config (resolves the bound IDs; broken if either flame or target ID doesn't resolve). |
+| [`src/animation/mod.rs`](../../src/animation/mod.rs) | Delete the now-redundant `Animation::on_transform_removed`, `on_color_effect_removed`, `on_color_effect_reordered`, `on_density_effect_removed`, `on_density_effect_reordered`. Their job is fully subsumed by ID-keyed rebinding. |
 
-**Migration:** Sequential ID assignment on first load. Animation
-files with index paths transparently rebind to IDs.
+**Migration:** None on disk. IDs are session-local, assigned fresh
+on every load. Old `.fflame` / `.anim` files round-trip through serde
+untouched. `ConfigPath` enum unchanged.
+
+**Interaction with ConfigManager undo/redo:** Two rules make this
+clean:
+
+1. **IDs are normal Rust fields** (`#[serde(skip)]` only affects I/O).
+   `DeleteTransform` snapshots clone the Transform with its `id`
+   intact; undo restores it. The undo machinery doesn't need to know
+   IDs exist.
+2. **Never auto-clear `bound`.** Broken state is purely "the ID
+   doesn't currently resolve." If undo later restores the missing
+   item with the same id (which it will, since snapshots preserve
+   the field), the next rebind tick re-resolves and the track is
+   automatically un-broken.
+
+The rebind hook fires after the mutation in `undo` / `redo` /
+`apply_structural_change` — same one-line call as the structural-edit
+sites.
 
 **Test plan:**
-- Load an animation, add a transform before the one being animated,
-  verify the animation still targets the original transform.
-- Delete an animated transform, verify the track is flagged broken
-  (not silently retargeted).
-- Round-trip a config + animation: save with IDs, reload, verify
-  IDs are preserved.
+- Add a transform *before* an animated transform → track's `target`
+  index updates; animation keeps targeting the same xform.
+- Delete an animated transform → track flagged broken; do not write to
+  a different transform that slid into the deleted index.
+- Reorder transforms → tracks follow.
+- Delete a transform then undo → track rebinds automatically.
+- Delete an animated subflame → broken; undo → rebinds.
+- Same suite for ColorEffect and DensityEffect (add / delete / reorder
+  / undo).
+- Save mid-session after rebinding → file has current indices → reload
+  → bind-on-load reproduces the same bindings.
 
-**Scope:** ~1500-2000 LOC. The ConfigPath additions are mechanical
-but broad. The hardest part is the migration to make sure every
-track-loading site does the rebind.
+**Scope:** ~400-600 LOC total. Mostly the rebind hook +
+finding every structural-mutation site (~10 call sites). No
+ConfigPath enum changes, no file format changes, no migration logic.
 
-**Depends on PR 1?** Yes for cleanliness: doing IDs first then
-adding `flame_target` would force two migration passes on every
-animation file. With PR 1 already shipped, this is a clean
-single-pass ID migration.
+**Depends on PR 1?** Yes, for `flame_target` — the rebind needs to
+know which flame's pool to scan when resolving a track's ID. With
+PR 1 shipped, this drops in cleanly.
+
+**Commit structure:**
+1. `Transform.id` + `Flame.id` + counter + `fixup_ids` for transform pools and subflames
+2. `*Effect.id` + extend `fixup_ids` to cover effects
+3. `Track.bound` + `TrackBinding` types + bind-on-load
+4. Rebind hook on `ConfigManager` + wire into all structural mutation sites + undo/redo
+5. Delete redundant `on_*_removed` / `on_*_reordered` string-shifters; update `is_track_broken`
 
 ### PR 3 — Missing affine high-level ops
 
@@ -413,23 +525,16 @@ Easiest standalone.
 
 ## Phasing rationale
 
-The order I'd recommend: **PR 1 → PR 3 → PR 2.**
+The order shipped: **PR 1 → PR 3 → PR 2.** PR 1 and PR 3 are already
+merged.
 
-- **PR 1 first** because it's the user-reported pain point: animations
-  silently writing to the wrong flame. Everything else is secondary.
-- **PR 3 second** because it's small, additive, and useful. Doing it
-  before PR 2 means PR 2's ID migration covers the new variants too,
-  rather than needing a second migration pass.
-- **PR 2 last** because it's the largest, has the broadest blast
-  radius, and benefits from PR 1's `flame_target` already being in
-  place (so the ID migration knows which flame to resolve indices
-  against — there'd be ambiguity otherwise).
-
-Alternative: bundle PR 1 + PR 3 into one PR. Both are small enough
-that splitting is a judgment call. I'd lean separate because the
-review surface is cleaner (selector UI changes in one, ConfigPath
-plumbing in the other), but happy to combine if the user prefers
-fewer review rounds.
+- PR 1 first because it's the user-reported pain point: animations
+  silently writing to the wrong flame.
+- PR 3 second because it's small, additive, and unblocks animating
+  Origin / Rotation / Scale on every affine slot.
+- PR 2 last because it's purely an in-session safety net. The
+  runtime-only ID design means there's no file format coupling and
+  no migration concern, so it can land independently whenever.
 
 ## Out of scope
 
@@ -457,13 +562,12 @@ fewer review rounds.
 
 | Risk | Mitigation |
 |---|---|
-| ID assignment collisions on cross-config copy (paste a transform from one config to another, IDs collide) | Counter is per-config; on import, walk the imported transforms and reassign any ID that's already taken in the destination. |
-| Migration silently drops tracks whose index doesn't resolve on load (e.g. animation loaded against a fractal with fewer transforms than the animation expects) | Don't drop — keep the original path, mark broken in UI. User can rebind. |
-| `EditingTarget` is currently in `src/config/manager.rs`. Track needs to reference it. Pulling it into a shared module may break public API. | Re-export from `crate::animation` if needed; otherwise move it to `src/config/mod.rs`. Internal-only enum so this is safe. |
-| UI selector becomes too crowded with many subflames | Hierarchical collapsing (each flame is one collapsible group); only Main expands by default. Existing search filter
-([`src/ui/target_selector.rs:104-112`](../../src/ui/target_selector.rs)) cuts across all flames. |
-| Animation export captures `flame_target` but a downstream consumer doesn't honor it | Export tests should round-trip a multi-flame-target animation through render-to-PNG and verify the right flame moved. |
-| Old `on_transform_removed` and friends keep running but become inconsistent with ID-based tracks | After PR 2, these helpers either no-op for ID-based tracks or are deleted entirely. Add a `#[deprecated]` note as part of PR 2. |
+| ID counter is a process-global static — fine within one process; can collide if a config is moved across processes (e.g. paste from clipboard). | Counter only needs uniqueness within one config in-flight. On any deserialize (config load, transform import), reassign IDs that are already used in the destination. Cheap O(N) walk. |
+| Track loaded against a fractal with fewer transforms than the animation expects → `bound_id` resolves to `None` for some tracks. | Don't drop — leave `target` as-is, mark broken in UI. User can rebind by re-picking the target. |
+| `EditingTarget` is in `src/config/manager.rs`. Track needs it. Pulling it into a shared module may break public API. | Already re-exported from `src/config/mod.rs` in PR 1. |
+| UI selector becomes too crowded with many subflames. | Hierarchical collapsing (each flame is one collapsible group); only Main expands by default. Existing search filter ([`src/ui/target_selector.rs:104-112`](../../src/ui/target_selector.rs)) cuts across all flames. |
+| Animation export captures `flame_target` but a downstream consumer doesn't honor it. | Export tests should round-trip a multi-flame-target animation through render-to-PNG and verify the right flame moved. |
+| `Animation::on_transform_removed` (string-prefix shifting) and the new ID-keyed rebind both run, doing conflicting things. | PR 2 deletes the old string-prefix helpers; their job is fully subsumed by ID rebinding. |
 
 ## Decisions
 

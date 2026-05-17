@@ -1,7 +1,26 @@
 use std::collections::{HashMap, BTreeMap};
+use std::sync::atomic::{AtomicU64, Ordering};
 use serde::{Deserialize, Serialize, Deserializer, Serializer};
 use serde::de::{self, Visitor, MapAccess};
 use crate::variations::VariationRegistry;
+
+/// Process-global monotonic ID counter used to assign stable, session-local
+/// identities to Transforms and Flames (subflames). The counter starts at 1
+/// so `0` can act as the "needs assignment" sentinel — `Default::default()`
+/// produces `id = 0`, and `fixup_ids` (in `config::fractal_config`) walks
+/// freshly-deserialized configs and assigns a real ID to anything that's
+/// still `0`.
+///
+/// IDs are runtime-only (`#[serde(skip)]`) — they never appear in saved
+/// `.fflame` / `.anim` files. The animation system uses them to bind tracks
+/// to specific Transforms / subflames so that adding, deleting, or reordering
+/// items mid-session keeps tracks pointing at the same thing.
+static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Allocate a fresh ID from the process-global counter.
+pub fn next_id() -> u64 {
+    NEXT_ID.fetch_add(1, Ordering::Relaxed)
+}
 
 /// Maximum number of variations that can be active in a single flame.
 /// This is the cap on the GPU-side `xform.variations` array and the
@@ -255,6 +274,11 @@ pub fn total_state_slots(
 /// - opacity (final transform doesn't affect visibility)
 #[derive(Debug, Clone)]
 pub struct Transform {
+    /// Session-local identity used by the animation system to bind tracks
+    /// stably across structural changes (add/delete/reorder). Never
+    /// serialized — see module-level `next_id()` docs.
+    pub id: u64,
+
     // Affine transformation matrix: x' = ax + by + e, y' = cx + dy + f
     pub a: f32,
     pub b: f32,
@@ -338,6 +362,11 @@ pub struct Transform {
 impl Default for Transform {
     fn default() -> Self {
         Self {
+            // `id = 0` is the "needs assignment" sentinel: `fixup_ids`
+            // (after deserialize) replaces zeros with fresh counter
+            // values. `Transform::new()` allocates eagerly so editor-
+            // created transforms have an ID immediately.
+            id: 0,
             a: 1.0,
             b: 0.0,
             c: 0.0,
@@ -367,9 +396,16 @@ impl Default for Transform {
 }
 
 impl Transform {
-    /// Create a new transform with identity affine matrix
+    /// Create a new transform with identity affine matrix and a fresh
+    /// session-local ID. Use this from editor code paths; use
+    /// `Transform::default()` (which leaves `id == 0`) for code that
+    /// expects `fixup_ids` to allocate later (deserialize / preset
+    /// loaders).
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            id: next_id(),
+            ..Self::default()
+        }
     }
 
     /// Set a variation weight by name
@@ -1032,6 +1068,10 @@ impl<'de> Deserialize<'de> for Transform {
                 }
 
                 Ok(Transform {
+                    // ID is assigned by the post-deserialize `fixup_ids`
+                    // pass (see `config::fractal_config`). Leaving it 0
+                    // here keeps the file format unchanged.
+                    id: 0,
                     a: a.ok_or_else(|| de::Error::missing_field("a"))?,
                     b: b.ok_or_else(|| de::Error::missing_field("b"))?,
                     c: c.ok_or_else(|| de::Error::missing_field("c"))?,
@@ -1304,6 +1344,12 @@ impl Point {
 /// Flame system - collection of transforms
 #[derive(Debug, Clone, Serialize)]
 pub struct Flame {
+    /// Session-local identity used by the animation system to bind tracks
+    /// stably across subflame add / delete / reorder. Never serialized;
+    /// see module-level `next_id()` docs.
+    #[serde(skip)]
+    pub id: u64,
+
     pub name: String,
     pub transforms: Vec<Transform>,
     /// Pool of Linked transforms — referenced by index from each
@@ -1357,6 +1403,9 @@ fn default_flame_name() -> String {
 impl Default for Flame {
     fn default() -> Self {
         Self {
+            // `id = 0` is the "needs assignment" sentinel; `fixup_ids`
+            // replaces zeros after deserialize.
+            id: 0,
             name: "Untitled".to_string(),
             transforms: Vec::new(),
             linked_transforms: Vec::new(),
@@ -1394,8 +1443,14 @@ impl Flame {
         }
     }
 
+    /// Create a new flame with a fresh session-local ID. Use this from
+    /// editor code paths (e.g. add_subflame); `Flame::default()` leaves
+    /// `id == 0` for the `fixup_ids` pass to allocate later.
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            id: next_id(),
+            ..Self::default()
+        }
     }
 
     pub fn add_transform(&mut self, transform: Transform) {
@@ -1626,6 +1681,8 @@ impl<'de> Deserialize<'de> for Flame {
                 let final_transforms = final_transforms.unwrap_or_default();
 
                 let mut flame = Flame {
+                    // ID assigned by the post-deserialize `fixup_ids` pass.
+                    id: 0,
                     name: name.unwrap_or_else(|| default_flame_name()),
                     transforms,
                     linked_transforms,

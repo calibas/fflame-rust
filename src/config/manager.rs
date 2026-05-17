@@ -136,6 +136,30 @@ fn supports_coalescing(path: &ConfigPath) -> bool {
     }
 }
 
+/// Return true if the snapshot mutates one of the six animation-tracked
+/// lists (transforms in any pool, subflames, color/density effects).
+/// Used by undo/redo to flag `structural_changed` for the App-layer
+/// animation rebind.
+fn snapshot_is_structural(snapshot: Option<&crate::config::SnapshotData>) -> bool {
+    use crate::config::SnapshotData;
+    matches!(
+        snapshot,
+        Some(
+            SnapshotData::FullConfig { .. }
+            | SnapshotData::AddTransform { .. }
+            | SnapshotData::DeleteTransform { .. }
+            | SnapshotData::AddColorEffect { .. }
+            | SnapshotData::DeleteColorEffect { .. }
+            | SnapshotData::MoveColorEffect { .. }
+            | SnapshotData::AddDensityEffect { .. }
+            | SnapshotData::DeleteDensityEffect { .. }
+            | SnapshotData::MoveDensityEffect { .. }
+            | SnapshotData::AddSubflame { .. }
+            | SnapshotData::DeleteSubflame { .. }
+        )
+    )
+}
+
 /// Actions needed after configuration changes
 ///
 /// ConfigManager tracks changes and provides this struct to tell the App layer
@@ -167,6 +191,12 @@ pub struct UpdateAction {
     /// Needed when: active variations change
     pub rebuild_shader: bool,
 
+    /// One of the six animation-tracked lists changed shape (add /
+    /// delete / reorder of a transform pool, subflame, or effect).
+    /// The App layer's animation update code checks this and calls
+    /// `Animation::rebind_targets` so tracks follow the items they're
+    /// bound to.
+    pub structural_changed: bool,
 }
 
 impl UpdateAction {
@@ -205,6 +235,7 @@ impl UpdateAction {
                 update_tone_curve: true,
                 reset_accumulation: false, // Don't reset - use overwrite mode for smooth transition
                 rebuild_shader: false, // TODO: detect variation changes
+                structural_changed: false, // Only set by explicit structural mutation sites
             },
         }
     }
@@ -217,6 +248,7 @@ impl UpdateAction {
         self.update_tone_curve |= other.update_tone_curve;
         self.update_view |= other.update_view;
         self.rebuild_shader |= other.rebuild_shader;
+        self.structural_changed |= other.structural_changed;
     }
 }
 
@@ -510,6 +542,8 @@ impl ConfigManager {
         // this subflame via subflame_wf. See set_editing_target_silent
         // for the rationale on avoiding reset_accumulation here.
         self.pending_actions.merge(&UpdateAction::from_update_type(UpdateType::IterationReset));
+        // Subflames list shape changed → flag for animation rebind.
+        self.pending_actions.structural_changed = true;
         Ok(index)
     }
 
@@ -554,6 +588,8 @@ impl ConfigManager {
 
         // IterationReset semantics — same reasoning as add_subflame.
         self.pending_actions.merge(&UpdateAction::from_update_type(UpdateType::IterationReset));
+        // Subflames list shape changed → flag for animation rebind.
+        self.pending_actions.structural_changed = true;
         Ok(())
     }
 
@@ -849,6 +885,15 @@ impl ConfigManager {
         log::debug!("Undo: {} (position now: {}, target: {:?})",
             change.description, self.position, change.target);
 
+        // Set structural_changed up-front when the snapshot is one of
+        // the structural variants — the early-return branches below
+        // won't reach the bottom of the function, so flag it here
+        // while we still have one path through. `pending_actions` is
+        // shared state, so this stick through the return.
+        if snapshot_is_structural(change.snapshot.as_ref()) {
+            self.pending_actions.structural_changed = true;
+        }
+
         // Check if this is a snapshot-based undo
         if let Some(snapshot) = &change.snapshot {
             match snapshot {
@@ -860,6 +905,10 @@ impl ConfigManager {
                     // reset the editing target to Main. (No stash to
                     // clean up — un-swap refactor removed that.)
                     self.editing_target = EditingTarget::Main;
+                    // FullConfig swap drops in a freshly-deserialized
+                    // (or freshly-cloned) flame; assign IDs to anything
+                    // that's zero so the rebind machinery has handles.
+                    self.current.fixup_ids();
                     return Ok(UpdateType::IterationReset);
                 }
 
@@ -1043,6 +1092,12 @@ impl ConfigManager {
         let change = self.history[self.position].clone();
         log::debug!("Redo: {} (target: {:?})", change.description, change.target);
 
+        // Same up-front structural flag as in undo — match arms below
+        // return early so we need to set this before entering them.
+        if snapshot_is_structural(change.snapshot.as_ref()) {
+            self.pending_actions.structural_changed = true;
+        }
+
         // Check if this is a snapshot-based redo
         if let Some(snapshot) = &change.snapshot {
             match snapshot {
@@ -1050,6 +1105,7 @@ impl ConfigManager {
                     log::debug!("  Restoring full config snapshot (after)");
                     self.current = (**after).clone();
                     self.editing_target = EditingTarget::Main;
+                    self.current.fixup_ids();
                     self.position += 1;
                     return Ok(UpdateType::IterationReset);
                 }
@@ -2629,6 +2685,7 @@ impl ConfigManager {
                     // Record in history and return early with correct update type
                     self.push_undo(change);
                     self.record_action(UpdateType::ToneMappingOnly);
+                    self.pending_actions.structural_changed = true;
                     return Ok(());
                 }
                 crate::config::SnapshotData::DeleteColorEffect { index, .. } => {
@@ -2639,6 +2696,7 @@ impl ConfigManager {
                     }
                     self.push_undo(change);
                     self.record_action(UpdateType::ToneMappingOnly);
+                    self.pending_actions.structural_changed = true;
                     return Ok(());
                 }
                 crate::config::SnapshotData::AddDensityEffect { index, effect } => {
@@ -2649,6 +2707,7 @@ impl ConfigManager {
                     }
                     self.push_undo(change);
                     self.record_action(UpdateType::ToneMappingOnly);
+                    self.pending_actions.structural_changed = true;
                     return Ok(());
                 }
                 crate::config::SnapshotData::DeleteDensityEffect { index, .. } => {
@@ -2659,6 +2718,7 @@ impl ConfigManager {
                     }
                     self.push_undo(change);
                     self.record_action(UpdateType::ToneMappingOnly);
+                    self.pending_actions.structural_changed = true;
                     return Ok(());
                 }
 
@@ -2671,6 +2731,7 @@ impl ConfigManager {
                     self.current.color_effects.insert(insert_at, effect);
                     self.push_undo(change);
                     self.record_action(UpdateType::ToneMappingOnly);
+                    self.pending_actions.structural_changed = true;
                     return Ok(());
                 }
 
@@ -2683,6 +2744,7 @@ impl ConfigManager {
                     self.current.density_effects.insert(insert_at, effect);
                     self.push_undo(change);
                     self.record_action(UpdateType::ToneMappingOnly);
+                    self.pending_actions.structural_changed = true;
                     return Ok(());
                 }
 
@@ -2705,6 +2767,11 @@ impl ConfigManager {
 
         // Record GPU update action
         self.record_action(UpdateType::IterationReset);
+
+        // A transform pool's shape changed; tell the App to rebind
+        // animation tracks so any bound IDs follow their items to
+        // their new indices.
+        self.pending_actions.structural_changed = true;
 
         Ok(())
     }

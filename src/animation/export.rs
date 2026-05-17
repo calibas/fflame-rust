@@ -1248,9 +1248,13 @@ pub async fn export_animation(
         .await
         .map_err(|e| AnimationExportError::GpuError(format!("Failed to create device: {:?}", e)))?;
 
-    // Create animation controller for evaluation
+    // Create animation controller for evaluation. Bind tracks against
+    // the export config so the rebind hook (n/a here, but kept for
+    // consistency) and apply path see resolved IDs.
     let mut controller = AnimationController::new();
-    controller.load(export_config.animation.clone());
+    let mut animation = export_config.animation.clone();
+    animation.bind_to_config(&export_config.config);
+    controller.load(animation);
 
     // Create signal manager from exported signals for signal track evaluation
     let mut signal_manager = SignalManager::new();
@@ -1708,7 +1712,9 @@ pub async fn export_animation_fast(
 
     // Create animation controller
     let mut controller = AnimationController::new();
-    controller.load(export_config.animation.clone());
+    let mut animation = export_config.animation.clone();
+    animation.bind_to_config(&export_config.config);
+    controller.load(animation);
 
     // Create signal manager from exported signals for signal track evaluation
     let mut signal_manager = SignalManager::new();

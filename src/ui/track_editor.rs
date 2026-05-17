@@ -128,84 +128,53 @@ fn resolve_flame<'a>(config: &'a FractalConfig, flame_target: EditingTarget) -> 
     }
 }
 
-/// Check whether a track's `(flame_target, path)` resolves to a valid
-/// parameter in the current config. Returns `true` if broken (target
-/// missing or transform/effect/etc. index out of range).
+/// Check whether a track is broken — i.e. its `bound` IDs don't
+/// resolve in the current config. Tracks with no `bound` (View, Color,
+/// Tone, Rendering — anything that doesn't index a tracked list) are
+/// never broken.
 ///
-/// This is a cheap scan — used by the track-list UI to mark broken
-/// rows and by the panel header to tally them.
-pub fn is_track_broken(config: &FractalConfig, flame_target: EditingTarget, path_str: &str) -> bool {
-    let Some(flame) = resolve_flame(config, flame_target) else {
-        return true;
-    };
-    let Some(path) = ConfigPath::from_string_key(path_str) else {
-        // Unparseable path strings are treated as broken so the user
-        // can see them and choose to delete or fix.
-        return true;
-    };
-    match &path {
-        // Transform-pool paths: index must exist on the resolved flame.
-        ConfigPath::TransformWeight { index }
-        | ConfigPath::TransformColor { index }
-        | ConfigPath::TransformColorSpeed { index }
-        | ConfigPath::TransformOpacity { index }
-        | ConfigPath::TransformAffine { index, .. }
-        | ConfigPath::TransformPostAffineEnabled { index }
-        | ConfigPath::TransformPostAffine { index, .. }
-        | ConfigPath::TransformOriginX { index }
-        | ConfigPath::TransformOriginY { index }
-        | ConfigPath::TransformRotation { index }
-        | ConfigPath::TransformScale { index }
-        | ConfigPath::TransformPostAffineOriginX { index }
-        | ConfigPath::TransformPostAffineOriginY { index }
-        | ConfigPath::TransformPostAffineRotation { index }
-        | ConfigPath::TransformPostAffineScale { index }
-        | ConfigPath::TransformVariation { index, .. }
-        | ConfigPath::TransformVariationParam { index, .. } => {
-            *index >= flame.transforms.len()
+/// The check is keyed off `Track.bound`, which is populated by
+/// `Animation::bind_to_config` after load and kept current by the
+/// `rebind_targets` hook. Compare to the pre-PR-2 implementation,
+/// which parsed `target` and checked the literal index — that worked
+/// but couldn't distinguish "deleted" from "shifted by another delete"
+/// and would silently retarget rather than mark broken.
+pub fn is_track_broken(config: &FractalConfig, track: &crate::animation::Track) -> bool {
+    use crate::animation::TargetBinding;
+
+    // Subflame ID must still resolve.
+    if let Some(flame_id) = track.bound.flame {
+        if !config.flame.subflames.iter().any(|s| s.id == flame_id) {
+            return true;
         }
-        ConfigPath::LinkedTransformAffine { index, .. }
-        | ConfigPath::LinkedTransformPostAffineEnabled { index }
-        | ConfigPath::LinkedTransformPostAffine { index, .. }
-        | ConfigPath::LinkedTransformOriginX { index }
-        | ConfigPath::LinkedTransformOriginY { index }
-        | ConfigPath::LinkedTransformRotation { index }
-        | ConfigPath::LinkedTransformScale { index }
-        | ConfigPath::LinkedTransformPostAffineOriginX { index }
-        | ConfigPath::LinkedTransformPostAffineOriginY { index }
-        | ConfigPath::LinkedTransformPostAffineRotation { index }
-        | ConfigPath::LinkedTransformPostAffineScale { index }
-        | ConfigPath::LinkedTransformVariation { index, .. }
-        | ConfigPath::LinkedTransformVariationParam { index, .. } => {
-            *index >= flame.linked_transforms.len()
-        }
-        ConfigPath::FinalTransformAffine { index, .. }
-        | ConfigPath::FinalTransformPostAffineEnabled { index }
-        | ConfigPath::FinalTransformPostAffine { index, .. }
-        | ConfigPath::FinalTransformOriginX { index }
-        | ConfigPath::FinalTransformOriginY { index }
-        | ConfigPath::FinalTransformRotation { index }
-        | ConfigPath::FinalTransformScale { index }
-        | ConfigPath::FinalTransformPostAffineOriginX { index }
-        | ConfigPath::FinalTransformPostAffineOriginY { index }
-        | ConfigPath::FinalTransformPostAffineRotation { index }
-        | ConfigPath::FinalTransformPostAffineScale { index }
-        | ConfigPath::FinalTransformVariation { index, .. }
-        | ConfigPath::FinalTransformVariationParam { index, .. } => {
-            *index >= flame.final_transforms.len()
-        }
-        ConfigPath::Xaos { src, dst } => {
-            *src >= flame.transforms.len() || *dst >= flame.transforms.len()
-        }
-        // Effects only live on Main; we already check that flame resolved.
-        ConfigPath::ColorEffectEnabled { index } | ConfigPath::ColorEffectParam { index, .. } => {
-            *index >= config.color_effects.len()
-        }
-        ConfigPath::DensityEffectEnabled { index } | ConfigPath::DensityEffectParam { index, .. } => {
-            *index >= config.density_effects.len()
-        }
-        _ => false,
     }
+
+    let Some(target_binding) = track.bound.target else {
+        // No target binding either means the path doesn't index a
+        // tracked list (View, Color, etc.) or the track was never
+        // bound. Either way, nothing to be broken about.
+        return false;
+    };
+
+    // Find the flame to scan based on the (already-verified-resolvable)
+    // flame_target. If the *path* refers to FractalConfig-level effects,
+    // the flame parameter is irrelevant.
+    let flame = match track.flame_target {
+        EditingTarget::Main => &config.flame,
+        EditingTarget::Subflame { index } => match config.flame.subflames.get(index) {
+            Some(sub) => sub,
+            None => return true, // subflame gone (also caught by flame_id check above)
+        },
+    };
+
+    let found = match target_binding {
+        TargetBinding::Transform(id) => flame.transforms.iter().any(|t| t.id == id),
+        TargetBinding::Linked(id) => flame.linked_transforms.iter().any(|t| t.id == id),
+        TargetBinding::Final(id) => flame.final_transforms.iter().any(|t| t.id == id),
+        TargetBinding::ColorEffect(id) => config.color_effects.iter().any(|e| e.id == id),
+        TargetBinding::DensityEffect(id) => config.density_effects.iter().any(|e| e.id == id),
+    };
+    !found
 }
 
 /// Count how many tracks in the animation are broken given the
@@ -215,7 +184,7 @@ pub fn count_broken_tracks(animation: &Animation, config: &FractalConfig) -> usi
     animation
         .tracks
         .iter()
-        .filter(|t| is_track_broken(config, t.flame_target, &t.target))
+        .filter(|t| is_track_broken(config, t))
         .count()
 }
 
@@ -468,7 +437,7 @@ fn render_tracks_visual(
                     Pos2::new(rect.left() + LABEL_WIDTH - 4.0, rect.bottom()),
                 );
                 let flame_target = track.flame_target;
-                let is_broken = is_track_broken(config, flame_target, &path);
+                let is_broken = is_track_broken(config, track);
                 // Convert to 1-based display + prepend flame prefix
                 let full_display = target_display(flame_target, &path);
                 // Truncate label if too long (show more characters)
