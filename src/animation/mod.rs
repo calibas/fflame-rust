@@ -96,6 +96,7 @@ where
                     flame_target: legacy.flame_target,
                     source: legacy.source,
                     interpolation: legacy.interpolation,
+                    bound: TrackBinding::default(),
                 });
             }
             Ok(tracks)
@@ -103,6 +104,41 @@ where
     }
 
     deserializer.deserialize_any(TracksVisitor)
+}
+
+/// Identifies which list-item a track is bound to (post-rebind).
+///
+/// Runtime-only. Set by `Animation::bind_to_config` after load and
+/// kept current by the rebind hook on every structural change to the
+/// referenced list. The hook uses these IDs to find where the item
+/// *now* lives in its pool, then rewrites the index inside
+/// `Track.target` to match. Apply-path code never reads this — it
+/// always parses `Track.target` and indexes directly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TargetBinding {
+    /// References `flame.transforms[index]` of the bound flame.
+    Transform(u64),
+    /// References `flame.linked_transforms[index]` of the bound flame.
+    Linked(u64),
+    /// References `flame.final_transforms[index]` of the bound flame.
+    Final(u64),
+    /// References `config.color_effects[index]` (FractalConfig-level,
+    /// not per-flame).
+    ColorEffect(u64),
+    /// References `config.density_effects[index]` (FractalConfig-level).
+    DensityEffect(u64),
+}
+
+/// Full binding state for a Track. Runtime-only; never serialized.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TrackBinding {
+    /// The subflame this track's `flame_target` refers to, by id.
+    /// `None` when `flame_target == Main` (or for non-flame paths).
+    pub flame: Option<u64>,
+    /// The list-item the track's `target` resolves to. `None` for
+    /// non-list paths (View, Color, Tone, Rendering — anything not
+    /// indexed into one of the six tracked lists).
+    pub target: Option<TargetBinding>,
 }
 
 /// Single parameter track
@@ -125,6 +161,17 @@ pub struct Track {
     /// Interpolation method (for keyframe tracks)
     #[serde(default)]
     pub interpolation: Interpolation,
+
+    /// Runtime-only handle to whichever list-items this track
+    /// targets. Populated by `Animation::bind_to_config` after load
+    /// and kept current by the rebind hook on every add/delete/reorder
+    /// of a tracked list. Never serialized.
+    ///
+    /// `target` is always the source of truth for *where to apply*; the
+    /// rebind hook reads `bound` to look up where each tracked item
+    /// is *now* and rewrites the index inside `target` to match.
+    #[serde(skip)]
+    pub bound: TrackBinding,
 }
 
 /// Source of track values
@@ -255,96 +302,17 @@ impl Animation {
         }
     }
 
-    /// Update animation tracks when a transform is removed.
-    ///
-    /// Removes all tracks targeting the deleted transform and decrements
-    /// indices for tracks targeting higher transforms.
-    ///
-    /// Returns the number of tracks that were removed.
-    pub fn on_transform_removed(&mut self, removed_index: usize) -> usize {
-        let prefix = format!("Transform.{}.", removed_index);
-        let initial_count = self.tracks.len();
-
-        // Remove tracks targeting the deleted transform
-        self.tracks.retain(|track| !track.target.starts_with(&prefix));
-
-        // Decrement indices for tracks targeting higher transforms
-        for track in &mut self.tracks {
-            if let Some(new_target) = decrement_transform_index(&track.target, removed_index) {
-                track.target = new_target;
-            }
-        }
-
-        initial_count - self.tracks.len()
-    }
-
-    /// Update animation tracks when a color effect is removed.
-    ///
-    /// Removes all tracks targeting the deleted effect and decrements
-    /// indices for tracks targeting higher effects.
-    ///
-    /// Returns the number of tracks that were removed.
-    pub fn on_color_effect_removed(&mut self, removed_index: usize) -> usize {
-        let prefix = format!("ColorEffect.{}.", removed_index);
-        let initial_count = self.tracks.len();
-
-        // Remove tracks targeting the deleted effect
-        self.tracks.retain(|track| !track.target.starts_with(&prefix));
-
-        // Decrement indices for tracks targeting higher effects
-        for track in &mut self.tracks {
-            if let Some(new_target) = decrement_effect_index(&track.target, "ColorEffect", removed_index) {
-                track.target = new_target;
-            }
-        }
-
-        initial_count - self.tracks.len()
-    }
-
-    /// Update animation tracks when a density effect is removed.
-    ///
-    /// Removes all tracks targeting the deleted effect and decrements
-    /// indices for tracks targeting higher effects.
-    ///
-    /// Returns the number of tracks that were removed.
-    pub fn on_density_effect_removed(&mut self, removed_index: usize) -> usize {
-        let prefix = format!("DensityEffect.{}.", removed_index);
-        let initial_count = self.tracks.len();
-
-        // Remove tracks targeting the deleted effect
-        self.tracks.retain(|track| !track.target.starts_with(&prefix));
-
-        // Decrement indices for tracks targeting higher effects
-        for track in &mut self.tracks {
-            if let Some(new_target) = decrement_effect_index(&track.target, "DensityEffect", removed_index) {
-                track.target = new_target;
-            }
-        }
-
-        initial_count - self.tracks.len()
-    }
-
-    /// Update animation tracks when color effects are reordered.
-    ///
-    /// Remaps effect indices based on a move from old_index to new_index.
-    pub fn on_color_effect_reordered(&mut self, old_index: usize, new_index: usize) {
-        for track in &mut self.tracks {
-            if let Some(new_target) = remap_effect_index(&track.target, "ColorEffect", old_index, new_index) {
-                track.target = new_target;
-            }
-        }
-    }
-
-    /// Update animation tracks when density effects are reordered.
-    ///
-    /// Remaps effect indices based on a move from old_index to new_index.
-    pub fn on_density_effect_reordered(&mut self, old_index: usize, new_index: usize) {
-        for track in &mut self.tracks {
-            if let Some(new_target) = remap_effect_index(&track.target, "DensityEffect", old_index, new_index) {
-                track.target = new_target;
-            }
-        }
-    }
+    // Note: `on_transform_removed` / `on_color_effect_removed` /
+    // `on_color_effect_reordered` / `on_density_effect_removed` /
+    // `on_density_effect_reordered` were removed in the PR 2 stable-
+    // identity overhaul. Their job — string-prefix shifting of indices
+    // in `Track.target` — is now done by `rebind_targets`, which uses
+    // `Track.bound` IDs to find where each tracked item moved to.
+    //
+    // Deletion semantics also changed: the old helpers *removed*
+    // tracks pointing at the deleted item. The new model keeps the
+    // track and marks it broken so it can be auto-restored if the
+    // deletion is undone.
 
     /// Get track by index
     pub fn get_track(&self, index: usize) -> Option<&Track> {
@@ -365,6 +333,207 @@ impl Animation {
     pub fn to_json(&self) -> Result<String, serde_json::Error> {
         serde_json::to_string_pretty(self)
     }
+
+    /// Resolve every track's `(flame_target, target)` against the given
+    /// config and populate `track.bound` with the IDs of the items each
+    /// track currently points at. Tracks whose target is non-list
+    /// (View, Color, etc.) get `bound = Default::default()`. Tracks
+    /// whose flame_target or target index doesn't resolve get
+    /// `bound = Default::default()` too — they'll be marked broken in
+    /// the UI and won't be auto-rebound until the user picks a new
+    /// target.
+    ///
+    /// Call this once after `Animation::from_json` (or after loading
+    /// the embedded `base_config`) so the rebind hook has IDs to
+    /// follow during the session. Safe to re-run.
+    pub fn bind_to_config(&mut self, config: &FractalConfig) {
+        for track in &mut self.tracks {
+            track.bound = resolve_track_binding(config, track.flame_target, &track.target);
+        }
+    }
+
+    /// After a structural change to one of the six tracked lists,
+    /// walk every track and rewrite its `target` / `flame_target`
+    /// indices to keep pointing at the same item the `bound` IDs name.
+    ///
+    /// - If `bound.flame` is set, find the subflame with that id and
+    ///   rewrite `flame_target = Subflame{new_index}`.
+    /// - If `bound.target` is set, find the item with that id in the
+    ///   relevant pool of the bound flame and rewrite the index inside
+    ///   `target`.
+    /// - If either lookup fails, leave the path as-is. The track is
+    ///   "broken" — `bound` stays set so a future undo/restore that
+    ///   brings the item back will re-resolve and un-break it.
+    ///
+    /// Called from `ConfigManager` after every add / delete / reorder
+    /// of a tracked list, and after undo/redo snapshot restores.
+    pub fn rebind_targets(&mut self, config: &FractalConfig) {
+        for track in &mut self.tracks {
+            rebind_one(track, config);
+        }
+    }
+}
+
+/// Resolve a `(flame_target, target_path)` pair to the runtime
+/// binding it should carry. Returns `Default` when:
+/// - the path doesn't reference any of the six tracked lists
+///   (so there's nothing to bind to — e.g. `Zoom`)
+/// - or the path *does* reference a list but the index / flame is
+///   out of range (track is broken; binding stays empty until the
+///   user re-picks a target).
+pub fn resolve_track_binding(
+    config: &FractalConfig,
+    flame_target: EditingTarget,
+    target_path: &str,
+) -> TrackBinding {
+    use crate::config::ConfigPath;
+
+    // Resolve the subflame ID, if any. Out-of-range subflame index →
+    // bound is left empty.
+    let (flame, flame_id) = match flame_target {
+        EditingTarget::Main => (&config.flame, None),
+        EditingTarget::Subflame { index } => match config.flame.subflames.get(index) {
+            Some(sub) => (sub, Some(sub.id)),
+            None => return TrackBinding::default(),
+        },
+    };
+
+    let Some(path) = ConfigPath::from_string_key(target_path) else {
+        return TrackBinding { flame: flame_id, target: None };
+    };
+
+    // Map ConfigPath → which list it indexes into. Paths that don't
+    // index a tracked list (View / Color / Tone / Rendering / etc.)
+    // return None.
+    let target = match &path {
+        // Normal pool
+        ConfigPath::TransformWeight { index }
+        | ConfigPath::TransformColor { index }
+        | ConfigPath::TransformColorSpeed { index }
+        | ConfigPath::TransformOpacity { index }
+        | ConfigPath::TransformDirectColor { index }
+        | ConfigPath::TransformAffine { index, .. }
+        | ConfigPath::TransformPostAffineEnabled { index }
+        | ConfigPath::TransformPostAffine { index, .. }
+        | ConfigPath::TransformOriginX { index }
+        | ConfigPath::TransformOriginY { index }
+        | ConfigPath::TransformRotation { index }
+        | ConfigPath::TransformScale { index }
+        | ConfigPath::TransformPostAffineOriginX { index }
+        | ConfigPath::TransformPostAffineOriginY { index }
+        | ConfigPath::TransformPostAffineRotation { index }
+        | ConfigPath::TransformPostAffineScale { index }
+        | ConfigPath::TransformVariation { index, .. }
+        | ConfigPath::TransformVariationParam { index, .. } => {
+            flame.transforms.get(*index).map(|t| TargetBinding::Transform(t.id))
+        }
+        // Linked pool
+        ConfigPath::LinkedTransformAffine { index, .. }
+        | ConfigPath::LinkedTransformPostAffineEnabled { index }
+        | ConfigPath::LinkedTransformPostAffine { index, .. }
+        | ConfigPath::LinkedTransformOriginX { index }
+        | ConfigPath::LinkedTransformOriginY { index }
+        | ConfigPath::LinkedTransformRotation { index }
+        | ConfigPath::LinkedTransformScale { index }
+        | ConfigPath::LinkedTransformPostAffineOriginX { index }
+        | ConfigPath::LinkedTransformPostAffineOriginY { index }
+        | ConfigPath::LinkedTransformPostAffineRotation { index }
+        | ConfigPath::LinkedTransformPostAffineScale { index }
+        | ConfigPath::LinkedTransformVariation { index, .. }
+        | ConfigPath::LinkedTransformVariationParam { index, .. } => {
+            flame.linked_transforms.get(*index).map(|t| TargetBinding::Linked(t.id))
+        }
+        // Final pool
+        ConfigPath::FinalTransformAffine { index, .. }
+        | ConfigPath::FinalTransformPostAffineEnabled { index }
+        | ConfigPath::FinalTransformPostAffine { index, .. }
+        | ConfigPath::FinalTransformOriginX { index }
+        | ConfigPath::FinalTransformOriginY { index }
+        | ConfigPath::FinalTransformRotation { index }
+        | ConfigPath::FinalTransformScale { index }
+        | ConfigPath::FinalTransformPostAffineOriginX { index }
+        | ConfigPath::FinalTransformPostAffineOriginY { index }
+        | ConfigPath::FinalTransformPostAffineRotation { index }
+        | ConfigPath::FinalTransformPostAffineScale { index }
+        | ConfigPath::FinalTransformVariation { index, .. }
+        | ConfigPath::FinalTransformVariationParam { index, .. } => {
+            flame.final_transforms.get(*index).map(|t| TargetBinding::Final(t.id))
+        }
+        // Effects (FractalConfig-level, not per-flame)
+        ConfigPath::ColorEffectEnabled { index }
+        | ConfigPath::ColorEffectParam { index, .. } => {
+            config.color_effects.get(*index).map(|e| TargetBinding::ColorEffect(e.id))
+        }
+        ConfigPath::DensityEffectEnabled { index }
+        | ConfigPath::DensityEffectParam { index, .. } => {
+            config.density_effects.get(*index).map(|e| TargetBinding::DensityEffect(e.id))
+        }
+        // Everything else (View, Color, Tone, Rendering, Xaos,
+        // SoloTransform, …) doesn't index a tracked list.
+        _ => None,
+    };
+
+    TrackBinding { flame: flame_id, target }
+}
+
+/// Rewrite one track's index references to match where its `bound`
+/// IDs currently live in the config. See `Animation::rebind_targets`
+/// for the full contract.
+fn rebind_one(track: &mut Track, config: &FractalConfig) {
+    // Step 1: rebind flame_target. If the track is bound to a
+    // subflame ID, find its current position; if the ID is gone,
+    // leave flame_target as-is (broken).
+    if let Some(flame_id) = track.bound.flame {
+        if let Some(new_index) = config
+            .flame
+            .subflames
+            .iter()
+            .position(|sub| sub.id == flame_id)
+        {
+            track.flame_target = EditingTarget::Subflame { index: new_index };
+        }
+    }
+
+    // Step 2: rebind the target path's list index. Need to look up
+    // the bound item in the right pool *of the bound flame*. If the
+    // flame itself doesn't resolve, skip — track is broken.
+    let Some(target_binding) = track.bound.target else { return };
+    let flame = match track.flame_target {
+        EditingTarget::Main => &config.flame,
+        EditingTarget::Subflame { index } => match config.flame.subflames.get(index) {
+            Some(sub) => sub,
+            None => return, // broken — leave target as-is
+        },
+    };
+
+    let new_index = match target_binding {
+        TargetBinding::Transform(id) => flame.transforms.iter().position(|t| t.id == id),
+        TargetBinding::Linked(id) => flame.linked_transforms.iter().position(|t| t.id == id),
+        TargetBinding::Final(id) => flame.final_transforms.iter().position(|t| t.id == id),
+        TargetBinding::ColorEffect(id) => config.color_effects.iter().position(|e| e.id == id),
+        TargetBinding::DensityEffect(id) => config.density_effects.iter().position(|e| e.id == id),
+    };
+
+    if let Some(new_index) = new_index {
+        if let Some(rewritten) = rewrite_path_index(&track.target, new_index) {
+            track.target = rewritten;
+        }
+    }
+}
+
+/// Replace the index segment of a `{Prefix}.{index}.{rest...}` path
+/// with a new index. Returns `None` if the path doesn't have that
+/// shape (e.g. `Zoom`, `Pan`, `RenderMode` — none of which carry an
+/// index to begin with). The function doesn't validate the prefix —
+/// callers are expected to know the path is one of the indexed
+/// transform / effect families.
+fn rewrite_path_index(path: &str, new_index: usize) -> Option<String> {
+    let dot1 = path.find('.')?;
+    let after_prefix = &path[dot1 + 1..];
+    let dot2_rel = after_prefix.find('.')?;
+    let prefix = &path[..dot1];
+    let rest = &after_prefix[dot2_rel + 1..];
+    Some(format!("{}.{}.{}", prefix, new_index, rest))
 }
 
 impl Track {
@@ -377,6 +546,7 @@ impl Track {
             flame_target: EditingTarget::Main,
             source,
             interpolation: Interpolation::Linear,
+            bound: TrackBinding::default(),
         }
     }
 
@@ -488,74 +658,6 @@ impl Track {
             _ => None,
         }
     }
-}
-
-/// Helper to decrement transform index in a path string if it's higher than removed_index.
-///
-/// Path format: "Transform.{N}.{field}..."
-fn decrement_transform_index(path: &str, removed_index: usize) -> Option<String> {
-    if let Some(rest) = path.strip_prefix("Transform.") {
-        if let Some(dot_pos) = rest.find('.') {
-            if let Ok(index) = rest[..dot_pos].parse::<usize>() {
-                if index > removed_index {
-                    return Some(format!("Transform.{}.{}", index - 1, &rest[dot_pos + 1..]));
-                }
-            }
-        }
-    }
-    None
-}
-
-/// Helper to decrement effect index in a path string if it's higher than removed_index.
-///
-/// Path format: "{prefix}.{N}.{field}" where prefix is "ColorEffect" or "DensityEffect"
-fn decrement_effect_index(path: &str, prefix: &str, removed_index: usize) -> Option<String> {
-    let full_prefix = format!("{}.", prefix);
-    if let Some(rest) = path.strip_prefix(&full_prefix) {
-        if let Some(dot_pos) = rest.find('.') {
-            if let Ok(index) = rest[..dot_pos].parse::<usize>() {
-                if index > removed_index {
-                    return Some(format!("{}.{}.{}", prefix, index - 1, &rest[dot_pos + 1..]));
-                }
-            }
-        }
-    }
-    None
-}
-
-/// Helper to remap effect index when effects are reordered.
-///
-/// When an effect moves from old_index to new_index:
-/// - The moved effect: old_index -> new_index
-/// - Effects between shift up or down depending on direction
-fn remap_effect_index(path: &str, prefix: &str, old_index: usize, new_index: usize) -> Option<String> {
-    let full_prefix = format!("{}.", prefix);
-    if let Some(rest) = path.strip_prefix(&full_prefix) {
-        if let Some(dot_pos) = rest.find('.') {
-            if let Ok(index) = rest[..dot_pos].parse::<usize>() {
-                let new_idx = if index == old_index {
-                    // This is the moved effect
-                    new_index
-                } else if old_index < new_index {
-                    // Moving down: effects in (old_index, new_index] shift up by 1
-                    if index > old_index && index <= new_index {
-                        index - 1
-                    } else {
-                        return None; // No change needed
-                    }
-                } else {
-                    // Moving up: effects in [new_index, old_index) shift down by 1
-                    if index >= new_index && index < old_index {
-                        index + 1
-                    } else {
-                        return None; // No change needed
-                    }
-                };
-                return Some(format!("{}.{}.{}", prefix, new_idx, &rest[dot_pos + 1..]));
-            }
-        }
-    }
-    None
 }
 
 #[cfg(test)]

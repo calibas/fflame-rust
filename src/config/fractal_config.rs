@@ -516,7 +516,36 @@ impl FractalConfig {
             config = Self::migrate(config, version)?;
         }
 
+        // Assign session-local IDs to every Transform / Flame / Effect
+        // that came in without one (i.e. all of them — IDs are
+        // serde-skipped). This makes the deserialized config immediately
+        // usable by the animation rebind machinery.
+        config.fixup_ids();
+
         Ok(config)
+    }
+
+    /// Walk every list-item (transforms in all three pools on Main and
+    /// every subflame, every subflame itself, and every color/density
+    /// effect) and assign a fresh session-local ID to anything whose
+    /// `id` is the zero sentinel. Idempotent — items that already have
+    /// a non-zero ID are left alone.
+    ///
+    /// Called automatically after deserialize. Also safe to call after
+    /// any operation that produces a config without IDs (e.g. preset
+    /// clones, paste from clipboard).
+    pub fn fixup_ids(&mut self) {
+        fixup_flame_ids(&mut self.flame);
+        for effect in &mut self.density_effects {
+            if effect.id == 0 {
+                effect.id = crate::scene::transforms::next_id();
+            }
+        }
+        for effect in &mut self.color_effects {
+            if effect.id == 0 {
+                effect.id = crate::scene::transforms::next_id();
+            }
+        }
     }
 
     /// Migrate config from old version to current version
@@ -626,6 +655,9 @@ impl FractalConfig {
             config = Self::migrate(config, version)?;
         }
 
+        // Assign session-local IDs (see `fixup_ids` doc).
+        config.fixup_ids();
+
         Ok(config)
     }
 
@@ -674,6 +706,34 @@ impl FractalConfig {
         let json = Self::to_json_array(configs)?;
         std::fs::write(path, json)?;
         Ok(())
+    }
+}
+
+/// Recursively assign session-local IDs to a flame, its transform
+/// pools, and every subflame. Items with non-zero IDs are left alone
+/// so this is safe to re-run.
+fn fixup_flame_ids(flame: &mut Flame) {
+    use crate::scene::transforms::next_id;
+    if flame.id == 0 {
+        flame.id = next_id();
+    }
+    for t in &mut flame.transforms {
+        if t.id == 0 {
+            t.id = next_id();
+        }
+    }
+    for t in &mut flame.linked_transforms {
+        if t.id == 0 {
+            t.id = next_id();
+        }
+    }
+    for t in &mut flame.final_transforms {
+        if t.id == 0 {
+            t.id = next_id();
+        }
+    }
+    for sub in &mut flame.subflames {
+        fixup_flame_ids(sub);
     }
 }
 

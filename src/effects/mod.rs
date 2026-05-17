@@ -94,8 +94,14 @@ impl EffectInfo {
 }
 
 /// A single effect instance in a config
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EffectInstance {
+    /// Session-local identity used by the animation system to bind
+    /// tracks stably across effect add / delete / reorder. Never
+    /// serialized — see `crate::scene::transforms::next_id` docs.
+    #[serde(skip)]
+    pub id: u64,
+
     /// Effect type name (must match registered effect)
     pub effect_type: String,
 
@@ -108,8 +114,21 @@ pub struct EffectInstance {
     pub params: HashMap<String, f32>,
 }
 
+// Manual PartialEq that ignores the runtime-only `id` field. Two
+// effects with the same data are equal regardless of session identity.
+impl PartialEq for EffectInstance {
+    fn eq(&self, other: &Self) -> bool {
+        self.effect_type == other.effect_type
+            && self.enabled == other.enabled
+            && self.params == other.params
+    }
+}
+
 impl EffectInstance {
-    /// Create a new effect instance with default parameters
+    /// Create a new effect instance with default parameters and a fresh
+    /// session-local ID. Editor code paths should use this. Code that
+    /// expects `fixup_ids` to assign an ID later (deserialize) can
+    /// construct with `id: 0`.
     pub fn new(effect_type: &str) -> Self {
         let params = if let Some(info) = global_effect_registry().get(effect_type) {
             info.default_params()
@@ -118,6 +137,7 @@ impl EffectInstance {
         };
 
         Self {
+            id: crate::scene::transforms::next_id(),
             effect_type: effect_type.to_string(),
             enabled: true,
             params,

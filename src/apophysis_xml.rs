@@ -251,6 +251,7 @@ fn parse_flame_element(
     // rest of the pipeline sees a consistent shape.
     // See `docs/projects/per-transform-linked-and-final.md`.
     let mut flame = Flame {
+        id: crate::scene::transforms::next_id(),
         name,
         transforms,
         linked_transforms: Vec::new(),

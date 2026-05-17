@@ -233,6 +233,16 @@ impl App {
         // Update overwrite mode based on changes
         self.update_overwrite_mode(&actions, view_changed_by_keyboard);
 
+        // If a tracked list changed shape (transform pool, subflame,
+        // or effect add / delete / reorder), walk animation tracks
+        // and rewrite their index references to follow the items
+        // they're bound to. See `Animation::rebind_targets`.
+        if actions.structural_changed {
+            if let Some(animation) = self.animation_controller.animation.as_mut() {
+                animation.rebind_targets(self.config_manager.active_config());
+            }
+        }
+
         // Clear pending actions after executing them
         self.config_manager.clear_pending_actions();
 

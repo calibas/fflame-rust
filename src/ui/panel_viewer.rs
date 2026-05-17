@@ -708,7 +708,7 @@ impl<'a> PanelViewer<'a> {
         }
 
         // Handle animation load response
-        if let Some(animation) = response.load_animation.take() {
+        if let Some(mut animation) = response.load_animation.take() {
             // If animation has embedded config, load it via selected_preset_config
             // This ensures proper GPU sync and undo/redo handling
             if let Some(config) = animation.base_config.clone() {
@@ -717,6 +717,7 @@ impl<'a> PanelViewer<'a> {
             }
             let generators = animation.generators.clone();
             let duration = animation.duration;
+            animation.bind_to_config(self.context.config_manager.active_config());
             self.context.animation_controller.load(animation);
             self.context.signal_panel_state.restore_generators(
                 generators, self.context.signal_manager, duration,
