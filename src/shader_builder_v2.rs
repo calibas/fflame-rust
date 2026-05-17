@@ -929,6 +929,30 @@ impl ShaderBuilder {
             next_idx += 1;
         }
 
+        // Subflame xforms get unified xform_ids in the
+        // [SUBFLAME_XFORM_ID_BASE, …) range — same layout the main
+        // shader's get_param / get_state see. Without dispatching init
+        // for them, variations like klein_group (16-slot init computes
+        // Möbius generator matrices from user params) would render
+        // with zero matrices.
+        let mut sub_offset: u32 = 0;
+        for sf in flame.subflames.iter() {
+            for xform in sf.transforms.iter() {
+                emit_variation(
+                    crate::scene::transforms::SUBFLAME_XFORM_ID_BASE + sub_offset,
+                    xform,
+                );
+                sub_offset += 1;
+            }
+            for xform in sf.final_transforms.iter() {
+                emit_variation(
+                    crate::scene::transforms::SUBFLAME_XFORM_ID_BASE + sub_offset,
+                    xform,
+                );
+                sub_offset += 1;
+            }
+        }
+
         if pairs.is_empty() {
             return None;
         }
