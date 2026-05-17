@@ -569,6 +569,23 @@ fn get_transform_items(index: usize, transform: &crate::scene::transforms::Trans
                 &format!("Post-Affine {}", param.to_char()),
             ));
         }
+        // High-level post-affine ops (Origin, Rotation, Scale)
+        items.push(TargetItem::new(
+            ConfigPath::TransformPostAffineOriginX { index },
+            "Post-Affine Origin X",
+        ));
+        items.push(TargetItem::new(
+            ConfigPath::TransformPostAffineOriginY { index },
+            "Post-Affine Origin Y",
+        ));
+        items.push(TargetItem::new(
+            ConfigPath::TransformPostAffineRotation { index },
+            "Post-Affine Rotation",
+        ));
+        items.push(TargetItem::new(
+            ConfigPath::TransformPostAffineScale { index },
+            "Post-Affine Scale",
+        ));
     }
 
     // Active variations and their parameters
@@ -614,6 +631,11 @@ fn get_linked_transform_items(index: usize, transform: &crate::scene::transforms
             &format!("Affine {}", param.to_char()),
         ));
     }
+    // High-level pre-affine ops on the linked transform.
+    items.push(TargetItem::new(ConfigPath::LinkedTransformOriginX { index }, "Origin X"));
+    items.push(TargetItem::new(ConfigPath::LinkedTransformOriginY { index }, "Origin Y"));
+    items.push(TargetItem::new(ConfigPath::LinkedTransformRotation { index }, "Rotation"));
+    items.push(TargetItem::new(ConfigPath::LinkedTransformScale { index }, "Scale"));
 
     if transform.post_affine_enabled {
         items.push(TargetItem::new(
@@ -627,6 +649,23 @@ fn get_linked_transform_items(index: usize, transform: &crate::scene::transforms
                 &format!("Post-Affine {}", param.to_char()),
             ));
         }
+        // High-level post-affine ops on the linked transform.
+        items.push(TargetItem::new(
+            ConfigPath::LinkedTransformPostAffineOriginX { index },
+            "Post-Affine Origin X",
+        ));
+        items.push(TargetItem::new(
+            ConfigPath::LinkedTransformPostAffineOriginY { index },
+            "Post-Affine Origin Y",
+        ));
+        items.push(TargetItem::new(
+            ConfigPath::LinkedTransformPostAffineRotation { index },
+            "Post-Affine Rotation",
+        ));
+        items.push(TargetItem::new(
+            ConfigPath::LinkedTransformPostAffineScale { index },
+            "Post-Affine Scale",
+        ));
     }
 
     let registry = global_registry();
@@ -662,6 +701,11 @@ fn get_pool_final_transform_items(index: usize, transform: &crate::scene::transf
             &format!("Affine {}", param.to_char()),
         ));
     }
+    // High-level pre-affine ops on the final transform.
+    items.push(TargetItem::new(ConfigPath::FinalTransformOriginX { index }, "Origin X"));
+    items.push(TargetItem::new(ConfigPath::FinalTransformOriginY { index }, "Origin Y"));
+    items.push(TargetItem::new(ConfigPath::FinalTransformRotation { index }, "Rotation"));
+    items.push(TargetItem::new(ConfigPath::FinalTransformScale { index }, "Scale"));
 
     if transform.post_affine_enabled {
         items.push(TargetItem::new(
@@ -675,6 +719,23 @@ fn get_pool_final_transform_items(index: usize, transform: &crate::scene::transf
                 &format!("Post-Affine {}", param.to_char()),
             ));
         }
+        // High-level post-affine ops on the final transform.
+        items.push(TargetItem::new(
+            ConfigPath::FinalTransformPostAffineOriginX { index },
+            "Post-Affine Origin X",
+        ));
+        items.push(TargetItem::new(
+            ConfigPath::FinalTransformPostAffineOriginY { index },
+            "Post-Affine Origin Y",
+        ));
+        items.push(TargetItem::new(
+            ConfigPath::FinalTransformPostAffineRotation { index },
+            "Post-Affine Rotation",
+        ));
+        items.push(TargetItem::new(
+            ConfigPath::FinalTransformPostAffineScale { index },
+            "Post-Affine Scale",
+        ));
     }
 
     let registry = global_registry();

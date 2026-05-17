@@ -156,6 +156,10 @@ pub fn is_track_broken(config: &FractalConfig, flame_target: EditingTarget, path
         | ConfigPath::TransformOriginY { index }
         | ConfigPath::TransformRotation { index }
         | ConfigPath::TransformScale { index }
+        | ConfigPath::TransformPostAffineOriginX { index }
+        | ConfigPath::TransformPostAffineOriginY { index }
+        | ConfigPath::TransformPostAffineRotation { index }
+        | ConfigPath::TransformPostAffineScale { index }
         | ConfigPath::TransformVariation { index, .. }
         | ConfigPath::TransformVariationParam { index, .. } => {
             *index >= flame.transforms.len()
@@ -163,6 +167,14 @@ pub fn is_track_broken(config: &FractalConfig, flame_target: EditingTarget, path
         ConfigPath::LinkedTransformAffine { index, .. }
         | ConfigPath::LinkedTransformPostAffineEnabled { index }
         | ConfigPath::LinkedTransformPostAffine { index, .. }
+        | ConfigPath::LinkedTransformOriginX { index }
+        | ConfigPath::LinkedTransformOriginY { index }
+        | ConfigPath::LinkedTransformRotation { index }
+        | ConfigPath::LinkedTransformScale { index }
+        | ConfigPath::LinkedTransformPostAffineOriginX { index }
+        | ConfigPath::LinkedTransformPostAffineOriginY { index }
+        | ConfigPath::LinkedTransformPostAffineRotation { index }
+        | ConfigPath::LinkedTransformPostAffineScale { index }
         | ConfigPath::LinkedTransformVariation { index, .. }
         | ConfigPath::LinkedTransformVariationParam { index, .. } => {
             *index >= flame.linked_transforms.len()
@@ -170,6 +182,14 @@ pub fn is_track_broken(config: &FractalConfig, flame_target: EditingTarget, path
         ConfigPath::FinalTransformAffine { index, .. }
         | ConfigPath::FinalTransformPostAffineEnabled { index }
         | ConfigPath::FinalTransformPostAffine { index, .. }
+        | ConfigPath::FinalTransformOriginX { index }
+        | ConfigPath::FinalTransformOriginY { index }
+        | ConfigPath::FinalTransformRotation { index }
+        | ConfigPath::FinalTransformScale { index }
+        | ConfigPath::FinalTransformPostAffineOriginX { index }
+        | ConfigPath::FinalTransformPostAffineOriginY { index }
+        | ConfigPath::FinalTransformPostAffineRotation { index }
+        | ConfigPath::FinalTransformPostAffineScale { index }
         | ConfigPath::FinalTransformVariation { index, .. }
         | ConfigPath::FinalTransformVariationParam { index, .. } => {
             *index >= flame.final_transforms.len()
@@ -1332,6 +1352,18 @@ pub fn get_current_value(
         ConfigPath::TransformScale { index } => {
             flame.transforms.get(*index).map(|t| t.scale() as f64)
         }
+        ConfigPath::TransformPostAffineOriginX { index } => {
+            flame.transforms.get(*index).map(|t| t.post_origin_x() as f64)
+        }
+        ConfigPath::TransformPostAffineOriginY { index } => {
+            flame.transforms.get(*index).map(|t| t.post_origin_y() as f64)
+        }
+        ConfigPath::TransformPostAffineRotation { index } => {
+            flame.transforms.get(*index).map(|t| t.post_rotation() as f64)
+        }
+        ConfigPath::TransformPostAffineScale { index } => {
+            flame.transforms.get(*index).map(|t| t.post_scale() as f64)
+        }
         ConfigPath::TransformVariation { index, variation } => {
             flame.transforms.get(*index).and_then(|t| {
                 t.variations.get(variation).map(|&v| v as f64)
@@ -1367,6 +1399,30 @@ pub fn get_current_value(
                 ) as f64
             })
         }
+        ConfigPath::LinkedTransformOriginX { index } => {
+            flame.linked_transforms.get(*index).map(|t| t.origin_x() as f64)
+        }
+        ConfigPath::LinkedTransformOriginY { index } => {
+            flame.linked_transforms.get(*index).map(|t| t.origin_y() as f64)
+        }
+        ConfigPath::LinkedTransformRotation { index } => {
+            flame.linked_transforms.get(*index).map(|t| t.rotation() as f64)
+        }
+        ConfigPath::LinkedTransformScale { index } => {
+            flame.linked_transforms.get(*index).map(|t| t.scale() as f64)
+        }
+        ConfigPath::LinkedTransformPostAffineOriginX { index } => {
+            flame.linked_transforms.get(*index).map(|t| t.post_origin_x() as f64)
+        }
+        ConfigPath::LinkedTransformPostAffineOriginY { index } => {
+            flame.linked_transforms.get(*index).map(|t| t.post_origin_y() as f64)
+        }
+        ConfigPath::LinkedTransformPostAffineRotation { index } => {
+            flame.linked_transforms.get(*index).map(|t| t.post_rotation() as f64)
+        }
+        ConfigPath::LinkedTransformPostAffineScale { index } => {
+            flame.linked_transforms.get(*index).map(|t| t.post_scale() as f64)
+        }
 
         // Final pool — animatable per-pool-member parameters.
         ConfigPath::FinalTransformAffine { index, param } => {
@@ -1390,6 +1446,30 @@ pub fn get_current_value(
                 ) as f64
             })
         }
+        ConfigPath::FinalTransformOriginX { index } => {
+            flame.final_transforms.get(*index).map(|t| t.origin_x() as f64)
+        }
+        ConfigPath::FinalTransformOriginY { index } => {
+            flame.final_transforms.get(*index).map(|t| t.origin_y() as f64)
+        }
+        ConfigPath::FinalTransformRotation { index } => {
+            flame.final_transforms.get(*index).map(|t| t.rotation() as f64)
+        }
+        ConfigPath::FinalTransformScale { index } => {
+            flame.final_transforms.get(*index).map(|t| t.scale() as f64)
+        }
+        ConfigPath::FinalTransformPostAffineOriginX { index } => {
+            flame.final_transforms.get(*index).map(|t| t.post_origin_x() as f64)
+        }
+        ConfigPath::FinalTransformPostAffineOriginY { index } => {
+            flame.final_transforms.get(*index).map(|t| t.post_origin_y() as f64)
+        }
+        ConfigPath::FinalTransformPostAffineRotation { index } => {
+            flame.final_transforms.get(*index).map(|t| t.post_rotation() as f64)
+        }
+        ConfigPath::FinalTransformPostAffineScale { index } => {
+            flame.final_transforms.get(*index).map(|t| t.post_scale() as f64)
+        }
 
         // Legacy `FinalTransform*` (no index) variants were removed in
         // Phase 9. Animation tracks saved against the legacy string
@@ -1411,6 +1491,11 @@ pub fn get_auto_fill_end_value(path: &ConfigPath, start_value: f64) -> f64 {
     match path {
         // Rotation parameters: add full rotation
         ConfigPath::TransformRotation { .. } |
+        ConfigPath::TransformPostAffineRotation { .. } |
+        ConfigPath::LinkedTransformRotation { .. } |
+        ConfigPath::LinkedTransformPostAffineRotation { .. } |
+        ConfigPath::FinalTransformRotation { .. } |
+        ConfigPath::FinalTransformPostAffineRotation { .. } |
         ConfigPath::Rotation |
         ConfigPath::CameraRotationX |
         ConfigPath::CameraRotationY => start_value + TAU,

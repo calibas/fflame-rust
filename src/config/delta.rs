@@ -108,6 +108,14 @@ pub enum ConfigPath {
     /// Computed from: sqrt(a² + b²)
     TransformScale { index: usize },
 
+    // High-level ops on the post-affine half of a normal-pool
+    // transform. Same decomposition as the pre-affine versions
+    // above, applied to post_a..post_f.
+    TransformPostAffineOriginX { index: usize },
+    TransformPostAffineOriginY { index: usize },
+    TransformPostAffineRotation { index: usize },
+    TransformPostAffineScale { index: usize },
+
     // ===== Linked Transform pool (require iteration reset) =====
     // Linked transforms run sequentially after a normal transform's
     // variations and feed forward into the next iteration. Pool members
@@ -122,6 +130,16 @@ pub enum ConfigPath {
         variation: String,
         param: String,
     },
+    // High-level pre-affine ops on a linked-pool transform.
+    LinkedTransformOriginX { index: usize },
+    LinkedTransformOriginY { index: usize },
+    LinkedTransformRotation { index: usize },
+    LinkedTransformScale { index: usize },
+    // High-level post-affine ops on a linked-pool transform.
+    LinkedTransformPostAffineOriginX { index: usize },
+    LinkedTransformPostAffineOriginY { index: usize },
+    LinkedTransformPostAffineRotation { index: usize },
+    LinkedTransformPostAffineScale { index: usize },
 
     // ===== Final Transform pool (require iteration reset) =====
     // Final transforms run sequentially after the Linked chain to
@@ -144,6 +162,16 @@ pub enum ConfigPath {
         variation: String,
         param: String,
     },
+    // High-level pre-affine ops on a final-pool transform.
+    FinalTransformOriginX { index: usize },
+    FinalTransformOriginY { index: usize },
+    FinalTransformRotation { index: usize },
+    FinalTransformScale { index: usize },
+    // High-level post-affine ops on a final-pool transform.
+    FinalTransformPostAffineOriginX { index: usize },
+    FinalTransformPostAffineOriginY { index: usize },
+    FinalTransformPostAffineRotation { index: usize },
+    FinalTransformPostAffineScale { index: usize },
 
     // ===== Flame-level (require iteration reset) =====
     RenderMode,
@@ -436,6 +464,18 @@ impl Display for ConfigPath {
             ConfigPath::TransformPostAffineEnabled { index } => {
                 write!(f, "Transform {} → Post-Affine Enabled", index + 1)
             }
+            ConfigPath::TransformPostAffineOriginX { index } => {
+                write!(f, "Transform {} → Post-Affine Origin X", index + 1)
+            }
+            ConfigPath::TransformPostAffineOriginY { index } => {
+                write!(f, "Transform {} → Post-Affine Origin Y", index + 1)
+            }
+            ConfigPath::TransformPostAffineRotation { index } => {
+                write!(f, "Transform {} → Post-Affine Rotation", index + 1)
+            }
+            ConfigPath::TransformPostAffineScale { index } => {
+                write!(f, "Transform {} → Post-Affine Scale", index + 1)
+            }
             ConfigPath::TransformPostAffine { index, param } => {
                 write!(f, "Transform {} → Post-Affine {:?}", index + 1, param)
             }
@@ -456,6 +496,30 @@ impl Display for ConfigPath {
             ConfigPath::LinkedTransformVariationParam { index, variation, param } => {
                 write!(f, "Linked Transform {} → {} → {}", index + 1, variation, param)
             }
+            ConfigPath::LinkedTransformOriginX { index } => {
+                write!(f, "Linked Transform {} → Origin X", index + 1)
+            }
+            ConfigPath::LinkedTransformOriginY { index } => {
+                write!(f, "Linked Transform {} → Origin Y", index + 1)
+            }
+            ConfigPath::LinkedTransformRotation { index } => {
+                write!(f, "Linked Transform {} → Rotation", index + 1)
+            }
+            ConfigPath::LinkedTransformScale { index } => {
+                write!(f, "Linked Transform {} → Scale", index + 1)
+            }
+            ConfigPath::LinkedTransformPostAffineOriginX { index } => {
+                write!(f, "Linked Transform {} → Post-Affine Origin X", index + 1)
+            }
+            ConfigPath::LinkedTransformPostAffineOriginY { index } => {
+                write!(f, "Linked Transform {} → Post-Affine Origin Y", index + 1)
+            }
+            ConfigPath::LinkedTransformPostAffineRotation { index } => {
+                write!(f, "Linked Transform {} → Post-Affine Rotation", index + 1)
+            }
+            ConfigPath::LinkedTransformPostAffineScale { index } => {
+                write!(f, "Linked Transform {} → Post-Affine Scale", index + 1)
+            }
 
             // Final Transform pool
             ConfigPath::FinalTransformAffine { index, param } => {
@@ -472,6 +536,30 @@ impl Display for ConfigPath {
             }
             ConfigPath::FinalTransformVariationParam { index, variation, param } => {
                 write!(f, "Final Transform {} → {} → {}", index + 1, variation, param)
+            }
+            ConfigPath::FinalTransformOriginX { index } => {
+                write!(f, "Final Transform {} → Origin X", index + 1)
+            }
+            ConfigPath::FinalTransformOriginY { index } => {
+                write!(f, "Final Transform {} → Origin Y", index + 1)
+            }
+            ConfigPath::FinalTransformRotation { index } => {
+                write!(f, "Final Transform {} → Rotation", index + 1)
+            }
+            ConfigPath::FinalTransformScale { index } => {
+                write!(f, "Final Transform {} → Scale", index + 1)
+            }
+            ConfigPath::FinalTransformPostAffineOriginX { index } => {
+                write!(f, "Final Transform {} → Post-Affine Origin X", index + 1)
+            }
+            ConfigPath::FinalTransformPostAffineOriginY { index } => {
+                write!(f, "Final Transform {} → Post-Affine Origin Y", index + 1)
+            }
+            ConfigPath::FinalTransformPostAffineRotation { index } => {
+                write!(f, "Final Transform {} → Post-Affine Rotation", index + 1)
+            }
+            ConfigPath::FinalTransformPostAffineScale { index } => {
+                write!(f, "Final Transform {} → Post-Affine Scale", index + 1)
             }
 
             // Flame
@@ -696,6 +784,25 @@ impl ConfigPath {
                 "history.param.transform_post_affine",
                 vec![("index", (index + 1).to_string()), ("param", format!("{:?}", param))],
             ),
+            // Reuse the pre-affine high-level i18n keys for the
+            // post-affine ones — the UI distinguishes by the
+            // "Post-Affine" label that surrounds the value.
+            ConfigPath::TransformPostAffineOriginX { index } => I18nKey::with_params(
+                "history.param.transform_origin_x",
+                vec![("index", (index + 1).to_string())],
+            ),
+            ConfigPath::TransformPostAffineOriginY { index } => I18nKey::with_params(
+                "history.param.transform_origin_y",
+                vec![("index", (index + 1).to_string())],
+            ),
+            ConfigPath::TransformPostAffineRotation { index } => I18nKey::with_params(
+                "history.param.transform_rotation",
+                vec![("index", (index + 1).to_string())],
+            ),
+            ConfigPath::TransformPostAffineScale { index } => I18nKey::with_params(
+                "history.param.transform_scale",
+                vec![("index", (index + 1).to_string())],
+            ),
 
             // Linked Transform pool
             ConfigPath::LinkedTransformAffine { index, param } => I18nKey::with_params(
@@ -721,6 +828,26 @@ impl ConfigPath {
                     ("variation", variation.clone()),
                     ("param", param.clone()),
                 ],
+            ),
+            ConfigPath::LinkedTransformOriginX { index }
+            | ConfigPath::LinkedTransformPostAffineOriginX { index } => I18nKey::with_params(
+                "history.param.transform_origin_x",
+                vec![("index", (index + 1).to_string())],
+            ),
+            ConfigPath::LinkedTransformOriginY { index }
+            | ConfigPath::LinkedTransformPostAffineOriginY { index } => I18nKey::with_params(
+                "history.param.transform_origin_y",
+                vec![("index", (index + 1).to_string())],
+            ),
+            ConfigPath::LinkedTransformRotation { index }
+            | ConfigPath::LinkedTransformPostAffineRotation { index } => I18nKey::with_params(
+                "history.param.transform_rotation",
+                vec![("index", (index + 1).to_string())],
+            ),
+            ConfigPath::LinkedTransformScale { index }
+            | ConfigPath::LinkedTransformPostAffineScale { index } => I18nKey::with_params(
+                "history.param.transform_scale",
+                vec![("index", (index + 1).to_string())],
             ),
 
             // Final Transform pool — reuses transform_* i18n keys; the
@@ -749,6 +876,26 @@ impl ConfigPath {
                     ("variation", variation.clone()),
                     ("param", param.clone()),
                 ],
+            ),
+            ConfigPath::FinalTransformOriginX { index }
+            | ConfigPath::FinalTransformPostAffineOriginX { index } => I18nKey::with_params(
+                "history.param.transform_origin_x",
+                vec![("index", (index + 1).to_string())],
+            ),
+            ConfigPath::FinalTransformOriginY { index }
+            | ConfigPath::FinalTransformPostAffineOriginY { index } => I18nKey::with_params(
+                "history.param.transform_origin_y",
+                vec![("index", (index + 1).to_string())],
+            ),
+            ConfigPath::FinalTransformRotation { index }
+            | ConfigPath::FinalTransformPostAffineRotation { index } => I18nKey::with_params(
+                "history.param.transform_rotation",
+                vec![("index", (index + 1).to_string())],
+            ),
+            ConfigPath::FinalTransformScale { index }
+            | ConfigPath::FinalTransformPostAffineScale { index } => I18nKey::with_params(
+                "history.param.transform_scale",
+                vec![("index", (index + 1).to_string())],
             ),
 
             // Flame
@@ -1616,16 +1763,36 @@ impl ConfigPath {
             | ConfigPath::TransformOriginY { .. }
             | ConfigPath::TransformRotation { .. }
             | ConfigPath::TransformScale { .. }
+            | ConfigPath::TransformPostAffineOriginX { .. }
+            | ConfigPath::TransformPostAffineOriginY { .. }
+            | ConfigPath::TransformPostAffineRotation { .. }
+            | ConfigPath::TransformPostAffineScale { .. }
             | ConfigPath::LinkedTransformAffine { .. }
             | ConfigPath::LinkedTransformPostAffineEnabled { .. }
             | ConfigPath::LinkedTransformPostAffine { .. }
             | ConfigPath::LinkedTransformVariation { .. }
             | ConfigPath::LinkedTransformVariationParam { .. }
+            | ConfigPath::LinkedTransformOriginX { .. }
+            | ConfigPath::LinkedTransformOriginY { .. }
+            | ConfigPath::LinkedTransformRotation { .. }
+            | ConfigPath::LinkedTransformScale { .. }
+            | ConfigPath::LinkedTransformPostAffineOriginX { .. }
+            | ConfigPath::LinkedTransformPostAffineOriginY { .. }
+            | ConfigPath::LinkedTransformPostAffineRotation { .. }
+            | ConfigPath::LinkedTransformPostAffineScale { .. }
             | ConfigPath::FinalTransformAffine { .. }
             | ConfigPath::FinalTransformPostAffineEnabled { .. }
             | ConfigPath::FinalTransformPostAffine { .. }
             | ConfigPath::FinalTransformVariation { .. }
             | ConfigPath::FinalTransformVariationParam { .. }
+            | ConfigPath::FinalTransformOriginX { .. }
+            | ConfigPath::FinalTransformOriginY { .. }
+            | ConfigPath::FinalTransformRotation { .. }
+            | ConfigPath::FinalTransformScale { .. }
+            | ConfigPath::FinalTransformPostAffineOriginX { .. }
+            | ConfigPath::FinalTransformPostAffineOriginY { .. }
+            | ConfigPath::FinalTransformPostAffineRotation { .. }
+            | ConfigPath::FinalTransformPostAffineScale { .. }
             | ConfigPath::RenderMode
             | ConfigPath::PerspectiveStrength
             | ConfigPath::Xaos { .. }
@@ -1742,6 +1909,10 @@ impl ConfigPath {
             ConfigPath::TransformPostAffine { index, param } => {
                 format!("Transform.{}.PostAffine.{}", index, param.to_char())
             }
+            ConfigPath::TransformPostAffineOriginX { index } => format!("Transform.{}.PostAffineOriginX", index),
+            ConfigPath::TransformPostAffineOriginY { index } => format!("Transform.{}.PostAffineOriginY", index),
+            ConfigPath::TransformPostAffineRotation { index } => format!("Transform.{}.PostAffineRotation", index),
+            ConfigPath::TransformPostAffineScale { index } => format!("Transform.{}.PostAffineScale", index),
 
             // Linked Transform pool
             ConfigPath::LinkedTransformAffine { index, param } => {
@@ -1759,6 +1930,14 @@ impl ConfigPath {
             ConfigPath::LinkedTransformVariationParam { index, variation, param } => {
                 format!("LinkedTransform.{}.VariationParam.{}.{}", index, variation, param)
             }
+            ConfigPath::LinkedTransformOriginX { index } => format!("LinkedTransform.{}.OriginX", index),
+            ConfigPath::LinkedTransformOriginY { index } => format!("LinkedTransform.{}.OriginY", index),
+            ConfigPath::LinkedTransformRotation { index } => format!("LinkedTransform.{}.Rotation", index),
+            ConfigPath::LinkedTransformScale { index } => format!("LinkedTransform.{}.Scale", index),
+            ConfigPath::LinkedTransformPostAffineOriginX { index } => format!("LinkedTransform.{}.PostAffineOriginX", index),
+            ConfigPath::LinkedTransformPostAffineOriginY { index } => format!("LinkedTransform.{}.PostAffineOriginY", index),
+            ConfigPath::LinkedTransformPostAffineRotation { index } => format!("LinkedTransform.{}.PostAffineRotation", index),
+            ConfigPath::LinkedTransformPostAffineScale { index } => format!("LinkedTransform.{}.PostAffineScale", index),
 
             // Final Transform pool. Emits the new `FinalTransform.{index}.{field}`
             // format. The parser in `from_string_key` also accepts the
@@ -1780,6 +1959,14 @@ impl ConfigPath {
             ConfigPath::FinalTransformVariationParam { index, variation, param } => {
                 format!("FinalTransform.{}.VariationParam.{}.{}", index, variation, param)
             }
+            ConfigPath::FinalTransformOriginX { index } => format!("FinalTransform.{}.OriginX", index),
+            ConfigPath::FinalTransformOriginY { index } => format!("FinalTransform.{}.OriginY", index),
+            ConfigPath::FinalTransformRotation { index } => format!("FinalTransform.{}.Rotation", index),
+            ConfigPath::FinalTransformScale { index } => format!("FinalTransform.{}.Scale", index),
+            ConfigPath::FinalTransformPostAffineOriginX { index } => format!("FinalTransform.{}.PostAffineOriginX", index),
+            ConfigPath::FinalTransformPostAffineOriginY { index } => format!("FinalTransform.{}.PostAffineOriginY", index),
+            ConfigPath::FinalTransformPostAffineRotation { index } => format!("FinalTransform.{}.PostAffineRotation", index),
+            ConfigPath::FinalTransformPostAffineScale { index } => format!("FinalTransform.{}.PostAffineScale", index),
 
             // Flame
             ConfigPath::RenderMode => "RenderMode".to_string(),
@@ -1923,6 +2110,10 @@ impl ConfigPath {
                 "OriginY" => return Some(ConfigPath::TransformOriginY { index }),
                 "Rotation" => return Some(ConfigPath::TransformRotation { index }),
                 "Scale" => return Some(ConfigPath::TransformScale { index }),
+                "PostAffineOriginX" => return Some(ConfigPath::TransformPostAffineOriginX { index }),
+                "PostAffineOriginY" => return Some(ConfigPath::TransformPostAffineOriginY { index }),
+                "PostAffineRotation" => return Some(ConfigPath::TransformPostAffineRotation { index }),
+                "PostAffineScale" => return Some(ConfigPath::TransformPostAffineScale { index }),
                 _ => {}
             }
         }
@@ -1957,6 +2148,14 @@ impl ConfigPath {
                         param: parts[4].to_string(),
                     });
                 }
+                "OriginX" => return Some(ConfigPath::LinkedTransformOriginX { index }),
+                "OriginY" => return Some(ConfigPath::LinkedTransformOriginY { index }),
+                "Rotation" => return Some(ConfigPath::LinkedTransformRotation { index }),
+                "Scale" => return Some(ConfigPath::LinkedTransformScale { index }),
+                "PostAffineOriginX" => return Some(ConfigPath::LinkedTransformPostAffineOriginX { index }),
+                "PostAffineOriginY" => return Some(ConfigPath::LinkedTransformPostAffineOriginY { index }),
+                "PostAffineRotation" => return Some(ConfigPath::LinkedTransformPostAffineRotation { index }),
+                "PostAffineScale" => return Some(ConfigPath::LinkedTransformPostAffineScale { index }),
                 _ => {}
             }
         }
@@ -2008,6 +2207,14 @@ impl ConfigPath {
                             param: parts[4].to_string(),
                         });
                     }
+                    "OriginX" => return Some(ConfigPath::FinalTransformOriginX { index }),
+                    "OriginY" => return Some(ConfigPath::FinalTransformOriginY { index }),
+                    "Rotation" => return Some(ConfigPath::FinalTransformRotation { index }),
+                    "Scale" => return Some(ConfigPath::FinalTransformScale { index }),
+                    "PostAffineOriginX" => return Some(ConfigPath::FinalTransformPostAffineOriginX { index }),
+                    "PostAffineOriginY" => return Some(ConfigPath::FinalTransformPostAffineOriginY { index }),
+                    "PostAffineRotation" => return Some(ConfigPath::FinalTransformPostAffineRotation { index }),
+                    "PostAffineScale" => return Some(ConfigPath::FinalTransformPostAffineScale { index }),
                     _ => {}
                 }
             }
@@ -2183,14 +2390,34 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::TransformOriginY { .. }
         | ConfigPath::TransformRotation { .. }
         | ConfigPath::TransformScale { .. }
+        | ConfigPath::TransformPostAffineOriginX { .. }
+        | ConfigPath::TransformPostAffineOriginY { .. }
+        | ConfigPath::TransformPostAffineRotation { .. }
+        | ConfigPath::TransformPostAffineScale { .. }
         | ConfigPath::LinkedTransformAffine { .. }
         | ConfigPath::LinkedTransformPostAffine { .. }
         | ConfigPath::LinkedTransformVariation { .. }
         | ConfigPath::LinkedTransformVariationParam { .. }
+        | ConfigPath::LinkedTransformOriginX { .. }
+        | ConfigPath::LinkedTransformOriginY { .. }
+        | ConfigPath::LinkedTransformRotation { .. }
+        | ConfigPath::LinkedTransformScale { .. }
+        | ConfigPath::LinkedTransformPostAffineOriginX { .. }
+        | ConfigPath::LinkedTransformPostAffineOriginY { .. }
+        | ConfigPath::LinkedTransformPostAffineRotation { .. }
+        | ConfigPath::LinkedTransformPostAffineScale { .. }
         | ConfigPath::FinalTransformAffine { .. }
         | ConfigPath::FinalTransformPostAffine { .. }
         | ConfigPath::FinalTransformVariation { .. }
         | ConfigPath::FinalTransformVariationParam { .. }
+        | ConfigPath::FinalTransformOriginX { .. }
+        | ConfigPath::FinalTransformOriginY { .. }
+        | ConfigPath::FinalTransformRotation { .. }
+        | ConfigPath::FinalTransformScale { .. }
+        | ConfigPath::FinalTransformPostAffineOriginX { .. }
+        | ConfigPath::FinalTransformPostAffineOriginY { .. }
+        | ConfigPath::FinalTransformPostAffineRotation { .. }
+        | ConfigPath::FinalTransformPostAffineScale { .. }
         | ConfigPath::Xaos { .. }
         | ConfigPath::SystemTargetFps
         | ConfigPath::LevelsLow
