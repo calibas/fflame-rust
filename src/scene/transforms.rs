@@ -170,6 +170,23 @@ pub struct PackedStateEntry {
 /// legitimately need more.
 pub const MAX_STATE_SLOTS_PER_FLAME: u32 = 1024;
 
+/// Synthetic `xform_id` base for subflame xforms in the unified
+/// xform_id space.
+///
+/// Subflame xforms occupy `[SUBFLAME_XFORM_ID_BASE,
+/// SUBFLAME_XFORM_ID_BASE + subflame_total)` in every per-xform
+/// buffer (variation_params, per-thread state, eventually transforms).
+/// The subflame iteration shader computes
+/// `xform_id = xform_id_base + normals_offset + picked` to land on
+/// the right slot — `xform_id_base` on `SubflameMeta` matches this
+/// constant.
+///
+/// MUST match `crate::gpu::buffers::MAX_TRANSFORMS`. Hardcoded here
+/// instead of imported to keep `scene` from depending on `gpu`. If
+/// MAX_TRANSFORMS changes, update this too (and the matching
+/// `xform_id_base` initializer in `update_subflames`).
+pub const SUBFLAME_XFORM_ID_BASE: u32 = 128;
+
 /// Walk a flame's active variations and assign each `(xform_idx,
 /// variation_local_id)` pair with `state_count > 0` a contiguous offset
 /// in the per-thread state array.
@@ -232,6 +249,26 @@ pub fn compute_state_layout(
     for xform in flame.final_transforms.iter() {
         emit_xform(next_idx, xform, &mut cursor);
         next_idx += 1;
+    }
+
+    // Subflame xforms land in the unified xform_id range
+    // `[SUBFLAME_XFORM_ID_BASE, SUBFLAME_XFORM_ID_BASE + subflame_total)`
+    // matching the variation_params buffer layout and the synthetic
+    // xform_id computed by `subflame_iterate`. Per-subflame order
+    // is normals first, then finals — same as `update_subflames`
+    // packs the subflame_transforms_buffer. Without this, stateful
+    // variations in subflames (klein_group, etc.) read OOB on
+    // `thread_state` and lose their state every iteration.
+    let mut sub_offset: u32 = 0;
+    for sf in flame.subflames.iter() {
+        for xform in sf.transforms.iter() {
+            emit_xform(SUBFLAME_XFORM_ID_BASE + sub_offset, xform, &mut cursor);
+            sub_offset += 1;
+        }
+        for xform in sf.final_transforms.iter() {
+            emit_xform(SUBFLAME_XFORM_ID_BASE + sub_offset, xform, &mut cursor);
+            sub_offset += 1;
+        }
     }
 
     if cursor > MAX_STATE_SLOTS_PER_FLAME {
