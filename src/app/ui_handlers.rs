@@ -1013,11 +1013,16 @@ impl App {
                         }
                         let generators = animation.generators.clone();
                         let duration = animation.duration;
-                        // Bind tracks against the (possibly just-loaded
-                        // embedded base_config) so structural changes
-                        // mid-session keep them pointing at the right items.
-                        animation.bind_to_config(self.config_manager.active_config());
                         self.animation_controller.load(animation);
+                        // Bind AFTER controller.load so we're binding
+                        // the new animation that's now in the
+                        // controller. The embedded config (if any)
+                        // was loaded above via load_config_with_undo,
+                        // so active_config carries the new IDs the
+                        // tracks will resolve against.
+                        if let Some(anim) = self.animation_controller.animation.as_mut() {
+                            anim.bind_to_config(self.config_manager.active_config());
+                        }
                         self.egui_layer.signal_panel_state.restore_generators(
                             generators, &mut self.signal_manager, duration,
                         );
@@ -1844,8 +1849,12 @@ impl App {
                 // Load the animation
                 let generators = animation.generators.clone();
                 let duration = animation.duration;
-                animation.bind_to_config(self.config_manager.active_config());
                 self.animation_controller.load(animation);
+                // Bind AFTER controller.load — see file-load path above
+                // for the reasoning.
+                if let Some(anim) = self.animation_controller.animation.as_mut() {
+                    anim.bind_to_config(self.config_manager.active_config());
+                }
                 self.egui_layer.signal_panel_state.restore_generators(
                     generators, &mut self.signal_manager, duration,
                 );

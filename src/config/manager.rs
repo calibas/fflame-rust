@@ -2541,7 +2541,7 @@ impl ConfigManager {
     /// Load a complete config (e.g., preset, imported file)
     /// Creates single bidirectional snapshot for efficient undo/redo
     /// Use this for atomic operations like loading presets
-    pub fn load_config(&mut self, new_config: FractalConfig, description: String) -> Result<(), ConfigError> {
+    pub fn load_config(&mut self, mut new_config: FractalConfig, description: String) -> Result<(), ConfigError> {
         // Clear any preview state
         self.preview = None;
 
@@ -2549,6 +2549,16 @@ impl ConfigManager {
         // list, so any prior Subflame{i} target may now be out of
         // bounds. Land on Main.
         self.editing_target = EditingTarget::Main;
+
+        // Assign session-local IDs to any item that came in with the
+        // zero sentinel. Caller paths that don't route through
+        // `FractalConfig::from_json` (animation embedded base_config
+        // via Animation's derive Deserialize, API DTO conversion,
+        // preset clones from a different source) bring in id=0
+        // everywhere; without this, fresh-loaded transforms would
+        // collide in id-space and animation bindings would resolve
+        // to the wrong item.
+        new_config.fixup_ids();
 
         // Create single bidirectional snapshot
         let change = ConfigChange::full_config_snapshot(
@@ -2569,6 +2579,12 @@ impl ConfigManager {
         action.update_palette = true;
         action.update_tone_curve = true;
         action.reset_accumulation = true;
+        // Lists may have completely changed shape; flag for animation
+        // rebind. (The app-level animation load path also calls
+        // `bind_to_config` directly after this, so this is belt-and-
+        // suspenders for cases where load_config is called without
+        // a follow-up bind.)
+        action.structural_changed = true;
         self.pending_actions.merge(&action);
 
         Ok(())
@@ -2675,6 +2691,10 @@ impl ConfigManager {
                 }
                 crate::config::SnapshotData::FullConfig { after, .. } => {
                     self.current = (**after).clone();
+                    // Snapshot's after may carry id=0 transforms if it
+                    // came from a derive-Deserialize path; allocate
+                    // fresh IDs so animation bindings can resolve.
+                    self.current.fixup_ids();
                 }
                 crate::config::SnapshotData::AddColorEffect { index, effect } => {
                     if *index <= self.current.color_effects.len() {

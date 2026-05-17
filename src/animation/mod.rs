@@ -562,6 +562,21 @@ impl Track {
         self
     }
 
+    /// Resolve `target` + `flame_target` against the given config and
+    /// store the resulting IDs in `bound`. Call this any time a track
+    /// is created or has its target/flame_target field changed — the
+    /// editor uses it on add/edit so newly-created tracks start out
+    /// bound just like load-time ones do.
+    ///
+    /// Without this, a track created interactively has an empty
+    /// `bound`, which means `is_track_broken` can't tell the
+    /// difference between "non-list path" and "should be tracking
+    /// but isn't bound yet" — and a later delete of the target
+    /// transform would silently fail to mark the track broken.
+    pub fn bind(&mut self, config: &FractalConfig) {
+        self.bound = resolve_track_binding(config, self.flame_target, &self.target);
+    }
+
     /// Create keyframe track with single keyframe (constant value)
     pub fn constant(target: String, value: serde_json::Value) -> Self {
         Self::new(
