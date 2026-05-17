@@ -72,7 +72,10 @@ fn subflame_iterate(
     // change during this dispatch). Hoist it out.
     var total_weight: f32 = 0.0;
     for (var i: u32 = 0u; i < sf_meta.normals_count; i = i + 1u) {
-        total_weight = total_weight + subflame_transforms[sf_meta.normals_offset + i].weight;
+        // Read from the unified `transforms[]` buffer at this
+        // subflame xform's xform_id. Pre-Phase-5 this read went to a
+        // separate `subflame_transforms[]` buffer; that path is gone.
+        total_weight = total_weight + transforms[sf_meta.xform_id_base + sf_meta.normals_offset + i].weight;
     }
     let total_weight_safe = max(total_weight, 1e-6);
 
@@ -85,15 +88,18 @@ fn subflame_iterate(
         var cumulative: f32 = 0.0;
         picked = sf_meta.normals_count - 1u;
         for (var i: u32 = 0u; i < sf_meta.normals_count; i = i + 1u) {
-            cumulative = cumulative + subflame_transforms[sf_meta.normals_offset + i].weight;
+            cumulative = cumulative + transforms[sf_meta.xform_id_base + sf_meta.normals_offset + i].weight;
             if (r < cumulative) {
                 picked = i;
                 break;
             }
         }
 
-        let xform = subflame_transforms[sf_meta.normals_offset + picked];
-        let sub_xform_id = 128u + sf_meta.normals_offset + picked;
+        // xform_id_base = MAX_TRANSFORMS, so this lands in the
+        // subflame portion of the unified transforms / variation_params
+        // buffers.
+        let sub_xform_id = sf_meta.xform_id_base + sf_meta.normals_offset + picked;
+        let xform = transforms[sub_xform_id];
 
         // Color blend — Apophysis-standard color_speed lerp.
         let symmetry = xform.color_speed;
@@ -109,8 +115,8 @@ fn subflame_iterate(
 
         // Apply subflame's final transforms (if any).
         for (var i: u32 = 0u; i < sf_meta.finals_count; i = i + 1u) {
-            let f_xform = subflame_transforms[sf_meta.finals_offset + i];
-            let f_xform_id = 128u + sf_meta.finals_offset + i;
+            let f_xform_id = sf_meta.xform_id_base + sf_meta.finals_offset + i;
+            let f_xform = transforms[f_xform_id];
             let f_affine_p = apply_affine(f_xform, current);
             current = apply_subflame_variations(f_xform, f_xform_id, f_affine_p, rng, &vc);
             if (f_xform.post_enabled > 0.5) {
@@ -154,7 +160,10 @@ fn subflame_iterate(
 
     var total_weight: f32 = 0.0;
     for (var i: u32 = 0u; i < sf_meta.normals_count; i = i + 1u) {
-        total_weight = total_weight + subflame_transforms[sf_meta.normals_offset + i].weight;
+        // Read from the unified `transforms[]` buffer at this
+        // subflame xform's xform_id. Pre-Phase-5 this read went to a
+        // separate `subflame_transforms[]` buffer; that path is gone.
+        total_weight = total_weight + transforms[sf_meta.xform_id_base + sf_meta.normals_offset + i].weight;
     }
     let total_weight_safe = max(total_weight, 1e-6);
 
@@ -166,15 +175,16 @@ fn subflame_iterate(
         var cumulative: f32 = 0.0;
         picked = sf_meta.normals_count - 1u;
         for (var i: u32 = 0u; i < sf_meta.normals_count; i = i + 1u) {
-            cumulative = cumulative + subflame_transforms[sf_meta.normals_offset + i].weight;
+            cumulative = cumulative + transforms[sf_meta.xform_id_base + sf_meta.normals_offset + i].weight;
             if (r < cumulative) {
                 picked = i;
                 break;
             }
         }
 
-        let xform = subflame_transforms[sf_meta.normals_offset + picked];
-        let sub_xform_id = 128u + sf_meta.normals_offset + picked;
+        // See 3D branch for xform_id_base rationale.
+        let sub_xform_id = sf_meta.xform_id_base + sf_meta.normals_offset + picked;
+        let xform = transforms[sub_xform_id];
 
         let symmetry = xform.color_speed;
         color = color * (1.0 + symmetry) * 0.5 + xform.color * (1.0 - symmetry) * 0.5;
@@ -187,8 +197,8 @@ fn subflame_iterate(
         }
 
         for (var i: u32 = 0u; i < sf_meta.finals_count; i = i + 1u) {
-            let f_xform = subflame_transforms[sf_meta.finals_offset + i];
-            let f_xform_id = 128u + sf_meta.finals_offset + i;
+            let f_xform_id = sf_meta.xform_id_base + sf_meta.finals_offset + i;
+            let f_xform = transforms[f_xform_id];
             let f_affine_p = apply_affine(f_xform, current);
             current = apply_subflame_variations(f_xform, f_xform_id, f_affine_p, rng, &vc);
             if (f_xform.post_enabled > 0.5) {

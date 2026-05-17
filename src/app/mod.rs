@@ -479,6 +479,14 @@ pub struct App {
     pub(super) url_load_in_progress: bool,
     pub(super) url_load_started: Option<web_time::Instant>,
 
+    /// Subflames panel "Load from file" target: index of the subflame
+    /// to replace once the picked `.fflame` finishes loading. Captured
+    /// at button-click time so the async WASM file picker can pair the
+    /// returned JSON with the right slot. Always None on desktop
+    /// (the dialog is synchronous, so the index never needs to survive
+    /// across frames).
+    pub(super) pending_subflame_load_index: Option<usize>,
+
     // Variation fetching: when loading a flame that references unknown
     // variations, fetch them from the API in parallel and pause rendering
     // until done (or timeout).
@@ -617,6 +625,7 @@ impl App {
             url_load_result: std::sync::Arc::new(std::sync::Mutex::new(None)),
             url_load_in_progress: false,
             url_load_started: None,
+            pending_subflame_load_index: None,
 
             variation_fetch_results: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             variation_fetch_in_progress: false,

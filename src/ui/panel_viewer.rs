@@ -207,6 +207,9 @@ pub struct PanelContext<'a> {
     /// isolation; otherwise the parent flame is rendered (default).
     /// App reads this in `gpu_updates` to pick the render source.
     pub view_subflame_in_isolation: &'a mut bool,
+    /// Subflames panel: user clicked the "Load from file" button on a
+    /// subflame row. Carries the target index; consumed by App.
+    pub load_subflame_into: &'a mut Option<usize>,
     pub png_export_with_background: &'a mut bool,
     pub png_export_transparent: &'a mut bool,
     pub export_width: &'a mut u32,
@@ -486,6 +489,7 @@ impl<'a> PanelViewer<'a> {
                     ui,
                     self.context.config_manager,
                     self.context.view_subflame_in_isolation,
+                    self.context.load_subflame_into,
                 );
             }
         }

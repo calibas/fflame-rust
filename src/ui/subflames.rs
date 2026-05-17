@@ -26,6 +26,7 @@ pub fn render_subflames_content(
     ui: &mut egui::Ui,
     config_manager: &mut ConfigManager,
     view_subflame_in_isolation: &mut bool,
+    load_subflame_into: &mut Option<usize>,
 ) {
     let active = config_manager.editing_target();
     let logical_count = config_manager.logical_subflame_count();
@@ -83,12 +84,25 @@ pub fn render_subflames_content(
                         ui.with_layout(
                             egui::Layout::right_to_left(egui::Align::Center),
                             |ui| {
+                                // Buttons are laid out right-to-left, so
+                                // the trash comes first and the load
+                                // button second — they read left-to-right
+                                // on screen as [load] [delete].
                                 if ui
                                     .small_button("🗑")
                                     .on_hover_text("Delete this subflame")
                                     .clicked()
                                 {
                                     delete_request = Some(i);
+                                }
+                                if ui
+                                    .small_button("📁")
+                                    .on_hover_text(
+                                        "Replace this subflame's flame with one loaded from a .fflame file",
+                                    )
+                                    .clicked()
+                                {
+                                    *load_subflame_into = Some(i);
                                 }
                                 ui.with_layout(
                                     egui::Layout::left_to_right(egui::Align::Center),
