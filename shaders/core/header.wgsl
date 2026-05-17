@@ -190,8 +190,13 @@ struct SubflameMeta {
     finals_offset: u32,
     finals_count: u32,
     render_mode: u32,
+    // Base added to (normals_offset/finals_offset + picked) to form the
+    // synthetic xform_id the variation system sees. v1: always 128.
+    // v2 will set this per-subflame to the unified-array start position
+    // so per-xform buffers (variation_params, transforms, thread_state)
+    // resolve real slots for subflame xforms.
+    xform_id_base: u32,
     _pad0: u32,
     _pad1: u32,
-    _pad2: u32,
 }
 @group(0) @binding(12) var<storage, read> subflame_metadata: array<SubflameMeta>;
