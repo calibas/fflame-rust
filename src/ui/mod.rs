@@ -1228,7 +1228,6 @@ impl EguiLayer {
                 ctx,
                 animation_controller,
                 &mut self.track_editor_state,
-                &config_manager.active_config().flame,
                 config_manager.active_config(),
                 animation_controller.current_time,
                 signal_names,

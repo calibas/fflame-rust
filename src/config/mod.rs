@@ -22,5 +22,5 @@ pub use delta::{
     json_to_config_value,
 };
 pub use fractal_config::{FractalConfig, CURRENT_CONFIG_VERSION};
-pub use manager::{ConfigError, ConfigManager, UpdateAction};
+pub use manager::{ConfigError, ConfigManager, EditingTarget, UpdateAction};
 pub use slider::{ConfigSlider, ConfigSliderResult, ConfigSliderUi, LazyUndoUi};

@@ -1077,11 +1077,17 @@ impl App {
             // Evaluate current frame and apply values
             let frame_values = self.animation_controller.evaluate_frame(Some(&self.signal_manager));
 
-            for (path_str, json_value) in frame_values {
+            for (flame_target, path_str, json_value) in frame_values {
                 if let Some(path) = crate::config::ConfigPath::from_string_key(&path_str) {
                     if let Some(config_value) = crate::config::json_to_config_value(&json_value, &path) {
-                        if let Err(e) = self.config_manager.update_param_silent(path, config_value) {
-                            log::warn!("Animation scrub: failed to update {}: {}", path_str, e);
+                        if let Err(e) = self
+                            .config_manager
+                            .update_param_silent_on(flame_target, path, config_value)
+                        {
+                            log::warn!(
+                                "Animation scrub: failed to update {:?}/{}: {}",
+                                flame_target, path_str, e
+                            );
                         }
                     }
                 }
