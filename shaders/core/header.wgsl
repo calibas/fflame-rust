@@ -173,16 +173,13 @@ struct SampleCounter {
 // xform_id (0..num_transforms). See AttachmentList struct above.
 @group(0) @binding(10) var<storage, read> attachments: array<AttachmentList>;
 
-// Subflame transform pool — concatenated `Transform` array spanning
-// every subflame's normals + finals back-to-back. Indexed via
-// `subflame_metadata[subflame_id]` for the right slice. Empty (zero-
-// initialized) when the flame has no subflames; the subflame_wf
-// variation is the only consumer.
-@group(0) @binding(11) var<storage, read> subflame_transforms: array<Transform>;
-
 // Per-subflame metadata: where each subflame's normals + finals live
-// inside `subflame_transforms`, plus a few flags. Indexed by
-// `subflame_id` (the variation parameter). See `SubflameMeta` in
+// inside the *unified* `transforms[]` buffer. Indexed by
+// `subflame_id` (the variation parameter). Pre-v2 there was a
+// separate `subflame_transforms` array at @binding(11); that's gone
+// — subflame xforms now live in the parent's `transforms` buffer at
+// `[xform_id_base + normals_offset, xform_id_base + normals_offset +
+// normals_count)` (and similarly for finals). See `SubflameMeta` in
 // `src/gpu/buffers.rs` for the matching Rust struct.
 struct SubflameMeta {
     normals_offset: u32,

@@ -148,19 +148,12 @@ impl FlamePipelines {
                     },
                     count: None,
                 },
-                // Subflame transform pool (subflame_wf nested IFS).
-                // Concatenated GpuTransform array spanning all subflames'
-                // normals + finals; indexed via subflame_metadata.
-                BindGroupLayoutEntry {
-                    binding: 11,
-                    visibility: ShaderStages::COMPUTE,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
+                // (binding 11 was the legacy subflame_transforms buffer
+                // — removed in v2 of the subflame variation work.
+                // Subflame xforms now share the parent's `transforms`
+                // buffer at @binding(0). Slot 11 is intentionally left
+                // unbound to preserve binding numbering with existing
+                // shaders.)
                 // Subflame metadata: array<SubflameMeta> with per-subflame
                 // (normals_offset/count, finals_offset/count, render_mode).
                 // Indexed by `subflame_id` (variation param). Storage rather
@@ -537,11 +530,7 @@ impl FlamePipelines {
                     binding: 10,
                     resource: buffers.attachments_buffer.as_entire_binding(),
                 },
-                // Subflame transform pool (subflame_wf nested IFS).
-                BindGroupEntry {
-                    binding: 11,
-                    resource: buffers.subflame_transforms_buffer.as_entire_binding(),
-                },
+                // (binding 11 dropped — see layout comment.)
                 // Subflame metadata uniform.
                 BindGroupEntry {
                     binding: 12,
