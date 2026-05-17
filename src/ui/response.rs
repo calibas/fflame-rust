@@ -95,6 +95,12 @@ pub struct UiResponse {
     // Animation export request
     pub animation_export_requested: Option<super::animation_panel::AnimationExportSettings>,
 
+    // Subflames panel: user clicked the "Load from file" button on a
+    // subflame row, requesting we replace that subflame's flame data
+    // with one loaded from a `.fflame` file. Index identifies the
+    // target slot in `flame.subflames`.
+    pub load_subflame_into: Option<usize>,
+
     // Animation timeline was scrubbed (slider dragged or frame stepped)
     pub animation_seek_changed: bool,
 
@@ -210,6 +216,7 @@ impl Default for UiResponse {
             selected_preset_config: None,
             file_browser_open_requested: false,
             animation_export_requested: None,
+            load_subflame_into: None,
             animation_seek_changed: false,
             animation_seek_drag_stopped: false,
             path_filters_changed: None,

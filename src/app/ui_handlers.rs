@@ -27,6 +27,7 @@ impl App {
         self.handle_generated_flame(ui_response);
         self.handle_palette_operations(ui_response);
         self.handle_file_operations(ui_response);
+        self.handle_subflame_load(ui_response);
         self.handle_undo_redo(ui_response);
         self.handle_panel_requests(ui_response);
         self.handle_preset_selection(ui_response);
@@ -629,6 +630,81 @@ impl App {
                         log::info!("Palette loaded to clipboard - paste to import");
                     }
                 });
+            }
+        }
+    }
+
+    /// Handle "Load from file" requests from the Subflames panel.
+    /// Replaces the targeted subflame's flame data with one loaded from
+    /// a `.fflame` file. Only the flame is taken — view, tone, color,
+    /// effects, and any nested subflames in the loaded file are dropped.
+    fn handle_subflame_load(&mut self, ui_response: &UiResponse) {
+        // Trigger side: button was clicked this frame.
+        if let Some(index) = ui_response.load_subflame_into {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("Fractal Flame Config", &["fflame"])
+                    .pick_file()
+                {
+                    match FractalConfig::load_from_file(&path) {
+                        Ok(config) => {
+                            let mut flame = config.flame;
+                            // Strip nested subflames — the project keeps
+                            // nesting out of scope, and the user asked
+                            // for "only the flame data."
+                            flame.subflames.clear();
+                            if let Err(e) = self.config_manager.replace_subflame(index, flame) {
+                                log::error!(
+                                    "Failed to replace subflame {}: {}", index, e
+                                );
+                            } else {
+                                log::info!(
+                                    "Replaced subflame {} with flame from {}",
+                                    index, path.display(),
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            log::error!("Failed to load .fflame file: {}", e);
+                        }
+                    }
+                }
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                // Stash the target index for async pickup, then trigger
+                // the browser file picker. Pickup runs below each frame.
+                self.pending_subflame_load_index = Some(index);
+                let ctx = self.egui_layer.ctx.clone();
+                super::trigger_browser_file_picker(
+                    ".fflame", ctx, "pending_subflame_load_raw",
+                );
+            }
+        }
+
+        // Async pickup side (WASM only): the browser file picker
+        // writes the file contents into egui temp data under
+        // `pending_subflame_load_raw`. Pair it with the stashed index.
+        #[cfg(target_arch = "wasm32")]
+        if let Some(json) = self.egui_layer.ctx.data_mut(|data| {
+            data.remove_temp::<String>(egui::Id::new("pending_subflame_load_raw"))
+        }) {
+            if let Some(index) = self.pending_subflame_load_index.take() {
+                match serde_json::from_str::<FractalConfig>(&json) {
+                    Ok(config) => {
+                        let mut flame = config.flame;
+                        flame.subflames.clear();
+                        if let Err(e) = self.config_manager.replace_subflame(index, flame) {
+                            log::error!("Failed to replace subflame {}: {}", index, e);
+                        } else {
+                            log::info!("Replaced subflame {} from loaded file", index);
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("Failed to parse .fflame JSON: {}", e);
+                    }
+                }
             }
         }
     }
