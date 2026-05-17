@@ -93,7 +93,11 @@ fn subflame_iterate(
         }
 
         let xform = subflame_transforms[sf_meta.normals_offset + picked];
-        let sub_xform_id = 128u + sf_meta.normals_offset + picked;
+        // xform_id_base lets us route through the SubflameMeta field
+        // rather than a hard-coded 128. v2 will change the base to the
+        // unified-array position so per-xform lookups resolve real
+        // subflame slots.
+        let sub_xform_id = sf_meta.xform_id_base + sf_meta.normals_offset + picked;
 
         // Color blend — Apophysis-standard color_speed lerp.
         let symmetry = xform.color_speed;
@@ -110,7 +114,7 @@ fn subflame_iterate(
         // Apply subflame's final transforms (if any).
         for (var i: u32 = 0u; i < sf_meta.finals_count; i = i + 1u) {
             let f_xform = subflame_transforms[sf_meta.finals_offset + i];
-            let f_xform_id = 128u + sf_meta.finals_offset + i;
+            let f_xform_id = sf_meta.xform_id_base + sf_meta.finals_offset + i;
             let f_affine_p = apply_affine(f_xform, current);
             current = apply_subflame_variations(f_xform, f_xform_id, f_affine_p, rng, &vc);
             if (f_xform.post_enabled > 0.5) {
@@ -174,7 +178,8 @@ fn subflame_iterate(
         }
 
         let xform = subflame_transforms[sf_meta.normals_offset + picked];
-        let sub_xform_id = 128u + sf_meta.normals_offset + picked;
+        // See 3D branch for xform_id_base rationale.
+        let sub_xform_id = sf_meta.xform_id_base + sf_meta.normals_offset + picked;
 
         let symmetry = xform.color_speed;
         color = color * (1.0 + symmetry) * 0.5 + xform.color * (1.0 - symmetry) * 0.5;
@@ -188,7 +193,7 @@ fn subflame_iterate(
 
         for (var i: u32 = 0u; i < sf_meta.finals_count; i = i + 1u) {
             let f_xform = subflame_transforms[sf_meta.finals_offset + i];
-            let f_xform_id = 128u + sf_meta.finals_offset + i;
+            let f_xform_id = sf_meta.xform_id_base + sf_meta.finals_offset + i;
             let f_affine_p = apply_affine(f_xform, current);
             current = apply_subflame_variations(f_xform, f_xform_id, f_affine_p, rng, &vc);
             if (f_xform.post_enabled > 0.5) {

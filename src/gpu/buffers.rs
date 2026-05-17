@@ -127,9 +127,17 @@ pub struct SubflameMeta {
     pub finals_count: u32,
     /// Subflame's render mode: 0 = TwoD, 1 = ThreeD (Z is meaningful).
     pub render_mode: u32,
+    /// Base value added to (normals_offset/finals_offset + picked) to
+    /// produce the synthetic `xform_id` the variation system sees for
+    /// this subflame's xforms. v1: always 128 — the constant prefix that
+    /// keeps subflame xform_ids outside the parent's [0, MAX_TRANSFORMS)
+    /// range. v2 will set this per-subflame to the unified-array
+    /// position where this subflame's xforms start, so the variation
+    /// system's per-xform buffers can hold real entries for subflame
+    /// xforms too.
+    pub xform_id_base: u32,
     pub _pad0: u32,
     pub _pad1: u32,
-    pub _pad2: u32,
 }
 
 unsafe impl bytemuck::Pod for SubflameMeta {}
@@ -1548,9 +1556,14 @@ impl FlameBuffers {
                     crate::scene::transforms::RenderMode::TwoD => 0,
                     crate::scene::transforms::RenderMode::ThreeD => 1,
                 },
+                // v1: the synthetic prefix that pushes subflame xform_ids
+                // outside the parent's per-xform buffer range. v2 will
+                // change this to the unified-array start position so
+                // `get_param` / `get_state` / `transforms[xform_id]` all
+                // resolve correctly for subflame xforms.
+                xform_id_base: 128,
                 _pad0: 0,
                 _pad1: 0,
-                _pad2: 0,
             };
         }
 
