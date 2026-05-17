@@ -50,6 +50,18 @@ pub const MAX_SUBFLAMES: usize = 8;
 /// this cap is set so 8 typical subflames fit comfortably.
 pub const MAX_SUBFLAME_TRANSFORMS_TOTAL: usize = 256;
 
+/// Total xform_id space covering both parent and subflame xforms.
+///
+/// Parent xforms live in `[0, MAX_TRANSFORMS)` (their xform_id is the
+/// pool position, unchanged from v1). Subflame xforms live in
+/// `[MAX_TRANSFORMS, MAX_TRANSFORMS_UNIFIED)`, packed back-to-back in
+/// the same order as `subflame_transforms` packs them. This is the
+/// size of every per-xform GPU buffer that needs to address both
+/// parent and subflame xforms (currently `variation_params`; later
+/// `transforms` once the separate `subflame_transforms_buffer` is
+/// merged in Phase 5).
+pub const MAX_TRANSFORMS_UNIFIED: usize = MAX_TRANSFORMS + MAX_SUBFLAME_TRANSFORMS_TOTAL;
+
 /// Maximum number of attachments (linked + final) per normal transform.
 /// Per-normal chain length cap — independent of the total transform
 /// budget. Sized to keep `GpuAttachmentList` small (264 bytes per entry
@@ -127,9 +139,17 @@ pub struct SubflameMeta {
     pub finals_count: u32,
     /// Subflame's render mode: 0 = TwoD, 1 = ThreeD (Z is meaningful).
     pub render_mode: u32,
+    /// Base value added to (normals_offset/finals_offset + picked) to
+    /// produce the synthetic `xform_id` the variation system sees for
+    /// this subflame's xforms. v1: always 128 — the constant prefix that
+    /// keeps subflame xform_ids outside the parent's [0, MAX_TRANSFORMS)
+    /// range. v2 will set this per-subflame to the unified-array
+    /// position where this subflame's xforms start, so the variation
+    /// system's per-xform buffers can hold real entries for subflame
+    /// xforms too.
+    pub xform_id_base: u32,
     pub _pad0: u32,
     pub _pad1: u32,
-    pub _pad2: u32,
 }
 
 unsafe impl bytemuck::Pod for SubflameMeta {}
@@ -781,17 +801,6 @@ pub struct FlameBuffers {
     /// See `docs/projects/per-transform-linked-and-final.md`.
     pub attachments_buffer: Buffer,
 
-    /// Concatenated `GpuTransform` array holding every subflame's
-    /// normal + final transforms, packed back-to-back. Indexed via
-    /// the per-subflame offsets in `subflame_metadata_buffer`. Allocated
-    /// at worst-case size (`MAX_SUBFLAME_TRANSFORMS_TOTAL`) so the
-    /// buffer never needs reallocation when subflames change.
-    ///
-    /// Phase 4 wires this into the shader bind group at binding 11 and
-    /// the `subflame_iterate()` helper reads from it. v1 leaves it
-    /// zero-allocated when `subflames` is empty.
-    pub subflame_transforms_buffer: Buffer,
-
     /// `array<SubflameMeta, MAX_SUBFLAMES>` uniform with per-subflame
     /// transform-pool offsets + counts. Indexed by `subflame_id` (the
     /// variation parameter). Unused slots remain zero.
@@ -885,9 +894,14 @@ impl FlameBuffers {
     pub fn with_palette_size(device: &Device, queue: &Queue, width: u32, height: u32, flame: &Flame, palette_size: u32) -> Self {
         // Clamp palette size to valid range
         let palette_size = palette_size.clamp(DEFAULT_PALETTE_SIZE, MAX_PALETTE_SIZE);
-        // Create transform storage buffer sized for MAX_TRANSFORMS
-        // This allows loading presets with different numbers of transforms without recreating the buffer
-        let buffer_size = (MAX_TRANSFORMS * std::mem::size_of::<GpuTransform>()) as u64;
+        // Create transform storage buffer sized for the unified
+        // xform_id space: parent xforms in [0, MAX_TRANSFORMS),
+        // subflame xforms in [MAX_TRANSFORMS, MAX_TRANSFORMS_UNIFIED).
+        // The subflame iteration shader reads xform data via
+        // `transforms[xform_id]` (where xform_id is the unified id),
+        // and per-xform variation lookups (transforms[xform_id].
+        // variations[var_id]) now resolve for subflame xforms too.
+        let buffer_size = (MAX_TRANSFORMS_UNIFIED * std::mem::size_of::<GpuTransform>()) as u64;
         let transform_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Transform Buffer"),
             size: buffer_size,
@@ -895,15 +909,14 @@ impl FlameBuffers {
             mapped_at_creation: false,
         });
 
-        // Create variation parameters storage buffer sized for MAX_TRANSFORMS.
-        // Both transforms and variation_params buffers are populated below via
-        // update_transforms / update_variation_params (after Self is constructed),
-        // matching the exact code path used by load_config + update_flame. This
-        // avoids the prior split where the initial write was unpadded while
-        // subsequent writes were padded to MAX_TRANSFORMS — the inconsistent
-        // shape couldn't be triggered as a visible bug, but it was extra
-        // surface area for things to go wrong.
-        let params_buffer_size = (MAX_TRANSFORMS * std::mem::size_of::<GpuVariationParams>()) as u64;
+        // Create variation parameters storage buffer sized for
+        // `MAX_TRANSFORMS_UNIFIED` — the unified xform_id space
+        // covering parent xforms in [0, MAX_TRANSFORMS) plus subflame
+        // xforms in [MAX_TRANSFORMS, MAX_TRANSFORMS_UNIFIED). The
+        // buffer is populated below via update_variation_params, which
+        // walks parent xforms then subflame xforms in the same
+        // contiguous order.
+        let params_buffer_size = (MAX_TRANSFORMS_UNIFIED * std::mem::size_of::<GpuVariationParams>()) as u64;
         let variation_params_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Variation Params Buffer"),
             size: params_buffer_size,
@@ -1224,19 +1237,6 @@ impl FlameBuffers {
             ..Default::default()
         });
 
-        // Subflame transform pool: concatenated GpuTransform array
-        // covering every subflame's normal + final transforms. Sized
-        // for worst case (`MAX_SUBFLAME_TRANSFORMS_TOTAL`) so we don't
-        // have to reallocate when subflames change. Initial contents
-        // are zero (no subflames in a freshly-created FlameBuffers);
-        // `update_subflames` later in this branch will write real data.
-        let subflame_transforms_buffer = device.create_buffer(&BufferDescriptor {
-            label: Some("Subflame Transforms Buffer"),
-            size: (MAX_SUBFLAME_TRANSFORMS_TOTAL * std::mem::size_of::<GpuTransform>()) as u64,
-            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
         // Subflame metadata: `array<SubflameMeta>` storage buffer with
         // per-subflame offsets + counts. Indexed by `subflame_id` (the
         // variation parameter). All-zero by default. Storage rather
@@ -1253,7 +1253,6 @@ impl FlameBuffers {
             transform_buffer,
             variation_params_buffer,
             attachments_buffer,
-            subflame_transforms_buffer,
             subflame_metadata_buffer,
             params_buffer,
             tonemap_params_buffer,
@@ -1460,9 +1459,25 @@ impl FlameBuffers {
         queue.write_buffer(&self.accumulate_params_buffer, 0, bytemuck::cast_slice(&[*params]));
     }
 
-    /// Update transforms
+    /// Update transforms.
+    ///
+    /// Buffer layout (parallel to variation_params):
+    ///
+    /// ```text
+    ///   [0 .. parent_total)               parent normals + linkeds + finals
+    ///   [parent_total .. MAX_TRANSFORMS)  zero-padding (parent slack)
+    ///   [MAX_TRANSFORMS .. MAX_TRANSFORMS + subflame_total)
+    ///                                     subflame xforms, packed in the same
+    ///                                     order as `update_variation_params`
+    ///                                     (per subflame: normals, then finals)
+    ///   [.. MAX_TRANSFORMS_UNIFIED)       zero-padding (subflame slack)
+    /// ```
+    ///
+    /// Subflame xforms in the unified slots let
+    /// `transforms[xform_id].variations[var_id]` resolve for them —
+    /// klein_group and other `needs_transform: true` variations read
+    /// their own weight that way.
     pub fn update_transforms(&self, queue: &Queue, flame: &Flame) {
-        // Check space for normals + linkeds + finals + legacy_final.
         let total_transforms = flame.total_gpu_transform_slots();
         if total_transforms > MAX_TRANSFORMS {
             panic!(
@@ -1479,39 +1494,64 @@ impl FlameBuffers {
         let registry = crate::variations::global_registry();
         let mut gpu_transforms = GpuTransform::from_flame(flame, &registry);
 
-        // Pad with zeroed transforms to fill the buffer
-        // This ensures old transforms don't remain in GPU memory when switching to fewer transforms
+        // Pad parent slack to MAX_TRANSFORMS so subflame slots start
+        // at the synthetic-id base (matches variation_params layout).
         while gpu_transforms.len() < MAX_TRANSFORMS {
+            gpu_transforms.push(bytemuck::Zeroable::zeroed());
+        }
+
+        // Subflame slots — MUST match update_variation_params'
+        // ordering (per subflame: normals first, then finals). The
+        // local_map is shared across parent and subflame xforms via
+        // `extract_active_variations`.
+        let local_map = crate::scene::transforms::compute_local_index_map(
+            flame.extract_active_variations().into_keys(),
+            &registry,
+        );
+        let mut subflame_xforms_packed = 0usize;
+        for sf in &flame.subflames {
+            for xform in &sf.transforms {
+                gpu_transforms.push(GpuTransform::from_transform(xform, &local_map));
+                subflame_xforms_packed += 1;
+            }
+            for xform in &sf.final_transforms {
+                gpu_transforms.push(GpuTransform::from_transform(xform, &local_map));
+                subflame_xforms_packed += 1;
+            }
+        }
+        if subflame_xforms_packed > MAX_SUBFLAME_TRANSFORMS_TOTAL {
+            panic!(
+                "Subflames have {} total transforms but MAX_SUBFLAME_TRANSFORMS_TOTAL is {}",
+                subflame_xforms_packed, MAX_SUBFLAME_TRANSFORMS_TOTAL,
+            );
+        }
+        while gpu_transforms.len() < MAX_TRANSFORMS_UNIFIED {
             gpu_transforms.push(bytemuck::Zeroable::zeroed());
         }
 
         queue.write_buffer(&self.transform_buffer, 0, bytemuck::cast_slice(&gpu_transforms));
     }
 
-    /// Pack a config's subflames into the GPU buffers (binding 11 + the
-    /// metadata uniform).
+    /// Write the per-subflame metadata uniform (offsets / counts /
+    /// xform_id_base for each subflame).
     ///
-    /// The packing concatenates each subflame's normal transforms
-    /// followed by its final transforms back-to-back, and records
-    /// per-subflame offsets/counts in the metadata array. Each
-    /// transform is packed against the same `local_map` the parent
-    /// flame uses, so the shader's variation indices are valid for
-    /// both parent and subflame transforms. Phase 4's shader-builder
-    /// computes the union local-map across parent + subflames.
+    /// Pre-v2, this function also wrote a separate `subflame_transforms`
+    /// buffer that subflame_iterate read xform data from. v2 unified
+    /// subflame xforms into the parent's `transforms` buffer (written
+    /// by `update_transforms`) at slots
+    /// `[MAX_TRANSFORMS, MAX_TRANSFORMS + subflame_total)`, so this
+    /// function only writes metadata now. The `local_map` parameter
+    /// is kept for call-site stability but is no longer used here.
     ///
-    /// `local_map`: variation name → shader-local index (same mapping
-    /// the parent's transforms were packed against — passing a
-    /// mismatched map silently desyncs subflame variation IDs).
-    ///
-    /// Validation: returns `Err(...)` if the total transform count
-    /// exceeds `MAX_SUBFLAME_TRANSFORMS_TOTAL` or the subflame count
-    /// exceeds `MAX_SUBFLAMES`. The caller is expected to surface this
-    /// as a user-visible config error rather than panic.
+    /// Validation: returns `Err(...)` if the subflame count exceeds
+    /// `MAX_SUBFLAMES` or the total xform count exceeds
+    /// `MAX_SUBFLAME_TRANSFORMS_TOTAL`. The caller surfaces this as a
+    /// user-visible config error rather than panic.
     pub fn update_subflames(
         &self,
         queue: &Queue,
         subflames: &[Flame],
-        local_map: &std::collections::HashMap<String, u32>,
+        _local_map: &std::collections::HashMap<String, u32>,
     ) -> Result<(), String> {
         if subflames.len() > MAX_SUBFLAMES {
             return Err(format!(
@@ -1521,23 +1561,17 @@ impl FlameBuffers {
             ));
         }
 
-        // Pack every subflame's (normals, finals) back-to-back into one
-        // big GpuTransform vec; record per-subflame offsets as we go.
-        let mut gpu_transforms: Vec<GpuTransform> = Vec::new();
         let mut metas: [SubflameMeta; MAX_SUBFLAMES] = Default::default();
+        let mut cursor: u32 = 0;
 
         for (sf_idx, sf) in subflames.iter().enumerate() {
-            let normals_offset = gpu_transforms.len() as u32;
-            for xform in &sf.transforms {
-                gpu_transforms.push(GpuTransform::from_transform(xform, local_map));
-            }
-            let normals_count = gpu_transforms.len() as u32 - normals_offset;
+            let normals_offset = cursor;
+            cursor += sf.transforms.len() as u32;
+            let normals_count = cursor - normals_offset;
 
-            let finals_offset = gpu_transforms.len() as u32;
-            for xform in &sf.final_transforms {
-                gpu_transforms.push(GpuTransform::from_transform(xform, local_map));
-            }
-            let finals_count = gpu_transforms.len() as u32 - finals_offset;
+            let finals_offset = cursor;
+            cursor += sf.final_transforms.len() as u32;
+            let finals_count = cursor - finals_offset;
 
             metas[sf_idx] = SubflameMeta {
                 normals_offset,
@@ -1548,27 +1582,28 @@ impl FlameBuffers {
                     crate::scene::transforms::RenderMode::TwoD => 0,
                     crate::scene::transforms::RenderMode::ThreeD => 1,
                 },
+                // Unified xform_id base. Subflame xforms occupy the
+                // slot range [MAX_TRANSFORMS, MAX_TRANSFORMS +
+                // subflame_total) in both `transforms` and
+                // `variation_params` (laid out by update_transforms /
+                // update_variation_params in the same per-subflame
+                // order). So:
+                //   xform_id = xform_id_base + normals_offset + picked
+                //            = MAX_TRANSFORMS + buffer_offset
+                // which is exactly the unified slot for this xform.
+                xform_id_base: MAX_TRANSFORMS as u32,
                 _pad0: 0,
                 _pad1: 0,
-                _pad2: 0,
             };
         }
 
-        if gpu_transforms.len() > MAX_SUBFLAME_TRANSFORMS_TOTAL {
+        if cursor as usize > MAX_SUBFLAME_TRANSFORMS_TOTAL {
             return Err(format!(
                 "Subflames have {} total transforms but MAX_SUBFLAME_TRANSFORMS_TOTAL is {}",
-                gpu_transforms.len(),
-                MAX_SUBFLAME_TRANSFORMS_TOTAL,
+                cursor, MAX_SUBFLAME_TRANSFORMS_TOTAL,
             ));
         }
 
-        // Pad to capacity so stale GPU memory from a previous (larger)
-        // subflame set doesn't bleed into the current render.
-        while gpu_transforms.len() < MAX_SUBFLAME_TRANSFORMS_TOTAL {
-            gpu_transforms.push(bytemuck::Zeroable::zeroed());
-        }
-
-        queue.write_buffer(&self.subflame_transforms_buffer, 0, bytemuck::cast_slice(&gpu_transforms));
         queue.write_buffer(&self.subflame_metadata_buffer, 0, bytemuck::cast_slice(&metas));
 
         Ok(())
@@ -1608,9 +1643,27 @@ impl FlameBuffers {
         queue.write_buffer(&self.attachments_buffer, 0, &buf);
     }
 
-    /// Update variation parameters
+    /// Update variation parameters.
+    ///
+    /// Buffer layout (parallel to xform_id):
+    ///
+    /// ```text
+    ///   [0 .. parent_total)               parent normals + linkeds + finals
+    ///   [parent_total .. MAX_TRANSFORMS)  zero-padding (parent slack)
+    ///   [MAX_TRANSFORMS .. MAX_TRANSFORMS + subflame_total)
+    ///                                     subflame xforms, packed in the same
+    ///                                     order as `subflame_transforms_buffer`
+    ///                                     (per subflame: normals, then finals)
+    ///   [.. MAX_TRANSFORMS_UNIFIED)       zero-padding (subflame slack)
+    /// ```
+    ///
+    /// Subflame xforms use synthetic `xform_id = MAX_TRANSFORMS +
+    /// subflame_buffer_offset` (set per-subflame via
+    /// `SubflameMeta.xform_id_base`), so `get_param(xform_id, …)`
+    /// reads from the subflame portion of this buffer. v1 had all
+    /// subflame xforms reading OOB and getting zeros — that's what
+    /// broke julian / blob / klein_group inside subflames.
     pub fn update_variation_params(&self, queue: &Queue, flame: &Flame) {
-        // Check space for normals + linkeds + finals + legacy_final.
         let total_transforms = flame.total_gpu_transform_slots();
         if total_transforms > MAX_TRANSFORMS {
             panic!(
@@ -1623,12 +1676,76 @@ impl FlameBuffers {
             );
         }
 
-        // Create a fixed-size array with all variation parameters, padding with zeroes
         let registry = crate::variations::global_registry();
-        let mut gpu_params = GpuVariationParams::from_flame(flame, &registry);
+        // Local map covers parent + subflame variations together —
+        // `extract_active_variations` already walks subflames, so each
+        // subflame xform's variations get the same per-variation
+        // packed offsets the parent's do.
+        let local_map = crate::scene::transforms::compute_local_index_map(
+            flame.extract_active_variations().into_keys(),
+            &registry,
+        );
+        // Soft cap: warn if the per-xform packed footprint exceeds the
+        // fixed slot count. Same check `GpuVariationParams::from_flame`
+        // does — preserved here since this path no longer routes
+        // through it.
+        let total_slots = crate::scene::transforms::total_packed_slots(&local_map, &registry);
+        if total_slots as usize > MAX_VARIATION_PARAM_SLOTS {
+            log::error!(
+                "Flame has {} packed variation slots, exceeds buffer capacity {}. \
+                 Some parameters will be lost. Active variations: {:?}",
+                total_slots,
+                MAX_VARIATION_PARAM_SLOTS,
+                local_map.keys().collect::<Vec<_>>(),
+            );
+        }
 
-        // Pad with zeroed params to fill the buffer
+        let mut gpu_params: Vec<GpuVariationParams> =
+            Vec::with_capacity(MAX_TRANSFORMS_UNIFIED);
+
+        // Parent slots — order matches `GpuTransform::from_flame`.
+        for xform in &flame.transforms {
+            gpu_params.push(GpuVariationParams::from_transform(xform, &local_map, &registry));
+        }
+        for xform in &flame.linked_transforms {
+            gpu_params.push(GpuVariationParams::from_transform(xform, &local_map, &registry));
+        }
+        for xform in &flame.final_transforms {
+            gpu_params.push(GpuVariationParams::from_transform(xform, &local_map, &registry));
+        }
+        // Pad parent slack to MAX_TRANSFORMS so subflame slots start
+        // at the synthetic-id base.
         while gpu_params.len() < MAX_TRANSFORMS {
+            gpu_params.push(bytemuck::Zeroable::zeroed());
+        }
+
+        // Subflame slots — order MUST match `update_subflames`'
+        // packing of `subflame_transforms_buffer` (per subflame:
+        // normals first, then finals). The subflame iteration code
+        // computes `xform_id = MAX_TRANSFORMS + subflame_buffer_offset
+        // + picked`; that has to land on the same xform in both
+        // buffers.
+        let mut subflame_xforms_packed = 0usize;
+        for sf in &flame.subflames {
+            for xform in &sf.transforms {
+                gpu_params.push(GpuVariationParams::from_transform(xform, &local_map, &registry));
+                subflame_xforms_packed += 1;
+            }
+            for xform in &sf.final_transforms {
+                gpu_params.push(GpuVariationParams::from_transform(xform, &local_map, &registry));
+                subflame_xforms_packed += 1;
+            }
+        }
+        if subflame_xforms_packed > MAX_SUBFLAME_TRANSFORMS_TOTAL {
+            panic!(
+                "Subflames have {} total transforms but MAX_SUBFLAME_TRANSFORMS_TOTAL is {}",
+                subflame_xforms_packed, MAX_SUBFLAME_TRANSFORMS_TOTAL,
+            );
+        }
+        // Pad to full unified size — zeroed slack covers both the
+        // parent gap (already filled above) and any unused subflame
+        // capacity.
+        while gpu_params.len() < MAX_TRANSFORMS_UNIFIED {
             gpu_params.push(bytemuck::Zeroable::zeroed());
         }
 

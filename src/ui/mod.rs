@@ -260,6 +260,12 @@ pub struct EguiLayer {
     // Selected preset config (from FractalBrowser or other sources)
     selected_preset_config: Option<crate::config::FractalConfig>,
 
+    // Subflames panel: pending "Load from file" request. Carries the
+    // target subflame index. Set by the Subflames panel, taken by
+    // App's UI handler each frame and turned into a file-dialog or
+    // browser-picker invocation.
+    load_subflame_into: Option<usize>,
+
     // Animation export settings
     animation_export_settings: animation_panel::AnimationExportSettings,
 
@@ -414,6 +420,7 @@ impl EguiLayer {
             fractal_texture_width: 0,
             fractal_texture_height: 0,
             selected_preset_config: None,
+            load_subflame_into: None,
             animation_export_settings: animation_panel::AnimationExportSettings::default(),
             export_panel_state: animation_panel::ExportPanelState::default(),
             track_editor_state: track_editor::TrackEditorState::default(),
@@ -1021,6 +1028,9 @@ impl EguiLayer {
                         // Selected preset config (from FractalBrowser or other sources)
                         selected_preset_config: &mut self.selected_preset_config,
 
+                        // Subflames panel: "Load from file" target index
+                        load_subflame_into: &mut self.load_subflame_into,
+
                         // API flame ID loaded from Online tab
                         loaded_api_flame_id: &mut self.loaded_api_flame_id,
                         loaded_api_flame_is_public: &mut self.loaded_api_flame_is_public,
@@ -1515,6 +1525,9 @@ impl EguiLayer {
         // Take selected preset config (reset to None after returning)
         let selected_preset_config = self.selected_preset_config.take();
 
+        // Take pending subflame load-from-file request
+        let load_subflame_into = self.load_subflame_into.take();
+
         // Take API flame metadata (reset after returning)
         let loaded_api_flame_id = self.loaded_api_flame_id.take();
         let loaded_api_flame_is_public = self.loaded_api_flame_is_public.take();
@@ -1566,6 +1579,7 @@ impl EguiLayer {
             selected_preset_config,
             file_browser_open_requested,
             animation_export_requested,
+            load_subflame_into,
             animation_seek_changed,
             animation_seek_drag_stopped,
             path_filters_changed,

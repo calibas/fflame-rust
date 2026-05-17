@@ -593,6 +593,54 @@ impl ConfigManager {
         Ok(())
     }
 
+    /// Replace the flame data at subflame `index` with `new_flame`,
+    /// keeping the subflame slot in place. Used by the "Load from
+    /// file" button in the Subflames panel to swap a subflame's IFS
+    /// for one loaded from a `.fflame`.
+    ///
+    /// Undo support uses a `FullConfig` snapshot — heavy compared to
+    /// a dedicated `ReplaceSubflame` variant, but simple and
+    /// correct, and a normal config is small enough that the doubled
+    /// memory doesn't matter in practice.
+    ///
+    /// IDs on the incoming flame and its transforms are assigned
+    /// fresh via `fixup_ids`; old animation tracks bound to the
+    /// previous subflame's items will surface as broken in the UI
+    /// (the rebind hook fires via `structural_changed`).
+    pub fn replace_subflame(&mut self, index: usize, new_flame: Flame) -> Result<(), ConfigError> {
+        if index >= self.current.flame.subflames.len() {
+            return Err(ConfigError::InvalidPath(format!(
+                "subflame {} out of bounds", index
+            )));
+        }
+
+        // Snapshot for undo (heavy — FullConfig — but symmetric across
+        // before/after, no new SnapshotData variant required).
+        let before = self.current.clone();
+        self.current.flame.subflames[index] = new_flame;
+        // Allocate IDs for the freshly-installed flame and its
+        // transforms; the loaded `.fflame` came in with id=0
+        // everywhere (serde-skipped) and otherwise wouldn't be
+        // resolvable by the animation rebind machinery.
+        self.current.fixup_ids();
+        let after = self.current.clone();
+
+        let change = ConfigChange::full_config_snapshot(
+            before,
+            after,
+            "Replace subflame".to_string(),
+        );
+        self.push_undo(change);
+
+        // IterationReset semantics (no buffer clear) — same as
+        // add_subflame / delete_subflame.
+        self.pending_actions.merge(&UpdateAction::from_update_type(UpdateType::IterationReset));
+        // Subflame contents changed → animation rebind to follow IDs
+        // (which all just changed because of fixup_ids).
+        self.pending_actions.structural_changed = true;
+        Ok(())
+    }
+
     /// Rename the subflame at `index`. With the un-swap refactor the
     /// list is always intact, so this is a straightforward index
     /// into `current.flame.subflames`.
