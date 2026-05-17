@@ -1072,6 +1072,8 @@ fn update_or_create_track(
                 if let Some(track) = animation.get_track_mut(track_index) {
                     track.target = state.new_track_target.clone();
                     track.flame_target = state.new_track_flame_target;
+                    // Re-bind: target may have changed to a different item.
+                    track.bind(config);
                     // Keep existing keyframes, just update target
                 }
                 Some(track_index)
@@ -1103,6 +1105,10 @@ fn update_or_create_track(
                 )
                 .with_flame_target(state.new_track_flame_target);
                 track.interpolation = state.preview_interpolation;
+                // Bind right away so the rebind hook can keep the
+                // track pointing at the right item after add/delete/
+                // reorder, and `is_track_broken` reports correctly.
+                track.bind(config);
                 let new_index = animation.add_track(track);
                 Some(new_index)
             }
@@ -1125,11 +1131,12 @@ fn update_or_create_track(
                         fade_out: state.signal_params.fade_out,
                         fade_out_easing: state.signal_params.fade_out_easing,
                     };
+                    track.bind(config);
                 }
                 Some(track_index)
             } else {
                 // Create new track
-                let track = Track::new(
+                let mut track = Track::new(
                     state.new_track_target.clone(),
                     TrackSource::Signal {
                         signal_name: state.signal_params.signal_name.clone(),
@@ -1145,6 +1152,7 @@ fn update_or_create_track(
                     },
                 )
                 .with_flame_target(state.new_track_flame_target);
+                track.bind(config);
                 let new_index = animation.add_track(track);
                 Some(new_index)
             }

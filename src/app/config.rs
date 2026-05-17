@@ -56,6 +56,23 @@ impl App {
         let active_config = self.config_manager.active_config().clone();
         self.import_config(active_config);
 
+        // Re-bind animation tracks against the just-loaded config.
+        // The new config carries fresh session-local IDs (assigned by
+        // ConfigManager::load_config); any previously-bound tracks
+        // were referencing the *previous* config's IDs, which no
+        // longer exist. A fresh bind walks each track's `target` /
+        // `flame_target` and resolves it against the new config.
+        //
+        // Covers the deferred-load case in particular: the panel
+        // viewer stashes an animation's embedded base_config into
+        // `selected_preset_config` and loads the animation immediately
+        // (with stale bind). Later, `handle_preset_selection` applies
+        // the stashed config via this same `load_config_with_undo`
+        // path — at which point the hook below re-binds.
+        if let Some(animation) = self.animation_controller.animation.as_mut() {
+            animation.bind_to_config(self.config_manager.active_config());
+        }
+
         // Enable overwrite mode for immediate rendering (same as restore_base_config).
         // Without this, the first frames after loading use normal blend mode (e.g. 10%),
         // making the image very dim and effects invisible until accumulation builds up.
