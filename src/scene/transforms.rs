@@ -683,6 +683,107 @@ impl Transform {
         self.from_triangle_apophysis(o, new_x, new_y);
     }
 
+    // === POST-AFFINE TRANSFORM OPERATIONS (mirror of pre-affine) ===
+
+    /// Get the post-affine origin X position (translation component).
+    pub fn post_origin_x(&self) -> f32 {
+        self.post_e
+    }
+
+    /// Get the post-affine origin Y position (Apophysis convention).
+    pub fn post_origin_y(&self) -> f32 {
+        -self.post_f
+    }
+
+    /// Set the post-affine origin X position (translates triangle by dx).
+    pub fn set_post_origin_x(&mut self, x: f32) {
+        let (mut o, mut x_pt, mut y_pt) = self.post_to_triangle_apophysis();
+        let dx = x - o[0];
+        o[0] = x;
+        x_pt[0] += dx;
+        y_pt[0] += dx;
+        self.post_from_triangle_apophysis(o, x_pt, y_pt);
+    }
+
+    /// Set the post-affine origin Y position (Apophysis convention).
+    pub fn set_post_origin_y(&mut self, y: f32) {
+        let (mut o, mut x_pt, mut y_pt) = self.post_to_triangle_apophysis();
+        let dy = y - o[1];
+        o[1] = y;
+        x_pt[1] += dy;
+        y_pt[1] += dy;
+        self.post_from_triangle_apophysis(o, x_pt, y_pt);
+    }
+
+    /// Get the post-affine rotation angle in radians (from the X-axis arm).
+    pub fn post_rotation(&self) -> f32 {
+        let (o, x_pt, _) = self.post_to_triangle_apophysis();
+        let dx = x_pt[0] - o[0];
+        let dy = x_pt[1] - o[1];
+        dy.atan2(dx)
+    }
+
+    /// Set the post-affine rotation angle in radians. Rotates the
+    /// X arm to `angle`, preserves the X/Y arm length ratio and the
+    /// angle difference between arms (so any pre-existing shear is
+    /// kept).
+    pub fn set_post_rotation(&mut self, angle: f32) {
+        let (o, x_pt, y_pt) = self.post_to_triangle_apophysis();
+
+        let x_vec = [x_pt[0] - o[0], x_pt[1] - o[1]];
+        let y_vec = [y_pt[0] - o[0], y_pt[1] - o[1]];
+
+        let x_len = (x_vec[0] * x_vec[0] + x_vec[1] * x_vec[1]).sqrt();
+        let y_len = (y_vec[0] * y_vec[0] + y_vec[1] * y_vec[1]).sqrt();
+
+        let current_x_angle = x_vec[1].atan2(x_vec[0]);
+        let current_y_angle = y_vec[1].atan2(y_vec[0]);
+        let angle_diff = current_y_angle - current_x_angle;
+
+        let cos_a = angle.cos();
+        let sin_a = angle.sin();
+        let new_x = [o[0] + x_len * cos_a, o[1] + x_len * sin_a];
+
+        let y_angle = angle + angle_diff;
+        let new_y = [o[0] + y_len * y_angle.cos(), o[1] + y_len * y_angle.sin()];
+
+        self.post_from_triangle_apophysis(o, new_x, new_y);
+    }
+
+    /// Get the post-affine uniform scale factor (average of X and Y arm lengths).
+    pub fn post_scale(&self) -> f32 {
+        let (o, x_pt, y_pt) = self.post_to_triangle_apophysis();
+        let x_vec = [x_pt[0] - o[0], x_pt[1] - o[1]];
+        let y_vec = [y_pt[0] - o[0], y_pt[1] - o[1]];
+        let x_len = (x_vec[0] * x_vec[0] + x_vec[1] * x_vec[1]).sqrt();
+        let y_len = (y_vec[0] * y_vec[0] + y_vec[1] * y_vec[1]).sqrt();
+        (x_len + y_len) / 2.0
+    }
+
+    /// Set uniform post-affine scale (scales both arms equally,
+    /// preserves rotation). No-op if either arm has near-zero length.
+    pub fn set_post_scale(&mut self, scale: f32) {
+        let (o, x_pt, y_pt) = self.post_to_triangle_apophysis();
+
+        let x_vec = [x_pt[0] - o[0], x_pt[1] - o[1]];
+        let y_vec = [y_pt[0] - o[0], y_pt[1] - o[1]];
+
+        let x_len = (x_vec[0] * x_vec[0] + x_vec[1] * x_vec[1]).sqrt();
+        let y_len = (y_vec[0] * y_vec[0] + y_vec[1] * y_vec[1]).sqrt();
+
+        if x_len < 1e-6 || y_len < 1e-6 {
+            return;
+        }
+
+        let x_scale = scale / x_len;
+        let y_scale = scale / y_len;
+
+        let new_x = [o[0] + x_vec[0] * x_scale, o[1] + x_vec[1] * x_scale];
+        let new_y = [o[0] + y_vec[0] * y_scale, o[1] + y_vec[1] * y_scale];
+
+        self.post_from_triangle_apophysis(o, new_x, new_y);
+    }
+
     // === COMPATIBILITY METHODS (for gradual migration) ===
 
     /// COMPATIBILITY: Set variation by index (for old code)

@@ -857,6 +857,26 @@ fn apply_flame_value(
                 xform.set_scale(*v);
             }
         }
+        (ConfigPath::TransformPostAffineOriginX { index }, ConfigValue::Float(v)) => {
+            if let Some(xform) = flame.transforms.get_mut(*index) {
+                xform.set_post_origin_x(*v);
+            }
+        }
+        (ConfigPath::TransformPostAffineOriginY { index }, ConfigValue::Float(v)) => {
+            if let Some(xform) = flame.transforms.get_mut(*index) {
+                xform.set_post_origin_y(*v);
+            }
+        }
+        (ConfigPath::TransformPostAffineRotation { index }, ConfigValue::Float(v)) => {
+            if let Some(xform) = flame.transforms.get_mut(*index) {
+                xform.set_post_rotation(*v);
+            }
+        }
+        (ConfigPath::TransformPostAffineScale { index }, ConfigValue::Float(v)) => {
+            if let Some(xform) = flame.transforms.get_mut(*index) {
+                xform.set_post_scale(*v);
+            }
+        }
 
         // Linked pool — animatable per-pool-member parameters.
         (ConfigPath::LinkedTransformAffine { index, param }, ConfigValue::Float(v)) => {
@@ -884,6 +904,46 @@ fn apply_flame_value(
                 xform.set_variation_param(variation, param, *v);
             }
         }
+        (ConfigPath::LinkedTransformOriginX { index }, ConfigValue::Float(v)) => {
+            if let Some(xform) = flame.linked_transforms.get_mut(*index) {
+                xform.set_origin_x(*v);
+            }
+        }
+        (ConfigPath::LinkedTransformOriginY { index }, ConfigValue::Float(v)) => {
+            if let Some(xform) = flame.linked_transforms.get_mut(*index) {
+                xform.set_origin_y(*v);
+            }
+        }
+        (ConfigPath::LinkedTransformRotation { index }, ConfigValue::Float(v)) => {
+            if let Some(xform) = flame.linked_transforms.get_mut(*index) {
+                xform.set_rotation(*v);
+            }
+        }
+        (ConfigPath::LinkedTransformScale { index }, ConfigValue::Float(v)) => {
+            if let Some(xform) = flame.linked_transforms.get_mut(*index) {
+                xform.set_scale(*v);
+            }
+        }
+        (ConfigPath::LinkedTransformPostAffineOriginX { index }, ConfigValue::Float(v)) => {
+            if let Some(xform) = flame.linked_transforms.get_mut(*index) {
+                xform.set_post_origin_x(*v);
+            }
+        }
+        (ConfigPath::LinkedTransformPostAffineOriginY { index }, ConfigValue::Float(v)) => {
+            if let Some(xform) = flame.linked_transforms.get_mut(*index) {
+                xform.set_post_origin_y(*v);
+            }
+        }
+        (ConfigPath::LinkedTransformPostAffineRotation { index }, ConfigValue::Float(v)) => {
+            if let Some(xform) = flame.linked_transforms.get_mut(*index) {
+                xform.set_post_rotation(*v);
+            }
+        }
+        (ConfigPath::LinkedTransformPostAffineScale { index }, ConfigValue::Float(v)) => {
+            if let Some(xform) = flame.linked_transforms.get_mut(*index) {
+                xform.set_post_scale(*v);
+            }
+        }
 
         // Final pool — animatable per-pool-member parameters.
         (ConfigPath::FinalTransformAffine { index, param }, ConfigValue::Float(v)) => {
@@ -909,6 +969,46 @@ fn apply_flame_value(
         (ConfigPath::FinalTransformVariationParam { index, variation, param }, ConfigValue::Float(v)) => {
             if let Some(xform) = flame.final_transforms.get_mut(*index) {
                 xform.set_variation_param(variation, param, *v);
+            }
+        }
+        (ConfigPath::FinalTransformOriginX { index }, ConfigValue::Float(v)) => {
+            if let Some(xform) = flame.final_transforms.get_mut(*index) {
+                xform.set_origin_x(*v);
+            }
+        }
+        (ConfigPath::FinalTransformOriginY { index }, ConfigValue::Float(v)) => {
+            if let Some(xform) = flame.final_transforms.get_mut(*index) {
+                xform.set_origin_y(*v);
+            }
+        }
+        (ConfigPath::FinalTransformRotation { index }, ConfigValue::Float(v)) => {
+            if let Some(xform) = flame.final_transforms.get_mut(*index) {
+                xform.set_rotation(*v);
+            }
+        }
+        (ConfigPath::FinalTransformScale { index }, ConfigValue::Float(v)) => {
+            if let Some(xform) = flame.final_transforms.get_mut(*index) {
+                xform.set_scale(*v);
+            }
+        }
+        (ConfigPath::FinalTransformPostAffineOriginX { index }, ConfigValue::Float(v)) => {
+            if let Some(xform) = flame.final_transforms.get_mut(*index) {
+                xform.set_post_origin_x(*v);
+            }
+        }
+        (ConfigPath::FinalTransformPostAffineOriginY { index }, ConfigValue::Float(v)) => {
+            if let Some(xform) = flame.final_transforms.get_mut(*index) {
+                xform.set_post_origin_y(*v);
+            }
+        }
+        (ConfigPath::FinalTransformPostAffineRotation { index }, ConfigValue::Float(v)) => {
+            if let Some(xform) = flame.final_transforms.get_mut(*index) {
+                xform.set_post_rotation(*v);
+            }
+        }
+        (ConfigPath::FinalTransformPostAffineScale { index }, ConfigValue::Float(v)) => {
+            if let Some(xform) = flame.final_transforms.get_mut(*index) {
+                xform.set_post_scale(*v);
             }
         }
 

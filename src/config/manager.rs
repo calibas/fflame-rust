@@ -1563,6 +1563,93 @@ impl ConfigManager {
                     .ok_or(ConfigError::InvalidIndex)?;
                 Ok(xform.scale().into())
             }
+            // High-level post-affine ops (normal pool)
+            ConfigPath::TransformPostAffineOriginX { index } => {
+                let xform = flame.transforms.get(*index).ok_or(ConfigError::InvalidIndex)?;
+                Ok(xform.post_origin_x().into())
+            }
+            ConfigPath::TransformPostAffineOriginY { index } => {
+                let xform = flame.transforms.get(*index).ok_or(ConfigError::InvalidIndex)?;
+                Ok(xform.post_origin_y().into())
+            }
+            ConfigPath::TransformPostAffineRotation { index } => {
+                let xform = flame.transforms.get(*index).ok_or(ConfigError::InvalidIndex)?;
+                Ok(xform.post_rotation().into())
+            }
+            ConfigPath::TransformPostAffineScale { index } => {
+                let xform = flame.transforms.get(*index).ok_or(ConfigError::InvalidIndex)?;
+                Ok(xform.post_scale().into())
+            }
+
+            // High-level pre-affine ops (linked pool)
+            ConfigPath::LinkedTransformOriginX { index } => {
+                let xform = flame.linked_transforms.get(*index).ok_or(ConfigError::InvalidIndex)?;
+                Ok(xform.origin_x().into())
+            }
+            ConfigPath::LinkedTransformOriginY { index } => {
+                let xform = flame.linked_transforms.get(*index).ok_or(ConfigError::InvalidIndex)?;
+                Ok(xform.origin_y().into())
+            }
+            ConfigPath::LinkedTransformRotation { index } => {
+                let xform = flame.linked_transforms.get(*index).ok_or(ConfigError::InvalidIndex)?;
+                Ok(xform.rotation().into())
+            }
+            ConfigPath::LinkedTransformScale { index } => {
+                let xform = flame.linked_transforms.get(*index).ok_or(ConfigError::InvalidIndex)?;
+                Ok(xform.scale().into())
+            }
+            // High-level post-affine ops (linked pool)
+            ConfigPath::LinkedTransformPostAffineOriginX { index } => {
+                let xform = flame.linked_transforms.get(*index).ok_or(ConfigError::InvalidIndex)?;
+                Ok(xform.post_origin_x().into())
+            }
+            ConfigPath::LinkedTransformPostAffineOriginY { index } => {
+                let xform = flame.linked_transforms.get(*index).ok_or(ConfigError::InvalidIndex)?;
+                Ok(xform.post_origin_y().into())
+            }
+            ConfigPath::LinkedTransformPostAffineRotation { index } => {
+                let xform = flame.linked_transforms.get(*index).ok_or(ConfigError::InvalidIndex)?;
+                Ok(xform.post_rotation().into())
+            }
+            ConfigPath::LinkedTransformPostAffineScale { index } => {
+                let xform = flame.linked_transforms.get(*index).ok_or(ConfigError::InvalidIndex)?;
+                Ok(xform.post_scale().into())
+            }
+
+            // High-level pre-affine ops (final pool)
+            ConfigPath::FinalTransformOriginX { index } => {
+                let xform = flame.final_transforms.get(*index).ok_or(ConfigError::InvalidIndex)?;
+                Ok(xform.origin_x().into())
+            }
+            ConfigPath::FinalTransformOriginY { index } => {
+                let xform = flame.final_transforms.get(*index).ok_or(ConfigError::InvalidIndex)?;
+                Ok(xform.origin_y().into())
+            }
+            ConfigPath::FinalTransformRotation { index } => {
+                let xform = flame.final_transforms.get(*index).ok_or(ConfigError::InvalidIndex)?;
+                Ok(xform.rotation().into())
+            }
+            ConfigPath::FinalTransformScale { index } => {
+                let xform = flame.final_transforms.get(*index).ok_or(ConfigError::InvalidIndex)?;
+                Ok(xform.scale().into())
+            }
+            // High-level post-affine ops (final pool)
+            ConfigPath::FinalTransformPostAffineOriginX { index } => {
+                let xform = flame.final_transforms.get(*index).ok_or(ConfigError::InvalidIndex)?;
+                Ok(xform.post_origin_x().into())
+            }
+            ConfigPath::FinalTransformPostAffineOriginY { index } => {
+                let xform = flame.final_transforms.get(*index).ok_or(ConfigError::InvalidIndex)?;
+                Ok(xform.post_origin_y().into())
+            }
+            ConfigPath::FinalTransformPostAffineRotation { index } => {
+                let xform = flame.final_transforms.get(*index).ok_or(ConfigError::InvalidIndex)?;
+                Ok(xform.post_rotation().into())
+            }
+            ConfigPath::FinalTransformPostAffineScale { index } => {
+                let xform = flame.final_transforms.get(*index).ok_or(ConfigError::InvalidIndex)?;
+                Ok(xform.post_scale().into())
+            }
 
             // Legacy `FinalTransform*` (no index) variants were removed
             // in Phase 9. The migration shim in
@@ -2041,6 +2128,113 @@ impl ConfigManager {
                 let xform = self.normal_transform_mut(*index)?;
                 let new_value: f32 = value.try_into()?;
                 xform.set_scale(new_value);
+            }
+            // High-level post-affine ops (normal pool)
+            ConfigPath::TransformPostAffineOriginX { index } => {
+                let xform = self.normal_transform_mut(*index)?;
+                let v: f32 = value.try_into()?;
+                xform.set_post_origin_x(v);
+            }
+            ConfigPath::TransformPostAffineOriginY { index } => {
+                let xform = self.normal_transform_mut(*index)?;
+                let v: f32 = value.try_into()?;
+                xform.set_post_origin_y(v);
+            }
+            ConfigPath::TransformPostAffineRotation { index } => {
+                let xform = self.normal_transform_mut(*index)?;
+                let v: f32 = value.try_into()?;
+                xform.set_post_rotation(v);
+            }
+            ConfigPath::TransformPostAffineScale { index } => {
+                let xform = self.normal_transform_mut(*index)?;
+                let v: f32 = value.try_into()?;
+                xform.set_post_scale(v);
+            }
+
+            // High-level pre-affine ops (linked pool)
+            ConfigPath::LinkedTransformOriginX { index } => {
+                let xform = self.linked_transform_mut(*index)?;
+                let v: f32 = value.try_into()?;
+                xform.set_origin_x(v);
+            }
+            ConfigPath::LinkedTransformOriginY { index } => {
+                let xform = self.linked_transform_mut(*index)?;
+                let v: f32 = value.try_into()?;
+                xform.set_origin_y(v);
+            }
+            ConfigPath::LinkedTransformRotation { index } => {
+                let xform = self.linked_transform_mut(*index)?;
+                let v: f32 = value.try_into()?;
+                xform.set_rotation(v);
+            }
+            ConfigPath::LinkedTransformScale { index } => {
+                let xform = self.linked_transform_mut(*index)?;
+                let v: f32 = value.try_into()?;
+                xform.set_scale(v);
+            }
+            // High-level post-affine ops (linked pool)
+            ConfigPath::LinkedTransformPostAffineOriginX { index } => {
+                let xform = self.linked_transform_mut(*index)?;
+                let v: f32 = value.try_into()?;
+                xform.set_post_origin_x(v);
+            }
+            ConfigPath::LinkedTransformPostAffineOriginY { index } => {
+                let xform = self.linked_transform_mut(*index)?;
+                let v: f32 = value.try_into()?;
+                xform.set_post_origin_y(v);
+            }
+            ConfigPath::LinkedTransformPostAffineRotation { index } => {
+                let xform = self.linked_transform_mut(*index)?;
+                let v: f32 = value.try_into()?;
+                xform.set_post_rotation(v);
+            }
+            ConfigPath::LinkedTransformPostAffineScale { index } => {
+                let xform = self.linked_transform_mut(*index)?;
+                let v: f32 = value.try_into()?;
+                xform.set_post_scale(v);
+            }
+
+            // High-level pre-affine ops (final pool)
+            ConfigPath::FinalTransformOriginX { index } => {
+                let xform = self.final_transform_mut(*index)?;
+                let v: f32 = value.try_into()?;
+                xform.set_origin_x(v);
+            }
+            ConfigPath::FinalTransformOriginY { index } => {
+                let xform = self.final_transform_mut(*index)?;
+                let v: f32 = value.try_into()?;
+                xform.set_origin_y(v);
+            }
+            ConfigPath::FinalTransformRotation { index } => {
+                let xform = self.final_transform_mut(*index)?;
+                let v: f32 = value.try_into()?;
+                xform.set_rotation(v);
+            }
+            ConfigPath::FinalTransformScale { index } => {
+                let xform = self.final_transform_mut(*index)?;
+                let v: f32 = value.try_into()?;
+                xform.set_scale(v);
+            }
+            // High-level post-affine ops (final pool)
+            ConfigPath::FinalTransformPostAffineOriginX { index } => {
+                let xform = self.final_transform_mut(*index)?;
+                let v: f32 = value.try_into()?;
+                xform.set_post_origin_x(v);
+            }
+            ConfigPath::FinalTransformPostAffineOriginY { index } => {
+                let xform = self.final_transform_mut(*index)?;
+                let v: f32 = value.try_into()?;
+                xform.set_post_origin_y(v);
+            }
+            ConfigPath::FinalTransformPostAffineRotation { index } => {
+                let xform = self.final_transform_mut(*index)?;
+                let v: f32 = value.try_into()?;
+                xform.set_post_rotation(v);
+            }
+            ConfigPath::FinalTransformPostAffineScale { index } => {
+                let xform = self.final_transform_mut(*index)?;
+                let v: f32 = value.try_into()?;
+                xform.set_post_scale(v);
             }
 
             // Legacy `FinalTransform*` (no index) variants were removed
