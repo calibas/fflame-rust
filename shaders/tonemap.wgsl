@@ -39,6 +39,13 @@ struct TonemapParams {
     levels_low: f32,  // Density below this becomes fully transparent/background
     levels_high: f32,  // Density above this becomes fully opaque
     levels_gamma: f32,  // Gamma for density curve (1.0 = linear)
+    highlight_mode: u32,  // 0 = Clip (per-channel clamp, Apophysis), 1 = MaxNorm (hue-preserving)
+    // Three scalar u32s rather than `vec3<u32>`: vec3 has 16-byte alignment
+    // *and* a 16-byte slot in std140/std430, which would push the struct to
+    // 160 bytes vs. the [u32; 3] in Rust packing to 144. Match Rust packing.
+    _pad_highlight_0: u32,
+    _pad_highlight_1: u32,
+    _pad_highlight_2: u32,
 }
 
 // Path storage entry (matches compute shader PathEntry)
@@ -555,8 +562,50 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         color *= tonemap_params.exposure;
     }
 
-    // Clamp to valid range
-    color = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
+    // Map HDR values back into [0,1].
+    //
+    // `Clip` (Apophysis/JWildfire compatible): per-channel clamp. Any channel
+    // exceeding 1.0 saturates independently, which pushes bright colors
+    // toward the CMY/white corners of the RGB cube — orange (1, 0.5, 0) ×
+    // exposure 5 → (5, 2.5, 0) → clamps to pure yellow.
+    //
+    // `MaxNorm` (hue-preserving): if any channel exceeds 1.0, divide all by
+    // the max so the brightest channel lands at exactly 1.0 and the others
+    // stay in ratio. Bright pixels desaturate by lowering value (luminance)
+    // rather than shifting hue. Negative channels are clamped separately.
+    color = max(color, vec3<f32>(0.0));
+    if (tonemap_params.highlight_mode == 1u) {
+        // MaxNorm: rescale by max channel so brightest channel = 1.0.
+        let m = max(color.r, max(color.g, color.b));
+        if (m > 1.0) {
+            color = color / m;
+        }
+    } else if (tonemap_params.highlight_mode == 2u) {
+        // Reinhard luminance-preserving: L_mapped = L / (1 + L), scale RGB
+        // by L_mapped/L. Rec.709 luminance weights.
+        let lum = dot(color, vec3<f32>(0.2126, 0.7152, 0.0722));
+        if (lum > 1e-6) {
+            let lum_mapped = lum / (1.0 + lum);
+            color = color * (lum_mapped / lum);
+        }
+        // Safety clamp — Reinhard maps to (0,1) but float noise could leak.
+        color = min(color, vec3<f32>(1.0));
+    } else if (tonemap_params.highlight_mode == 3u) {
+        // ACES filmic (Narkowicz approximation):
+        //   f(x) = (x(ax+b)) / (x(cx+d)+e)
+        // Constants tuned for SDR display output. Slight contrast boost in
+        // midtones, gentle highlight roll-off, hue-mostly-preserving.
+        let a = 2.51;
+        let b = 0.03;
+        let c = 2.43;
+        let d = 0.59;
+        let e = 0.14;
+        color = (color * (a * color + vec3<f32>(b))) / (color * (c * color + vec3<f32>(d)) + vec3<f32>(e));
+        color = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
+    } else {
+        // Clip: per-channel clamp (Apophysis/JWildfire compatible).
+        color = min(color, vec3<f32>(1.0));
+    }
 
     // Apply tone curve to fractal color only (not background)
     // Sample curve LUT unconditionally (WebGPU requires textureSample in uniform control flow)

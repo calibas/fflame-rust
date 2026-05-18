@@ -1,4 +1,4 @@
-use crate::scene::tonemap::{ToneMapMode, ToneCurve};
+use crate::scene::tonemap::{HighlightMode, ToneMapMode, ToneCurve};
 use crate::scene::palette::{ColorMode, PathMapStyle, PathCaptureMode, PathTrackingMode, PaletteLibrary};
 use crate::config::{ConfigManager, ConfigPath, LazyUndoUi, UpdateType};
 use crate::renderer::DensityHistogram;
@@ -221,6 +221,9 @@ pub fn render_colors_content(
                                     (ConfigPath::GammaThreshold, preset.gamma_threshold.into()),
                                     (ConfigPath::Brightness, preset.brightness.into()),
                                     (ConfigPath::Vibrancy, preset.vibrancy.into()),
+                                    // TODO: add `white_level` to TonemapPreset (currently
+                                    // omitted so applying a preset doesn't reset the user's
+                                    // highlights tuning — see tonemap-highlights.md).
                                     (ConfigPath::Saturation, preset.saturation.into()),
                                     (ConfigPath::HueShift, preset.hue_shift.into()),
                                     (ConfigPath::UseCurve, preset.use_curve.into()),
@@ -261,6 +264,10 @@ pub fn render_colors_content(
                 max_update = max_update.max(result.update_type);
             }
 
+            if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::WhiteLevel, 50.0..=1000.0, t!("tonemap.highlights").as_ref(), Some(t!("tonemap.tooltip_highlights").as_ref())) {
+                max_update = max_update.max(result.update_type);
+            }
+
             if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::Saturation, 0.0..=3.0, t!("tonemap.saturation").as_ref(), Some(t!("tonemap.tooltip_saturation").as_ref())) {
                 max_update = max_update.max(result.update_type);
             }
@@ -268,6 +275,39 @@ pub fn render_colors_content(
             if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::HueShift, -360.0..=360.0, t!("tonemap.hue_shift").as_ref(), Some(t!("tonemap.tooltip_hue_shift").as_ref())) {
                 max_update = max_update.max(result.update_type);
             }
+
+            // Highlight handling — how channels exceeding 1.0 after exposure
+            // are mapped back into [0,1]. Sits at the bottom of the tonemap
+            // section so it's the last thing the user reaches for after
+            // tuning exposure/gamma/brightness.
+            let current_highlight_mode = config_manager.active_config().highlight_mode;
+            let selected_label = match current_highlight_mode {
+                HighlightMode::Clip => t!("tonemap.highlight_clip"),
+                HighlightMode::MaxNorm => t!("tonemap.highlight_maxnorm"),
+                HighlightMode::Reinhard => t!("tonemap.highlight_reinhard"),
+                HighlightMode::Filmic => t!("tonemap.highlight_filmic"),
+            };
+            ui.horizontal(|ui| {
+                ui.label(t!("tonemap.highlight_mode"));
+                egui::ComboBox::from_id_salt("tonemap_highlight_mode_combo")
+                    .selected_text(selected_label)
+                    .show_ui(ui, |ui| {
+                        for (mode, label, tooltip) in [
+                            (HighlightMode::Clip,     t!("tonemap.highlight_clip"),     t!("tonemap.tooltip_highlight_clip")),
+                            (HighlightMode::MaxNorm,  t!("tonemap.highlight_maxnorm"),  t!("tonemap.tooltip_highlight_maxnorm")),
+                            (HighlightMode::Reinhard, t!("tonemap.highlight_reinhard"), t!("tonemap.tooltip_highlight_reinhard")),
+                            (HighlightMode::Filmic,   t!("tonemap.highlight_filmic"),   t!("tonemap.tooltip_highlight_filmic")),
+                        ] {
+                            let resp = ui.selectable_label(current_highlight_mode == mode, label)
+                                .on_hover_text(tooltip);
+                            if resp.clicked() {
+                                if let Ok(update) = config_manager.update_param(ConfigPath::HighlightMode, mode.into()) {
+                                    max_update = max_update.max(update);
+                                }
+                            }
+                        }
+                    });
+            });
 
             ui.separator();
             egui::CollapsingHeader::new(t!("tonemap.alpha_blending"))

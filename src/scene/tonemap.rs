@@ -18,6 +18,38 @@ impl Default for ToneMapMode {
     }
 }
 
+/// How to handle color values that exceed [0,1] after exposure/gamma/vibrancy.
+/// The shader's clamp-to-[0,1] cliff at the end of the tonemap pass is the
+/// Apophysis/JWildfire-compatible default; `MaxNorm` divides all channels by
+/// the maximum so hue is preserved exactly when any channel would clip.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HighlightMode {
+    /// Per-channel clamp to [0,1]. Causes hue shift toward CMY/white at high
+    /// brightness (orange (1, 0.5, 0) × 5 → (5, 2.5, 0) → clamps to pure
+    /// yellow). Matches Apophysis / JWildfire.
+    Clip,
+    /// Hue-preserving rescale. If `max(r,g,b) > 1`, divide all channels by
+    /// the max so the brightest channel lands at 1.0 and the others stay in
+    /// ratio. No hue shift; bright pixels desaturate by lowering value
+    /// rather than blowing out per-channel.
+    MaxNorm,
+    /// Reinhard luminance-preserving tonemap: `L_mapped = L / (1 + L)` where
+    /// L is Rec.709 luminance. Color is scaled by `L_mapped / L`. Smooth
+    /// roll-off, slight desaturation in highlights. Soft "photographic" look.
+    Reinhard,
+    /// ACES filmic tonemap (Narkowicz approximation): the standard film/HDR
+    /// curve used in games and cinema. Slight contrast boost in midtones,
+    /// gentle highlight roll-off, hue-preserving.
+    Filmic,
+}
+
+impl Default for HighlightMode {
+    fn default() -> Self {
+        // Preserve existing visual regression baselines.
+        Self::Clip
+    }
+}
+
 /// A single control point on the tone curve
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct CurvePoint {

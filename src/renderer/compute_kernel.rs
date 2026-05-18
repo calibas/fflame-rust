@@ -154,6 +154,8 @@ pub struct FlameRenderer {
     path_capture_mode: PathCaptureMode,
     path_tracking_mode: PathTrackingMode,
     density_scale: f32,
+    white_level: f32,
+    highlight_mode: u32,
     background_color: [f32; 3],
     current_render_mode: crate::scene::transforms::RenderMode,
     perspective_strength: f32,
@@ -258,6 +260,8 @@ impl FlameRenderer {
             path_capture_mode: PathCaptureMode::default(),
             path_tracking_mode: PathTrackingMode::default(),
             density_scale: 1.0,
+            white_level: crate::config::defaults::DEFAULT_WHITE_LEVEL,
+            highlight_mode: 0,  // Clip — Apophysis-compatible default
             background_color: [0.0, 0.0, 0.0],
             current_render_mode: flame.render_mode,
             perspective_strength: flame.perspective_strength,
@@ -823,6 +827,13 @@ impl FlameRenderer {
 
         // 3. Update density and background
         self.density_scale = config.density_scale;
+        self.white_level = config.white_level;
+        self.highlight_mode = match config.highlight_mode {
+            crate::scene::tonemap::HighlightMode::Clip => 0,
+            crate::scene::tonemap::HighlightMode::MaxNorm => 1,
+            crate::scene::tonemap::HighlightMode::Reinhard => 2,
+            crate::scene::tonemap::HighlightMode::Filmic => 3,
+        };
         self.background_color = config.background_color;
 
         // 4. Update render mode and perspective
@@ -908,7 +919,7 @@ impl FlameRenderer {
         // config.levels_*). Headless renders and the in-app viewport
         // would otherwise render the same flame with different Levels
         // settings.
-        self.update_tonemap(queue, config.tonemap_mode, config.use_curve, config.exposure, config.gamma, config.gamma_threshold, config.brightness, config.vibrancy, config.saturation, config.hue_shift, config.alpha_blend_low, config.alpha_blend_high, self.width, self.height, self.total_iterations, config.max_iterations, config.zoom, iterations_per_thread, 1, false,
+        self.update_tonemap(queue, config.tonemap_mode, config.highlight_mode, config.use_curve, config.exposure, config.gamma, config.gamma_threshold, config.brightness, config.vibrancy, config.white_level, config.saturation, config.hue_shift, config.alpha_blend_low, config.alpha_blend_high, self.width, self.height, self.total_iterations, config.max_iterations, config.zoom, iterations_per_thread, 1, false,
             config.levels_low, config.levels_high, config.levels_gamma);
         self.update_curve_lut(queue, &config.tonemap_curve);
 
@@ -1038,7 +1049,7 @@ impl FlameRenderer {
             use_curve: 0,  // Disabled
             vibrancy: 1.0,  // Default
             brightness: DEFAULT_BRIGHTNESS,
-            white_level: DEFAULT_WHITE_LEVEL,
+            white_level: self.white_level,
             prefilter_white: PREFILTER_WHITE,
             bright_adjust: BRIGHT_ADJUST,
             area,
@@ -1059,6 +1070,8 @@ impl FlameRenderer {
             levels_low: 0.0,
             levels_high: crate::config::defaults::DEFAULT_LEVELS_HIGH,
             levels_gamma: 1.0,
+            highlight_mode: self.highlight_mode,
+            _pad_highlight: [0; 3],
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -1245,7 +1258,7 @@ impl FlameRenderer {
             use_curve: 0,  // Disabled
             vibrancy: 1.0,  // Default
             brightness: DEFAULT_BRIGHTNESS,
-            white_level: DEFAULT_WHITE_LEVEL,
+            white_level: self.white_level,
             prefilter_white: PREFILTER_WHITE,
             bright_adjust: BRIGHT_ADJUST,
             area,
@@ -1266,6 +1279,8 @@ impl FlameRenderer {
             levels_low: 0.0,
             levels_high: crate::config::defaults::DEFAULT_LEVELS_HIGH,
             levels_gamma: 1.0,
+            highlight_mode: self.highlight_mode,
+            _pad_highlight: [0; 3],
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -1328,7 +1343,7 @@ impl FlameRenderer {
             use_curve: if config.use_curve { 1u32 } else { 0u32 },
             vibrancy: config.vibrancy,
             brightness: config.brightness,
-            white_level: DEFAULT_WHITE_LEVEL,
+            white_level: config.white_level,
             prefilter_white: PREFILTER_WHITE,
             bright_adjust: BRIGHT_ADJUST,
             area,
@@ -1349,13 +1364,25 @@ impl FlameRenderer {
             levels_low: 0.0,
             levels_high: crate::config::defaults::DEFAULT_LEVELS_HIGH,
             levels_gamma: 1.0,
+            highlight_mode: self.highlight_mode,
+            _pad_highlight: [0; 3],
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
 
     /// Update tone mapping mode, curve usage, exposure, gamma, gamma_threshold, brightness, vibrancy, saturation, hue shift, and alpha blend
-    pub fn update_tonemap(&self, queue: &Queue, tonemap_mode: crate::scene::tonemap::ToneMapMode, use_curve: bool, exposure: f32, gamma: f32, gamma_threshold: f32, brightness: f32, vibrancy: f32, saturation: f32, hue_shift: f32, alpha_blend_low: f32, alpha_blend_high: f32, width: u32, height: u32, _total_iterations: u64, _max_iterations: u64, zoom: f32, iterations_per_thread: u32, _batch_size: u32, is_live_preview: bool, levels_low: f32, levels_high: f32, levels_gamma: f32) {
+    pub fn update_tonemap(&mut self, queue: &Queue, tonemap_mode: crate::scene::tonemap::ToneMapMode, highlight_mode: crate::scene::tonemap::HighlightMode, use_curve: bool, exposure: f32, gamma: f32, gamma_threshold: f32, brightness: f32, vibrancy: f32, white_level: f32, saturation: f32, hue_shift: f32, alpha_blend_low: f32, alpha_blend_high: f32, width: u32, height: u32, _total_iterations: u64, _max_iterations: u64, zoom: f32, iterations_per_thread: u32, _batch_size: u32, is_live_preview: bool, levels_low: f32, levels_high: f32, levels_gamma: f32) {
         use crate::config::defaults::*;
+        // Cache on self so internal helpers (update_density_scale,
+        // update_background_color → update_tonemap_state) don't reset
+        // white_level / highlight_mode back to their defaults on the next refresh.
+        self.white_level = white_level;
+        self.highlight_mode = match highlight_mode {
+            crate::scene::tonemap::HighlightMode::Clip => 0,
+            crate::scene::tonemap::HighlightMode::MaxNorm => 1,
+            crate::scene::tonemap::HighlightMode::Reinhard => 2,
+            crate::scene::tonemap::HighlightMode::Filmic => 3,
+        };
 
         let tonemap_mode_u32 = match tonemap_mode {
             crate::scene::tonemap::ToneMapMode::Linear => 0u32,
@@ -1421,7 +1448,7 @@ impl FlameRenderer {
             use_curve: if use_curve { 1u32 } else { 0u32 },
             vibrancy,
             brightness,
-            white_level: DEFAULT_WHITE_LEVEL,
+            white_level,
             prefilter_white: PREFILTER_WHITE,
             bright_adjust: BRIGHT_ADJUST,
             area,
@@ -1442,6 +1469,8 @@ impl FlameRenderer {
             levels_low,
             levels_high,
             levels_gamma,
+            highlight_mode: self.highlight_mode,
+            _pad_highlight: [0; 3],
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
