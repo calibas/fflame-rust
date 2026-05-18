@@ -332,8 +332,8 @@ impl FlamePipelines {
 
         let accumulate_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("Accumulate Pipeline Layout"),
-            bind_group_layouts: &[&accumulate_bind_group_layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&accumulate_bind_group_layout)],
+            immediate_size: 0,
         });
 
         let accumulate_pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
@@ -348,8 +348,8 @@ impl FlamePipelines {
         // Create tonemap render pipeline
         let tonemap_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("Tonemap Pipeline Layout"),
-            bind_group_layouts: &[&tonemap_bind_group_layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&tonemap_bind_group_layout)],
+            immediate_size: 0,
         });
 
         let tonemap_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
@@ -386,7 +386,7 @@ impl FlamePipelines {
                 })],
                 compilation_options: Default::default(),
             }),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
 

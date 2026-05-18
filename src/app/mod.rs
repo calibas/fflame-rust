@@ -260,8 +260,25 @@ pub fn trigger_browser_file_picker_binary(accept: &str, ctx: egui::Context, resu
 }
 
 use winit::{event::*, event_loop::{EventLoop, ControlFlow, ActiveEventLoop}, window::Window};
-use egui_wgpu::wgpu::SurfaceError;
 use std::sync::{Arc, Mutex};
+
+/// Local error type for `App::render` — replaces the wgpu 0.27
+/// `SurfaceError` variants we used to match on. wgpu 0.29's
+/// `Surface::get_current_texture` returns the `CurrentSurfaceTexture`
+/// enum instead of a `Result`, with finer-grained non-success states
+/// (Suboptimal counts as usable; Validation/Timeout are new).
+/// We collapse them to the recovery / fatal pattern the caller cares
+/// about: Lost or Outdated → recreate surface; anything else → log
+/// and recover.
+#[derive(Debug)]
+pub enum RenderError {
+    /// Surface dropped/invalidated — needs full recreate.
+    Lost,
+    /// Surface configuration outdated — needs reconfigure.
+    Outdated,
+    /// Acquisition timed out or a validation error fired — recover.
+    Other,
+}
 
 /// Tracks which flame/animation is currently loaded from the API.
 /// Session-only state (not persisted). Cleared on new flame, load file, etc.
@@ -831,14 +848,13 @@ impl App {
                             app.update();
                             match app.render(&window) {
                                 Ok(_) => {},
-                                Err(SurfaceError::Lost | SurfaceError::Outdated) => {
+                                Err(RenderError::Lost | RenderError::Outdated) => {
                                     log::warn!("Surface lost/outdated, scheduling recovery...");
                                     #[cfg(not(target_arch = "wasm32"))]
                                     { app.needs_surface_recreate = true; }
                                     #[cfg(target_arch = "wasm32")]
                                     { app.gpu.resize(app.gpu.size); }
                                 }
-                                Err(SurfaceError::OutOfMemory) => elwt.exit(),
                                 Err(e) => {
                                     log::error!("Surface error: {:?}, scheduling recovery...", e);
                                     #[cfg(not(target_arch = "wasm32"))]
@@ -952,7 +968,7 @@ impl App {
         // Update performance metrics
         self.metrics.update();
     }
-    fn render(&mut self, window: &Window) -> Result<(), SurfaceError> {
+    fn render(&mut self, window: &Window) -> Result<(), RenderError> {
         use web_time::Instant;
 
         // Sync fullscreen state with browser (WASM only)
@@ -1024,10 +1040,21 @@ impl App {
             self.was_video_exporting = false;
         }
 
-        // Normal rendering: acquire surface texture
+        // Normal rendering: acquire surface texture. wgpu 0.29's
+        // `get_current_texture` returns a `CurrentSurfaceTexture`
+        // enum (not a Result). Suboptimal is still usable — we just
+        // accept it and let the next reconfigure address it. The
+        // other non-success states bubble up as `RenderError` for
+        // the event loop to handle.
+        use egui_wgpu::wgpu::CurrentSurfaceTexture;
         let frame = match self.gpu.surface.get_current_texture() {
-            Ok(f) => f,
-            Err(e) => return Err(e),
+            CurrentSurfaceTexture::Success(f) => f,
+            CurrentSurfaceTexture::Suboptimal(f) => f,
+            CurrentSurfaceTexture::Outdated => return Err(RenderError::Outdated),
+            CurrentSurfaceTexture::Lost => return Err(RenderError::Lost),
+            CurrentSurfaceTexture::Timeout
+            | CurrentSurfaceTexture::Occluded
+            | CurrentSurfaceTexture::Validation => return Err(RenderError::Other),
         };
         let surface_view = frame.texture.create_view(&egui_wgpu::wgpu::TextureViewDescriptor::default());
         let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {

@@ -329,13 +329,19 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     if event.pointer_type() == "touch" {
                         // Only re-dispatch if the event didn't originate on the canvas
                         if event.target().as_ref() != Some(canvas_for_up.as_ref()) {
+                            // web-sys 0.3.98 deprecated chained setters on
+                            // PointerEventInit; the new API uses `set_*`
+                            // taking `&Self`. clientX/clientY become f64
+                            // under web_sys_unstable_apis, so cast to i32
+                            // unconditionally — no-op when already i32.
+                            let init = web_sys::PointerEventInit::new();
+                            init.set_pointer_id(event.pointer_id());
+                            init.set_pointer_type(&event.pointer_type());
+                            init.set_client_x(event.client_x() as i32);
+                            init.set_client_y(event.client_y() as i32);
                             let new_event = web_sys::PointerEvent::new_with_event_init_dict(
                                 event.type_().as_str(),
-                                web_sys::PointerEventInit::new()
-                                    .pointer_id(event.pointer_id())
-                                    .pointer_type(&event.pointer_type())
-                                    .client_x(event.client_x())
-                                    .client_y(event.client_y()),
+                                &init,
                             ).unwrap();
                             let _ = canvas_for_up.dispatch_event(&new_event);
                         }

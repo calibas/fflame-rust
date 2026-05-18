@@ -232,9 +232,9 @@ impl HighResExporter {
     ) -> Result<Self, String> {
         let iterations_per_thread = iterations_per_thread.unwrap_or(Self::DEFAULT_ITERATIONS_PER_THREAD);
         // Create GPU instance
-        let instance = Instance::new(&InstanceDescriptor {
+        let instance = Instance::new(InstanceDescriptor {
             backends: Backends::all(),
-            ..Default::default()
+            ..InstanceDescriptor::new_without_display_handle()
         });
 
         let adapter = instance
@@ -557,8 +557,8 @@ impl HighResExporter {
                 });
                 let init_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
                     label: Some("Export Init Pipeline Layout"),
-                    bind_group_layouts: &[&init_bind_group_layout],
-                    push_constant_ranges: &[],
+                    bind_group_layouts: &[Some(&init_bind_group_layout)],
+                    immediate_size: 0,
                 });
                 let pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
                     label: Some("Export Variation Init"),
@@ -705,8 +705,8 @@ impl HighResExporter {
 
         let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("Export Pipeline Layout"),
-            bind_group_layouts: &[&bind_group_layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&bind_group_layout)],
+            immediate_size: 0,
         });
 
         let compute_pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
@@ -923,8 +923,8 @@ impl HighResExporter {
 
         let tonemap_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("Export Tonemap Pipeline Layout"),
-            bind_group_layouts: &[&tonemap_bind_group_layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&tonemap_bind_group_layout)],
+            immediate_size: 0,
         });
 
         let tonemap_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
@@ -952,7 +952,7 @@ impl HighResExporter {
             },
             depth_stencil: None,
             multisample: MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
 
@@ -1862,6 +1862,7 @@ impl HighResExporter {
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
 
             render_pass.set_pipeline(&self.tonemap_pipeline);

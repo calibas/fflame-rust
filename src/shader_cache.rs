@@ -368,8 +368,8 @@ impl ShaderCache {
 
         let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some(&format!("{} Layout", label)),
-            bind_group_layouts: &[bind_group_layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(bind_group_layout)],
+            immediate_size: 0,
         });
 
         device.create_compute_pipeline(&ComputePipelineDescriptor {
@@ -446,8 +446,8 @@ impl ShaderCache {
         });
         let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("Variation Init Layout"),
-            bind_group_layouts: &[init_bind_group_layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(init_bind_group_layout)],
+            immediate_size: 0,
         });
         let pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
             label: Some("Variation Init"),
