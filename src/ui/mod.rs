@@ -116,8 +116,8 @@ impl<'a> VkbDragValue<'a> {
         self.inner = self.inner.range(range);
         self
     }
-    pub fn prefix(mut self, prefix: impl ToString) -> Self { self.inner = self.inner.prefix(prefix); self }
-    pub fn suffix(mut self, suffix: impl ToString) -> Self { self.inner = self.inner.suffix(suffix); self }
+    pub fn prefix(mut self, prefix: impl ToString) -> Self { self.inner = self.inner.prefix(prefix.to_string()); self }
+    pub fn suffix(mut self, suffix: impl ToString) -> Self { self.inner = self.inner.suffix(suffix.to_string()); self }
     pub fn min_decimals(mut self, min_decimals: usize) -> Self { self.inner = self.inner.min_decimals(min_decimals); self }
     pub fn fixed_decimals(mut self, fixed_decimals: usize) -> Self { self.inner = self.inner.fixed_decimals(fixed_decimals); self }
 }
@@ -385,6 +385,10 @@ impl EguiLayer {
     pub fn new(window: &Window, device: &Device, format: TextureFormat) -> Self {
         let ctx = egui_dock::egui::Context::default();
 
+        // egui 0.34 requires Context::run() to be called at least once before
+        // fonts can be accessed. Run a dummy frame to initialize the font system.
+        let _ = ctx.run(egui_dock::egui::RawInput::default(), |_ctx| {});
+
         // Initialize fonts with Noto Sans (better Unicode coverage than Ubuntu-Light)
         font_loader::initialize_default_fonts(&ctx);
 
@@ -475,9 +479,9 @@ impl EguiLayer {
         match event {
             WindowEvent::MouseInput { .. } | WindowEvent::CursorMoved { .. } | WindowEvent::MouseWheel { .. } => {
                 // Check multiple egui states to detect UI interaction
-                let is_using = self.ctx.is_using_pointer();
-                let wants_pointer = self.ctx.wants_pointer_input();
-                let is_pointer_over_area = self.ctx.is_pointer_over_area();
+                let is_using = self.ctx.egui_is_using_pointer();
+                let wants_pointer = self.ctx.egui_wants_pointer_input();
+                let is_pointer_over_area = self.ctx.is_pointer_over_egui();
 
                 // Consume if egui wants the pointer OR pointer is over any UI area
                 let consumed = response.consumed && (is_using || wants_pointer || is_pointer_over_area);
@@ -682,7 +686,7 @@ impl EguiLayer {
 
         // Wider, always-visible scrollbars in compact mode (touch-friendly).
         // Applied every frame since egui_dock may reset styles.
-        self.ctx.style_mut(|style| {
+        self.ctx.global_style_mut(|style| {
             if self.compact_mode {
                 style.spacing.scroll = egui::style::ScrollStyle {
                     bar_width: 7.0,
@@ -880,6 +884,13 @@ impl EguiLayer {
         // Capture animation time before closure to avoid borrow conflict with animation_controller
         let anim_current_time = animation_controller.current_time;
 
+        // egui 0.34 deprecates `Context::run` + `CentralPanel::show` + `Panel::show` +
+        // `DockArea::show(ctx, ...)` in favor of an eframe::App-based flow that hands
+        // out a `&mut Ui` directly. We drive winit + wgpu ourselves, so the legacy
+        // ctx-based path is still the supported way to feed egui from outside eframe.
+        // Suppress for the duration of this closure rather than restructuring the
+        // whole UI tree.
+        #[allow(deprecated)]
         let full_output = self.ctx.run(raw_input, |ctx| {
             // Debug: Print font info once after fonts are available
             static FONT_DEBUG_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -1121,7 +1132,8 @@ impl EguiLayer {
             // The GPU renders the fractal texture taller (body + tab bar height). The body
             // shows the bottom portion via UV offset. Here we draw the top portion over the
             // tab bar and block input so the hidden tab buttons can't be clicked.
-            if let Some((_surface, node_index, _tab)) = workspace.dock_state.find_tab(&workspace::PanelType::FractalViewport) {
+            if let Some(tab_path) = workspace.dock_state.find_tab(&workspace::PanelType::FractalViewport) {
+                let node_index = tab_path.node;
                 if let Some(leaf) = workspace.dock_state.main_surface()[node_index].get_leaf() {
                     let tab_bar_h = leaf.viewport.min.y - leaf.rect.min.y;
                     // Store for next frame so render_fractal_viewport can inflate texture size
@@ -1271,8 +1283,8 @@ impl EguiLayer {
         // Close save dialog panel if requested (Cancel or after Save)
         if self.save_online_dialog_state.close_requested {
             self.save_online_dialog_state.close_requested = false;
-            if let Some((surface, node, tab)) = workspace.dock_state.find_tab(&workspace::PanelType::SaveOnlineDialog) {
-                workspace.dock_state.remove_tab((surface, node, tab));
+            if let Some(tab_path) = workspace.dock_state.find_tab(&workspace::PanelType::SaveOnlineDialog) {
+                workspace.dock_state.remove_tab(tab_path);
             }
         }
 
@@ -1369,6 +1381,7 @@ impl EguiLayer {
                 depth_stencil_attachment: None,
                 occlusion_query_set: None,
                 timestamp_writes: None,
+                multiview_mask: None,
             });
 
             // forget_lifetime() converts RenderPass<'a> to RenderPass<'static>

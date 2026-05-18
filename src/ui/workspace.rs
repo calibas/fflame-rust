@@ -176,8 +176,8 @@ impl Workspace {
     pub fn open_compact_panel(&mut self, panel_type: PanelType, ctx: &egui::Context) {
         if let Some((surface_index, node_index, tab_index)) = self.find_tab(panel_type) {
             // Already exists — focus it
-            self.dock_state.set_focused_node_and_surface((surface_index, node_index));
-            self.dock_state.set_active_tab((surface_index, node_index, tab_index));
+            self.dock_state.set_focused_node_and_surface(egui_dock::NodePath::new(surface_index, node_index));
+            let _ = self.dock_state.set_active_tab(egui_dock::TabPath::new(surface_index, node_index, tab_index));
             return;
         }
 
@@ -190,8 +190,8 @@ impl Workspace {
                 .append_tab(panel_type);
             // Find the newly added tab to focus it
             if let Some((si, ni, ti)) = self.find_tab(panel_type) {
-                self.dock_state.set_focused_node_and_surface((si, ni));
-                self.dock_state.set_active_tab((si, ni, ti));
+                self.dock_state.set_focused_node_and_surface(egui_dock::NodePath::new(si, ni));
+                let _ = self.dock_state.set_active_tab(egui_dock::TabPath::new(si, ni, ti));
             }
             return;
         }
@@ -223,11 +223,11 @@ impl Workspace {
     /// Used by compact mode to add new tabs to an existing panel area.
     fn find_non_viewport_node(&self) -> Option<egui_dock::NodeIndex> {
         // Find any non-viewport tab and return its node index
-        for ((_surface, _tab), &ref panel) in self.dock_state.iter_all_tabs() {
+        for (_tab_path, panel) in self.dock_state.iter_all_tabs() {
             if *panel != PanelType::FractalViewport {
                 // Found a non-viewport tab — look up its full location
-                if let Some((_si, ni, _ti)) = self.dock_state.find_tab(panel) {
-                    return Some(ni);
+                if let Some(p) = self.dock_state.find_tab(panel) {
+                    return Some(p.node);
                 }
             }
         }
@@ -270,8 +270,8 @@ impl Workspace {
                     }
 
                     // Focus the newly created window
-                    self.dock_state.set_focused_node_and_surface((new_surface_index, new_node_index));
-                    self.dock_state.set_active_tab((new_surface_index, new_node_index, new_tab_index));
+                    self.dock_state.set_focused_node_and_surface(egui_dock::NodePath::new(new_surface_index, new_node_index));
+                    let _ = self.dock_state.set_active_tab(egui_dock::TabPath::new(new_surface_index, new_node_index, new_tab_index));
                 }
             } else {
                 // Not collapsed - just bring to front and activate
@@ -281,8 +281,8 @@ impl Workspace {
                     ctx.move_to_top(layer_id);
                 }
 
-                self.dock_state.set_focused_node_and_surface((surface_index, node_index));
-                self.dock_state.set_active_tab((surface_index, node_index, tab_index));
+                self.dock_state.set_focused_node_and_surface(egui_dock::NodePath::new(surface_index, node_index));
+                let _ = self.dock_state.set_active_tab(egui_dock::TabPath::new(surface_index, node_index, tab_index));
             }
         } else {
             // Panel doesn't exist - create new floating window
@@ -333,7 +333,7 @@ impl Workspace {
     pub fn activate_panel(&mut self, panel_type: PanelType) {
         // Try to find and activate the tab
         if let Some((surface_index, node_index, tab_index)) = self.find_tab(panel_type) {
-            self.dock_state.set_active_tab((surface_index, node_index, tab_index));
+            let _ = self.dock_state.set_active_tab(egui_dock::TabPath::new(surface_index, node_index, tab_index));
         } else {
             // Panel doesn't exist, open as floating window
             self.dock_state.add_window(vec![panel_type]);
@@ -342,8 +342,11 @@ impl Workspace {
 
     /// Find the location of a panel tab (surface, node, tab index)
     fn find_tab(&self, panel_type: PanelType) -> Option<(egui_dock::SurfaceIndex, egui_dock::NodeIndex, egui_dock::TabIndex)> {
-        // Use find_tab API to locate the panel
-        self.dock_state.find_tab(&panel_type)
+        // egui_dock 0.19 returns a `TabPath` from `find_tab`; unpack to the
+        // tuple shape callers expect.
+        self.dock_state
+            .find_tab(&panel_type)
+            .map(|p| (p.surface, p.node, p.tab))
     }
 
     /// Create Standard layout: Fractal in center, controls on sides

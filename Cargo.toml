@@ -9,9 +9,8 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 winit = "0.30"
-# wgpu = "23.0"
-egui = "0.33"
-egui_dock = "0.18"
+egui = "0.34"
+egui_dock = "0.19"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 ron = "0.8"
@@ -44,7 +43,7 @@ ringbuf = "0.4"
 
 # WASM-specific dependencies
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-egui-winit = { version = "0.33", default-features = false }
+egui-winit = { version = "0.34", default-features = false }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 web-sys = { version = "0.3", features = [
@@ -106,16 +105,30 @@ js-sys = "0.3"
 console_error_panic_hook = "0.1"
 console_log = "1.0"
 getrandom = { version = "0.2", features = ["js"] }
-egui-wgpu = "0.33"
-# WebGPU only - WebGL doesn't support compute shaders (required for fractal generation)
-wgpu = { version = "27.0", features = ["webgpu"]}
+# egui-wgpu default features pull in `wgpu/default` + `wgpu/webgl`.
+# wgpu/default enables dx12, which we don't want (transitive dep
+# skew with gpu-allocator's windows-rs) and webgl is incompatible
+# with our compute-shader requirements. Disable defaults; we don't
+# need any of the optional egui-wgpu features on WASM.
+egui-wgpu = { version = "0.34", default-features = false }
+# WebGPU only — WebGL doesn't support compute shaders (required for
+# fractal generation).
+wgpu = { version = "29.0", default-features = false, features = ["std", "webgpu", "wgsl"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-egui-winit = { version = "0.33", default-features = true }
+egui-winit = { version = "0.34", default-features = true }
 env_logger = "0.11"
 pollster = { version = "0.4", features = ["macro"] }
 clap = { version = "4.5", features = ["derive"] }
-egui-wgpu = "0.33"
+# See WASM section for why egui-wgpu defaults are disabled. Re-enable
+# macos-window-resize-jitter-fix on desktop (harmless on
+# Windows/Linux — just pulls wgpu/metal which only activates on Mac).
+egui-wgpu = { version = "0.34", default-features = false, features = ["macos-window-resize-jitter-fix"] }
+# Desktop backends: vulkan + metal + gles. dx12 deliberately omitted —
+# wgpu 29.0.3's dx12 backend has a transitive dep skew with
+# gpu-allocator's windows-rs version, and on Windows we use Vulkan
+# anyway (see Backends::VULKAN forcing for SwiftShader compat).
+wgpu = { version = "29.0", default-features = false, features = ["std", "parking_lot", "vulkan", "metal", "gles", "wgsl"] }
 ureq = "2"
 aes-gcm = "0.10"
 base64 = "0.22"

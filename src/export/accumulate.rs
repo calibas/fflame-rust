@@ -109,8 +109,8 @@ pub fn create_pipeline(
     });
     let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
         label: Some("Accumulate Pipeline Layout"),
-        bind_group_layouts: &[bind_group_layout],
-        push_constant_ranges: &[],
+        bind_group_layouts: &[Some(bind_group_layout)],
+        immediate_size: 0,
     });
     device.create_compute_pipeline(&ComputePipelineDescriptor {
         label: Some("Accumulate Samples Pipeline"),
