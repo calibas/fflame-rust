@@ -1723,7 +1723,7 @@ impl HighResExporter {
             use_curve: if config.use_curve { 1 } else { 0 },
             vibrancy: config.vibrancy,
             brightness: config.brightness,
-            white_level: DEFAULT_WHITE_LEVEL,
+            white_level: config.white_level,
             prefilter_white: PREFILTER_WHITE,
             bright_adjust: BRIGHT_ADJUST,
             area,
@@ -1745,6 +1745,13 @@ impl HighResExporter {
             levels_low: 0.0,
             levels_high: crate::config::defaults::DEFAULT_LEVELS_HIGH,
             levels_gamma: crate::config::defaults::DEFAULT_LEVELS_GAMMA,
+            highlight_mode: match config.highlight_mode {
+                crate::scene::tonemap::HighlightMode::Clip => 0,
+                crate::scene::tonemap::HighlightMode::MaxNorm => 1,
+                crate::scene::tonemap::HighlightMode::Reinhard => 2,
+                crate::scene::tonemap::HighlightMode::Filmic => 3,
+            },
+            _pad_highlight: [0; 3],
         };
 
         self.queue.write_buffer(

@@ -632,6 +632,9 @@ pub fn flame_response_to_config(
         gamma_threshold: resp.gamma_threshold,
         brightness: resp.brightness,
         vibrancy: resp.vibrancy,
+        // white_level + highlight_mode land in config v2; v1 wire format defaults them.
+        white_level: crate::config::defaults::DEFAULT_WHITE_LEVEL,
+        highlight_mode: crate::scene::tonemap::HighlightMode::default(),
         saturation: resp.saturation,
         hue_shift: resp.hue_shift,
         alpha_blend_low: resp.alpha_blend_low,
