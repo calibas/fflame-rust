@@ -326,7 +326,7 @@ impl GpuContext {
         // If new() fails after this, we panic — there's no way to restore a valid surface.
         unsafe { ManuallyDrop::drop(&mut self.surface); }
 
-        let mut new_ctx = ManuallyDrop::new(
+        let new_ctx = ManuallyDrop::new(
             pollster::block_on(Self::new(window))
                 .expect("GPU reinitialization failed — cannot recover from device loss")
         );

@@ -1889,7 +1889,7 @@ impl App {
                     false,
                 );
             }
-            Ok(UrlLoadedData::Animation { mut animation, animation_id, flame_id, flame_meta }) => {
+            Ok(UrlLoadedData::Animation { animation, animation_id, flame_id, flame_meta }) => {
                 let anim_name = animation.name.clone();
                 log::info!("URL load: animation '{}' ({})", anim_name, animation_id);
 
@@ -2063,7 +2063,7 @@ async fn load_from_url(
 
     if let Some(animation_id) = animation_id {
         // Load animation with embedded flame config (single request)
-        let (mut animation, _flame_config, resp_flame_id) = api.load_animation_full(&animation_id).await
+        let (animation, _flame_config, resp_flame_id) = api.load_animation_full(&animation_id).await
             .map_err(|e| format!("Failed to load animation: {}", e))?;
 
         // Use flame_id from URL param, or fall back to the one from the animation response

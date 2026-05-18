@@ -338,7 +338,7 @@ pub fn render_cloud_palettes_section(
     ui.separator();
 
     let header_id = ui.make_persistent_id("cloud_palettes_header");
-    let mut collapsing = egui::collapsing_header::CollapsingState::load_with_default_open(
+    let collapsing = egui::collapsing_header::CollapsingState::load_with_default_open(
         ui.ctx(),
         header_id,
         false, // Default collapsed

@@ -712,7 +712,7 @@ impl<'a> PanelViewer<'a> {
         }
 
         // Handle animation load response
-        if let Some(mut animation) = response.load_animation.take() {
+        if let Some(animation) = response.load_animation.take() {
             // If animation has embedded config, load it via selected_preset_config
             // This ensures proper GPU sync and undo/redo handling
             if let Some(config) = animation.base_config.clone() {

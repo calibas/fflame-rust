@@ -315,7 +315,6 @@ pub fn render_file_controls(
     api_context: Option<&AnimationApiContext>,
 ) {
     let has_animation = controller.animation.is_some();
-    let has_tracks = controller.animation.as_ref().map_or(false, |a| !a.tracks.is_empty());
 
     // Row 1: Name
     // ui.label(t!("animation_panel.name"));

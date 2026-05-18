@@ -482,9 +482,10 @@ pub struct App {
     /// Subflames panel "Load from file" target: index of the subflame
     /// to replace once the picked `.fflame` finishes loading. Captured
     /// at button-click time so the async WASM file picker can pair the
-    /// returned JSON with the right slot. Always None on desktop
-    /// (the dialog is synchronous, so the index never needs to survive
-    /// across frames).
+    /// returned JSON with the right slot. Desktop uses a synchronous
+    /// dialog, so the index never has to survive across frames — the
+    /// field is unused there.
+    #[allow(dead_code)]
     pub(super) pending_subflame_load_index: Option<usize>,
 
     // Variation fetching: when loading a flame that references unknown
@@ -725,7 +726,7 @@ impl App {
                             app.last_input_time = Some(web_time::Instant::now());
                             window.request_redraw();
                         }
-                        WindowEvent::Touch(ref touch) => {
+                        WindowEvent::Touch(ref _touch) => {
                             app.last_input_time = Some(web_time::Instant::now());
                             window.request_redraw();
                         }

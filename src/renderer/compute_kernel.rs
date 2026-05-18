@@ -1633,7 +1633,6 @@ impl FlameRenderer {
     pub fn update_path_features(&mut self, device: &Device, queue: &Queue, flame: &crate::scene::transforms::Flame) -> bool {
         let needs_path = self.needs_path_features();
         let has_path = self.buffers.path_features_enabled();
-        let shader_has_path = self.pipelines.path_features_enabled();
         let mut changed = false;
 
         // Update buffers if needed

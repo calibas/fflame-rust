@@ -83,8 +83,10 @@
 /// ```
 
 use super::delta::{
-    AffineParam, ConfigChange, ConfigDelta, ConfigPath, ConfigValue, TransformKind, TransformRef, UpdateType,
+    AffineParam, ConfigChange, ConfigDelta, ConfigPath, ConfigValue, TransformRef, UpdateType,
 };
+#[cfg(test)]
+use super::delta::TransformKind;
 use super::fractal_config::FractalConfig;
 use crate::scene::transforms::Flame;
 use std::time::Duration;
@@ -390,19 +392,10 @@ impl ConfigManager {
         self.current.flame.subflames.len()
     }
 
-    /// Resolve an `EditingTarget` to the `Flame` it refers to. `Main`
-    /// returns the main flame; `Subflame { index }` returns the
-    /// nested subflame at that index. Used by the apply/get machinery
-    /// to route writes/reads to the right slot without physically
-    /// swapping data.
-    fn target_flame(&self, target: EditingTarget) -> Option<&Flame> {
-        match target {
-            EditingTarget::Main => Some(&self.current.flame),
-            EditingTarget::Subflame { index } => self.current.flame.subflames.get(index),
-        }
-    }
-
-    /// Mutable counterpart to `target_flame`.
+    /// Resolve an `EditingTarget` to a mutable `Flame` reference. `Main`
+    /// returns the main flame; `Subflame { index }` returns the nested
+    /// subflame at that index. Used by the apply/get machinery to route
+    /// writes/reads to the right slot without physically swapping data.
     fn target_flame_mut(&mut self, target: EditingTarget) -> Option<&mut Flame> {
         match target {
             EditingTarget::Main => Some(&mut self.current.flame),
