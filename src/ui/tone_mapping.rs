@@ -225,6 +225,20 @@ pub fn render_colors_content(
                         max_update = max_update.max(update);
                     }
                 }
+                let rein_resp = ui.selectable_label(matches!(current_highlight_mode, HighlightMode::Reinhard), t!("tonemap.highlight_reinhard"))
+                    .on_hover_text(t!("tonemap.tooltip_highlight_reinhard"));
+                if rein_resp.clicked() {
+                    if let Ok(update) = config_manager.update_param(ConfigPath::HighlightMode, HighlightMode::Reinhard.into()) {
+                        max_update = max_update.max(update);
+                    }
+                }
+                let film_resp = ui.selectable_label(matches!(current_highlight_mode, HighlightMode::Filmic), t!("tonemap.highlight_filmic"))
+                    .on_hover_text(t!("tonemap.tooltip_highlight_filmic"));
+                if film_resp.clicked() {
+                    if let Ok(update) = config_manager.update_param(ConfigPath::HighlightMode, HighlightMode::Filmic.into()) {
+                        max_update = max_update.max(update);
+                    }
+                }
             });
 
             // Preset dropdown — snaps brightness/curve fields to a named

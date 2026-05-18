@@ -2531,6 +2531,8 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
                 match s {
                     "Clip" => Some(ConfigValue::HighlightMode(HighlightMode::Clip)),
                     "MaxNorm" => Some(ConfigValue::HighlightMode(HighlightMode::MaxNorm)),
+                    "Reinhard" => Some(ConfigValue::HighlightMode(HighlightMode::Reinhard)),
+                    "Filmic" => Some(ConfigValue::HighlightMode(HighlightMode::Filmic)),
                     _ => None,
                 }
             } else {

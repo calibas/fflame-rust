@@ -1748,6 +1748,8 @@ impl HighResExporter {
             highlight_mode: match config.highlight_mode {
                 crate::scene::tonemap::HighlightMode::Clip => 0,
                 crate::scene::tonemap::HighlightMode::MaxNorm => 1,
+                crate::scene::tonemap::HighlightMode::Reinhard => 2,
+                crate::scene::tonemap::HighlightMode::Filmic => 3,
             },
             _pad_highlight: [0; 3],
         };
