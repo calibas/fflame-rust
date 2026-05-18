@@ -385,6 +385,10 @@ impl EguiLayer {
     pub fn new(window: &Window, device: &Device, format: TextureFormat) -> Self {
         let ctx = egui_dock::egui::Context::default();
 
+        // egui 0.34 requires Context::run() to be called at least once before
+        // fonts can be accessed. Run a dummy frame to initialize the font system.
+        let _ = ctx.run(egui_dock::egui::RawInput::default(), |_ctx| {});
+
         // Initialize fonts with Noto Sans (better Unicode coverage than Ubuntu-Light)
         font_loader::initialize_default_fonts(&ctx);
 
