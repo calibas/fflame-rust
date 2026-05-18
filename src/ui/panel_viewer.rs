@@ -921,7 +921,7 @@ impl<'a> PanelViewer<'a> {
 
             // Handle mouse wheel for zooming
             if response.hovered() {
-                let scroll_delta = ui.input(|i| i.raw_scroll_delta.y);
+                let scroll_delta = ui.input(|i| i.smooth_scroll_delta.y);
                 if scroll_delta.abs() > 0.1 {
                     self.handle_fractal_scroll(scroll_delta, response.hover_pos(), response.rect, available_size);
                 }

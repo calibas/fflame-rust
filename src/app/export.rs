@@ -16,9 +16,9 @@ pub async fn export_headless_wasm(
     transparent: bool,
 ) -> Result<Vec<u8>, String> {
     // Create headless GPU instance
-    let instance = egui_wgpu::wgpu::Instance::new(&egui_wgpu::wgpu::InstanceDescriptor {
+    let instance = egui_wgpu::wgpu::Instance::new(egui_wgpu::wgpu::InstanceDescriptor {
         backends: egui_wgpu::wgpu::Backends::BROWSER_WEBGPU,
-        ..Default::default()
+        ..egui_wgpu::wgpu::InstanceDescriptor::new_without_display_handle()
     });
 
     // Try high-performance adapter first, then fallback
@@ -172,9 +172,9 @@ pub async fn export_headless(
 /// FlameRenderer) or has to be tile-fallbacked (use HighResExporter).
 #[cfg(not(target_arch = "wasm32"))]
 async fn probe_max_binding_size() -> Option<u64> {
-    let instance = egui_wgpu::wgpu::Instance::new(&egui_wgpu::wgpu::InstanceDescriptor {
+    let instance = egui_wgpu::wgpu::Instance::new(egui_wgpu::wgpu::InstanceDescriptor {
         backends: egui_wgpu::wgpu::Backends::all(),
-        ..Default::default()
+        ..egui_wgpu::wgpu::InstanceDescriptor::new_without_display_handle()
     });
     let adapter = instance
         .request_adapter(&egui_wgpu::wgpu::RequestAdapterOptions {
@@ -203,9 +203,9 @@ async fn export_headless_gpu(
     let export_start = Instant::now();
 
     // Create headless GPU instance
-    let instance = egui_wgpu::wgpu::Instance::new(&egui_wgpu::wgpu::InstanceDescriptor {
+    let instance = egui_wgpu::wgpu::Instance::new(egui_wgpu::wgpu::InstanceDescriptor {
         backends: egui_wgpu::wgpu::Backends::all(),
-        ..Default::default()
+        ..egui_wgpu::wgpu::InstanceDescriptor::new_without_display_handle()
     });
 
     let adapter = instance

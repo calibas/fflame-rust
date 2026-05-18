@@ -46,12 +46,12 @@ impl GpuContext {
         #[cfg(not(target_arch = "wasm32"))]
         log::info!("Creating GPU instance with all backends");
 
-        let instance = Instance::new(&InstanceDescriptor {
+        let instance = Instance::new(InstanceDescriptor {
             #[cfg(target_arch = "wasm32")]
             backends: Backends::BROWSER_WEBGPU,  // WebGL doesn't support compute shaders
             #[cfg(not(target_arch = "wasm32"))]
             backends: Backends::all(),
-            ..Default::default()
+            ..InstanceDescriptor::new_without_display_handle()
         });
 
         // Using Arc<Window> gives the surface a 'static lifetime safely
