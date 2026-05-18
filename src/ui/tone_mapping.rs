@@ -205,42 +205,6 @@ pub fn render_colors_content(
                 }
             });
 
-            // Highlight handling — how channels exceeding 1.0 after exposure
-            // are mapped back into [0,1]. Clip is Apophysis-compatible (default);
-            // MaxNorm preserves hue by rescaling all channels by their max.
-            ui.label(t!("tonemap.highlight_mode"));
-            let current_highlight_mode = config_manager.active_config().highlight_mode;
-            ui.horizontal(|ui| {
-                let clip_resp = ui.selectable_label(matches!(current_highlight_mode, HighlightMode::Clip), t!("tonemap.highlight_clip"))
-                    .on_hover_text(t!("tonemap.tooltip_highlight_clip"));
-                if clip_resp.clicked() {
-                    if let Ok(update) = config_manager.update_param(ConfigPath::HighlightMode, HighlightMode::Clip.into()) {
-                        max_update = max_update.max(update);
-                    }
-                }
-                let max_resp = ui.selectable_label(matches!(current_highlight_mode, HighlightMode::MaxNorm), t!("tonemap.highlight_maxnorm"))
-                    .on_hover_text(t!("tonemap.tooltip_highlight_maxnorm"));
-                if max_resp.clicked() {
-                    if let Ok(update) = config_manager.update_param(ConfigPath::HighlightMode, HighlightMode::MaxNorm.into()) {
-                        max_update = max_update.max(update);
-                    }
-                }
-                let rein_resp = ui.selectable_label(matches!(current_highlight_mode, HighlightMode::Reinhard), t!("tonemap.highlight_reinhard"))
-                    .on_hover_text(t!("tonemap.tooltip_highlight_reinhard"));
-                if rein_resp.clicked() {
-                    if let Ok(update) = config_manager.update_param(ConfigPath::HighlightMode, HighlightMode::Reinhard.into()) {
-                        max_update = max_update.max(update);
-                    }
-                }
-                let film_resp = ui.selectable_label(matches!(current_highlight_mode, HighlightMode::Filmic), t!("tonemap.highlight_filmic"))
-                    .on_hover_text(t!("tonemap.tooltip_highlight_filmic"));
-                if film_resp.clicked() {
-                    if let Ok(update) = config_manager.update_param(ConfigPath::HighlightMode, HighlightMode::Filmic.into()) {
-                        max_update = max_update.max(update);
-                    }
-                }
-            });
-
             // Preset dropdown — snaps brightness/curve fields to a named
             // "look" without touching the flame, palette, or background.
             // Each selection is one batch update (single undo step).
@@ -311,6 +275,39 @@ pub fn render_colors_content(
             if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::HueShift, -360.0..=360.0, t!("tonemap.hue_shift").as_ref(), Some(t!("tonemap.tooltip_hue_shift").as_ref())) {
                 max_update = max_update.max(result.update_type);
             }
+
+            // Highlight handling — how channels exceeding 1.0 after exposure
+            // are mapped back into [0,1]. Sits at the bottom of the tonemap
+            // section so it's the last thing the user reaches for after
+            // tuning exposure/gamma/brightness.
+            let current_highlight_mode = config_manager.active_config().highlight_mode;
+            let selected_label = match current_highlight_mode {
+                HighlightMode::Clip => t!("tonemap.highlight_clip"),
+                HighlightMode::MaxNorm => t!("tonemap.highlight_maxnorm"),
+                HighlightMode::Reinhard => t!("tonemap.highlight_reinhard"),
+                HighlightMode::Filmic => t!("tonemap.highlight_filmic"),
+            };
+            ui.horizontal(|ui| {
+                ui.label(t!("tonemap.highlight_mode"));
+                egui::ComboBox::from_id_salt("tonemap_highlight_mode_combo")
+                    .selected_text(selected_label)
+                    .show_ui(ui, |ui| {
+                        for (mode, label, tooltip) in [
+                            (HighlightMode::Clip,     t!("tonemap.highlight_clip"),     t!("tonemap.tooltip_highlight_clip")),
+                            (HighlightMode::MaxNorm,  t!("tonemap.highlight_maxnorm"),  t!("tonemap.tooltip_highlight_maxnorm")),
+                            (HighlightMode::Reinhard, t!("tonemap.highlight_reinhard"), t!("tonemap.tooltip_highlight_reinhard")),
+                            (HighlightMode::Filmic,   t!("tonemap.highlight_filmic"),   t!("tonemap.tooltip_highlight_filmic")),
+                        ] {
+                            let resp = ui.selectable_label(current_highlight_mode == mode, label)
+                                .on_hover_text(tooltip);
+                            if resp.clicked() {
+                                if let Ok(update) = config_manager.update_param(ConfigPath::HighlightMode, mode.into()) {
+                                    max_update = max_update.max(update);
+                                }
+                            }
+                        }
+                    });
+            });
 
             ui.separator();
             egui::CollapsingHeader::new(t!("tonemap.alpha_blending"))
