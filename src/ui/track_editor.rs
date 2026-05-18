@@ -382,20 +382,25 @@ fn render_tracks_visual(
                                     .map(|v| format!("{:.3}", v))
                                     .unwrap_or_else(|| format!("{}", keyframe.value));
 
-                                // Create a tooltip area near the pointer
+                                // Create a tooltip area near the pointer.
+                                // `Tooltip::always_open` with `PopupAnchor::Pointer`
+                                // matches the legacy `show_tooltip` behavior — body
+                                // shows as long as this call runs, positioned at
+                                // the cursor.
                                 let tooltip_id = egui::Id::new(format!("kf_tooltip_{}_{}", path, kf_idx));
-                                #[allow(deprecated)]
-                                egui::containers::show_tooltip(
-                                    ui.ctx(),
+                                egui::Tooltip::always_open(
+                                    ui.ctx().clone(),
                                     egui::LayerId::new(egui::Order::Tooltip, tooltip_id),
                                     tooltip_id,
-                                    |ui| {
-                                        ui.label(format!(
-                                            "{}: {} @ {:.2}s",
-                                            path, value_str, keyframe.time
-                                        ));
-                                    },
-                                );
+                                    egui::PopupAnchor::Pointer,
+                                )
+                                .gap(12.0)
+                                .show(|ui| {
+                                    ui.label(format!(
+                                        "{}: {} @ {:.2}s",
+                                        path, value_str, keyframe.time
+                                    ));
+                                });
 
                                 // Check for click on keyframe
                                 if row_response.clicked() {
@@ -480,11 +485,11 @@ fn render_tracks_visual(
             }
 
             // Buttons on the right (rendered in UI layer for interaction)
-            ui.allocate_ui_at_rect(
-                Rect::from_min_max(
+            ui.scope_builder(
+                egui::UiBuilder::new().max_rect(Rect::from_min_max(
                     Pos2::new(rect.right() - BUTTON_WIDTH, rect.top()),
                     rect.right_bottom(),
-                ),
+                )),
                 |ui| {
                     ui.horizontal_centered(|ui| {
                         if ui.small_button(t!("track_editor.edit")).clicked() {
@@ -568,7 +573,7 @@ pub fn render_track_editor_panel(
     // Default position: keep clear of the compact mode menu button
     // (top-right hamburger area, ~80px tall including safe-area padding).
     let default_pos = {
-        let screen = ctx.screen_rect();
+        let screen = ctx.content_rect();
         egui::pos2(screen.center().x - 175.0, screen.min.y + 150.0)
     };
 

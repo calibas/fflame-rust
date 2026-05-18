@@ -356,7 +356,7 @@ pub fn render_menu_bar(
 
             // Push right-side controls (right-to-left: language, then auth status)
             // Hide when window is too narrow to prevent overlap with left-side menus.
-            let available_width = ui.ctx().screen_rect().width();
+            let available_width = ui.ctx().content_rect().width();
             if available_width >= 500.0 {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 // Language selector menu (globe icon) — rightmost
