@@ -431,11 +431,14 @@ fn render_variations_section(
     // Add Variation button
     let add_btn = ui.button(t!("variations.add"));
     if add_btn.clicked() {
-        ui.memory_mut(|mem| mem.toggle_popup(add_variation_popup_id));
+        egui::Popup::toggle_id(ui.ctx(), add_variation_popup_id);
     }
 
     // Variation picker popup
-    egui::popup_below_widget(ui, add_variation_popup_id, &add_btn, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
+    egui::Popup::from_response(&add_btn)
+        .id(add_variation_popup_id)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .show(|ui| {
         ui.set_min_width(250.0);
         ui.set_max_height(300.0);
 
@@ -497,7 +500,7 @@ fn render_variations_section(
                     for var_info in filtered {
                         if ui.selectable_label(false, &var_info.display_name).clicked() {
                             variation_to_add = Some(var_info.name.clone());
-                            ui.memory_mut(|mem| mem.close_popup(add_variation_popup_id));
+                            egui::Popup::close_id(ui.ctx(), add_variation_popup_id);
                         }
                     }
                     ui.add_space(4.0);

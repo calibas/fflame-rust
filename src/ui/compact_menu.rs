@@ -51,14 +51,17 @@ pub fn render_compact_menu(
                 let popup_id = ui.id().with("compact_menu_popup");
 
                 if response.clicked() || expanded.clicked() {
-                    ui.memory_mut(|mem| mem.toggle_popup(popup_id));
+                    egui::Popup::toggle_id(ui.ctx(), popup_id);
                 }
 
-                egui::popup_below_widget(ui, popup_id, &response, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
-                    ui.set_min_width(200.0);
-                    ui.style_mut().override_font_id = Some(egui::FontId::proportional(16.0));
-                    render_compact_menu_items(ui, ctx, workspace, menu_actions, menu_state, save_online_dialog_state);
-                });
+                egui::Popup::from_response(&response)
+                    .id(popup_id)
+                    .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                    .show(|ui| {
+                        ui.set_min_width(200.0);
+                        ui.style_mut().override_font_id = Some(egui::FontId::proportional(16.0));
+                        render_compact_menu_items(ui, ctx, workspace, menu_actions, menu_state, save_online_dialog_state);
+                    });
             });
         });
 }
