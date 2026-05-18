@@ -39,6 +39,13 @@ struct TonemapParams {
     levels_low: f32,  // Density below this becomes fully transparent/background
     levels_high: f32,  // Density above this becomes fully opaque
     levels_gamma: f32,  // Gamma for density curve (1.0 = linear)
+    highlight_mode: u32,  // 0 = Clip (per-channel clamp, Apophysis), 1 = MaxNorm (hue-preserving)
+    // Three scalar u32s rather than `vec3<u32>`: vec3 has 16-byte alignment
+    // *and* a 16-byte slot in std140/std430, which would push the struct to
+    // 160 bytes vs. the [u32; 3] in Rust packing to 144. Match Rust packing.
+    _pad_highlight_0: u32,
+    _pad_highlight_1: u32,
+    _pad_highlight_2: u32,
 }
 
 // Path storage entry (matches compute shader PathEntry)
@@ -555,8 +562,26 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         color *= tonemap_params.exposure;
     }
 
-    // Clamp to valid range
-    color = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
+    // Map HDR values back into [0,1].
+    //
+    // `Clip` (Apophysis/JWildfire compatible): per-channel clamp. Any channel
+    // exceeding 1.0 saturates independently, which pushes bright colors
+    // toward the CMY/white corners of the RGB cube — orange (1, 0.5, 0) ×
+    // exposure 5 → (5, 2.5, 0) → clamps to pure yellow.
+    //
+    // `MaxNorm` (hue-preserving): if any channel exceeds 1.0, divide all by
+    // the max so the brightest channel lands at exactly 1.0 and the others
+    // stay in ratio. Bright pixels desaturate by lowering value (luminance)
+    // rather than shifting hue. Negative channels are clamped separately.
+    color = max(color, vec3<f32>(0.0));
+    if (tonemap_params.highlight_mode == 1u) {
+        let m = max(color.r, max(color.g, color.b));
+        if (m > 1.0) {
+            color = color / m;
+        }
+    } else {
+        color = min(color, vec3<f32>(1.0));
+    }
 
     // Apply tone curve to fractal color only (not background)
     // Sample curve LUT unconditionally (WebGPU requires textureSample in uniform control flow)

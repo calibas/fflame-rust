@@ -1485,6 +1485,7 @@ impl ConfigManager {
             ConfigPath::AlphaBlendHigh => Ok(config.alpha_blend_high.into()),
             ConfigPath::DensityScale => Ok(config.density_scale.into()),
             ConfigPath::TonemapMode => Ok(config.tonemap_mode.into()),
+            ConfigPath::HighlightMode => Ok(config.highlight_mode.into()),
             ConfigPath::TonemapCurve => Ok(config.tonemap_curve.clone().into()),
             ConfigPath::UseCurve => Ok(config.use_curve.into()),
             // Levels controls
@@ -2029,6 +2030,9 @@ impl ConfigManager {
             }
             ConfigPath::TonemapMode => {
                 self.current.tonemap_mode = value.try_into()?;
+            }
+            ConfigPath::HighlightMode => {
+                self.current.highlight_mode = value.try_into()?;
             }
             ConfigPath::TonemapCurve => {
                 self.current.tonemap_curve = value.try_into()?;
@@ -3123,6 +3127,16 @@ impl TryFrom<ConfigValue> for ToneMapMode {
     fn try_from(v: ConfigValue) -> Result<Self, Self::Error> {
         match v {
             ConfigValue::ToneMapMode(m) => Ok(m),
+            _ => Err(ConfigError::TypeMismatch),
+        }
+    }
+}
+
+impl TryFrom<ConfigValue> for crate::scene::tonemap::HighlightMode {
+    type Error = ConfigError;
+    fn try_from(v: ConfigValue) -> Result<Self, Self::Error> {
+        match v {
+            ConfigValue::HighlightMode(m) => Ok(m),
             _ => Err(ConfigError::TypeMismatch),
         }
     }

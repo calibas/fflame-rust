@@ -724,6 +724,8 @@ pub struct TonemapParams {
     pub levels_low: f32,  // Density (× mean) below this → fully transparent
     pub levels_high: f32,  // Density (× mean) above this → fully opaque
     pub levels_gamma: f32,  // Gamma/midpoint for density curve (1.0 = linear)
+    pub highlight_mode: u32,  // 0 = Clip (per-channel clamp, Apophysis), 1 = MaxNorm (hue-preserving)
+    pub _pad_highlight: [u32; 3],  // Pad trailing chunk to 16 bytes for std140 alignment
 }
 
 impl Default for TonemapParams {
@@ -760,6 +762,8 @@ impl Default for TonemapParams {
             levels_low: 0.0,  // No low clipping by default
             levels_high: crate::config::defaults::DEFAULT_LEVELS_HIGH,
             levels_gamma: crate::config::defaults::DEFAULT_LEVELS_GAMMA,
+            highlight_mode: 0,  // Clip (Apophysis-compatible)
+            _pad_highlight: [0; 3],
         }
     }
 }

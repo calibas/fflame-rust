@@ -43,6 +43,7 @@ pub enum ConfigPath {
     AlphaBlendHigh,
     DensityScale,
     TonemapMode,
+    HighlightMode,
     TonemapCurve,
     UseCurve,
     // Levels controls (density-to-opacity mapping)
@@ -381,6 +382,7 @@ impl Display for ConfigPath {
             ConfigPath::AlphaBlendHigh => write!(f, "Alpha Blend High"),
             ConfigPath::DensityScale => write!(f, "Density Scale"),
             ConfigPath::TonemapMode => write!(f, "Tonemap Mode"),
+            ConfigPath::HighlightMode => write!(f, "Highlight Mode"),
             ConfigPath::TonemapCurve => write!(f, "Tone Curve"),
             ConfigPath::UseCurve => write!(f, "Use Tone Curve"),
             ConfigPath::LevelsLow => write!(f, "Levels Low"),
@@ -685,6 +687,7 @@ impl ConfigPath {
             ConfigPath::AlphaBlendHigh => I18nKey::simple("history.param.alpha_blend_high"),
             ConfigPath::DensityScale => I18nKey::simple("history.param.density_scale"),
             ConfigPath::TonemapMode => I18nKey::simple("history.param.tonemap_mode"),
+            ConfigPath::HighlightMode => I18nKey::simple("history.param.highlight_mode"),
             ConfigPath::TonemapCurve => I18nKey::simple("history.param.tone_curve"),
             ConfigPath::UseCurve => I18nKey::simple("history.param.use_tone_curve"),
             ConfigPath::LevelsLow => I18nKey::simple("history.param.levels_low"),
@@ -980,6 +983,7 @@ pub enum ConfigValue {
     Vec2(f32, f32),  // For pan coordinates and other 2D values
     ColorRgb([f32; 3]),
     ToneMapMode(ToneMapMode),
+    HighlightMode(crate::scene::tonemap::HighlightMode),
     ColorMode(ColorMode),
     PathMapStyle(PathMapStyle),
     PathCaptureMode(PathCaptureMode),
@@ -1010,6 +1014,7 @@ impl ConfigValue {
             (ConfigValue::Bool(a), ConfigValue::Bool(b)) => a == b,
             (ConfigValue::String(a), ConfigValue::String(b)) => a == b,
             (ConfigValue::ToneMapMode(a), ConfigValue::ToneMapMode(b)) => a == b,
+            (ConfigValue::HighlightMode(a), ConfigValue::HighlightMode(b)) => a == b,
             (ConfigValue::ColorMode(a), ConfigValue::ColorMode(b)) => a == b,
             (ConfigValue::SqueezeMode(a), ConfigValue::SqueezeMode(b)) => a == b,
             (ConfigValue::RenderMode(a), ConfigValue::RenderMode(b)) => a == b,
@@ -1034,6 +1039,7 @@ impl Display for ConfigValue {
                 write!(f, "RGB({:.2}, {:.2}, {:.2})", r, g, b)
             }
             ConfigValue::ToneMapMode(m) => write!(f, "{:?}", m),
+            ConfigValue::HighlightMode(m) => write!(f, "{:?}", m),
             ConfigValue::ColorMode(m) => write!(f, "{:?}", m),
             ConfigValue::SqueezeMode(m) => write!(f, "{:?}", m),
             ConfigValue::PathMapStyle(m) => write!(f, "{:?}", m),
@@ -1114,6 +1120,12 @@ impl From<[f32; 3]> for ConfigValue {
 impl From<ToneMapMode> for ConfigValue {
     fn from(v: ToneMapMode) -> Self {
         ConfigValue::ToneMapMode(v)
+    }
+}
+
+impl From<crate::scene::tonemap::HighlightMode> for ConfigValue {
+    fn from(v: crate::scene::tonemap::HighlightMode) -> Self {
+        ConfigValue::HighlightMode(v)
     }
 }
 
@@ -1714,6 +1726,7 @@ impl ConfigPath {
             | ConfigPath::AlphaBlendHigh
             | ConfigPath::DensityScale
             | ConfigPath::TonemapMode
+            | ConfigPath::HighlightMode
             | ConfigPath::TonemapCurve
             | ConfigPath::UseCurve
             | ConfigPath::BackgroundColor
@@ -1856,6 +1869,7 @@ impl ConfigPath {
             ConfigPath::AlphaBlendHigh => "AlphaBlendHigh".to_string(),
             ConfigPath::DensityScale => "DensityScale".to_string(),
             ConfigPath::TonemapMode => "TonemapMode".to_string(),
+            ConfigPath::HighlightMode => "HighlightMode".to_string(),
             ConfigPath::TonemapCurve => "TonemapCurve".to_string(),
             ConfigPath::UseCurve => "UseCurve".to_string(),
             ConfigPath::LevelsLow => "LevelsLow".to_string(),
@@ -2034,6 +2048,7 @@ impl ConfigPath {
             "AlphaBlendHigh" => return Some(ConfigPath::AlphaBlendHigh),
             "DensityScale" => return Some(ConfigPath::DensityScale),
             "TonemapMode" => return Some(ConfigPath::TonemapMode),
+            "HighlightMode" => return Some(ConfigPath::HighlightMode),
             "TonemapCurve" => return Some(ConfigPath::TonemapCurve),
             "UseCurve" => return Some(ConfigPath::UseCurve),
             "LevelsLow" => return Some(ConfigPath::LevelsLow),
@@ -2510,6 +2525,19 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
             }
         }
 
+        ConfigPath::HighlightMode => {
+            use crate::scene::tonemap::HighlightMode;
+            if let Some(s) = json.as_str() {
+                match s {
+                    "Clip" => Some(ConfigValue::HighlightMode(HighlightMode::Clip)),
+                    "MaxNorm" => Some(ConfigValue::HighlightMode(HighlightMode::MaxNorm)),
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        }
+
         ConfigPath::ColorMode => {
             if let Some(s) = json.as_str() {
                 match s {
@@ -2852,6 +2880,7 @@ mod tests {
             ConfigPath::AlphaBlendHigh,
             ConfigPath::DensityScale,
             ConfigPath::TonemapMode,
+            ConfigPath::HighlightMode,
             ConfigPath::TonemapCurve,
             ConfigPath::UseCurve,
             ConfigPath::LevelsLow,

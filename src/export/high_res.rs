@@ -1745,6 +1745,11 @@ impl HighResExporter {
             levels_low: 0.0,
             levels_high: crate::config::defaults::DEFAULT_LEVELS_HIGH,
             levels_gamma: crate::config::defaults::DEFAULT_LEVELS_GAMMA,
+            highlight_mode: match config.highlight_mode {
+                crate::scene::tonemap::HighlightMode::Clip => 0,
+                crate::scene::tonemap::HighlightMode::MaxNorm => 1,
+            },
+            _pad_highlight: [0; 3],
         };
 
         self.queue.write_buffer(
