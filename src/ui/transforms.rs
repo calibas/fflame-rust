@@ -434,9 +434,12 @@ fn render_variations_section(
         egui::Popup::toggle_id(ui.ctx(), add_variation_popup_id);
     }
 
-    // Variation picker popup
+    // Variation picker popup. `from_response` defaults to "always
+    // open"; switch to memory-backed open state so the toggle/close
+    // calls above actually control visibility.
     egui::Popup::from_response(&add_btn)
         .id(add_variation_popup_id)
+        .open_memory(None)
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .show(|ui| {
         ui.set_min_width(250.0);
