@@ -36,6 +36,7 @@ pub enum ConfigPath {
     GammaThreshold,
     Brightness,
     Vibrancy,
+    WhiteLevel,
     Saturation,
     HueShift,
     AlphaBlendLow,
@@ -373,6 +374,7 @@ impl Display for ConfigPath {
             ConfigPath::GammaThreshold => write!(f, "Gamma Threshold"),
             ConfigPath::Brightness => write!(f, "Brightness"),
             ConfigPath::Vibrancy => write!(f, "Vibrancy"),
+            ConfigPath::WhiteLevel => write!(f, "Highlights"),
             ConfigPath::Saturation => write!(f, "Saturation"),
             ConfigPath::HueShift => write!(f, "Hue Shift"),
             ConfigPath::AlphaBlendLow => write!(f, "Alpha Blend Low"),
@@ -676,6 +678,7 @@ impl ConfigPath {
             ConfigPath::GammaThreshold => I18nKey::simple("history.param.gamma_threshold"),
             ConfigPath::Brightness => I18nKey::simple("history.param.brightness"),
             ConfigPath::Vibrancy => I18nKey::simple("history.param.vibrancy"),
+            ConfigPath::WhiteLevel => I18nKey::simple("history.param.white_level"),
             ConfigPath::Saturation => I18nKey::simple("history.param.saturation"),
             ConfigPath::HueShift => I18nKey::simple("history.param.hue_shift"),
             ConfigPath::AlphaBlendLow => I18nKey::simple("history.param.alpha_blend_low"),
@@ -1704,6 +1707,7 @@ impl ConfigPath {
             | ConfigPath::GammaThreshold
             | ConfigPath::Brightness
             | ConfigPath::Vibrancy
+            | ConfigPath::WhiteLevel
             | ConfigPath::Saturation
             | ConfigPath::HueShift
             | ConfigPath::AlphaBlendLow
@@ -1845,6 +1849,7 @@ impl ConfigPath {
             ConfigPath::GammaThreshold => "GammaThreshold".to_string(),
             ConfigPath::Brightness => "Brightness".to_string(),
             ConfigPath::Vibrancy => "Vibrancy".to_string(),
+            ConfigPath::WhiteLevel => "WhiteLevel".to_string(),
             ConfigPath::Saturation => "Saturation".to_string(),
             ConfigPath::HueShift => "HueShift".to_string(),
             ConfigPath::AlphaBlendLow => "AlphaBlendLow".to_string(),
@@ -2022,6 +2027,7 @@ impl ConfigPath {
             "GammaThreshold" => return Some(ConfigPath::GammaThreshold),
             "Brightness" => return Some(ConfigPath::Brightness),
             "Vibrancy" => return Some(ConfigPath::Vibrancy),
+            "WhiteLevel" => return Some(ConfigPath::WhiteLevel),
             "Saturation" => return Some(ConfigPath::Saturation),
             "HueShift" => return Some(ConfigPath::HueShift),
             "AlphaBlendLow" => return Some(ConfigPath::AlphaBlendLow),
@@ -2360,6 +2366,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::GammaThreshold
         | ConfigPath::Brightness
         | ConfigPath::Vibrancy
+        | ConfigPath::WhiteLevel
         | ConfigPath::Saturation
         | ConfigPath::HueShift
         | ConfigPath::AlphaBlendLow
@@ -2838,6 +2845,7 @@ mod tests {
             ConfigPath::GammaThreshold,
             ConfigPath::Brightness,
             ConfigPath::Vibrancy,
+            ConfigPath::WhiteLevel,
             ConfigPath::Saturation,
             ConfigPath::HueShift,
             ConfigPath::AlphaBlendLow,

@@ -1723,7 +1723,7 @@ impl HighResExporter {
             use_curve: if config.use_curve { 1 } else { 0 },
             vibrancy: config.vibrancy,
             brightness: config.brightness,
-            white_level: DEFAULT_WHITE_LEVEL,
+            white_level: config.white_level,
             prefilter_white: PREFILTER_WHITE,
             bright_adjust: BRIGHT_ADJUST,
             area,
