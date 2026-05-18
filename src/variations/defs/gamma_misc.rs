@@ -20,8 +20,8 @@
 //! Source: `output/jwildfire-vars/output/gamma.cpp`.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
-    ParamType, VariationCategory, VariationPhase,
+    definition::VariationDef,
+    VariationCategory, VariationPhase,
 };
 
 const LGAMMA_BODY: &str = r#"

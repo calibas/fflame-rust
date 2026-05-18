@@ -386,7 +386,7 @@ impl FractalConfigGallery {
         };
 
         ui.horizontal_wrapped(|ui| {
-            for (original_index, hash, name, config) in &filtered {
+            for (_original_index, hash, name, config) in &filtered {
                 let card_response = self.render_grid_card(ui, hash, name);
                 if card_response.clicked() {
                     response.selected = Some(config.clone());

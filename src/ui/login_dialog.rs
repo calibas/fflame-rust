@@ -509,7 +509,7 @@ fn poll_result(
 }
 
 /// Trigger the async login request
-fn trigger_login(state: &mut LoginDialogState, config_manager: &crate::config::ConfigManager) {
+fn trigger_login(state: &mut LoginDialogState, _config_manager: &crate::config::ConfigManager) {
     state.loading = true;
     state.error = None;
 
@@ -536,7 +536,7 @@ fn trigger_login(state: &mut LoginDialogState, config_manager: &crate::config::C
 }
 
 /// Trigger the async register request
-fn trigger_register(state: &mut LoginDialogState, config_manager: &crate::config::ConfigManager) {
+fn trigger_register(state: &mut LoginDialogState, _config_manager: &crate::config::ConfigManager) {
     state.reg_loading = true;
     state.reg_error = None;
 

@@ -35,18 +35,14 @@ mod view;
 pub mod workspace;
 mod xaos_editor;
 
-pub use animation_panel::{ExportProgress, ExportPanelState, TimelineLayout};
 pub use export_panel::PngExportProgress;
-pub use histogram::LevelsState;
-pub use track_editor::{TrackEditorState, TrackEditorResponse};
-pub use font_loader::{ensure_font_for_locale, initialize_default_fonts};
+pub use font_loader::ensure_font_for_locale;
 pub use menu_context::{MenuActions, MenuState};
 pub use palette_editor::PaletteEditor;
 pub use response::UiResponse;
 pub use response::ApiSaveAction;
 pub use response::ApiAnimationSaveAction;
 pub use workspace::Workspace;
-pub use xaos_editor::XaosEditorState;
 
 /// Publish a TextEdit's content for the virtual keyboard overlay (WASM compact mode).
 /// Call after any `ui.text_edit_singleline()` or `ui.add(TextEdit::singleline())`.
@@ -578,9 +574,6 @@ impl EguiLayer {
         };
 
         let text_color = egui::Color32::from_rgba_unmultiplied(255, 255, 255, (alpha * 255.0) as u8);
-
-        let screen_rect = ctx.screen_rect();
-        let anchor_pos = egui::pos2(screen_rect.center().x, screen_rect.bottom() - 60.0);
 
         egui::Area::new(egui::Id::new("api_notification"))
             .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -60.0))

@@ -141,8 +141,8 @@ mod native {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-pub use native::*;
+// `native::fetch_text_sync` is referenced through its module path in
+// `fetch_text` below — no re-export needed at this scope.
 
 // ============================================================================
 // WASM implementation (browser fetch API)

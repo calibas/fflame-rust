@@ -1499,7 +1499,7 @@ impl Flame {
     /// flame actually uses.
     pub fn extract_active_variations(&self) -> HashMap<String, f32> {
         let mut all_variations = HashMap::new();
-        let mut absorb = |t: &Transform, all: &mut HashMap<String, f32>| {
+        let absorb = |t: &Transform, all: &mut HashMap<String, f32>| {
             for (name, weight) in &t.variations {
                 if weight.abs() > 1e-6 {
                     let existing = all.entry(name.clone()).or_insert(0.0);

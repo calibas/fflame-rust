@@ -1253,8 +1253,6 @@ pub fn get_current_value(
     flame_target: EditingTarget,
     path: &ConfigPath,
 ) -> Option<f64> {
-    use crate::config::AffineParam;
-
     // Per-flame paths need the resolved flame; resolve up front so
     // the per-flame arms below can index into it directly.
     let flame = resolve_flame(config, flame_target)?;

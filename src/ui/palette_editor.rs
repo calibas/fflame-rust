@@ -44,7 +44,7 @@ fn render_palette_editor_core_impl(
     palette_export_json: &mut Option<Palette>,
     palette_save_file: &mut Option<Palette>,
     palette_save_to_library: &mut Option<Palette>,
-    palette_delete_from_library: &mut Option<String>,
+    _palette_delete_from_library: &mut Option<String>,
     palette_import_json: &mut Option<String>,
     palette_load_file: &mut bool,
     open_palette_library: &mut bool,
