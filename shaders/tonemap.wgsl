@@ -575,11 +575,35 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     // rather than shifting hue. Negative channels are clamped separately.
     color = max(color, vec3<f32>(0.0));
     if (tonemap_params.highlight_mode == 1u) {
+        // MaxNorm: rescale by max channel so brightest channel = 1.0.
         let m = max(color.r, max(color.g, color.b));
         if (m > 1.0) {
             color = color / m;
         }
+    } else if (tonemap_params.highlight_mode == 2u) {
+        // Reinhard luminance-preserving: L_mapped = L / (1 + L), scale RGB
+        // by L_mapped/L. Rec.709 luminance weights.
+        let lum = dot(color, vec3<f32>(0.2126, 0.7152, 0.0722));
+        if (lum > 1e-6) {
+            let lum_mapped = lum / (1.0 + lum);
+            color = color * (lum_mapped / lum);
+        }
+        // Safety clamp — Reinhard maps to (0,1) but float noise could leak.
+        color = min(color, vec3<f32>(1.0));
+    } else if (tonemap_params.highlight_mode == 3u) {
+        // ACES filmic (Narkowicz approximation):
+        //   f(x) = (x(ax+b)) / (x(cx+d)+e)
+        // Constants tuned for SDR display output. Slight contrast boost in
+        // midtones, gentle highlight roll-off, hue-mostly-preserving.
+        let a = 2.51;
+        let b = 0.03;
+        let c = 2.43;
+        let d = 0.59;
+        let e = 0.14;
+        color = (color * (a * color + vec3<f32>(b))) / (color * (c * color + vec3<f32>(d)) + vec3<f32>(e));
+        color = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
     } else {
+        // Clip: per-channel clamp (Apophysis/JWildfire compatible).
         color = min(color, vec3<f32>(1.0));
     }
 

@@ -33,6 +33,14 @@ pub enum HighlightMode {
     /// ratio. No hue shift; bright pixels desaturate by lowering value
     /// rather than blowing out per-channel.
     MaxNorm,
+    /// Reinhard luminance-preserving tonemap: `L_mapped = L / (1 + L)` where
+    /// L is Rec.709 luminance. Color is scaled by `L_mapped / L`. Smooth
+    /// roll-off, slight desaturation in highlights. Soft "photographic" look.
+    Reinhard,
+    /// ACES filmic tonemap (Narkowicz approximation): the standard film/HDR
+    /// curve used in games and cinema. Slight contrast boost in midtones,
+    /// gentle highlight roll-off, hue-preserving.
+    Filmic,
 }
 
 impl Default for HighlightMode {
