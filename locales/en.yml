@@ -443,6 +443,7 @@ tonemap:
   gamma_threshold: "Gamma Threshold"
   brightness: "Brightness"
   vibrancy: "Vibrancy"
+  highlights: "Highlights"
   saturation: "Saturation"
   hue_shift: "Hue Shift"
 
@@ -517,6 +518,7 @@ tonemap:
   tooltip_gamma_threshold: "Smooths gamma at low densities to reduce noise.\n0 = disabled, higher = more smoothing."
   tooltip_brightness: "Apophysis brightness curve steepness.\nAffects how density maps to luminance.\n1.0 = default."
   tooltip_vibrancy: "Color saturation preservation.\n0 = colors wash out in bright areas,\n1 = colors stay saturated."
+  tooltip_highlights: "Controls how bright/dense pixels fade to white.\nHigher values keep highlights more saturated (darker, deeper colors).\nLower values make highlights brighter but can wash out to white.\n200 = Apophysis-compatible default."
   tooltip_saturation: "Color saturation multiplier.\n0 = grayscale, 1 = no change, >1 = more colorful."
   tooltip_hue_shift: "Rotate all colors around the color wheel.\n180° = complementary colors."
   tooltip_alpha_blend_low: "Start blending to linear alpha at this density.\nLower = sharper edges, may cause halos."
@@ -1160,6 +1162,7 @@ track_editor:
   param_gamma_threshold: "Gamma Threshold"
   param_brightness: "Brightness"
   param_vibrancy: "Vibrancy"
+  param_white_level: "Highlights"
   param_saturation: "Saturation"
   param_hue_shift: "Hue Shift"
   param_value_scale: "Value Scale"

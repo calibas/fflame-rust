@@ -1478,6 +1478,7 @@ impl ConfigManager {
             ConfigPath::GammaThreshold => Ok(config.gamma_threshold.into()),
             ConfigPath::Brightness => Ok(config.brightness.into()),
             ConfigPath::Vibrancy => Ok(config.vibrancy.into()),
+            ConfigPath::WhiteLevel => Ok(config.white_level.into()),
             ConfigPath::Saturation => Ok(config.saturation.into()),
             ConfigPath::HueShift => Ok(config.hue_shift.into()),
             ConfigPath::AlphaBlendLow => Ok(config.alpha_blend_low.into()),
@@ -2007,6 +2008,9 @@ impl ConfigManager {
             }
             ConfigPath::Vibrancy => {
                 self.current.vibrancy = value.try_into()?;
+            }
+            ConfigPath::WhiteLevel => {
+                self.current.white_level = value.try_into()?;
             }
             ConfigPath::Saturation => {
                 self.current.saturation = value.try_into()?;

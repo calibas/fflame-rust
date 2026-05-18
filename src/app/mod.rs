@@ -1237,7 +1237,7 @@ impl App {
 
                     // Restore tonemap parameters after buffer recreation (not in live preview mode)
                     renderer.update_tonemap(&self.gpu.queue, resize_config.tonemap_mode, resize_config.use_curve, resize_config.exposure, resize_config.gamma,
-                        resize_config.gamma_threshold, resize_config.brightness, resize_config.vibrancy, resize_config.saturation, resize_config.hue_shift,
+                        resize_config.gamma_threshold, resize_config.brightness, resize_config.vibrancy, resize_config.white_level, resize_config.saturation, resize_config.hue_shift,
                         resize_config.alpha_blend_low, resize_config.alpha_blend_high,
                         viewport_size.0, viewport_size.1, renderer.total_iterations(), resize_config.max_iterations, resize_config.zoom, self.config_manager.system_settings().iterations_per_thread, 1, false,
                         resize_config.levels_low, resize_config.levels_high, resize_config.levels_gamma);
@@ -1940,7 +1940,7 @@ impl App {
 
             renderer.update_tonemap(&self.gpu.queue, final_config.tonemap_mode, final_config.use_curve,
                 final_config.exposure, final_config.gamma, final_config.gamma_threshold, final_config.brightness,
-                final_config.vibrancy, final_config.saturation, final_config.hue_shift,
+                final_config.vibrancy, final_config.white_level, final_config.saturation, final_config.hue_shift,
                 final_config.alpha_blend_low, final_config.alpha_blend_high,
                 renderer.width, renderer.height, renderer.total_iterations(), final_config.max_iterations, final_config.zoom,
                 self.config_manager.system_settings().iterations_per_thread, batch_size_for_tonemap, is_live_preview,

@@ -325,6 +325,8 @@ fn parse_flame_element(
         gamma,
         brightness,  // Use parsed Apophysis brightness value
         vibrancy,  // Use parsed Apophysis vibrancy
+        // TODO: parse Apophysis `white_level` XML attribute (default 200)
+        white_level: crate::config::defaults::DEFAULT_WHITE_LEVEL,
         saturation: 1.5,  // Default saturation
         hue_shift: 0.0,  // Default hue shift
         gamma_threshold,  // Use parsed Apophysis gamma_threshold

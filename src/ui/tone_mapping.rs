@@ -221,6 +221,9 @@ pub fn render_colors_content(
                                     (ConfigPath::GammaThreshold, preset.gamma_threshold.into()),
                                     (ConfigPath::Brightness, preset.brightness.into()),
                                     (ConfigPath::Vibrancy, preset.vibrancy.into()),
+                                    // TODO: add `white_level` to TonemapPreset (currently
+                                    // omitted so applying a preset doesn't reset the user's
+                                    // highlights tuning — see tonemap-highlights.md).
                                     (ConfigPath::Saturation, preset.saturation.into()),
                                     (ConfigPath::HueShift, preset.hue_shift.into()),
                                     (ConfigPath::UseCurve, preset.use_curve.into()),
@@ -258,6 +261,10 @@ pub fn render_colors_content(
             }
 
             if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::Vibrancy, 0.0..=30.0, t!("tonemap.vibrancy").as_ref(), Some(t!("tonemap.tooltip_vibrancy").as_ref())) {
+                max_update = max_update.max(result.update_type);
+            }
+
+            if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::WhiteLevel, 50.0..=1000.0, t!("tonemap.highlights").as_ref(), Some(t!("tonemap.tooltip_highlights").as_ref())) {
                 max_update = max_update.max(result.update_type);
             }
 

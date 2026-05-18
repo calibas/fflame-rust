@@ -140,6 +140,13 @@ pub struct FractalConfig {
     /// 1.0 = modern vibrant colors (default), 0.0 = classic gamma-only colors
     #[serde(default = "default_vibrancy")]
     pub vibrancy: f32,
+    /// Highlights ("Fade to White" / Apophysis `white_level`): divides chroma
+    /// in the log-density curve while leaving alpha alone, so bright/dense
+    /// pixels bloom toward the background through alpha blend before RGB
+    /// clips. Higher values bleach to white sooner; lower values keep
+    /// highlights more saturated. See `DEFAULT_WHITE_LEVEL` in `defaults.rs`.
+    #[serde(default = "default_white_level")]
+    pub white_level: f32,
     /// Saturation: color saturation boost (1.0 = no change, >1.0 = more saturated)
     #[serde(default = "default_saturation")]
     pub saturation: f32,
@@ -209,6 +216,10 @@ fn default_gamma() -> f32 {
 
 fn default_gamma_threshold() -> f32 {
     super::defaults::DEFAULT_GAMMA_THRESHOLD
+}
+
+fn default_white_level() -> f32 {
+    super::defaults::DEFAULT_WHITE_LEVEL
 }
 
 fn default_brightness() -> f32 {
@@ -389,6 +400,7 @@ impl Default for FractalConfig {
             gamma_threshold: default_gamma_threshold(),
             brightness: default_brightness(),
             vibrancy: default_vibrancy(),
+            white_level: default_white_level(),
             saturation: default_saturation(),
             hue_shift: default_hue_shift(),
             alpha_blend_low: default_alpha_blend_low(),
@@ -479,6 +491,7 @@ impl FractalConfig {
         if config.gamma_threshold == defaults.gamma_threshold { obj.remove("gamma_threshold"); }
         if config.brightness == defaults.brightness { obj.remove("brightness"); }
         if config.vibrancy == defaults.vibrancy { obj.remove("vibrancy"); }
+        if config.white_level == defaults.white_level { obj.remove("white_level"); }
         if config.saturation == defaults.saturation { obj.remove("saturation"); }
         if config.hue_shift == defaults.hue_shift { obj.remove("hue_shift"); }
 
