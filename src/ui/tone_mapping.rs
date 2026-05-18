@@ -1,4 +1,4 @@
-use crate::scene::tonemap::{ToneMapMode, ToneCurve};
+use crate::scene::tonemap::{HighlightMode, ToneMapMode, ToneCurve};
 use crate::scene::palette::{ColorMode, PathMapStyle, PathCaptureMode, PathTrackingMode, PaletteLibrary};
 use crate::config::{ConfigManager, ConfigPath, LazyUndoUi, UpdateType};
 use crate::renderer::DensityHistogram;
@@ -200,6 +200,28 @@ pub fn render_colors_content(
                 }
                 if ui.selectable_label(matches!(current_tonemap_mode, ToneMapMode::DensityVisualization), t!("tonemap.mode_density")).clicked() {
                     if let Ok(update) = config_manager.update_param(ConfigPath::TonemapMode, ToneMapMode::DensityVisualization.into()) {
+                        max_update = max_update.max(update);
+                    }
+                }
+            });
+
+            // Highlight handling — how channels exceeding 1.0 after exposure
+            // are mapped back into [0,1]. Clip is Apophysis-compatible (default);
+            // MaxNorm preserves hue by rescaling all channels by their max.
+            ui.label(t!("tonemap.highlight_mode"));
+            let current_highlight_mode = config_manager.active_config().highlight_mode;
+            ui.horizontal(|ui| {
+                let clip_resp = ui.selectable_label(matches!(current_highlight_mode, HighlightMode::Clip), t!("tonemap.highlight_clip"))
+                    .on_hover_text(t!("tonemap.tooltip_highlight_clip"));
+                if clip_resp.clicked() {
+                    if let Ok(update) = config_manager.update_param(ConfigPath::HighlightMode, HighlightMode::Clip.into()) {
+                        max_update = max_update.max(update);
+                    }
+                }
+                let max_resp = ui.selectable_label(matches!(current_highlight_mode, HighlightMode::MaxNorm), t!("tonemap.highlight_maxnorm"))
+                    .on_hover_text(t!("tonemap.tooltip_highlight_maxnorm"));
+                if max_resp.clicked() {
+                    if let Ok(update) = config_manager.update_param(ConfigPath::HighlightMode, HighlightMode::MaxNorm.into()) {
                         max_update = max_update.max(update);
                     }
                 }

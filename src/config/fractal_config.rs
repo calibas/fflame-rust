@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use crate::scene::transforms::Flame;
 use crate::scene::palette::{ColorMode, Palette, PathCaptureMode, PathMapStyle, PathTrackingMode};
-use crate::scene::tonemap::{ToneMapMode, ToneCurve};
+use crate::scene::tonemap::{HighlightMode, ToneMapMode, ToneCurve};
 use crate::effects::EffectInstance;
 
 /// Current config format version
@@ -119,6 +119,12 @@ pub struct FractalConfig {
     /// Tone mapping settings
     #[serde(default)]
     pub tonemap_mode: ToneMapMode,
+    /// How to handle channel values that exceed [0,1] after tone mapping.
+    /// `Clip` (default, Apophysis-compatible) clamps per-channel and shifts
+    /// hue toward CMY/white at high brightness. `MaxNorm` divides all
+    /// channels by their max to preserve hue when clipping would occur.
+    #[serde(default)]
+    pub highlight_mode: HighlightMode,
     #[serde(default)]
     pub tonemap_curve: ToneCurve,
     /// Whether to actually apply the tone curve
@@ -393,6 +399,7 @@ impl Default for FractalConfig {
             palette_reverse: false,
             background_color: [0.0, 0.0, 0.0],
             tonemap_mode: ToneMapMode::default(),
+            highlight_mode: HighlightMode::default(),
             tonemap_curve: ToneCurve::default(),
             use_curve: default_true(),
             exposure: default_exposure(),
@@ -484,6 +491,7 @@ impl FractalConfig {
 
         // Tone mapping settings
         if config.tonemap_mode == defaults.tonemap_mode { obj.remove("tonemap_mode"); }
+        if config.highlight_mode == defaults.highlight_mode { obj.remove("highlight_mode"); }
         if config.tonemap_curve == defaults.tonemap_curve { obj.remove("tonemap_curve"); }
         if config.use_curve == defaults.use_curve { obj.remove("use_curve"); }
         if config.exposure == defaults.exposure { obj.remove("exposure"); }
