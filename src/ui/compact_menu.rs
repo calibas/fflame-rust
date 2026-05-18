@@ -54,8 +54,12 @@ pub fn render_compact_menu(
                     egui::Popup::toggle_id(ui.ctx(), popup_id);
                 }
 
+                // `from_response` defaults to "always open"; switch to
+                // memory-backed open state so the `toggle_id` call above
+                // (and CloseOnClickOutside) actually control visibility.
                 egui::Popup::from_response(&response)
                     .id(popup_id)
+                    .open_memory(None)
                     .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
                     .show(|ui| {
                         ui.set_min_width(200.0);
