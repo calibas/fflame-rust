@@ -1213,9 +1213,9 @@ pub async fn export_animation(
     }
 
     // Create GPU resources (reused across frames)
-    let instance = egui_wgpu::wgpu::Instance::new(&egui_wgpu::wgpu::InstanceDescriptor {
+    let instance = egui_wgpu::wgpu::Instance::new(egui_wgpu::wgpu::InstanceDescriptor {
         backends: egui_wgpu::wgpu::Backends::all(),
-        ..Default::default()
+        ..egui_wgpu::wgpu::InstanceDescriptor::new_without_display_handle()
     });
 
     let adapter = instance
@@ -1677,9 +1677,9 @@ pub async fn export_animation_fast(
     }
 
     // Create GPU resources
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends: wgpu::Backends::all(),
-        ..Default::default()
+        ..wgpu::InstanceDescriptor::new_without_display_handle()
     });
 
     let adapter = instance

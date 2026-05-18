@@ -686,6 +686,7 @@ impl FlameRenderer {
             depth_stencil_attachment: None,
             occlusion_query_set: None,
             timestamp_writes: None,
+            multiview_mask: None,
         });
 
         render_pass.set_pipeline(&self.pipelines.tonemap_pipeline);
@@ -756,6 +757,7 @@ impl FlameRenderer {
             depth_stencil_attachment: None,
             occlusion_query_set: None,
             timestamp_writes: None,
+            multiview_mask: None,
         });
 
         render_pass.set_pipeline(&self.pipelines.tonemap_pipeline);

@@ -567,7 +567,7 @@ pub fn render_track_editor_panel(
     let mut open = state.track_editor_panel_open;
 
     // Highlighted frame to make dialog stand out from docked panels
-    let highlight_frame = egui::Frame::window(&ctx.style())
+    let highlight_frame = egui::Frame::window(&ctx.global_style())
         .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(100, 149, 237))); // Cornflower blue
 
     // Default position: keep clear of the compact mode menu button
