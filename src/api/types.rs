@@ -72,6 +72,40 @@ pub enum ApiToneMapMode {
     Density,
 }
 
+/// How channels exceeding [0,1] after tone mapping get mapped back into
+/// display range. `Clip` is Apophysis/JWildfire-compatible (per-channel
+/// clamp, causes hue shift toward CMY/white at high brightness).
+/// `MaxNorm` rescales by the max channel (exact hue preservation).
+/// `Reinhard` luminance-preserving curve. `Filmic` ACES Narkowicz curve.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApiHighlightMode {
+    Clip,
+    MaxNorm,
+    Reinhard,
+    Filmic,
+}
+
+/// Palette index squeeze algorithm.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApiSqueezeMode {
+    Linear,
+    Geometric,
+}
+
+/// Which pool a transform belongs to. Server assigns from which request
+/// array the transform arrived in (`transforms` / `linked_transforms` /
+/// `final_transforms`); present on responses only so clients reading
+/// flames back know the pool without re-deriving.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApiTransformKind {
+    Normal,
+    Linked,
+    Final,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ApiPathMapStyle {
@@ -171,13 +205,26 @@ pub struct CreateTransformInput {
     pub post_f: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub post_g: Option<f32>,
+    /// Indices into the parent flame's `linked_transforms` pool. Only
+    /// meaningful when this transform lives in the `transforms` (normal)
+    /// pool of its flame; server rejects non-empty values on linked or
+    /// final transforms.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub linked_attachments: Option<Vec<usize>>,
+    /// Indices into the parent flame's `final_transforms` pool. Same
+    /// scoping rule as `linked_attachments`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub final_attachments: Option<Vec<usize>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct TransformResponse {
     pub id: String,
     pub sort_order: i32,
-    pub is_final_transform: bool,
+    /// Which pool this transform lives in (`normal` / `linked` / `final`).
+    /// Server-assigned from the request array the transform arrived in;
+    /// clients use this to bucket responses back into the three pools.
+    pub transform_kind: ApiTransformKind,
     pub a: f32,
     pub b: f32,
     pub c: f32,
@@ -203,6 +250,14 @@ pub struct TransformResponse {
     pub post_e: f32,
     pub post_f: f32,
     pub post_g: f32,
+    /// Indices into the parent flame's `linked_transforms` pool. Empty on
+    /// linked / final pool rows.
+    #[serde(default)]
+    pub linked_attachments: Vec<usize>,
+    /// Indices into the parent flame's `final_transforms` pool. Empty on
+    /// linked / final pool rows.
+    #[serde(default)]
+    pub final_attachments: Vec<usize>,
 }
 
 // ============================================================================
@@ -253,15 +308,61 @@ pub struct ApiVariation {
 // Flames
 // ============================================================================
 
+/// Subflame submission shape — mirrors the client-side `Flame` struct, not
+/// `FractalConfig`. Subflames don't carry tonemap, palette, or visibility
+/// state on the wire because those live on `FractalConfig` and are
+/// inherited from the parent at render time. Recursive: nested subflames
+/// up to depth 4 (server enforces).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubflameRequest {
+    /// Internal `.fflame` name of this subflame.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flame_name: Option<String>,
+    pub render_mode: ApiRenderMode,
+    pub perspective_strength: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub solo_transform: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub xaos: Option<serde_json::Value>,
+    /// Normal-pool transforms.
+    pub transforms: Vec<CreateTransformInput>,
+    /// Linked-pool transforms.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub linked_transforms: Vec<CreateTransformInput>,
+    /// Final-pool transforms.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub final_transforms: Vec<CreateTransformInput>,
+    /// Nested subflames (recursive).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subflames: Vec<SubflameRequest>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct CreateFlameRequest {
+    /// Cloud-library title.
     pub name: String,
+    /// Internal `.fflame` name (separate from the cloud-library title above).
+    /// `Flame::name` round-trips through this; both are presentable to users
+    /// in different contexts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flame_name: Option<String>,
+    /// Normal-pool transforms.
     pub transforms: Vec<CreateTransformInput>,
+    /// Linked-pool transforms. Empty by default.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub linked_transforms: Vec<CreateTransformInput>,
+    /// Final-pool transforms (multiple allowed in v2). Empty by default.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub final_transforms: Vec<CreateTransformInput>,
+    /// Subflames — recursive nested IFS instances. See `SubflameRequest`
+    /// for the shape; subflames carry only `Flame` state, never tonemap
+    /// or palette state (those are inherited from the parent at render
+    /// time). Empty by default.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subflames: Vec<SubflameRequest>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub visibility: Option<ApiVisibility>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub final_transform: Option<CreateTransformInput>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub render_mode: Option<ApiRenderMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -331,11 +432,23 @@ pub struct CreateFlameRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub palette_squeeze: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub palette_squeeze_mode: Option<ApiSqueezeMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub palette_squeeze_falloff: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub palette_log_strength: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub palette_reverse: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub background_color: Option<Vec<f32>>,
 
     // Tone mapping
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tonemap_mode: Option<ApiToneMapMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub highlight_mode: Option<ApiHighlightMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub white_level: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tonemap_curve: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -381,6 +494,9 @@ pub struct FlameResponse {
     pub id: String,
     pub user_id: String,
     pub name: String,
+    /// Internal `.fflame` name (separate from cloud-library `name`).
+    #[serde(default)]
+    pub flame_name: Option<String>,
     pub render_mode: ApiRenderMode,
     pub perspective_strength: f32,
     pub zoom: f32,
@@ -409,8 +525,20 @@ pub struct FlameResponse {
     pub palette_rotation: f32,
     pub palette_size: i32,
     pub palette_squeeze: f32,
+    #[serde(default)]
+    pub palette_squeeze_mode: Option<ApiSqueezeMode>,
+    #[serde(default)]
+    pub palette_squeeze_falloff: Option<f32>,
+    #[serde(default)]
+    pub palette_log_strength: Option<f32>,
+    #[serde(default)]
+    pub palette_reverse: Option<bool>,
     pub background_color: Vec<f32>,
     pub tonemap_mode: ApiToneMapMode,
+    #[serde(default)]
+    pub highlight_mode: Option<ApiHighlightMode>,
+    #[serde(default)]
+    pub white_level: Option<f32>,
     pub tonemap_curve: Option<serde_json::Value>,
     pub use_curve: bool,
     pub exposure: f32,
@@ -428,8 +556,17 @@ pub struct FlameResponse {
     pub deterministic_rng: bool,
     pub solo_transform: Option<i32>,
     pub xaos: Option<serde_json::Value>,
-    pub final_transform: Option<TransformResponse>,
+    /// Normal-pool transforms (transform_kind = 'normal').
     pub transforms: Vec<TransformResponse>,
+    /// Linked-pool transforms.
+    #[serde(default)]
+    pub linked_transforms: Vec<TransformResponse>,
+    /// Final-pool transforms (multiple allowed).
+    #[serde(default)]
+    pub final_transforms: Vec<TransformResponse>,
+    /// Nested subflames (recursive).
+    #[serde(default)]
+    pub subflames: Vec<FlameResponse>,
     pub density_effects: Vec<ConfigEffectResponse>,
     pub color_effects: Vec<ConfigEffectResponse>,
     pub transform_count: i32,
