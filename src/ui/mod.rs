@@ -700,6 +700,19 @@ impl EguiLayer {
             } else {
                 style.spacing.scroll = egui::style::ScrollStyle::floating();
             }
+            // Label drag-to-select disabled globally — opt in per-widget with
+            // `.selectable(true)` on any specific Label that should support
+            // copy/paste. egui 0.33 → 0.34 introduced a regression where a
+            // single click on a Label can leave LabelSelectionState's
+            // `is_dragging` flag stuck (subsequent hovers select text as if
+            // the mouse button were held). The widget-level code in
+            // text_selection/label_text_selection.rs is identical between
+            // 0.33 and 0.34.2; the actual regression is upstream of it in
+            // the new interaction-stack flag computation (context.rs ~1424).
+            // No known upstream fix yet. Mirrors how egui's own tooltip
+            // containers handle this — see tooltip.rs:158 in egui 0.34.2.
+            // Runs every frame because egui_dock can reset styles.
+            style.interaction.selectable_labels = false;
         });
 
         #[cfg(not(target_arch = "wasm32"))]
