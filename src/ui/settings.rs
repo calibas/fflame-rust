@@ -90,24 +90,6 @@ pub fn render_settings_content(
                 );
             }
 
-            // Histogram color scale
-            let mut temp_histogram = config.histogram_color_scale;
-            let response = ui.add(super::VkbSlider::new(&mut temp_histogram, 1.0..=100.0)
-                .logarithmic(true)
-                .text(t!("settings.histogram_color_scale")))
-                .on_hover_text(t!("settings.tooltip_histogram_color_scale"));
-
-            if response.changed() {
-                let _ = config_manager.update_param(
-                    ConfigPath::HistogramColorScale,
-                    temp_histogram.into()
-                );
-            }
-
-            if response.drag_stopped() {
-                let _ = config_manager.force_commit_preview(&ConfigPath::HistogramColorScale);
-            }
-
             let mut temp_deterministic = config.deterministic_rng;
             if ui.checkbox(&mut temp_deterministic, t!("settings.deterministic_rng").as_ref())
                 .on_hover_text(t!("settings.tooltip_deterministic_rng"))

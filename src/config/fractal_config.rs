@@ -55,8 +55,6 @@ pub struct FractalConfig {
     #[serde(default = "default_max_iterations")]
     pub max_iterations: u64,
     /// Histogram color scale (precision vs overflow protection, default: 10.0)
-    #[serde(default = "default_histogram_color_scale")]
-    pub histogram_color_scale: f32,
     /// Blend factor for accumulation (0.01 = slow/smooth, 1.0 = fast/flickery, default: 0.1)
     #[serde(default = "default_blend_factor")]
     pub blend_factor: f32,
@@ -345,10 +343,6 @@ fn is_default_levels_gamma(v: &f32) -> bool {
     (*v - 1.0).abs() < FLOAT_EPSILON  // Default is 1.0
 }
 
-fn default_histogram_color_scale() -> f32 {
-    super::defaults::DEFAULT_HISTOGRAM_COLOR_SCALE
-}
-
 fn default_blend_factor() -> f32 {
     super::defaults::DEFAULT_BLEND_FACTOR
 }
@@ -378,7 +372,6 @@ impl Default for FractalConfig {
             density_scale: 1.0,
             speed_factor: 0.5,
             max_iterations: default_max_iterations(),
-            histogram_color_scale: default_histogram_color_scale(),
             blend_factor: default_blend_factor(),
             use_dynamic_blend: default_use_dynamic_blend(),
             color_mode: ColorMode::Palette,
@@ -468,7 +461,6 @@ impl FractalConfig {
         if config.density_scale == defaults.density_scale { obj.remove("density_scale"); }
         if config.speed_factor == defaults.speed_factor { obj.remove("speed_factor"); }
         if config.max_iterations == defaults.max_iterations { obj.remove("max_iterations"); }
-        if config.histogram_color_scale == defaults.histogram_color_scale { obj.remove("histogram_color_scale"); }
         if config.blend_factor == defaults.blend_factor { obj.remove("blend_factor"); }
         if config.use_dynamic_blend == defaults.use_dynamic_blend { obj.remove("use_dynamic_blend"); }
 

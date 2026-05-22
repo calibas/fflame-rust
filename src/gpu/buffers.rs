@@ -610,7 +610,6 @@ pub struct GpuParams {
     pub dof_blur_strength: f32, // Depth of field: blur amount (0.0 = disabled, default: 0.0)
     pub fog_strength: f32, // Depth fog: exponential fog density (0.0 = disabled)
     pub fog_start: f32, // Depth fog: distance where fog begins
-    pub histogram_color_scale: f32, // Precision vs overflow (default: 10.0)
     pub bits_per_transform: u32, // Bits needed per transform index (1-4 based on num_transforms)
     pub path_map_style: u32, // 0=Prefix, 1=Suffix, 2=PrefixDistinct, 3=SuffixDistinct
     pub path_capture_mode: u32, // 0=FirstHit, 1=FirstAfterBurnIn, 2=DeepestHit
@@ -775,7 +774,6 @@ pub struct AccumulateParams {
     pub width: u32,
     pub height: u32,
     pub blend_factor: f32,
-    pub histogram_color_scale: f32, // Must match compute shader value
     /// Mode flag — 0 = cumulative-mean (algorithmic ideal,
     /// precision-limited around 10^9 iters/pixel on f32), 1 = fixed
     /// EMA at `blend_factor` (precision-stable, dim early frames as
@@ -959,7 +957,6 @@ impl FlameBuffers {
             dof_blur_strength: crate::config::DEFAULT_DOF_BLUR_STRENGTH,
             fog_strength: crate::config::DEFAULT_FOG_STRENGTH,
             fog_start: crate::config::DEFAULT_FOG_START,
-            histogram_color_scale: crate::config::DEFAULT_HISTOGRAM_COLOR_SCALE,
             bits_per_transform: bits_per_transform(flame.transforms.len() as u32),
             path_map_style: 0,
             path_capture_mode: 0, // FirstHit by default
@@ -990,7 +987,6 @@ impl FlameBuffers {
             width,
             height,
             blend_factor: 1.0,
-            histogram_color_scale: crate::config::DEFAULT_HISTOGRAM_COLOR_SCALE,
             use_fixed_ema: 0, // Default: cumulative-mean
             background_r: 0.0,  // Default black background
             background_g: 0.0,

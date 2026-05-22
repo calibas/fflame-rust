@@ -1076,8 +1076,9 @@ impl HighResExporter {
         // GPU accumulate path uses this scale to widen the [0,1] sample
         // RGB into u32 atomic-add precision; we divide back by it on
         // readback so HistogramPixel's units stay equivalent to the CPU
-        // path's (r,g,b ∈ [0,n], count = sample count).
-        let color_scale_f = config.histogram_color_scale.max(1.0);
+        // path's (r,g,b ∈ [0,n], count = sample count). Hardcoded — was
+        // a user-tunable slider, removed (see shader const comment).
+        let color_scale_f: f32 = 100.0;
         let use_gpu_accumulate = self.tile_histograms_buffer.is_some();
 
         // Pre-zero the concatenated tile-histogram buffer. The per-tile
@@ -1294,7 +1295,6 @@ impl HighResExporter {
                 dof_blur_strength: config.dof_blur_strength,
                 fog_strength: config.fog_strength,
                 fog_start: config.fog_start,
-                histogram_color_scale: config.histogram_color_scale,
                 bits_per_transform: crate::gpu::buffers::bits_per_transform(config.flame.transforms.len() as u32),
                 path_map_style: config.path_map_style as u32,
                 path_capture_mode: config.path_capture_mode as u32,

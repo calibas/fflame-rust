@@ -406,8 +406,6 @@ pub struct CreateFlameRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_iterations: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub histogram_color_scale: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub blend_factor: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub use_dynamic_blend: Option<bool>,
@@ -511,7 +509,6 @@ pub struct FlameResponse {
     pub density_scale: f32,
     pub speed_factor: f32,
     pub max_iterations: u64,
-    pub histogram_color_scale: f32,
     pub blend_factor: f32,
     pub use_dynamic_blend: bool,
     pub color_mode: ApiColorMode,

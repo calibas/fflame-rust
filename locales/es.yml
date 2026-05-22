@@ -206,7 +206,6 @@ tonemap:
   exposure: "Exposición"
   gamma: "Gamma"
   density_scale: "Escala de Densidad"
-  histogram_color_scale: "Escala de Color del Histograma"
 
 # History Panel
 history:
@@ -275,8 +274,6 @@ tooltips:
   blend_rate: "Qué tan rápido se mezclan las nuevas muestras con las existentes.\n0.01 = lento/suave, 1.0 = rápido/parpadeante"
   dynamic_blend: "Convergencia exponencial (antiguo) vs tasa fija (nuevo).\nLa tasa fija da resultados más consistentes."
   density_compression: "Ralentiza la acumulación en áreas brillantes.\n0 = desactivado, 100 = efecto fuerte"
-
-  histogram_color_scale: "Factor de escala para acumulación de color.\nMayor = colores más vibrantes."
 
 # Messages
 messages:

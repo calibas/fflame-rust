@@ -1294,7 +1294,6 @@ pub fn get_current_value(
         ConfigPath::BackgroundColorB => Some(config.background_color[2] as f64),
 
         // Rendering
-        ConfigPath::HistogramColorScale => Some(config.histogram_color_scale as f64),
         ConfigPath::BlendFactor => Some(config.blend_factor as f64),
         ConfigPath::PerspectiveStrength => Some(config.flame.perspective_strength as f64),
 

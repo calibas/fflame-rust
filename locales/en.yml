@@ -634,7 +634,6 @@ history:
     background_blue: "Background Blue"
 
     # Rendering
-    histogram_color_scale: "Histogram Color Scale"
     blend_factor: "Blend Factor"
     use_dynamic_blend: "Use Dynamic Blend"
     max_iterations: "Max Iterations"
@@ -1189,7 +1188,6 @@ track_editor:
   param_palette_reverse: "Reverse Palette"
   param_palette_size: "Palette Size"
   param_speed_factor: "Speed Factor"
-  param_histogram_color_scale: "Histogram Color Scale"
   param_background_r: "Background Red"
   param_background_g: "Background Green"
   param_background_b: "Background Blue"
@@ -1303,7 +1301,6 @@ settings:
   iterations_per_thread: "Iterations per Thread"
   advanced: "Advanced"
   burn_in: "Burn-in Iterations"
-  histogram_color_scale: "Histogram Color Scale"
   use_dynamic_blend: "Use Dynamic Blend"
   fixed_blend_rate: "Fixed Blend Rate"
   enable_vsync: "Enable VSync"
@@ -1327,7 +1324,6 @@ settings:
   # Tooltips
   tooltip_iterations_per_thread: "GPU workgroup performance tuning.\nHigher values = fewer dispatches, better GPU utilization.\nLower values = more frequent updates, smoother animation."
   tooltip_burn_in: "Skip first N iterations before plotting.\nAllows points to 'settle' onto the attractor before contributing to the image.\nHigher values = cleaner results but slower convergence.\n0 = no burn-in (may show artifacts from random starting points)"
-  tooltip_histogram_color_scale: "Controls color precision vs overflow protection in histogram accumulation.\nLower values prevent artifacts in zoomed-out scenes.\nHigher values give better color accuracy but overflow sooner.\n\n1-5: Maximum overflow protection (65535+ hits), very low precision\n10: Balanced (6553 hits, 10 color levels) - recommended default\n50: Higher precision (1310 hits, 50 color levels)\n100: Maximum precision (655 hits, 100 color levels) - classic"
   tooltip_use_dynamic_blend: "Exponential convergence.\nWhen enabled, blend rate adapts over time.\nWhen disabled, uses fixed blend rate below."
   tooltip_fixed_blend_rate: "Controls how quickly new samples blend with history.\nOnly active when Dynamic Blend is disabled.\n\n0.001 = Nearly permanent (very slow fade)\n0.01 = Very slow/smooth\n0.1 = Balanced (default)\n1.0 = Fast/flickery"
   tooltip_vsync: "Synchronize rendering with monitor refresh rate.\nEnabled = smoother, no tearing, capped at monitor refresh.\nDisabled = uncapped FPS, may tear, better for benchmarking."
@@ -1417,7 +1413,6 @@ tooltips:
   dynamic_blend: "Exponential convergence (old) vs fixed rate (new).\nFixed rate gives more consistent results."
   density_compression: "Slows accumulation in bright areas.\n0 = disabled, 100 = strong effect"
 
-  histogram_color_scale: "Scaling factor for color accumulation.\nHigher = more vibrant colors."
 
 # Messages
 messages:

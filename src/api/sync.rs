@@ -461,7 +461,6 @@ pub fn config_to_create_request(config: &FractalConfig, name: Option<&str>) -> C
         density_scale: Some(config.density_scale),
         speed_factor: Some(config.speed_factor),
         max_iterations: Some(config.max_iterations),
-        histogram_color_scale: Some(config.histogram_color_scale),
         blend_factor: Some(config.blend_factor),
         use_dynamic_blend: Some(config.use_dynamic_blend),
 
@@ -735,7 +734,6 @@ pub fn flame_response_to_config(
         density_scale: resp.density_scale,
         speed_factor: resp.speed_factor,
         max_iterations: resp.max_iterations,
-        histogram_color_scale: resp.histogram_color_scale,
         blend_factor: resp.blend_factor,
         use_dynamic_blend: resp.use_dynamic_blend,
         color_mode: resp.color_mode.into(),
