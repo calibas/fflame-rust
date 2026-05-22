@@ -75,7 +75,6 @@ pub enum ConfigPath {
     HistogramColorScale,
     BlendFactor,
     UseDynamicBlend,
-    TargetIterationsPerPixel,
     MaxIterations,
     DeterministicRng,
 
@@ -413,7 +412,6 @@ impl Display for ConfigPath {
             ConfigPath::HistogramColorScale => write!(f, "Histogram Color Scale"),
             ConfigPath::BlendFactor => write!(f, "Blend Factor"),
             ConfigPath::UseDynamicBlend => write!(f, "Use Dynamic Blend"),
-            ConfigPath::TargetIterationsPerPixel => write!(f, "Target Iterations Per Pixel"),
             ConfigPath::MaxIterations => write!(f, "Max Iterations"),
             ConfigPath::DeterministicRng => write!(f, "Deterministic RNG"),
 
@@ -718,7 +716,6 @@ impl ConfigPath {
             ConfigPath::HistogramColorScale => I18nKey::simple("history.param.histogram_color_scale"),
             ConfigPath::BlendFactor => I18nKey::simple("history.param.blend_factor"),
             ConfigPath::UseDynamicBlend => I18nKey::simple("history.param.use_dynamic_blend"),
-            ConfigPath::TargetIterationsPerPixel => I18nKey::simple("history.param.target_iterations_per_pixel"),
             ConfigPath::MaxIterations => I18nKey::simple("history.param.max_iterations"),
             ConfigPath::DeterministicRng => I18nKey::simple("history.param.deterministic_rng"),
 
@@ -1761,8 +1758,7 @@ impl ConfigPath {
             // Rendering settings - affect iteration behavior
             ConfigPath::HistogramColorScale
             | ConfigPath::BlendFactor
-            | ConfigPath::UseDynamicBlend
-            | ConfigPath::TargetIterationsPerPixel => UpdateType::IterationReset,
+            | ConfigPath::UseDynamicBlend => UpdateType::IterationReset,
 
             // Transform/flame changes - full reset
             ConfigPath::TransformCount
@@ -1900,7 +1896,6 @@ impl ConfigPath {
             ConfigPath::HistogramColorScale => "HistogramColorScale".to_string(),
             ConfigPath::BlendFactor => "BlendFactor".to_string(),
             ConfigPath::UseDynamicBlend => "UseDynamicBlend".to_string(),
-            ConfigPath::TargetIterationsPerPixel => "TargetIterationsPerPixel".to_string(),
             ConfigPath::MaxIterations => "MaxIterations".to_string(),
             ConfigPath::DeterministicRng => "DeterministicRng".to_string(),
 
@@ -2079,7 +2074,6 @@ impl ConfigPath {
             "HistogramColorScale" => return Some(ConfigPath::HistogramColorScale),
             "BlendFactor" => return Some(ConfigPath::BlendFactor),
             "UseDynamicBlend" => return Some(ConfigPath::UseDynamicBlend),
-            "TargetIterationsPerPixel" => return Some(ConfigPath::TargetIterationsPerPixel),
             "MaxIterations" => return Some(ConfigPath::MaxIterations),
             "DeterministicRng" => return Some(ConfigPath::DeterministicRng),
 
@@ -2488,7 +2482,6 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
 
         // UInt parameters
         ConfigPath::PaletteIndex
-        | ConfigPath::TargetIterationsPerPixel
         | ConfigPath::TransformCount
         | ConfigPath::SystemIterationsPerThread
         | ConfigPath::SystemBurnIn
@@ -2913,7 +2906,6 @@ mod tests {
             ConfigPath::HistogramColorScale,
             ConfigPath::BlendFactor,
             ConfigPath::UseDynamicBlend,
-            ConfigPath::TargetIterationsPerPixel,
             ConfigPath::MaxIterations,
             ConfigPath::DeterministicRng,
 

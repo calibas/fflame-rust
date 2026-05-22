@@ -157,9 +157,10 @@ struct SampleCounter {
 @group(0) @binding(4) var palette_sampler: sampler;
 @group(0) @binding(5) var<storage, read> variation_params: array<VariationParams>;
 {{#if OUTPUT_HISTOGRAM_DIRECT}}
-// Per-pixel iteration counter for convergence tracking. Bound but
-// unwritten when ITERATION_COUNTS=false.
-@group(0) @binding(6) var<storage, read_write> iteration_counts: array<atomic<u32>>;
+// Binding 6 intentionally unused in histogram-direct mode. Was
+// `iteration_counts: array<atomic<u32>>` for the per-pixel convergence
+// feature, removed because the feature was experimental and the
+// always-allocated buffer was just consuming GPU memory.
 {{else}}
 // Sample buffer write cursor.
 @group(0) @binding(6) var<storage, read_write> sample_counter: SampleCounter;

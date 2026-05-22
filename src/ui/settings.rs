@@ -108,24 +108,6 @@ pub fn render_settings_content(
                 let _ = config_manager.force_commit_preview(&ConfigPath::HistogramColorScale);
             }
 
-            // Per-pixel iteration limit
-            let mut temp_limit = config.target_iterations_per_pixel;
-            let response = ui.add(super::VkbSlider::new(&mut temp_limit, 0..=1_000_000)
-                .logarithmic(true)
-                .text(t!("settings.target_iterations_per_pixel")))
-                .on_hover_text(t!("settings.tooltip_target_iterations_per_pixel"));
-
-            if response.changed() {
-                let _ = config_manager.update_param(
-                    ConfigPath::TargetIterationsPerPixel,
-                    temp_limit.into()
-                );
-            }
-
-            if response.drag_stopped() {
-                let _ = config_manager.force_commit_preview(&ConfigPath::TargetIterationsPerPixel);
-            }
-
             let mut temp_deterministic = config.deterministic_rng;
             if ui.checkbox(&mut temp_deterministic, t!("settings.deterministic_rng").as_ref())
                 .on_hover_text(t!("settings.tooltip_deterministic_rng"))

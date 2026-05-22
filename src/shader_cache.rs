@@ -80,10 +80,6 @@ impl ShaderCache {
             has_post_affine: flame.has_post_affine(),
             has_attachments: flame.has_attachments(),
             attachment_cap: flame.attachment_cap() as u32,
-            // ShaderCache::new is called before any config arrives —
-            // start with the gate off; ensure_current_full will flip it
-            // when the loaded config has target_iterations_per_pixel > 0.
-            iteration_counts_enabled: false,
             inlined_transforms: None,
             cumulative_weights: None,
         };
@@ -182,7 +178,6 @@ impl ShaderCache {
                 has_post_affine: config.flame.has_post_affine(),
                 has_attachments: config.flame.has_attachments(),
                 attachment_cap: config.flame.attachment_cap() as u32,
-                iteration_counts_enabled: config.target_iterations_per_pixel > 0,
                 inlined_transforms: None,
                 cumulative_weights: None,
             }
