@@ -464,7 +464,6 @@ pub fn config_to_create_request(config: &FractalConfig, name: Option<&str>) -> C
         histogram_color_scale: Some(config.histogram_color_scale),
         blend_factor: Some(config.blend_factor),
         use_dynamic_blend: Some(config.use_dynamic_blend),
-        target_iterations_per_pixel: Some(config.target_iterations_per_pixel as i32),
 
         color_mode: Some(config.color_mode.into()),
         path_map_style: Some(config.path_map_style.into()),
@@ -739,7 +738,6 @@ pub fn flame_response_to_config(
         histogram_color_scale: resp.histogram_color_scale,
         blend_factor: resp.blend_factor,
         use_dynamic_blend: resp.use_dynamic_blend,
-        target_iterations_per_pixel: resp.target_iterations_per_pixel as u32,
         color_mode: resp.color_mode.into(),
         path_map_style: resp.path_map_style.into(),
         path_capture_mode: resp.path_capture_mode.into(),

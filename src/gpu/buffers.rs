@@ -776,7 +776,6 @@ pub struct AccumulateParams {
     pub height: u32,
     pub blend_factor: f32,
     pub histogram_color_scale: f32, // Must match compute shader value
-    pub target_iterations_per_pixel: u32, // Per-pixel convergence threshold (0 = disabled)
     /// Mode flag — 0 = cumulative-mean (algorithmic ideal,
     /// precision-limited around 10^9 iters/pixel on f32), 1 = fixed
     /// EMA at `blend_factor` (precision-stable, dim early frames as
@@ -786,7 +785,7 @@ pub struct AccumulateParams {
     pub background_r: f32,  // Background color RGB (for blending when no samples)
     pub background_g: f32,
     pub background_b: f32,
-    pub _pad1: f32,  // Total 10 fields = 40 bytes (rounds to 48 with padding)
+    pub _pad1: f32,  // Total 9 fields = 36 bytes (rounds to 48 with padding)
 }
 
 /// Manages GPU buffers and textures for fractal flame rendering
@@ -829,10 +828,6 @@ pub struct FlameBuffers {
     pub histogram_buffer: Buffer,
 
     // Per-pixel iteration count buffer for convergence tracking
-    // Layout: 1× u32 per pixel (total iteration hits)
-    // Used to stop accumulating pixels after target iteration count
-    pub iteration_count_buffer: Buffer,
-
     // Per-pixel path buffer for PathMap color mode (OPTIONAL)
     // Layout: 7× u32 per pixel (PathEntry struct)
     // Path is packed MSB-first: transform indices stored from high bits down
@@ -996,7 +991,6 @@ impl FlameBuffers {
             height,
             blend_factor: 1.0,
             histogram_color_scale: crate::config::DEFAULT_HISTOGRAM_COLOR_SCALE,
-            target_iterations_per_pixel: 0, // Default: disabled (no per-pixel convergence)
             use_fixed_ema: 0, // Default: cumulative-mean
             background_r: 0.0,  // Default black background
             background_g: 0.0,
@@ -1067,19 +1061,6 @@ impl FlameBuffers {
         let histogram_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Histogram Buffer"),
             size: histogram_buffer_size,
-            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        // Create iteration count buffer (1× u32 per pixel)
-        // Tracks how many times each pixel has been hit
-        // Used for per-pixel convergence control
-        // Size: width × height × sizeof(u32)
-        // Memory: ~1.9MB @ 800×600, ~8.3MB @ 1920×1080
-        let iteration_count_buffer_size = (width * height * std::mem::size_of::<u32>() as u32) as u64;
-        let iteration_count_buffer = device.create_buffer(&BufferDescriptor {
-            label: Some("Iteration Count Buffer"),
-            size: iteration_count_buffer_size,
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -1268,7 +1249,6 @@ impl FlameBuffers {
             temp_samples_texture,
             temp_samples_view,
             histogram_buffer,
-            iteration_count_buffer,
             path_buffer,
             path_filter_buffer,
             dummy_path_buffer,
@@ -1345,9 +1325,6 @@ impl FlameBuffers {
         // Clear histogram buffer (zero out all pixels)
         // Note: This is done via queue.write_buffer to avoid encoder ordering issues
         encoder.clear_buffer(&self.histogram_buffer, 0, None);
-
-        // Clear iteration count buffer (zero out all iteration counts)
-        encoder.clear_buffer(&self.iteration_count_buffer, 0, None);
 
         // Clear path buffer (zero out all paths) - only if enabled
         if let Some(ref path_buffer) = self.path_buffer {
