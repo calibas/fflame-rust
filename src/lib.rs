@@ -389,6 +389,22 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
             let _ = window.request_inner_size(PhysicalSize::new(physical_width, physical_height));
 
+            // Override winit's inline canvas style only when the DPR cap
+            // actually kicked in (raw_dpr > 1.5). On Windows with DPR=1.0
+            // the override is a no-op visually but tripped a reflow loop
+            // in Firefox; gating on the cap keeps it macOS-retina-only
+            // where it's needed. See resize listener comment below for the
+            // full explanation.
+            if raw_dpr > 1.5 {
+                let canvas_for_style = document
+                    .get_element_by_id("canvas")
+                    .unwrap()
+                    .dyn_into::<web_sys::HtmlCanvasElement>()
+                    .unwrap();
+                let _ = canvas_for_style.style().set_property("width", "100%");
+                let _ = canvas_for_style.style().set_property("height", "100%");
+            }
+
             // DEBUG: Log all size-related information
             let actual_inner_size = window.inner_size();
             let canvas_element = document.get_element_by_id("canvas").unwrap();
@@ -456,24 +472,85 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     Some(w) => w,
                     None => return,
                 };
-                let inner_width = match web_window.inner_width() {
-                    Ok(v) => v.as_f64().unwrap_or(0.0),
-                    Err(_) => return,
+
+                // Prefer visualViewport over window.innerWidth/Height.
+                // On iOS Safari, window.innerWidth can balloon to the
+                // layout viewport (10000+ during pinch-zoom and address-bar
+                // transitions); visualViewport reports what's actually
+                // visible. Falls back to innerWidth/Height on browsers
+                // that don't expose visualViewport.
+                let (css_width, css_height) = {
+                    let vv = web_window.visual_viewport();
+                    if let Some(vv) = vv {
+                        (vv.width(), vv.height())
+                    } else {
+                        let w = web_window
+                            .inner_width()
+                            .ok()
+                            .and_then(|v| v.as_f64())
+                            .unwrap_or(0.0);
+                        let h = web_window
+                            .inner_height()
+                            .ok()
+                            .and_then(|v| v.as_f64())
+                            .unwrap_or(0.0);
+                        (w, h)
+                    }
                 };
-                let inner_height = match web_window.inner_height() {
-                    Ok(v) => v.as_f64().unwrap_or(0.0),
-                    Err(_) => return,
-                };
-                if inner_width <= 0.0 || inner_height <= 0.0 {
+                if css_width <= 0.0 || css_height <= 0.0 {
                     return;
                 }
                 let raw_dpr = web_window.device_pixel_ratio();
                 let dpr = raw_dpr.min(1.5);
-                let physical_width = (inner_width * dpr) as u32;
-                let physical_height = (inner_height * dpr) as u32;
+
+                // Hard cap on physical dimensions. Defense against iOS
+                // Safari reporting absurd visualViewport values during
+                // unusual UI states (rare but observed). At 4096×4096
+                // the histogram is ~256 MB, the upper bound we'll
+                // tolerate even on a misbehaving browser.
+                const MAX_PHYSICAL_DIM: u32 = 4096;
+                let uncapped_width = (css_width * dpr) as u32;
+                let uncapped_height = (css_height * dpr) as u32;
+                let physical_width = uncapped_width.min(MAX_PHYSICAL_DIM);
+                let physical_height = uncapped_height.min(MAX_PHYSICAL_DIM);
+                log::info!(
+                    "WASM resize: css={}x{} dpr_raw={} dpr_used={} requested={}x{} (uncapped would be {}x{})",
+                    css_width, css_height, raw_dpr, dpr,
+                    physical_width, physical_height,
+                    uncapped_width, uncapped_height,
+                );
                 let _ = window_for_resize.request_inner_size(
                     PhysicalSize::new(physical_width, physical_height),
                 );
+
+                // winit sets `canvas.style.width = ${physical / raw_dpr}px`
+                // inline when request_inner_size runs. When our DPR cap is
+                // below the OS DPR (e.g., 1.5 < 2.0 on macOS retina) the
+                // inline style becomes ${CSS × 0.75}px and overrides our
+                // CSS `width: 100%` rule, shrinking the visible canvas.
+                // Restore CSS sizing in that case — drawing buffer stays
+                // at the capped resolution, browser upscales at composite.
+                //
+                // Skip when no cap was applied (raw_dpr <= 1.5). On
+                // Windows DPR=1.0, setting style.width "100%" on a canvas
+                // that didn't need it has been observed to trip a reflow
+                // loop in Firefox that froze the renderer.
+                if raw_dpr > 1.5 {
+                    if let Some(doc) = web_window.document() {
+                        if let Some(canvas_el) = doc.get_element_by_id("canvas") {
+                            if let Ok(html_canvas) =
+                                canvas_el.dyn_into::<web_sys::HtmlCanvasElement>()
+                            {
+                                let _ = html_canvas
+                                    .style()
+                                    .set_property("width", "100%");
+                                let _ = html_canvas
+                                    .style()
+                                    .set_property("height", "100%");
+                            }
+                        }
+                    }
+                }
             });
 
             // The resize handler: schedule/reschedule the fire closure.

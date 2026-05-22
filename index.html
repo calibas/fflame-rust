@@ -2,7 +2,13 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=overlays-content">
+    <!-- maximum-scale=1.0 + user-scalable=no disables browser pinch-zoom.
+         When iOS Safari pinch-zooms out, devicePixelRatio drops to ~0.1,
+         which causes egui-winit's pixels_per_point to crash to 0.1, which
+         inflates egui's logical screen_rect to ~10× the canvas size, which
+         allocates a ~10000×10000 GPU buffer and crashes the tab. The app
+         has its own zoom controls; browser pinch-zoom isn't useful here. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=overlays-content">
     <title>FAR - Online Version</title>
     <link rel="stylesheet" href="css/vkb.css">
     <style>
@@ -551,6 +557,16 @@
                     // WasmApi may not be available if built without --features api
                     console.log('WasmApi not available (built without api feature?):', e.message);
                 } */
+
+                // Block iOS Safari pinch-zoom and double-tap-zoom even when
+                // user-scalable=no is set on the viewport meta (Safari often
+                // ignores user-scalable=no on iPad for "accessibility").
+                // Without this, pinch-zoom on iOS drops devicePixelRatio
+                // toward 0, which inflates egui's screen_rect by 1/dpr and
+                // crashes the tab on GPU buffer allocation.
+                document.addEventListener('gesturestart', e => e.preventDefault());
+                document.addEventListener('gesturechange', e => e.preventDefault());
+                document.addEventListener('gestureend', e => e.preventDefault());
 
                 // No JS resize handler here. Canvas sizing is winit's job:
                 // winit observes the canvas via ResizeObserver, dispatches
