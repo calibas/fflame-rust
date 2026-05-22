@@ -1165,6 +1165,21 @@ impl App {
         // Handle viewport resize immediately (before rendering)
         // WASM: Debounce resizes to prevent rapid resize loops that can freeze the browser
         if let Some(viewport_size) = ui_response.fractal_viewport_size {
+            // Defensive ceiling. The egui/egui-winit screen_rect can inflate
+            // far beyond the canvas's physical size if pixels_per_point gets
+            // pushed below 1 (iOS Safari does this during pinch-zoom: DPR
+            // drops to ~0.1, screen_rect = inner_size / 0.1 = 10× inflation,
+            // dock panels report 10000+ available pixels, GPU buffer
+            // allocation crashes the tab). Disabled at the source via the
+            // viewport meta tag, but kept here as defense-in-depth.
+            const MAX_VIEWPORT_DIM: u32 = 4096;
+            if viewport_size.0 > MAX_VIEWPORT_DIM || viewport_size.1 > MAX_VIEWPORT_DIM {
+                log::warn!(
+                    "Suspicious fractal viewport size {}x{} (exceeds {}); refusing to resize",
+                    viewport_size.0, viewport_size.1, MAX_VIEWPORT_DIM
+                );
+                return Ok(());
+            }
             #[cfg(target_arch = "wasm32")]
             let should_resize = {
                 let now = web_time::Instant::now();
