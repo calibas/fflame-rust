@@ -90,17 +90,9 @@ impl FlamePipelines {
                     },
                     count: None,
                 },
-                // Iteration count buffer (storage, read-write for atomics)
-                BindGroupLayoutEntry {
-                    binding: 6,
-                    visibility: ShaderStages::COMPUTE,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
+                // binding 6 intentionally unused (was iteration_counts;
+                // feature removed). Kept as a gap rather than renumbered to
+                // avoid disturbing the entries past it.
                 // Path buffer (storage, read-write for PathMap color mode)
                 BindGroupLayoutEntry {
                     binding: 7,
@@ -316,17 +308,6 @@ impl FlamePipelines {
                     },
                     count: None,
                 },
-                // Iteration count buffer (storage, read-only)
-                BindGroupLayoutEntry {
-                    binding: 4,
-                    visibility: ShaderStages::COMPUTE,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
             ],
         });
 
@@ -507,10 +488,8 @@ impl FlamePipelines {
                     binding: 5,
                     resource: buffers.variation_params_buffer.as_entire_binding(),
                 },
-                BindGroupEntry {
-                    binding: 6,
-                    resource: buffers.iteration_count_buffer.as_entire_binding(),
-                },
+                // binding 6 intentionally unused in histogram-direct mode
+                // (was iteration_counts; feature removed).
                 // Use helper methods that return real or dummy buffers
                 BindGroupEntry {
                     binding: 7,
@@ -583,10 +562,6 @@ impl FlamePipelines {
                 BindGroupEntry {
                     binding: 3,
                     resource: buffers.accumulate_params_buffer.as_entire_binding(),
-                },
-                BindGroupEntry {
-                    binding: 4,
-                    resource: buffers.iteration_count_buffer.as_entire_binding(),
                 },
             ],
         })

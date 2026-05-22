@@ -1523,9 +1523,6 @@ impl ConfigManager {
             ConfigPath::HistogramColorScale => Ok(config.histogram_color_scale.into()),
             ConfigPath::BlendFactor => Ok(config.blend_factor.into()),
             ConfigPath::UseDynamicBlend => Ok(config.use_dynamic_blend.into()),
-            ConfigPath::TargetIterationsPerPixel => {
-                Ok(config.target_iterations_per_pixel.into())
-            }
             ConfigPath::MaxIterations => Ok(config.max_iterations.into()),
             ConfigPath::DeterministicRng => Ok(config.deterministic_rng.into()),
 
@@ -2139,9 +2136,6 @@ impl ConfigManager {
             }
             ConfigPath::UseDynamicBlend => {
                 self.current.use_dynamic_blend = value.try_into()?;
-            }
-            ConfigPath::TargetIterationsPerPixel => {
-                self.current.target_iterations_per_pixel = value.try_into()?;
             }
             ConfigPath::MaxIterations => {
                 self.current.max_iterations = value.try_into()?;

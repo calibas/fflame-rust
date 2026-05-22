@@ -289,14 +289,6 @@ pub struct ShaderConstants {
     pub attachment_cap: u32,
 
     /// Whether the per-pixel `iteration_counts` atomic counter is in
-    /// use. Drives the `ITERATION_COUNTS` template flag — when false,
-    /// the per-iteration `atomicAdd(&iteration_counts[pixel_idx], 1u)`
-    /// at the bottom of the iteration loop is stripped from the
-    /// compiled shader. Set from `target_iterations_per_pixel > 0`;
-    /// flames not using per-pixel convergence pay zero per-iteration
-    /// cost for the counter.
-    pub iteration_counts_enabled: bool,
-
     /// Precomputed cumulative weights for transform selection
     /// Eliminates the weight accumulation loops in select_transform
     pub cumulative_weights: Option<Vec<f32>>,
@@ -310,7 +302,6 @@ impl Default for ShaderConstants {
             has_post_affine: false,
             has_attachments: false,
             attachment_cap: 1,
-            iteration_counts_enabled: false,
             inlined_transforms: None,
             cumulative_weights: None,
         }
@@ -461,11 +452,6 @@ impl ShaderConstants {
             has_post_affine: flame.has_post_affine(),
             has_attachments: flame.has_attachments(),
             attachment_cap: flame.attachment_cap() as u32,
-            // Inlined-export mode never uses per-pixel convergence
-            // (HighResExporter sets target_iterations_per_pixel=0).
-            // If a future inlined-mode caller needs the gate, plumb
-            // target_iterations_per_pixel into this constructor.
-            iteration_counts_enabled: false,
             inlined_transforms: Some(inlined),
             cumulative_weights: Some(cumulative),
         }
@@ -1138,12 +1124,6 @@ impl ShaderBuilder {
         // mode binds samples + sample_counter. See
         // docs/projects/unified-render-pipeline.md.
         processor.set("OUTPUT_HISTOGRAM_DIRECT", output_histogram_direct);
-        // ITERATION_COUNTS gates the per-iteration `atomicAdd` to the
-        // iteration_counts buffer used for per-pixel convergence
-        // tracking. Set from the flame's `target_iterations_per_pixel`
-        // — when 0 (today's default), strips the atomic from the
-        // compiled shader entirely.
-        processor.set("ITERATION_COUNTS", constants.iteration_counts_enabled);
 
         let mut shader = String::new();
 
@@ -1735,7 +1715,7 @@ mod tests {
 
         // Shared baseline: 2D, no path tracking, no xaos, no DC, no
         // attachments — matches the export flow's flag set in 2c.
-        let make_processor = |output_histogram_direct: bool, iteration_counts: bool| {
+        let make_processor = |output_histogram_direct: bool| {
             let mut p = TemplateProcessor::new();
             p.set("RENDER_3D", false);
             p.set("PATH_TRACKING", false);
@@ -1743,22 +1723,17 @@ mod tests {
             p.set("HAS_DC", false);
             p.set("HAS_ATTACHMENTS", false);
             p.set("OUTPUT_HISTOGRAM_DIRECT", output_histogram_direct);
-            p.set("ITERATION_COUNTS", iteration_counts);
             p
         };
 
         // Direct-histogram mode (interactive default).
-        let p = make_processor(true, false);
+        let p = make_processor(true);
         let header_direct = p.process(&header_src);
         let main_direct = p.process(main_src);
 
         assert!(
             header_direct.contains("histogram: array<atomic<u32>>"),
             "direct mode header missing histogram binding"
-        );
-        assert!(
-            header_direct.contains("iteration_counts: array<atomic<u32>>"),
-            "direct mode header missing iteration_counts binding"
         );
         assert!(
             !header_direct.contains("samples: array<Sample>"),
@@ -1781,23 +1756,8 @@ mod tests {
             "direct mode main has sample-emit body leaked"
         );
 
-        // ITERATION_COUNTS=false strips the per-iteration counter atomic.
-        assert!(
-            !main_direct.contains("atomicAdd(&iteration_counts[pixel_idx]"),
-            "direct mode with ITERATION_COUNTS=false should strip counter atomic"
-        );
-        // ITERATION_COUNTS=true keeps it.
-        let p_with_counts = make_processor(true, true);
-        let main_with_counts = p_with_counts.process(main_src);
-        assert!(
-            main_with_counts.contains("atomicAdd(&iteration_counts[pixel_idx]"),
-            "direct mode with ITERATION_COUNTS=true missing counter atomic"
-        );
-
-        // Sample-emit mode (multi-tile / high-res export). ITERATION_COUNTS
-        // is meaningless here (it's nested inside the direct branch), so
-        // pass false.
-        let p = make_processor(false, false);
+        // Sample-emit mode (multi-tile / high-res export).
+        let p = make_processor(false);
         let header_emit = p.process(&header_src);
         let main_emit = p.process(main_src);
 
@@ -1816,10 +1776,6 @@ mod tests {
         assert!(
             !header_emit.contains("histogram: array<atomic<u32>>"),
             "emit mode header has direct-histogram binding leaked"
-        );
-        assert!(
-            !header_emit.contains("iteration_counts: array<atomic<u32>>"),
-            "emit mode header has iteration_counts binding leaked"
         );
         assert!(
             main_emit.contains("atomicAdd(&sample_counter.count"),

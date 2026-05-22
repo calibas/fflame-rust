@@ -172,7 +172,6 @@ pub struct FlameRenderer {
     burn_in: u32, // Burn-in iterations (for Depth gradient in PathMap mode)
     blend_factor: f32, // Accumulation blend rate: 0.01 (slow/smooth) to 1.0 (fast/flickery), default: 0.1
     use_dynamic_blend: bool, // true = exponential convergence (old), false = fixed blend rate (new)
-    target_iterations_per_pixel: u32, // Per-pixel convergence: stop updating pixel after N iterations (0 = disabled)
     overwrite_mode: bool, // When true, replace accumulation buffer instead of blending (for live preview)
     num_transforms: u32, // Number of normal transforms
     path_filters: Vec<crate::gpu::buffers::GpuPathFilter>, // Active path filters
@@ -278,7 +277,6 @@ impl FlameRenderer {
             burn_in: 20, // Default burn-in iterations
             blend_factor: 0.1, // 10% blend rate - good balance between speed and smoothness
             use_dynamic_blend: true, // Default to clamped exponential (0.8 → 0.01)
-            target_iterations_per_pixel: 0, // Default: disabled (no per-pixel convergence)
             overwrite_mode: false, // Default to normal blending (progressive refinement)
             num_transforms: flame.transforms.len() as u32,
             path_filters: Vec::new(), // No filters by default
@@ -409,7 +407,6 @@ impl FlameRenderer {
             has_post_affine: flame.has_post_affine(),
             has_attachments: flame.has_attachments(),
             attachment_cap: flame.attachment_cap() as u32,
-            iteration_counts_enabled: self.target_iterations_per_pixel > 0,
             // No inlining for incremental updates (would trigger too many shader rebuilds)
             inlined_transforms: None,
             cumulative_weights: None,
@@ -605,7 +602,6 @@ impl FlameRenderer {
             height: self.height,
             blend_factor,
             histogram_color_scale: self.histogram_color_scale,
-            target_iterations_per_pixel: self.target_iterations_per_pixel,
             use_fixed_ema,
             background_r: self.background_color[0],
             background_g: self.background_color[1],
@@ -1185,11 +1181,6 @@ impl FlameRenderer {
     pub fn set_use_dynamic_blend(&mut self, use_dynamic: bool) {
         self.use_dynamic_blend = use_dynamic;
         // Note: This will take effect on the next accumulate pass (no need to update GPU params immediately)
-    }
-
-    /// Set per-pixel iteration limit (0 = disabled)
-    pub fn set_target_iterations_per_pixel(&mut self, target: u32) {
-        self.target_iterations_per_pixel = target;
     }
 
     /// Set overwrite mode (live preview)

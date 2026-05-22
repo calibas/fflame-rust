@@ -6,7 +6,6 @@ struct AccumulateParams {
     height: u32,      // Tile height
     blend_factor: f32,
     histogram_color_scale: f32,
-    target_iterations_per_pixel: u32,
     _pad0: f32,
     background_r: f32,
     background_g: f32,
@@ -24,8 +23,7 @@ struct TileInfo {
 @group(0) @binding(1) var<storage, read> histogram: array<u32>;
 @group(0) @binding(2) var output_texture: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(3) var<uniform> params: AccumulateParams;
-@group(0) @binding(4) var<storage, read> iteration_counts: array<u32>;
-@group(0) @binding(5) var<uniform> tile_info: TileInfo;
+@group(0) @binding(4) var<uniform> tile_info: TileInfo;
 
 @compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -53,13 +51,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let b_sum = f32(histogram[base_idx + 2u]);
     let density = f32(histogram[base_idx + 3u]);
 
-    // Read iteration count for convergence check
-    let count_offset = tile_info.tile_index * pixels_per_tile;
-    let pixel_iterations = iteration_counts[count_offset + local_pixel_idx];
-    let has_some_density = prev.a > 0.01;
-    let is_converged = params.target_iterations_per_pixel > 0u && has_some_density && pixel_iterations >= params.target_iterations_per_pixel;
-    let convergence_gate = select(1.0, 0.0, is_converged);
-
     // Detect overwrite mode
     let is_overwrite_mode = params.blend_factor >= 0.99;
 
@@ -76,16 +67,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         b_sum / density
     ), vec3<f32>(0.0), vec3<f32>(1.0));
 
-    // Multiply blend factor by convergence gate
-    let final_blend = params.blend_factor * convergence_gate;
-
     // Blend RGB
     let blend_trust = clamp(prev.a / 0.05, 0.0, 1.0);
-    let blended_rgb = prev.rgb * (1.0 - final_blend) + new_color * final_blend;
+    let blended_rgb = prev.rgb * (1.0 - params.blend_factor) + new_color * params.blend_factor;
     let rgb_accumulated = mix(new_color, blended_rgb, blend_trust);
 
     // Alpha accumulation
-    let new_alpha = density * 0.01 * params.blend_factor * convergence_gate;
+    let new_alpha = density * 0.01 * params.blend_factor;
     let alpha_accumulated = select(
         prev.a + new_alpha,
         new_alpha,
