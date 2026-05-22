@@ -9,6 +9,13 @@ Download or clone this reposity, [install Rust](https://rust-lang.org/tools/inst
 cargo run --release
 ```
 
+### Linux
+A couple other packages are required to build on Linux (pkg-manager & libasound2-dev). You can install them on Ubuntu by running:
+```
+apt install pkg-manager
+apt install libasound2-dev
+```
+
 ## Learn
 
 We have a set of [tutorials](./docs/tutorials/README.md) on how to use FAR.
@@ -58,3 +65,7 @@ Fractal renderers:
 - [Fred's Fractal Factory](https://www.torpor.com/fred/fred.htm)
 - [FractalSet](https://www.fractalset.com/)
 - [IFS Construction Kit](https://larryriddle.agnesscott.org/ifskit/index.htm)
+
+| Name | Webpage | Source | Platforms | Type | Language |
+| ---- | ------- | ------ | --------- | ---- | -------- |
+| Apophysis 7x | [link](https://sourceforge.net/projects/apophysis7x/) | [GitHub](https://github.com/xyrus02/apophysis-7x) | Win | Flame | Pascal
