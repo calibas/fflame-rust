@@ -297,23 +297,27 @@ pub fn render_palette_library(
 
 // --- Cloud Palettes Section (API feature) ---
 
-/// Fetch cloud palettes from the API
-async fn fetch_cloud_palettes(base_url: &str, token: &str) -> Result<Vec<crate::api::types::PaletteResponse>, String> {
+/// Fetch the caller's library palette entries from the API.
+async fn fetch_cloud_palettes(
+    base_url: &str,
+    token: &str,
+) -> Result<Vec<crate::api::types::LibraryPaletteEntry>, String> {
     let mut api = crate::api::ApiState::new(base_url);
     api.set_token(token);
-    api.list_palettes(None, 1, 100)
+    api.list_library_palettes(1, 100)
         .await
         .map_err(|e| e.to_string())
 }
 
-/// Delete a cloud palette from the API
-async fn delete_cloud_palette(base_url: &str, token: &str, palette_id: &str) -> Result<String, String> {
+/// Remove the caller's library entry for a palette (by content hash).
+/// Doesn't delete the underlying palette content.
+async fn delete_cloud_palette(base_url: &str, token: &str, hash: &str) -> Result<String, String> {
     let mut api = crate::api::ApiState::new(base_url);
     api.set_token(token);
-    let id = palette_id.to_string();
-    api.delete_palette(&id)
+    let h = hash.to_string();
+    api.remove_library_palette(&h)
         .await
-        .map(|_| id)
+        .map(|_| h)
         .map_err(|e| e.to_string())
 }
 
@@ -394,7 +398,7 @@ pub fn render_cloud_palettes_section(
             let preview_width = 200.0;
             let max_name_width = cloud_state.palettes.iter()
                 .map(|p| {
-                    let name = p.name.as_deref().unwrap_or("Unnamed");
+                    let name = p.nickname.as_deref().unwrap_or("Untitled");
                     name.len() as f32 * 8.0
                 })
                 .fold(0.0f32, f32::max)
@@ -406,17 +410,19 @@ pub fn render_cloud_palettes_section(
                 .spacing([10.0, 4.0])
                 .striped(false)
                 .show(ui, |ui| {
-                    // Collect palette data first to avoid borrow conflicts
+                    // Collect palette data first to avoid borrow conflicts.
+                    // Library entries are keyed by content hash; the
+                    // nickname is the caller's personal label.
                     let palette_data: Vec<_> = cloud_state.palettes.iter().map(|p| {
-                        let name = p.name.clone().unwrap_or_else(|| "Unnamed".to_string());
-                        let id = p.id.clone();
-                        let palette = crate::api::sync::palette_from_api(p);
-                        (id, name, palette)
+                        let name = p.nickname.clone().unwrap_or_else(|| "Untitled".to_string());
+                        let hash = p.hash.clone();
+                        let palette = crate::api::sync::palette_from_library_entry(p);
+                        (hash, name, palette)
                     }).collect();
 
-                    for (id, name, palette) in &palette_data {
+                    for (hash, name, palette) in &palette_data {
                         // Generate cached texture for gradient preview
-                        let texture_id = egui::Id::new(("cloud_palette_preview", id));
+                        let texture_id = egui::Id::new(("cloud_palette_preview", hash));
                         let texture = ui.ctx().data_mut(|data| {
                             data.get_temp::<egui::TextureHandle>(texture_id)
                         }).unwrap_or_else(|| {
@@ -426,7 +432,7 @@ pub fn render_cloud_palettes_section(
                                 preview_height as usize,
                             );
                             let tex = ui.ctx().load_texture(
-                                format!("cloud_palette_{}", id),
+                                format!("cloud_palette_{}", hash),
                                 preview_image,
                                 egui::TextureOptions::LINEAR,
                             );
@@ -497,7 +503,7 @@ pub fn render_cloud_palettes_section(
 
                         // Handle delete
                         if delete_clicked {
-                            trigger_cloud_palette_delete(cloud_state, id, auth);
+                            trigger_cloud_palette_delete(cloud_state, hash, auth);
                         }
 
                         ui.end_row();
@@ -558,9 +564,9 @@ fn trigger_cloud_palette_fetch(cloud_state: &mut super::CloudPaletteState, auth:
     });
 }
 
-/// Trigger async delete of a cloud palette.
+/// Trigger async removal of a library palette entry (by content hash).
 /// `auth` is `Some((base_url, token))` from SystemSettings; on WASM falls back to localStorage.
-fn trigger_cloud_palette_delete(cloud_state: &mut super::CloudPaletteState, palette_id: &str, auth: Option<(&str, &str)>) {
+fn trigger_cloud_palette_delete(cloud_state: &mut super::CloudPaletteState, hash: &str, auth: Option<(&str, &str)>) {
     cloud_state.deleting = true;
     cloud_state.notification = None;
 
@@ -584,11 +590,11 @@ fn trigger_cloud_palette_delete(cloud_state: &mut super::CloudPaletteState, pale
     };
 
     let result_slot = cloud_state.delete_result.clone();
-    let id = palette_id.to_string();
+    let h = hash.to_string();
 
     #[cfg(target_arch = "wasm32")]
     wasm_bindgen_futures::spawn_local(async move {
-        let result = delete_cloud_palette(&base_url, &token, &id).await;
+        let result = delete_cloud_palette(&base_url, &token, &h).await;
         if let Ok(mut slot) = result_slot.lock() {
             *slot = Some(result);
         }
@@ -596,7 +602,7 @@ fn trigger_cloud_palette_delete(cloud_state: &mut super::CloudPaletteState, pale
 
     #[cfg(not(target_arch = "wasm32"))]
     std::thread::spawn(move || {
-        let result = pollster::block_on(delete_cloud_palette(&base_url, &token, &id));
+        let result = pollster::block_on(delete_cloud_palette(&base_url, &token, &h));
         if let Ok(mut slot) = result_slot.lock() {
             *slot = Some(result);
         }
@@ -617,7 +623,7 @@ fn poll_cloud_palette_results(
                 Ok(palettes) => {
                     // Clear texture cache when palette list changes
                     for p in &cloud_state.palettes {
-                        let texture_id = egui::Id::new(("cloud_palette_preview", &p.id));
+                        let texture_id = egui::Id::new(("cloud_palette_preview", &p.hash));
                         ui.ctx().data_mut(|data| {
                             data.remove::<egui::TextureHandle>(texture_id);
                         });
@@ -638,17 +644,17 @@ fn poll_cloud_palette_results(
         if let Some(result) = slot.take() {
             cloud_state.deleting = false;
             match result {
-                Ok(deleted_id) => {
+                Ok(deleted_hash) => {
                     // Remove from local list and clear texture cache
-                    let texture_id = egui::Id::new(("cloud_palette_preview", &deleted_id));
+                    let texture_id = egui::Id::new(("cloud_palette_preview", &deleted_hash));
                     ui.ctx().data_mut(|data| {
                         data.remove::<egui::TextureHandle>(texture_id);
                     });
                     let name = cloud_state.palettes.iter()
-                        .find(|p| p.id == deleted_id)
-                        .and_then(|p| p.name.clone())
+                        .find(|p| p.hash == deleted_hash)
+                        .and_then(|p| p.nickname.clone())
                         .unwrap_or_else(|| "palette".to_string());
-                    cloud_state.palettes.retain(|p| p.id != deleted_id);
+                    cloud_state.palettes.retain(|p| p.hash != deleted_hash);
                     cloud_state.notification = Some((
                         t!("palette_library.cloud_delete_success", name = name).to_string(),
                         false,
