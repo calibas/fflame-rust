@@ -350,8 +350,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 // Write RGB as 4× u32 (unpacked, full 32-bit precision).
                 let base_idx = pixel_idx * 4u;  // 4 words per pixel (R, G, B, density)
 
-                // Use global color scale from params (uniform constant, fast access)
-                let color_scale = params.histogram_color_scale;
+                // Hardcoded color scale (was `params.histogram_color_scale`,
+                // formerly a user-tunable slider — removed because the value
+                // cancels in the color-recovery math
+                // `(scale × Σ color) / (scale × N) = Σ color / N`, and u32
+                // overflow is unreachable under any plausible iteration count).
+                // Must match the const in `accumulate.wgsl`.
+                let color_scale = 100.0;
 
                 // Convert colors to u32 using global scale
                 // No packing needed - each channel gets its own u32 word

@@ -1,3 +1,10 @@
+// Hardcoded color scale (was `params.histogram_color_scale`, formerly
+// a user-tunable slider — removed because the value cancels in the
+// color-recovery math `(scale × Σ color) / (scale × N) = Σ color / N`,
+// and u32 overflow is unreachable under any plausible iteration count).
+// Must match the const in `core/main_template.wgsl`.
+const HISTOGRAM_COLOR_SCALE: f32 = 100.0;
+
 // Accumulation shader — adaptive blend (Phase 8c follow-up). The
 // accumulator stores:
 //   - rgb: density-weighted running mean color, in [0,1]
@@ -46,7 +53,6 @@ struct AccumulateParams {
     // the "overwrite" signal: blend_factor ≥ 0.99 means clear prev
     // before add (used for parameter-change reset).
     blend_factor: f32,
-    histogram_color_scale: f32, // Must match compute shader value
     // Mode flag (was _pad0):
     //   0 = cumulative-mean — α per pixel = new_density / total_density.
     //       Matches the reference Fractal Flame algorithm. Brightness
@@ -98,12 +104,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let b_sum = f32(histogram[base_idx + 2u]);
     let scaled_density = f32(histogram[base_idx + 3u]);
 
-    // Convert scaled density to raw iteration count. histogram_color_scale
-    // is the multiplier the compute shader applies to keep u32 atomic
-    // adds in a useful precision range; we undo it here so the stored
+    // Convert scaled density to raw iteration count. The compute shader
+    // multiplies by HISTOGRAM_COLOR_SCALE to keep per-iteration u32
+    // values in a useful precision range; we undo it here so the stored
     // alpha is "iteration count for this pixel," matching the units
     // the tonemap's sample_density expects (iters / pixel_count).
-    let color_scale = max(params.histogram_color_scale, 1.0);
+    let color_scale = HISTOGRAM_COLOR_SCALE;
     let new_density = scaled_density / color_scale;
     let total_density = prev.a + new_density;
 

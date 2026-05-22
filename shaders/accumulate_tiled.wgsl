@@ -5,7 +5,6 @@ struct AccumulateParams {
     width: u32,       // Tile width
     height: u32,      // Tile height
     blend_factor: f32,
-    histogram_color_scale: f32,
     _pad0: f32,
     background_r: f32,
     background_g: f32,

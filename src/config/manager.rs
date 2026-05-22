@@ -1520,7 +1520,6 @@ impl ConfigManager {
             ConfigPath::BackgroundColorB => Ok(config.background_color[2].into()),
 
             // Rendering settings
-            ConfigPath::HistogramColorScale => Ok(config.histogram_color_scale.into()),
             ConfigPath::BlendFactor => Ok(config.blend_factor.into()),
             ConfigPath::UseDynamicBlend => Ok(config.use_dynamic_blend.into()),
             ConfigPath::MaxIterations => Ok(config.max_iterations.into()),
@@ -2128,9 +2127,6 @@ impl ConfigManager {
             }
 
             // Rendering settings
-            ConfigPath::HistogramColorScale => {
-                self.current.histogram_color_scale = value.try_into()?;
-            }
             ConfigPath::BlendFactor => {
                 self.current.blend_factor = value.try_into()?;
             }

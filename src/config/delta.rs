@@ -72,7 +72,6 @@ pub enum ConfigPath {
     BackgroundColorB, // Separate B component for animation
 
     // ===== Rendering settings (affects iteration speed/quality) =====
-    HistogramColorScale,
     BlendFactor,
     UseDynamicBlend,
     MaxIterations,
@@ -409,7 +408,6 @@ impl Display for ConfigPath {
             ConfigPath::BackgroundColorB => write!(f, "Background Blue"),
 
             // Rendering
-            ConfigPath::HistogramColorScale => write!(f, "Histogram Color Scale"),
             ConfigPath::BlendFactor => write!(f, "Blend Factor"),
             ConfigPath::UseDynamicBlend => write!(f, "Use Dynamic Blend"),
             ConfigPath::MaxIterations => write!(f, "Max Iterations"),
@@ -713,7 +711,6 @@ impl ConfigPath {
             ConfigPath::BackgroundColorB => I18nKey::simple("history.param.background_blue"),
 
             // Rendering
-            ConfigPath::HistogramColorScale => I18nKey::simple("history.param.histogram_color_scale"),
             ConfigPath::BlendFactor => I18nKey::simple("history.param.blend_factor"),
             ConfigPath::UseDynamicBlend => I18nKey::simple("history.param.use_dynamic_blend"),
             ConfigPath::MaxIterations => I18nKey::simple("history.param.max_iterations"),
@@ -1756,8 +1753,7 @@ impl ConfigPath {
             ConfigPath::PathTrackingMode => UpdateType::IterationReset,
 
             // Rendering settings - affect iteration behavior
-            ConfigPath::HistogramColorScale
-            | ConfigPath::BlendFactor
+            ConfigPath::BlendFactor
             | ConfigPath::UseDynamicBlend => UpdateType::IterationReset,
 
             // Transform/flame changes - full reset
@@ -1893,7 +1889,6 @@ impl ConfigPath {
             ConfigPath::BackgroundColorB => "BackgroundColorB".to_string(),
 
             // Rendering
-            ConfigPath::HistogramColorScale => "HistogramColorScale".to_string(),
             ConfigPath::BlendFactor => "BlendFactor".to_string(),
             ConfigPath::UseDynamicBlend => "UseDynamicBlend".to_string(),
             ConfigPath::MaxIterations => "MaxIterations".to_string(),
@@ -2071,7 +2066,6 @@ impl ConfigPath {
             "BackgroundColorB" => return Some(ConfigPath::BackgroundColorB),
 
             // Rendering
-            "HistogramColorScale" => return Some(ConfigPath::HistogramColorScale),
             "BlendFactor" => return Some(ConfigPath::BlendFactor),
             "UseDynamicBlend" => return Some(ConfigPath::UseDynamicBlend),
             "MaxIterations" => return Some(ConfigPath::MaxIterations),
@@ -2390,7 +2384,6 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::BackgroundColorR
         | ConfigPath::BackgroundColorG
         | ConfigPath::BackgroundColorB
-        | ConfigPath::HistogramColorScale
         | ConfigPath::BlendFactor
         | ConfigPath::PerspectiveStrength
         | ConfigPath::TransformWeight { .. }
@@ -2903,7 +2896,6 @@ mod tests {
             ConfigPath::BackgroundColorB,
 
             // Rendering
-            ConfigPath::HistogramColorScale,
             ConfigPath::BlendFactor,
             ConfigPath::UseDynamicBlend,
             ConfigPath::MaxIterations,

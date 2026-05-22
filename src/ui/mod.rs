@@ -1737,7 +1737,6 @@ fn reset_rendering_to_defaults(config_manager: &mut crate::config::ConfigManager
     let _ = config_manager.update_batch(
         vec![
             (ConfigPath::MaxIterations, defaults::DEFAULT_MAX_ITERATIONS.into()),
-            (ConfigPath::HistogramColorScale, defaults::DEFAULT_HISTOGRAM_COLOR_SCALE.into()),
             (ConfigPath::BlendFactor, defaults::DEFAULT_BLEND_FACTOR.into()),
             (ConfigPath::UseDynamicBlend, defaults::DEFAULT_USE_DYNAMIC_BLEND.into()),
             (ConfigPath::DeterministicRng, false.into()),

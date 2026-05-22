@@ -161,7 +161,6 @@ pub struct FlameRenderer {
     perspective_strength: f32,
     deterministic_rng: bool,
     frame_counter: u32, // For deterministic seed progression
-    histogram_color_scale: f32, // Precision vs overflow (default: 10.0)
     dof_focus_distance: f32, // DOF: Distance from origin where image is sharpest
     dof_blur_strength: f32, // DOF: Blur amount (0.0 = disabled)
     fog_strength: f32, // Depth fog: exponential fog density (0.0 = disabled)
@@ -266,7 +265,6 @@ impl FlameRenderer {
             perspective_strength: flame.perspective_strength,
             deterministic_rng: true, // Default to deterministic for reproducible rendering
             frame_counter: 0,
-            histogram_color_scale: crate::config::DEFAULT_HISTOGRAM_COLOR_SCALE,
             dof_focus_distance: crate::config::DEFAULT_DOF_FOCUS_DISTANCE,
             dof_blur_strength: crate::config::DEFAULT_DOF_BLUR_STRENGTH,
             fog_strength: crate::config::DEFAULT_FOG_STRENGTH,
@@ -463,7 +461,6 @@ impl FlameRenderer {
             dof_blur_strength: self.dof_blur_strength,
             fog_strength: self.fog_strength,
             fog_start: self.fog_start,
-            histogram_color_scale: self.histogram_color_scale,
             bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
             path_map_style: self.path_map_style as u32,
             path_capture_mode: self.path_capture_mode as u32,
@@ -601,7 +598,6 @@ impl FlameRenderer {
             width: self.width,
             height: self.height,
             blend_factor,
-            histogram_color_scale: self.histogram_color_scale,
             use_fixed_ema,
             background_r: self.background_color[0],
             background_g: self.background_color[1],
@@ -835,7 +831,6 @@ impl FlameRenderer {
         // 4. Update render mode and perspective
         self.current_render_mode = config.flame.render_mode;
         self.perspective_strength = config.flame.perspective_strength;
-        self.histogram_color_scale = config.histogram_color_scale;
         self.dof_focus_distance = config.dof_focus_distance;
         self.dof_blur_strength = config.dof_blur_strength;
         self.fog_strength = config.fog_strength;
@@ -892,7 +887,6 @@ impl FlameRenderer {
             dof_blur_strength: config.dof_blur_strength,
             fog_strength: config.fog_strength,
             fog_start: config.fog_start,
-            histogram_color_scale: config.histogram_color_scale,
             bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
             path_map_style: self.path_map_style as u32,
             path_capture_mode: self.path_capture_mode as u32,
@@ -1012,7 +1006,6 @@ impl FlameRenderer {
             dof_blur_strength: self.dof_blur_strength,
             fog_strength: self.fog_strength,
             fog_start: self.fog_start,
-            histogram_color_scale: self.histogram_color_scale,
             bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
             path_map_style: self.path_map_style as u32,
             path_capture_mode: self.path_capture_mode as u32,
@@ -1165,12 +1158,6 @@ impl FlameRenderer {
         self.deterministic_rng = deterministic;
     }
 
-    pub fn set_histogram_color_scale(&mut self, queue: &Queue, scale: f32, iterations_per_thread: u32, burn_in: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_z: f32, speed_factor: f32) {
-        self.histogram_color_scale = scale;
-        // Update GPU params immediately so new scale takes effect
-        self.update_iterations(queue, iterations_per_thread, burn_in, zoom, pan_x, pan_y, rotation, camera_rotation_x, camera_rotation_y, camera_z, speed_factor);
-    }
-
     /// Set blend factor for accumulation (0.01 = slow/smooth, 1.0 = fast/flickery)
     pub fn set_blend_factor(&mut self, blend_factor: f32) {
         self.blend_factor = blend_factor;
@@ -1219,7 +1206,6 @@ impl FlameRenderer {
             dof_blur_strength: self.dof_blur_strength,
             fog_strength: self.fog_strength,
             fog_start: self.fog_start,
-            histogram_color_scale: self.histogram_color_scale,
             bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
             path_map_style: self.path_map_style as u32,
             path_capture_mode: self.path_capture_mode as u32,
@@ -1549,7 +1535,6 @@ impl FlameRenderer {
             dof_blur_strength: self.dof_blur_strength,
             fog_strength: self.fog_strength,
             fog_start: self.fog_start,
-            histogram_color_scale: self.histogram_color_scale,
             bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
             path_map_style: self.path_map_style as u32,
             path_capture_mode: self.path_capture_mode as u32,

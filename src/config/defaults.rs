@@ -16,7 +16,6 @@
 //! units conversion, etc.).
 
 // Histogram & Color
-pub const DEFAULT_HISTOGRAM_COLOR_SCALE: f32 = 100.0; // Max precision: 100 color levels
 pub const DEFAULT_EXPOSURE: f32 = 0.5; // Was 1.0 — calibrated against scale-invariant Levels
 pub const DEFAULT_GAMMA: f32 = 1.5; // Was 1.0 — same recalibration
 pub const DEFAULT_BRIGHTNESS: f32 = 1.0;
