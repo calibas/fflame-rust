@@ -58,9 +58,15 @@
             touch-action: none;
             width: 100%;
             height: 100%;
-            object-fit: contain;
-            /* Ensure canvas is ready for WebGPU context */
-            image-rendering: pixelated;
+            /* Do NOT use `object-fit` or `image-rendering` here. Both treat
+               the canvas as if it were a bitmap image and letterbox-fit it
+               using `canvas.width × canvas.height` as the intrinsic ratio.
+               That fights with WebGPU resize: every time the canvas buffer
+               attribute changes, `object-fit: contain` recomputes the
+               letterbox, the visible area flips, egui-reported viewport
+               jumps, and the layout oscillates. We want the canvas to fill
+               its container exactly; let the renderer match the buffer size
+               to the container size explicitly. */
         }
 
         #loading {
@@ -546,22 +552,23 @@
                     console.log('WasmApi not available (built without api feature?):', e.message);
                 } */
 
-                // Window resize handler
-                let resizeTimeout;
-                window.addEventListener('resize', () => {
-                    clearTimeout(resizeTimeout);
-                    resizeTimeout = setTimeout(() => {
-                        const canvas = document.getElementById('canvas');
-                        if (canvas) {
-                            canvas.style.width = '100%';
-                            canvas.style.height = '100%';
-                            const currentWidth = canvas.width;
-                            canvas.width = currentWidth + 1;
-                            requestAnimationFrame(() => {});
-                            console.log('Window resized - triggered canvas resize');
-                        }
-                    }, 100);
-                });
+                // No JS resize handler here. Canvas sizing is winit's job:
+                // winit observes the canvas via ResizeObserver, dispatches
+                // WindowEvent::Resized to Rust, our handler applies the DPR
+                // cap (1.5) via window.request_inner_size, and winit then
+                // sets canvas.width/height to match. Single source of truth
+                // for the canvas buffer size — no JS races, no drift.
+                //
+                // Previous versions had a JS handler that either:
+                //   (a) did `canvas.width = currentWidth + 1` (force wgpu
+                //       surface refresh). Cumulative drift; iOS Safari fires
+                //       hundreds of resize events per minute and the canvas
+                //       eventually drifted past 10000 px wide → OOM crash.
+                //   (b) set canvas.width to `window.innerWidth * cappedDPR`.
+                //       Raced winit's ResizeObserver (which sees full DPR);
+                //       resize never converged, layout flapped between two
+                //       sizes after every resize gesture.
+                // Both removed.
 
                 console.log('Fractal Flame Renderer initialized successfully!');
             } catch (error) {

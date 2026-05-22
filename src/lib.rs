@@ -363,13 +363,27 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             #[allow(deprecated)]
             let window = event_loop.create_window(attributes)?;
 
-            // Set canvas size to match display size with device pixel ratio
-            // This ensures 1:1 pixel mapping for crisp rendering
-            let dpr = web_window.device_pixel_ratio();
+            // Set canvas size to match display size with device pixel ratio.
+            // Cap effective DPR at 1.5 — at full DPR (2.0 on retina iPad, 3.0
+            // on iPhone Pro), the per-pixel GPU buffers exceed iOS Safari's
+            // ~512 MB-on-iPad / ~256 MB-on-iPhone per-tab memory limit and
+            // the tab silently crashes. Cost: slight softening on retina
+            // displays. See docs/projects/wasm-dpr-cap.md if we want to
+            // revisit (e.g., a user preference toggle for high-DPR mode).
+            //
+            // Memory budget math at full DPR on iPad retina (2048×1536, DPR
+            // 2.0 → 4096×3072 physical, 12.6M pixels):
+            //   histogram_buffer = 12.6M × 16 bytes  = 192 MB
+            //   iteration_count  = 12.6M × 4 bytes   =  48 MB
+            //   accum textures   = 12.6M × 8 × 2     = 192 MB
+            //   total > 432 MB just for these → tab gets killed.
+            // At DPR 1.5 the same iPad lands ~7M pixels, ~270 MB total.
+            let raw_dpr = web_window.device_pixel_ratio();
+            let dpr = raw_dpr.min(1.5);
             let width = web_window.inner_width().unwrap().as_f64().unwrap();
             let height = web_window.inner_height().unwrap().as_f64().unwrap();
 
-            // Physical pixels = CSS pixels × device pixel ratio
+            // Physical pixels = CSS pixels × (capped) device pixel ratio
             let physical_width = (width * dpr) as u32;
             let physical_height = (height * dpr) as u32;
 
@@ -396,13 +410,113 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             window
         };
 
+        // Wrap the window in Arc up here so we can clone it into the browser
+        // resize listener installed below. The Arc gets passed through to
+        // App::run unchanged.
+        let window = std::sync::Arc::new(window);
+
+        // Browser resize listener.
+        //
+        // winit 0.30's web backend observes the canvas with `ResizeObserver`
+        // configured for `DevicePixelContentBox`. For HTMLCanvasElement, that
+        // box is keyed to the `canvas.width × canvas.height` *attributes*, not
+        // the CSS layout box. So when the browser window resizes and only the
+        // canvas's CSS dimensions change (via `width: 100%` etc.), winit's
+        // observer never fires and no `WindowEvent::Resized` is dispatched —
+        // the app stays at startup size forever.
+        //
+        // Fix: bypass winit's observer entirely. Listen to `window.resize`
+        // ourselves, compute the desired physical size (`CSS × min(DPR, 1.5)`
+        // — DPR cap for iOS Safari memory budget), and call
+        // `winit::Window::request_inner_size`. That sets canvas.width and
+        // canvas.height to the new values, which DOES fire winit's observer
+        // (the attributes changed), which dispatches `WindowEvent::Resized`
+        // with the new size, which flows through `app.gpu.resize` normally.
+        // Single source of truth: this listener.
+        {
+            use std::cell::Cell;
+            use std::rc::Rc;
+            use wasm_bindgen::JsCast;
+            use wasm_bindgen::closure::Closure;
+
+            let window_for_resize = std::sync::Arc::clone(&window);
+
+            // Debounce: collapse rapid drag-resize events into a single
+            // request_inner_size call after the user has stopped moving.
+            // Without this, each browser 'resize' event triggers a wgpu
+            // surface reconfigure and the pile-up freezes the renderer.
+            // 100ms matches the original JS handler's behavior.
+            let pending_timeout: Rc<Cell<Option<i32>>> = Rc::new(Cell::new(None));
+
+            // The closure that fires after the debounce delay.
+            let pending_timeout_for_fire = pending_timeout.clone();
+            let fire_closure = Closure::<dyn FnMut()>::new(move || {
+                pending_timeout_for_fire.set(None);
+                let web_window = match web_sys::window() {
+                    Some(w) => w,
+                    None => return,
+                };
+                let inner_width = match web_window.inner_width() {
+                    Ok(v) => v.as_f64().unwrap_or(0.0),
+                    Err(_) => return,
+                };
+                let inner_height = match web_window.inner_height() {
+                    Ok(v) => v.as_f64().unwrap_or(0.0),
+                    Err(_) => return,
+                };
+                if inner_width <= 0.0 || inner_height <= 0.0 {
+                    return;
+                }
+                let raw_dpr = web_window.device_pixel_ratio();
+                let dpr = raw_dpr.min(1.5);
+                let physical_width = (inner_width * dpr) as u32;
+                let physical_height = (inner_height * dpr) as u32;
+                let _ = window_for_resize.request_inner_size(
+                    PhysicalSize::new(physical_width, physical_height),
+                );
+            });
+
+            // The resize handler: schedule/reschedule the fire closure.
+            let pending_timeout_for_schedule = pending_timeout.clone();
+            let fire_closure_ref = fire_closure.as_ref().clone();
+            let resize_closure = Closure::<dyn FnMut()>::new(move || {
+                let web_window = match web_sys::window() {
+                    Some(w) => w,
+                    None => return,
+                };
+                // Cancel any pending fire scheduled by a previous event.
+                if let Some(id) = pending_timeout_for_schedule.take() {
+                    web_window.clear_timeout_with_handle(id);
+                }
+                // Schedule the fire 100ms from now — coalesces drag storms.
+                if let Ok(id) = web_window.set_timeout_with_callback_and_timeout_and_arguments_0(
+                    fire_closure_ref.unchecked_ref(),
+                    100,
+                ) {
+                    pending_timeout_for_schedule.set(Some(id));
+                }
+            });
+
+            let web_window = web_sys::window().expect("no global window");
+            web_window
+                .add_event_listener_with_callback(
+                    "resize",
+                    resize_closure.as_ref().unchecked_ref(),
+                )
+                .expect("Failed to register resize listener");
+
+            // Keep both closures alive for the lifetime of the page.
+            fire_closure.forget();
+            resize_closure.forget();
+        }
+
         // Parse URL query params for deep-linking (?flame=uuid or ?animation=uuid)
         let (url_flame_id, url_animation_id) = parse_url_load_params();
         if url_flame_id.is_some() || url_animation_id.is_some() {
             log::info!("URL params: flame={:?}, animation={:?}", url_flame_id, url_animation_id);
         }
 
-        App::run(event_loop, std::sync::Arc::new(window), url_flame_id, url_animation_id).await
+        App::run(event_loop, window, url_flame_id, url_animation_id).await
     }
 
     #[cfg(not(target_arch = "wasm32"))]
