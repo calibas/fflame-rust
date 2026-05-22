@@ -47,7 +47,6 @@ struct AccumulateParams {
     // before add (used for parameter-change reset).
     blend_factor: f32,
     histogram_color_scale: f32, // Must match compute shader value
-    target_iterations_per_pixel: u32, // Per-pixel convergence threshold (0 = disabled)
     // Mode flag (was _pad0):
     //   0 = cumulative-mean — α per pixel = new_density / total_density.
     //       Matches the reference Fractal Flame algorithm. Brightness
@@ -71,7 +70,6 @@ struct AccumulateParams {
 @group(0) @binding(1) var<storage, read> histogram: array<u32>;
 @group(0) @binding(2) var output_texture: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(3) var<uniform> params: AccumulateParams;
-@group(0) @binding(4) var<storage, read> iteration_counts: array<u32>;  // Per-pixel iteration counts
 
 @compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -100,21 +98,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let b_sum = f32(histogram[base_idx + 2u]);
     let scaled_density = f32(histogram[base_idx + 3u]);
 
-    // Per-pixel convergence gate: once a pixel's iteration count hits
-    // the user's target, stop accumulating into it (keeps the rest of
-    // the image catching up while bright spots don't run away).
-    let pixel_iterations = iteration_counts[pixel_idx];
-    let has_some_density = prev.a > 0.01;
-    let is_converged = params.target_iterations_per_pixel > 0u && has_some_density && pixel_iterations >= params.target_iterations_per_pixel;
-    let convergence_gate = select(1.0, 0.0, is_converged);
-
     // Convert scaled density to raw iteration count. histogram_color_scale
     // is the multiplier the compute shader applies to keep u32 atomic
     // adds in a useful precision range; we undo it here so the stored
     // alpha is "iteration count for this pixel," matching the units
     // the tonemap's sample_density expects (iters / pixel_count).
     let color_scale = max(params.histogram_color_scale, 1.0);
-    let new_density = (scaled_density / color_scale) * convergence_gate;
+    let new_density = scaled_density / color_scale;
     let total_density = prev.a + new_density;
 
     // No new contribution this pixel this dispatch — keep prev. (In

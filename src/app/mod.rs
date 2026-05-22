@@ -1944,7 +1944,6 @@ impl App {
             // 3. Update accumulation parameters from config
             renderer.set_blend_factor(final_config.blend_factor);
             renderer.set_use_dynamic_blend(final_config.use_dynamic_blend);
-            renderer.set_target_iterations_per_pixel(final_config.target_iterations_per_pixel);
 
             // 4. Update tonemap parameters and render to fractal texture
             renderer.update_density_scale(&self.gpu.queue, final_config.density_scale);

@@ -411,8 +411,6 @@ pub struct CreateFlameRequest {
     pub blend_factor: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub use_dynamic_blend: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub target_iterations_per_pixel: Option<i32>,
 
     // Color
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -516,7 +514,6 @@ pub struct FlameResponse {
     pub histogram_color_scale: f32,
     pub blend_factor: f32,
     pub use_dynamic_blend: bool,
-    pub target_iterations_per_pixel: i32,
     pub color_mode: ApiColorMode,
     pub path_map_style: ApiPathMapStyle,
     pub path_capture_mode: ApiPathCaptureMode,

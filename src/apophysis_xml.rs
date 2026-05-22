@@ -335,7 +335,6 @@ fn parse_flame_element(
         histogram_color_scale: 100.0,
         blend_factor: 0.1,
         use_dynamic_blend: true,
-        target_iterations_per_pixel: 0,
         alpha_blend_low: crate::config::defaults::DEFAULT_ALPHA_BLEND_LOW,
         alpha_blend_high: crate::config::defaults::DEFAULT_ALPHA_BLEND_HIGH,
         palette_size: crate::config::defaults::DEFAULT_PALETTE_SIZE,

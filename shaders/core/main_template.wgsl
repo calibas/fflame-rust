@@ -365,16 +365,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 atomicAdd(&histogram[base_idx + 1u], g_u32);
                 atomicAdd(&histogram[base_idx + 2u], b_u32);
                 atomicAdd(&histogram[base_idx + 3u], density_u32);
-
-{{#if ITERATION_COUNTS}}
-                // Per-pixel convergence tracking — gated by
-                // ITERATION_COUNTS (which the builder ties to
-                // `target_iterations_per_pixel > 0`). Stripped from the
-                // compiled shader entirely when convergence isn't in
-                // use, eliminating one atomic per iteration. See
-                // docs/projects/unified-render-pipeline.md.
-                atomicAdd(&iteration_counts[pixel_idx], 1u);
-{{/if}}
 {{else}}
                 // Sample-emit path (multi-tile render). Stream one Sample
                 // per plotted point to a buffer; a host-driven accumulate

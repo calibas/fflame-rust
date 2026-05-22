@@ -63,9 +63,6 @@ pub struct FractalConfig {
     /// Use dynamic blend (true = exponential convergence, false = fixed blend rate, default: true)
     #[serde(default = "default_use_dynamic_blend")]
     pub use_dynamic_blend: bool,
-    /// Per-pixel iteration limit (0 = disabled, default: 0)
-    #[serde(default)]
-    pub target_iterations_per_pixel: u32,
 
     /// Color settings
     #[serde(default)]
@@ -384,7 +381,6 @@ impl Default for FractalConfig {
             histogram_color_scale: default_histogram_color_scale(),
             blend_factor: default_blend_factor(),
             use_dynamic_blend: default_use_dynamic_blend(),
-            target_iterations_per_pixel: 0,
             color_mode: ColorMode::Palette,
             path_map_style: PathMapStyle::default(),
             path_capture_mode: PathCaptureMode::default(),
@@ -475,7 +471,6 @@ impl FractalConfig {
         if config.histogram_color_scale == defaults.histogram_color_scale { obj.remove("histogram_color_scale"); }
         if config.blend_factor == defaults.blend_factor { obj.remove("blend_factor"); }
         if config.use_dynamic_blend == defaults.use_dynamic_blend { obj.remove("use_dynamic_blend"); }
-        if config.target_iterations_per_pixel == defaults.target_iterations_per_pixel { obj.remove("target_iterations_per_pixel"); }
 
         // Color settings
         if config.color_mode == defaults.color_mode { obj.remove("color_mode"); }
