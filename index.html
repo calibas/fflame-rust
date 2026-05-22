@@ -2,7 +2,13 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=overlays-content">
+    <!-- maximum-scale=1.0 + user-scalable=no disables browser pinch-zoom.
+         When iOS Safari pinch-zooms out, devicePixelRatio drops to ~0.1,
+         which causes egui-winit's pixels_per_point to crash to 0.1, which
+         inflates egui's logical screen_rect to ~10× the canvas size, which
+         allocates a ~10000×10000 GPU buffer and crashes the tab. The app
+         has its own zoom controls; browser pinch-zoom isn't useful here. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=overlays-content">
     <title>FAR - Online Version</title>
     <link rel="stylesheet" href="css/vkb.css">
     <style>
@@ -58,9 +64,15 @@
             touch-action: none;
             width: 100%;
             height: 100%;
-            object-fit: contain;
-            /* Ensure canvas is ready for WebGPU context */
-            image-rendering: pixelated;
+            /* Do NOT use `object-fit` or `image-rendering` here. Both treat
+               the canvas as if it were a bitmap image and letterbox-fit it
+               using `canvas.width × canvas.height` as the intrinsic ratio.
+               That fights with WebGPU resize: every time the canvas buffer
+               attribute changes, `object-fit: contain` recomputes the
+               letterbox, the visible area flips, egui-reported viewport
+               jumps, and the layout oscillates. We want the canvas to fill
+               its container exactly; let the renderer match the buffer size
+               to the container size explicitly. */
         }
 
         #loading {
@@ -546,22 +558,33 @@
                     console.log('WasmApi not available (built without api feature?):', e.message);
                 } */
 
-                // Window resize handler
-                let resizeTimeout;
-                window.addEventListener('resize', () => {
-                    clearTimeout(resizeTimeout);
-                    resizeTimeout = setTimeout(() => {
-                        const canvas = document.getElementById('canvas');
-                        if (canvas) {
-                            canvas.style.width = '100%';
-                            canvas.style.height = '100%';
-                            const currentWidth = canvas.width;
-                            canvas.width = currentWidth + 1;
-                            requestAnimationFrame(() => {});
-                            console.log('Window resized - triggered canvas resize');
-                        }
-                    }, 100);
-                });
+                // Block iOS Safari pinch-zoom and double-tap-zoom even when
+                // user-scalable=no is set on the viewport meta (Safari often
+                // ignores user-scalable=no on iPad for "accessibility").
+                // Without this, pinch-zoom on iOS drops devicePixelRatio
+                // toward 0, which inflates egui's screen_rect by 1/dpr and
+                // crashes the tab on GPU buffer allocation.
+                document.addEventListener('gesturestart', e => e.preventDefault());
+                document.addEventListener('gesturechange', e => e.preventDefault());
+                document.addEventListener('gestureend', e => e.preventDefault());
+
+                // No JS resize handler here. Canvas sizing is winit's job:
+                // winit observes the canvas via ResizeObserver, dispatches
+                // WindowEvent::Resized to Rust, our handler applies the DPR
+                // cap (1.5) via window.request_inner_size, and winit then
+                // sets canvas.width/height to match. Single source of truth
+                // for the canvas buffer size — no JS races, no drift.
+                //
+                // Previous versions had a JS handler that either:
+                //   (a) did `canvas.width = currentWidth + 1` (force wgpu
+                //       surface refresh). Cumulative drift; iOS Safari fires
+                //       hundreds of resize events per minute and the canvas
+                //       eventually drifted past 10000 px wide → OOM crash.
+                //   (b) set canvas.width to `window.innerWidth * cappedDPR`.
+                //       Raced winit's ResizeObserver (which sees full DPR);
+                //       resize never converged, layout flapped between two
+                //       sizes after every resize gesture.
+                // Both removed.
 
                 console.log('Fractal Flame Renderer initialized successfully!');
             } catch (error) {

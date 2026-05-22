@@ -1,6 +1,6 @@
 [package]
 name = "fractal_flame_wgpu"
-version = "0.4.0"
+version = "0.4.4"
 edition = "2021"
 default-run = "fractal_flame_wgpu"
 
@@ -49,6 +49,7 @@ wasm-bindgen-futures = "0.4"
 web-sys = { version = "0.3", features = [
     "Document",
     "Window",
+    "VisualViewport",
     "Location",
     "Element",
     "HtmlCanvasElement",
