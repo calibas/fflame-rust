@@ -325,12 +325,16 @@ fn palette_stops_to_json(palette: &Palette) -> serde_json::Value {
     serde_json::Value::Array(stops)
 }
 
-/// Reconstruct a Palette from API palette response data.
-pub fn palette_from_api(resp: &PaletteResponse) -> Palette {
-    let name = resp.name.clone().unwrap_or_else(|| "API Palette".to_string());
-
-    // Try to reconstruct from stops first
-    if let Some(stops_value) = &resp.stops {
+/// Reconstruct a `Palette` from any content-carrying source (an inline
+/// `ApiPalette`, a library entry, etc.). Prefers `stops` for fidelity,
+/// falls back to a 256-position interpolation of `color_data`, and
+/// finally yields the default palette when neither is present.
+fn palette_from_parts(
+    name: String,
+    stops_value: Option<&serde_json::Value>,
+    color_data: Option<&Vec<u32>>,
+) -> Palette {
+    if let Some(stops_value) = stops_value {
         if let Ok(stops) = serde_json::from_value::<Vec<ColorStop>>(stops_value.clone()) {
             if !stops.is_empty() {
                 return Palette {
@@ -343,8 +347,7 @@ pub fn palette_from_api(resp: &PaletteResponse) -> Palette {
         }
     }
 
-    // Fall back to color_data (packed u32 array: R,G,B,R,G,B,...)
-    if let Some(color_data) = &resp.color_data {
+    if let Some(color_data) = color_data {
         if color_data.len() >= 3 {
             let num_colors = color_data.len() / 3;
             let stops: Vec<ColorStop> = (0..num_colors)
@@ -372,18 +375,29 @@ pub fn palette_from_api(resp: &PaletteResponse) -> Palette {
         }
     }
 
-    // Last resort: default palette
     Palette::fire()
+}
+
+/// Reconstruct a `Palette` from an inline `ApiPalette` payload.
+pub fn palette_from_api(api: &ApiPalette) -> Palette {
+    let name = api.name.clone().unwrap_or_else(|| "API Palette".to_string());
+    palette_from_parts(name, api.stops.as_ref(), api.color_data.as_ref())
+}
+
+/// Reconstruct a `Palette` from a library entry. Uses the caller's
+/// personal `nickname` as the display name, or "Untitled" when none.
+pub fn palette_from_library_entry(entry: &LibraryPaletteEntry) -> Palette {
+    let name = entry.nickname.clone().unwrap_or_else(|| "Untitled".to_string());
+    palette_from_parts(name, entry.stops.as_ref(), entry.color_data.as_ref())
 }
 
 // ============================================================================
 // FractalConfig → API request
 // ============================================================================
 
-/// Convert a FractalConfig to an API CreateFlameRequest.
+/// Convert a FractalConfig to an API CreateFlameRequest. The palette
+/// travels inline in `palette`; the server deduplicates by content hash.
 ///
-/// Returns the flame request and optionally a palette request if the palette
-/// should be saved separately (when no palette_id exists yet).
 /// Convert a nested `Flame` (subflame) into the `SubflameRequest` wire
 /// shape. Recursive — subflames can contain subflames up to depth 4
 /// (server-enforced). Only the `Flame` state crosses the wire; tonemap
@@ -468,7 +482,7 @@ pub fn config_to_create_request(config: &FractalConfig, name: Option<&str>) -> C
         path_map_style: Some(config.path_map_style.into()),
         path_capture_mode: Some(config.path_capture_mode.into()),
         path_tracking_mode: Some(config.path_tracking_mode.into()),
-        palette_id: None, // Will be set after palette is saved
+        palette: Some(palette_to_api(&config.palette)),
         palette_rotation: Some(config.palette_rotation),
         palette_size: Some(config.palette_size as i32),
         palette_squeeze: Some(config.palette_squeeze),
@@ -536,92 +550,22 @@ fn encode_palette_data(palette: &Palette) -> (Option<serde_json::Value>, Option<
     }
 }
 
-/// Compute the palette content hash matching the server's `palette_content_hash()`.
-///
-/// SHA-256 over:
-///   (0x63 + color_data_bytes | 0x43) || (0x73 + stops_utf8 | 0x53)
-///
-/// `color_data` bytes are raw u8 channel values (R,G,B,R,G,B,...).
-/// `stops` text must match PostgreSQL's `jsonb::text` canonical format
-/// (sorted keys, space after `:` and `,`).
-pub fn compute_palette_hash(palette: &Palette) -> String {
-    use sha2::{Sha256, Digest};
-
-    let (stops_json, color_data) = encode_palette_data(palette);
-
-    let mut hasher = Sha256::new();
-
-    // color_data component
-    match color_data {
-        Some(ref data) => {
-            hasher.update([0x63]); // tag: color_data present
-            // Convert u32 values (0-255) to raw bytes — matches BYTEA storage
-            let bytes: Vec<u8> = data.iter().map(|&v| v as u8).collect();
-            hasher.update(&bytes);
-        }
-        None => {
-            hasher.update([0x43]); // tag: color_data NULL
-        }
-    }
-
-    // stops component
-    match stops_json {
-        Some(ref val) => {
-            hasher.update([0x73]); // tag: stops present
-            let text = jsonb_text(val);
-            hasher.update(text.as_bytes());
-        }
-        None => {
-            hasher.update([0x53]); // tag: stops NULL
-        }
-    }
-
-    // Zero-pad each byte to 2 hex digits — matches PostgreSQL encode(..., 'hex')
-    hasher.finalize().iter().map(|b| format!("{:02x}", b)).collect()
-}
-
-/// Format a serde_json::Value to match PostgreSQL's `jsonb::text` canonical output.
-///
-/// PostgreSQL JSONB text format: sorted keys, space after `:` and `,`, no newlines.
-/// e.g. `{"color": [1.0, 0.0, 0.0], "position": 0.0}`
-fn jsonb_text(val: &serde_json::Value) -> String {
-    use serde::Serialize;
-
-    struct PostgresJsonFormatter;
-
-    impl serde_json::ser::Formatter for PostgresJsonFormatter {
-        fn begin_array_value<W>(&mut self, writer: &mut W, first: bool) -> std::io::Result<()>
-        where W: ?Sized + std::io::Write {
-            if first { Ok(()) } else { writer.write_all(b", ") }
-        }
-
-        fn begin_object_key<W>(&mut self, writer: &mut W, first: bool) -> std::io::Result<()>
-        where W: ?Sized + std::io::Write {
-            if first { Ok(()) } else { writer.write_all(b", ") }
-        }
-
-        fn begin_object_value<W>(&mut self, writer: &mut W) -> std::io::Result<()>
-        where W: ?Sized + std::io::Write {
-            writer.write_all(b": ")
-        }
-    }
-
-    let mut buf = Vec::new();
-    let mut ser = serde_json::Serializer::with_formatter(&mut buf, PostgresJsonFormatter);
-    val.serialize(&mut ser).unwrap();
-    String::from_utf8(buf).unwrap()
-}
-
-/// Create a palette request from a FractalConfig's palette.
-pub fn palette_to_create_request(palette: &Palette, visibility: Option<ApiPaletteVisibility>) -> CreatePaletteRequest {
-    let vis = visibility.unwrap_or(ApiPaletteVisibility::Private);
+/// Build an inline `ApiPalette` payload from a local `Palette`. The
+/// server computes the content hash and assigns it on the response, so
+/// the client never sends `hash`. The local palette name travels as the
+/// flame-specific display label.
+pub fn palette_to_api(palette: &Palette) -> ApiPalette {
     let (stops, color_data) = encode_palette_data(palette);
-    CreatePaletteRequest {
-        visibility: vis,
+    ApiPalette {
+        hash: None,
         name: Some(palette.name.clone()),
-        stops,
         color_data,
-        metadata: None,
+        stops,
+        avg_color_r: None,
+        avg_color_g: None,
+        avg_color_b: None,
+        dominant_hue: None,
+        color_count: None,
     }
 }
 
@@ -629,10 +573,9 @@ pub fn palette_to_create_request(palette: &Palette, visibility: Option<ApiPalett
 // API response → FractalConfig
 // ============================================================================
 
-/// Convert an API FlameResponse to a FractalConfig.
-///
-/// Optionally provide a PaletteResponse to reconstruct the palette.
-/// If no palette is provided, the default palette is used.
+/// Convert an API FlameResponse to a FractalConfig. The palette is
+/// reconstructed from the inline `resp.palette` payload; when the flame
+/// has no palette, the default palette is used.
 /// Recursively assemble a nested `Flame` from a subflame `FlameResponse`.
 /// Subflames don't carry their own tonemap/palette/visibility — those are
 /// inherited from the parent's `FractalConfig` at render time. Server
@@ -664,10 +607,7 @@ fn flame_from_subflame_response(resp: &FlameResponse) -> Flame {
     }
 }
 
-pub fn flame_response_to_config(
-    resp: &FlameResponse,
-    palette_resp: Option<&PaletteResponse>,
-) -> FractalConfig {
+pub fn flame_response_to_config(resp: &FlameResponse) -> FractalConfig {
     // Bucket the three pools by `transform_kind` and sort by sort_order
     // within each. Server-side guarantees `transforms` only holds
     // `normal` rows (linked / final pools come in their own arrays), but
@@ -702,8 +642,10 @@ pub fn flame_response_to_config(
         subflames: resp.subflames.iter().map(flame_from_subflame_response).collect(),
     };
 
-    // Reconstruct palette
-    let palette = palette_resp
+    // Reconstruct palette from the inline payload on the flame response.
+    let palette = resp
+        .palette
+        .as_ref()
         .map(palette_from_api)
         .unwrap_or_else(Palette::fire);
 
