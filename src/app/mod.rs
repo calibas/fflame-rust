@@ -761,7 +761,12 @@ impl App {
                         },
                         WindowEvent::Resized(size) => {
                             if size.width > 0 && size.height > 0 {
-                                log::debug!("Window resized to {}x{}", size.width, size.height);
+                                // On WASM, the size here has already been capped
+                                // by the `window.resize` listener in lib.rs (which
+                                // calls request_inner_size with `CSS × min(DPR,
+                                // 1.5)`). winit then fires this event with the
+                                // capped value.
+                                log::info!("Window resized to {}x{}", size.width, size.height);
                                 app.gpu.resize(size);
                                 // NOTE: Don't resize renderer here - it will be resized by fractal viewport resize
                                 // The fractal panel is smaller than the window (due to UI panels)
