@@ -143,9 +143,6 @@ pub enum ApiVisibility {
     Public,
 }
 
-/// Backward-compatible alias.
-pub type ApiPaletteVisibility = ApiVisibility;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ApiEffectStage {
@@ -419,8 +416,12 @@ pub struct CreateFlameRequest {
     pub path_capture_mode: Option<ApiPathCaptureMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path_tracking_mode: Option<ApiPathTrackingMode>,
+    /// Inline palette payload. `None` clears the flame's palette; `Some`
+    /// embeds content (and optionally a flame-specific display name). The
+    /// server computes the content hash and stores `(hash, name)` on the
+    /// flame row — there is no separate palette-create round trip.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub palette_id: Option<String>,
+    pub palette: Option<ApiPalette>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub palette_rotation: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -515,7 +516,11 @@ pub struct FlameResponse {
     pub path_map_style: ApiPathMapStyle,
     pub path_capture_mode: ApiPathCaptureMode,
     pub path_tracking_mode: ApiPathTrackingMode,
-    pub palette_id: Option<String>,
+    /// Inline palette payload. `None` when the flame has no palette;
+    /// otherwise contains the server-computed hash, content, and derived
+    /// metadata. See `ApiPalette`.
+    #[serde(default)]
+    pub palette: Option<ApiPalette>,
     pub palette_rotation: f32,
     pub palette_size: i32,
     pub palette_squeeze: f32,
@@ -664,49 +669,79 @@ impl SearchFlamesParams {
 // Palettes
 // ============================================================================
 
-#[derive(Debug, Clone, Serialize)]
-pub struct CreatePaletteRequest {
-    pub visibility: ApiPaletteVisibility,
-    #[serde(skip_serializing_if = "Option::is_none")]
+/// Content-addressable palette payload. Used inline on flame
+/// requests/responses and as the body for `POST /api/palettes`, the
+/// public `GET /api/palettes/{hash}` endpoint, and library entry reads.
+///
+/// On requests the client sends content (`color_data` and/or `stops`)
+/// plus an optional flame-specific `name`. The server computes the
+/// SHA-256 hash and identifies the palette by it — the client never
+/// needs to send `hash` (the server ignores it when content is present).
+///
+/// On responses the server populates `hash` plus the derived metadata
+/// fields (`avg_color_*`, `dominant_hue`, `color_count`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ApiPalette {
+    /// Server-computed SHA-256 hex. Set on responses; clients omit it
+    /// on requests (server ignores any client-supplied value).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hash: Option<String>,
+    /// Flame-specific display name. Travels with the flame, independent
+    /// of any library nickname the caller may have set separately.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub stops: Option<serde_json::Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// RGB color data, one u32 per entry (0xRRGGBB). At least one of
+    /// `color_data` or `stops` must be present on a request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color_data: Option<Vec<u32>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct UpdatePaletteRequest {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Editor stop list (opaque JSON, preserved as-sent by the server).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stops: Option<serde_json::Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub color_data: Option<Vec<u32>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct PaletteResponse {
-    pub id: String,
-    pub visibility: ApiPaletteVisibility,
-    pub owner_id: String,
-    pub name: Option<String>,
-    #[serde(default)]
-    pub data_hash: Option<String>,
-    pub stops: Option<serde_json::Value>,
-    pub color_data: Option<Vec<u32>>,
-    pub color_count: Option<i32>,
-    pub dominant_hue: Option<f32>,
+    /// Derived: average channel values. Response only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub avg_color_r: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub avg_color_g: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub avg_color_b: Option<f32>,
-    pub metadata: Option<serde_json::Value>,
-    pub created_at: String,
-    pub updated_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dominant_hue: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_count: Option<i32>,
+}
+
+/// Entry from `GET /api/users/me/palettes` — the caller's bookmarked
+/// library. Carries the palette content alongside the caller's personal
+/// `nickname` and `added_at` timestamp.
+#[derive(Debug, Clone, Deserialize)]
+pub struct LibraryPaletteEntry {
+    pub hash: String,
+    /// Caller's personal label. `None` when no nickname was set.
+    #[serde(default)]
+    pub nickname: Option<String>,
+    pub added_at: String,
+    #[serde(default)]
+    pub color_data: Option<Vec<u32>>,
+    #[serde(default)]
+    pub stops: Option<serde_json::Value>,
+    #[serde(default)]
+    pub avg_color_r: Option<f32>,
+    #[serde(default)]
+    pub avg_color_g: Option<f32>,
+    #[serde(default)]
+    pub avg_color_b: Option<f32>,
+    #[serde(default)]
+    pub dominant_hue: Option<f32>,
+    #[serde(default)]
+    pub color_count: Option<i32>,
+}
+
+/// Body for `PUT /api/users/me/palettes/{hash}`. Omitted `nickname`
+/// leaves the existing label unchanged.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct UpdateLibraryNicknameRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nickname: Option<String>,
 }
 
 // ============================================================================

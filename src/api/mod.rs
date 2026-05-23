@@ -169,8 +169,9 @@ impl ApiState {
     /// Save a FractalConfig to the API as a new flame.
     /// Returns the server-assigned flame ID.
     ///
-    /// Order: create flame first, then palette, then update the flame
-    /// to link the palette. Optionally upload thumbnail and set visibility.
+    /// Single POST: the palette travels inline on the flame body and is
+    /// deduplicated server-side by content hash. Optionally uploads a
+    /// thumbnail afterwards.
     pub async fn save_flame(
         &self,
         config: &FractalConfig,
@@ -180,7 +181,6 @@ impl ApiState {
     ) -> FetchResult<String> {
         let token = self.require_token()?;
 
-        // 1. Create the flame (without palette)
         let mut flame_req = sync::config_to_create_request(config, name);
         flame_req.visibility = visibility;
         let flame_url = build_url(API_BASE_URL, "/api/flames");
@@ -188,20 +188,6 @@ impl ApiState {
             client::api_post(&flame_url, &flame_req, &token).await?;
         let flame_id = flame_resp.id;
 
-        // 2. Create the palette (same visibility as flame)
-        let palette_req = sync::palette_to_create_request(&config.palette, visibility);
-        let palette_url = build_url(API_BASE_URL, "/api/palettes");
-        let palette_resp: PaletteResponse =
-            client::api_post(&palette_url, &palette_req, &token).await?;
-
-        // 3. Update the flame to link the palette
-        let update_url = build_url(API_BASE_URL, &format!("/api/flames/{}", flame_id));
-        let mut update_req = sync::config_to_create_request(config, name);
-        update_req.palette_id = Some(palette_resp.id);
-        update_req.visibility = visibility;
-        let _: FlameResponse = client::api_put(&update_url, &update_req, &token).await?;
-
-        // 4. Upload thumbnail if provided
         if let Some(jpg_data) = thumbnail_jpg {
             self.upload_thumbnail(&flame_id, jpg_data, 512, 512).await?;
         }
@@ -234,13 +220,11 @@ impl ApiState {
 
     /// Update an existing flame on the API.
     ///
-    /// Fetches the current flame first to:
-    /// 1. Get the existing palette's data_hash for comparison
-    /// 2. Preserve visibility when `visibility` is `None`
-    ///
-    /// Palette handling: compares content hashes to avoid overwriting shared palettes.
-    /// If the palette hasn't changed, keeps the existing palette_id.
-    /// If it has changed, creates a new palette (copy) to avoid mutating shared data.
+    /// Single PUT with the inline palette payload. The server
+    /// recomputes the content hash and stores it on the flame row;
+    /// there's no separate palette round trip. When `visibility` is
+    /// `None`, we fetch the current flame first to preserve the
+    /// existing setting.
     ///
     /// If `thumbnail_jpg` is `Some`, uploads a new thumbnail.
     pub async fn update_flame(
@@ -253,50 +237,17 @@ impl ApiState {
     ) -> FetchResult<FlameResponse> {
         let token = self.require_token()?;
 
-        // Fetch current flame to preserve palette link and visibility
-        let current_url = build_url(API_BASE_URL, &format!("/api/flames/{}", flame_id));
-        let current: FlameResponse = client::api_get(&current_url, &token).await?;
-
-        // Determine palette: compare hashes to decide if we need a new palette
-        let local_hash = sync::compute_palette_hash(&config.palette);
-        let final_palette_id = match current.palette_id {
-            Some(ref pid) => {
-                // Fetch the existing palette to compare data_hash
-                let palette_url = build_url(API_BASE_URL, &format!("/api/palettes/{}", pid));
-                let existing_palette: PaletteResponse =
-                    client::api_get(&palette_url, &token).await?;
-
-                if existing_palette.data_hash.as_deref() == Some(&local_hash) {
-                    // Palette unchanged — keep existing link
-                    log::info!("Palette unchanged (hash: {}), keeping existing", local_hash);
-                    Some(pid.clone())
-                } else {
-                    // Palette changed — create a new one (don't overwrite shared palette)
-                    log::info!("Palette changed (local: {}, remote: {:?}), creating copy",
-                        local_hash, existing_palette.data_hash);
-                    let palette_req = sync::palette_to_create_request(&config.palette, None);
-                    let palette_url = build_url(API_BASE_URL, "/api/palettes");
-                    let palette_resp: PaletteResponse =
-                        client::api_post(&palette_url, &palette_req, &token).await?;
-                    Some(palette_resp.id)
-                }
-            }
+        let effective_visibility = match visibility {
+            Some(v) => Some(v),
             None => {
-                // Flame had no palette — create one now
-                let palette_req = sync::palette_to_create_request(&config.palette, None);
-                let palette_url = build_url(API_BASE_URL, "/api/palettes");
-                let palette_resp: PaletteResponse =
-                    client::api_post(&palette_url, &palette_req, &token).await?;
-                Some(palette_resp.id)
+                let current_url = build_url(API_BASE_URL, &format!("/api/flames/{}", flame_id));
+                let current: FlameResponse = client::api_get(&current_url, &token).await?;
+                current.visibility
             }
         };
 
-        // Use explicit visibility if provided, otherwise preserve existing
-        let effective_visibility = visibility.or(current.visibility);
-
         let mut req = sync::config_to_create_request(config, name);
         req.visibility = effective_visibility;
-        req.palette_id = final_palette_id;
 
         let url = build_url(API_BASE_URL, &format!("/api/flames/{}", flame_id));
         let resp: FlameResponse = client::api_put(&url, &req, &token).await?;
@@ -320,21 +271,11 @@ impl ApiState {
         let url = build_url(API_BASE_URL, &format!("/api/flames/{}", flame_id));
         let resp: FlameResponse = client::api_get(&url, &token).await?;
 
-        // Load palette if referenced
-        let palette_resp = if let Some(ref palette_id) = resp.palette_id {
-            let palette_url = build_url(API_BASE_URL, &format!("/api/palettes/{}", palette_id));
-            client::api_get::<PaletteResponse>(&palette_url, &token)
-                .await
-                .ok()
-        } else {
-            None
-        };
-
         let is_public = resp.visibility.as_ref().map(|v| matches!(v, ApiVisibility::Public));
         let user_id = resp.user_id.clone();
         let animation_count = resp.animation_count;
         let animations = resp.animations.clone();
-        let config = sync::flame_response_to_config(&resp, palette_resp.as_ref());
+        let config = sync::flame_response_to_config(&resp);
         Ok(FlameLoadResult { config, is_public, user_id, animation_count, animations })
     }
 
@@ -370,54 +311,58 @@ impl ApiState {
         client::api_get_unauth(&url).await
     }
 
-    // --- Palette operations ---
+    // --- Palette library operations ---
 
-    /// List palettes, optionally filtered by visibility.
-    pub async fn list_palettes(
+    /// List the caller's bookmarked palette library entries (the
+    /// `/api/users/me/palettes` endpoint). Each entry includes the
+    /// content hash, optional nickname, and full palette content.
+    pub async fn list_library_palettes(
         &self,
-        visibility: Option<ApiPaletteVisibility>,
         page: u32,
         per_page: u32,
-    ) -> FetchResult<Vec<PaletteResponse>> {
+    ) -> FetchResult<Vec<LibraryPaletteEntry>> {
         let token = self.require_token()?;
-        let visibility_param = visibility
-            .map(|v| {
-                let v = serde_json::to_value(v)
-                    .ok()
-                    .and_then(|v| v.as_str().map(|s| s.to_string()))
-                    .unwrap_or_default();
-                format!("&visibility={}", v)
-            })
-            .unwrap_or_default();
         let url = build_url(
             API_BASE_URL,
-            &format!("/api/palettes?page={}&per_page={}{}", page, per_page, visibility_param),
+            &format!("/api/users/me/palettes?page={}&per_page={}", page, per_page),
         );
         client::api_get(&url, &token).await
     }
 
-    /// Get a single palette by ID.
-    pub async fn get_palette(&self, palette_id: &str) -> FetchResult<PaletteResponse> {
-        let token = self.require_token()?;
-        let url = build_url(API_BASE_URL, &format!("/api/palettes/{}", palette_id));
-        client::api_get(&url, &token).await
+    /// Fetch a single palette by content hash. Public — no auth required.
+    pub async fn get_palette(&self, hash: &str) -> FetchResult<ApiPalette> {
+        let url = build_url(API_BASE_URL, &format!("/api/palettes/{}", hash));
+        client::api_get_unauth(&url).await
     }
 
-    /// Update an existing palette.
-    pub async fn update_palette(
+    /// Set or update the caller's personal nickname for a library entry.
+    /// 404 if the content hash isn't yet in `palette_data`.
+    pub async fn set_library_nickname(
         &self,
-        palette_id: &str,
-        req: &UpdatePaletteRequest,
-    ) -> FetchResult<PaletteResponse> {
+        hash: &str,
+        nickname: Option<&str>,
+    ) -> FetchResult<()> {
         let token = self.require_token()?;
-        let url = build_url(API_BASE_URL, &format!("/api/palettes/{}", palette_id));
-        client::api_put(&url, req, &token).await
+        let url = build_url(
+            API_BASE_URL,
+            &format!("/api/users/me/palettes/{}", hash),
+        );
+        let req = UpdateLibraryNicknameRequest {
+            nickname: nickname.map(|s| s.to_string()),
+        };
+        let _: serde_json::Value = client::api_put(&url, &req, &token).await?;
+        Ok(())
     }
 
-    /// Delete a palette.
-    pub async fn delete_palette(&self, palette_id: &str) -> FetchResult<()> {
+    /// Remove the caller's library entry for the given content hash.
+    /// Never deletes the underlying palette content (palettes are shared
+    /// and reference-counted by flames).
+    pub async fn remove_library_palette(&self, hash: &str) -> FetchResult<()> {
         let token = self.require_token()?;
-        let url = build_url(API_BASE_URL, &format!("/api/palettes/{}", palette_id));
+        let url = build_url(
+            API_BASE_URL,
+            &format!("/api/users/me/palettes/{}", hash),
+        );
         client::api_delete(&url, &token).await
     }
 
@@ -468,20 +413,11 @@ impl ApiState {
         let resp: AnimationResponse = client::api_get(&url, &token).await?;
         let flame_id = resp.flame_id.clone();
 
-        // Convert embedded flame to FractalConfig (fetch palette if referenced)
-        let flame_config = if let Some(ref flame_resp) = resp.flame {
-            let palette_resp = if let Some(ref palette_id) = flame_resp.palette_id {
-                let palette_url = build_url(API_BASE_URL, &format!("/api/palettes/{}", palette_id));
-                client::api_get::<PaletteResponse>(&palette_url, &token)
-                    .await
-                    .ok()
-            } else {
-                None
-            };
-            Some(sync::flame_response_to_config(flame_resp, palette_resp.as_ref()))
-        } else {
-            None
-        };
+        // Convert embedded flame to FractalConfig (palette travels inline).
+        let flame_config = resp
+            .flame
+            .as_ref()
+            .map(sync::flame_response_to_config);
 
         let mut animation = sync::animation_response_to_animation(&resp);
 

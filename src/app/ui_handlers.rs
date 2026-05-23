@@ -1007,8 +1007,6 @@ impl App {
                     animation_count: ui_response.loaded_api_flame_animation_count,
                     flame_animations: ui_response.loaded_api_flame_animations.clone(),
                     animation_id: None,
-                    palette_id: None,
-                    palette_user_id: None,
                 }
             });
             if let Err(e) = self.load_config_with_undo(config.clone(), "history.action.load_preset".to_string(), api_metadata) {
@@ -1873,8 +1871,6 @@ impl App {
                     animation_id: None,
                     animation_count,
                     flame_animations: animations,
-                    palette_id: None,
-                    palette_user_id: None,
                 });
                 if let Err(e) = self.load_config_with_undo(config, format!("Load flame from URL: {}", name), api_metadata) {
                     log::error!("Failed to load flame from URL: {}", e);
@@ -1914,8 +1910,6 @@ impl App {
                         animation_id: Some(animation_id.clone()),
                         animation_count: meta.animation_count,
                         flame_animations: meta.animations.clone(),
-                        palette_id: None,
-                        palette_user_id: None,
                     });
                     if let Err(e) = self.load_config_with_undo(config, format!("Load flame for animation: {}", flame_name), api_metadata) {
                         log::error!("Failed to load flame for animation: {}", e);
