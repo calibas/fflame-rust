@@ -9,6 +9,9 @@ use crate::variations::{
     VariationCategory, VariationPhase,
 };
 
+/// Rotates the point around the X axis before any other variations run.
+/// The rotation angle (in radians) is the variation's own weight slider —
+/// e.g. set the weight to 1.57 for a 90° rotation.
 pub static PRE_ROTATE_X: VariationDef = VariationDef {
     name: "pre_rotate_x",
     display_name: "Pre Rotate X",
@@ -43,6 +46,8 @@ fn variation_pre_rotate_x(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec
 "#),
 };
 
+/// Rotates the point around the Y axis before any other variations run.
+/// The rotation angle (in radians) is the variation's own weight slider.
 pub static PRE_ROTATE_Y: VariationDef = VariationDef {
     name: "pre_rotate_y",
     display_name: "Pre Rotate Y",
@@ -77,6 +82,9 @@ fn variation_pre_rotate_y(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec
 "#),
 };
 
+/// Rotates the output point around the X axis after all other variations
+/// have run. The rotation angle (in radians) is the variation's own weight
+/// slider.
 pub static POST_ROTATE_X: VariationDef = VariationDef {
     name: "post_rotate_x",
     display_name: "Post Rotate X",
@@ -111,6 +119,9 @@ fn variation_post_rotate_x(p: vec3<f32>, xform_id: u32, variation_id: u32) -> ve
 "#),
 };
 
+/// Rotates the output point around the Y axis after all other variations
+/// have run. The rotation angle (in radians) is the variation's own weight
+/// slider.
 pub static POST_ROTATE_Y: VariationDef = VariationDef {
     name: "post_rotate_y",
     display_name: "Post Rotate Y",
