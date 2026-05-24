@@ -146,10 +146,6 @@ parseable trailer:
 /// - Original Author Name (year)
 /// - Second Contributor (year)
 ///
-/// # Parameters
-/// - `param_a`: description of param a
-/// - `param_b`: description of param b
-///
 /// # Source
 /// jwildfire-vars/output/popcorn2_3d.cpp
 pub static POPCORN2_3D: VariationDef = VariationDef { ... };
@@ -158,9 +154,13 @@ pub static POPCORN2_3D: VariationDef = VariationDef { ... };
 Same shape for `pub fn register_effects` entries in
 [effects/mod.rs](../../src/effects/mod.rs).
 
-The `# Parameters` section is the per-param description source. Bullet
-order doesn't need to match the `parameters: &[]` order — the script
-matches by name.
+**Per-parameter descriptions go directly in the struct**, not in a
+`# Parameters` doc-section. After slice 1 of the plumbing landed,
+`VariationParamDef.description` and `EffectParameter.description`
+are first-class fields; populate them with `description: Some("...")`
+(longhand structs) or the trailing description arg on the `param!`
+macro. The Rust JSON dump (§4.1) picks them up automatically — no
+comment-parsing needed for per-param prose.
 
 ### 3.3 Authoring the prose
 

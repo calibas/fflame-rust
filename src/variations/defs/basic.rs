@@ -7,6 +7,12 @@ use crate::variations::{
     VariationCategory, VariationPhase,
 };
 
+/// The identity transform — passes the point through unchanged. Acts as
+/// a baseline shape; mix it with other variations to soften their
+/// effect, or use a small weight as a placeholder.
+///
+/// # Authors
+/// - Scott Draves
 pub static LINEAR: VariationDef = VariationDef {
     name: "linear",
     display_name: "Linear",
@@ -33,6 +39,12 @@ fn variation_linear(p: vec3<f32>) -> vec3<f32> {
 "#),
 };
 
+/// Maps each coordinate through `sin`, folding the plane into a
+/// [-1, 1] tile. Produces wavy, ribbon-like patterns that repeat
+/// outward from the origin.
+///
+/// # Authors
+/// - Scott Draves
 pub static SINUSOIDAL: VariationDef = VariationDef {
     name: "sinusoidal",
     display_name: "Sinusoidal",
@@ -59,6 +71,12 @@ fn variation_sinusoidal(p: vec3<f32>) -> vec3<f32> {
 "#),
 };
 
+/// Inverts every point through the unit circle — a point at distance
+/// r is mapped to distance 1/r. Far points fold inward, near points
+/// fly outward; an inside-out fisheye on the plane.
+///
+/// # Authors
+/// - Scott Draves
 pub static SPHERICAL: VariationDef = VariationDef {
     name: "spherical",
     display_name: "Spherical",
@@ -87,6 +105,12 @@ fn variation_spherical(p: vec3<f32>) -> vec3<f32> {
 "#),
 };
 
+/// Rotates each point around the origin by an angle proportional to
+/// its distance — the further out, the more it twists. Produces
+/// whirlpool and pinwheel patterns.
+///
+/// # Authors
+/// - Scott Draves
 pub static SWIRL: VariationDef = VariationDef {
     name: "swirl",
     display_name: "Swirl",
@@ -119,6 +143,12 @@ fn variation_swirl(p: vec3<f32>) -> vec3<f32> {
 "#),
 };
 
+/// Bends the plane into a horseshoe — opposite quadrants get folded
+/// into the same region of the output. The result has a distinctive
+/// U-shaped silhouette.
+///
+/// # Authors
+/// - Scott Draves
 pub static HORSESHOE: VariationDef = VariationDef {
     name: "horseshoe",
     display_name: "Horseshoe",
