@@ -48,6 +48,12 @@ use crate::param;
 //       per-iteration (negligible cost).
 //     - VVAR factors out cleanly through the outer multiplier.
 // =============================================================================
+/// N-power Möbius — transforms into `z^power` space, applies a 2×2 complex
+/// Möbius transformation `(Az + B)/(Cz + D)`, then transforms back via a
+/// random branch of the N-th root.
+///
+/// # Authors
+/// - eralex61
 pub static MOBIUSN: VariationDef = VariationDef {
     name: "mobiusN",
     display_name: "MobiusN",
@@ -55,16 +61,16 @@ pub static MOBIUSN: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("re_a", "Re A", unlimited_float, 1.0, -10.0, 10.0),
-        param!("re_b", "Re B", unlimited_float, 0.0, -10.0, 10.0),
-        param!("re_c", "Re C", unlimited_float, 0.0, -10.0, 10.0),
-        param!("re_d", "Re D", unlimited_float, 1.0, -10.0, 10.0),
-        param!("im_a", "Im A", unlimited_float, 0.0, -10.0, 10.0),
-        param!("im_b", "Im B", unlimited_float, 0.0, -10.0, 10.0),
-        param!("im_c", "Im C", unlimited_float, 0.0, -10.0, 10.0),
-        param!("im_d", "Im D", unlimited_float, 0.0, -10.0, 10.0),
-        param!("power", "Power", unlimited_float, 1.0, -10.0, 10.0),
-        param!("dist", "Distance", unlimited_float, 1.0, -10.0, 10.0),
+        param!("re_a", "Re A", unlimited_float, 1.0, -10.0, 10.0, "Real part of complex coefficient A (numerator multiplier)."),
+        param!("re_b", "Re B", unlimited_float, 0.0, -10.0, 10.0, "Real part of complex coefficient B (numerator offset)."),
+        param!("re_c", "Re C", unlimited_float, 0.0, -10.0, 10.0, "Real part of complex coefficient C (denominator multiplier)."),
+        param!("re_d", "Re D", unlimited_float, 1.0, -10.0, 10.0, "Real part of complex coefficient D (denominator offset)."),
+        param!("im_a", "Im A", unlimited_float, 0.0, -10.0, 10.0, "Imaginary part of complex coefficient A (numerator multiplier)."),
+        param!("im_b", "Im B", unlimited_float, 0.0, -10.0, 10.0, "Imaginary part of complex coefficient B (numerator offset)."),
+        param!("im_c", "Im C", unlimited_float, 0.0, -10.0, 10.0, "Imaginary part of complex coefficient C (denominator multiplier)."),
+        param!("im_d", "Im D", unlimited_float, 0.0, -10.0, 10.0, "Imaginary part of complex coefficient D (denominator offset)."),
+        param!("power", "Power", unlimited_float, 1.0, -10.0, 10.0, "Exponent for the `z^power` transform that wraps the Möbius operation. Higher values create more arms in the output."),
+        param!("dist", "Distance", unlimited_float, 1.0, -10.0, 10.0, "Scales the radial component of the wrapping transform."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -173,6 +179,12 @@ fn variation_mobiusN(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fu
 //   leaving zero room for derived init values. The body therefore inlines
 //   all the arithmetic — no init step needed.
 // =============================================================================
+/// Quaternion Möbius — same `(Az + B)/(Cz + D)` form as Möbius but with
+/// quaternion-valued A, B, C, D and input. Treats `(x, y, z)` as a
+/// quaternion with no k-component, producing true 3D output.
+///
+/// # Authors
+/// - zephyrtronium
 pub static MOBIQ: VariationDef = VariationDef {
     name: "mobiq",
     display_name: "Mobiq",
@@ -180,22 +192,22 @@ pub static MOBIQ: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("qat", "qa.t", unlimited_float, 1.0, -10.0, 10.0),
-        param!("qax", "qa.x", unlimited_float, 0.0, -10.0, 10.0),
-        param!("qay", "qa.y", unlimited_float, 0.0, -10.0, 10.0),
-        param!("qaz", "qa.z", unlimited_float, 0.0, -10.0, 10.0),
-        param!("qbt", "qb.t", unlimited_float, 0.0, -10.0, 10.0),
-        param!("qbx", "qb.x", unlimited_float, 0.0, -10.0, 10.0),
-        param!("qby", "qb.y", unlimited_float, 0.0, -10.0, 10.0),
-        param!("qbz", "qb.z", unlimited_float, 0.0, -10.0, 10.0),
-        param!("qct", "qc.t", unlimited_float, 0.0, -10.0, 10.0),
-        param!("qcx", "qc.x", unlimited_float, 0.0, -10.0, 10.0),
-        param!("qcy", "qc.y", unlimited_float, 0.0, -10.0, 10.0),
-        param!("qcz", "qc.z", unlimited_float, 0.0, -10.0, 10.0),
-        param!("qdt", "qd.t", unlimited_float, 1.0, -10.0, 10.0),
-        param!("qdx", "qd.x", unlimited_float, 0.0, -10.0, 10.0),
-        param!("qdy", "qd.y", unlimited_float, 0.0, -10.0, 10.0),
-        param!("qdz", "qd.z", unlimited_float, 0.0, -10.0, 10.0),
+        param!("qat", "qa.t", unlimited_float, 1.0, -10.0, 10.0, "T (scalar) component of quaternion A (numerator multiplier)."),
+        param!("qax", "qa.x", unlimited_float, 0.0, -10.0, 10.0, "X (i) component of quaternion A (numerator multiplier)."),
+        param!("qay", "qa.y", unlimited_float, 0.0, -10.0, 10.0, "Y (j) component of quaternion A (numerator multiplier)."),
+        param!("qaz", "qa.z", unlimited_float, 0.0, -10.0, 10.0, "Z (k) component of quaternion A (numerator multiplier)."),
+        param!("qbt", "qb.t", unlimited_float, 0.0, -10.0, 10.0, "T (scalar) component of quaternion B (numerator offset)."),
+        param!("qbx", "qb.x", unlimited_float, 0.0, -10.0, 10.0, "X (i) component of quaternion B (numerator offset)."),
+        param!("qby", "qb.y", unlimited_float, 0.0, -10.0, 10.0, "Y (j) component of quaternion B (numerator offset)."),
+        param!("qbz", "qb.z", unlimited_float, 0.0, -10.0, 10.0, "Z (k) component of quaternion B (numerator offset)."),
+        param!("qct", "qc.t", unlimited_float, 0.0, -10.0, 10.0, "T (scalar) component of quaternion C (denominator multiplier)."),
+        param!("qcx", "qc.x", unlimited_float, 0.0, -10.0, 10.0, "X (i) component of quaternion C (denominator multiplier)."),
+        param!("qcy", "qc.y", unlimited_float, 0.0, -10.0, 10.0, "Y (j) component of quaternion C (denominator multiplier)."),
+        param!("qcz", "qc.z", unlimited_float, 0.0, -10.0, 10.0, "Z (k) component of quaternion C (denominator multiplier)."),
+        param!("qdt", "qd.t", unlimited_float, 1.0, -10.0, 10.0, "T (scalar) component of quaternion D (denominator offset)."),
+        param!("qdx", "qd.x", unlimited_float, 0.0, -10.0, 10.0, "X (i) component of quaternion D (denominator offset)."),
+        param!("qdy", "qd.y", unlimited_float, 0.0, -10.0, 10.0, "Y (j) component of quaternion D (denominator offset)."),
+        param!("qdz", "qd.z", unlimited_float, 0.0, -10.0, 10.0, "Z (k) component of quaternion D (denominator offset)."),
     ],
     needs_transform: false,
     writes_color: false,

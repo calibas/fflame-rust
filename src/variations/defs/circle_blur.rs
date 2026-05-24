@@ -1,9 +1,9 @@
 //! Circle / blur distortion family
 //!
 //! Four small circle-related distortion and blur primitives:
-//!   - `circleblur`  (Zyorg)        — pure RNG blur on the unit disc
-//!   - `circlesplit` (Zabanova)     — radius-thresholded outward push
-//!   - `flipcircle`  (Faber)        — Y-flip outside a weight-sized radius
+//!   - `circleblur`  (Zy0rg)        — pure RNG blur on the unit disc
+//!   - `circlesplit` (Tatyana Zabanova)     — radius-thresholded outward push
+//!   - `flipcircle`  (Michael Faber)        — Y-flip outside a weight-sized radius
 //!   - `blur_linear` (Faber/DarkBeam) — directional linear-segment blur
 //!
 //! Sources:
@@ -27,11 +27,17 @@ use crate::variations::{
 use crate::param;
 
 // =============================================================================
-// circleblur: uniform random sample inside the unit disc (Zyorg)
+// circleblur: uniform random sample inside the unit disc (Zy0rg)
 //   rad = sqrt(rand)            (sqrt for area-uniform distribution)
 //   ang = rand · 2π
 //   out = (cos ang · rad, sin ang · rad)
 // =============================================================================
+/// Pure random sample inside the unit disc — replaces the input with a
+/// uniformly random point in the unit circle (area-uniform via `sqrt(rand)`
+/// radius).
+///
+/// # Authors
+/// - Zy0rg
 pub static CIRCLEBLUR: VariationDef = VariationDef {
     name: "circleblur",
     display_name: "Circle Blur",
@@ -64,7 +70,7 @@ fn variation_circleblur(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32>
 
 // =============================================================================
 // circlesplit: pass-through inside r < (radius - split), pushed outward by
-// `split` outside it (Zabanova / Stefanov)
+// `split` outside it (Tatyana Zabanova / Brad Stefanov)
 //   r = sqrt(x² + y²)
 //   if r < radius - split:
 //       (x', y') = (x, y)
@@ -74,6 +80,13 @@ fn variation_circleblur(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32>
 // Effect: punches a circular "ring" wider by `split` around the radius
 // boundary, splitting the inner and outer regions visually.
 // =============================================================================
+/// Pass-through inside a `radius − split` disc; outside, points get pushed
+/// outward by `split`. Creates a visible gap ring between the inner and
+/// outer regions.
+///
+/// # Authors
+/// - Tatyana Zabanova
+/// - Brad Stefanov
 pub static CIRCLESPLIT: VariationDef = VariationDef {
     name: "circlesplit",
     display_name: "Circle Split",
@@ -81,8 +94,8 @@ pub static CIRCLESPLIT: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("radius", "Radius", unlimited_float, 1.0, 0.0, 5.0),
-        param!("split", "Split", unlimited_float, 0.5, 0.0, 5.0),
+        param!("radius", "Radius", unlimited_float, 1.0, 0.0, 5.0, "Distance from origin where the splitting starts."),
+        param!("split", "Split", unlimited_float, 0.5, 0.0, 5.0, "Gap size — how far outside the radius points get pushed."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -120,7 +133,7 @@ fn variation_circlesplit(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3
 };
 
 // =============================================================================
-// flipcircle: Y-flip outside a radius-VVAR disc (Faber)
+// flipcircle: Y-flip outside a radius-VVAR disc (Michael Faber)
 //   if x² + y² > VVAR²:  out = (x,  y)        (no flip)
 //   else:                 out = (x, -y)        (flip Y inside the disc)
 //
@@ -129,6 +142,11 @@ fn variation_circlesplit(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3
 // Comparison threshold scales with weight; output magnitude factors
 // through the outer multiplier as usual.
 // =============================================================================
+/// Flips the Y coordinate inside a circular region sized by the variation's
+/// own weight. Outside the circle, points pass through unchanged.
+///
+/// # Authors
+/// - Michael Faber
 pub static FLIPCIRCLE: VariationDef = VariationDef {
     name: "flipcircle",
     display_name: "Flip Circle",
@@ -173,6 +191,13 @@ fn variation_flipcircle(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<
 //   out = (x + r·cos(angle), y + r·sin(angle))
 // (sin/cos of `angle` precomputed once via init.)
 // =============================================================================
+/// Directional linear-segment blur — each iteration scatters the point
+/// along a fixed-angle line of random length up to `length`. Produces
+/// directional streaks.
+///
+/// # Authors
+/// - Joel Faber
+/// - DarkBeam
 pub static BLUR_LINEAR: VariationDef = VariationDef {
     name: "blur_linear",
     display_name: "Blur Linear",
@@ -180,8 +205,8 @@ pub static BLUR_LINEAR: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("length", "Length", unlimited_float, 1.0, 0.0, 10.0),
-        param!("angle", "Angle (rad)", unlimited_float, 0.5, -6.28318, 6.28318),
+        param!("length", "Length", unlimited_float, 1.0, 0.0, 10.0, "Maximum scatter distance along the blur direction."),
+        param!("angle", "Angle (rad)", unlimited_float, 0.5, -6.28318, 6.28318, "Direction of the blur, in radians."),
     ],
     needs_transform: false,
     writes_color: false,
