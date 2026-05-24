@@ -51,11 +51,23 @@ the answer is known — that's the convention for "unknown" per
 - `blur_zoom` ([extended.rs](../../src/variations/defs/extended.rs))
 - `blur_pixelize` ([extended.rs](../../src/variations/defs/extended.rs))
 - `separation` ([extended.rs](../../src/variations/defs/extended.rs))
+
+**Likely shared author** — all are JWildfire ports of complex-plane
+inverse hyperbolic functions (the plain ones in `hyperbolic.rs` and
+the `sqrt(z)`-prefixed siblings in `sqrt_hyperbolic.rs`). Finding the
+author of any one should resolve the rest of the group.
+
 - `acosech` ([hyperbolic.rs](../../src/variations/defs/hyperbolic.rs))
 - `arcsech` ([hyperbolic.rs](../../src/variations/defs/hyperbolic.rs))
 - `arcsech2` ([hyperbolic.rs](../../src/variations/defs/hyperbolic.rs))
 - `arcsinh` ([hyperbolic.rs](../../src/variations/defs/hyperbolic.rs))
 - `arctanh` ([hyperbolic.rs](../../src/variations/defs/hyperbolic.rs))
+- `sqrt_acoth` ([sqrt_hyperbolic.rs](../../src/variations/defs/sqrt_hyperbolic.rs))
+- `sqrt_acosh` ([sqrt_hyperbolic.rs](../../src/variations/defs/sqrt_hyperbolic.rs))
+- `sqrt_acosech` ([sqrt_hyperbolic.rs](../../src/variations/defs/sqrt_hyperbolic.rs))
+- `sqrt_asech` ([sqrt_hyperbolic.rs](../../src/variations/defs/sqrt_hyperbolic.rs))
+- `sqrt_asinh` ([sqrt_hyperbolic.rs](../../src/variations/defs/sqrt_hyperbolic.rs))
+- `sqrt_atanh` ([sqrt_hyperbolic.rs](../../src/variations/defs/sqrt_hyperbolic.rs))
 
 ### Enum-candidate parameters
 
