@@ -153,7 +153,7 @@ fn render_boolean_param(ui: &mut egui::Ui, param: &VariationParameter, value: &m
 
 /// Render an enum parameter (dropdown/combobox)
 /// Returns (changed, dragged=false, drag_stopped=false)
-fn render_enum_param(ui: &mut egui::Ui, param: &VariationParameter, value: &mut f32, choices: &[String]) -> (bool, bool) {
+fn render_enum_param(ui: &mut egui::Ui, param: &VariationParameter, value: &mut f32, choices: &[&'static str]) -> (bool, bool) {
     if choices.is_empty() {
         // Fallback if no choices provided
         ui.label(format!("{}: (no choices)", param.display_name));
@@ -165,10 +165,10 @@ fn render_enum_param(ui: &mut egui::Ui, param: &VariationParameter, value: &mut 
 
     let mut changed = false;
     egui::ComboBox::from_label(&param.display_name)
-        .selected_text(&choices[selected])
+        .selected_text(choices[selected])
         .show_ui(ui, |ui| {
             for (idx, choice) in choices.iter().enumerate() {
-                if ui.selectable_value(&mut selected, idx, choice).clicked() {
+                if ui.selectable_value(&mut selected, idx, *choice).clicked() {
                     changed = true;
                 }
             }
