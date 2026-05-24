@@ -24,6 +24,9 @@ use crate::variations::{
 //   T = x²+y²+z²+ε,  r = 1/T
 //   (x', y', z') = r · (x, y, z)
 // =============================================================================
+/// 3D version of Spherical — inverts each point through the unit sphere
+/// (`1/r²`). Pulls distant points toward the origin and pushes nearby
+/// points outward in all three axes.
 pub static SPHERICAL3D: VariationDef = VariationDef {
     name: "spherical3d",
     display_name: "Spherical 3D",
@@ -58,6 +61,11 @@ fn variation_spherical3d(p: vec3<f32>) -> vec3<f32> {
 // sinusoidal3d: gossamer_light's 3D sinusoidal
 //   x' = sin(x), y' = sin(y), z' = atan2(x², y²) · cos(z)
 // =============================================================================
+/// 3D sinusoidal — applies `sin` to X and Y like Sinusoidal, then adds
+/// `atan2(x², y²) · cos(z)` on the Z axis.
+///
+/// # Authors
+/// - gossamer_light
 pub static SINUSOIDAL3D: VariationDef = VariationDef {
     name: "sinusoidal3d",
     display_name: "Sinusoidal 3D",
@@ -88,6 +96,8 @@ fn variation_sinusoidal3d(p: vec3<f32>) -> vec3<f32> {
 // square: random 2D unit-square sampler
 //   (x', y') = (uniform - 0.5, uniform - 0.5)
 // =============================================================================
+/// Random 2D unit-square sampler — replaces the input with a uniformly
+/// random point in `[-0.5, 0.5]²`.
 pub static SQUARE: VariationDef = VariationDef {
     name: "square",
     display_name: "Square",
@@ -117,6 +127,7 @@ fn variation_square(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
 // =============================================================================
 // square3d: 3D version — Z gets its own random offset
 // =============================================================================
+/// 3D unit-cube version of Square — random point in `[-0.5, 0.5]³`.
 pub static SQUARE3D: VariationDef = VariationDef {
     name: "square3d",
     display_name: "Square 3D",
@@ -147,6 +158,11 @@ fn variation_square3d(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
 // disc3d: 3D disc inversion (note: takes a `pi` parameter — defaults to π but
 // upstream exposes it for tweaking).
 // =============================================================================
+/// 3D version of Disc with a tweakable `pi` constant. Wraps the (x, y)
+/// plane onto a disc and adds a `r·cos(z)` Z component.
+///
+/// # Authors
+/// - Larry Berlin
 pub static DISC3D: VariationDef = VariationDef {
     name: "disc3d",
     display_name: "Disc 3D",
@@ -155,7 +171,7 @@ pub static DISC3D: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[
         VariationParamDef { name: "pi", display_name: "Pi", param_type: ParamType::UnlimitedFloat,
-                            default_value: 3.14159265358979, min_value: Some(-10.0), max_value: Some(10.0), description: None },
+                            default_value: 3.14159265358979, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Phase constant — defaults to π. Tweaking it warps the disc shape.") },
     ],
     needs_transform: false,
     writes_color: false,
@@ -190,6 +206,11 @@ fn variation_disc3d(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 //   y' = y · r · param_y
 //   z' = (z ± param_z) + z · r · param_z   (sign on param_z chosen by sign(z))
 // =============================================================================
+/// Parameterized 3D bubble with separate X / Y / Z scaling. Maps the input
+/// onto a sphere and stretches each axis independently.
+///
+/// # Authors
+/// - FracFx
 pub static BUBBLE2: VariationDef = VariationDef {
     name: "bubble2",
     display_name: "Bubble2",
@@ -198,11 +219,11 @@ pub static BUBBLE2: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[
         VariationParamDef { name: "x", display_name: "X", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: None },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("X-axis scaling of the sphere projection.") },
         VariationParamDef { name: "y", display_name: "Y", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: None },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Y-axis scaling.") },
         VariationParamDef { name: "z", display_name: "Z", param_type: ParamType::UnlimitedFloat,
-                            default_value: 0.0, min_value: Some(-10.0), max_value: Some(10.0), description: None },
+                            default_value: 0.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Z-axis displacement plus scaling.") },
     ],
     needs_transform: false,
     writes_color: false,
@@ -239,6 +260,10 @@ fn variation_bubble2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 //   x' = x + param_x · sin(tan(y · param_c))
 //   y' = y + param_y · sin(tan(x · param_c))
 // =============================================================================
+/// Parameterized version of Popcorn — adds `param · sin(tan(coord · c))`
+/// to each axis. Unlike the original Popcorn (which reads parameters from
+/// the affine matrix), this one has dedicated `x` / `y` / `c` sliders.
+///
 /// # Authors
 /// - Apophysis Plugin Pack
 pub static POPCORN2: VariationDef = VariationDef {
@@ -249,11 +274,11 @@ pub static POPCORN2: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[
         VariationParamDef { name: "x", display_name: "X", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: None },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("X-axis displacement strength.") },
         VariationParamDef { name: "y", display_name: "Y", param_type: ParamType::UnlimitedFloat,
-                            default_value: 0.5, min_value: Some(-10.0), max_value: Some(10.0), description: None },
+                            default_value: 0.5, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Y-axis displacement strength.") },
         VariationParamDef { name: "c", display_name: "C", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.5, min_value: Some(-10.0), max_value: Some(10.0), description: None },
+                            default_value: 1.5, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Frequency of the tan-sine wave that drives the displacement on both axes.") },
     ],
     needs_transform: false,
     writes_color: false,
@@ -284,6 +309,11 @@ fn variation_popcorn2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
 // splits3d: TyrantWave's 3D splits — pushes each coordinate away from zero
 // by a fixed offset per axis.
 // =============================================================================
+/// 3D version of Splits — pushes each coordinate away from zero by a fixed
+/// per-axis offset, creating a gap along each axis.
+///
+/// # Authors
+/// - TyrantWave
 pub static SPLITS3D: VariationDef = VariationDef {
     name: "splits3d",
     display_name: "Splits 3D",
@@ -292,11 +322,11 @@ pub static SPLITS3D: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[
         VariationParamDef { name: "x", display_name: "X", param_type: ParamType::UnlimitedFloat,
-                            default_value: 0.1, min_value: Some(-10.0), max_value: Some(10.0), description: None },
+                            default_value: 0.1, min_value: Some(-10.0), max_value: Some(10.0), description: Some("How far positive-X and negative-X points get pushed apart along X.") },
         VariationParamDef { name: "y", display_name: "Y", param_type: ParamType::UnlimitedFloat,
-                            default_value: 0.3, min_value: Some(-10.0), max_value: Some(10.0), description: None },
+                            default_value: 0.3, min_value: Some(-10.0), max_value: Some(10.0), description: Some("How far positive-Y and negative-Y points get pushed apart along Y.") },
         VariationParamDef { name: "z", display_name: "Z", param_type: ParamType::UnlimitedFloat,
-                            default_value: 0.2, min_value: Some(-10.0), max_value: Some(10.0), description: None },
+                            default_value: 0.2, min_value: Some(-10.0), max_value: Some(10.0), description: Some("How far positive-Z and negative-Z points get pushed apart along Z.") },
     ],
     needs_transform: false,
     writes_color: false,
@@ -334,6 +364,11 @@ fn variation_splits3d(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
 //   y' = y + scale · sin(x · freq)
 //   z' = z + scale · sin(avgxy · freq)
 // =============================================================================
+/// 3D version of Waves2 — adds `scale · sin(freq · avg(x, y))` to the Z
+/// coordinate alongside the standard 2D Waves2 X/Y displacement.
+/// 
+/// # Authors
+/// - Larry Berlin
 pub static WAVES2_3D: VariationDef = VariationDef {
     name: "waves2_3d",
     display_name: "Waves2 3D",
@@ -342,9 +377,9 @@ pub static WAVES2_3D: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[
         VariationParamDef { name: "freq", display_name: "Freq", param_type: ParamType::UnlimitedFloat,
-                            default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0), description: None },
+                            default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Wave frequency on all three axes.") },
         VariationParamDef { name: "scale", display_name: "Scale", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: None },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Wave amplitude — how strongly points get displaced.") },
     ],
     needs_transform: false,
     writes_color: false,
@@ -383,6 +418,12 @@ fn variation_waves2_3d(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
 //   r = (x² + y²)^half_inv_power
 //   x' = r · cos(a),  y' = r · sin(a)
 // =============================================================================
+/// Rational-power Julia — like JuliaN but with separate `power` and
+/// `divisor`, allowing fractional/rational branch counts (e.g. 3/2 gives
+/// 1.5 branches).
+///
+/// # Authors
+/// - Zueuk
 pub static JULIAQ: VariationDef = VariationDef {
     name: "juliaq",
     display_name: "JuliaQ",
@@ -391,9 +432,9 @@ pub static JULIAQ: VariationDef = VariationDef {
     needs_rng: true,
     parameters: &[
         VariationParamDef { name: "power", display_name: "Power", param_type: ParamType::Integer,
-                            default_value: 3.0, min_value: Some(1.0), max_value: Some(64.0), description: None },
+                            default_value: 3.0, min_value: Some(1.0), max_value: Some(64.0), description: Some("Number of Julia branches in the rational power.") },
         VariationParamDef { name: "divisor", display_name: "Divisor", param_type: ParamType::Integer,
-                            default_value: 2.0, min_value: Some(1.0), max_value: Some(64.0), description: None },
+                            default_value: 2.0, min_value: Some(1.0), max_value: Some(64.0), description: Some("Rational-power divisor. Combined with `power` lets you pick non-integer branch counts (e.g. power=3, divisor=2 → 1.5 branches).") },
     ],
     // 3 derived values stored in slots 2..5:
     //   2: inv_power       (divisor / power)
@@ -452,6 +493,10 @@ fn variation_juliaq(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
 //   r *= sqrt(r2d)
 //   x' = r · cos(a),  y' = r · sin(a)
 // =============================================================================
+/// 3D version of JuliaQ — extends the rational-power Julia into the Z axis.
+///
+/// # Authors
+/// - Zueuk
 pub static JULIA3DQ: VariationDef = VariationDef {
     name: "julia3dq",
     display_name: "Julia 3D Q",
@@ -460,9 +505,9 @@ pub static JULIA3DQ: VariationDef = VariationDef {
     needs_rng: true,
     parameters: &[
         VariationParamDef { name: "power", display_name: "Power", param_type: ParamType::Integer,
-                            default_value: 3.0, min_value: Some(1.0), max_value: Some(64.0), description: None },
+                            default_value: 3.0, min_value: Some(1.0), max_value: Some(64.0), description: Some("Number of Julia branches.") },
         VariationParamDef { name: "divisor", display_name: "Divisor", param_type: ParamType::Integer,
-                            default_value: 2.0, min_value: Some(1.0), max_value: Some(64.0), description: None },
+                            default_value: 2.0, min_value: Some(1.0), max_value: Some(64.0), description: Some("Rational-power divisor.") },
     ],
     // 4 derived values stored in slots 2..6:
     //   2: inv_power       (divisor / power)
@@ -531,6 +576,11 @@ fn variation_julia3dq(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
 // The C++ port uses `double VAR(re) = 1 / (VAR(re) + ε)` (variable shadowing
 // via macro) — we name the locals differently to avoid confusion.
 // =============================================================================
+/// Complex-power Julia — `power = re + i·im`. Like CPow but with a `dist`
+/// parameter that scales the log-of-radius term separately.
+///
+/// # Authors
+/// - David Young
 pub static JULIAC: VariationDef = VariationDef {
     name: "juliac",
     display_name: "JuliaC",
@@ -539,11 +589,11 @@ pub static JULIAC: VariationDef = VariationDef {
     needs_rng: true,
     parameters: &[
         VariationParamDef { name: "re", display_name: "Re", param_type: ParamType::UnlimitedFloat,
-                            default_value: 0.0, min_value: Some(-10.0), max_value: Some(10.0), description: None },
+                            default_value: 0.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Real part of the complex power.") },
         VariationParamDef { name: "im", display_name: "Im", param_type: ParamType::UnlimitedFloat,
-                            default_value: 0.0, min_value: Some(-10.0), max_value: Some(10.0), description: None },
+                            default_value: 0.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Imaginary part of the complex power.") },
         VariationParamDef { name: "dist", display_name: "Dist", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: None },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Distance scaling on the log-of-radius term — affects how rapidly the spiral grows outward.") },
     ],
     // 2 derived values stored in slots 3..5:
     //   3: re_recip   (1 / (re_param + ε))
