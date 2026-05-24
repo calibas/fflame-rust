@@ -58,6 +58,7 @@ the answer is known — that's the convention for "unknown" per
 - `square` ([numbered.rs](../../src/variations/defs/numbered.rs))
 - `square3d` ([numbered.rs](../../src/variations/defs/numbered.rs))
 - `disc2` ([heavy_init.rs](../../src/variations/defs/heavy_init.rs))
+- `blob3d` ([numbered_extras.rs](../../src/variations/defs/numbered_extras.rs))
 
 **Likely shared author** — all are JWildfire ports of complex-plane
 inverse hyperbolic functions (the plain ones in `hyperbolic.rs` and
@@ -84,6 +85,7 @@ when found.
 
 - `bent2` ([misc_extras2.rs](../../src/variations/defs/misc_extras2.rs))
 - `bipolar` ([advanced.rs](../../src/variations/defs/advanced.rs))
+- `bipolar2` ([numbered_extras.rs](../../src/variations/defs/numbered_extras.rs)) — also credited to Brad Stefanov
 - `boarders` ([boarders.rs](../../src/variations/defs/boarders.rs))
 - `butterfly` ([shapes2.rs](../../src/variations/defs/shapes2.rs))
 - `cell` ([shapes2.rs](../../src/variations/defs/shapes2.rs))

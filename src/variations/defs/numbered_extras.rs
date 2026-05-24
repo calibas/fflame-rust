@@ -39,6 +39,12 @@ use crate::param;
 //   out_x = (2/π) · f1 · log((t + x2) / (t - x2))
 //   out_y = (2/π) · y' · h
 // =============================================================================
+/// Bipolar coordinates with 9 user-tunable scaling/offset knobs — much more
+/// configurable than the basic Bipolar.
+///
+/// # Authors
+/// - Apophysis Plugin Pack
+/// - Brad Stefanov
 pub static BIPOLAR2: VariationDef = VariationDef {
     name: "bipolar2",
     display_name: "Bipolar 2",
@@ -46,15 +52,15 @@ pub static BIPOLAR2: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("shift", "Shift", unlimited_float, 0.0, -2.0, 2.0),
-        param!("a", "A", unlimited_float, 1.0, -10.0, 10.0),
-        param!("b", "B", unlimited_float, 2.0, -10.0, 10.0),
-        param!("c", "C", unlimited_float, 0.5, -10.0, 10.0),
-        param!("d", "D", unlimited_float, 1.0, -10.0, 10.0),
-        param!("e", "E", unlimited_float, 2.0, -10.0, 10.0),
-        param!("f1", "F", unlimited_float, 0.25, -10.0, 10.0),
-        param!("g1", "G", unlimited_float, 1.0, -10.0, 10.0),
-        param!("h", "H", unlimited_float, 1.0, -10.0, 10.0),
+        param!("shift", "Shift", unlimited_float, 0.0, -2.0, 2.0, "Vertical offset added to the bipolar angle output."),
+        param!("a", "A", unlimited_float, 1.0, -10.0, 10.0, "Inner offset for the radius² term."),
+        param!("b", "B", unlimited_float, 2.0, -10.0, 10.0, "X scaling for the log term's numerator/denominator."),
+        param!("c", "C", unlimited_float, 0.5, -10.0, 10.0, "Scaling on the angle output."),
+        param!("d", "D", unlimited_float, 1.0, -10.0, 10.0, "Offset inside the atan2 denominator."),
+        param!("e", "E", unlimited_float, 2.0, -10.0, 10.0, "Y scaling inside the atan2 numerator."),
+        param!("f1", "F", unlimited_float, 0.25, -10.0, 10.0, "Output X scaling factor."),
+        param!("g1", "G", unlimited_float, 1.0, -10.0, 10.0, "Outer scaling on the squared radius."),
+        param!("h", "H", unlimited_float, 1.0, -10.0, 10.0, "Output Y scaling factor."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -154,6 +160,8 @@ fn variation_bipolar2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
 // the original 2D blob with sin/cos swapped on the angle, faithful to
 // upstream).
 // =============================================================================
+/// 3D version of Blob — same wavy boundary as Blob, plus a Z component that
+/// modulates with the same waves pattern.
 pub static BLOB3D: VariationDef = VariationDef {
     name: "blob3d",
     display_name: "Blob 3D",
@@ -161,9 +169,9 @@ pub static BLOB3D: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("low", "Low", unlimited_float, 0.3, -5.0, 5.0),
-        param!("high", "High", unlimited_float, 1.2, -5.0, 5.0),
-        param!("waves", "Waves", unlimited_float, 6.0, 0.0, 30.0),
+        param!("low", "Low", unlimited_float, 0.3, -5.0, 5.0, "Inner radius — how close the bumps recede in the troughs."),
+        param!("high", "High", unlimited_float, 1.2, -5.0, 5.0, "Outer radius — how far the bumps reach at their peaks."),
+        param!("waves", "Waves", unlimited_float, 6.0, 0.0, 30.0, "Number of bumps around the perimeter."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -203,6 +211,12 @@ fn variation_blob3d(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 //   Like `circular` but exposes the magic numbers (12.9898, 78.233) as
 //   `xx` and `yy` parameters for users who want to vary the hash pattern.
 // =============================================================================
+/// Circular with user-tunable hash multipliers — same shape as Circular but
+/// exposes the `(12.9898, 78.233)` magic numbers as `xx` / `yy` parameters.
+///
+/// # Authors
+/// - Tatyana Zabanova
+/// - Brad Stefanov
 pub static CIRCULAR2: VariationDef = VariationDef {
     name: "circular2",
     display_name: "Circular 2",
@@ -210,10 +224,10 @@ pub static CIRCULAR2: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("angle", "Angle", angle, 90.0),
-        param!("seed", "Seed", unlimited_float, 0.0, -100.0, 100.0),
-        param!("xx", "X mul", unlimited_float, 12.9898, -100.0, 100.0),
-        param!("yy", "Y mul", unlimited_float, 78.233, -100.0, 100.0),
+        param!("angle", "Angle", angle, 90.0, "Maximum rotation per iteration (degrees)."),
+        param!("seed", "Seed", unlimited_float, 0.0, -100.0, 100.0, "Random seed for the hash term — change to vary the pattern."),
+        param!("xx", "X mul", unlimited_float, 12.9898, -100.0, 100.0, "X-axis multiplier for the hash. Default 12.9898 matches the standard Circular."),
+        param!("yy", "Y mul", unlimited_float, 78.233, -100.0, 100.0, "Y-axis multiplier for the hash. Default 78.233 matches the standard Circular."),
     ],
     needs_transform: false,
     writes_color: false,
