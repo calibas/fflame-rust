@@ -25,29 +25,43 @@ the answer is known — that's the convention for "unknown" per
 - `zcone` ([depth3d.rs](../../src/variations/defs/depth3d.rs))
 - `flatten` ([depth3d.rs](../../src/variations/defs/depth3d.rs))
 - `zscale` ([depth3d.rs](../../src/variations/defs/depth3d.rs))
+- `pre_rotate_x` ([rotation3d.rs](../../src/variations/defs/rotation3d.rs))
+- `pre_rotate_y` ([rotation3d.rs](../../src/variations/defs/rotation3d.rs))
+- `post_rotate_x` ([rotation3d.rs](../../src/variations/defs/rotation3d.rs))
+- `post_rotate_y` ([rotation3d.rs](../../src/variations/defs/rotation3d.rs))
+- `hemisphere` ([full3d.rs](../../src/variations/defs/full3d.rs))
 
 ---
 
 ## Out of scope (defer to other branches)
 
-### `depth3d.rs` WGSL signature has an unused `weight: f32` argument
+### Stray `weight: f32` parameter in some WGSL bodies — why does it work?
 
-All three Z-only variations in
-[depth3d.rs](../../src/variations/defs/depth3d.rs) (`zcone`, `flatten`,
-`zscale`) declare their WGSL function with a trailing `weight: f32`
-parameter that the shader builder never passes.
+Several 3D variations declare their WGSL function with a trailing
+`weight: f32` parameter that the shader builder doesn't pass:
+
+- All three in [depth3d.rs](../../src/variations/defs/depth3d.rs)
+  (`zcone`, `flatten`, `zscale`).
+- All four in [rotation3d.rs](../../src/variations/defs/rotation3d.rs)
+  (`pre_rotate_x/y`, `post_rotate_x/y`) — confirmed working in
+  practice despite the apparent signature mismatch.
 
 Per the signature contract in
 [VARIATIONS_WIRE_FORMAT.md §4](VARIATIONS_WIRE_FORMAT.md), with
-`parameters: &[]`, `needs_rng: false`, `needs_transform: false`,
+`parameters: &[]`, `needs_rng: false`, `needs_transform: false` (or
+true with `(xform_id, variation_id)` already covering it),
 `writes_color: false`, `needs_accum: false`, the only argument should
-be `p: vec3<f32>`. The extra `weight: f32` either makes the WGSL
-silently fail to link in 3D mode, or there's special-case handling for
-legacy Z-only variations somewhere in the codebase.
+be `p: vec3<f32>`. The extra `weight: f32` shouldn't link — but
+rotation3d demonstrably renders correctly.
 
-Investigate, then either:
-- Remove the stale `weight: f32` parameter from the three WGSL bodies
-  (they don't use it), or
-- Document the special case if there's a real reason these need it.
+Possibilities:
+- WGSL is silently tolerant of an unused trailing parameter in
+  declarations the caller doesn't reference.
+- The shader builder has special-case handling we haven't traced.
+- The function is being inlined/elided before the linker sees the
+  mismatch.
 
-Either way, it's a correctness/cleanup task, not a metadata task.
+Investigate, then either remove the stale `weight: f32` parameters
+from the WGSL bodies (they're unused even where they appear), or
+document the actual mechanism. Correctness/cleanup task, not a
+metadata task.
