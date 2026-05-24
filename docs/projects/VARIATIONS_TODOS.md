@@ -53,6 +53,7 @@ the answer is known — that's the convention for "unknown" per
 - `secant2` ([shapes.rs](../../src/variations/defs/shapes.rs))
 - `cosine` ([shapes.rs](../../src/variations/defs/shapes.rs))
 - `pie3d` ([shapes.rs](../../src/variations/defs/shapes.rs))
+- `butterfly3d` ([shapes2.rs](../../src/variations/defs/shapes2.rs))
 
 **Likely shared author** — all are JWildfire ports of complex-plane
 inverse hyperbolic functions (the plain ones in `hyperbolic.rs` and

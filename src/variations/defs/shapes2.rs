@@ -72,9 +72,6 @@ fn variation_butterfly(p: vec3<f32>) -> vec3<f32> {
 // =============================================================================
 /// 3D version of Butterfly — same XY butterfly curve plus a Z component
 /// that scales with the radial distance times `|2y|`.
-///
-/// # Authors
-/// - Don Town
 pub static BUTTERFLY3D: VariationDef = VariationDef {
     name: "butterfly3d",
     display_name: "Butterfly 3D",
