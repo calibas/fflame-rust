@@ -245,79 +245,103 @@ fn {func_name}({params}) -> vec3<f32> {{
     }
 }
 
-/// Macro to simplify variation parameter definition
+/// Macro to simplify variation parameter definition.
+///
+/// Each typed form has two arms: one without description (default
+/// `None`), one with a trailing `$desc:expr` arg. Pick whichever matches
+/// the call site — macro_rules dispatches by arity.
 #[macro_export]
 macro_rules! param {
-    // Float with full range
+    // ---- Float ----
     ($name:expr, $display:expr, float, $default:expr, $min:expr, $max:expr) => {
         VariationParamDef {
-            name: $name,
-            display_name: $display,
-            param_type: ParamType::Float,
-            default_value: $default,
-            min_value: Some($min),
-            max_value: Some($max),
+            name: $name, display_name: $display, param_type: ParamType::Float,
+            default_value: $default, min_value: Some($min), max_value: Some($max),
             description: None,
         }
     };
-    // UnlimitedFloat
+    ($name:expr, $display:expr, float, $default:expr, $min:expr, $max:expr, $desc:expr) => {
+        VariationParamDef {
+            name: $name, display_name: $display, param_type: ParamType::Float,
+            default_value: $default, min_value: Some($min), max_value: Some($max),
+            description: Some($desc),
+        }
+    };
+    // ---- UnlimitedFloat ----
     ($name:expr, $display:expr, unlimited_float, $default:expr, $min:expr, $max:expr) => {
         VariationParamDef {
-            name: $name,
-            display_name: $display,
-            param_type: ParamType::UnlimitedFloat,
-            default_value: $default,
-            min_value: Some($min),
-            max_value: Some($max),
+            name: $name, display_name: $display, param_type: ParamType::UnlimitedFloat,
+            default_value: $default, min_value: Some($min), max_value: Some($max),
             description: None,
         }
     };
-    // Integer
+    ($name:expr, $display:expr, unlimited_float, $default:expr, $min:expr, $max:expr, $desc:expr) => {
+        VariationParamDef {
+            name: $name, display_name: $display, param_type: ParamType::UnlimitedFloat,
+            default_value: $default, min_value: Some($min), max_value: Some($max),
+            description: Some($desc),
+        }
+    };
+    // ---- Integer ----
     ($name:expr, $display:expr, int, $default:expr, $min:expr, $max:expr) => {
         VariationParamDef {
-            name: $name,
-            display_name: $display,
-            param_type: ParamType::Integer,
-            default_value: $default,
-            min_value: Some($min),
-            max_value: Some($max),
+            name: $name, display_name: $display, param_type: ParamType::Integer,
+            default_value: $default, min_value: Some($min), max_value: Some($max),
             description: None,
         }
     };
-    // UnlimitedInteger
+    ($name:expr, $display:expr, int, $default:expr, $min:expr, $max:expr, $desc:expr) => {
+        VariationParamDef {
+            name: $name, display_name: $display, param_type: ParamType::Integer,
+            default_value: $default, min_value: Some($min), max_value: Some($max),
+            description: Some($desc),
+        }
+    };
+    // ---- UnlimitedInteger ----
     ($name:expr, $display:expr, unlimited_int, $default:expr, $min:expr, $max:expr) => {
         VariationParamDef {
-            name: $name,
-            display_name: $display,
-            param_type: ParamType::UnlimitedInteger,
-            default_value: $default,
-            min_value: Some($min),
-            max_value: Some($max),
+            name: $name, display_name: $display, param_type: ParamType::UnlimitedInteger,
+            default_value: $default, min_value: Some($min), max_value: Some($max),
             description: None,
         }
     };
-    // Angle
+    ($name:expr, $display:expr, unlimited_int, $default:expr, $min:expr, $max:expr, $desc:expr) => {
+        VariationParamDef {
+            name: $name, display_name: $display, param_type: ParamType::UnlimitedInteger,
+            default_value: $default, min_value: Some($min), max_value: Some($max),
+            description: Some($desc),
+        }
+    };
+    // ---- Angle ----
     ($name:expr, $display:expr, angle, $default:expr) => {
         VariationParamDef {
-            name: $name,
-            display_name: $display,
-            param_type: ParamType::Angle,
-            default_value: $default,
-            min_value: Some(-360.0),
-            max_value: Some(360.0),
+            name: $name, display_name: $display, param_type: ParamType::Angle,
+            default_value: $default, min_value: Some(-360.0), max_value: Some(360.0),
             description: None,
         }
     };
-    // Boolean
+    ($name:expr, $display:expr, angle, $default:expr, $desc:expr) => {
+        VariationParamDef {
+            name: $name, display_name: $display, param_type: ParamType::Angle,
+            default_value: $default, min_value: Some(-360.0), max_value: Some(360.0),
+            description: Some($desc),
+        }
+    };
+    // ---- Boolean ----
     ($name:expr, $display:expr, bool, $default:expr) => {
         VariationParamDef {
-            name: $name,
-            display_name: $display,
-            param_type: ParamType::Boolean,
+            name: $name, display_name: $display, param_type: ParamType::Boolean,
             default_value: if $default { 1.0 } else { 0.0 },
-            min_value: None,
-            max_value: None,
+            min_value: None, max_value: None,
             description: None,
+        }
+    };
+    ($name:expr, $display:expr, bool, $default:expr, $desc:expr) => {
+        VariationParamDef {
+            name: $name, display_name: $display, param_type: ParamType::Boolean,
+            default_value: if $default { 1.0 } else { 0.0 },
+            min_value: None, max_value: None,
+            description: Some($desc),
         }
     };
 }
