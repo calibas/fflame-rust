@@ -397,6 +397,7 @@ pub static JULIAN: VariationDef = VariationDef {
             default_value: 2.0,
             min_value: Some(-10.0),
             max_value: Some(10.0),
+            description: None,
         },
         VariationParamDef {
             name: "dist",
@@ -405,6 +406,7 @@ pub static JULIAN: VariationDef = VariationDef {
             default_value: 1.0,
             min_value: Some(-100.0),
             max_value: Some(100.0),
+            description: None,
         },
     ],
     needs_transform: false,
@@ -470,6 +472,7 @@ pub static BLOB: VariationDef = VariationDef {
             default_value: 1.0,
             min_value: Some(-3.0),
             max_value: Some(3.0),
+            description: None,
         },
         VariationParamDef {
             name: "low",
@@ -478,6 +481,7 @@ pub static BLOB: VariationDef = VariationDef {
             default_value: 1.0,
             min_value: Some(-3.0),
             max_value: Some(3.0),
+            description: None,
         },
         VariationParamDef {
             name: "waves",
@@ -486,6 +490,7 @@ pub static BLOB: VariationDef = VariationDef {
             default_value: 6.0,
             min_value: Some(1.0),
             max_value: Some(20.0),
+            description: None,
         },
     ],
     needs_transform: false,
@@ -945,6 +950,7 @@ pub static WAVES2: VariationDef = VariationDef {
             default_value: 2.0,
             min_value: Some(0.0),
             max_value: Some(20.0),
+            description: None,
         },
         VariationParamDef {
             name: "scalex",
@@ -953,6 +959,7 @@ pub static WAVES2: VariationDef = VariationDef {
             default_value: 1.0,
             min_value: Some(-2.0),
             max_value: Some(2.0),
+            description: None,
         },
         VariationParamDef {
             name: "freqy",
@@ -961,6 +968,7 @@ pub static WAVES2: VariationDef = VariationDef {
             default_value: 2.0,
             min_value: Some(0.0),
             max_value: Some(20.0),
+            description: None,
         },
         VariationParamDef {
             name: "scaley",
@@ -969,6 +977,7 @@ pub static WAVES2: VariationDef = VariationDef {
             default_value: 1.0,
             min_value: Some(-2.0),
             max_value: Some(2.0),
+            description: None,
         },
         VariationParamDef {
             name: "freqz",
@@ -977,6 +986,7 @@ pub static WAVES2: VariationDef = VariationDef {
             default_value: 0.0,
             min_value: Some(0.0),
             max_value: Some(20.0),
+            description: None,
         },
         VariationParamDef {
             name: "scalez",
@@ -985,6 +995,7 @@ pub static WAVES2: VariationDef = VariationDef {
             default_value: 0.0,
             min_value: Some(-2.0),
             max_value: Some(2.0),
+            description: None,
         },
     ],
     needs_transform: false,
@@ -1037,6 +1048,7 @@ pub static LOG: VariationDef = VariationDef {
             default_value: 2.718281828,
             min_value: Some(1.01),
             max_value: Some(100.0),
+            description: None,
         },
     ],
     needs_transform: false,
@@ -1084,6 +1096,7 @@ pub static ESCHER: VariationDef = VariationDef {
             default_value: 0.0,
             min_value: Some(-180.0),
             max_value: Some(180.0),
+            description: None,
         },
     ],
     needs_transform: false,
@@ -1142,6 +1155,7 @@ pub static BIPOLAR: VariationDef = VariationDef {
             default_value: 0.0,
             min_value: Some(-2.0),
             max_value: Some(2.0),
+            description: None,
         },
     ],
     needs_transform: false,
@@ -1215,6 +1229,7 @@ pub static LAZYSUSAN: VariationDef = VariationDef {
             default_value: 0.0,
             min_value: Some(-360.0),
             max_value: Some(360.0),
+            description: None,
         },
         VariationParamDef {
             name: "space",
@@ -1223,6 +1238,7 @@ pub static LAZYSUSAN: VariationDef = VariationDef {
             default_value: 0.0,
             min_value: Some(-2.0),
             max_value: Some(2.0),
+            description: None,
         },
         VariationParamDef {
             name: "twist",
@@ -1231,6 +1247,7 @@ pub static LAZYSUSAN: VariationDef = VariationDef {
             default_value: 0.0,
             min_value: Some(-5.0),
             max_value: Some(5.0),
+            description: None,
         },
         VariationParamDef {
             name: "x",
@@ -1239,6 +1256,7 @@ pub static LAZYSUSAN: VariationDef = VariationDef {
             default_value: 0.0,
             min_value: Some(-2.0),
             max_value: Some(2.0),
+            description: None,
         },
         VariationParamDef {
             name: "y",
@@ -1247,6 +1265,7 @@ pub static LAZYSUSAN: VariationDef = VariationDef {
             default_value: 0.0,
             min_value: Some(-2.0),
             max_value: Some(2.0),
+            description: None,
         },
     ],
     needs_transform: false,
@@ -1312,6 +1331,7 @@ pub static RINGS2: VariationDef = VariationDef {
             default_value: 1.0,
             min_value: Some(0.01),
             max_value: Some(5.0),
+            description: None,
         },
     ],
     needs_transform: false,
@@ -1355,6 +1375,7 @@ pub static FAN2: VariationDef = VariationDef {
             default_value: 1.0,
             min_value: Some(0.01),
             max_value: Some(5.0),
+            description: None,
         },
         VariationParamDef {
             name: "y",
@@ -1363,6 +1384,7 @@ pub static FAN2: VariationDef = VariationDef {
             default_value: 0.0,
             min_value: Some(-5.0),
             max_value: Some(5.0),
+            description: None,
         },
     ],
     needs_transform: false,
@@ -1424,6 +1446,7 @@ pub static PDJ: VariationDef = VariationDef {
             default_value: 0.0,
             min_value: Some(-20.0),
             max_value: Some(20.0),
+            description: None,
         },
         VariationParamDef {
             name: "b",
@@ -1432,6 +1455,7 @@ pub static PDJ: VariationDef = VariationDef {
             default_value: 0.0,
             min_value: Some(-20.0),
             max_value: Some(20.0),
+            description: None,
         },
         VariationParamDef {
             name: "c",
@@ -1440,6 +1464,7 @@ pub static PDJ: VariationDef = VariationDef {
             default_value: 0.0,
             min_value: Some(-20.0),
             max_value: Some(20.0),
+            description: None,
         },
         VariationParamDef {
             name: "d",
@@ -1448,6 +1473,7 @@ pub static PDJ: VariationDef = VariationDef {
             default_value: 0.0,
             min_value: Some(-20.0),
             max_value: Some(20.0),
+            description: None,
         },
     ],
     needs_transform: false,
@@ -1498,6 +1524,7 @@ pub static CURL: VariationDef = VariationDef {
             default_value: 1.0,
             min_value: Some(-2.0),
             max_value: Some(2.0),
+            description: None,
         },
         VariationParamDef {
             name: "c2",
@@ -1506,6 +1533,7 @@ pub static CURL: VariationDef = VariationDef {
             default_value: 0.0,
             min_value: Some(-2.0),
             max_value: Some(2.0),
+            description: None,
         },
     ],
     needs_transform: false,
@@ -1558,6 +1586,7 @@ pub static RECTANGLES: VariationDef = VariationDef {
             default_value: 1.0,
             min_value: Some(0.01),
             max_value: Some(5.0),
+            description: None,
         },
         VariationParamDef {
             name: "y",
@@ -1566,6 +1595,7 @@ pub static RECTANGLES: VariationDef = VariationDef {
             default_value: 1.0,
             min_value: Some(0.01),
             max_value: Some(5.0),
+            description: None,
         },
     ],
     needs_transform: false,
@@ -1612,6 +1642,7 @@ pub static SPLITS: VariationDef = VariationDef {
             default_value: 0.4,
             min_value: Some(-2.0),
             max_value: Some(2.0),
+            description: None,
         },
         VariationParamDef {
             name: "y",
@@ -1620,6 +1651,7 @@ pub static SPLITS: VariationDef = VariationDef {
             default_value: 0.4,
             min_value: Some(-2.0),
             max_value: Some(2.0),
+            description: None,
         },
     ],
     needs_transform: false,
@@ -1666,6 +1698,7 @@ pub static NGON: VariationDef = VariationDef {
             default_value: 5.0,
             min_value: Some(-10.0),
             max_value: Some(10.0),
+            description: None,
         },
         VariationParamDef {
             name: "power",
@@ -1674,6 +1707,7 @@ pub static NGON: VariationDef = VariationDef {
             default_value: 3.0,
             min_value: Some(-2.0),
             max_value: Some(20.0),
+            description: None,
         },
         VariationParamDef {
             name: "circle",
@@ -1682,6 +1716,7 @@ pub static NGON: VariationDef = VariationDef {
             default_value: 1.0,
             min_value: Some(-20.0),
             max_value: Some(20.0),
+            description: None,
         },
         VariationParamDef {
             name: "corners",
@@ -1690,6 +1725,7 @@ pub static NGON: VariationDef = VariationDef {
             default_value: 2.0,
             min_value: Some(-20.0),
             max_value: Some(20.0),
+            description: None,
         },
     ],
     needs_transform: false,
@@ -1752,6 +1788,7 @@ pub static AUGER: VariationDef = VariationDef {
             default_value: 1.0,
             min_value: Some(0.0),
             max_value: Some(10.0),
+            description: None,
         },
         VariationParamDef {
             name: "weight",
@@ -1760,6 +1797,7 @@ pub static AUGER: VariationDef = VariationDef {
             default_value: 0.5,
             min_value: Some(-2.0),
             max_value: Some(2.0),
+            description: None,
         },
         VariationParamDef {
             name: "scale",
@@ -1768,6 +1806,7 @@ pub static AUGER: VariationDef = VariationDef {
             default_value: 0.5,
             min_value: Some(-2.0),
             max_value: Some(2.0),
+            description: None,
         },
         VariationParamDef {
             name: "sym",
@@ -1776,6 +1815,7 @@ pub static AUGER: VariationDef = VariationDef {
             default_value: 0.0,
             min_value: Some(-2.0),
             max_value: Some(2.0),
+            description: None,
         },
     ],
     needs_transform: false,
@@ -1845,6 +1885,7 @@ pub static CPOW: VariationDef = VariationDef {
             default_value: 1.0,
             min_value: Some(-10.0),
             max_value: Some(10.0),
+            description: None,
         },
         VariationParamDef {
             name: "i",
@@ -1853,6 +1894,7 @@ pub static CPOW: VariationDef = VariationDef {
             default_value: 0.1,
             min_value: Some(-10.0),
             max_value: Some(10.0),
+            description: None,
         },
         VariationParamDef {
             name: "power",
@@ -1861,6 +1903,7 @@ pub static CPOW: VariationDef = VariationDef {
             default_value: 1.5,
             min_value: Some(-10.0),
             max_value: Some(10.0),
+            description: None,
         },
     ],
     needs_transform: false,

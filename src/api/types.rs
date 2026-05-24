@@ -865,6 +865,12 @@ pub struct ApiVariationParameter {
     pub min_value: Option<f32>,
     #[serde(default)]
     pub max_value: Option<f32>,
+    /// Free-form help / tooltip prose. Single English locale by
+    /// policy. `None` / absent renders the control without a tooltip.
+    /// Edits to this field do not bump the variation `version` (see
+    /// VARIATIONS_WIRE_FORMAT.md §8).
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 /// Full variation definition fetched from the API.

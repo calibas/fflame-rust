@@ -60,6 +60,13 @@ pub struct VariationParameter {
 
     /// Maximum value (None = no limit)
     pub max_value: Option<f32>,
+
+    /// Free-form help / tooltip prose shown under the parameter
+    /// control. Populated from `VariationParamDef.description` for
+    /// built-ins, from `ApiVariationParameter.description` for API
+    /// loads. `None` renders the control with no tooltip.
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 /// Execution phase for variations (Apophysis XForm.pas:343-383)
@@ -186,6 +193,7 @@ impl VariationInfo {
             default_value: p.default_value,
             min_value: p.min_value,
             max_value: p.max_value,
+            description: p.description.clone(),
         }).collect();
 
         let wgsl_function = format!("variation_{}", dl.name);
