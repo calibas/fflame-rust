@@ -155,7 +155,7 @@ pub static DISC3D: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[
         VariationParamDef { name: "pi", display_name: "Pi", param_type: ParamType::UnlimitedFloat,
-                            default_value: 3.14159265358979, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 3.14159265358979, min_value: Some(-10.0), max_value: Some(10.0), description: None },
     ],
     needs_transform: false,
     writes_color: false,
@@ -198,11 +198,11 @@ pub static BUBBLE2: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[
         VariationParamDef { name: "x", display_name: "X", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: None },
         VariationParamDef { name: "y", display_name: "Y", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: None },
         VariationParamDef { name: "z", display_name: "Z", param_type: ParamType::UnlimitedFloat,
-                            default_value: 0.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 0.0, min_value: Some(-10.0), max_value: Some(10.0), description: None },
     ],
     needs_transform: false,
     writes_color: false,
@@ -247,11 +247,11 @@ pub static POPCORN2: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[
         VariationParamDef { name: "x", display_name: "X", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: None },
         VariationParamDef { name: "y", display_name: "Y", param_type: ParamType::UnlimitedFloat,
-                            default_value: 0.5, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 0.5, min_value: Some(-10.0), max_value: Some(10.0), description: None },
         VariationParamDef { name: "c", display_name: "C", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.5, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.5, min_value: Some(-10.0), max_value: Some(10.0), description: None },
     ],
     needs_transform: false,
     writes_color: false,
@@ -290,11 +290,11 @@ pub static SPLITS3D: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[
         VariationParamDef { name: "x", display_name: "X", param_type: ParamType::UnlimitedFloat,
-                            default_value: 0.1, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 0.1, min_value: Some(-10.0), max_value: Some(10.0), description: None },
         VariationParamDef { name: "y", display_name: "Y", param_type: ParamType::UnlimitedFloat,
-                            default_value: 0.3, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 0.3, min_value: Some(-10.0), max_value: Some(10.0), description: None },
         VariationParamDef { name: "z", display_name: "Z", param_type: ParamType::UnlimitedFloat,
-                            default_value: 0.2, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 0.2, min_value: Some(-10.0), max_value: Some(10.0), description: None },
     ],
     needs_transform: false,
     writes_color: false,
@@ -340,9 +340,9 @@ pub static WAVES2_3D: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[
         VariationParamDef { name: "freq", display_name: "Freq", param_type: ParamType::UnlimitedFloat,
-                            default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0), description: None },
         VariationParamDef { name: "scale", display_name: "Scale", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: None },
     ],
     needs_transform: false,
     writes_color: false,
@@ -389,9 +389,9 @@ pub static JULIAQ: VariationDef = VariationDef {
     needs_rng: true,
     parameters: &[
         VariationParamDef { name: "power", display_name: "Power", param_type: ParamType::Integer,
-                            default_value: 3.0, min_value: Some(1.0), max_value: Some(64.0) },
+                            default_value: 3.0, min_value: Some(1.0), max_value: Some(64.0), description: None },
         VariationParamDef { name: "divisor", display_name: "Divisor", param_type: ParamType::Integer,
-                            default_value: 2.0, min_value: Some(1.0), max_value: Some(64.0) },
+                            default_value: 2.0, min_value: Some(1.0), max_value: Some(64.0), description: None },
     ],
     // 3 derived values stored in slots 2..5:
     //   2: inv_power       (divisor / power)
@@ -458,9 +458,9 @@ pub static JULIA3DQ: VariationDef = VariationDef {
     needs_rng: true,
     parameters: &[
         VariationParamDef { name: "power", display_name: "Power", param_type: ParamType::Integer,
-                            default_value: 3.0, min_value: Some(1.0), max_value: Some(64.0) },
+                            default_value: 3.0, min_value: Some(1.0), max_value: Some(64.0), description: None },
         VariationParamDef { name: "divisor", display_name: "Divisor", param_type: ParamType::Integer,
-                            default_value: 2.0, min_value: Some(1.0), max_value: Some(64.0) },
+                            default_value: 2.0, min_value: Some(1.0), max_value: Some(64.0), description: None },
     ],
     // 4 derived values stored in slots 2..6:
     //   2: inv_power       (divisor / power)
@@ -537,11 +537,11 @@ pub static JULIAC: VariationDef = VariationDef {
     needs_rng: true,
     parameters: &[
         VariationParamDef { name: "re", display_name: "Re", param_type: ParamType::UnlimitedFloat,
-                            default_value: 0.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 0.0, min_value: Some(-10.0), max_value: Some(10.0), description: None },
         VariationParamDef { name: "im", display_name: "Im", param_type: ParamType::UnlimitedFloat,
-                            default_value: 0.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 0.0, min_value: Some(-10.0), max_value: Some(10.0), description: None },
         VariationParamDef { name: "dist", display_name: "Dist", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: None },
     ],
     // 2 derived values stored in slots 3..5:
     //   3: re_recip   (1 / (re_param + ε))

@@ -275,6 +275,7 @@ pub static POST_FALLOFF2: VariationDef = VariationDef {
             default_value: 0.0,
             min_value: Some(0.0),
             max_value: Some(2.0),
+            description: None,
         },
     ],
     needs_transform: false,

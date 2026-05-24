@@ -72,9 +72,9 @@ pub static LOG_DB: VariationDef = VariationDef {
     needs_rng: true,
     parameters: &[
         VariationParamDef { name: "base", display_name: "Base", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(1e-6), max_value: Some(100.0) },
+                            default_value: 1.0, min_value: Some(1e-6), max_value: Some(100.0), description: None },
         VariationParamDef { name: "fix_period", display_name: "Fix Period", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(0.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(0.0), max_value: Some(10.0), description: None },
     ],
     // 2 derived values stored in slots 2..4:
     //   2: denom    (0.5 / log(e · base), or 0.5 if base <= 0)
@@ -151,11 +151,11 @@ pub static LOG_TILE2: VariationDef = VariationDef {
     needs_rng: true,
     parameters: &[
         VariationParamDef { name: "spreadx", display_name: "Spread X", param_type: ParamType::UnlimitedFloat,
-                            default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0), description: None },
         VariationParamDef { name: "spready", display_name: "Spread Y", param_type: ParamType::UnlimitedFloat,
-                            default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0), description: None },
         VariationParamDef { name: "spreadz", display_name: "Spread Z", param_type: ParamType::UnlimitedFloat,
-                            default_value: 0.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 0.0, min_value: Some(-10.0), max_value: Some(10.0), description: None },
     ],
     needs_transform: false,
     writes_color: false,
@@ -204,7 +204,7 @@ pub static TILE_LOG: VariationDef = VariationDef {
     needs_rng: true,
     parameters: &[
         VariationParamDef { name: "spread", display_name: "Spread", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: None },
     ],
     needs_transform: false,
     writes_color: false,

@@ -137,6 +137,12 @@ pub struct VariationParamDef {
 
     /// Maximum value (None = no limit for slider, typing still allowed)
     pub max_value: Option<f32>,
+
+    /// Free-form help / tooltip prose shown under the parameter
+    /// control. `None` renders the control without a tooltip. Single
+    /// English locale by policy (technical descriptions, not subject
+    /// to i18n).
+    pub description: Option<&'static str>,
 }
 
 impl VariationParamDef {
@@ -149,6 +155,7 @@ impl VariationParamDef {
             default_value: self.default_value,
             min_value: self.min_value,
             max_value: self.max_value,
+            description: self.description.map(|s| s.to_string()),
         }
     }
 }
@@ -250,6 +257,7 @@ macro_rules! param {
             default_value: $default,
             min_value: Some($min),
             max_value: Some($max),
+            description: None,
         }
     };
     // UnlimitedFloat
@@ -261,6 +269,7 @@ macro_rules! param {
             default_value: $default,
             min_value: Some($min),
             max_value: Some($max),
+            description: None,
         }
     };
     // Integer
@@ -272,6 +281,7 @@ macro_rules! param {
             default_value: $default,
             min_value: Some($min),
             max_value: Some($max),
+            description: None,
         }
     };
     // UnlimitedInteger
@@ -283,6 +293,7 @@ macro_rules! param {
             default_value: $default,
             min_value: Some($min),
             max_value: Some($max),
+            description: None,
         }
     };
     // Angle
@@ -294,6 +305,7 @@ macro_rules! param {
             default_value: $default,
             min_value: Some(-360.0),
             max_value: Some(360.0),
+            description: None,
         }
     };
     // Boolean
@@ -305,6 +317,7 @@ macro_rules! param {
             default_value: if $default { 1.0 } else { 0.0 },
             min_value: None,
             max_value: None,
+            description: None,
         }
     };
 }

@@ -35,11 +35,11 @@ pub static TARGET: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[
         VariationParamDef { name: "even", display_name: "Even", param_type: ParamType::Angle,
-                            default_value: 0.0, min_value: Some(-360.0), max_value: Some(360.0) },
+                            default_value: 0.0, min_value: Some(-360.0), max_value: Some(360.0), description: None },
         VariationParamDef { name: "odd", display_name: "Odd", param_type: ParamType::Angle,
-                            default_value: 0.0, min_value: Some(-360.0), max_value: Some(360.0) },
+                            default_value: 0.0, min_value: Some(-360.0), max_value: Some(360.0), description: None },
         VariationParamDef { name: "size", display_name: "Size", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(0.01), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(0.01), max_value: Some(10.0), description: None },
     ],
     // 1 derived value at slot 3:
     //   3: t_size_2  (size / 2)
@@ -120,15 +120,15 @@ pub static YIN_YANG: VariationDef = VariationDef {
     needs_rng: true,
     parameters: &[
         VariationParamDef { name: "radius", display_name: "Radius", param_type: ParamType::Float,
-                            default_value: 0.5, min_value: Some(0.0), max_value: Some(1.0) },
+                            default_value: 0.5, min_value: Some(0.0), max_value: Some(1.0), description: None },
         VariationParamDef { name: "ang1", display_name: "Ang1", param_type: ParamType::UnlimitedFloat,
-                            default_value: 0.0, min_value: Some(-2.0), max_value: Some(2.0) },
+                            default_value: 0.0, min_value: Some(-2.0), max_value: Some(2.0), description: None },
         VariationParamDef { name: "ang2", display_name: "Ang2", param_type: ParamType::UnlimitedFloat,
-                            default_value: 0.0, min_value: Some(-2.0), max_value: Some(2.0) },
+                            default_value: 0.0, min_value: Some(-2.0), max_value: Some(2.0), description: None },
         VariationParamDef { name: "dual_t", display_name: "Dual T", param_type: ParamType::Boolean,
-                            default_value: 1.0, min_value: None, max_value: None },
+                            default_value: 1.0, min_value: None, max_value: None, description: None },
         VariationParamDef { name: "outside", display_name: "Outside", param_type: ParamType::Boolean,
-                            default_value: 0.0, min_value: None, max_value: None },
+                            default_value: 0.0, min_value: None, max_value: None, description: None },
     ],
     // 4 derived values at slots 5..9:
     //   5: sina   sin(π · ang1)

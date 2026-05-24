@@ -53,13 +53,13 @@ pub static CPOW2: VariationDef = VariationDef {
     needs_rng: true,
     parameters: &[
         VariationParamDef { name: "r", display_name: "R", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: None },
         VariationParamDef { name: "a", display_name: "A", param_type: ParamType::UnlimitedFloat,
-                            default_value: 0.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 0.0, min_value: Some(-10.0), max_value: Some(10.0), description: None },
         VariationParamDef { name: "divisor", display_name: "Divisor", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: None },
         VariationParamDef { name: "range", display_name: "Range", param_type: ParamType::Integer,
-                            default_value: 1.0, min_value: Some(1.0), max_value: Some(64.0) },
+                            default_value: 1.0, min_value: Some(1.0), max_value: Some(64.0), description: None },
     ],
     // 7 derived values stored in slots 4..11 of this variation's slot range:
     //   4: ang        (2π / divisor)
@@ -175,13 +175,13 @@ pub static CPOW3: VariationDef = VariationDef {
     needs_rng: true,
     parameters: &[
         VariationParamDef { name: "r", display_name: "R", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: None },
         VariationParamDef { name: "d", display_name: "D", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: None },
         VariationParamDef { name: "divisor", display_name: "Divisor", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: None },
         VariationParamDef { name: "spread", display_name: "Spread", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: None },
     ],
     // 6 derived values stored in slots 4..10 of this variation's slot range:
     //   4: ang        (2π / divisor)
@@ -287,9 +287,9 @@ pub static DISC2: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[
         VariationParamDef { name: "rot", display_name: "Rot", param_type: ParamType::UnlimitedFloat,
-                            default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0), description: None },
         VariationParamDef { name: "twist", display_name: "Twist", param_type: ParamType::UnlimitedFloat,
-                            default_value: 0.5, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 0.5, min_value: Some(-10.0), max_value: Some(10.0), description: None },
     ],
     // 3 derived values stored in slots 2..5:
     //   2: timespi  (rot · π)
