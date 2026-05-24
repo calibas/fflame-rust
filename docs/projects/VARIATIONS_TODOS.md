@@ -54,6 +54,9 @@ the answer is known — that's the convention for "unknown" per
 - `cosine` ([shapes.rs](../../src/variations/defs/shapes.rs))
 - `pie3d` ([shapes.rs](../../src/variations/defs/shapes.rs))
 - `butterfly3d` ([shapes2.rs](../../src/variations/defs/shapes2.rs))
+- `spherical3d` ([numbered.rs](../../src/variations/defs/numbered.rs))
+- `square` ([numbered.rs](../../src/variations/defs/numbered.rs))
+- `square3d` ([numbered.rs](../../src/variations/defs/numbered.rs))
 
 **Likely shared author** — all are JWildfire ports of complex-plane
 inverse hyperbolic functions (the plain ones in `hyperbolic.rs` and
