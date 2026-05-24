@@ -30,10 +30,35 @@ the answer is known — that's the convention for "unknown" per
 - `post_rotate_x` ([rotation3d.rs](../../src/variations/defs/rotation3d.rs))
 - `post_rotate_y` ([rotation3d.rs](../../src/variations/defs/rotation3d.rs))
 - `hemisphere` ([full3d.rs](../../src/variations/defs/full3d.rs))
+- `zblur` ([blur.rs](../../src/variations/defs/blur.rs))
+- `blur3d` ([blur.rs](../../src/variations/defs/blur.rs))
+- `pre_blur` ([blur.rs](../../src/variations/defs/blur.rs))
 
 ---
 
 ## Out of scope (defer to other branches)
+
+### Zero-weight variations should still count as "present"
+
+A variation with weight 0 is currently treated as if it doesn't exist
+in some code paths:
+
+- **Animation system**: zero-weight variations don't appear in the
+  target list, so they can't be picked as animation targets.
+- **Shader builder** (suspected, needs verification): the generated
+  WGSL may skip emitting calls for zero-weight variations, which
+  means animating the weight up from zero wouldn't take effect on the
+  fly.
+
+The intended contract: **if a variation is part of a flame, plan on
+it being used.** A weight of 0 is a valid resting state — the user
+may want to animate to/from it, or set it conditionally — and
+shouldn't make the variation invisible to the rest of the pipeline.
+
+Investigate both call sites; either bring the behavior in line with
+"present means used" or document the cases where dropping zero-weight
+variations is intentional (likely none, but worth confirming before
+ripping the optimization out).
 
 ### Stray `weight: f32` parameter in some WGSL bodies — why does it work?
 
