@@ -1,6 +1,6 @@
 //! Standalone shape variations (continued)
 //!
-//! - `butterfly`, `butterfly3d` — Don Town's butterfly curve
+//! - `butterfly`, `butterfly3d` — butterfly curve
 //! - `ennepers`, `ennepers2` — Enneper's surface mappings
 //! - `pyramid` — Zueuk's 3D pyramid (cubic distance norm)
 //! - `rays2`, `rays3` — Raykoid666's tan/cos ray patterns (rays/rays1
@@ -29,6 +29,10 @@ use crate::variations::{
 // =============================================================================
 // butterfly: x' = K · sqrt(|xy|/(x²+(2y)²+ε)) · x;  y' = … · 2y
 // =============================================================================
+/// Butterfly-shaped curve produced by a normalized cross-coordinate
+/// stretch. Output sketches the classic butterfly silhouette around the
+/// origin.
+///
 /// # Authors
 /// - Apophysis Plugin Pack
 pub static BUTTERFLY: VariationDef = VariationDef {
@@ -66,6 +70,11 @@ fn variation_butterfly(p: vec3<f32>) -> vec3<f32> {
 // =============================================================================
 // butterfly3d: butterfly + z' = r · |2y| · sqrt(x² + y²) / 4
 // =============================================================================
+/// 3D version of Butterfly — same XY butterfly curve plus a Z component
+/// that scales with the radial distance times `|2y|`.
+///
+/// # Authors
+/// - Don Town
 pub static BUTTERFLY3D: VariationDef = VariationDef {
     name: "butterfly3d",
     display_name: "Butterfly 3D",
@@ -105,6 +114,11 @@ fn variation_butterfly3d(p: vec3<f32>) -> vec3<f32> {
 //   y' = y · (1 − y²/3 + x²)
 // (See file comment about upstream's broken `=` form.)
 // =============================================================================
+/// Enneper's-surface parametric mapping — `(x(1 − x²/3 + y²), y(1 − y²/3 +
+/// x²))`. Inspired by Alfred Enneper's classical minimal surface.
+///
+/// # Authors
+/// - Raykoid666
 pub static ENNEPERS: VariationDef = VariationDef {
     name: "ennepers",
     display_name: "Ennepers",
@@ -140,6 +154,12 @@ fn variation_ennepers(p: vec3<f32>) -> vec3<f32> {
 //   x' = x³ / (|x³| + |y³| + |z³| + ε)
 // (z component takes |z³| in upstream.)
 // =============================================================================
+/// 3D pyramid using cubic-distance norm — each coordinate is cubed and
+/// divided by the sum of absolute cubes. Produces a pyramid-shaped
+/// silhouette.
+///
+/// # Authors
+/// - Zueuk
 pub static PYRAMID: VariationDef = VariationDef {
     name: "pyramid",
     display_name: "Pyramid",
@@ -178,6 +198,11 @@ fn variation_pyramid(p: vec3<f32>) -> vec3<f32> {
 //   t = x²+y², u = 1/cos((t+ε)·tan(1/t + ε))
 //   x' = u·t/(10·x), y' = u·t/(10·y)
 // =============================================================================
+/// Cosine-of-tangent rays — uses `1/cos((t+ε)·tan(1/t+ε))` on the squared
+/// radius `t`. Creates intricate ray patterns radiating from the origin.
+///
+/// # Authors
+/// - Raykoid666
 pub static RAYS2: VariationDef = VariationDef {
     name: "rays2",
     display_name: "Rays2",
@@ -217,6 +242,11 @@ fn variation_rays2(p: vec3<f32>) -> vec3<f32> {
 //   t = x²+y², u = 1/sqrt(cos(sin(t²+ε) · sin(1/t² + ε)))
 //   x' = u·cos(t)·t/(10·x), y' = u·tan(t)·t/(10·y)
 // =============================================================================
+/// Variant of Rays2 with `sqrt(cos(sin(...)·sin(...)))` and tangent on Y.
+/// Denser ray pattern with sharper structure.
+///
+/// # Authors
+/// - Raykoid666
 pub static RAYS3: VariationDef = VariationDef {
     name: "rays3",
     display_name: "Rays3",
@@ -264,6 +294,11 @@ fn variation_rays3(p: vec3<f32>) -> vec3<f32> {
 //   x' = d · cos(c1) · sin(c2)
 //   y' = d · sin(c1) · sin(c2)
 // =============================================================================
+/// Spiral wing — uses cos/sin of `x²` with `sin(y²)` modulation. Produces
+/// wing-shaped spiral patterns.
+///
+/// # Authors
+/// - Raykoid666
 pub static SPIRALWING: VariationDef = VariationDef {
     name: "spiralwing",
     display_name: "Spiral Wing",
@@ -304,6 +339,11 @@ fn variation_spiralwing(p: vec3<f32>) -> vec3<f32> {
 //   y' = u
 //   z' = v²
 // =============================================================================
+/// Parametric Whitney umbrella surface — output is `(xy, x, y²)`. The
+/// classical algebraic surface with the same name.
+///
+/// # Authors
+/// - Don Town
 pub static WHITNEY_UMBRELLA: VariationDef = VariationDef {
     name: "whitney_umbrella",
     display_name: "Whitney Umbrella",
@@ -336,6 +376,12 @@ fn variation_whitney_umbrella(p: vec3<f32>) -> vec3<f32> {
 //   r = 5(1 + sin(11u/5)) − 4·sin(17u/3)⁴ · sin(2cos(3u) − 28u)⁸
 //   x' = r·cos(u), y' = r·sin(u)
 // =============================================================================
+/// Chrysanthemum curve — Sosa's flower-like parametric curve. Plots `r` as
+/// a function of a random angle, producing dense overlapping petal
+/// patterns.
+///
+/// # Authors
+/// - Jesus Sosa
 pub static CHRYSANTHEMUM: VariationDef = VariationDef {
     name: "chrysanthemum",
     display_name: "Chrysanthemum",
@@ -383,6 +429,10 @@ fn variation_chrysanthemum(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f
 // =============================================================================
 // cell: Apophysis cell (interleaved cells of size `size`)
 // =============================================================================
+/// Cellular tiling — divides the plane into cells of the given size and
+/// rearranges them in an interleaved pattern. Produces a checkered,
+/// displaced look.
+///
 /// # Authors
 /// - Apophysis Plugin Pack
 pub static CELL: VariationDef = VariationDef {
@@ -393,7 +443,7 @@ pub static CELL: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[
         VariationParamDef { name: "size", display_name: "Size", param_type: ParamType::UnlimitedFloat,
-                            default_value: 0.6, min_value: Some(0.01), max_value: Some(10.0), description: None },
+                            default_value: 0.6, min_value: Some(0.01), max_value: Some(10.0), description: Some("Width of each cell in the grid.") },
     ],
     needs_transform: false,
     writes_color: false,
@@ -452,6 +502,11 @@ fn variation_cell(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
 //   y' = y · (b² − dxy·r2 − c·sqrt(|y|))
 //   z' = dxy · 0.5 · sqrt(r2)
 // =============================================================================
+/// Parameterized Enneper variant — 3-parameter 3D extension of Ennepers
+/// with separate `a`/`b`/`c` controls.
+///
+/// # Authors
+/// - DarkBeam
 pub static ENNEPERS2: VariationDef = VariationDef {
     name: "ennepers2",
     display_name: "Ennepers2",
@@ -460,11 +515,11 @@ pub static ENNEPERS2: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[
         VariationParamDef { name: "a", display_name: "A", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: None },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Coefficient on the X factor.") },
         VariationParamDef { name: "b", display_name: "B", param_type: ParamType::UnlimitedFloat,
-                            default_value: 0.3333, min_value: Some(-10.0), max_value: Some(10.0), description: None },
+                            default_value: 0.3333, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Coefficient on the Y factor.") },
         VariationParamDef { name: "c", display_name: "C", param_type: ParamType::UnlimitedFloat,
-                            default_value: 0.075, min_value: Some(-10.0), max_value: Some(10.0), description: None },
+                            default_value: 0.075, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Square-root correction strength applied to both X and Y outputs.") },
     ],
     needs_transform: false,
     writes_color: false,
@@ -511,6 +566,12 @@ fn variation_ennepers2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
 //   r = (uniform − holes) · cos(petals · theta) / d
 //   x' = r · x, y' = r · y
 // =============================================================================
+/// Flower — produces petal patterns based on a uniform-random distance
+/// scaled by `cos(petals · angle)`. The `holes` parameter controls how
+/// hollow the center is.
+///
+/// # Authors
+/// - cyberxaos
 pub static FLOWER: VariationDef = VariationDef {
     name: "flower",
     display_name: "Flower",
@@ -519,9 +580,9 @@ pub static FLOWER: VariationDef = VariationDef {
     needs_rng: true,
     parameters: &[
         VariationParamDef { name: "holes", display_name: "Holes", param_type: ParamType::UnlimitedFloat,
-                            default_value: 0.4, min_value: Some(-10.0), max_value: Some(10.0), description: None },
+                            default_value: 0.4, min_value: Some(-10.0), max_value: Some(10.0), description: Some("How hollow the center of the flower is. Higher = bigger center hole.") },
         VariationParamDef { name: "petals", display_name: "Petals", param_type: ParamType::UnlimitedFloat,
-                            default_value: 7.0, min_value: Some(1.0), max_value: Some(64.0), description: None },
+                            default_value: 7.0, min_value: Some(1.0), max_value: Some(64.0), description: Some("Number of petals around the flower.") },
     ],
     needs_transform: false,
     writes_color: false,
