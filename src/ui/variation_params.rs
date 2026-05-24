@@ -64,16 +64,26 @@ pub fn render_variation_params(
     max_update
 }
 
+/// Attach a hover tooltip to a widget response when the param has a
+/// description. No-op when description is None (no tooltip rendered).
+fn with_hover(response: egui::Response, param: &VariationParameter) -> egui::Response {
+    if let Some(desc) = &param.description {
+        response.on_hover_text(desc)
+    } else {
+        response
+    }
+}
+
 /// Render a float parameter slider
 /// Returns (changed, dragged, drag_stopped)
 fn render_float_param(ui: &mut egui::Ui, param: &VariationParameter, value: &mut f32) -> (bool, bool) {
     let min = param.min_value.unwrap_or(-10.0);
     let max = param.max_value.unwrap_or(10.0);
-    let response = ui.add(
+    let response = with_hover(ui.add(
         super::VkbSlider::new(value, min..=max)
             .text(&param.display_name)
             .step_by(0.01),
-    );
+    ), param);
     (response.changed(), response.drag_stopped())
 }
 
@@ -83,7 +93,10 @@ fn render_integer_param(ui: &mut egui::Ui, param: &VariationParameter, value: &m
     let min = param.min_value.unwrap_or(1.0) as i32;
     let max = param.max_value.unwrap_or(10.0) as i32;
     let mut int_val = *value as i32;
-    let response = ui.add(super::VkbSlider::new(&mut int_val, min..=max).text(&param.display_name));
+    let response = with_hover(
+        ui.add(super::VkbSlider::new(&mut int_val, min..=max).text(&param.display_name)),
+        param,
+    );
     *value = int_val as f32;
     (response.changed(), response.drag_stopped())
 }
@@ -96,11 +109,11 @@ fn render_unlimited_integer_param(ui: &mut egui::Ui, param: &VariationParameter,
     let max = param.max_value.unwrap_or(100.0) as i32;
     let mut int_val = *value as i32;
 
-    let response = ui.add(
+    let response = with_hover(ui.add(
         super::VkbSlider::new(&mut int_val, min..=max)
             .text(&param.display_name)
             .clamping(egui::SliderClamping::Never)  // Allow typing values outside slider range
-    );
+    ), param);
 
     if response.changed() {
         // Clamp to i32 limits (actual limits: -2,147,483,648 to 2,147,483,647)
@@ -117,7 +130,10 @@ fn render_unlimited_integer_param(ui: &mut egui::Ui, param: &VariationParameter,
 fn render_angle_param(ui: &mut egui::Ui, param: &VariationParameter, value: &mut f32) -> (bool, bool) {
     let min = param.min_value.unwrap_or(0.0);
     let max = param.max_value.unwrap_or(360.0);
-    let response = ui.add(super::VkbSlider::new(value, min..=max).text(&param.display_name).suffix("°"));
+    let response = with_hover(
+        ui.add(super::VkbSlider::new(value, min..=max).text(&param.display_name).suffix("°")),
+        param,
+    );
     (response.changed(), response.drag_stopped())
 }
 
@@ -128,11 +144,11 @@ fn render_unlimited_float_param(ui: &mut egui::Ui, param: &VariationParameter, v
     let min = param.min_value.unwrap_or(-10.0);
     let max = param.max_value.unwrap_or(10.0);
 
-    let response = ui.add(
+    let response = with_hover(ui.add(
         super::VkbSlider::new(value, min..=max)
             .text(&param.display_name)
             .clamping(egui::SliderClamping::Never)  // Allow typing values outside slider range
-    );
+    ), param);
 
     if response.changed() {
         // Clamp to f32 limits (actual limits: -3.4E38 to 3.4E38)
@@ -146,7 +162,7 @@ fn render_unlimited_float_param(ui: &mut egui::Ui, param: &VariationParameter, v
 /// Returns (changed, dragged=false, drag_stopped=false)
 fn render_boolean_param(ui: &mut egui::Ui, param: &VariationParameter, value: &mut f32) -> (bool, bool) {
     let mut checked = *value > 0.5;
-    let response = ui.checkbox(&mut checked, &param.display_name);
+    let response = with_hover(ui.checkbox(&mut checked, &param.display_name), param);
     *value = if checked { 1.0 } else { 0.0 };
     (response.changed(), false)  // Checkboxes don't have drag states
 }
@@ -164,7 +180,7 @@ fn render_enum_param(ui: &mut egui::Ui, param: &VariationParameter, value: &mut 
     let mut selected = current_idx;
 
     let mut changed = false;
-    egui::ComboBox::from_label(&param.display_name)
+    let combo = egui::ComboBox::from_label(&param.display_name)
         .selected_text(choices[selected])
         .show_ui(ui, |ui| {
             for (idx, choice) in choices.iter().enumerate() {
@@ -173,6 +189,8 @@ fn render_enum_param(ui: &mut egui::Ui, param: &VariationParameter, value: &mut 
                 }
             }
         });
+    // Attach hover tooltip to the closed combobox response.
+    let _ = with_hover(combo.response, param);
 
     if changed {
         *value = selected as f32;

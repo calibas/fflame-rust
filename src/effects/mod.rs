@@ -76,12 +76,6 @@ impl EffectInfo {
         t!(&key).to_string()
     }
 
-    /// Get the translated display name for a parameter
-    pub fn translated_param_name(&self, param_name: &str) -> String {
-        let key = format!("effects.{}.params.{}", self.name, param_name);
-        t!(&key).to_string()
-    }
-
     /// Get the default value for a parameter by name
     pub fn get_param_default(&self, param_name: &str) -> Option<f32> {
         self.parameters
