@@ -51,6 +51,11 @@ the answer is known — that's the convention for "unknown" per
 - `blur_zoom` ([extended.rs](../../src/variations/defs/extended.rs))
 - `blur_pixelize` ([extended.rs](../../src/variations/defs/extended.rs))
 - `separation` ([extended.rs](../../src/variations/defs/extended.rs))
+- `acosech` ([hyperbolic.rs](../../src/variations/defs/hyperbolic.rs))
+- `arcsech` ([hyperbolic.rs](../../src/variations/defs/hyperbolic.rs))
+- `arcsech2` ([hyperbolic.rs](../../src/variations/defs/hyperbolic.rs))
+- `arcsinh` ([hyperbolic.rs](../../src/variations/defs/hyperbolic.rs))
+- `arctanh` ([hyperbolic.rs](../../src/variations/defs/hyperbolic.rs))
 
 ### Enum-candidate parameters
 
