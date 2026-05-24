@@ -894,9 +894,6 @@ fn variation_cross(p: vec3<f32>) -> vec3<f32> {
 
 /// Inside the unit circle, inflates points outward; outside, leaves them
 /// alone. Creates a coin shape with a sharp edge at radius 1.
-///
-/// # Authors
-/// - Joel and Michael Faber
 pub static LOONIE: VariationDef = VariationDef {
     name: "loonie",
     display_name: "Loonie",

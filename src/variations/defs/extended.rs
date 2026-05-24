@@ -8,6 +8,9 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Shifts the Z coordinate during the variation pass. The variation's
+/// weight is the offset — set the weight to control how far each point
+/// moves up or down.
 pub static ZTRANSLATE: VariationDef = VariationDef {
     name: "ztranslate",
     display_name: "ZTranslate",
@@ -38,6 +41,11 @@ fn variation_ztranslate(p: vec3<f32>) -> vec3<f32> {
 "#),
 };
 
+/// 3D version of Julia — splits the output into `power` randomly-chosen
+/// branches in both XY and Z. Generates intricate 3D Julia-set fractals.
+///
+/// # Authors
+/// - Joel Faber
 pub static JULIA3D: VariationDef = VariationDef {
     name: "julia3d",
     display_name: "Julia3D",
@@ -45,7 +53,7 @@ pub static JULIA3D: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("power", "Power", unlimited_int, 2.0, -10.0, 10.0),
+        param!("power", "Power", unlimited_int, 2.0, -10.0, 10.0, "Number of branches in the 3D Julia output. Higher = more arms; negative values flip the rotation."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -153,6 +161,9 @@ fn variation_julia3d(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fu
 "#),
 };
 
+/// Adds random scatter that varies with distance from a chosen center
+/// point. Closer points get less scatter (or more, with `invert`); the
+/// random distribution shape is selectable.
 pub static FALLOFF2: VariationDef = VariationDef {
     name: "falloff2",
     display_name: "Falloff2",
@@ -160,16 +171,16 @@ pub static FALLOFF2: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("scatter", "Scatter", unlimited_float, 1.0, 0.000001, 10.0),
-        param!("mindist", "Min Distance", unlimited_float, 0.5, 0.0, 10.0),
-        param!("mul_x", "Multiply X", float, 1.0, 0.0, 1.0),
-        param!("mul_y", "Multiply Y", float, 1.0, 0.0, 1.0),
-        param!("mul_z", "Multiply Z", float, 0.0, 0.0, 1.0),
-        param!("mul_c", "Multiply Color", float, 0.0, 0.0, 1.0),
-        param!("x0", "X Center", unlimited_float, 0.0, -10.0, 10.0),
-        param!("y0", "Y Center", unlimited_float, 0.0, -10.0, 10.0),
-        param!("z0", "Z Center", unlimited_float, 0.0, -10.0, 10.0),
-        param!("invert", "Invert", bool, false),
+        param!("scatter", "Scatter", unlimited_float, 1.0, 0.000001, 10.0, "Maximum random scatter applied at full strength."),
+        param!("mindist", "Min Distance", unlimited_float, 0.5, 0.0, 10.0, "Distance from the center where the falloff kicks in. Points inside this radius get full strength scatter."),
+        param!("mul_x", "Multiply X", float, 1.0, 0.0, 1.0, "How strongly the scatter affects the X axis (0 = ignore, 1 = full)."),
+        param!("mul_y", "Multiply Y", float, 1.0, 0.0, 1.0, "How strongly the scatter affects the Y axis (0 = ignore, 1 = full)."),
+        param!("mul_z", "Multiply Z", float, 0.0, 0.0, 1.0, "How strongly the scatter affects the Z axis (0 = ignore, 1 = full). 3D mode only."),
+        param!("mul_c", "Multiply Color", float, 0.0, 0.0, 1.0, "Color-channel scatter strength. Currently unused — direct color writing is not wired up for this variation."),
+        param!("x0", "X Center", unlimited_float, 0.0, -10.0, 10.0, "X coordinate of the falloff center."),
+        param!("y0", "Y Center", unlimited_float, 0.0, -10.0, 10.0, "Y coordinate of the falloff center."),
+        param!("z0", "Z Center", unlimited_float, 0.0, -10.0, 10.0, "Z coordinate of the falloff center."),
+        param!("invert", "Invert", bool, false, "When on, flips the falloff direction — full scatter applies far from the center, nothing near it."),
         VariationParamDef {
             name: "type",
             display_name: "Blur Type",
@@ -177,7 +188,7 @@ pub static FALLOFF2: VariationDef = VariationDef {
             default_value: 0.0,
             min_value: Some(0.0),
             max_value: Some(2.0),
-            description: None,
+            description: Some("Random distribution shape. 0 = uniform, 1 = triangular (smoother), 2 = gaussian (concentrated near zero)."),
         },
     ],
     needs_transform: false,
@@ -300,6 +311,9 @@ fn variation_falloff2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
 "#),
 };
 
+/// Slices the plane into N pie wedges, each compressed and offset by the
+/// chosen angle. Adds an optional swirl that increases with distance and a
+/// `hole` radial offset.
 pub static WEDGE: VariationDef = VariationDef {
     name: "wedge",
     display_name: "Wedge",
@@ -307,10 +321,10 @@ pub static WEDGE: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("angle", "Angle", angle, 90.0),
-        param!("hole", "Hole", unlimited_float, 0.0, -5.0, 5.0),
-        param!("count", "Count", int, 2.0, 1.0, 20.0),
-        param!("swirl", "Swirl", unlimited_float, 0.0, -30.0, 30.0),
+        param!("angle", "Angle", angle, 90.0, "Wedge angle in degrees — how wide each pie slice is before compression."),
+        param!("hole", "Hole", unlimited_float, 0.0, -5.0, 5.0, "Radial offset added to the output. Positive pushes the pattern outward, negative pulls it inward."),
+        param!("count", "Count", int, 2.0, 1.0, 20.0, "Number of pie wedges arranged around the center."),
+        param!("swirl", "Swirl", unlimited_float, 0.0, -30.0, 30.0, "Extra rotation that grows with distance. 0 = no swirl, positive = curves arms outward."),
     ],
     // 2 derived values at slots 4..6:
     //   4: angle_rad  (angle_deg · π/180)
@@ -374,6 +388,11 @@ fn variation_wedge(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 "#),
 };
 
+/// Maps the plane onto an epicycloid spiral pattern. `n` controls how many
+/// lobes, `thickness` adds randomness, `holes` punches gaps in the pattern.
+/// 
+/// # Authors
+/// - cyberxaos
 pub static EPISPIRAL: VariationDef = VariationDef {
     name: "epispiral",
     display_name: "Epispiral",
@@ -381,9 +400,9 @@ pub static EPISPIRAL: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("n", "N", unlimited_float, 6.0, -20.0, 20.0),
-        param!("thickness", "Thickness", unlimited_float, 0.0, -2.0, 2.0),
-        param!("holes", "Holes", unlimited_float, 1.0, -10.0, 10.0),
+        param!("n", "N", unlimited_float, 6.0, -20.0, 20.0, "Number of lobes in the spiral pattern."),
+        param!("thickness", "Thickness", unlimited_float, 0.0, -2.0, 2.0, "Random thickness of each lobe. 0 = razor-thin curves, higher = wider bands."),
+        param!("holes", "Holes", unlimited_float, 1.0, -10.0, 10.0, "Radial offset that punches gaps in the pattern."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -428,6 +447,9 @@ fn variation_epispiral(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
 "#),
 };
 
+/// Wraps the plane into a grid of soft bubbles, each with its own internal
+/// twist. Same shape as Pre Bwraps and Post Bwraps but applied in the
+/// normal weighted-sum phase.
 pub static BWRAPS: VariationDef = VariationDef {
     name: "bwraps",
     display_name: "BWraps",
@@ -435,11 +457,11 @@ pub static BWRAPS: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("cellsize", "Cell Size", unlimited_float, 1.0, -10.0, 10.0),
-        param!("space", "Space", unlimited_float, 0.0, -1.0, 1.0),
-        param!("gain", "Gain", unlimited_float, 1.0, -5.0, 5.0),
-        param!("inner_twist", "Inner Twist", unlimited_float, 0.0, -10.0, 10.0),
-        param!("outer_twist", "Outer Twist", unlimited_float, 0.0, -10.0, 10.0),
+        param!("cellsize", "Cell Size", unlimited_float, 1.0, -10.0, 10.0, "Width of each grid cell — the plane is divided into cells of this size, each becoming a bubble."),
+        param!("space", "Space", unlimited_float, 0.0, -1.0, 1.0, "Gap between cells. 0 = no gap; positive values push the bubbles apart."),
+        param!("gain", "Gain", unlimited_float, 1.0, -5.0, 5.0, "How strongly each bubble wraps its contents inward."),
+        param!("inner_twist", "Inner Twist", unlimited_float, 0.0, -10.0, 10.0, "Rotation (in degrees) applied at the center of each bubble."),
+        param!("outer_twist", "Outer Twist", unlimited_float, 0.0, -10.0, 10.0, "Rotation (in degrees) applied at the edge of each bubble."),
     ],
     // 3 derived values at slots 5..8:
     //   5: g2        (gain² / (radius + ε) + ε)
@@ -556,6 +578,11 @@ fn variation_bwraps(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 "#),
 };
 
+/// Kaleidoscope variant of Julia — splits the angle into `power` branches
+/// with random sign-flipping, producing symmetric mirror-like patterns.
+///
+/// # Authors
+/// - Scott Draves
 pub static JULIASCOPE: VariationDef = VariationDef {
     name: "juliascope",
     display_name: "JuliaScope",
@@ -563,8 +590,8 @@ pub static JULIASCOPE: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("power", "Power", unlimited_int, 2.0, -20.0, 20.0),
-        param!("dist", "Distance", unlimited_float, 1.0, -10.0, 10.0),
+        param!("power", "Power", unlimited_int, 2.0, -20.0, 20.0, "Number of mirror branches. Higher = more reflections; negative values invert the rotation."),
+        param!("dist", "Distance", unlimited_float, 1.0, -10.0, 10.0, "Radial scaling factor. 1.0 is balanced; larger values push arms outward."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -643,6 +670,8 @@ fn variation_juliascope(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
 "#),
 };
 
+/// 3D variant of Julia where the Z coordinate gets folded along with the
+/// XY. Produces 3D fractals stretched along the depth axis.
 pub static JULIA3DZ: VariationDef = VariationDef {
     name: "julia3dz",
     display_name: "Julia3Dz",
@@ -650,7 +679,7 @@ pub static JULIA3DZ: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("power", "Power", unlimited_int, 2.0, -20.0, 20.0),
+        param!("power", "Power", unlimited_int, 2.0, -20.0, 20.0, "Number of Julia branches in the 3D output. Higher = more arms."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -712,6 +741,8 @@ fn variation_julia3dz(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
 "#),
 };
 
+/// 3D version of Curl — applies a complex polynomial twist along all three
+/// axes. Each axis has its own twist coefficient.
 pub static CURL3D: VariationDef = VariationDef {
     name: "curl3d",
     display_name: "Curl3D",
@@ -719,9 +750,9 @@ pub static CURL3D: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("cx", "CX", unlimited_float, 0.0, -5.0, 5.0),
-        param!("cy", "CY", unlimited_float, 0.0, -5.0, 5.0),
-        param!("cz", "CZ", unlimited_float, 0.0, -5.0, 5.0),
+        param!("cx", "CX", unlimited_float, 0.0, -5.0, 5.0, "Twist strength along the X axis."),
+        param!("cy", "CY", unlimited_float, 0.0, -5.0, 5.0, "Twist strength along the Y axis."),
+        param!("cz", "CZ", unlimited_float, 0.0, -5.0, 5.0, "Twist strength along the Z axis."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -768,6 +799,12 @@ fn variation_curl3d(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 "#),
 };
 
+/// Adds randomness in both rotation (spin) and scale (zoom) around the
+/// origin. The angle slider controls the mix — 0 degrees = pure zoom, 90
+/// degrees = pure spin, 45 degrees = balanced.
+///
+/// # Authors
+/// - Scott Draves
 pub static RADIAL_BLUR: VariationDef = VariationDef {
     name: "radial_blur",
     display_name: "Radial Blur",
@@ -775,7 +812,7 @@ pub static RADIAL_BLUR: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("angle", "Angle", angle, 0.0),
+        param!("angle", "Angle", angle, 0.0, "Spin/zoom balance. 0 degrees = pure zoom blur, 90 degrees = pure rotational blur, 45 degrees = balanced mix."),
     ],
     // 2 derived values at slots 1..3:
     //   1: spin_var  (sin(angle_deg · π/360))
@@ -832,6 +869,9 @@ fn variation_radial_blur(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: pt
 "#),
 };
 
+/// Replaces the input with a uniformly random point inside the unit circle.
+/// Like Blur, but with a sharp circular boundary instead of a soft
+/// gradient.
 pub static BLUR_CIRCLE: VariationDef = VariationDef {
     name: "blur_circle",
     display_name: "Blur Circle",
@@ -922,6 +962,8 @@ fn variation_blur_circle(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32
 "#),
 };
 
+/// Random zoom blur radiating from a chosen center point. The `length`
+/// slider controls how far points get pushed; `x` and `y` set the center.
 pub static BLUR_ZOOM: VariationDef = VariationDef {
     name: "blur_zoom",
     display_name: "Blur Zoom",
@@ -929,9 +971,9 @@ pub static BLUR_ZOOM: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("length", "Length", unlimited_float, 0.0, -5.0, 5.0),
-        param!("x", "X", unlimited_float, 0.0, -20.0, 20.0),
-        param!("y", "Y", unlimited_float, 0.0, -20.0, 20.0),
+        param!("length", "Length", unlimited_float, 0.0, -5.0, 5.0, "Maximum zoom distance. Larger values streak points further outward from the center."),
+        param!("x", "X", unlimited_float, 0.0, -20.0, 20.0, "X coordinate of the zoom center."),
+        param!("y", "Y", unlimited_float, 0.0, -20.0, 20.0, "Y coordinate of the zoom center."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -973,6 +1015,8 @@ fn variation_blur_zoom(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
 "#),
 };
 
+/// Snaps points to a grid of pixel-sized cells, then adds random offset
+/// within each cell. Produces a mosaic effect.
 pub static BLUR_PIXELIZE: VariationDef = VariationDef {
     name: "blur_pixelize",
     display_name: "Blur Pixelize",
@@ -980,8 +1024,8 @@ pub static BLUR_PIXELIZE: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("size", "Size", unlimited_float, 0.1, 0.0000001, 10.0),
-        param!("scale", "Scale", unlimited_float, 1.0, -20.0, 20.0),
+        param!("size", "Size", unlimited_float, 0.1, 0.0000001, 10.0, "Pixel cell size. Smaller = finer grid; larger = chunkier pixels."),
+        param!("scale", "Scale", unlimited_float, 1.0, -20.0, 20.0, "How much each point can jitter within its cell. 0 = points snap to cell centers; 1 = points scatter across the cell."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -1027,6 +1071,8 @@ fn variation_blur_pixelize(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: 
 "#),
 };
 
+/// Pushes points away from the X and Y axes by configurable amounts, with
+/// separate inside/outside offsets. Creates a split, mirrored look.
 pub static SEPARATION: VariationDef = VariationDef {
     name: "separation",
     display_name: "Separation",
@@ -1034,10 +1080,10 @@ pub static SEPARATION: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("x", "X", unlimited_float, 1.0, -20.0, 20.0),
-        param!("y", "Y", unlimited_float, 1.0, -20.0, 20.0),
-        param!("xinside", "X Inside", unlimited_float, 0.0, -20.0, 20.0),
-        param!("yinside", "Y Inside", unlimited_float, 0.0, -20.0, 20.0),
+        param!("x", "X", unlimited_float, 1.0, -20.0, 20.0, "How far to push points away from the X axis on either side."),
+        param!("y", "Y", unlimited_float, 1.0, -20.0, 20.0, "How far to push points away from the Y axis on either side."),
+        param!("xinside", "X Inside", unlimited_float, 0.0, -20.0, 20.0, "Inside offset along X — adjusts how the separation looks near the axis."),
+        param!("yinside", "Y Inside", unlimited_float, 0.0, -20.0, 20.0, "Inside offset along Y — adjusts how the separation looks near the axis."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -1094,6 +1140,12 @@ fn variation_separation(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<
 "#),
 };
 
+/// Möbius transformation in the complex plane — `(Az + B) / (Cz + D)`. The
+/// eight real/imaginary coefficients (A, B, C, D) control the conformal
+/// warping; classic hyperbolic-geometry effect.
+/// 
+/// # Authors
+/// - eralex
 pub static MOBIUS: VariationDef = VariationDef {
     name: "mobius",
     display_name: "Mobius",
@@ -1101,14 +1153,14 @@ pub static MOBIUS: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("re_a", "Re A", unlimited_float, 1.0, -20.0, 20.0),
-        param!("im_a", "Im A", unlimited_float, 0.0, -20.0, 20.0),
-        param!("re_b", "Re B", unlimited_float, 0.0, -20.0, 20.0),
-        param!("im_b", "Im B", unlimited_float, 0.0, -20.0, 20.0),
-        param!("re_c", "Re C", unlimited_float, 0.0, -20.0, 20.0),
-        param!("im_c", "Im C", unlimited_float, 0.0, -20.0, 20.0),
-        param!("re_d", "Re D", unlimited_float, 1.0, -20.0, 20.0),
-        param!("im_d", "Im D", unlimited_float, 0.0, -20.0, 20.0),
+        param!("re_a", "Re A", unlimited_float, 1.0, -20.0, 20.0, "Real component of complex coefficient A in `(Az + B)/(Cz + D)`."),
+        param!("im_a", "Im A", unlimited_float, 0.0, -20.0, 20.0, "Imaginary component of complex coefficient A."),
+        param!("re_b", "Re B", unlimited_float, 0.0, -20.0, 20.0, "Real component of complex coefficient B."),
+        param!("im_b", "Im B", unlimited_float, 0.0, -20.0, 20.0, "Imaginary component of complex coefficient B."),
+        param!("re_c", "Re C", unlimited_float, 0.0, -20.0, 20.0, "Real component of complex coefficient C."),
+        param!("im_c", "Im C", unlimited_float, 0.0, -20.0, 20.0, "Imaginary component of complex coefficient C."),
+        param!("re_d", "Re D", unlimited_float, 1.0, -20.0, 20.0, "Real component of complex coefficient D."),
+        param!("im_d", "Im D", unlimited_float, 0.0, -20.0, 20.0, "Imaginary component of complex coefficient D."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -1172,6 +1224,11 @@ fn variation_mobius(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 "#),
 };
 
+/// Constrains points to a rectangle. Points outside either collapse to zero
+/// or get scattered along the nearest edge, depending on `zero`.
+/// 
+/// # Authors
+/// - Xyrus02
 pub static CROP: VariationDef = VariationDef {
     name: "crop",
     display_name: "Crop",
@@ -1179,12 +1236,12 @@ pub static CROP: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("left", "Left", unlimited_float, -1.0, -5.0, 5.0),
-        param!("top", "Top", unlimited_float, -1.0, -5.0, 5.0),
-        param!("right", "Right", unlimited_float, 1.0, -5.0, 5.0),
-        param!("bottom", "Bottom", unlimited_float, 1.0, -5.0, 5.0),
-        param!("scatter_area", "Scatter Area", float, 0.0, -1.0, 1.0),
-        param!("zero", "Zero", bool, false),
+        param!("left", "Left", unlimited_float, -1.0, -5.0, 5.0, "Left edge of the rectangle the points are constrained to."),
+        param!("top", "Top", unlimited_float, -1.0, -5.0, 5.0, "Top edge of the rectangle."),
+        param!("right", "Right", unlimited_float, 1.0, -5.0, 5.0, "Right edge of the rectangle."),
+        param!("bottom", "Bottom", unlimited_float, 1.0, -5.0, 5.0, "Bottom edge of the rectangle."),
+        param!("scatter_area", "Scatter Area", float, 0.0, -1.0, 1.0, "Width of the random scatter band along the rectangle's edges. 0 = points snap exactly to the edge."),
+        param!("zero", "Zero", bool, false, "When on, points outside the rectangle collapse to the origin. When off, they scatter back to the nearest edge."),
     ],
     needs_transform: false,
     writes_color: false,

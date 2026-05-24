@@ -22,6 +22,7 @@ the answer is known — that's the convention for "unknown" per
 
 - `rings2` ([advanced.rs](../../src/variations/defs/advanced.rs))
 - `log` ([advanced.rs](../../src/variations/defs/advanced.rs))
+- `loonie` ([advanced.rs](../../src/variations/defs/advanced.rs))
 - `zcone` ([depth3d.rs](../../src/variations/defs/depth3d.rs))
 - `flatten` ([depth3d.rs](../../src/variations/defs/depth3d.rs))
 - `zscale` ([depth3d.rs](../../src/variations/defs/depth3d.rs))
@@ -40,6 +41,16 @@ the answer is known — that's the convention for "unknown" per
 - `post_bwraps` ([post_phase.rs](../../src/variations/defs/post_phase.rs))
 - `post_falloff2` ([post_phase.rs](../../src/variations/defs/post_phase.rs))
 - `post_curl3d` ([post_phase.rs](../../src/variations/defs/post_phase.rs))
+- `ztranslate` ([extended.rs](../../src/variations/defs/extended.rs))
+- `falloff2` ([extended.rs](../../src/variations/defs/extended.rs))
+- `wedge` ([extended.rs](../../src/variations/defs/extended.rs))
+- `bwraps` ([extended.rs](../../src/variations/defs/extended.rs))
+- `julia3dz` ([extended.rs](../../src/variations/defs/extended.rs))
+- `curl3d` ([extended.rs](../../src/variations/defs/extended.rs))
+- `blur_circle` ([extended.rs](../../src/variations/defs/extended.rs))
+- `blur_zoom` ([extended.rs](../../src/variations/defs/extended.rs))
+- `blur_pixelize` ([extended.rs](../../src/variations/defs/extended.rs))
+- `separation` ([extended.rs](../../src/variations/defs/extended.rs))
 
 ### Enum-candidate parameters
 
@@ -47,9 +58,11 @@ Confirmed during review — currently declared as `Integer` but
 semantically picks among a few labeled modes. Convert during the Phase 3
 type-correction pass.
 
-- `pre_falloff2.type` and `post_falloff2.type` — 3 branches (0 =
-  uniform, 1 = triangular, 2 = gaussian). Same enum on both. See
-  [pre_phase.rs](../../src/variations/defs/pre_phase.rs) and
+- `falloff2.type`, `pre_falloff2.type`, `post_falloff2.type` — 3
+  branches (0 = uniform, 1 = triangular, 2 = gaussian). Same enum
+  across all three phase variants. See
+  [extended.rs](../../src/variations/defs/extended.rs),
+  [pre_phase.rs](../../src/variations/defs/pre_phase.rs),
   [post_phase.rs](../../src/variations/defs/post_phase.rs).
 
 ---
