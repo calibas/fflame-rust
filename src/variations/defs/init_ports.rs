@@ -27,6 +27,12 @@ use crate::variations::{
 //   breaks the variation. We default to 1.0 so the variation is usable
 //   out-of-the-box; users can override.
 // =============================================================================
+/// Alternates two angular rotations on concentric log-spaced rings — points
+/// in 'even' rings rotate by `even`, points in 'odd' rings by `odd`.
+/// Creates a target-like pattern of rotation bands.
+///
+/// # Authors
+/// - Michael Faber
 pub static TARGET: VariationDef = VariationDef {
     name: "target",
     display_name: "Target",
@@ -35,11 +41,11 @@ pub static TARGET: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[
         VariationParamDef { name: "even", display_name: "Even", param_type: ParamType::Angle,
-                            default_value: 0.0, min_value: Some(-360.0), max_value: Some(360.0), description: None },
+                            default_value: 0.0, min_value: Some(-360.0), max_value: Some(360.0), description: Some("Rotation angle (degrees) applied to even-numbered rings.") },
         VariationParamDef { name: "odd", display_name: "Odd", param_type: ParamType::Angle,
-                            default_value: 0.0, min_value: Some(-360.0), max_value: Some(360.0), description: None },
+                            default_value: 0.0, min_value: Some(-360.0), max_value: Some(360.0), description: Some("Rotation angle (degrees) applied to odd-numbered rings.") },
         VariationParamDef { name: "size", display_name: "Size", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(0.01), max_value: Some(10.0), description: None },
+                            default_value: 1.0, min_value: Some(0.01), max_value: Some(10.0), description: Some("Ring spacing — controls how thick each ring is in log-radius space.") },
     ],
     // 1 derived value at slot 3:
     //   3: t_size_2  (size / 2)
@@ -112,6 +118,14 @@ fn variation_target(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 //   parameter. Outside the unit disc: pass-through if `outside=1`,
 //   else discard the point.
 // =============================================================================
+/// Yin-yang pattern — inside the unit disc, points get reflected onto the
+/// iconic two-droplet curve at the given radius. Optional `dual_t` randomly
+/// picks between two rotations per iteration (yin and yang each get their
+/// own twist). Outside the disc, points either pass through or get
+/// discarded.
+///
+/// # Authors
+/// - dark-beam
 pub static YIN_YANG: VariationDef = VariationDef {
     name: "yin_yang",
     display_name: "Yin Yang",
@@ -120,15 +134,15 @@ pub static YIN_YANG: VariationDef = VariationDef {
     needs_rng: true,
     parameters: &[
         VariationParamDef { name: "radius", display_name: "Radius", param_type: ParamType::Float,
-                            default_value: 0.5, min_value: Some(0.0), max_value: Some(1.0), description: None },
+                            default_value: 0.5, min_value: Some(0.0), max_value: Some(1.0), description: Some("Radius of the two yin/yang droplet centers, 0-1.") },
         VariationParamDef { name: "ang1", display_name: "Ang1", param_type: ParamType::UnlimitedFloat,
-                            default_value: 0.0, min_value: Some(-2.0), max_value: Some(2.0), description: None },
+                            default_value: 0.0, min_value: Some(-2.0), max_value: Some(2.0), description: Some("Rotation angle for the first half, in half-turns (multiples of π).") },
         VariationParamDef { name: "ang2", display_name: "Ang2", param_type: ParamType::UnlimitedFloat,
-                            default_value: 0.0, min_value: Some(-2.0), max_value: Some(2.0), description: None },
+                            default_value: 0.0, min_value: Some(-2.0), max_value: Some(2.0), description: Some("Rotation angle for the second half, in half-turns. Only used when `dual_t` is on.") },
         VariationParamDef { name: "dual_t", display_name: "Dual T", param_type: ParamType::Boolean,
-                            default_value: 1.0, min_value: None, max_value: None, description: None },
+                            default_value: 1.0, min_value: None, max_value: None, description: Some("When on, randomly picks between the two rotations each iteration so yin and yang each get their own twist. When off, always uses `ang1`.") },
         VariationParamDef { name: "outside", display_name: "Outside", param_type: ParamType::Boolean,
-                            default_value: 0.0, min_value: None, max_value: None, description: None },
+                            default_value: 0.0, min_value: None, max_value: None, description: Some("When on, points outside the unit circle pass through unchanged. When off, they're discarded.") },
     ],
     // 4 derived values at slots 5..9:
     //   5: sina   sin(π · ang1)
