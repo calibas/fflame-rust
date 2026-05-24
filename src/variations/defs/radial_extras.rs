@@ -30,6 +30,13 @@ use crate::param;
 //   (note: NO VVAR multiplier on FPx/FPy/FPz lines in upstream — see module
 //   header comment for the divide-out pattern.)
 // =============================================================================
+/// Onion-warp 3D variation — points inside a sphere (sized by the
+/// variation's weight) stay flat with Z pushed to the bottom; outside, they
+/// curl onto the sphere's top with an exponential tail. Forms onion-layer
+/// structures.
+///
+/// # Authors
+/// - chronologicaldot
 pub static ONION: VariationDef = VariationDef {
     name: "onion",
     display_name: "Onion",
@@ -37,8 +44,8 @@ pub static ONION: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("centre_x", "Centre X", unlimited_float, 0.0, -5.0, 5.0),
-        param!("centre_y", "Centre Y", unlimited_float, 0.0, -5.0, 5.0),
+        param!("centre_x", "Centre X", unlimited_float, 0.0, -5.0, 5.0, "X coordinate of the sphere center."),
+        param!("centre_y", "Centre Y", unlimited_float, 0.0, -5.0, 5.0, "Y coordinate of the sphere center."),
     ],
     needs_transform: true,
     writes_color: false,
@@ -119,7 +126,7 @@ fn variation_onion(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 };
 
 // =============================================================================
-// target_sp: log-spiral target (Faber + Dark-Beam tweak)
+// target_sp: log-spiral target (Michael Faber + Dark-Beam tweak)
 //   a = atan2(y, x);  r = sqrt(x² + y²)
 //   t = tightness · log(r) + n_of_sp · (a + π) / π
 //   if t < 0:    t -= t_size_2
@@ -129,6 +136,13 @@ fn variation_onion(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 //   FPx += r · cos(a);  FPy += r · sin(a)   (no VVAR multiplier — same
 //                                            divide-out pattern as `onion`)
 // =============================================================================
+/// Log-spiral target — splits the plane into log-spaced spiral arms and
+/// rotates each arm by `twist`. `n_of_sp` controls how many spirals
+/// interleave; `tightness` controls how rapidly they wind.
+///
+/// # Authors
+/// - Michael Faber
+/// - DarkBeam
 pub static TARGET_SP: VariationDef = VariationDef {
     name: "target_sp",
     display_name: "Target Sp",
@@ -136,10 +150,10 @@ pub static TARGET_SP: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("twist", "Twist", unlimited_float, 0.0, -5.0, 5.0),
-        param!("n_of_sp", "N of Spirals", int, 1.0, -20.0, 20.0),
-        param!("size", "Size", unlimited_float, 1.0, 0.01, 10.0),
-        param!("tightness", "Tightness", unlimited_float, 0.5, -5.0, 5.0),
+        param!("twist", "Twist", unlimited_float, 0.0, -5.0, 5.0, "Rotation applied to alternating spiral arms, in half-turns."),
+        param!("n_of_sp", "N of Spirals", int, 1.0, -20.0, 20.0, "Number of interleaved spiral arms."),
+        param!("size", "Size", unlimited_float, 1.0, 0.01, 10.0, "Width of each spiral band in log-radius space."),
+        param!("tightness", "Tightness", unlimited_float, 0.5, -5.0, 5.0, "Logarithmic winding rate — higher = arms wind tighter."),
     ],
     needs_transform: true,
     writes_color: false,
