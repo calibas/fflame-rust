@@ -174,7 +174,10 @@ For each of ~494 variations and ~? effects:
 - **Authors**: extract from parentheses in existing comments
   (`(Larry Berlin, 2009)`, `(zephyrtronium / dark-beam)`). Manual
   review for ambiguous cases — multi-author splits, ports vs original
-  designers, "Apophysis classic" attributions.
+  designers, "Apophysis classic" attributions. **When attribution is
+  genuinely unknown, omit the `# Authors` section entirely** — don't
+  write a placeholder. The import script treats a missing section as
+  empty `authors: []`.
 - **Per-parameter descriptions**: this is the bulk of the work. Most
   variations have ~3–7 params; some have 13+. Many params are
   self-documenting by name (`amplitude`, `frequency`), many are not
