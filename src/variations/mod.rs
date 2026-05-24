@@ -6,8 +6,15 @@ pub mod defs;
 
 use definition::VariationDef;
 
-/// Parameter type for variation parameters
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+/// Parameter type for variation parameters.
+///
+/// Note on `Enum.choices`: `&'static [&'static str]` so the type is
+/// `const`-compatible — enum params can live in `pub static
+/// VariationDef`. For API-loaded variations, the conversion in
+/// `api_param_type_to_runtime` leaks owned strings to obtain
+/// `&'static` lifetimes (memory cost is bounded by the number of
+/// distinct enum variations loaded — trivial in practice).
+#[derive(Clone, Debug, Serialize, PartialEq)]
 pub enum ParamType {
     /// Continuous floating-point value with min/max bounds
     Float,
@@ -27,21 +34,12 @@ pub enum ParamType {
     /// Values stored as indices (0, 1, 2, ...)
     Enum {
         /// Display labels for each choice
-        choices: Vec<String>,
+        choices: &'static [&'static str],
     },
 }
 
-/// Helper function to simplify Enum creation
-impl ParamType {
-    pub fn enum_choices<S: AsRef<str>>(choices: &[S]) -> Self {
-        ParamType::Enum {
-            choices: choices.iter().map(|s| s.as_ref().to_string()).collect(),
-        }
-    }
-}
-
 /// Definition of a single variation parameter
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct VariationParameter {
     /// Parameter name (e.g., "power", "dist")
     pub name: String,
@@ -65,7 +63,6 @@ pub struct VariationParameter {
     /// control. Populated from `VariationParamDef.description` for
     /// built-ins, from `ApiVariationParameter.description` for API
     /// loads. `None` renders the control with no tooltip.
-    #[serde(default)]
     pub description: Option<String>,
 }
 
@@ -269,7 +266,13 @@ pub enum VariationCategory {
     Plugin,
 }
 
-/// Convert API param type to runtime ParamType
+/// Convert API param type to runtime ParamType.
+///
+/// For `Enum`, leaks the choice strings to obtain the `&'static`
+/// lifetime that `ParamType::Enum.choices` requires. Memory is
+/// bounded by the count of distinct enum-bearing variations loaded
+/// from the API — small in practice (one allocation per choice plus
+/// one for the slice, freed never but never re-allocated either).
 fn api_param_type_to_runtime(api: &crate::api::types::ApiParamType) -> ParamType {
     use crate::api::types::ApiParamType;
     match api {
@@ -279,7 +282,15 @@ fn api_param_type_to_runtime(api: &crate::api::types::ApiParamType) -> ParamType
         ApiParamType::UnlimitedInteger => ParamType::UnlimitedInteger,
         ApiParamType::Boolean => ParamType::Boolean,
         ApiParamType::Angle => ParamType::Angle,
-        ApiParamType::Enum { choices } => ParamType::Enum { choices: choices.clone() },
+        ApiParamType::Enum { choices } => {
+            let leaked_strs: Vec<&'static str> = choices
+                .iter()
+                .map(|s| &*Box::leak(s.clone().into_boxed_str()))
+                .collect();
+            ParamType::Enum {
+                choices: Box::leak(leaked_strs.into_boxed_slice()),
+            }
+        }
     }
 }
 

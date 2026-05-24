@@ -344,4 +344,61 @@ macro_rules! param {
             description: Some($desc),
         }
     };
+    // ---- Enum ----
+    // Choices is a `&'static [&'static str]` slice literal.
+    // Default value is the index of the initially selected choice.
+    // Example: param!("mode", "Mode", enum, 0, &["Wrap", "Clamp", "Zero"])
+    ($name:expr, $display:expr, enum, $default:expr, $choices:expr) => {
+        VariationParamDef {
+            name: $name, display_name: $display,
+            param_type: ParamType::Enum { choices: $choices },
+            default_value: $default as f32,
+            min_value: Some(0.0),
+            max_value: Some(($choices.len() as f32) - 1.0),
+            description: None,
+        }
+    };
+    ($name:expr, $display:expr, enum, $default:expr, $choices:expr, $desc:expr) => {
+        VariationParamDef {
+            name: $name, display_name: $display,
+            param_type: ParamType::Enum { choices: $choices },
+            default_value: $default as f32,
+            min_value: Some(0.0),
+            max_value: Some(($choices.len() as f32) - 1.0),
+            description: Some($desc),
+        }
+    };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::param;
+
+    // Smoke test: the enum arm must produce a const-evaluable value
+    // so it can live in a `pub static VariationDef`. If
+    // ParamType::Enum.choices ever drifts back to a non-const-compatible
+    // type (Vec<String>, etc.), this declaration fails to compile.
+    static _ENUM_ARM_COMPILES_IN_STATIC: VariationParamDef = param!(
+        "mode", "Mode", enum, 1, &["Wrap", "Clamp", "Zero"]
+    );
+
+    static _ENUM_ARM_WITH_DESC: VariationParamDef = param!(
+        "mode", "Mode", enum, 0, &["Off", "On"],
+        "Toggles the thing."
+    );
+
+    #[test]
+    fn enum_arm_fields_correct() {
+        assert_eq!(_ENUM_ARM_COMPILES_IN_STATIC.default_value, 1.0);
+        assert_eq!(_ENUM_ARM_COMPILES_IN_STATIC.min_value, Some(0.0));
+        assert_eq!(_ENUM_ARM_COMPILES_IN_STATIC.max_value, Some(2.0));
+        match _ENUM_ARM_COMPILES_IN_STATIC.param_type {
+            ParamType::Enum { choices } => {
+                assert_eq!(choices, &["Wrap", "Clamp", "Zero"]);
+            }
+            _ => panic!("expected Enum param_type"),
+        }
+        assert_eq!(_ENUM_ARM_WITH_DESC.description, Some("Toggles the thing."));
+    }
 }

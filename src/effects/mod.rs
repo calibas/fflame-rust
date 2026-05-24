@@ -24,7 +24,7 @@ pub enum EffectCategory {
 }
 
 /// Definition of a single effect parameter
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct EffectParameter {
     /// Parameter name (e.g., "intensity", "radius")
     pub name: String,
