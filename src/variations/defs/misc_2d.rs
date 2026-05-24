@@ -31,6 +31,8 @@ use crate::param;
 //   if cos(x · xsize · π) >= 0:  out_y = +y  else: out_y = -y
 //   if cos(y · ysize · π) >= 0:  out_x = +x  else: out_x = -x
 // =============================================================================
+/// # Authors
+/// - Apophysis Plugin Pack
 pub static SPLIT: VariationDef = VariationDef {
     name: "split",
     display_name: "Split",
@@ -129,6 +131,8 @@ fn variation_squirrel(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
 //   out_x = off · (1 − space) + round_x
 //   out_y = y + off² · warp
 // =============================================================================
+/// # Authors
+/// - Apophysis Plugin Pack
 pub static STRIPES: VariationDef = VariationDef {
     name: "stripes",
     display_name: "Stripes",

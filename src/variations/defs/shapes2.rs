@@ -29,6 +29,8 @@ use crate::variations::{
 // =============================================================================
 // butterfly: x' = K · sqrt(|xy|/(x²+(2y)²+ε)) · x;  y' = … · 2y
 // =============================================================================
+/// # Authors
+/// - Apophysis Plugin Pack
 pub static BUTTERFLY: VariationDef = VariationDef {
     name: "butterfly",
     display_name: "Butterfly",
@@ -381,6 +383,8 @@ fn variation_chrysanthemum(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f
 // =============================================================================
 // cell: Apophysis cell (interleaved cells of size `size`)
 // =============================================================================
+/// # Authors
+/// - Apophysis Plugin Pack
 pub static CELL: VariationDef = VariationDef {
     name: "cell",
     display_name: "Cell",

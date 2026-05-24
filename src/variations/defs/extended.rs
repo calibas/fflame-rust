@@ -314,6 +314,9 @@ fn variation_falloff2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
 /// Slices the plane into N pie wedges, each compressed and offset by the
 /// chosen angle. Adds an optional swirl that increases with distance and a
 /// `hole` radial offset.
+///
+/// # Authors
+/// - Apophysis Plugin Pack
 pub static WEDGE: VariationDef = VariationDef {
     name: "wedge",
     display_name: "Wedge",
@@ -1073,6 +1076,9 @@ fn variation_blur_pixelize(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: 
 
 /// Pushes points away from the X and Y axes by configurable amounts, with
 /// separate inside/outside offsets. Creates a split, mirrored look.
+///
+/// # Authors
+/// - Apophysis Plugin Pack
 pub static SEPARATION: VariationDef = VariationDef {
     name: "separation",
     display_name: "Separation",

@@ -122,6 +122,8 @@ fn variation_collideoscope(p: vec3<f32>, xform_id: u32, variation_id: u32) -> ve
 //   if x < 0:  out_x = x · x_scale  else: out_x = x
 //   if y < 0:  out_y = y · y_scale  else: out_y = y
 // =============================================================================
+/// # Authors
+/// - Apophysis Plugin Pack
 pub static BENT2: VariationDef = VariationDef {
     name: "bent2",
     display_name: "Bent 2",
@@ -279,6 +281,8 @@ fn variation_lineart3d(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
 //   if |y| ≤ t: out = (x, -y)
 //   else:        out = (x, y)
 // =============================================================================
+/// # Authors
+/// - Apophysis Plugin Pack
 pub static OSCILLOSCOPE: VariationDef = VariationDef {
     name: "oscilloscope",
     display_name: "Oscilloscope",

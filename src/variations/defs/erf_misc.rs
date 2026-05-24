@@ -329,6 +329,8 @@ fn variation_deltaA(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 // Body has w in `wlocal` → needs_transform divide-out.
 // (11.57034632 ≈ 4·acosh(2) — the Apophysis classic empirical scale.)
 // =============================================================================
+/// # Authors
+/// - Apophysis Plugin Pack
 pub static EDISC: VariationDef = VariationDef {
     name: "edisc",
     display_name: "E-Disc",
@@ -402,6 +404,8 @@ fn variation_edisc(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 //   out_y = y + yamp · exp(-x² / pc_ylen)
 // Clean factor through outer.
 // =============================================================================
+/// # Authors
+/// - Apophysis Plugin Pack
 pub static CURVE: VariationDef = VariationDef {
     name: "curve",
     display_name: "Curve",
