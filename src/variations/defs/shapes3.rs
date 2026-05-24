@@ -1,9 +1,9 @@
 //! Standalone shape variations — third batch (continuation of shapes.rs / shapes2.rs)
 //!
 //! Three popular non-trig standalone shapes:
-//!   - `super_shape` (apo plugin pack) — Gielis super-formula warp
+//!   - `super_shape`                   — Gielis super-formula warp
 //!   - `henon`       (TyrantWave)      — classic Hénon strange attractor
-//!   - `apollony`    (Sosa, after Bourke) — Apollonian gasket IFS
+//!   - `apollony`    (Jesus Sosa, after Bourke) — Apollonian gasket IFS
 //!
 //! Sources:
 //!   - output/jwildfire-vars/output/super_shape.cpp
@@ -38,6 +38,8 @@ use crate::param;
 //   r    *= |p|^(-1) · (t1 + t2)^(-1/n1)
 //   out   = r · (x, y)
 // =============================================================================
+/// Warps points via the Gielis super-formula — a generalized rose/star
+/// curve controlled by 5 shape parameters. Produces flower-like patterns.
 pub static SUPER_SHAPE: VariationDef = VariationDef {
     name: "super_shape",
     display_name: "Super Shape",
@@ -45,12 +47,12 @@ pub static SUPER_SHAPE: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("rnd", "RND", unlimited_float, 3.0, -10.0, 10.0),
-        param!("m", "M", unlimited_float, 1.0, -20.0, 20.0),
-        param!("n1", "N1", unlimited_float, 1.0, -20.0, 20.0),
-        param!("n2", "N2", unlimited_float, 1.0, -20.0, 20.0),
-        param!("n3", "N3", unlimited_float, 1.0, -20.0, 20.0),
-        param!("holes", "Holes", unlimited_float, 0.0, -10.0, 10.0),
+        param!("rnd", "RND", unlimited_float, 3.0, -10.0, 10.0, "Mix between random sampling and the input radius. 0 = pure input radius, 1 = uniform random."),
+        param!("m", "M", unlimited_float, 1.0, -20.0, 20.0, "Number of symmetry petals — sets how many lobes the super-shape has."),
+        param!("n1", "N1", unlimited_float, 1.0, -20.0, 20.0, "Outer exponent — controls overall puffiness or sharpness."),
+        param!("n2", "N2", unlimited_float, 1.0, -20.0, 20.0, "First inner exponent — controls one half of each lobe shape."),
+        param!("n3", "N3", unlimited_float, 1.0, -20.0, 20.0, "Second inner exponent — controls the other half of each lobe shape."),
+        param!("holes", "Holes", unlimited_float, 0.0, -10.0, 10.0, "Radial offset that punches a hole in the center."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -107,6 +109,11 @@ fn variation_super_shape(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: pt
 //   out_y = b · x
 // (translated from the Java comment block — cpp PluginVarCalc was empty.)
 // =============================================================================
+/// Classic Hénon strange attractor — iteration of `(c − a·x² + y, b·x)`.
+/// Maps trajectories onto the famous Hénon curve.
+///
+/// # Authors
+/// - TyrantWave
 pub static HENON: VariationDef = VariationDef {
     name: "henon",
     display_name: "Henon",
@@ -114,9 +121,9 @@ pub static HENON: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("a", "A", unlimited_float, 0.5, -10.0, 10.0),
-        param!("b", "B", unlimited_float, 1.0, -10.0, 10.0),
-        param!("c", "C", unlimited_float, 1.0, -10.0, 10.0),
+        param!("a", "A", unlimited_float, 0.5, -10.0, 10.0, "Quadratic coefficient — controls the strength of the parabolic fold."),
+        param!("b", "B", unlimited_float, 1.0, -10.0, 10.0, "Linear coefficient on X — scales the Y output."),
+        param!("c", "C", unlimited_float, 1.0, -10.0, 10.0, "Constant offset added to X output."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -144,7 +151,7 @@ fn variation_henon(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 };
 
 // =============================================================================
-// apollony: Apollonian-gasket IFS (Sosa, after Paul Bourke)
+// apollony: Apollonian-gasket IFS (Jesus Sosa, after Paul Bourke)
 //   r       = sqrt(3)
 //   denom   = (1+r-x)² + y²
 //   a0      = 3·(1+r-x)/denom − (1+r)/(2+r)
@@ -155,6 +162,12 @@ fn variation_henon(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 //     1:  out = (-f1.x/2 - f1.y·r/2,  f1.x·r/2 - f1.y/2)
 //     2:  out = (-f1.x/2 + f1.y·r/2, -f1.x·r/2 - f1.y/2)
 // =============================================================================
+/// Apollonian-gasket IFS — randomly picks one of 3 Möbius-style branches
+/// per iteration to spawn points along an Apollonian gasket fractal.
+///
+/// # Authors
+/// - Jesus Sosa
+/// - Paul Bourke
 pub static APOLLONY: VariationDef = VariationDef {
     name: "apollony",
     display_name: "Apollony",

@@ -59,6 +59,7 @@ the answer is known — that's the convention for "unknown" per
 - `square3d` ([numbered.rs](../../src/variations/defs/numbered.rs))
 - `disc2` ([heavy_init.rs](../../src/variations/defs/heavy_init.rs))
 - `blob3d` ([numbered_extras.rs](../../src/variations/defs/numbered_extras.rs))
+- `super_shape` ([shapes3.rs](../../src/variations/defs/shapes3.rs))
 
 **Likely shared author** — all are JWildfire ports of complex-plane
 inverse hyperbolic functions (the plain ones in `hyperbolic.rs` and
