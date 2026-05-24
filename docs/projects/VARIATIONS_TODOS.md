@@ -129,6 +129,35 @@ type-correction pass.
 
 ## Out of scope (defer to other branches)
 
+### Direct-color (DC) port decisions to verify
+
+Two deliberate divergences from upstream C++ in
+[dc.rs](../../src/variations/defs/dc.rs) that warrant later review,
+especially as the broader DC corpus gets ported:
+
+- **Color from weighted post-variation position.** Both `dc_linear` and
+  `dc_bubble` (and likely most DC variations) compute color from
+  `weight * unweighted_output` to mimic the C++ `FPx` accumulator.
+  This matches the C++ exactly **only when the DC variation is the
+  only normal-phase variation in its transform** (the typical case).
+  Mixed with other normal variations, the C++ sums `FPx` across all
+  variations before reading it for color — our model uses just the DC
+  variation's own contribution. Worth a render comparison on
+  mixed-variation transforms once we have more of the DC corpus
+  ported.
+
+- **dc_bubble follows JWildfire Java, not the C++ port.** The
+  Chaotica/JWildfire C++ port has an apparent porter typo
+  (`FPx += FPx + r4_1 * FTx;` doubles FPx instead of incrementing
+  once); the C++ Z formula has the same bug. We follow the
+  single-add Java original on XY and pass Z through unchanged. Both
+  decisions deliberate — flag if a flame imported from a C++-based
+  Apophysis renders visibly different from the same flame in
+  JWildfire.
+
+When more `dc_*` variations land, apply the same logic and add to
+this entry rather than spawning new ones.
+
 ### Zero-weight variations should still count as "present"
 
 A variation with weight 0 is currently treated as if it doesn't exist

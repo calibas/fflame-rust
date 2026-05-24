@@ -43,6 +43,13 @@ use crate::param;
 //   Color:    vc = fract(abs(0.5 * (ldcs * (cos·FPx + sin·FPy + offset) + 1)))
 //   where ldcs = 1/scale (zero-guarded), FPx/FPy are weighted output coords.
 // =============================================================================
+/// Pass-through positioning (linear) with direct-color writes — colors each
+/// iteration based on a rotated linear projection of the post-variation
+/// point. Output position is unchanged from the input; effect only visible
+/// when the transform's Direct Color slider is > 0.
+///
+/// # Authors
+/// - Xyrus02
 pub static DC_LINEAR: VariationDef = VariationDef {
     name: "dc_linear",
     display_name: "DC Linear",
@@ -50,9 +57,9 @@ pub static DC_LINEAR: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("offset", "Offset", unlimited_float, 0.0, -10.0, 10.0),
-        param!("angle", "Angle", angle, 0.0),
-        param!("scale", "Scale", unlimited_float, 1.0, -10.0, 10.0),
+        param!("offset", "Offset", unlimited_float, 0.0, -10.0, 10.0, "Offset added to the projected coordinate before computing color."),
+        param!("angle", "Angle", angle, 0.0, "Rotation angle (degrees) for the projection axis."),
+        param!("scale", "Scale", unlimited_float, 1.0, -10.0, 10.0, "Scaling factor on the projection — larger compresses the color gradient, smaller stretches it."),
     ],
     needs_transform: true,
     writes_color: true,
@@ -118,6 +125,14 @@ fn variation_dc_linear(p: vec3<f32>, xform_id: u32, variation_id: u32, vc: ptr<f
 //   Color:    vc = fract(abs(bdcs * ((FPx + cx)² + (FPy + cy)²)))
 //   where bdcs = 1/scale (zero-guarded), FPx/FPy are weighted output coords.
 // =============================================================================
+/// Apophysis Bubble warp (spherical projection) with direct-color writes —
+/// colors each iteration based on the squared distance from a configurable
+/// center point. Same XY warp as Bubble, plus per-iteration color
+/// modulation. Color effect only visible when the transform's Direct Color
+/// slider is > 0.
+///
+/// # Authors
+/// - Xyrus02
 pub static DC_BUBBLE: VariationDef = VariationDef {
     name: "dc_bubble",
     display_name: "DC Bubble",
@@ -125,9 +140,9 @@ pub static DC_BUBBLE: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("centerx", "Center X", unlimited_float, 0.0, -2.0, 2.0),
-        param!("centery", "Center Y", unlimited_float, 0.0, -2.0, 2.0),
-        param!("scale", "Scale", unlimited_float, 1.0, -10.0, 10.0),
+        param!("centerx", "Center X", unlimited_float, 0.0, -2.0, 2.0, "X coordinate of the radial color center."),
+        param!("centery", "Center Y", unlimited_float, 0.0, -2.0, 2.0, "Y coordinate of the radial color center."),
+        param!("scale", "Scale", unlimited_float, 1.0, -10.0, 10.0, "Scaling factor on the squared distance — larger compresses the color gradient, smaller stretches it."),
     ],
     needs_transform: true,
     writes_color: true,
