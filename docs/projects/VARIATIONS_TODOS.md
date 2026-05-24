@@ -48,6 +48,11 @@ the answer is known — that's the convention for "unknown" per
 - `blur_circle` ([extended.rs](../../src/variations/defs/extended.rs))
 - `blur_zoom` ([extended.rs](../../src/variations/defs/extended.rs))
 - `blur_pixelize` ([extended.rs](../../src/variations/defs/extended.rs))
+- `tangent` ([shapes.rs](../../src/variations/defs/shapes.rs))
+- `tangent3d` ([shapes.rs](../../src/variations/defs/shapes.rs))
+- `secant2` ([shapes.rs](../../src/variations/defs/shapes.rs))
+- `cosine` ([shapes.rs](../../src/variations/defs/shapes.rs))
+- `pie3d` ([shapes.rs](../../src/variations/defs/shapes.rs))
 
 **Likely shared author** — all are JWildfire ports of complex-plane
 inverse hyperbolic functions (the plain ones in `hyperbolic.rs` and

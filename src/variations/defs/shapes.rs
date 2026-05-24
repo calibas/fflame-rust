@@ -30,6 +30,11 @@ use crate::variations::{
 //   x' = (1/d1) · tanh(d1) · 2x
 //   y' = (1/d1) · cos(d1) · 2y
 // =============================================================================
+/// Tan/cos blend — X gets scaled by tanh of the squared radius, Y by cos of
+/// the squared radius. Produces wavy concentric ring patterns.
+///
+/// # Authors
+/// - Raykoid666
 pub static TANCOS: VariationDef = VariationDef {
     name: "tancos",
     display_name: "TanCos",
@@ -65,6 +70,8 @@ fn variation_tancos(p: vec3<f32>) -> vec3<f32> {
 //   x' = sin(x) / cos(y)        — guarded
 //   y' = tan(y)
 // =============================================================================
+/// Real tan-by-cos — X is `sin(x)/cos(y)`, Y is `tan(y)`. Note: not the
+/// same as Tan from trig.rs (which is the complex tangent).
 pub static TANGENT: VariationDef = VariationDef {
     name: "tangent",
     display_name: "Tangent",
@@ -98,6 +105,8 @@ fn variation_tangent(p: vec3<f32>) -> vec3<f32> {
 // =============================================================================
 // tangent3d: 3D extension — adds z' = tan(x)
 // =============================================================================
+/// 3D extension of Tangent. Adds `z' = tan(x)` so the variation contributes
+/// depth modulation along the X coordinate.
 pub static TANGENT3D: VariationDef = VariationDef {
     name: "tangent3d",
     display_name: "Tangent 3D",
@@ -137,6 +146,9 @@ fn variation_tangent3d(p: vec3<f32>) -> vec3<f32> {
 //   y' = icr - 1   if cos(r) ≥ 0
 //   y' = icr + 1   if cos(r) < 0
 // =============================================================================
+/// Variant of secant with a sign-dependent constant offset on Y. Passes X
+/// through; Y becomes `1/cos(r) ± 1` depending on the sign of `cos(r)`.
+/// Produces banded patterns with a sharp jump at the cos-sign boundary.
 pub static SECANT2: VariationDef = VariationDef {
     name: "secant2",
     display_name: "Secant2",
@@ -176,6 +188,9 @@ fn variation_secant2(p: vec3<f32>) -> vec3<f32> {
 //   x' =  cos(π·x) · cosh(y)
 //   y' = -sin(π·x) · sinh(y)
 // =============================================================================
+/// Complex cosine of `π·x + iy` — output is `(cos(πx)·cosh(y),
+/// -sin(πx)·sinh(y))`. Horizontally periodic with vertical exponential
+/// growth.
 pub static COSINE: VariationDef = VariationDef {
     name: "cosine",
     display_name: "Cosine",
@@ -211,6 +226,12 @@ fn variation_cosine(p: vec3<f32>) -> vec3<f32> {
 //   x' = cos(x) · bx
 //   y' = cos(x) · by
 // =============================================================================
+/// Petal shape — `(cos(x)·bx, cos(x)·by)` where `bx, by` are cubed
+/// sine/cosine products of `(x, y)`. Produces flower-like radial
+/// structures.
+///
+/// # Authors
+/// - Raykoid666
 pub static PETAL: VariationDef = VariationDef {
     name: "petal",
     display_name: "Petal",
@@ -258,6 +279,11 @@ fn variation_petal(p: vec3<f32>) -> vec3<f32> {
 //   x' = r · cos(a)
 //   y' = r · sin(a)
 // =============================================================================
+/// Parameterized cardioid (heart-shaped curve). The `a` parameter controls
+/// how many lobes/cusps the shape has.
+///
+/// # Authors
+/// - Michael Faber
 pub static CARDIOID: VariationDef = VariationDef {
     name: "cardioid",
     display_name: "Cardioid",
@@ -266,7 +292,7 @@ pub static CARDIOID: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[
         VariationParamDef { name: "a", display_name: "A", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: None },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Number of cusps/lobes in the cardioid shape. 1 = standard heart, 2 = figure-eight, higher values add more lobes.") },
     ],
     needs_transform: false,
     writes_color: false,
@@ -297,6 +323,12 @@ fn variation_cardioid(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
 // helix: zy0rg's 3D helix — winds (x, y) around z by `width`, modulated at
 // `frequency` cycles per unit z. In 2D (z=0) collapses to (x + width, y).
 // =============================================================================
+/// 3D helix — winds the (x, y) coordinates around the Z axis with the given
+/// frequency and width. In 2D mode (z = 0) collapses to a simple horizontal
+/// shift by `width`.
+///
+/// # Authors
+/// - zy0rg
 pub static HELIX: VariationDef = VariationDef {
     name: "helix",
     display_name: "Helix",
@@ -305,9 +337,9 @@ pub static HELIX: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[
         VariationParamDef { name: "frequency", display_name: "Frequency", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: None },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("How many full turns the helix makes per unit of Z.") },
         VariationParamDef { name: "width", display_name: "Width", param_type: ParamType::UnlimitedFloat,
-                            default_value: 0.5, min_value: Some(-10.0), max_value: Some(10.0), description: None },
+                            default_value: 0.5, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Radius of the helical winding around the Z axis.") },
     ],
     needs_transform: false,
     writes_color: false,
@@ -338,6 +370,11 @@ fn variation_helix(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 // helicoid: zy0rg's 3D helicoid — rotates (x, y) by an angle proportional to
 // z, while preserving its radius from the origin.
 // =============================================================================
+/// 3D helicoid — rotates (x, y) by an angle proportional to Z, preserving
+/// the radius from the origin. In 2D mode collapses to identity.
+///
+/// # Authors
+/// - zy0rg
 pub static HELICOID: VariationDef = VariationDef {
     name: "helicoid",
     display_name: "Helicoid",
@@ -346,7 +383,7 @@ pub static HELICOID: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[
         VariationParamDef { name: "frequency", display_name: "Frequency", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: None },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("How fast the (x, y) plane rotates as Z increases. Larger = tighter spiral.") },
     ],
     needs_transform: false,
     writes_color: false,
@@ -380,6 +417,12 @@ fn variation_helicoid(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
 //   y' = width · cos(r) · u₂
 //   u₁, u₂ are independent uniform [0, 1)
 // =============================================================================
+/// Randomly-amplitude parabola. Output X is height-scaled `sin²(r)` times a
+/// uniform random; Y is width-scaled `cos(r)` times another uniform.
+/// Produces blurry parabolic arcs.
+///
+/// # Authors
+/// - cyberxaos
 pub static PARABOLA: VariationDef = VariationDef {
     name: "parabola",
     display_name: "Parabola",
@@ -388,9 +431,9 @@ pub static PARABOLA: VariationDef = VariationDef {
     needs_rng: true,
     parameters: &[
         VariationParamDef { name: "width", display_name: "Width", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: None },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Horizontal scaling of the parabolic envelope.") },
         VariationParamDef { name: "height", display_name: "Height", param_type: ParamType::UnlimitedFloat,
-                            default_value: 0.5, min_value: Some(-10.0), max_value: Some(10.0), description: None },
+                            default_value: 0.5, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Vertical scaling of the parabolic envelope.") },
     ],
     needs_transform: false,
     writes_color: false,
@@ -428,6 +471,11 @@ fn variation_parabola(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
 //   r  = uniform
 //   x' = r · cos(a), y' = r · sin(a)
 // =============================================================================
+/// Discrete pie-slice splatter — divides the unit disc into `slices`
+/// wedges and scatters output points uniformly inside one randomly
+/// chosen wedge per iteration. The slice's angular extent is controlled
+/// by `thickness`.
+///
 /// # Authors
 /// - Apophysis Plugin Pack
 pub static PIE: VariationDef = VariationDef {
@@ -438,11 +486,11 @@ pub static PIE: VariationDef = VariationDef {
     needs_rng: true,
     parameters: &[
         VariationParamDef { name: "slices", display_name: "Slices", param_type: ParamType::Float,
-                            default_value: 6.0, min_value: Some(1.0), max_value: Some(64.0), description: None },
+                            default_value: 6.0, min_value: Some(1.0), max_value: Some(64.0), description: Some("Number of pie wedges (1-64).") },
         VariationParamDef { name: "rotation", display_name: "Rotation", param_type: ParamType::Angle,
-                            default_value: 0.0, min_value: Some(0.0), max_value: Some(360.0), description: None },
+                            default_value: 0.0, min_value: Some(0.0), max_value: Some(360.0), description: Some("Rotation angle of the whole pie in degrees.") },
         VariationParamDef { name: "thickness", display_name: "Thickness", param_type: ParamType::Float,
-                            default_value: 0.5, min_value: Some(0.0), max_value: Some(1.0), description: None },
+                            default_value: 0.5, min_value: Some(0.0), max_value: Some(1.0), description: Some("Wedge thickness within its slice. 0 = razor-thin spokes, 1 = wedges fill their entire slice.") },
     ],
     needs_transform: false,
     writes_color: false,
@@ -480,6 +528,8 @@ fn variation_pie(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<functi
 // =============================================================================
 // pie3d: 3D version of pie — adds z' = r · sin(r)
 // =============================================================================
+/// 3D version of Pie — same pie-slice splatter as Pie but adds `z' =
+/// r·sin(r)` for depth modulation.
 pub static PIE3D: VariationDef = VariationDef {
     name: "pie3d",
     display_name: "Pie 3D",
@@ -488,11 +538,11 @@ pub static PIE3D: VariationDef = VariationDef {
     needs_rng: true,
     parameters: &[
         VariationParamDef { name: "slices", display_name: "Slices", param_type: ParamType::Float,
-                            default_value: 7.0, min_value: Some(1.0), max_value: Some(64.0), description: None },
+                            default_value: 7.0, min_value: Some(1.0), max_value: Some(64.0), description: Some("Number of pie wedges (1-64).") },
         VariationParamDef { name: "rotation", display_name: "Rotation", param_type: ParamType::Angle,
-                            default_value: 0.0, min_value: Some(0.0), max_value: Some(360.0), description: None },
+                            default_value: 0.0, min_value: Some(0.0), max_value: Some(360.0), description: Some("Rotation angle of the whole pie in degrees.") },
         VariationParamDef { name: "thickness", display_name: "Thickness", param_type: ParamType::Float,
-                            default_value: 0.5, min_value: Some(0.0), max_value: Some(1.0), description: None },
+                            default_value: 0.5, min_value: Some(0.0), max_value: Some(1.0), description: Some("Wedge thickness within its slice. 0 = razor-thin spokes, 1 = wedges fill their entire slice.") },
     ],
     needs_transform: false,
     writes_color: false,
