@@ -424,6 +424,8 @@ fn variation_stwin(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 //   else:        a = atan2(x, y) + outside / (w − r)
 //   out = r · (cos a, sin a)            (VVAR strictly outer)
 // =============================================================================
+/// # Authors
+/// - Apophysis Plugin Pack
 pub static WHORL: VariationDef = VariationDef {
     name: "whorl",
     display_name: "Whorl",

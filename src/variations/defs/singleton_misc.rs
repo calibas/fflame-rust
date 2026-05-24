@@ -147,6 +147,8 @@ fn variation_corners(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 //   else:         out_x = x
 //   (same for y)
 // =============================================================================
+/// # Authors
+/// - Apophysis Plugin Pack
 pub static MODULUS: VariationDef = VariationDef {
     name: "modulus",
     display_name: "Modulus",
@@ -400,6 +402,8 @@ fn variation_circus(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 //   a = (π/4) · perimeter / side − π/4
 //   FPx += r · cos a;  FPy += r · sin a
 // =============================================================================
+/// # Authors
+/// - Apophysis Plugin Pack
 pub static CIRCLIZE: VariationDef = VariationDef {
     name: "circlize",
     display_name: "Circlize",

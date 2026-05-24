@@ -22,7 +22,6 @@ the answer is known — that's the convention for "unknown" per
 
 - `rings2` ([advanced.rs](../../src/variations/defs/advanced.rs))
 - `log` ([advanced.rs](../../src/variations/defs/advanced.rs))
-- `loonie` ([advanced.rs](../../src/variations/defs/advanced.rs))
 - `zcone` ([depth3d.rs](../../src/variations/defs/depth3d.rs))
 - `flatten` ([depth3d.rs](../../src/variations/defs/depth3d.rs))
 - `zscale` ([depth3d.rs](../../src/variations/defs/depth3d.rs))
@@ -43,14 +42,12 @@ the answer is known — that's the convention for "unknown" per
 - `post_curl3d` ([post_phase.rs](../../src/variations/defs/post_phase.rs))
 - `ztranslate` ([extended.rs](../../src/variations/defs/extended.rs))
 - `falloff2` ([extended.rs](../../src/variations/defs/extended.rs))
-- `wedge` ([extended.rs](../../src/variations/defs/extended.rs))
 - `bwraps` ([extended.rs](../../src/variations/defs/extended.rs))
 - `julia3dz` ([extended.rs](../../src/variations/defs/extended.rs))
 - `curl3d` ([extended.rs](../../src/variations/defs/extended.rs))
 - `blur_circle` ([extended.rs](../../src/variations/defs/extended.rs))
 - `blur_zoom` ([extended.rs](../../src/variations/defs/extended.rs))
 - `blur_pixelize` ([extended.rs](../../src/variations/defs/extended.rs))
-- `separation` ([extended.rs](../../src/variations/defs/extended.rs))
 
 **Likely shared author** — all are JWildfire ports of complex-plane
 inverse hyperbolic functions (the plain ones in `hyperbolic.rs` and
@@ -68,6 +65,42 @@ author of any one should resolve the rest of the group.
 - `sqrt_asech` ([sqrt_hyperbolic.rs](../../src/variations/defs/sqrt_hyperbolic.rs))
 - `sqrt_asinh` ([sqrt_hyperbolic.rs](../../src/variations/defs/sqrt_hyperbolic.rs))
 - `sqrt_atanh` ([sqrt_hyperbolic.rs](../../src/variations/defs/sqrt_hyperbolic.rs))
+
+**Apophysis Plugin Pack** — currently attributed to the pack itself
+([output/apo-plugins/](../../output/apo-plugins/), sourceforge.net/projects/apo-plugins).
+Each variation in the pack has a real original author we haven't dug
+up yet; resolve attribution one-by-one and replace the placeholder
+when found.
+
+- `bent2` ([misc_extras2.rs](../../src/variations/defs/misc_extras2.rs))
+- `bipolar` ([advanced.rs](../../src/variations/defs/advanced.rs))
+- `boarders` ([boarders.rs](../../src/variations/defs/boarders.rs))
+- `butterfly` ([shapes2.rs](../../src/variations/defs/shapes2.rs))
+- `cell` ([shapes2.rs](../../src/variations/defs/shapes2.rs))
+- `circlize` ([singleton_misc.rs](../../src/variations/defs/singleton_misc.rs))
+- `cpow` ([advanced.rs](../../src/variations/defs/advanced.rs))
+- `curve` ([erf_misc.rs](../../src/variations/defs/erf_misc.rs))
+- `edisc` ([erf_misc.rs](../../src/variations/defs/erf_misc.rs))
+- `elliptic` ([advanced.rs](../../src/variations/defs/advanced.rs))
+- `escher` ([advanced.rs](../../src/variations/defs/advanced.rs))
+- `foci` ([advanced.rs](../../src/variations/defs/advanced.rs))
+- `lazysusan` ([advanced.rs](../../src/variations/defs/advanced.rs))
+- `loonie` ([advanced.rs](../../src/variations/defs/advanced.rs))
+- `modulus` ([singleton_misc.rs](../../src/variations/defs/singleton_misc.rs))
+- `ngon` ([advanced.rs](../../src/variations/defs/advanced.rs))
+- `oscilloscope` ([misc_extras2.rs](../../src/variations/defs/misc_extras2.rs))
+- `pie` ([shapes.rs](../../src/variations/defs/shapes.rs))
+- `polar2` ([advanced.rs](../../src/variations/defs/advanced.rs))
+- `popcorn2` ([numbered.rs](../../src/variations/defs/numbered.rs))
+- `scry` ([advanced.rs](../../src/variations/defs/advanced.rs))
+- `separation` ([extended.rs](../../src/variations/defs/extended.rs))
+- `split` ([misc_2d.rs](../../src/variations/defs/misc_2d.rs))
+- `splits` ([advanced.rs](../../src/variations/defs/advanced.rs))
+- `stripes` ([misc_2d.rs](../../src/variations/defs/misc_2d.rs))
+- `wedge` ([extended.rs](../../src/variations/defs/extended.rs))
+- `wedge_julia` ([wedge_extended.rs](../../src/variations/defs/wedge_extended.rs))
+- `wedge_sph` ([wedge_extended.rs](../../src/variations/defs/wedge_extended.rs))
+- `whorl` ([misc_extras4.rs](../../src/variations/defs/misc_extras4.rs))
 
 ### Enum-candidate parameters
 

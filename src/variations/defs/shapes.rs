@@ -428,6 +428,8 @@ fn variation_parabola(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
 //   r  = uniform
 //   x' = r · cos(a), y' = r · sin(a)
 // =============================================================================
+/// # Authors
+/// - Apophysis Plugin Pack
 pub static PIE: VariationDef = VariationDef {
     name: "pie",
     display_name: "Pie",

@@ -239,6 +239,8 @@ fn variation_bubble2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 //   x' = x + param_x · sin(tan(y · param_c))
 //   y' = y + param_y · sin(tan(x · param_c))
 // =============================================================================
+/// # Authors
+/// - Apophysis Plugin Pack
 pub static POPCORN2: VariationDef = VariationDef {
     name: "popcorn2",
     display_name: "Popcorn2",

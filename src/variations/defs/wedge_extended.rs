@@ -35,6 +35,8 @@ use crate::param;
 //     a       = a · cf + c · angle                  (cf = 1 − angle·count/(2π))
 //     out     = (cos(sin(a)), sin(a)) · r           (cos(sin(a)) — quirk, see notes)
 // =============================================================================
+/// # Authors
+/// - Apophysis Plugin Pack
 pub static WEDGE_JULIA: VariationDef = VariationDef {
     name: "wedge_julia",
     display_name: "Wedge Julia",
@@ -128,6 +130,8 @@ fn variation_wedge_julia(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: pt
 //     r        = r + hole                         (weight applied outside)
 //     out      = r · (cos(a), sin(a))
 // =============================================================================
+/// # Authors
+/// - Apophysis Plugin Pack
 pub static WEDGE_SPH: VariationDef = VariationDef {
     name: "wedge_sph",
     display_name: "Wedge Sph",

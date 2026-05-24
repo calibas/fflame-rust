@@ -38,6 +38,8 @@ use crate::param;
 // =============================================================================
 // boarders: cell-grid coin-flip border (Apophysis pack)
 // =============================================================================
+/// # Authors
+/// - Apophysis Plugin Pack
 pub static BOARDERS: VariationDef = VariationDef {
     name: "boarders",
     display_name: "Boarders",

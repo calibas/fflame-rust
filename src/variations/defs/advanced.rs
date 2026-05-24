@@ -820,7 +820,7 @@ fn variation_gaussian_blur(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f
 /// expands small ones; good for revealing distant structure.
 ///
 /// # Authors
-/// - Joel and Michael Faber
+/// - Apophysis Plugin Pack
 pub static POLAR2: VariationDef = VariationDef {
     name: "polar2",
     display_name: "Polar2",
@@ -894,6 +894,9 @@ fn variation_cross(p: vec3<f32>) -> vec3<f32> {
 
 /// Inside the unit circle, inflates points outward; outside, leaves them
 /// alone. Creates a coin shape with a sharp edge at radius 1.
+///
+/// # Authors
+/// - Apophysis Plugin Pack
 pub static LOONIE: VariationDef = VariationDef {
     name: "loonie",
     display_name: "Loonie",
@@ -936,7 +939,7 @@ fn variation_loonie(p: vec3<f32>) -> vec3<f32> {
 /// distance. Produces a magnifying-glass / scrying-orb effect.
 ///
 /// # Authors
-/// - Joel and Michael Faber
+/// - Apophysis Plugin Pack
 pub static SCRY: VariationDef = VariationDef {
     name: "scry",
     display_name: "Scry",
@@ -971,7 +974,7 @@ fn variation_scry(p: vec3<f32>) -> vec3<f32> {
 /// Produces two focal points that warp the surrounding space.
 ///
 /// # Authors
-/// - Joel and Michael Faber
+/// - Apophysis Plugin Pack
 pub static FOCI: VariationDef = VariationDef {
     name: "foci",
     display_name: "Foci",
@@ -1016,7 +1019,7 @@ fn variation_foci(p: vec3<f32>) -> vec3<f32> {
 /// looking, symmetric patterns.
 ///
 /// # Authors
-/// - Joel and Michael Faber
+/// - Apophysis Plugin Pack
 pub static ELLIPTIC: VariationDef = VariationDef {
     name: "elliptic",
     display_name: "Elliptic",
@@ -1224,7 +1227,7 @@ fn variation_log(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
 /// between pure scaling and pure rotation via the beta angle.
 ///
 /// # Authors
-/// - Joel and Michael Faber
+/// - Apophysis Plugin Pack
 pub static ESCHER: VariationDef = VariationDef {
     name: "escher",
     display_name: "Escher",
@@ -1288,7 +1291,7 @@ fn variation_escher(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 /// centered on two points). Good for two-focus symmetric flames.
 ///
 /// # Authors
-/// - Joel and Michael Faber
+/// - Apophysis Plugin Pack
 pub static BIPOLAR: VariationDef = VariationDef {
     name: "bipolar",
     display_name: "Bipolar",
@@ -1367,7 +1370,7 @@ fn variation_bipolar(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 /// pushed away from the center. Produces a layered, plate-like swirl.
 ///
 /// # Authors
-/// - Joel and Michael Faber
+/// - Apophysis Plugin Pack
 pub static LAZYSUSAN: VariationDef = VariationDef {
     name: "lazysusan",
     display_name: "LazySusan",
@@ -1809,7 +1812,7 @@ fn variation_rectangles(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<
 /// for Y. Creates a gap down the middle along each axis.
 ///
 /// # Authors
-/// - Joel and Michael Faber
+/// - Apophysis Plugin Pack
 pub static SPLITS: VariationDef = VariationDef {
     name: "splits",
     display_name: "Splits",
@@ -2057,7 +2060,7 @@ fn variation_auger(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 /// arms.
 ///
 /// # Authors
-/// - Joel and Michael Faber
+/// - Apophysis Plugin Pack
 pub static CPOW: VariationDef = VariationDef {
     name: "cpow",
     display_name: "CPow",
