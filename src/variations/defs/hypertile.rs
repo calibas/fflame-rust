@@ -46,6 +46,12 @@ use crate::param;
 //   Body: Möbius shift onto tile (re, -im), divide by |denom|², output.
 //   Z is preserved (pass-through in our 3D wrapper).
 // =============================================================================
+/// Maps the plane onto a {p, q} hyperbolic tiling via Möbius
+/// transformation. `n` picks which tile of the tiling is targeted
+/// (deterministic).
+///
+/// # Authors
+/// - Zueuk
 pub static HYPERTILE: VariationDef = VariationDef {
     name: "hypertile",
     display_name: "Hypertile",
@@ -53,9 +59,9 @@ pub static HYPERTILE: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("p", "P", int, 3.0, 3.0, 50.0),
-        param!("q", "Q", int, 7.0, 3.0, 50.0),
-        param!("n", "N", int, 1.0, 0.0, 50.0),
+        param!("p", "P", int, 3.0, 3.0, 50.0, "First Schläfli symbol — number of sides per tile (3 = triangle, 4 = square, 5 = pentagon, etc.)."),
+        param!("q", "Q", int, 7.0, 3.0, 50.0, "Second Schläfli symbol — number of tiles meeting at each vertex. For a valid hyperbolic tiling, `(p − 2)(q − 2) > 4`."),
+        param!("n", "N", int, 1.0, 0.0, 50.0, "Index of which tile to target — deterministic tile selector."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -134,6 +140,11 @@ fn variation_hypertile(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
 //   Body: pick angle uniformly in [0, pa], apply Möbius shift onto that
 //   tile center, divide by |denom|², output.
 // =============================================================================
+/// Maps the plane onto a {p, q} hyperbolic tiling — random tile per
+/// iteration. The rotation picking the tile is applied first.
+///
+/// # Authors
+/// - Zueuk
 pub static HYPERTILE1: VariationDef = VariationDef {
     name: "hypertile1",
     display_name: "Hypertile 1",
@@ -141,8 +152,8 @@ pub static HYPERTILE1: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("p", "P", int, 3.0, 3.0, 50.0),
-        param!("q", "Q", int, 7.0, 3.0, 50.0),
+        param!("p", "P", int, 3.0, 3.0, 50.0, "First Schläfli symbol — number of sides per tile (3 = triangle, 4 = square, 5 = pentagon, etc.)."),
+        param!("q", "Q", int, 7.0, 3.0, 50.0, "Second Schläfli symbol — number of tiles meeting at each vertex. For a valid hyperbolic tiling, `(p − 2)(q − 2) > 4`."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -234,6 +245,12 @@ fn variation_hypertile1(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
 //   per-frame distribution because the rotation is applied to the
 //   already-Möbius-warped point rather than the tile center.
 // =============================================================================
+/// Variant of Hypertile1 that applies the rotation last instead of first.
+/// Equivalent math up to ordering, but the per-iteration distribution looks
+/// visually distinct.
+///
+/// # Authors
+/// - Zueuk
 pub static HYPERTILE2: VariationDef = VariationDef {
     name: "hypertile2",
     display_name: "Hypertile 2",
@@ -241,8 +258,8 @@ pub static HYPERTILE2: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("p", "P", int, 3.0, 3.0, 50.0),
-        param!("q", "Q", int, 7.0, 3.0, 50.0),
+        param!("p", "P", int, 3.0, 3.0, 50.0, "First Schläfli symbol — number of sides per tile (3 = triangle, 4 = square, 5 = pentagon, etc.)."),
+        param!("q", "Q", int, 7.0, 3.0, 50.0, "Second Schläfli symbol — number of tiles meeting at each vertex. For a valid hyperbolic tiling, `(p − 2)(q − 2) > 4`."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -329,6 +346,11 @@ fn variation_hypertile2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
 //   Body: 3D Möbius reflection through a sphere whose center sits at
 //   (cx, cy, 0) on the unit-disc boundary; warps the full 3D point.
 // =============================================================================
+/// 3D version of Hypertile — Möbius reflection through a sphere on the
+/// unit-disc boundary. `n` picks which tile (deterministic).
+///
+/// # Authors
+/// - Zueuk
 pub static HYPERTILE3D: VariationDef = VariationDef {
     name: "hypertile3d",
     display_name: "Hypertile 3D",
@@ -336,9 +358,9 @@ pub static HYPERTILE3D: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("p", "P", int, 3.0, 3.0, 50.0),
-        param!("q", "Q", int, 7.0, 3.0, 50.0),
-        param!("n", "N", int, 0.0, 0.0, 50.0),
+        param!("p", "P", int, 3.0, 3.0, 50.0, "First Schläfli symbol — number of sides per tile (3 = triangle, 4 = square, 5 = pentagon, etc.)."),
+        param!("q", "Q", int, 7.0, 3.0, 50.0, "Second Schläfli symbol — number of tiles meeting at each vertex. For a valid hyperbolic tiling, `(p − 2)(q − 2) > 4`."),
+        param!("n", "N", int, 0.0, 0.0, 50.0, "Index of which tile to target — deterministic tile selector."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -443,6 +465,10 @@ fn variation_hypertile3d(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3
 //   Body: pick angle uniformly in [0, pa], compute (cx, cy) = (r·cos, r·sin)
 //   per iteration, then same 3D warp as hypertile3d.
 // =============================================================================
+/// 3D version of Hypertile1 — random 3D tile per iteration.
+///
+/// # Authors
+/// - Zueuk
 pub static HYPERTILE3D1: VariationDef = VariationDef {
     name: "hypertile3d1",
     display_name: "Hypertile 3D 1",
@@ -450,8 +476,8 @@ pub static HYPERTILE3D1: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("p", "P", int, 3.0, 3.0, 50.0),
-        param!("q", "Q", int, 7.0, 3.0, 50.0),
+        param!("p", "P", int, 3.0, 3.0, 50.0, "First Schläfli symbol — number of sides per tile (3 = triangle, 4 = square, 5 = pentagon, etc.)."),
+        param!("q", "Q", int, 7.0, 3.0, 50.0, "Second Schläfli symbol — number of tiles meeting at each vertex. For a valid hyperbolic tiling, `(p − 2)(q − 2) > 4`."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -554,6 +580,11 @@ fn variation_hypertile3d1(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: p
 //   Body: 3D Möbius warp through a sphere centered at (r, 0, 0), then
 //   rotate the (x, y) result by a random angle in [0, pa].
 // =============================================================================
+/// 3D version of Hypertile2 — tile centered on the real axis, with per-
+/// iteration random XY rotation applied after the Möbius warp.
+///
+/// # Authors
+/// - Zueuk
 pub static HYPERTILE3D2: VariationDef = VariationDef {
     name: "hypertile3d2",
     display_name: "Hypertile 3D 2",
@@ -561,8 +592,8 @@ pub static HYPERTILE3D2: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("p", "P", int, 3.0, 3.0, 50.0),
-        param!("q", "Q", int, 7.0, 3.0, 50.0),
+        param!("p", "P", int, 3.0, 3.0, 50.0, "First Schläfli symbol — number of sides per tile (3 = triangle, 4 = square, 5 = pentagon, etc.)."),
+        param!("q", "Q", int, 7.0, 3.0, 50.0, "Second Schläfli symbol — number of tiles meeting at each vertex. For a valid hyperbolic tiling, `(p − 2)(q − 2) > 4`."),
     ],
     needs_transform: false,
     writes_color: false,
