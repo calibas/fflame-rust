@@ -33,6 +33,24 @@ the answer is known — that's the convention for "unknown" per
 - `zblur` ([blur.rs](../../src/variations/defs/blur.rs))
 - `blur3d` ([blur.rs](../../src/variations/defs/blur.rs))
 - `pre_blur` ([blur.rs](../../src/variations/defs/blur.rs))
+- `pre_zscale` ([pre_phase.rs](../../src/variations/defs/pre_phase.rs))
+- `pre_ztranslate` ([pre_phase.rs](../../src/variations/defs/pre_phase.rs))
+- `pre_bwraps` ([pre_phase.rs](../../src/variations/defs/pre_phase.rs))
+- `pre_falloff2` ([pre_phase.rs](../../src/variations/defs/pre_phase.rs))
+- `post_bwraps` ([post_phase.rs](../../src/variations/defs/post_phase.rs))
+- `post_falloff2` ([post_phase.rs](../../src/variations/defs/post_phase.rs))
+- `post_curl3d` ([post_phase.rs](../../src/variations/defs/post_phase.rs))
+
+### Enum-candidate parameters
+
+Confirmed during review — currently declared as `Integer` but
+semantically picks among a few labeled modes. Convert during the Phase 3
+type-correction pass.
+
+- `pre_falloff2.type` and `post_falloff2.type` — 3 branches (0 =
+  uniform, 1 = triangular, 2 = gaussian). Same enum on both. See
+  [pre_phase.rs](../../src/variations/defs/pre_phase.rs) and
+  [post_phase.rs](../../src/variations/defs/post_phase.rs).
 
 ---
 
