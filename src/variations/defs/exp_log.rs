@@ -20,6 +20,11 @@ use crate::variations::{
 // exp: complex exponential
 //   exp(x + iy) = e^x · (cos(y), sin(y))
 // =============================================================================
+/// Complex exponential — `e^x · (cos(y), sin(y))`. Stretches the plane
+/// exponentially along X while wrapping Y onto a unit-circle phase.
+///
+/// # Authors
+/// - cothe
 pub static EXP: VariationDef = VariationDef {
     name: "exp",
     display_name: "Exp",
@@ -64,6 +69,13 @@ fn variation_exp(p: vec3<f32>) -> vec3<f32> {
 //                                        bug vs. the Java source, preserved
 //                                        for behavior parity)
 // =============================================================================
+/// Complex log with random period jitter on the imaginary part. Like the
+/// basic Log variation but the angle output gets shifted by a random
+/// multiple of π (configured via `fix_period`), producing repeating-strip
+/// patterns.
+///
+/// # Authors
+/// - DarkBeam
 pub static LOG_DB: VariationDef = VariationDef {
     name: "log_db",
     display_name: "Log DB",
@@ -72,9 +84,9 @@ pub static LOG_DB: VariationDef = VariationDef {
     needs_rng: true,
     parameters: &[
         VariationParamDef { name: "base", display_name: "Base", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(1e-6), max_value: Some(100.0), description: None },
+                            default_value: 1.0, min_value: Some(1e-6), max_value: Some(100.0), description: Some("Logarithm base. Larger values compress the output, smaller values stretch it. Mirrors the basic Log variation's `base`.") },
         VariationParamDef { name: "fix_period", display_name: "Fix Period", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(0.0), max_value: Some(10.0), description: None },
+                            default_value: 1.0, min_value: Some(0.0), max_value: Some(10.0), description: Some("How much random vertical shift gets added each iteration. 0 = no shift; higher = more striping.") },
     ],
     // 2 derived values stored in slots 2..4:
     //   2: denom    (0.5 / log(e · base), or 0.5 if base <= 0)
@@ -143,6 +155,12 @@ fn variation_log_db(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
 //   The log-of-uniform draws negative integers with geometric-ish distribution.
 //   This produces a tile-stamping effect along each axis.
 // =============================================================================
+/// 3D log-tiled spreader — each axis is independently shifted by a random
+/// integer drawn from `log(uniform)` rounded to the nearest integer.
+/// Produces a stamped tile effect with geometric falloff.
+///
+/// # Authors
+/// - Zy0rg
 pub static LOG_TILE2: VariationDef = VariationDef {
     name: "log_tile2",
     display_name: "Log Tile2",
@@ -151,11 +169,11 @@ pub static LOG_TILE2: VariationDef = VariationDef {
     needs_rng: true,
     parameters: &[
         VariationParamDef { name: "spreadx", display_name: "Spread X", param_type: ParamType::UnlimitedFloat,
-                            default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0), description: None },
+                            default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("X-axis tile spacing. The random integer from the log-of-uniform draw is multiplied by this value.") },
         VariationParamDef { name: "spready", display_name: "Spread Y", param_type: ParamType::UnlimitedFloat,
-                            default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0), description: None },
+                            default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Y-axis tile spacing.") },
         VariationParamDef { name: "spreadz", display_name: "Spread Z", param_type: ParamType::UnlimitedFloat,
-                            default_value: 0.0, min_value: Some(-10.0), max_value: Some(10.0), description: None },
+                            default_value: 0.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Z-axis tile spacing (3D mode only).") },
     ],
     needs_transform: false,
     writes_color: false,
@@ -196,6 +214,11 @@ fn variation_log_tile2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
 //   output.x = input.x + round(spread · log(uniform random in (0, 1)))
 //   spread sign chosen uniformly each iteration.
 // =============================================================================
+/// 1D version of Log Tile2 — only shifts along X with the same random log-
+/// of-uniform trick. Y (and Z) pass through unchanged.
+///
+/// # Authors
+/// - Zy0rg
 pub static TILE_LOG: VariationDef = VariationDef {
     name: "tile_log",
     display_name: "Tile Log",
@@ -204,7 +227,7 @@ pub static TILE_LOG: VariationDef = VariationDef {
     needs_rng: true,
     parameters: &[
         VariationParamDef { name: "spread", display_name: "Spread", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: None },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Tile spacing along X. The random integer from the log-of-uniform draw is multiplied by this value.") },
     ],
     needs_transform: false,
     writes_color: false,
