@@ -8,6 +8,8 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Same as Pre Bwraps but runs after all other variations — the bubble grid
+/// is applied to the final output coordinates.
 pub static POST_BWRAPS: VariationDef = VariationDef {
     name: "post_bwraps",
     display_name: "Post Bwraps",
@@ -15,11 +17,11 @@ pub static POST_BWRAPS: VariationDef = VariationDef {
     phase: VariationPhase::Post,
     needs_rng: false,
     parameters: &[
-        param!("cellsize", "Cell Size", unlimited_float, 1.0, -10.0, 10.0),
-        param!("space", "Space", unlimited_float, 0.0, -1.0, 1.0),
-        param!("gain", "Gain", unlimited_float, 1.0, -5.0, 5.0),
-        param!("inner_twist", "Inner Twist", unlimited_float, 0.0, -10.0, 10.0),
-        param!("outer_twist", "Outer Twist", unlimited_float, 0.0, -10.0, 10.0),
+        param!("cellsize", "Cell Size", unlimited_float, 1.0, -10.0, 10.0, "Width of each grid cell — the plane is divided into cells of this size, each becoming a bubble."),
+        param!("space", "Space", unlimited_float, 0.0, -1.0, 1.0, "Gap between cells. 0 = no gap; positive values push the bubbles apart."),
+        param!("gain", "Gain", unlimited_float, 1.0, -5.0, 5.0, "How strongly each bubble wraps its contents inward."),
+        param!("inner_twist", "Inner Twist", unlimited_float, 0.0, -10.0, 10.0, "Rotation (in degrees) applied at the center of each bubble."),
+        param!("outer_twist", "Outer Twist", unlimited_float, 0.0, -10.0, 10.0, "Rotation (in degrees) applied at the edge of each bubble."),
     ],
     // 5 derived values at slots 5..10 (identical layout to pre_bwraps):
     //   5: g2,  6: r2,  7: rfactor,  8: inner_twist_rad,  9: outer_twist_rad
@@ -148,6 +150,11 @@ fn variation_post_bwraps(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3
 "#),
 };
 
+/// Same as Pre Crop but runs after all other variations — the rectangle
+/// constraint is applied to the final output coordinates.
+/// 
+/// # Authors
+/// - Xyrus02
 pub static POST_CROP: VariationDef = VariationDef {
     name: "post_crop",
     display_name: "Post Crop",
@@ -155,12 +162,12 @@ pub static POST_CROP: VariationDef = VariationDef {
     phase: VariationPhase::Post,
     needs_rng: true,
     parameters: &[
-        param!("left", "Left", unlimited_float, -1.0, -5.0, 5.0),
-        param!("top", "Top", unlimited_float, -1.0, -5.0, 5.0),
-        param!("right", "Right", unlimited_float, 1.0, -5.0, 5.0),
-        param!("bottom", "Bottom", unlimited_float, 1.0, -5.0, 5.0),
-        param!("scatter_area", "Scatter Area", float, 0.0, -1.0, 1.0),
-        param!("zero", "Zero", bool, false),
+        param!("left", "Left", unlimited_float, -1.0, -5.0, 5.0, "Left edge of the rectangle the points are constrained to."),
+        param!("top", "Top", unlimited_float, -1.0, -5.0, 5.0, "Top edge of the rectangle."),
+        param!("right", "Right", unlimited_float, 1.0, -5.0, 5.0, "Right edge of the rectangle."),
+        param!("bottom", "Bottom", unlimited_float, 1.0, -5.0, 5.0, "Bottom edge of the rectangle."),
+        param!("scatter_area", "Scatter Area", float, 0.0, -1.0, 1.0, "Width of the random scatter band along the rectangle's edges. 0 = points snap exactly to the edge."),
+        param!("zero", "Zero", bool, false, "When on, points outside the rectangle collapse to the origin. When off, they scatter back to the nearest edge."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -251,6 +258,11 @@ fn variation_post_crop(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
 "#),
 };
 
+/// Same as Pre Falloff2 but runs after all other variations — the distance-
+/// based scatter is applied to the final output coordinates.
+/// 
+/// # Authors
+/// - xyrus02
 pub static POST_FALLOFF2: VariationDef = VariationDef {
     name: "post_falloff2",
     display_name: "Post Falloff2",
@@ -258,16 +270,16 @@ pub static POST_FALLOFF2: VariationDef = VariationDef {
     phase: VariationPhase::Post,
     needs_rng: true,
     parameters: &[
-        param!("scatter", "Scatter", unlimited_float, 1.0, 0.000001, 10.0),
-        param!("mindist", "Min Distance", unlimited_float, 0.5, 0.0, 10.0),
-        param!("mul_x", "Multiply X", float, 1.0, 0.0, 1.0),
-        param!("mul_y", "Multiply Y", float, 1.0, 0.0, 1.0),
-        param!("mul_z", "Multiply Z", float, 0.0, 0.0, 1.0),
-        param!("mul_c", "Multiply Color", float, 0.0, 0.0, 1.0),
-        param!("x0", "X Center", unlimited_float, 0.0, -10.0, 10.0),
-        param!("y0", "Y Center", unlimited_float, 0.0, -10.0, 10.0),
-        param!("z0", "Z Center", unlimited_float, 0.0, -10.0, 10.0),
-        param!("invert", "Invert", bool, false),
+        param!("scatter", "Scatter", unlimited_float, 1.0, 0.000001, 10.0, "Maximum random scatter applied at full strength."),
+        param!("mindist", "Min Distance", unlimited_float, 0.5, 0.0, 10.0, "Distance from the center where the falloff kicks in. Points inside this radius get full strength scatter."),
+        param!("mul_x", "Multiply X", float, 1.0, 0.0, 1.0, "How strongly the scatter affects the X axis (0 = ignore, 1 = full)."),
+        param!("mul_y", "Multiply Y", float, 1.0, 0.0, 1.0, "How strongly the scatter affects the Y axis (0 = ignore, 1 = full)."),
+        param!("mul_z", "Multiply Z", float, 0.0, 0.0, 1.0, "How strongly the scatter affects the Z axis (0 = ignore, 1 = full). 3D mode only."),
+        param!("mul_c", "Multiply Color", float, 0.0, 0.0, 1.0, "Color-channel scatter strength. Currently unused — direct color writing is not wired up for this variation."),
+        param!("x0", "X Center", unlimited_float, 0.0, -10.0, 10.0, "X coordinate of the falloff center."),
+        param!("y0", "Y Center", unlimited_float, 0.0, -10.0, 10.0, "Y coordinate of the falloff center."),
+        param!("z0", "Z Center", unlimited_float, 0.0, -10.0, 10.0, "Z coordinate of the falloff center."),
+        param!("invert", "Invert", bool, false, "When on, flips the falloff direction — full scatter applies far from the center, nothing near it."),
         VariationParamDef {
             name: "type",
             display_name: "Blur Type",
@@ -275,7 +287,7 @@ pub static POST_FALLOFF2: VariationDef = VariationDef {
             default_value: 0.0,
             min_value: Some(0.0),
             max_value: Some(2.0),
-            description: None,
+            description: Some("Random distribution shape. 0 = uniform, 1 = triangular (smoother), 2 = gaussian (concentrated near zero)."),
         },
     ],
     needs_transform: false,
@@ -403,6 +415,11 @@ fn variation_post_falloff2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: 
 "#),
 };
 
+/// Same math as Curl (complex polynomial twist) but runs after all other
+/// variations, distorting the final output coordinates.
+///
+/// # Authors
+/// - Scott Draves
 pub static POST_CURL: VariationDef = VariationDef {
     name: "post_curl",
     display_name: "Post Curl",
@@ -410,8 +427,8 @@ pub static POST_CURL: VariationDef = VariationDef {
     phase: VariationPhase::Post,
     needs_rng: false,
     parameters: &[
-        param!("c1", "C1", unlimited_float, 0.0, -5.0, 5.0),
-        param!("c2", "C2", unlimited_float, 0.0, -5.0, 5.0),
+        param!("c1", "C1", unlimited_float, 0.0, -5.0, 5.0, "Linear twist strength. Stronger = tighter curl around the center."),
+        param!("c2", "C2", unlimited_float, 0.0, -5.0, 5.0, "Quadratic twist strength. Adds a second-order curl that grows away from the origin."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -457,6 +474,9 @@ fn variation_post_curl(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
 "#),
 };
 
+/// 3D version of Post Curl — applies a complex polynomial twist along all
+/// three axes after all other variations have run. Each axis has its own
+/// twist coefficient.
 pub static POST_CURL3D: VariationDef = VariationDef {
     name: "post_curl3d",
     display_name: "Post Curl 3D",
@@ -464,9 +484,9 @@ pub static POST_CURL3D: VariationDef = VariationDef {
     phase: VariationPhase::Post,
     needs_rng: false,
     parameters: &[
-        param!("cx", "CX", unlimited_float, 0.0, -5.0, 5.0),
-        param!("cy", "CY", unlimited_float, 0.0, -5.0, 5.0),
-        param!("cz", "CZ", unlimited_float, 0.0, -5.0, 5.0),
+        param!("cx", "CX", unlimited_float, 0.0, -5.0, 5.0, "Twist strength along the X axis."),
+        param!("cy", "CY", unlimited_float, 0.0, -5.0, 5.0, "Twist strength along the Y axis."),
+        param!("cz", "CZ", unlimited_float, 0.0, -5.0, 5.0, "Twist strength along the Z axis."),
     ],
     needs_transform: false,
     writes_color: false,
