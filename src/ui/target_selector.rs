@@ -455,7 +455,7 @@ fn get_effects_items(config: &FractalConfig) -> Vec<TargetItem> {
                         index,
                         param: param.name.clone(),
                     },
-                    &format!("{} (Density) → {}", effect_name, info.translated_param_name(&param.name)),
+                    &format!("{} (Density) → {}", effect_name, param.display_name),
                 ));
             }
         }
@@ -483,7 +483,7 @@ fn get_effects_items(config: &FractalConfig) -> Vec<TargetItem> {
                         index,
                         param: param.name.clone(),
                     },
-                    &format!("{} (Color) → {}", effect_name, info.translated_param_name(&param.name)),
+                    &format!("{} (Color) → {}", effect_name, param.display_name),
                 ));
             }
         }
