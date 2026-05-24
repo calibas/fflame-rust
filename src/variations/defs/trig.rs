@@ -23,6 +23,12 @@ use crate::variations::{
 // =============================================================================
 // sin: sin(x + iy) = sin(x)cosh(y) + i·cos(x)sinh(y)
 // =============================================================================
+/// Treats the input as a complex number and applies the sine function.
+/// Output is `sin(x)*cosh(y), cos(x)*sinh(y)` — horizontally periodic,
+/// growing vertically away from the real axis.
+///
+/// # Authors
+/// - cothe
 pub static SIN: VariationDef = VariationDef {
     name: "sin",
     display_name: "Sin",
@@ -56,6 +62,11 @@ fn variation_sin(p: vec3<f32>) -> vec3<f32> {
 // =============================================================================
 // cos: cos(x + iy) = cos(x)cosh(y) − i·sin(x)sinh(y)
 // =============================================================================
+/// Complex cosine. Same shape as Sin but shifted — output is
+/// `cos(x)*cosh(y), -sin(x)*sinh(y)`.
+///
+/// # Authors
+/// - cothe
 pub static COS: VariationDef = VariationDef {
     name: "cos",
     display_name: "Cos",
@@ -89,6 +100,11 @@ fn variation_cos(p: vec3<f32>) -> vec3<f32> {
 // =============================================================================
 // tan: tan(x + iy) = (sin(2x) + i·sinh(2y)) / (cos(2x) + cosh(2y))
 // =============================================================================
+/// Complex tangent (sin/cos). Singularities at ±π/2 produce dramatic poles
+/// in the output.
+///
+/// # Authors
+/// - cothe
 pub static TAN: VariationDef = VariationDef {
     name: "tan",
     display_name: "Tan",
@@ -130,6 +146,11 @@ fn variation_tan(p: vec3<f32>) -> vec3<f32> {
 // =============================================================================
 // sec: 2(cos(x)cosh(y) + i·sin(x)sinh(y)) / (cos(2x) + cosh(2y))
 // =============================================================================
+/// Complex secant (1/cos). Singularities at ±π/2 create high-density rings
+/// around the poles.
+///
+/// # Authors
+/// - cothe
 pub static SEC: VariationDef = VariationDef {
     name: "sec",
     display_name: "Sec",
@@ -167,6 +188,10 @@ fn variation_sec(p: vec3<f32>) -> vec3<f32> {
 // =============================================================================
 // csc: 2(sin(x)cosh(y) − i·cos(x)sinh(y)) / (cosh(2y) − cos(2x))
 // =============================================================================
+/// Complex cosecant (1/sin). Singularities at 0 and ±π.
+///
+/// # Authors
+/// - cothe
 pub static CSC: VariationDef = VariationDef {
     name: "csc",
     display_name: "Csc",
@@ -204,6 +229,10 @@ fn variation_csc(p: vec3<f32>) -> vec3<f32> {
 // =============================================================================
 // cot: cot(x + iy) = (sin(2x) − i·sinh(2y)) / (cosh(2y) − cos(2x))
 // =============================================================================
+/// Complex cotangent (cos/sin). Singularities at 0 and ±π.
+///
+/// # Authors
+/// - cothe
 pub static COT: VariationDef = VariationDef {
     name: "cot",
     display_name: "Cot",
@@ -247,6 +276,11 @@ fn variation_cot(p: vec3<f32>) -> vec3<f32> {
 //   sinh(u + iv) = sinh(u)cos(v) + i·cosh(u)sin(v)
 //   with u = x·π/4, v = y·π/4
 // =============================================================================
+/// Complex hyperbolic sine, applied to `z·π/4`. Stretches the plane
+/// vertically.
+///
+/// # Authors
+/// - cothe
 pub static SINH: VariationDef = VariationDef {
     name: "sinh",
     display_name: "Sinh",
@@ -283,6 +317,11 @@ fn variation_sinh(p: vec3<f32>) -> vec3<f32> {
 // cosh: cosh(x + iy) = cosh(x)cos(y) + i·sinh(x)sin(y)
 // (Upstream uses x for the hyperbolic argument; trig argument is y.)
 // =============================================================================
+/// Complex hyperbolic cosine. Sister function to Sinh — even symmetry
+/// instead of odd.
+///
+/// # Authors
+/// - cothe
 pub static COSH: VariationDef = VariationDef {
     name: "cosh",
     display_name: "Cosh",
@@ -318,6 +357,11 @@ fn variation_cosh(p: vec3<f32>) -> vec3<f32> {
 //   tanh(u + iv) = (sinh(2u) + i·sin(2v)) / (cosh(2u) + cos(2v))
 //   with u = x·π/4, v = y·π/4 (so 2u = x·π/2, 2v = y·π/2)
 // =============================================================================
+/// Complex hyperbolic tangent, applied to `z·π/4`. Compresses extreme
+/// values toward ±1.
+///
+/// # Authors
+/// - cothe
 pub static TANH: VariationDef = VariationDef {
     name: "tanh",
     display_name: "Tanh",
@@ -361,6 +405,10 @@ fn variation_tanh(p: vec3<f32>) -> vec3<f32> {
 // =============================================================================
 // coth: coth(x + iy) = (sinh(2x) + i·sin(2y)) / (cosh(2x) − cos(2y))
 // =============================================================================
+/// Complex hyperbolic cotangent. Singularities at 0.
+///
+/// # Authors
+/// - cothe
 pub static COTH: VariationDef = VariationDef {
     name: "coth",
     display_name: "Coth",
@@ -405,6 +453,12 @@ fn variation_coth(p: vec3<f32>) -> vec3<f32> {
 //   csch(u+iv) = (sinh(u)cos(v) − i·cosh(u)sin(v)) / (sinh²(u)cos²(v) + cosh²(u)sin²(v))
 //   with u = x·π/4, v = y·π/4
 // =============================================================================
+/// Complex hyperbolic secant (note: ported with a JWildfire formula quirk
+/// that makes it equivalent to a sign-flipped csch — preserved so existing
+/// flames render the same).
+///
+/// # Authors
+/// - cothe
 pub static SECH: VariationDef = VariationDef {
     name: "sech",
     display_name: "Sech",
@@ -448,6 +502,10 @@ fn variation_sech(p: vec3<f32>) -> vec3<f32> {
 // =============================================================================
 // csch: 2(sinh(x)cos(y) − i·cosh(x)sin(y)) / (cosh(2x) − cos(2y))
 // =============================================================================
+/// Complex hyperbolic cosecant. Singularities at 0.
+///
+/// # Authors
+/// - cothe
 pub static CSCH: VariationDef = VariationDef {
     name: "csch",
     display_name: "Csch",
