@@ -7,6 +7,12 @@ use crate::variations::{
     ParamType, VariationCategory, VariationPhase,
 };
 
+/// Switches to polar coordinates: the X output becomes the angle (scaled to
+/// [-1, 1]), the Y output becomes the radius minus 1. Unwraps circular
+/// patterns into horizontal stripes.
+///
+/// # Authors
+/// - Scott Draves
 pub static POLAR: VariationDef = VariationDef {
     name: "polar",
     display_name: "Polar",
@@ -37,6 +43,11 @@ fn variation_polar(p: vec3<f32>) -> vec3<f32> {
 "#),
 };
 
+/// Twists radial waves so the pattern looks like a knotted handkerchief -
+/// concentric folds that ripple in toward the center.
+///
+/// # Authors
+/// - Scott Draves
 pub static HANDKERCHIEF: VariationDef = VariationDef {
     name: "handkerchief",
     display_name: "Handkerchief",
@@ -67,6 +78,11 @@ fn variation_handkerchief(p: vec3<f32>) -> vec3<f32> {
 "#),
 };
 
+/// Folds the plane along a heart-shaped curve. The output silhouette traces
+/// a cardioid; classic Apophysis effect.
+///
+/// # Authors
+/// - Scott Draves
 pub static HEART: VariationDef = VariationDef {
     name: "heart",
     display_name: "Heart",
@@ -99,6 +115,12 @@ fn variation_heart(p: vec3<f32>) -> vec3<f32> {
 "#),
 };
 
+/// Wraps the plane onto a disc, with the angle controlling the radial
+/// position and the radius controlling the ripples. Creates a hypnotic
+/// sunburst pattern.
+///
+/// # Authors
+/// - Scott Draves
 pub static DISC: VariationDef = VariationDef {
     name: "disc",
     display_name: "Disc",
@@ -133,6 +155,11 @@ fn variation_disc(p: vec3<f32>) -> vec3<f32> {
 "#),
 };
 
+/// Combines an inverse-radius scaling with sine/cosine of both angle and
+/// radius. The result spirals inward in a logarithmic pattern.
+///
+/// # Authors
+/// - Scott Draves
 pub static SPIRAL: VariationDef = VariationDef {
     name: "spiral",
     display_name: "Spiral",
@@ -172,6 +199,11 @@ fn variation_spiral(p: vec3<f32>) -> vec3<f32> {
 "#),
 };
 
+/// Inverts X by the squared radius while leaving Y alone. Stretches things
+/// horizontally near the origin and squashes them outside.
+///
+/// # Authors
+/// - Scott Draves
 pub static HYPERBOLIC: VariationDef = VariationDef {
     name: "hyperbolic",
     display_name: "Hyperbolic",
@@ -200,6 +232,11 @@ fn variation_hyperbolic(p: vec3<f32>) -> vec3<f32> {
 "#),
 };
 
+/// Maps the plane into a rotated diamond shape using sine and cosine of the
+/// polar angle and radius. Produces sharp diagonal symmetry.
+///
+/// # Authors
+/// - Scott Draves
 pub static DIAMOND: VariationDef = VariationDef {
     name: "diamond",
     display_name: "Diamond",
@@ -230,6 +267,11 @@ fn variation_diamond(p: vec3<f32>) -> vec3<f32> {
 "#),
 };
 
+/// Cubes two sinusoidal functions of angle and radius and blends them.
+/// Spreads points into pointed lobes
+///
+/// # Authors
+/// - Scott Draves
 pub static EX: VariationDef = VariationDef {
     name: "ex",
     display_name: "Ex",
@@ -268,6 +310,12 @@ fn variation_ex(p: vec3<f32>) -> vec3<f32> {
 "#),
 };
 
+/// Randomly picks one of the two branches of the complex square root, then
+/// applies it. Each iteration jumps to one half of the Julia-set folding;
+/// over time the attractor fills out.
+///
+/// # Authors
+/// - Scott Draves
 pub static JULIA: VariationDef = VariationDef {
     name: "julia",
     display_name: "Julia",
@@ -304,6 +352,11 @@ fn julia(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
 "#),
 };
 
+/// Doubles the X coordinate when X is negative, halves the Y coordinate
+/// when Y is negative. A simple asymmetric pinch.
+///
+/// # Authors
+/// - Scott Draves
 pub static BENT: VariationDef = VariationDef {
     name: "bent",
     display_name: "Bent",
@@ -346,6 +399,12 @@ fn variation_bent(p: vec3<f32>) -> vec3<f32> {
 //
 // First variation to use `needs_transform: true` — the body reads from the
 // `transforms` storage buffer via xform_id.
+/// Adds sine-wave displacement to each coordinate, using the affine
+/// matrix's own b/c/d/f fields as wave parameters. Inherits its frequency
+/// and amplitude from the transform itself rather than from extra sliders.
+///
+/// # Authors
+/// - Scott Draves
 pub static WAVES: VariationDef = VariationDef {
     name: "waves",
     display_name: "Waves",
@@ -383,6 +442,12 @@ fn variation_waves(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 
 // Parameterized variations
 
+/// Generalized Julia variation with a chosen integer power. Splits the
+/// angle into `power` equally-spaced branches and randomly picks one each
+/// iteration. With power = 2 it reduces to the classic Julia.
+///
+/// # Authors
+/// - Scott Draves
 pub static JULIAN: VariationDef = VariationDef {
     name: "julian",
     display_name: "JuliaN",
@@ -397,16 +462,16 @@ pub static JULIAN: VariationDef = VariationDef {
             default_value: 2.0,
             min_value: Some(-10.0),
             max_value: Some(10.0),
-            description: None,
+            description: Some("Number of branches the output is split into. Higher = more arms; negative values flip the rotation direction."),
         },
         VariationParamDef {
             name: "dist",
             display_name: "Distance",
             param_type: ParamType::UnlimitedFloat,
             default_value: 1.0,
-            min_value: Some(-100.0),
-            max_value: Some(100.0),
-            description: None,
+            min_value: Some(-10.0),
+            max_value: Some(10.0),
+            description: Some("Stretches or compresses each arm radially. 1.0 is balanced; larger pushes arms outward, smaller pulls them in."),
         },
     ],
     needs_transform: false,
@@ -458,6 +523,12 @@ fn variation_julian(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
 "#),
 };
 
+/// Wraps the plane around the origin, with the radius pulsing between a
+/// high and low value as the angle rotates. Produces a wavy, bumpy
+/// boundary.
+///
+/// # Authors
+/// - Scott Draves
 pub static BLOB: VariationDef = VariationDef {
     name: "blob",
     display_name: "Blob",
@@ -472,7 +543,7 @@ pub static BLOB: VariationDef = VariationDef {
             default_value: 1.0,
             min_value: Some(-3.0),
             max_value: Some(3.0),
-            description: None,
+            description: Some("Outer radius - how far the bumps reach at their peaks."),
         },
         VariationParamDef {
             name: "low",
@@ -481,7 +552,7 @@ pub static BLOB: VariationDef = VariationDef {
             default_value: 1.0,
             min_value: Some(-3.0),
             max_value: Some(3.0),
-            description: None,
+            description: Some("Inner radius - how close the bumps recede in the troughs."),
         },
         VariationParamDef {
             name: "waves",
@@ -490,7 +561,7 @@ pub static BLOB: VariationDef = VariationDef {
             default_value: 6.0,
             min_value: Some(1.0),
             max_value: Some(20.0),
-            description: None,
+            description: Some("How many bumps go around the perimeter. More waves = finer-grained edge."),
         },
     ],
     needs_transform: false,
@@ -530,6 +601,11 @@ fn variation_blob(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
 "#),
 };
 
+/// An anti-fisheye that pulls everything toward the unit circle. Inverse of
+/// the classic fisheye warp.
+///
+/// # Authors
+/// - Scott Draves
 pub static EYEFISH: VariationDef = VariationDef {
     name: "eyefish",
     display_name: "Eyefish",
@@ -560,6 +636,11 @@ fn variation_eyefish(p: vec3<f32>) -> vec3<f32> {
 "#),
 };
 
+/// Maps the plane onto a sphere - far points shrink toward the equator,
+/// near points spread across the surface.
+///
+/// # Authors
+/// - Scott Draves
 pub static BUBBLE: VariationDef = VariationDef {
     name: "bubble",
     display_name: "Bubble",
@@ -595,6 +676,12 @@ fn variation_bubble(p: vec3<f32>) -> vec3<f32> {
 "#),
 };
 
+/// Wraps the X coordinate around a cylinder (sine), passes Y through
+/// unchanged. In 3D, adds a cosine of X as the Z coordinate so the plane
+/// really wraps into a cylindrical sheet.
+///
+/// # Authors
+/// - Scott Draves
 pub static CYLINDER: VariationDef = VariationDef {
     name: "cylinder",
     display_name: "Cylinder",
@@ -622,6 +709,11 @@ fn variation_cylinder(p: vec3<f32>) -> vec3<f32> {
 "#),
 };
 
+/// Multiplies the point by a random radius in a random direction. Adds a
+/// textured, noisy spray to the rendered shape.
+///
+/// # Authors
+/// - Scott Draves
 pub static NOISE: VariationDef = VariationDef {
     name: "noise",
     display_name: "Noise",
@@ -652,6 +744,11 @@ fn variation_noise(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
 "#),
 };
 
+/// Replaces the input with a uniformly random point inside the unit disc -
+/// the position is ignored. Useful for adding a soft glow or particle haze.
+///
+/// # Authors
+/// - Scott Draves
 pub static BLUR: VariationDef = VariationDef {
     name: "blur",
     display_name: "Blur",
@@ -682,6 +779,11 @@ fn variation_blur(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
 "#),
 };
 
+/// Like Blur but the random radius follows a bell curve (sum of four
+/// uniforms). Produces a softer, more concentrated haze.
+///
+/// # Authors
+/// - Scott Draves
 pub static GAUSSIAN_BLUR: VariationDef = VariationDef {
     name: "gaussian_blur",
     display_name: "Gaussian Blur",
@@ -714,6 +816,11 @@ fn variation_gaussian_blur(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f
 
 // Extended variations
 
+/// Variant of Polar with log-radius output. Compresses large distances and
+/// expands small ones; good for revealing distant structure.
+///
+/// # Authors
+/// - Joel and Michael Faber
 pub static POLAR2: VariationDef = VariationDef {
     name: "polar2",
     display_name: "Polar2",
@@ -748,6 +855,11 @@ fn variation_polar2(p: vec3<f32>) -> vec3<f32> {
 "#),
 };
 
+/// Divides each coordinate by the absolute difference of squared
+/// coordinates. Produces a sharp diagonal cross pattern.
+///
+/// # Authors
+/// - Scott Draves
 pub static CROSS: VariationDef = VariationDef {
     name: "cross",
     display_name: "Cross",
@@ -780,6 +892,11 @@ fn variation_cross(p: vec3<f32>) -> vec3<f32> {
 "#),
 };
 
+/// Inside the unit circle, inflates points outward; outside, leaves them
+/// alone. Creates a coin shape with a sharp edge at radius 1.
+///
+/// # Authors
+/// - Joel and Michael Faber
 pub static LOONIE: VariationDef = VariationDef {
     name: "loonie",
     display_name: "Loonie",
@@ -818,6 +935,11 @@ fn variation_loonie(p: vec3<f32>) -> vec3<f32> {
 "#),
 };
 
+/// Pulls every point toward the origin with a strength that drops off with
+/// distance. Produces a magnifying-glass / scrying-orb effect.
+///
+/// # Authors
+/// - Joel and Michael Faber
 pub static SCRY: VariationDef = VariationDef {
     name: "scry",
     display_name: "Scry",
@@ -848,6 +970,11 @@ fn variation_scry(p: vec3<f32>) -> vec3<f32> {
 "#),
 };
 
+/// Maps the plane through a hyperbolic curve based on exponentials.
+/// Produces two focal points that warp the surrounding space.
+///
+/// # Authors
+/// - Joel and Michael Faber
 pub static FOCI: VariationDef = VariationDef {
     name: "foci",
     display_name: "Foci",
@@ -888,6 +1015,11 @@ fn variation_foci(p: vec3<f32>) -> vec3<f32> {
 "#),
 };
 
+/// Conformal map onto an elliptic-coordinate grid. Useful for mathematical-
+/// looking, symmetric patterns.
+///
+/// # Authors
+/// - Joel and Michael Faber
 pub static ELLIPTIC: VariationDef = VariationDef {
     name: "elliptic",
     display_name: "Elliptic",
@@ -936,6 +1068,12 @@ fn variation_elliptic(p: vec3<f32>) -> vec3<f32> {
 
 // Parameterized extended variations
 
+/// Like Waves, but the sine wave frequencies and amplitudes are exposed as
+/// sliders instead of being baked into the affine. Independent control over
+/// each axis.
+///
+/// # Authors
+/// - Joel Faber
 pub static WAVES2: VariationDef = VariationDef {
     name: "waves2",
     display_name: "Waves2",
@@ -950,7 +1088,7 @@ pub static WAVES2: VariationDef = VariationDef {
             default_value: 2.0,
             min_value: Some(0.0),
             max_value: Some(20.0),
-            description: None,
+            description: Some("Horizontal ripple frequency. More = tighter waves across the X axis."),
         },
         VariationParamDef {
             name: "scalex",
@@ -959,7 +1097,7 @@ pub static WAVES2: VariationDef = VariationDef {
             default_value: 1.0,
             min_value: Some(-2.0),
             max_value: Some(2.0),
-            description: None,
+            description: Some("Horizontal ripple amplitude. How far points get pushed sideways."),
         },
         VariationParamDef {
             name: "freqy",
@@ -968,7 +1106,7 @@ pub static WAVES2: VariationDef = VariationDef {
             default_value: 2.0,
             min_value: Some(0.0),
             max_value: Some(20.0),
-            description: None,
+            description: Some("Vertical ripple frequency."),
         },
         VariationParamDef {
             name: "scaley",
@@ -977,7 +1115,7 @@ pub static WAVES2: VariationDef = VariationDef {
             default_value: 1.0,
             min_value: Some(-2.0),
             max_value: Some(2.0),
-            description: None,
+            description: Some("Vertical ripple amplitude."),
         },
         VariationParamDef {
             name: "freqz",
@@ -986,7 +1124,7 @@ pub static WAVES2: VariationDef = VariationDef {
             default_value: 0.0,
             min_value: Some(0.0),
             max_value: Some(20.0),
-            description: None,
+            description: Some("Depth ripple frequency (3D mode only)."),
         },
         VariationParamDef {
             name: "scalez",
@@ -995,7 +1133,7 @@ pub static WAVES2: VariationDef = VariationDef {
             default_value: 0.0,
             min_value: Some(-2.0),
             max_value: Some(2.0),
-            description: None,
+            description: Some("Depth ripple amplitude (3D mode only)."),
         },
     ],
     needs_transform: false,
@@ -1034,6 +1172,9 @@ fn variation_waves2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 "#),
 };
 
+/// Polar log transform - the output X is the logarithm of the squared
+/// distance, the output Y is the angle. Produces a spiral log-scale view.
+///
 pub static LOG: VariationDef = VariationDef {
     name: "log",
     display_name: "Log",
@@ -1048,7 +1189,7 @@ pub static LOG: VariationDef = VariationDef {
             default_value: 2.718281828,
             min_value: Some(1.01),
             max_value: Some(100.0),
-            description: None,
+            description: Some("Logarithm base. Default `e` (natural log); larger compresses the output, smaller stretches it out."),
         },
     ],
     needs_transform: false,
@@ -1082,6 +1223,11 @@ fn variation_log(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
 "#),
 };
 
+/// Conformal log-spiral mapping inspired by M. C. Escher's prints. Tunes
+/// between pure scaling and pure rotation via the beta angle.
+///
+/// # Authors
+/// - Joel and Michael Faber
 pub static ESCHER: VariationDef = VariationDef {
     name: "escher",
     display_name: "Escher",
@@ -1096,7 +1242,7 @@ pub static ESCHER: VariationDef = VariationDef {
             default_value: 0.0,
             min_value: Some(-180.0),
             max_value: Some(180.0),
-            description: None,
+            description: Some("Balance between scaling and rotation. At 0 degrees the map is pure scaling; near +/-90 degrees it's pure rotation. Sweep this to get spiraling effects."),
         },
     ],
     needs_transform: false,
@@ -1141,6 +1287,11 @@ fn variation_escher(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 "#),
 };
 
+/// Maps to bipolar coordinates (a pair of orthogonal coordinate systems
+/// centered on two points). Good for two-focus symmetric flames.
+///
+/// # Authors
+/// - Joel and Michael Faber
 pub static BIPOLAR: VariationDef = VariationDef {
     name: "bipolar",
     display_name: "Bipolar",
@@ -1155,7 +1306,7 @@ pub static BIPOLAR: VariationDef = VariationDef {
             default_value: 0.0,
             min_value: Some(-2.0),
             max_value: Some(2.0),
-            description: None,
+            description: Some("Vertical offset on the output. Slides the bipolar pattern up or down."),
         },
     ],
     needs_transform: false,
@@ -1215,6 +1366,11 @@ fn variation_bipolar(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 "#),
 };
 
+/// Inside a unit disc the points rotate and twist; outside the disc they're
+/// pushed away from the center. Produces a layered, plate-like swirl.
+///
+/// # Authors
+/// - Joel and Michael Faber
 pub static LAZYSUSAN: VariationDef = VariationDef {
     name: "lazysusan",
     display_name: "LazySusan",
@@ -1229,7 +1385,7 @@ pub static LAZYSUSAN: VariationDef = VariationDef {
             default_value: 0.0,
             min_value: Some(-360.0),
             max_value: Some(360.0),
-            description: None,
+            description: Some("How far points inside the unit disc rotate."),
         },
         VariationParamDef {
             name: "space",
@@ -1238,7 +1394,7 @@ pub static LAZYSUSAN: VariationDef = VariationDef {
             default_value: 0.0,
             min_value: Some(-2.0),
             max_value: Some(2.0),
-            description: None,
+            description: Some("Gap added to points outside the disc - pushes the outer region away from center."),
         },
         VariationParamDef {
             name: "twist",
@@ -1247,7 +1403,7 @@ pub static LAZYSUSAN: VariationDef = VariationDef {
             default_value: 0.0,
             min_value: Some(-5.0),
             max_value: Some(5.0),
-            description: None,
+            description: Some("Extra rotation that fades with distance. Adds a twisting motion to the inside."),
         },
         VariationParamDef {
             name: "x",
@@ -1256,7 +1412,7 @@ pub static LAZYSUSAN: VariationDef = VariationDef {
             default_value: 0.0,
             min_value: Some(-2.0),
             max_value: Some(2.0),
-            description: None,
+            description: Some("Horizontal offset of the rotation center."),
         },
         VariationParamDef {
             name: "y",
@@ -1265,7 +1421,7 @@ pub static LAZYSUSAN: VariationDef = VariationDef {
             default_value: 0.0,
             min_value: Some(-2.0),
             max_value: Some(2.0),
-            description: None,
+            description: Some("Vertical offset of the rotation center."),
         },
     ],
     needs_transform: false,
@@ -1317,6 +1473,9 @@ fn variation_lazysusan(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
 "#),
 };
 
+/// Carves the plane into concentric ring bands at the chosen spacing. Each
+/// ring inverts the radial position within its band.
+///
 pub static RINGS2: VariationDef = VariationDef {
     name: "rings2",
     display_name: "Rings2",
@@ -1331,7 +1490,7 @@ pub static RINGS2: VariationDef = VariationDef {
             default_value: 1.0,
             min_value: Some(0.01),
             max_value: Some(5.0),
-            description: None,
+            description: Some("Ring spacing. Smaller packs more rings closer together; larger spreads them out."),
         },
     ],
     needs_transform: false,
@@ -1361,6 +1520,12 @@ fn variation_rings2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 "#),
 };
 
+/// Slices the plane into pie wedges and offsets each wedge alternately -
+/// even wedges go one way, odd wedges the other. Configurable wedge width
+/// and rotation.
+///
+/// # Authors
+/// - Scott Draves
 pub static FAN2: VariationDef = VariationDef {
     name: "fan2",
     display_name: "Fan2",
@@ -1375,7 +1540,7 @@ pub static FAN2: VariationDef = VariationDef {
             default_value: 1.0,
             min_value: Some(0.01),
             max_value: Some(5.0),
-            description: None,
+            description: Some("Wedge width. Controls how many sectors the fan is split into."),
         },
         VariationParamDef {
             name: "y",
@@ -1384,7 +1549,7 @@ pub static FAN2: VariationDef = VariationDef {
             default_value: 0.0,
             min_value: Some(-5.0),
             max_value: Some(5.0),
-            description: None,
+            description: Some("Rotation offset. Spins the whole fan around the origin."),
         },
     ],
     needs_transform: false,
@@ -1432,6 +1597,11 @@ fn variation_fan2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
 "#),
 };
 
+/// Peter de Jong attractor - four sine/cosine coefficients drive the
+/// output. Famous for producing intricate chaotic attractor shapes.
+///
+/// # Authors
+/// - Scott Draves
 pub static PDJ: VariationDef = VariationDef {
     name: "pdj",
     display_name: "PDJ",
@@ -1446,7 +1616,7 @@ pub static PDJ: VariationDef = VariationDef {
             default_value: 0.0,
             min_value: Some(-20.0),
             max_value: Some(20.0),
-            description: None,
+            description: Some("Coefficient on the first sine - shapes the X output curve."),
         },
         VariationParamDef {
             name: "b",
@@ -1455,7 +1625,7 @@ pub static PDJ: VariationDef = VariationDef {
             default_value: 0.0,
             min_value: Some(-20.0),
             max_value: Some(20.0),
-            description: None,
+            description: Some("Coefficient on the first cosine - shapes the X output curve."),
         },
         VariationParamDef {
             name: "c",
@@ -1464,7 +1634,7 @@ pub static PDJ: VariationDef = VariationDef {
             default_value: 0.0,
             min_value: Some(-20.0),
             max_value: Some(20.0),
-            description: None,
+            description: Some("Coefficient on the second sine - shapes the Y output curve."),
         },
         VariationParamDef {
             name: "d",
@@ -1473,7 +1643,7 @@ pub static PDJ: VariationDef = VariationDef {
             default_value: 0.0,
             min_value: Some(-20.0),
             max_value: Some(20.0),
-            description: None,
+            description: Some("Coefficient on the second cosine - shapes the Y output curve."),
         },
     ],
     needs_transform: false,
@@ -1510,6 +1680,11 @@ fn variation_pdj(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
 "#),
 };
 
+/// Multiplies the input by a complex polynomial (1 + c1*z + c2*z^2) and
+/// normalises. Adds a soft swirling distortion.
+///
+/// # Authors
+/// - Scott Draves
 pub static CURL: VariationDef = VariationDef {
     name: "curl",
     display_name: "Curl",
@@ -1524,7 +1699,7 @@ pub static CURL: VariationDef = VariationDef {
             default_value: 1.0,
             min_value: Some(-2.0),
             max_value: Some(2.0),
-            description: None,
+            description: Some("Linear twist strength. Stronger = tighter curl around the center."),
         },
         VariationParamDef {
             name: "c2",
@@ -1533,7 +1708,7 @@ pub static CURL: VariationDef = VariationDef {
             default_value: 0.0,
             min_value: Some(-2.0),
             max_value: Some(2.0),
-            description: None,
+            description: Some("Quadratic twist strength. Adds a second-order curl that grows away from the origin."),
         },
     ],
     needs_transform: false,
@@ -1572,6 +1747,11 @@ fn variation_curl(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
 "#),
 };
 
+/// Tiles the plane into rectangles, mirroring the coordinates within each
+/// tile. Produces a checkered, blocky output.
+///
+/// # Authors
+/// - Scott Draves
 pub static RECTANGLES: VariationDef = VariationDef {
     name: "rectangles",
     display_name: "Rectangles",
@@ -1586,7 +1766,7 @@ pub static RECTANGLES: VariationDef = VariationDef {
             default_value: 1.0,
             min_value: Some(0.01),
             max_value: Some(5.0),
-            description: None,
+            description: Some("Width of each rectangular tile."),
         },
         VariationParamDef {
             name: "y",
@@ -1595,7 +1775,7 @@ pub static RECTANGLES: VariationDef = VariationDef {
             default_value: 1.0,
             min_value: Some(0.01),
             max_value: Some(5.0),
-            description: None,
+            description: Some("Height of each rectangular tile."),
         },
     ],
     needs_transform: false,
@@ -1628,6 +1808,11 @@ fn variation_rectangles(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<
 "#),
 };
 
+/// Pushes positive-X points and negative-X points apart by `x`, and same
+/// for Y. Creates a gap down the middle along each axis.
+///
+/// # Authors
+/// - Joel and Michael Faber
 pub static SPLITS: VariationDef = VariationDef {
     name: "splits",
     display_name: "Splits",
@@ -1642,7 +1827,7 @@ pub static SPLITS: VariationDef = VariationDef {
             default_value: 0.4,
             min_value: Some(-2.0),
             max_value: Some(2.0),
-            description: None,
+            description: Some("Horizontal gap. Pushes positive-X and negative-X points apart by this amount."),
         },
         VariationParamDef {
             name: "y",
@@ -1651,7 +1836,7 @@ pub static SPLITS: VariationDef = VariationDef {
             default_value: 0.4,
             min_value: Some(-2.0),
             max_value: Some(2.0),
-            description: None,
+            description: Some("Vertical gap. Pushes positive-Y and negative-Y points apart by this amount."),
         },
     ],
     needs_transform: false,
@@ -1684,6 +1869,11 @@ fn variation_splits(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 "#),
 };
 
+/// Bends the plane into an N-sided polygon outline. Configurable side
+/// count, corner sharpness, and how circle-vs-polygon the shape feels.
+///
+/// # Authors
+/// - Scott Draves
 pub static NGON: VariationDef = VariationDef {
     name: "ngon",
     display_name: "Ngon",
@@ -1698,7 +1888,7 @@ pub static NGON: VariationDef = VariationDef {
             default_value: 5.0,
             min_value: Some(-10.0),
             max_value: Some(10.0),
-            description: None,
+            description: Some("Number of sides of the polygon (e.g. 5 = pentagon, 6 = hexagon)."),
         },
         VariationParamDef {
             name: "power",
@@ -1707,7 +1897,7 @@ pub static NGON: VariationDef = VariationDef {
             default_value: 3.0,
             min_value: Some(-2.0),
             max_value: Some(20.0),
-            description: None,
+            description: Some("Radial exponent. Stretches or compresses the polygon shape outward."),
         },
         VariationParamDef {
             name: "circle",
@@ -1716,7 +1906,7 @@ pub static NGON: VariationDef = VariationDef {
             default_value: 1.0,
             min_value: Some(-20.0),
             max_value: Some(20.0),
-            description: None,
+            description: Some("Blend between polygon and circle. 0 = pure circle, higher = sharper corners."),
         },
         VariationParamDef {
             name: "corners",
@@ -1725,7 +1915,7 @@ pub static NGON: VariationDef = VariationDef {
             default_value: 2.0,
             min_value: Some(-20.0),
             max_value: Some(20.0),
-            description: None,
+            description: Some("Horizontal output offset. Useful for tiling the polygon outward."),
         },
     ],
     needs_transform: false,
@@ -1774,6 +1964,11 @@ fn variation_ngon(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
 "#),
 };
 
+/// Drills a corkscrew distortion into the plane - sine waves on both axes
+/// coupled together. Produces twisting, augur-like patterns.
+///
+/// # Authors
+/// - Xyrus02
 pub static AUGER: VariationDef = VariationDef {
     name: "auger",
     display_name: "Auger",
@@ -1788,7 +1983,7 @@ pub static AUGER: VariationDef = VariationDef {
             default_value: 1.0,
             min_value: Some(0.0),
             max_value: Some(10.0),
-            description: None,
+            description: Some("Ripple frequency. How many waves go across the surface."),
         },
         VariationParamDef {
             name: "weight",
@@ -1797,7 +1992,7 @@ pub static AUGER: VariationDef = VariationDef {
             default_value: 0.5,
             min_value: Some(-2.0),
             max_value: Some(2.0),
-            description: None,
+            description: Some("How strongly the waves displace points. 0 = no effect."),
         },
         VariationParamDef {
             name: "scale",
@@ -1806,7 +2001,7 @@ pub static AUGER: VariationDef = VariationDef {
             default_value: 0.5,
             min_value: Some(-2.0),
             max_value: Some(2.0),
-            description: None,
+            description: Some("Cross-coupling between X and Y waves. Tunes the diagonal texture."),
         },
         VariationParamDef {
             name: "sym",
@@ -1815,7 +2010,7 @@ pub static AUGER: VariationDef = VariationDef {
             default_value: 0.0,
             min_value: Some(-2.0),
             max_value: Some(2.0),
-            description: None,
+            description: Some("Blend back toward the input. 0 = full displacement, 1 = no displacement."),
         },
     ],
     needs_transform: false,
@@ -1860,17 +2055,12 @@ fn variation_auger(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 "#),
 };
 
-/// CPow — complex power variation (JWildfire port)
+/// Raises the complex point to a complex power (real + imaginary parts of
+/// the exponent both adjustable). Produces logarithmic spirals with `power`
+/// arms.
 ///
-/// Reference: github.com/mwegner/chaotica-apophysis-plugins-from-jwildfire/blob/master/output/cpow.cpp
-///
-/// Math:
-///   a = atan2(y, x)
-///   lnr = 0.5 * ln(x² + y²)
-///   va = 2π / power, vc = r / power, vd = i / power
-///   ang = vc*a + vd*lnr + va * floor(power * rand())
-///   m = exp(vc*lnr - vd*a)
-///   out = m * (cos(ang), sin(ang))
+/// # Authors
+/// - Joel and Michael Faber
 pub static CPOW: VariationDef = VariationDef {
     name: "cpow",
     display_name: "CPow",
@@ -1885,7 +2075,7 @@ pub static CPOW: VariationDef = VariationDef {
             default_value: 1.0,
             min_value: Some(-10.0),
             max_value: Some(10.0),
-            description: None,
+            description: Some("Real component of the complex exponent. Controls scaling and how tightly the spiral winds."),
         },
         VariationParamDef {
             name: "i",
@@ -1894,7 +2084,7 @@ pub static CPOW: VariationDef = VariationDef {
             default_value: 0.1,
             min_value: Some(-10.0),
             max_value: Some(10.0),
-            description: None,
+            description: Some("Imaginary component of the complex exponent. Controls how much the spiral rotates."),
         },
         VariationParamDef {
             name: "power",
@@ -1903,7 +2093,7 @@ pub static CPOW: VariationDef = VariationDef {
             default_value: 1.5,
             min_value: Some(-10.0),
             max_value: Some(10.0),
-            description: None,
+            description: Some("Number of branches in the result. Like JuliaN's `power` - more = more arms."),
         },
     ],
     needs_transform: false,
