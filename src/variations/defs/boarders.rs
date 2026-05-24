@@ -38,6 +38,11 @@ use crate::param;
 // =============================================================================
 // boarders: cell-grid coin-flip border (Apophysis pack)
 // =============================================================================
+/// Cell-grid border warp — each input point is decomposed into a cell
+/// index and an offset within the cell. A coin flip per iteration either
+/// shrinks the offset toward the cell center or pushes it toward the
+/// nearest cell border.
+///
 /// # Authors
 /// - Apophysis Plugin Pack
 pub static BOARDERS: VariationDef = VariationDef {
@@ -135,6 +140,11 @@ fn variation_boarders(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
 //     _cl = max(|left|, ε)  →  _c · _cl
 //     _cr = max(|right|, ε) →  _c + (_c · _cr)
 // =============================================================================
+/// Variant of Boarders with 3 tunable knobs — scale factor `c` and per-
+/// direction `left`/`right` offsets controlling the border-push behavior.
+///
+/// # Authors
+/// - Xyrus02
 pub static BOARDERS2: VariationDef = VariationDef {
     name: "boarders2",
     display_name: "Boarders 2",
@@ -142,9 +152,9 @@ pub static BOARDERS2: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("c", "C", unlimited_float, 0.4, -5.0, 5.0),
-        param!("left", "Left", unlimited_float, 0.65, -5.0, 5.0),
-        param!("right", "Right", unlimited_float, 0.35, -5.0, 5.0),
+        param!("c", "C", unlimited_float, 0.4, -5.0, 5.0, "Cell scale factor — how much the in-cell offset shrinks toward the cell center."),
+        param!("left", "Left", unlimited_float, 0.65, -5.0, 5.0, "Border push-out distance — how far points get pushed toward the nearest cell border."),
+        param!("right", "Right", unlimited_float, 0.35, -5.0, 5.0, "Threshold for border behavior vs pass-through. Higher = more points get pushed to borders."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -255,6 +265,11 @@ fn variation_boarders2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
 //   Same init, same body — but pre-phase replaces `temp` with `VVAR · stuff`.
 //   Body reads w via needs_transform and applies VVAR directly.
 // =============================================================================
+/// Pre-phase version of Boarders 2 — same border-warp math but applied
+/// before the rest of the variations run.
+///
+/// # Authors
+/// - Xyrus02
 pub static PRE_BOARDERS2: VariationDef = VariationDef {
     name: "pre_boarders2",
     display_name: "Pre Boarders 2",
@@ -262,9 +277,9 @@ pub static PRE_BOARDERS2: VariationDef = VariationDef {
     phase: VariationPhase::Pre,
     needs_rng: true,
     parameters: &[
-        param!("c", "C", unlimited_float, 0.4, -5.0, 5.0),
-        param!("left", "Left", unlimited_float, 0.65, -5.0, 5.0),
-        param!("right", "Right", unlimited_float, 0.35, -5.0, 5.0),
+        param!("c", "C", unlimited_float, 0.4, -5.0, 5.0, "Cell scale factor — how much the in-cell offset shrinks toward the cell center."),
+        param!("left", "Left", unlimited_float, 0.65, -5.0, 5.0, "Border push-out distance — how far points get pushed toward the nearest cell border."),
+        param!("right", "Right", unlimited_float, 0.35, -5.0, 5.0, "Threshold for border behavior vs pass-through. Higher = more points get pushed to borders."),
     ],
     needs_transform: true,
     writes_color: false,
@@ -370,6 +385,12 @@ fn variation_pre_boarders2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: 
 //     + (FTx · px, FTy · py)              (NO VVAR multiplier — needs
 //                                          divide-out via needs_transform)
 // =============================================================================
+/// Combines a Bubble warp (radial sphere projection) with a Boarders-style
+/// cell-grid border. The `x`/`y` parameters control the border behavior;
+/// `px`/`py` add an extra linear pass-through component.
+///
+/// # Authors
+/// - FracFx
 pub static SPLITBRDR: VariationDef = VariationDef {
     name: "splitbrdr",
     display_name: "Split Brdr",
@@ -377,10 +398,10 @@ pub static SPLITBRDR: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("x", "X", unlimited_float, 0.25, -5.0, 5.0),
-        param!("y", "Y", unlimited_float, 0.25, -5.0, 5.0),
-        param!("px", "PX", unlimited_float, 0.0, -5.0, 5.0),
-        param!("py", "PY", unlimited_float, 0.0, -5.0, 5.0),
+        param!("x", "X", unlimited_float, 0.25, -5.0, 5.0, "Border push offset in one direction."),
+        param!("y", "Y", unlimited_float, 0.25, -5.0, 5.0, "Border push offset in the other direction."),
+        param!("px", "PX", unlimited_float, 0.0, -5.0, 5.0, "Linear pass-through scaling for X — adds a fraction of the input X to the output."),
+        param!("py", "PY", unlimited_float, 0.0, -5.0, 5.0, "Linear pass-through scaling for Y."),
     ],
     needs_transform: true,
     writes_color: false,
