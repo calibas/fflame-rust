@@ -32,6 +32,13 @@ use crate::param;
 // hadamard_js
 // ---------------------------------------------------------------------------
 
+/// 3-branch Hadamard IFS — picks one of three affine maps uniformly per
+/// iteration: half-scale identity, or one of two half-scale rotation-plus-
+/// offset maps. Produces a Hadamard fractal pattern. Based on Paul Bourke's
+/// `roger18.c`.
+///
+/// # Authors
+/// - Jesus Sosa
 pub static HADAMARD_JS: VariationDef = VariationDef {
     name: "hadamard_js",
     display_name: "Hadamard (JS)",
@@ -94,6 +101,13 @@ fn variation_hadamard_js(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32
 // invtree_js
 // ---------------------------------------------------------------------------
 
+/// 3-branch inverse-tree IFS — picks one of three branches uniformly per
+/// iteration: half-scale identity, or per-axis `1/(coord + 1)` inverse (one
+/// axis at a time). Produces an inverse-tree fractal. Based on Paul
+/// Bourke's `trifraction2`.
+///
+/// # Authors
+/// - Jesus Sosa
 pub static INVTREE_JS: VariationDef = VariationDef {
     name: "invtree_js",
     display_name: "Inv-Tree (JS)",
@@ -160,6 +174,14 @@ fn variation_invtree_js(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32>
 // crown_js
 // ---------------------------------------------------------------------------
 
+/// Crown / Roger Bagula attractor — sums 14 iterations of `(sin(a^k · ±t),
+/// cos(a^k · ±t)) / |a|^(b·k)` to form a complex-valued accumulator. Per-
+/// iteration `t` is sampled uniformly from `[-π, π]`. The Z output is
+/// `|wt|^4` (the squared magnitude squared). Based on Paul Bourke's Crown /
+/// Roger Bagula attractor.
+///
+/// # Authors
+/// - Jesus Sosa
 pub static CROWN_JS: VariationDef = VariationDef {
     name: "crown_js",
     display_name: "Crown (JS)",
@@ -167,8 +189,8 @@ pub static CROWN_JS: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("a", "A", unlimited_float, 5.0, -10.0, 10.0),
-        param!("b", "B", unlimited_float, 0.6309297535714574, -10.0, 10.0),
+        param!("a", "A", unlimited_float, 5.0, -10.0, 10.0, "Base of the exponential growth (`a^k` in the iteration). Default 5."),
+        param!("b", "B", unlimited_float, 0.6309297535714574, -10.0, 10.0, "Power decay rate (`|a|^(b·k)` in the denominator). Default log(2)/log(3) ≈ 0.631."),
     ],
     needs_transform: false,
     writes_color: false,
