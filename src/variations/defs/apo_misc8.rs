@@ -59,6 +59,14 @@ use crate::param;
 //   pi_mult, csc_add, scaley.
 // Clean factor through outer.
 // =============================================================================
+/// Cosecant-squared power scale — computes a csc-style intermediate `csc =
+/// csc_div / (cos(x/cos_div) · tan(x/tan_div))`, then a per-axis scale
+/// factor `f = (csc² + π·pi_mult)^csc_pow + csc_add`, then emits `(x·f,
+/// y·f·scaley)`. The csc/cos/tan composition produces sharp pole
+/// structures.
+///
+/// # Authors
+/// - Whittaker Courtney
 pub static CSC_SQUARED: VariationDef = VariationDef {
     name: "csc_squared",
     display_name: "Csc Squared",
@@ -66,13 +74,13 @@ pub static CSC_SQUARED: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("csc_div", "Csc Div", unlimited_float, 1.0, -10.0, 10.0),
-        param!("cos_div", "Cos Div", unlimited_float, 1.0, -10.0, 10.0),
-        param!("tan_div", "Tan Div", unlimited_float, 1.0, -10.0, 10.0),
-        param!("csc_pow", "Csc Pow", unlimited_float, 0.5, -10.0, 10.0),
-        param!("pi_mult", "Pi Mult", unlimited_float, 0.5, -10.0, 10.0),
-        param!("csc_add", "Csc Add", unlimited_float, 0.25, -10.0, 10.0),
-        param!("scaley", "Scale Y", unlimited_float, 1.0, -10.0, 10.0),
+        param!("csc_div", "Csc Div", unlimited_float, 1.0, -10.0, 10.0, "Numerator of the csc fraction."),
+        param!("cos_div", "Cos Div", unlimited_float, 1.0, -10.0, 10.0, "Divisor on x in the cos term `cos(x/cos_div)`."),
+        param!("tan_div", "Tan Div", unlimited_float, 1.0, -10.0, 10.0, "Divisor on x in the tan term `tan(x/tan_div)`."),
+        param!("csc_pow", "Csc Pow", unlimited_float, 0.5, -10.0, 10.0, "Exponent on `csc² + π·pi_mult`."),
+        param!("pi_mult", "Pi Mult", unlimited_float, 0.5, -10.0, 10.0, "Coefficient on the π offset added to `csc²` before the pow."),
+        param!("csc_add", "Csc Add", unlimited_float, 0.25, -10.0, 10.0, "Additive offset on the per-axis scale."),
+        param!("scaley", "Scale Y", unlimited_float, 1.0, -10.0, 10.0, "Y-axis scale multiplier (applied after the per-axis scale)."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -138,6 +146,9 @@ fn variation_csc_squared(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3
 // as anamorphcyl/ennepers; works as long as it's the only normal
 // variation in its transform.
 // =============================================================================
+/// Hyperbolic-elliptic mapping — emits `(sinh(x) · cos(a·y), cosh(x) ·
+/// sin(a·y))`. Echoes the parametric ellipse `(cos t, sin t)` but with
+/// hyperbolic radial scaling along X.
 pub static HYPERBOLICELLIPSE: VariationDef = VariationDef {
     name: "hyperbolicellipse",
     display_name: "Hyperbolic Ellipse",
@@ -145,7 +156,7 @@ pub static HYPERBOLICELLIPSE: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("a", "A", unlimited_float, 1.0, -10.0, 10.0),
+        param!("a", "A", unlimited_float, 1.0, -10.0, 10.0, "Frequency multiplier on Y in the cos/sin arguments."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -179,6 +190,12 @@ fn variation_hyperbolicellipse(p: vec3<f32>, xform_id: u32, variation_id: u32) -
 //   out = (a · cos(t), a · sin(t))
 // 1 user param (radius); clean.
 // =============================================================================
+/// Radial spiral — emits `(x · radius · cos(r² + ε), x · radius · sin(r² +
+/// ε))` where `r² = x² + y²`. The angular position rotates with squared
+/// radius, producing tightly wound layered spirals.
+///
+/// # Authors
+/// - Will Evans
 pub static LAYERED_SPIRAL: VariationDef = VariationDef {
     name: "layered_spiral",
     display_name: "Layered Spiral",
@@ -186,7 +203,7 @@ pub static LAYERED_SPIRAL: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("radius", "Radius", unlimited_float, 1.0, -10.0, 10.0),
+        param!("radius", "Radius", unlimited_float, 1.0, -10.0, 10.0, "Radial scale on the spiral magnitude."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -226,6 +243,13 @@ fn variation_layered_spiral(p: vec3<f32>, xform_id: u32, variation_id: u32) -> v
 //   r_power, x2y2_pow
 // Clean factor through outer.
 // =============================================================================
+/// 14-parameter atan2-driven spiral generator — combines two `atan2` calls
+/// (one over per-power radial terms, one over per-divisor xy positions) and
+/// a sine wrap, with separate weights and offsets per component. X output
+/// is mirrored across `±π` based on the sign of x.
+///
+/// # Authors
+/// - Whittaker Courtney
 pub static ATAN2_SPIRALS: VariationDef = VariationDef {
     name: "atan2_spirals",
     display_name: "Atan2 Spirals",
@@ -233,20 +257,20 @@ pub static ATAN2_SPIRALS: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("r_mult", "R Mult", unlimited_float, 1.5, -10.0, 10.0),
-        param!("r_add", "R Add", unlimited_float, 1.0, -10.0, 10.0),
-        param!("xy2_mult", "XY² Mult", unlimited_float, 1.125, -10.0, 10.0),
-        param!("xy2_add", "XY² Add", unlimited_float, 0.132, -10.0, 10.0),
-        param!("x_mult", "X Mult", unlimited_float, 2.0, -10.0, 10.0),
-        param!("x_add", "X Add", unlimited_float, 0.25, -10.0, 10.0),
-        param!("yx_div", "YX Div", unlimited_float, 1.0, -10.0, 10.0),
-        param!("yx_add", "YX Add", unlimited_float, 0.0, -10.0, 10.0),
-        param!("yy_div", "YY Div", unlimited_float, 1.25, -10.0, 10.0),
-        param!("yy_add", "YY Add", unlimited_float, 0.0, -10.0, 10.0),
-        param!("sin_add", "Sin Add", unlimited_float, 0.0, -10.0, 10.0),
-        param!("y_mult", "Y Mult", unlimited_float, 1.0, -10.0, 10.0),
-        param!("r_power", "R Power", unlimited_float, 0.5, -10.0, 10.0),
-        param!("x2y2_pow", "X²Y² Pow", unlimited_float, 1.0, -10.0, 10.0),
+        param!("r_mult", "R Mult", unlimited_float, 1.5, -10.0, 10.0, "Multiplier on the first atan2's numerator (r-term)."),
+        param!("r_add", "R Add", unlimited_float, 1.0, -10.0, 10.0, "Offset on the first atan2's numerator."),
+        param!("xy2_mult", "XY² Mult", unlimited_float, 1.125, -10.0, 10.0, "Multiplier on the first atan2's denominator (xy²-term)."),
+        param!("xy2_add", "XY² Add", unlimited_float, 0.132, -10.0, 10.0, "Offset on the first atan2's denominator."),
+        param!("x_mult", "X Mult", unlimited_float, 2.0, -10.0, 10.0, "Output multiplier on the first atan2."),
+        param!("x_add", "X Add", unlimited_float, 0.25, -10.0, 10.0, "Output additive offset on X."),
+        param!("yx_div", "YX Div", unlimited_float, 1.0, -10.0, 10.0, "Divisor on x in the second atan2."),
+        param!("yx_add", "YX Add", unlimited_float, 0.0, -10.0, 10.0, "Additive offset on x in the second atan2."),
+        param!("yy_div", "YY Div", unlimited_float, 1.25, -10.0, 10.0, "Divisor on y in the second atan2."),
+        param!("yy_add", "YY Add", unlimited_float, 0.0, -10.0, 10.0, "Additive offset on y in the second atan2."),
+        param!("sin_add", "Sin Add", unlimited_float, 0.0, -10.0, 10.0, "Phase offset on the sine wrap around the second atan2."),
+        param!("y_mult", "Y Mult", unlimited_float, 1.0, -10.0, 10.0, "Output multiplier on Y."),
+        param!("r_power", "R Power", unlimited_float, 0.5, -10.0, 10.0, "Exponent on the radial term `r = (x²+y²)^r_power`."),
+        param!("x2y2_pow", "X²Y² Pow", unlimited_float, 1.0, -10.0, 10.0, "Exponent on the xy² term `xy² = (x²+y²)^x2y2_pow`."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -325,6 +349,16 @@ fn variation_atan2_spirals(p: vec3<f32>, xform_id: u32, variation_id: u32) -> ve
 // inputs, which for floating-point grids in flame iteration is
 // effectively never; treat as equivalent.)
 // =============================================================================
+/// 8-cell quadrant routing — rounds the input to a grid (with separate cell
+/// sizes `c, d` per axis), then chooses one of 8 octant-style cell-boundary
+/// directions to add `±a` to X or `±b` to Y. Produces a grid-tile shifted
+/// pattern.
+///
+/// # Authors
+/// - Michael Faber
+/// - Joel Faber
+/// - Brad Stefanov
+/// - DarkBeam
 pub static GRIDOUT2: VariationDef = VariationDef {
     name: "gridout2",
     display_name: "Grid Out 2",
@@ -332,10 +366,10 @@ pub static GRIDOUT2: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("a", "A", unlimited_float, 1.0, -10.0, 10.0),
-        param!("b", "B", unlimited_float, 1.0, -10.0, 10.0),
-        param!("c", "C", unlimited_float, 1.0, -10.0, 10.0),
-        param!("d", "D", unlimited_float, 1.0, -10.0, 10.0),
+        param!("a", "A", unlimited_float, 1.0, -10.0, 10.0, "X-axis shift magnitude."),
+        param!("b", "B", unlimited_float, 1.0, -10.0, 10.0, "Y-axis shift magnitude."),
+        param!("c", "C", unlimited_float, 1.0, -10.0, 10.0, "X-axis cell size (multiplied with `round(x)` before the octant routing)."),
+        param!("d", "D", unlimited_float, 1.0, -10.0, 10.0, "Y-axis cell size (multiplied with `round(y)`)."),
     ],
     needs_transform: false,
     writes_color: false,
