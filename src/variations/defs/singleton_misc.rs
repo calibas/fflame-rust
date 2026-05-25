@@ -14,7 +14,7 @@
 //!                 mappings on the L∞ "square" perimeter
 //!   - `atan`      (FractalDesire / Stefanov)       — per-axis atan with
 //!                 mode selector
-//!   - `murl`      (Maschke)                        — complex-power Möbius
+//!   - `murl`      (Zueuk)                        — complex-power Möbius
 //!
 //! Sources: each variation's `.cpp` file in
 //! `output/jwildfire-vars/output/`.
@@ -50,6 +50,15 @@ use crate::param;
 //   FPy += sign(y) · (VVAR · ey + ywidth)
 //   (the trailing ±xwidth/±ywidth lacks VVAR — divide-out)
 // =============================================================================
+/// Quadrant-based power warp — squares the input per axis, raises each to a
+/// power (`xpower + xypower` on X, `ypower + xypower` on Y), and multiplies
+/// by `multx`/`multy`. The sign of the input chooses whether the result is
+/// added or subtracted, and a constant `xwidth`/`ywidth` is added to the
+/// output. With `logmode = 1`, the squared input is first run through a
+/// log-base transform before the pow.
+///
+/// # Authors
+/// - Whittaker Courtney
 pub static CORNERS: VariationDef = VariationDef {
     name: "corners",
     display_name: "Corners",
@@ -57,15 +66,15 @@ pub static CORNERS: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("xwidth", "X Width", unlimited_float, 1.0, -10.0, 10.0),
-        param!("ywidth", "Y Width", unlimited_float, 1.0, -10.0, 10.0),
-        param!("multx", "Mult X", unlimited_float, 1.0, -10.0, 10.0),
-        param!("multy", "Mult Y", unlimited_float, 1.0, -10.0, 10.0),
-        param!("xpower", "X Power", unlimited_float, 0.75, -10.0, 10.0),
-        param!("ypower", "Y Power", unlimited_float, 0.75, -10.0, 10.0),
-        param!("xypower", "XY Power Add", unlimited_float, 0.0, -10.0, 10.0),
-        param!("logmode", "Log Mode", int, 0.0, 0.0, 1.0),
-        param!("log_base", "Log Base", unlimited_float, 2.71828, 0.01, 100.0),
+        param!("xwidth", "X Width", unlimited_float, 1.0, -10.0, 10.0, "Constant X offset added per quadrant (signed by the input's X sign)."),
+        param!("ywidth", "Y Width", unlimited_float, 1.0, -10.0, 10.0, "Constant Y offset added per quadrant."),
+        param!("multx", "Mult X", unlimited_float, 1.0, -10.0, 10.0, "X-axis multiplier on the squared input before the pow."),
+        param!("multy", "Mult Y", unlimited_float, 1.0, -10.0, 10.0, "Y-axis multiplier on the squared input before the pow."),
+        param!("xpower", "X Power", unlimited_float, 0.75, -10.0, 10.0, "X-axis power exponent (combined additively with `xypower`)."),
+        param!("ypower", "Y Power", unlimited_float, 0.75, -10.0, 10.0, "Y-axis power exponent (combined additively with `xypower`)."),
+        param!("xypower", "XY Power Add", unlimited_float, 0.0, -10.0, 10.0, "Additional power offset added to both `xpower` and `ypower`."),
+        param!("logmode", "Log Mode", int, 0.0, 0.0, 1.0, "Formula selector: 0 = `pow(x², …)`, 1 = `pow(log_base(x²·mult + 3), …) − 1.33`."),
+        param!("log_base", "Log Base", unlimited_float, 2.71828, 0.01, 100.0, "Log base used by the `logmode = 1` formula. Default ≈ e."),
     ],
     needs_transform: true,
     writes_color: false,
@@ -147,6 +156,11 @@ fn variation_corners(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 //   else:         out_x = x
 //   (same for y)
 // =============================================================================
+/// Boundary-bounded fmod warp — leaves points inside the `±x, ±y`
+/// rectangle alone; outside the rectangle, wraps the coordinate back
+/// inside via fmod. Produces a tiled pattern in which the central
+/// rectangle is preserved while the surrounding plane is repeated.
+///
 /// # Authors
 /// - Apophysis Plugin Pack
 pub static MODULUS: VariationDef = VariationDef {
@@ -156,8 +170,8 @@ pub static MODULUS: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("x", "X", unlimited_float, 0.2, -10.0, 10.0),
-        param!("y", "Y", unlimited_float, 0.5, -10.0, 10.0),
+        param!("x", "X", unlimited_float, 0.2, -10.0, 10.0, "X-axis half-width — points outside ±x get mod-wrapped back inside."),
+        param!("y", "Y", unlimited_float, 0.5, -10.0, 10.0, "Y-axis half-width."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -253,6 +267,13 @@ fn variation_modulus(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 // use the threshold as-is when w > 0 (the typical case). At negative w
 // the comparison flips — accept that as a minor divergence.
 // =============================================================================
+/// Octagonal-tile warp — applies three sequential contributions: a radial
+/// term `r = 1/(x⁴ + y⁴)` (folded for `r < 2`), a Manhattan-distance
+/// reciprocal term, and a sign-based shift by `x`/`y`/`z`. The combined
+/// effect tiles the plane (or volume) with an octagonal pattern.
+///
+/// # Authors
+/// - FracFx
 pub static OCTAGON: VariationDef = VariationDef {
     name: "octagon",
     display_name: "Octagon",
@@ -260,9 +281,9 @@ pub static OCTAGON: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("x", "X", unlimited_float, 0.0, -10.0, 10.0),
-        param!("y", "Y", unlimited_float, 0.0, -10.0, 10.0),
-        param!("z", "Z", unlimited_float, 0.0, -10.0, 10.0),
+        param!("x", "X", unlimited_float, 0.0, -10.0, 10.0, "X-axis sign-shift amount added at the end (signed by `sign(x)`)."),
+        param!("y", "Y", unlimited_float, 0.0, -10.0, 10.0, "Y-axis sign-shift amount."),
+        param!("z", "Z", unlimited_float, 0.0, -10.0, 10.0, "Z-axis sign-shift amount (3D only)."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -341,12 +362,18 @@ fn variation_octagon(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 };
 
 // =============================================================================
-// circus: radial radius scale (Faber)
+// circus: radial radius scale (Michael Faber)
 //   r = sqrt(x² + y²)
 //   if r ≤ 1: r' = r · scale
 //   else:     r' = r / scale
 //   out = r' · (cos θ, sin θ)   where θ = atan2(y, x)
 // =============================================================================
+/// Radial radius scale — points inside the unit circle (`r ≤ 1`) are scaled
+/// outward by `scale`; points outside are scaled inward by `1/scale`.
+/// Creates a deliberate discontinuity at the unit circle.
+///
+/// # Authors
+/// - Michael Faber
 pub static CIRCUS: VariationDef = VariationDef {
     name: "circus",
     display_name: "Circus",
@@ -354,7 +381,7 @@ pub static CIRCUS: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("scale", "Scale", unlimited_float, 1.0, 0.001, 10.0),
+        param!("scale", "Scale", unlimited_float, 1.0, 0.001, 10.0, "Inner-disc (`r ≤ 1`) scaling factor. Outside the disc, the reciprocal `1/scale` is used."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -402,6 +429,11 @@ fn variation_circus(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 //   a = (π/4) · perimeter / side − π/4
 //   FPx += r · cos a;  FPy += r · sin a
 // =============================================================================
+/// L∞-square perimeter to circle mapping — treats the input as a point
+/// on the L∞ unit square (the Chebyshev-distance "square"), and maps it
+/// onto a circle by treating its perimeter distance as the output angle.
+/// `hole` adds a central radial offset, creating an inner gap.
+///
 /// # Authors
 /// - Apophysis Plugin Pack
 pub static CIRCLIZE: VariationDef = VariationDef {
@@ -411,7 +443,7 @@ pub static CIRCLIZE: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("hole", "Hole", unlimited_float, 0.4, -10.0, 10.0),
+        param!("hole", "Hole", unlimited_float, 0.4, -10.0, 10.0, "Center-hole radial offset. Larger values produce a bigger central gap."),
     ],
     needs_transform: true,
     writes_color: false,
@@ -477,9 +509,16 @@ fn variation_circlize(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
 };
 
 // =============================================================================
-// circlize2: same as circlize, hole folded into VVAR-scaled r (Faber)
+// circlize2: same as circlize, hole folded into VVAR-scaled r (Michael Faber)
 //   r = VVAR · (side + hole)        (clean factor through outer)
 // =============================================================================
+/// Variant of `circlize` — same L∞-square-to-circle mapping, but `hole` is
+/// folded into the variation-weighted radius so the whole formula factors
+/// cleanly through the outer weight. Same visual result as `circlize` for
+/// matching parameters, with subtly different weight semantics.
+///
+/// # Authors
+/// - Michael Faber
 pub static CIRCLIZE2: VariationDef = VariationDef {
     name: "circlize2",
     display_name: "Circlize 2",
@@ -487,7 +526,7 @@ pub static CIRCLIZE2: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("hole", "Hole", unlimited_float, 0.0, -10.0, 10.0),
+        param!("hole", "Hole", unlimited_float, 0.0, -10.0, 10.0, "Center-hole radial offset (folded into the weighted radius)."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -549,6 +588,14 @@ fn variation_circlize2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
 //   mode 1: out = ((2/π) · atan(stretch · x), y)
 //   mode 2: out = ((2/π) · atan(stretch · x), (2/π) · atan(stretch · y))
 // =============================================================================
+/// Per-axis arctangent warp with mode selector — applies
+/// `(2/π)·atan(stretch · coord)` to one or both axes (controlled by
+/// `mode`). Saturates the input toward ±1, with `stretch` controlling how
+/// quickly the saturation kicks in.
+///
+/// # Authors
+/// - FractalDesire
+/// - Brad Stefanov
 pub static ATAN_VAR: VariationDef = VariationDef {
     name: "atan",
     display_name: "Atan",
@@ -556,8 +603,8 @@ pub static ATAN_VAR: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("mode", "Mode", int, 0.0, 0.0, 2.0),
-        param!("stretch", "Stretch", unlimited_float, 1.0, -10.0, 10.0),
+        param!("mode", "Mode", int, 0.0, 0.0, 2.0, "Which axes get arctangent-transformed: 0 = Y only, 1 = X only, 2 = both."),
+        param!("stretch", "Stretch", unlimited_float, 1.0, -10.0, 10.0, "Pre-atan input scaling. Higher = sharper saturation toward ±1."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -604,7 +651,7 @@ fn variation_atan(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
 };
 
 // =============================================================================
-// murl: complex-power Möbius (Maschke)
+// murl: complex-power Möbius (Zueuk)
 //   c     = c_user / (power − 1)        (or = c_user when power == 1)
 //   p2    = power / 2
 //   vp    = VVAR · (c + 1)
@@ -615,6 +662,13 @@ fn variation_atan(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
 //   FPx += rl · (x · re + y · im)
 //   FPy += rl · (y · re − x · im)
 // =============================================================================
+/// Complex-power Möbius warp — treats the input as a complex number `z = x
+/// + iy`, computes `c·z^power + 1`, and applies the Möbius transform `z' =
+/// (c+1)·z / (c·z^power + 1)`. With `power = 1` and `c → 0` it reduces to
+/// identity; large `c` produces strong Möbius distortion.
+///
+/// # Authors
+/// - Zueuk
 pub static MURL: VariationDef = VariationDef {
     name: "murl",
     display_name: "Murl",
@@ -622,8 +676,8 @@ pub static MURL: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("c", "C", unlimited_float, 0.1, -10.0, 10.0),
-        param!("power", "Power", int, 1.0, -50.0, 50.0),
+        param!("c", "C", unlimited_float, 0.1, -10.0, 10.0, "Möbius coefficient. Rescaled internally by `1/(power−1)` when `power ≠ 1`."),
+        param!("power", "Power", int, 1.0, -50.0, 50.0, "Complex power applied to the input. Integer values produce rotational symmetries; `power = 1` reduces to a simpler Möbius warp."),
     ],
     needs_transform: false,
     writes_color: false,
