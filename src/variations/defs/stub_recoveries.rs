@@ -7,10 +7,10 @@
 //! the bottom of each file. We translate directly from the Java.
 //!
 //!   - `bsplit`     (Raykoid666)   — recovered 2 user params (x, y) from Java
-//!   - `cylinder2`  (Maschke)      — `x / sqrt(x²+1)` lengthwise warp
-//!   - `eclipse`    (Faber)        — eclipse-shaped X clamp; 1 user param
+//!   - `cylinder2`                 — `x / sqrt(x²+1)` lengthwise warp
+//!   - `eclipse`   (Michael Faber) — eclipse-shaped X clamp; 1 user param
 //!   - `lozi`       (TyrantWave)   — Lozi strange attractor; 3 user params
-//!   - `pulse`      (Maschke)      — sine-wave additive distortion; 4 params
+//!   - `pulse`                     — sine-wave additive distortion; 4 params
 //!   - `hypershift` (Zy0rg/Stefanov) — Möbius-style shift+stretch; 2 params
 //!
 //! Sources: each variation's `.cpp` file under `output/jwildfire-vars/output/`.
@@ -38,12 +38,19 @@ use crate::variations::{
 use crate::param;
 
 // =============================================================================
-// bsplit: tan/sin split (Raykoid666 / Anderson, recovered from Java)
+// bsplit: tan/sin split (Raykoid666 / ChronologicalDot, recovered from Java)
 //   if FTx + x == 0 or FTx + x == π:  contribute 0 (cpp's "doHide")
 //   else:
 //     out_x = cos(FTy + y) / tan(FTx + x)
 //     out_y = (-FTy + y) / sin(FTx + x)
 // =============================================================================
+/// Tangent-split warp — outputs `(cos(y)/tan(x), -y/sin(x))` with user-
+/// adjustable X/Y shifts. Degenerate at `x = 0` and `x = π` (sin = 0);
+/// those points contribute zero.
+///
+/// # Authors
+/// - Raykoid666
+/// - ChronologicalDot
 pub static BSPLIT: VariationDef = VariationDef {
     name: "bsplit",
     display_name: "BSplit",
@@ -51,8 +58,8 @@ pub static BSPLIT: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("x", "X shift", unlimited_float, 0.0, -10.0, 10.0),
-        param!("y", "Y shift", unlimited_float, 0.0, -10.0, 10.0),
+        param!("x", "X shift", unlimited_float, 0.0, -10.0, 10.0, "X-axis shift added before the trig terms."),
+        param!("y", "Y shift", unlimited_float, 0.0, -10.0, 10.0, "Y-axis shift added before the trig terms."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -102,6 +109,8 @@ fn variation_bsplit(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 // cylinder2: lengthwise unit-cylinder warp
 //   out = (x / sqrt(x² + 1), y)
 // =============================================================================
+/// Lengthwise unit-cylinder warp — `(x / sqrt(x² + 1), y)`. Compresses X
+/// toward [-1, 1] without affecting Y.
 pub static CYLINDER2: VariationDef = VariationDef {
     name: "cylinder2",
     display_name: "Cylinder 2",
@@ -129,7 +138,7 @@ fn variation_cylinder2(p: vec3<f32>) -> vec3<f32> {
 };
 
 // =============================================================================
-// eclipse: eclipse-shaped X-axis clamp (Faber)
+// eclipse: eclipse-shaped X-axis clamp (Michael Faber)
 //   if |y| <= w:
 //     c2 = sqrt(w² − y²)
 //     if |x| <= c2:
@@ -144,6 +153,12 @@ fn variation_cylinder2(p: vec3<f32>) -> vec3<f32> {
 //   else:
 //     out_x = x;  out_y = y      (pass-through outside the eclipse)
 // =============================================================================
+/// Eclipse-shaped X-axis clamp — inside an elliptical region sized by the
+/// variation's weight, X gets shifted by `shift · w`; outside the region,
+/// points pass through unchanged. Produces an eclipse silhouette.
+///
+/// # Authors
+/// - Michael Faber
 pub static ECLIPSE: VariationDef = VariationDef {
     name: "eclipse",
     display_name: "Eclipse",
@@ -151,7 +166,7 @@ pub static ECLIPSE: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("shift", "Shift", float, 0.0, -2.0, 2.0),
+        param!("shift", "Shift", float, 0.0, -2.0, 2.0, "Horizontal shift applied to points inside the eclipse region, scaled by the variation's weight."),
     ],
     needs_transform: true,
     writes_color: false,
@@ -206,6 +221,11 @@ fn variation_eclipse(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 // lozi: Lozi strange attractor (TyrantWave)
 //   out = (c − a·|x| + y, b · x)
 // =============================================================================
+/// Lozi strange attractor — `(c − a·|x| + y, b·x)` iteration. Like Hénon
+/// but with `|x|` instead of `x²`.
+///
+/// # Authors
+/// - TyrantWave
 pub static LOZI: VariationDef = VariationDef {
     name: "lozi",
     display_name: "Lozi",
@@ -213,9 +233,9 @@ pub static LOZI: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("a", "A", unlimited_float, 0.5, -10.0, 10.0),
-        param!("b", "B", unlimited_float, 1.0, -10.0, 10.0),
-        param!("c", "C", unlimited_float, 1.0, -10.0, 10.0),
+        param!("a", "A", unlimited_float, 0.5, -10.0, 10.0, "Coefficient on `|x|` — controls the fold strength."),
+        param!("b", "B", unlimited_float, 1.0, -10.0, 10.0, "Coefficient scaling X to the Y output."),
+        param!("c", "C", unlimited_float, 1.0, -10.0, 10.0, "Constant offset added to X output."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -243,10 +263,12 @@ fn variation_lozi(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
 };
 
 // =============================================================================
-// pulse: sine-wave additive distortion (Maschke)
+// pulse: sine-wave additive distortion
 //   out_x = x + scalex · sin(x · freqx)
 //   out_y = y + scaley · sin(y · freqy)
 // =============================================================================
+/// Sine-wave additive distortion — adds `scale · sin(coord · freq)` to each
+/// axis. Per-axis frequency and amplitude controls.
 pub static PULSE: VariationDef = VariationDef {
     name: "pulse",
     display_name: "Pulse",
@@ -254,10 +276,10 @@ pub static PULSE: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("freqx", "Freq X", unlimited_float, 2.0, -50.0, 50.0),
-        param!("freqy", "Freq Y", unlimited_float, 2.0, -50.0, 50.0),
-        param!("scalex", "Scale X", unlimited_float, 1.0, -10.0, 10.0),
-        param!("scaley", "Scale Y", unlimited_float, 1.0, -10.0, 10.0),
+        param!("freqx", "Freq X", unlimited_float, 2.0, -50.0, 50.0, "X-axis sine frequency."),
+        param!("freqy", "Freq Y", unlimited_float, 2.0, -50.0, 50.0, "Y-axis sine frequency."),
+        param!("scalex", "Scale X", unlimited_float, 1.0, -10.0, 10.0, "X-axis sine amplitude."),
+        param!("scaley", "Scale Y", unlimited_float, 1.0, -10.0, 10.0, "Y-axis sine amplitude."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -304,6 +326,13 @@ fn variation_pulse(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 //                                     — divide-out via needs_transform)
 //   FPy += rad · y' · stretch
 // =============================================================================
+/// Möbius-style shift + stretch — inverts the input through the unit
+/// circle, adds a horizontal shift, then re-inverts. The Y output gets
+/// stretched separately.
+///
+/// # Authors
+/// - Zy0rg
+/// - Brad Stefanov
 pub static HYPERSHIFT: VariationDef = VariationDef {
     name: "hypershift",
     display_name: "Hypershift",
@@ -311,8 +340,8 @@ pub static HYPERSHIFT: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("shift", "Shift", unlimited_float, 2.0, -10.0, 10.0),
-        param!("stretch", "Stretch", unlimited_float, 1.0, -10.0, 10.0),
+        param!("shift", "Shift", unlimited_float, 2.0, -10.0, 10.0, "Horizontal shift applied after the first inversion. Also scales the overall transformation strength via `1 − shift²`."),
+        param!("stretch", "Stretch", unlimited_float, 1.0, -10.0, 10.0, "Y-axis stretching factor applied to the output."),
     ],
     needs_transform: true,
     writes_color: false,
