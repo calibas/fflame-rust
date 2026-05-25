@@ -85,6 +85,9 @@ the answer is known — that's the convention for "unknown" per
 - `glynnSShape` ([glynnsshape_misc.rs](../../src/variations/defs/glynnsshape_misc.rs))
 - `xheart_blur_wf` ([apo_misc18.rs](../../src/variations/defs/apo_misc18.rs))
 - `circleLinear` ([apo_misc19.rs](../../src/variations/defs/apo_misc19.rs))
+- `cannabiscurve_wf` ([apo_misc20.rs](../../src/variations/defs/apo_misc20.rs)) — curve documented by Eric W. Weisstein at [mathworld.wolfram.com](https://mathworld.wolfram.com/CannabisCurve.html); WF implementation author unknown
+- `spherical3D_wf` ([apo_misc20.rs](../../src/variations/defs/apo_misc20.rs))
+- `swirl3D_wf` ([apo_misc20.rs](../../src/variations/defs/apo_misc20.rs))
 
 **Likely shared author** — all are JWildfire ports of complex-plane
 inverse hyperbolic functions (the plain ones in `hyperbolic.rs` and
@@ -327,10 +330,10 @@ this entry rather than spawning new ones.
 
 ### cpp-vs-Java port divergences (atan2-swap family)
 
-Six variations so far show the same family of divergence: the upstream
-cpp port swapped the order of `atan2` arguments (or, in `power`'s
-case, swapped sin↔cos directly in the output) relative to JWildfire's
-Java. Mechanically this collapses via the identity
+Seven variations so far show the same family of divergence: the
+upstream cpp port swapped the order of `atan2` arguments (or, in
+`power`'s case, swapped sin↔cos directly in the output) relative to
+JWildfire's Java. Mechanically this collapses via the identity
 `atan2(X, Y) = π/2 − atan2(Y, X)`. Each variation renders mirrored
 across `y = x` (sometimes with additional sign/parameter twists)
 relative to the Java equivalent. We follow cpp throughout.
@@ -377,6 +380,15 @@ exactly if we ever need to:
   (additive shift + sign flip). Because `vv` multiplies all three
   output components (`vv · sr, vv · cr, vv · r · cos(z)`), the
   whole-output magnitude differs, not just the angular direction.
+
+- **`swirl3D_wf`** ([apo_misc20.rs:176](../../src/variations/defs/apo_misc20.rs#L176),
+  [:185](../../src/variations/defs/apo_misc20.rs#L185))
+  — cpp's `ang = atan2(x, y)` gives output XY swap (`(rad·sin θ_java,
+  rad·cos θ_java)` vs Java's identity `(rad·cos θ_java, rad·sin θ_java) =
+  (x, y)`). The Z output `sin(6·cos(rad) − n·ang)` picks up both a
+  sign flip on the `n·θ` term and an additive `−n·π/2` shift inside
+  the sine, so the Z modulation is genuinely different (not just
+  rotated).
 
 **Remediation if we add JWildfire flame import:** two general
 options. Either (a) pre-compose a `y↔x` swap into the affine that
