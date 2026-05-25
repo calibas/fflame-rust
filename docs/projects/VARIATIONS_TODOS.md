@@ -63,6 +63,7 @@ the answer is known — that's the convention for "unknown" per
 - `spirograph` ([parametric_curves.rs](../../src/variations/defs/parametric_curves.rs))
 - `cylinder2` ([stub_recoveries.rs](../../src/variations/defs/stub_recoveries.rs))
 - `pulse` ([stub_recoveries.rs](../../src/variations/defs/stub_recoveries.rs))
+- `ptransform` ([misc_extras.rs](../../src/variations/defs/misc_extras.rs))
 
 **Likely shared author** — all are JWildfire ports of complex-plane
 inverse hyperbolic functions (the plain ones in `hyperbolic.rs` and
@@ -143,6 +144,20 @@ type-correction pass.
   dispatched as 3 modes via threshold comparisons (`> 1.5` snap to
   corner, `> 0.5` collapse to origin, else scatter). See
   [maurer_hyper.rs](../../src/variations/defs/maurer_hyper.rs).
+- `chunk.mode` — declared `Integer` with `[0, 1]` range, used as a
+  binary toggle (keep r ≤ 0 vs keep r > 0). Should be `Boolean`. See
+  [misc_extras.rs](../../src/variations/defs/misc_extras.rs).
+- `ptransform.use_log` — declared `Integer` with `[0, 1]` range, used
+  as a binary toggle (linear vs log-polar ρ). Should be `Boolean`. See
+  [misc_extras.rs](../../src/variations/defs/misc_extras.rs).
+- `tile_reverse.vertical` — declared `Integer` with `[0, 1]` range,
+  used as a binary axis selector (horizontal vs vertical). Should be
+  `Boolean`. See
+  [misc_extras.rs](../../src/variations/defs/misc_extras.rs).
+- `tile_reverse.reversal` — declared `unlimited_float` with `[-10, 10]`
+  range, but only checked for `== 1.0` vs anything else (binary mirror
+  toggle). Type is misleading; semantics are Boolean. See
+  [misc_extras.rs](../../src/variations/defs/misc_extras.rs).
 
 ---
 
