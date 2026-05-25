@@ -64,6 +64,7 @@ the answer is known — that's the convention for "unknown" per
 - `cylinder2` ([stub_recoveries.rs](../../src/variations/defs/stub_recoveries.rs))
 - `pulse` ([stub_recoveries.rs](../../src/variations/defs/stub_recoveries.rs))
 - `ptransform` ([misc_extras.rs](../../src/variations/defs/misc_extras.rs))
+- `squircular` ([watchlist_misc.rs](../../src/variations/defs/watchlist_misc.rs))
 
 **Likely shared author** — all are JWildfire ports of complex-plane
 inverse hyperbolic functions (the plain ones in `hyperbolic.rs` and
