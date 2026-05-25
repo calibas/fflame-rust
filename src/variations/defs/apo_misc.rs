@@ -15,7 +15,7 @@
 //!   - `conic`           (cyberxaos 4/2007)        — 2 user params,
 //!                                                    RNG; needs_transform
 //!                                                    divide-out
-//!   - `power`           (Apophysis classic)       — 0 user params;
+//!   - `power`                                     — 0 user params;
 //!                                                    cpp swap quirks
 //!                                                    preserved (cosA
 //!                                                    instead of sinA in
@@ -24,7 +24,7 @@
 //!                                                    body has w · w/d · …,
 //!                                                    needs_transform
 //!                                                    divide-out
-//!   - `checks`          (Apophysis classic)       — 4 user params + 1
+//!   - `checks`          (Keeps / Xyrus02)       — 4 user params + 1
 //!                                                    init slot; RNG;
 //!                                                    clean
 //!   - `cone`            (Brad Stefanov)           — 9 user params
@@ -62,6 +62,14 @@ use crate::param;
 // Clean factor through outer.
 // erf approximation: Abramowitz & Stegun 7.1.26 (max error ~1.5e-7).
 // =============================================================================
+/// 3D piecewise erf / 1/r² — per-axis, if `|coord| ≥ 2` the output is
+/// `coord / r²` (spherical inversion); otherwise it's `erf(coord)`.
+/// Combines sigmoid saturation near the origin with spherical inversion far
+/// away.
+///
+/// # Authors
+/// - zephyrtronium
+/// - DarkBeam
 pub static XERF: VariationDef = VariationDef {
     name: "xerf",
     display_name: "X Erf",
@@ -137,6 +145,13 @@ fn variation_xerf(p: vec3<f32>) -> vec3<f32> {
 // (cpp APO_VARIABLES only declares power, center; recovered from
 //  Java setParameter.)
 // =============================================================================
+/// Inverted Julia warp — 9-parameter Julia variant with adjustable inward
+/// center. Computes `z = (x² + y²·y2_mult)^power + x2y2_add`, picks a
+/// random hemisphere via `q = atan2(...)/2 + π·floor(2·rand)`, then emits
+/// `cos(z·cos_mult) · (sin q, cos q · y_mult) / z / center`.
+///
+/// # Authors
+/// - Whittaker Courtney
 pub static INVERTED_JULIA: VariationDef = VariationDef {
     name: "inverted_julia",
     display_name: "Inverted Julia",
@@ -144,15 +159,15 @@ pub static INVERTED_JULIA: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("power", "Power", unlimited_float, 0.25, -10.0, 10.0),
-        param!("y2_mult", "Y² Mult", unlimited_float, 1.0, -10.0, 10.0),
-        param!("a2x_mult", "A2x Mult", unlimited_float, 1.0, -10.0, 10.0),
-        param!("a2y_mult", "A2y Mult", unlimited_float, 1.0, -10.0, 10.0),
-        param!("a2y_add", "A2y Add", unlimited_float, 0.0, -10.0, 10.0),
-        param!("cos_mult", "Cos Mult", unlimited_float, 0.0, -10.0, 10.0),
-        param!("y_mult", "Y Mult", unlimited_float, 1.0, -10.0, 10.0),
-        param!("center", "Center", unlimited_float, 3.14, -10.0, 10.0),
-        param!("x2y2_add", "X²Y² Add", unlimited_float, 0.0, -10.0, 10.0),
+        param!("power", "Power", unlimited_float, 0.25, -10.0, 10.0, "Exponent on the squared-radius base term `(x² + y²·y2_mult)`."),
+        param!("y2_mult", "Y² Mult", unlimited_float, 1.0, -10.0, 10.0, "Multiplier on y² in the base term."),
+        param!("a2x_mult", "A2x Mult", unlimited_float, 1.0, -10.0, 10.0, "Multiplier on x in the angle term."),
+        param!("a2y_mult", "A2y Mult", unlimited_float, 1.0, -10.0, 10.0, "Multiplier on y in the angle term."),
+        param!("a2y_add", "A2y Add", unlimited_float, 0.0, -10.0, 10.0, "Additive offset on y in the angle term."),
+        param!("cos_mult", "Cos Mult", unlimited_float, 0.0, -10.0, 10.0, "Frequency multiplier on z in the cosine modulator."),
+        param!("y_mult", "Y Mult", unlimited_float, 1.0, -10.0, 10.0, "Y output scaling."),
+        param!("center", "Center", unlimited_float, 3.14, -10.0, 10.0, "Divisor on the output radius. Higher = tighter pattern."),
+        param!("x2y2_add", "X²Y² Add", unlimited_float, 0.0, -10.0, 10.0, "Additive offset on the base term (added after the pow)."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -227,6 +242,13 @@ fn variation_inverted_julia(p: vec3<f32>, xform_id: u32, variation_id: u32, rng:
 //   out = (r · cos a, r · sin a)
 // Body has w in `r` → needs_transform divide-out.
 // =============================================================================
+/// Angle-radius disc inversion — emits `(r·cos a, r·sin a)` where `a = π /
+/// (sqrt(x²+y²) + 1)` and `r = atan2(y, x) · w/π`. Swaps the roles of
+/// radius and angle in the output relative to a standard polar-to-cartesian
+/// mapping.
+///
+/// # Authors
+/// - Michael Faber
 pub static IDISC: VariationDef = VariationDef {
     name: "idisc",
     display_name: "I-Disc",
@@ -276,6 +298,12 @@ fn variation_idisc(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 //   out = (r · x, r · y)
 // Body has w in `r` → needs_transform divide-out.
 // =============================================================================
+/// Conic-section sampler — emits `r · (x, y)` where `r = w · (rand − holes)
+/// · eccentricity / (1 + ecc · x/s) / s` and `s = sqrt(x²+y²)`. The `1/(1 +
+/// ecc·cos θ)` term is the standard polar equation of a conic section.
+///
+/// # Authors
+/// - cyberxaos
 pub static CONIC: VariationDef = VariationDef {
     name: "conic",
     display_name: "Conic",
@@ -283,8 +311,8 @@ pub static CONIC: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("eccentricity", "Eccentricity", unlimited_float, 1.0, -10.0, 10.0),
-        param!("holes", "Holes", unlimited_float, 0.0, -10.0, 10.0),
+        param!("eccentricity", "Eccentricity", unlimited_float, 1.0, -10.0, 10.0, "Conic eccentricity. 0 = circle, 1 = parabola, > 1 = hyperbola."),
+        param!("holes", "Holes", unlimited_float, 0.0, -10.0, 10.0, "Random shift offset subtracted from the per-iteration random. Larger = sparser pattern."),
     ],
     needs_transform: true,
     writes_color: false,
@@ -326,7 +354,7 @@ fn variation_conic(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<func
 };
 
 // =============================================================================
-// power: power-warp (Apophysis classic, cpp swap quirks preserved)
+// power: power-warp (cpp swap quirks preserved)
 //   r = w · pow(sqrt(x²+y²) + ε, x / (sqrt + ε))
 //   out = r · (y/sqrt, x/sqrt)
 // (cpp uses cosA in the exponent and swaps xy in the output, which
@@ -334,6 +362,10 @@ fn variation_conic(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<func
 // Clean factor through outer.
 // pow(base, x) for negative base would NaN — base = sqrt + ε ≥ ε > 0.
 // =============================================================================
+/// Power warp — emits `r^(x/r) · (y/r, x/r)` where `r = sqrt(x²+y²)`. The
+/// exponent depends on the input's angle (`cos θ`), and the output
+/// coordinates are swapped relative to the input (a 90° rotation; cpp's xy-
+/// swap quirk, preserved).
 pub static POWER: VariationDef = VariationDef {
     name: "power",
     display_name: "Power",
@@ -374,6 +406,13 @@ fn variation_power(p: vec3<f32>) -> vec3<f32> {
 // Body has w² → needs_transform divide-out (one w stripped, outer × w
 // restores the second).
 // =============================================================================
+/// Rounded spherical inversion — softens the standard spherical inversion
+/// `(x, y)/r²` by adding `(2/π)²` to the reciprocal-of-radius term,
+/// yielding `(w·x, w·y) / (1 + (2/π)²·r²)`. Smooths out the singularity at
+/// the origin.
+///
+/// # Authors
+/// - Raykoid666
 pub static ROUNDSPHER: VariationDef = VariationDef {
     name: "roundspher",
     display_name: "Round Spher",
@@ -421,7 +460,7 @@ fn variation_roundspher(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<
 };
 
 // =============================================================================
-// checks: checkerboard cell-shift (Apophysis classic)
+// checks: checkerboard cell-shift (Keeps / Xyrus02)
 //   4 user params: x, y, size, rnd
 //   1 init slot: cs = 1 / (size + ε)
 //   isXY = round(x · cs) + round(y · cs)
@@ -430,6 +469,14 @@ fn variation_roundspher(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<
 //   out = (x + dx, y + dy)
 // Clean factor through outer.
 // =============================================================================
+/// Checkerboard cell-shift — divides space into a grid of cells of size
+/// `size`, classifies each cell as odd/even, and applies a different per-
+/// axis shift in each parity class. Optionally jitters one component of the
+/// shift by `rnd`.
+///
+/// # Authors
+/// - Keeps
+/// - Xyrus02
 pub static CHECKS: VariationDef = VariationDef {
     name: "checks",
     display_name: "Checks",
@@ -437,10 +484,10 @@ pub static CHECKS: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("x", "X", unlimited_float, 0.5, -10.0, 10.0),
-        param!("y", "Y", unlimited_float, 0.5, -10.0, 10.0),
-        param!("size", "Size", unlimited_float, 0.5, 0.001, 10.0),
-        param!("rnd", "Rnd", unlimited_float, 0.0, -10.0, 10.0),
+        param!("x", "X", unlimited_float, 0.5, -10.0, 10.0, "X-cell-shift magnitude."),
+        param!("y", "Y", unlimited_float, 0.5, -10.0, 10.0, "Y-cell-shift magnitude."),
+        param!("size", "Size", unlimited_float, 0.5, 0.001, 10.0, "Cell grid size."),
+        param!("rnd", "Rnd", unlimited_float, 0.0, -10.0, 10.0, "Random jitter magnitude on the cell shift."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -511,6 +558,14 @@ fn variation_checks(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
 //   out = r · (cos(xx·xwave), sin(xx·ywave), height)
 // 3D output (z ≠ pass-through). Clean factor through outer; needs_rng.
 // =============================================================================
+/// Julia + hemisphere mix forming a cone — combines a Julia-style angular
+/// pick `π·floor(weight · rand)·radius2 + atan2(y,x)·radius1` with a
+/// hemisphere-style radial term `r = size2 / sqrt(x²·warp + y² + size1)`,
+/// plus a configurable `height` Z output. The result traces a cone-shaped
+/// surface in 3D.
+///
+/// # Authors
+/// - Brad Stefanov
 pub static CONE: VariationDef = VariationDef {
     name: "cone",
     display_name: "Cone",
@@ -518,15 +573,15 @@ pub static CONE: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("radius1", "Radius 1", unlimited_float, 0.5, -10.0, 10.0),
-        param!("radius2", "Radius 2", unlimited_float, 1.0, -10.0, 10.0),
-        param!("size1", "Size 1", unlimited_float, 0.5, -10.0, 10.0),
-        param!("size2", "Size 2", unlimited_float, 2.0, -10.0, 10.0),
-        param!("ywave", "Y Wave", unlimited_float, 1.0, -10.0, 10.0),
-        param!("xwave", "X Wave", unlimited_float, 1.0, -10.0, 10.0),
-        param!("height", "Height", unlimited_float, 1.0, -10.0, 10.0),
-        param!("warp", "Warp", unlimited_float, 1.0, -10.0, 10.0),
-        param!("weight", "Weight", unlimited_float, 2.0, -10.0, 10.0),
+        param!("radius1", "Radius 1", unlimited_float, 0.5, -10.0, 10.0, "Inner-radius multiplier on the input angle."),
+        param!("radius2", "Radius 2", unlimited_float, 1.0, -10.0, 10.0, "Outer-radius multiplier on the random branch offset."),
+        param!("size1", "Size 1", unlimited_float, 0.5, -10.0, 10.0, "Squared-radius offset in the denominator."),
+        param!("size2", "Size 2", unlimited_float, 2.0, -10.0, 10.0, "Output radius scale (numerator of `r`)."),
+        param!("ywave", "Y Wave", unlimited_float, 1.0, -10.0, 10.0, "Y-axis frequency multiplier in `sin(xx·ywave)`."),
+        param!("xwave", "X Wave", unlimited_float, 1.0, -10.0, 10.0, "X-axis frequency multiplier in `cos(xx·xwave)`."),
+        param!("height", "Height", unlimited_float, 1.0, -10.0, 10.0, "Z output scale (3D only — controls cone height)."),
+        param!("warp", "Warp", unlimited_float, 1.0, -10.0, 10.0, "X² weight in the denominator. Controls the aspect ratio of the cone."),
+        param!("weight", "Weight", unlimited_float, 2.0, -10.0, 10.0, "Number of random angular branches — `floor(weight · rand)` picks the branch."),
     ],
     needs_transform: false,
     writes_color: false,

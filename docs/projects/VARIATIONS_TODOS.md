@@ -68,6 +68,7 @@ the answer is known — that's the convention for "unknown" per
 - `bi_linear` ([classic_blades_misc.rs](../../src/variations/defs/classic_blades_misc.rs))
 - `twoface` ([classic_blades_misc.rs](../../src/variations/defs/classic_blades_misc.rs))
 - `unpolar` ([classic_blades_misc.rs](../../src/variations/defs/classic_blades_misc.rs))
+- `power` ([apo_misc.rs](../../src/variations/defs/apo_misc.rs))
 
 **Likely shared author** — all are JWildfire ports of complex-plane
 inverse hyperbolic functions (the plain ones in `hyperbolic.rs` and
@@ -274,6 +275,17 @@ especially as the broader DC corpus gets ported:
 
 When more `dc_*` variations land, apply the same logic and add to
 this entry rather than spawning new ones.
+
+### `power` follows cpp (Apophysis), not Java (JWildfire)
+
+The standard `power` variation has two upstream forms:
+
+- **Java (JWildfire):** exponent is `sinA = y/r`, output is `(r·cosA, r·sinA) = pow(r, y/r) · (x/r, y/r)`.
+- **cpp (Chaotica / Apophysis ports):** exponent is `cosA = x/r`, output is `(r·sinA, r·cosA) = pow(r, x/r) · (y/r, x/r)`.
+
+These collapse to a single identity: **`cpp_power(x, y) ≡ java_power(y, x)`** — i.e. cpp's output is Java's output with the input transposed across the diagonal `y = x`. Visually this is a mirror, not a rotation, and the angular structure of the output really does differ between the two (because the exponent itself depends on angle). We follow cpp; see [apo_misc.rs](../../src/variations/defs/apo_misc.rs).
+
+Worth flagging once we add JWildfire flame import — any imported flame whose intended look came from Java's `power` will render mirrored unless we either (a) pre-compose a `y↔x` swap into the affine that feeds the variation (doesn't compose cleanly when multiple variations share a transform), or (b) add a per-variation in-body input swap gated on an import-source flag. Either path is a real change, so make the decision deliberately rather than just "do what JWildfire does."
 
 ### Zero-weight variations should still count as "present"
 
