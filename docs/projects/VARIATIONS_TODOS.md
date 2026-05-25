@@ -98,6 +98,7 @@ the answer is known — that's the convention for "unknown" per
 - `rose_wf` ([wf_curves.rs](../../src/variations/defs/wf_curves.rs))
 - `bubble_wf` ([wf_curves.rs](../../src/variations/defs/wf_curves.rs))
 - `dinis_surface_wf` ([waves_wf_family.rs](../../src/variations/defs/waves_wf_family.rs)) — surface documented at [mathworld.wolfram.com/DinisSurface](https://mathworld.wolfram.com/DinisSurface.html); WF implementation author unknown
+- `dc_triangle` ([dc_misc.rs](../../src/variations/defs/dc_misc.rs))
 
 **Likely shared author** — all are JWildfire ports of complex-plane
 inverse hyperbolic functions (the plain ones in `hyperbolic.rs` and
@@ -267,6 +268,10 @@ thresholds, or add a `legacy_import` hook on the param def.
   sin-vs-cos selector per axis. Should all be `Boolean`. Same enum
   across all six instances (three variations × two axes). See
   [waves_wf_family.rs](../../src/variations/defs/waves_wf_family.rs).
+- `dc_triangle.zero_edges` — declared `Integer` with `[0, 1]` range,
+  used as a binary out-of-triangle behavior selector (collapse-to-
+  origin vs scatter). Should be `Boolean`. See
+  [dc_misc.rs](../../src/variations/defs/dc_misc.rs).
 - `butterfly_fay.unified_inner_outer` — declared `Integer` with
   `[0, 1]` range, used as a binary "always-outer vs inside-outside-
   dispatch" toggle. Should be `Boolean`. See
