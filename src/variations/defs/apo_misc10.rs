@@ -8,12 +8,12 @@
 //!   - `ovoid3d` (Larry Berlin)         — 3 user (x, y, z scales);
 //!                                          Full3D `r = w/T` per-axis
 //!                                          scaled output
-//!   - `murl2`   (?)                    — 2 user (c, power int);
+//!   - `murl2`   (Zueuk)                    — 2 user (c, power int);
 //!                                          body has internal `_vp =
 //!                                          w · pow(c+1, 2/power)`
 //!                                          factor; needs_transform
 //!                                          divide-out
-//!   - `minkQM`  (dark-beam)            — 6 user (a, b, c, dd, e, f);
+//!   - `minkQM`  (dark-beam / Brad Stefanov) — 6 user (a, b, c, dd, e, f);
 //!                                          implements Minkowski's
 //!                                          question-mark function via
 //!                                          a per-axis loop bounded by
@@ -41,6 +41,14 @@ use crate::param;
 // (cpp uses `FPx = …` for x and `FPy +=` for y — porter inconsistency;
 // both treated as additive in our system.)
 // =============================================================================
+/// Sin/cos masked warp — emits `(sin³(xf), cos(xf)·sin²(xf)) · (cosh(yf) +
+/// ushift) / (x² + y²)` where `xf = xscale·x + xshift` and `yf = yscale·y +
+/// yshift`. The sin-power factors create lobed masking; `cosh(yf)`
+/// modulates the overall magnitude based on Y.
+///
+/// # Authors
+/// - Raykoid666
+/// - CozyG
 pub static MASK: VariationDef = VariationDef {
     name: "mask",
     display_name: "Mask",
@@ -48,11 +56,11 @@ pub static MASK: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("xshift", "X shift", unlimited_float, 0.0, -10.0, 10.0),
-        param!("yshift", "Y shift", unlimited_float, 0.0, -10.0, 10.0),
-        param!("ushift", "U shift", unlimited_float, 1.0, -10.0, 10.0),
-        param!("xscale", "X scale", unlimited_float, 1.0, -10.0, 10.0),
-        param!("yscale", "Y scale", unlimited_float, 1.0, -10.0, 10.0),
+        param!("xshift", "X shift", unlimited_float, 0.0, -10.0, 10.0, "Additive offset on X before the sin term."),
+        param!("yshift", "Y shift", unlimited_float, 0.0, -10.0, 10.0, "Additive offset on Y before the cosh term."),
+        param!("ushift", "U shift", unlimited_float, 1.0, -10.0, 10.0, "Constant offset added to `cosh(yf)`."),
+        param!("xscale", "X scale", unlimited_float, 1.0, -10.0, 10.0, "Multiplier on X before the sin term."),
+        param!("yscale", "Y scale", unlimited_float, 1.0, -10.0, 10.0, "Multiplier on Y before the cosh term."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -109,6 +117,11 @@ fn variation_mask(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
 // 3 user params; Full3D; clean factor through outer.
 // (In 2D `T = x² + y²`; z output ignored.)
 // =============================================================================
+/// 3D ovoid — emits `(x·x_scale, y·y_scale, z·z_scale) / T` where `T = x² +
+/// y² + z² + ε`. Generalizes spherical inversion to per-axis scaling.
+///
+/// # Authors
+/// - Larry Berlin
 pub static OVOID3D: VariationDef = VariationDef {
     name: "ovoid3d",
     display_name: "Ovoid 3D",
@@ -116,9 +129,9 @@ pub static OVOID3D: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("x", "X scale", unlimited_float, 1.0, -10.0, 10.0),
-        param!("y", "Y scale", unlimited_float, 1.0, -10.0, 10.0),
-        param!("z", "Z scale", unlimited_float, 1.0, -10.0, 10.0),
+        param!("x", "X scale", unlimited_float, 1.0, -10.0, 10.0, "X-axis scale on the inverted output."),
+        param!("y", "Y scale", unlimited_float, 1.0, -10.0, 10.0, "Y-axis scale."),
+        param!("z", "Z scale", unlimited_float, 1.0, -10.0, 10.0, "Z-axis scale (3D only)."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -149,7 +162,7 @@ fn variation_ovoid3d(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 };
 
 // =============================================================================
-// murl2
+// murl2 (Zueuk)
 //   2 user params: c, power (int)
 //   p2 = power / 2;  invp = 1 / power (with special case for power == 0)
 //   vp = w · pow(c + 1, 2 / power)   (special case for c = -1: vp = 0)
@@ -162,6 +175,14 @@ fn variation_ovoid3d(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 //   out = (rl · (x·re + y·im), rl · (y·re - x·im))
 // Body has internal w in `vp` then in `rl` — needs_transform divide-out.
 // =============================================================================
+/// Variant of `murl` — applies a more involved complex Möbius mapping:
+/// power-transforms the input, adds 1, then power-transforms the result
+/// back, then divides by squared magnitude. The `2/power` exponent in the
+/// internal `vp = w · (c+1)^(2/power)` factor adjusts the output magnitude
+/// per power value.
+///
+/// # Authors
+/// - Zueuk
 pub static MURL2: VariationDef = VariationDef {
     name: "murl2",
     display_name: "Murl 2",
@@ -169,8 +190,8 @@ pub static MURL2: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("c", "C", unlimited_float, 0.1, -10.0, 10.0),
-        param!("power", "Power", int, 3.0, -100.0, 100.0),
+        param!("c", "C", unlimited_float, 0.1, -10.0, 10.0, "Möbius coefficient — controls the strength of the Möbius distortion."),
+        param!("power", "Power", int, 3.0, -100.0, 100.0, "Power exponent. 0 falls back to a degenerate case with a high invp."),
     ],
     needs_transform: true,
     writes_color: false,
@@ -256,7 +277,7 @@ fn variation_murl2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 };
 
 // =============================================================================
-// minkQM (dark-beam)
+// minkQM (dark-beam / Brad Stefanov)
 //   Helper minkowski(x): runs `f` iterations of the SB-tree question-mark
 //   algorithm with parameters a, b, c, dd, e seeding the recursion
 //   Body: per-axis sign-pass + minkowski for |x|, |y| in (0, 1)
@@ -264,6 +285,15 @@ fn variation_murl2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 // 6 user params: a, b, c, dd, e, f. Clean factor through outer.
 // (`f` is the iteration count; default 20 = ~1e-6 precision.)
 // =============================================================================
+/// Minkowski's question-mark function — applies the Stern-Brocot tree
+/// iteration of Minkowski's `?(x)` to each axis separately. The function
+/// maps rationals with simple continued-fraction expansions to dyadic
+/// rationals, producing a self-similar staircase pattern. Parameters `a, b,
+/// c, dd, e` seed the SB tree recursion; `f` sets the iteration count.
+///
+/// # Authors
+/// - DarkBeam
+/// - Brad Stefanov
 pub static MINKQM: VariationDef = VariationDef {
     name: "minkQM",
     display_name: "Mink QM",
@@ -271,12 +301,12 @@ pub static MINKQM: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("a", "A", unlimited_float, 1.0, -10.0, 10.0),
-        param!("b", "B", unlimited_float, 1.0, -10.0, 10.0),
-        param!("c", "C", unlimited_float, 1.0, -10.0, 10.0),
-        param!("dd", "D", unlimited_float, 1.0, -10.0, 10.0),
-        param!("e", "E", unlimited_float, 0.5, -10.0, 10.0),
-        param!("f", "Iters", int, 20.0, 1.0, 50.0),
+        param!("a", "A", unlimited_float, 1.0, -10.0, 10.0, "Initial denominator `q` of the SB-tree recursion."),
+        param!("b", "B", unlimited_float, 1.0, -10.0, 10.0, "Initial offset on the SB-tree numerator `r`."),
+        param!("c", "C", unlimited_float, 1.0, -10.0, 10.0, "Initial denominator `s` of the SB-tree recursion."),
+        param!("dd", "D", unlimited_float, 1.0, -10.0, 10.0, "Initial step size on the output `y`."),
+        param!("e", "E", unlimited_float, 0.5, -10.0, 10.0, "Step decay factor — multiplied with `d` each iteration. 0.5 gives the standard Minkowski function."),
+        param!("f", "Iters", int, 20.0, 1.0, 50.0, "Iteration count. Default 20 yields about 1e-6 precision."),
     ],
     needs_transform: false,
     writes_color: false,
