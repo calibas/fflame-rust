@@ -78,6 +78,7 @@ the answer is known — that's the convention for "unknown" per
 - `rings` ([apo_misc12.rs](../../src/variations/defs/apo_misc12.rs))
 - `pre_spin_z` ([spin_phase.rs](../../src/variations/defs/spin_phase.rs))
 - `post_spin_z` ([spin_phase.rs](../../src/variations/defs/spin_phase.rs))
+- `pre_blur3D` ([apo_misc15.rs](../../src/variations/defs/apo_misc15.rs))
 
 **Likely shared author** — all are JWildfire ports of complex-plane
 inverse hyperbolic functions (the plain ones in `hyperbolic.rs` and
