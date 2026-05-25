@@ -19,7 +19,7 @@
 //!                                              inside `r2 = sqrt(r·(w²·r
 //!                                              − 4u²v²)/w)`;
 //!                                              needs_transform divide-out
-//!   - `sphere_nja`     (?)                  — 6 user (circle_a/b,
+//!   - `sphere_nja`     (Nicolaus Anderson)  — 6 user (circle_a/b,
 //!                                              shift_x/y/z, stretch);
 //!                                              Full3D parametric sphere.
 //!                                              Body has w-scaled `r/z`
@@ -43,6 +43,10 @@ use crate::param;
 //   out = rad · (cos ang, sin ang)
 // 1 user param (shift); clean factor through outer.
 // =============================================================================
+/// Log-spiral swirl — emits `(rad · cos(ang), rad · sin(ang))` where `rad =
+/// sqrt(x²+y²) + ε` and `ang = atan2(x, y) + log(rad) · shift`. The
+/// `log(rad)` term makes the angular offset grow linearly with the log of
+/// radius, producing a logarithmic-spiral swirl.
 pub static SWIRL3: VariationDef = VariationDef {
     name: "swirl3",
     display_name: "Swirl 3",
@@ -50,7 +54,7 @@ pub static SWIRL3: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("shift", "Shift", unlimited_float, 0.5, -10.0, 10.0),
+        param!("shift", "Shift", unlimited_float, 0.5, -10.0, 10.0, "Logarithmic spiral coefficient. Larger = tighter spiral."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -85,6 +89,12 @@ fn variation_swirl3(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 //   out = r · (cos a, sin a)
 // 0 user params; clean.
 // =============================================================================
+/// Wedge disc — emits `r · (cos a, sin a)` where `a = π / (sqrt(x²+y²) +
+/// 1)` and `r = atan2(y, x) / π`. Points with `r > 0` get their `a`
+/// reflected via `π − a`. Maps the input plane onto a folded-disc pattern.
+///
+/// # Authors
+/// - Michael Faber
 pub static WDISC: VariationDef = VariationDef {
     name: "wdisc",
     display_name: "W-Disc",
@@ -135,6 +145,14 @@ fn variation_wdisc(p: vec3<f32>) -> vec3<f32> {
 //   out = (x · r, y · r, z · r)
 // 3 user params; Full3D; clean factor through outer.
 // =============================================================================
+/// 3D spherical with per-axis scales — emits `(x, y, z) / (x_scale²·x² +
+/// y_scale²·y² + zz² + ε)` where `zz = x_scale · z` (upstream typo:
+/// cpp+Java both use `x_scale` instead of `z_scale` in the Z denominator
+/// term, preserved). Per-axis scales tune the asymmetry of the inverse-
+/// distance scaling.
+///
+/// # Authors
+/// - Xyrus02
 pub static SPH3D: VariationDef = VariationDef {
     name: "sph3D",
     display_name: "Sph 3D",
@@ -142,9 +160,9 @@ pub static SPH3D: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("x", "X scale", unlimited_float, 1.0, -10.0, 10.0),
-        param!("y", "Y scale", unlimited_float, 1.0, -10.0, 10.0),
-        param!("z", "Z scale", unlimited_float, 1.0, -10.0, 10.0),
+        param!("x", "X scale", unlimited_float, 1.0, -10.0, 10.0, "X-axis scale on the inverse-distance denominator."),
+        param!("y", "Y scale", unlimited_float, 1.0, -10.0, 10.0, "Y-axis scale."),
+        param!("z", "Z scale", unlimited_float, 1.0, -10.0, 10.0, "Z-axis scale — note: due to an upstream typo the body actually uses `x_scale` for `zz`, so this parameter is effectively unused. Preserved for preset compatibility."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -187,6 +205,9 @@ fn variation_sph3D(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 // 0 user params. Body has w nonlinearly inside r2's sqrt;
 // needs_transform divide-out.
 // =============================================================================
+/// Inverse `squircular` — undoes the squircular Möbius warp. The body has
+/// the variation weight `w²` appearing nonlinearly inside `r2 = sqrt(r₀ ·
+/// (w²·r₀ − 4u²v²) / w)`, so the shape changes qualitatively with weight.
 pub static INVSQUIRCULAR: VariationDef = VariationDef {
     name: "invsquircular",
     display_name: "Inv Squircular",
@@ -238,7 +259,7 @@ fn variation_invsquircular(p: vec3<f32>, xform_id: u32, variation_id: u32) -> ve
 };
 
 // =============================================================================
-// sphere_nja
+// sphere_nja (Nicolaus Anderson)
 //   ini = (x − shift_x, y − shift_y, z)
 //   sqtr = sqrt(ini.x² + ini.y² + ini.z²)
 //   t = sqtr / stretch − π/2
@@ -251,6 +272,13 @@ fn variation_invsquircular(p: vec3<f32>, xform_id: u32, variation_id: u32) -> ve
 // (Note: `circle_a/b` declared but unused in cpp body — present in Java
 //  scaffolding too. Preserved as user params so presets work.)
 // =============================================================================
+/// Parametric sphere — uses `t = sqrt(x²+y²+z²)/stretch − π/2` to
+/// parameterize a sphere with `cos(t)` radius. Per-axis output mixes
+/// cos/sin terms with the input position and configurable shift offsets,
+/// producing a 3D sphere centered at `(shift_x, shift_y, 0)`.
+///
+/// # Authors
+/// - Nicolaus Anderson
 pub static SPHERE_NJA: VariationDef = VariationDef {
     name: "sphere_nja",
     display_name: "Sphere NJA",
@@ -258,12 +286,12 @@ pub static SPHERE_NJA: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("circle_a", "Circle A", unlimited_float, 1.0, -10.0, 10.0),
-        param!("circle_b", "Circle B", unlimited_float, 1.0, -10.0, 10.0),
-        param!("shift_x", "Shift X", unlimited_float, 0.0, -10.0, 10.0),
-        param!("shift_y", "Shift Y", unlimited_float, 0.0, -10.0, 10.0),
-        param!("shift_z", "Shift Z", unlimited_float, 0.0, -10.0, 10.0),
-        param!("stretch", "Stretch", unlimited_float, 1.0, -10.0, 10.0),
+        param!("circle_a", "Circle A", unlimited_float, 1.0, -10.0, 10.0, "Declared in the upstream source but unused in the body. Preserved as a parameter for preset compatibility."),
+        param!("circle_b", "Circle B", unlimited_float, 1.0, -10.0, 10.0, "Declared but unused (same as `circle_a`)."),
+        param!("shift_x", "Shift X", unlimited_float, 0.0, -10.0, 10.0, "X-axis center offset (subtracted from input, added back to output)."),
+        param!("shift_y", "Shift Y", unlimited_float, 0.0, -10.0, 10.0, "Y-axis center offset."),
+        param!("shift_z", "Shift Z", unlimited_float, 0.0, -10.0, 10.0, "Z-axis center offset."),
+        param!("stretch", "Stretch", unlimited_float, 1.0, -10.0, 10.0, "Radial-to-angular scaling factor in `t = sqtr/stretch − π/2`."),
     ],
     needs_transform: true,
     writes_color: false,
