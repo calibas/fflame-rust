@@ -324,6 +324,25 @@ transform weight). Moving these to `wgsl_init` removes the work from
 the hot path — same model as `circus`, `modulus`, `spligon`, etc.
 that already do this.
 
+- `affine3D` — six precomputable per-flame values: `sin(rx·π/180)`,
+  `cos(rx·π/180)`, and likewise for `ry` and `rz`. Upstream cpp
+  caches all six in `_sinX/cosX/sinY/cosY/sinZ/cosZ`; our port
+  skipped this because the historical 16-slot per-variation budget
+  couldn't fit them alongside the 15 user params. That budget is
+  gone — the shader builder now packs variation params contiguously
+  with no fixed stride (see
+  [shader_builder_v2.rs:799-842](../../src/shader_builder_v2.rs#L799-L842)),
+  so 6 init slots cost only what they cost. Worth revisiting now
+  that the constraint is lifted. See
+  [affine3d_misc.rs:10-14](../../src/variations/defs/affine3d_misc.rs#L10-L14)
+  for the original justification.
+
+  More broadly: any variation whose module header cites the
+  "16-slot budget" as the reason for inlining derived values is a
+  candidate for the same revisit — `maurer_hyper.rs`,
+  `stub_recoveries2.rs`, `sosa_attractors2.rs`, `apo_misc22.rs`,
+  and `parametric_curves.rs` all mention it as of this commit.
+
 - `murl` — three precomputable per-flame values: `c` (rescaled
   `c_user / (power − 1)` when `power ≠ 1`), `p2 = power / 2`, and
   `vp = c + 1`. Upstream cpp stores these in its `Variables` struct
