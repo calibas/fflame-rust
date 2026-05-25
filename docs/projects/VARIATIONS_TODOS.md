@@ -99,6 +99,8 @@ the answer is known — that's the convention for "unknown" per
 - `bubble_wf` ([wf_curves.rs](../../src/variations/defs/wf_curves.rs))
 - `dinis_surface_wf` ([waves_wf_family.rs](../../src/variations/defs/waves_wf_family.rs)) — surface documented at [mathworld.wolfram.com/DinisSurface](https://mathworld.wolfram.com/DinisSurface.html); WF implementation author unknown
 - `dc_triangle` ([dc_misc.rs](../../src/variations/defs/dc_misc.rs))
+- `dc_cube` ([dc_misc2.rs](../../src/variations/defs/dc_misc2.rs))
+- `pre_rect_wf` ([dc_misc2.rs](../../src/variations/defs/dc_misc2.rs))
 
 **Likely shared author** — all are JWildfire ports of complex-plane
 inverse hyperbolic functions (the plain ones in `hyperbolic.rs` and
