@@ -274,6 +274,14 @@ thresholds, or add a `legacy_import` hook on the param def.
   used as a binary out-of-triangle behavior selector (collapse-to-
   origin vs scatter). Should be `Boolean`. See
   [dc_misc.rs](../../src/variations/defs/dc_misc.rs).
+- `truchet.extended`, `truchet.direct_color`, `truchet2.inverse` —
+  all declared `Integer` with `[0, 1]` range, used as binary toggles
+  (LCG variant, color-write enable, complement-output). Should all
+  be `Boolean`. Note: `truchet.direct_color` is currently dead
+  (color write was dropped in the port) but still flagged so the
+  type change is consistent if the color write is ever restored.
+  See [truchet_misc.rs](../../src/variations/defs/truchet_misc.rs)
+  and [truchet2_misc.rs](../../src/variations/defs/truchet2_misc.rs).
 - `butterfly_fay.unified_inner_outer` — declared `Integer` with
   `[0, 1]` range, used as a binary "always-outer vs inside-outside-
   dispatch" toggle. Should be `Boolean`. See

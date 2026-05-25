@@ -33,6 +33,15 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Truchet tile pattern — divides the input plane into a unit-square grid;
+/// each cell is one of two truchet types selected by a deterministic per-
+/// cell hash of `(intx, inty)`. Within each cell, two arc segments connect
+/// opposite corners; an emitted point falls on one of those arcs (within
+/// `arc_width` of the unit distance). Arc shape controlled by the Lp-norm
+/// `exponent`.
+///
+/// # Authors
+/// - TyrantWave
 pub static TRUCHET: VariationDef = VariationDef {
     name: "truchet",
     display_name: "Truchet",
@@ -40,13 +49,13 @@ pub static TRUCHET: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("extended", "Extended", int, 0.0, 0.0, 1.0),
-        param!("exponent", "Exponent", unlimited_float, 2.0, 0.001, 2.0),
-        param!("arc_width", "Arc Width", unlimited_float, 0.5, 0.001, 1.0),
-        param!("rotation", "Rotation", unlimited_float, 0.0, -10.0, 10.0),
-        param!("size", "Size", unlimited_float, 1.0, 0.001, 10.0),
-        param!("seed", "Seed", unlimited_float, 50.0, -1000.0, 1000.0),
-        param!("direct_color", "Direct Color", int, 0.0, 0.0, 1.0),
+        param!("extended", "Extended", int, 0.0, 0.0, 1.0, "1 = slow iterated-LCG hash for tile-type selection (more cells produce distinct patterns); 0 = fast single-step LCG."),
+        param!("exponent", "Exponent", unlimited_float, 2.0, 0.001, 2.0, "Lp-norm exponent for the arc shape (clamped to [0.001, 2]). 2 = circular arcs; lower values produce more angular shapes."),
+        param!("arc_width", "Arc Width", unlimited_float, 0.5, 0.001, 1.0, "Width of the arc segments (clamped to [0.001, 1])."),
+        param!("rotation", "Rotation", unlimited_float, 0.0, -10.0, 10.0, "Pre-rotation angle applied to the input, in radians."),
+        param!("size", "Size", unlimited_float, 1.0, 0.001, 10.0, "Output scale factor for each cell (clamped to [0.001, 10])."),
+        param!("seed", "Seed", unlimited_float, 50.0, -1000.0, 1000.0, "Hash seed for the per-cell tile-type selection."),
+        param!("direct_color", "Direct Color", int, 0.0, 0.0, 1.0, "1 = enable direct-color writes (but the color write is dropped in this port — preserved for cpp parity)."),
     ],
     needs_transform: true,
     writes_color: false,
