@@ -49,6 +49,13 @@ use crate::param;
 //   FTz = w · atan2(FTx², FTy²) · cos(z_in)   (uses JUST-WRITTEN FTx, FTy)
 // 0 user; needs_transform.
 // =============================================================================
+/// Pre-phase sinusoidal with 3D output — applies `(sin x, sin y)` to XY
+/// (same as the standard sinusoidal), plus a Z output `atan2(sin²x, sin²y)
+/// · cos(z)` that uses the just-written X/Y values. Distinct from the
+/// existing `pre_sinusoidal`, which leaves Z alone.
+///
+/// # Authors
+/// - gossamer light
 pub static PRE_SINUSOIDAL3D: VariationDef = VariationDef {
     name: "pre_sinusoidal3d",
     display_name: "Pre Sinusoidal 3D",
@@ -90,6 +97,12 @@ fn variation_pre_sinusoidal3d(p: vec3<f32>, xform_id: u32, variation_id: u32) ->
 //   FTz += r · cos(angle2)
 // 0 user; needs_rng; needs_transform.
 // =============================================================================
+/// Pre-phase 3D Gaussian-sphere blur — adds a random offset along a unit-
+/// sphere direction with Gaussian-distributed radius. The radius is `(sum
+/// of 6 uniforms) − 3` (central-limit Gaussian approximation); direction is
+/// picked uniformly on the sphere via `(sin b · cos a, sin b · sin a, cos
+/// b)` with `a ∈ [0, 2π], b ∈ [0, π]`. Effectively a 3D Gaussian blur of
+/// the input.
 pub static PRE_BLUR3D: VariationDef = VariationDef {
     name: "pre_blur3D",
     display_name: "Pre Blur 3D",
@@ -150,6 +163,14 @@ fn variation_pre_blur3D(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
 //   out = (gamma · cos α, gamma · sin α, FPz_contrib)
 // Body has one w factor — needs_transform divide-out.
 // =============================================================================
+/// 3D Julia-N with affine pre-transform — extends `julian2` to 3D: same
+/// affine pre-transform `(X, Y) = (a·x + b·y + e, c·x + d·y + f)` and
+/// random angular branch, plus a `z_local = x / |power|` term that feeds
+/// into the radius computation and produces a Z output `radius_out ·
+/// z_local`.
+///
+/// # Authors
+/// - Xyrus02
 pub static JULIAN3DX: VariationDef = VariationDef {
     name: "julian3Dx",
     display_name: "JuliaN 3D X",
@@ -157,14 +178,14 @@ pub static JULIAN3DX: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("power", "Power", int, 0.0, -100.0, 100.0),
-        param!("dist", "Distance", unlimited_float, 1.0, -100.0, 100.0),
-        param!("a", "A", unlimited_float, 1.0, -10.0, 10.0),
-        param!("b", "B", unlimited_float, 0.0, -10.0, 10.0),
-        param!("c", "C", unlimited_float, 0.0, -10.0, 10.0),
-        param!("d", "D", unlimited_float, 1.0, -10.0, 10.0),
-        param!("e", "E", unlimited_float, 0.0, -10.0, 10.0),
-        param!("f", "F", unlimited_float, 0.0, -10.0, 10.0),
+        param!("power", "Power", int, 0.0, -100.0, 100.0, "Number of angular branches. 0 produces zero output."),
+        param!("dist", "Distance", unlimited_float, 1.0, -100.0, 100.0, "Radial-power exponent — `cN = (dist/power − 1)/2`."),
+        param!("a", "A", unlimited_float, 1.0, -10.0, 10.0, "Pre-affine xx coefficient."),
+        param!("b", "B", unlimited_float, 0.0, -10.0, 10.0, "Pre-affine xy coefficient."),
+        param!("c", "C", unlimited_float, 0.0, -10.0, 10.0, "Pre-affine yx coefficient."),
+        param!("d", "D", unlimited_float, 1.0, -10.0, 10.0, "Pre-affine yy coefficient."),
+        param!("e", "E", unlimited_float, 0.0, -10.0, 10.0, "Pre-affine x offset."),
+        param!("f", "F", unlimited_float, 0.0, -10.0, 10.0, "Pre-affine y offset."),
     ],
     needs_transform: true,
     writes_color: false,
