@@ -44,6 +44,15 @@ use crate::param;
 //                                       oscilloscope which only flips Y)
 //   else:        out = (x, y)
 // =============================================================================
+/// 2D extension of `oscilloscope` — adds a Y-driven sinusoidal perturbation
+/// `perturbation · sin(2π·freqy·y)` to the X-axis cosine argument, and
+/// flips BOTH X and Y when the input falls inside the band (vs
+/// `oscilloscope`, which only flips Y). Produces a 2D oscilloscope-trace
+/// masking pattern.
+///
+/// # Authors
+/// - Apophysis Plugin Pack
+/// - DarkBeam
 pub static OSCILLOSCOPE2: VariationDef = VariationDef {
     name: "oscilloscope2",
     display_name: "Oscilloscope 2",
@@ -51,12 +60,12 @@ pub static OSCILLOSCOPE2: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("separation", "Separation", unlimited_float, 1.0, -10.0, 10.0),
-        param!("frequencyx", "Frequency X", unlimited_float, 3.14159265, -100.0, 100.0),
-        param!("frequencyy", "Frequency Y", unlimited_float, 3.14159265, -100.0, 100.0),
-        param!("amplitude", "Amplitude", unlimited_float, 1.0, -10.0, 10.0),
-        param!("perturbation", "Perturbation", unlimited_float, 1.0, -10.0, 10.0),
-        param!("damping", "Damping", unlimited_float, 0.0, -10.0, 10.0),
+        param!("separation", "Separation", unlimited_float, 1.0, -10.0, 10.0, "Vertical offset of the band threshold."),
+        param!("frequencyx", "Frequency X", unlimited_float, 3.14159265, -100.0, 100.0, "X-axis cosine frequency (multiplied by 2π internally)."),
+        param!("frequencyy", "Frequency Y", unlimited_float, 3.14159265, -100.0, 100.0, "Y-axis sine frequency for the perturbation term (multiplied by 2π)."),
+        param!("amplitude", "Amplitude", unlimited_float, 1.0, -10.0, 10.0, "Cosine amplitude."),
+        param!("perturbation", "Perturbation", unlimited_float, 1.0, -10.0, 10.0, "Magnitude of the Y-driven X-perturbation."),
+        param!("damping", "Damping", unlimited_float, 0.0, -10.0, 10.0, "Exponential damping rate. Values near zero disable the damping term."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -130,6 +139,12 @@ fn variation_oscilloscope2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> ve
 // naming inconsistency; same lowercase form as `lineart3d` in our
 // registry.)
 // =============================================================================
+/// Per-axis sign-preserving power (2D) — applies `sign(coord) ·
+/// |coord|^pow` to each of X and Y independently, with separate exponents
+/// per axis. The 2D analogue of `lineart3d`.
+///
+/// # Authors
+/// - FractalDesire
 pub static LINEART: VariationDef = VariationDef {
     name: "lineart",
     display_name: "Line Art",
@@ -137,8 +152,8 @@ pub static LINEART: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("powX", "Power X", unlimited_float, 1.2, -10.0, 10.0),
-        param!("powY", "Power Y", unlimited_float, 1.2, -10.0, 10.0),
+        param!("powX", "Power X", unlimited_float, 1.2, -10.0, 10.0, "X-axis power exponent."),
+        param!("powY", "Power Y", unlimited_float, 1.2, -10.0, 10.0, "Y-axis power exponent."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -181,6 +196,14 @@ fn variation_lineart(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 //   r   = (x² + y²)^cN                                    (cN = dist/(2·power))
 //   out = r · (cos a, sin a)
 // =============================================================================
+/// Phoenix-Julia N-th-root sampler with X/Y distortion — distorts the input
+/// by `(1 + x_distort, 1 + y_distort)`, scales the resulting angle by
+/// `1/power`, adds a random branch `n · 2π/power` (with `n` random from `0`
+/// to `power − 1`), and emits at radius `r^(dist/power)` in the new angular
+/// direction.
+///
+/// # Authors
+/// - TyrantWave
 pub static PHOENIX_JULIA: VariationDef = VariationDef {
     name: "phoenix_julia",
     display_name: "Phoenix Julia",
@@ -188,10 +211,10 @@ pub static PHOENIX_JULIA: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("power", "Power", unlimited_float, 3.0, -50.0, 50.0),
-        param!("dist", "Distance", unlimited_float, 1.0, -10.0, 10.0),
-        param!("x_distort", "X distort", unlimited_float, -0.5, -10.0, 10.0),
-        param!("y_distort", "Y distort", unlimited_float, 0.0, -10.0, 10.0),
+        param!("power", "Power", unlimited_float, 3.0, -50.0, 50.0, "Number of angular branches — `floor(rand · power)` picks the branch each iteration."),
+        param!("dist", "Distance", unlimited_float, 1.0, -10.0, 10.0, "Radial-power exponent — output magnitude is `r^(dist/power)`."),
+        param!("x_distort", "X distort", unlimited_float, -0.5, -10.0, 10.0, "X-axis pre-rotation distortion (multiplier on X before angle computation, offset by +1)."),
+        param!("y_distort", "Y distort", unlimited_float, 0.0, -10.0, 10.0, "Y-axis pre-rotation distortion (offset by +1)."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -261,6 +284,15 @@ fn variation_phoenix_julia(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: 
 //   ran = (theta · _deneps + root · 2π · floor(rand · denominator) · _deneps) · numerator
 //   out = r2 · (cos ran, sin ran)
 // =============================================================================
+/// Generalized N-th root of `(x²+y²)^p` with random branch — computes the
+/// input angle, scales it by `1/denominator`, adds a random `root · 2π ·
+/// k/denominator` branch (with `k` random from `0` to `denominator − 1`),
+/// multiplies the whole angle by `numerator`, and emits at radius governed
+/// by `numerator / (2·denominator) · (correctd/correctn)`.
+///
+/// # Authors
+/// - cothe
+/// - DarkBeam
 pub static POW_BLOCK: VariationDef = VariationDef {
     name: "pow_block",
     display_name: "Pow Block",
@@ -268,11 +300,11 @@ pub static POW_BLOCK: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("numerator", "Numerator", unlimited_float, 3.0, -50.0, 50.0),
-        param!("denominator", "Denominator", unlimited_float, 2.0, -50.0, 50.0),
-        param!("correctn", "Correct N", unlimited_float, 1.0, -10.0, 10.0),
-        param!("correctd", "Correct D", unlimited_float, 1.0, -10.0, 10.0),
-        param!("root", "Root", unlimited_float, 1.0, -10.0, 10.0),
+        param!("numerator", "Numerator", unlimited_float, 3.0, -50.0, 50.0, "Output-angle multiplier and effective power numerator."),
+        param!("denominator", "Denominator", unlimited_float, 2.0, -50.0, 50.0, "Branch count — `floor(rand · denominator)` picks the branch."),
+        param!("correctn", "Correct N", unlimited_float, 1.0, -10.0, 10.0, "Power-correction numerator (divides the effective exponent)."),
+        param!("correctd", "Correct D", unlimited_float, 1.0, -10.0, 10.0, "Power-correction denominator (multiplies the effective exponent)."),
+        param!("root", "Root", unlimited_float, 1.0, -10.0, 10.0, "Per-branch angular offset multiplier (× 2π)."),
     ],
     needs_transform: false,
     writes_color: false,

@@ -23,13 +23,20 @@ use crate::variations::{
 use crate::param;
 
 // =============================================================================
-// collideoscope: radial branch-and-mod (Faber)
+// collideoscope: radial branch-and-mod (Michael Faber)
 //   r = sqrt(x²+y²) (with weight applied via outer)
 //   a = atan2(y, x)
 //   alt = floor(|a| · num/π)
 //   Mirror-and-shift `a` based on sign of original a and parity of alt
 //   out = r · (cos a, sin a)
 // =============================================================================
+/// Radial branch-and-mod (kaleidoscope-style) — converts the input to polar
+/// `(r, a)`, splits the angle into `num` equal sectors, and mirrors/shifts
+/// alternating sectors based on the parity of the sector index, with a per-
+/// sector angular offset `a`. Produces a kaleidoscope-like radial tiling.
+///
+/// # Authors
+/// - Michael Faber
 pub static COLLIDEOSCOPE: VariationDef = VariationDef {
     name: "collideoscope",
     display_name: "Collideoscope",
@@ -37,8 +44,8 @@ pub static COLLIDEOSCOPE: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("a", "A", unlimited_float, 0.2, -10.0, 10.0),
-        param!("num", "N", int, 1.0, 1.0, 50.0),
+        param!("a", "A", unlimited_float, 0.2, -10.0, 10.0, "Per-sector angular offset — the parity-based mirror is shifted by ±a."),
+        param!("num", "N", int, 1.0, 1.0, 50.0, "Number of angular sectors. Higher = finer kaleidoscope."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -122,6 +129,10 @@ fn variation_collideoscope(p: vec3<f32>, xform_id: u32, variation_id: u32) -> ve
 //   if x < 0:  out_x = x · x_scale  else: out_x = x
 //   if y < 0:  out_y = y · y_scale  else: out_y = y
 // =============================================================================
+/// Per-quadrant scale — positive coordinates pass through unchanged,
+/// while negative coordinates are multiplied by per-axis scale factors.
+/// Bends the quadrants asymmetrically.
+///
 /// # Authors
 /// - Apophysis Plugin Pack
 pub static BENT2: VariationDef = VariationDef {
@@ -131,8 +142,8 @@ pub static BENT2: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("x", "X scale", unlimited_float, 1.0, -10.0, 10.0),
-        param!("y", "Y scale", unlimited_float, 1.0, -10.0, 10.0),
+        param!("x", "X scale", unlimited_float, 1.0, -10.0, 10.0, "X-axis scale applied where x < 0. Positive x passes through unchanged."),
+        param!("y", "Y scale", unlimited_float, 1.0, -10.0, 10.0, "Y-axis scale applied where y < 0. Positive y passes through unchanged."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -168,6 +179,12 @@ fn variation_bent2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 //   FPx += x·r·x_scale + (1 − twist·x² + y)
 //   FPy += y·r·y_scale + tilt·x
 // =============================================================================
+/// Bubble warp with twist and tilt — applies a bubble-style radial scaling
+/// `r = 1 / (r²/4 + 1)` to each axis with independent scale factors, then
+/// adds a quadratic twist term to X and a linear tilt term to Y.
+///
+/// # Authors
+/// - FracFx
 pub static MCARPET: VariationDef = VariationDef {
     name: "mcarpet",
     display_name: "MCarpet",
@@ -175,10 +192,10 @@ pub static MCARPET: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("x", "X scale", unlimited_float, 1.0, -10.0, 10.0),
-        param!("y", "Y scale", unlimited_float, 1.0, -10.0, 10.0),
-        param!("twist", "Twist", unlimited_float, 0.0, -10.0, 10.0),
-        param!("tilt", "Tilt", unlimited_float, 0.0, -10.0, 10.0),
+        param!("x", "X scale", unlimited_float, 1.0, -10.0, 10.0, "X-axis bubble scale."),
+        param!("y", "Y scale", unlimited_float, 1.0, -10.0, 10.0, "Y-axis bubble scale."),
+        param!("twist", "Twist", unlimited_float, 0.0, -10.0, 10.0, "Quadratic twist amount on X output (subtracts `twist · x²`)."),
+        param!("tilt", "Tilt", unlimited_float, 0.0, -10.0, 10.0, "Linear tilt amount on Y output (adds `tilt · x`)."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -225,6 +242,12 @@ fn variation_mcarpet(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 // `linearT3D` — porter naming inconsistency. We use lowercase `lineart3d`
 // for our registry; it's the same variation.)
 // =============================================================================
+/// Per-axis sign-preserving power — applies `sign(coord) · |coord|^pow` to
+/// each axis independently, with separate exponents per axis. Preserves the
+/// sign while compressing or expanding the magnitude.
+///
+/// # Authors
+/// - FractalDesire
 pub static LINEART3D: VariationDef = VariationDef {
     name: "lineart3d",
     display_name: "Line Art 3D",
@@ -232,9 +255,9 @@ pub static LINEART3D: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("powX", "Power X", unlimited_float, 1.2, -10.0, 10.0),
-        param!("powY", "Power Y", unlimited_float, 1.2, -10.0, 10.0),
-        param!("powZ", "Power Z", unlimited_float, 1.2, -10.0, 10.0),
+        param!("powX", "Power X", unlimited_float, 1.2, -10.0, 10.0, "X-axis power exponent."),
+        param!("powY", "Power Y", unlimited_float, 1.2, -10.0, 10.0, "Y-axis power exponent."),
+        param!("powZ", "Power Z", unlimited_float, 1.2, -10.0, 10.0, "Z-axis power exponent (3D only)."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -281,6 +304,12 @@ fn variation_lineart3d(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
 //   if |y| ≤ t: out = (x, -y)
 //   else:        out = (x, y)
 // =============================================================================
+/// Y-flip inside a damped cosine band — computes a (possibly damped)
+/// cosine envelope `t(x) = amp · cos(2π·freq·x) · exp(−|x|·damping) +
+/// separation`. Points whose `|y| ≤ t(x)` get their Y coordinate
+/// flipped; others pass through. Produces an oscilloscope-trace-like
+/// masking pattern.
+///
 /// # Authors
 /// - Apophysis Plugin Pack
 pub static OSCILLOSCOPE: VariationDef = VariationDef {
@@ -290,10 +319,10 @@ pub static OSCILLOSCOPE: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("separation", "Separation", unlimited_float, 1.0, -10.0, 10.0),
-        param!("frequency", "Frequency", unlimited_float, 3.14159265, -100.0, 100.0),
-        param!("amplitude", "Amplitude", unlimited_float, 1.0, -10.0, 10.0),
-        param!("damping", "Damping", unlimited_float, 0.0, -10.0, 10.0),
+        param!("separation", "Separation", unlimited_float, 1.0, -10.0, 10.0, "Vertical offset of the band threshold, added to the cosine envelope."),
+        param!("frequency", "Frequency", unlimited_float, 3.14159265, -100.0, 100.0, "Cosine frequency (multiplied by 2π internally)."),
+        param!("amplitude", "Amplitude", unlimited_float, 1.0, -10.0, 10.0, "Cosine amplitude."),
+        param!("damping", "Damping", unlimited_float, 0.0, -10.0, 10.0, "Exponential damping rate. Values near zero disable the damping term."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -360,6 +389,14 @@ fn variation_oscilloscope(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec
 //     1/sqrt(5)   ≈ 0.4472135955
 //     log(φ)      ≈ 0.4812118250596034
 // =============================================================================
+/// Binet-formula complex Fibonacci — extends the Fibonacci sequence to
+/// complex inputs via the closed form `F(z) = (φ^z − (−φ)^(−z)) / √5`, with
+/// `sc` scaling the magnitude and `sc2` scaling the polar-radius
+/// exponential growth rate. Produces spiral patterns based on the golden
+/// ratio.
+///
+/// # Authors
+/// - Larry Berlin
 pub static FIBONACCI2: VariationDef = VariationDef {
     name: "fibonacci2",
     display_name: "Fibonacci 2",
@@ -367,8 +404,8 @@ pub static FIBONACCI2: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("sc", "Scale", unlimited_float, 1.0, -10.0, 10.0),
-        param!("sc2", "Scale 2", unlimited_float, 1.0, -10.0, 10.0),
+        param!("sc", "Scale", unlimited_float, 1.0, -10.0, 10.0, "Output magnitude scale."),
+        param!("sc2", "Scale 2", unlimited_float, 1.0, -10.0, 10.0, "Polar-radius exponential scale — controls how quickly the magnitude grows along X."),
     ],
     needs_transform: false,
     writes_color: false,
