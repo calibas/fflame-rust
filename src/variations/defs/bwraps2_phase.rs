@@ -37,6 +37,15 @@ use crate::param;
 //   Pre-phase bubble-wrap. Operates on the input `p` and returns the
 //   transformed point (with w applied directly inside).
 // =============================================================================
+/// Bubble Wrap warp with a third `g2` formula — same Bubble Wrap algorithm
+/// as `bwraps`/`bwraps7` (each grid cell hosts a bubble; inside the bubble
+/// the input twists toward the cell center, outside it passes through), but
+/// with `g2 = gain² / cellsize + ε` (where `bwraps` divides by `radius` and
+/// `bwraps7` doesn't divide at all). Applied at pre-phase, before any
+/// normal-phase variations run.
+///
+/// # Authors
+/// - Xyrus02
 pub static PRE_BWRAPS2: VariationDef = VariationDef {
     name: "pre_bwraps2",
     display_name: "Pre BWraps 2",
@@ -44,11 +53,11 @@ pub static PRE_BWRAPS2: VariationDef = VariationDef {
     phase: VariationPhase::Pre,
     needs_rng: false,
     parameters: &[
-        param!("cellsize", "Cell Size", unlimited_float, 1.0, -10.0, 10.0),
-        param!("space", "Space", unlimited_float, 0.0, -1.0, 1.0),
-        param!("gain", "Gain", unlimited_float, 2.0, -5.0, 5.0),
-        param!("inner_twist", "Inner Twist", unlimited_float, 0.0, -10.0, 10.0),
-        param!("outer_twist", "Outer Twist", unlimited_float, 0.0, -10.0, 10.0),
+        param!("cellsize", "Cell Size", unlimited_float, 1.0, -10.0, 10.0, "Grid cell size."),
+        param!("space", "Space", unlimited_float, 0.0, -1.0, 1.0, "Inter-cell spacing factor. 0 = no space; larger = smaller bubble relative to cell."),
+        param!("gain", "Gain", unlimited_float, 2.0, -5.0, 5.0, "Bubble strength — controls both bubble size and twist intensity."),
+        param!("inner_twist", "Inner Twist", unlimited_float, 0.0, -10.0, 10.0, "Rotation amount applied at the bubble center."),
+        param!("outer_twist", "Outer Twist", unlimited_float, 0.0, -10.0, 10.0, "Rotation amount applied at the bubble edge. Interpolated radially with `inner_twist`."),
     ],
     needs_transform: true,
     writes_color: false,
@@ -151,6 +160,15 @@ fn variation_pre_bwraps2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3
 //   Post-phase bubble-wrap. Same body as pre_bwraps2; runs at post
 //   phase on the accumulated point.
 // =============================================================================
+/// Bubble Wrap warp with a third `g2` formula — same Bubble Wrap algorithm
+/// as `bwraps`/`bwraps7` (each grid cell hosts a bubble; inside the bubble
+/// the input twists toward the cell center, outside it passes through), but
+/// with `g2 = gain² / cellsize + ε` (where `bwraps` divides by `radius` and
+/// `bwraps7` doesn't divide at all). Applied at post-phase, on the
+/// accumulated output.
+///
+/// # Authors
+/// - Xyrus02
 pub static POST_BWRAPS2: VariationDef = VariationDef {
     name: "post_bwraps2",
     display_name: "Post BWraps 2",
@@ -158,11 +176,11 @@ pub static POST_BWRAPS2: VariationDef = VariationDef {
     phase: VariationPhase::Post,
     needs_rng: false,
     parameters: &[
-        param!("cellsize", "Cell Size", unlimited_float, 1.0, -10.0, 10.0),
-        param!("space", "Space", unlimited_float, 0.0, -1.0, 1.0),
-        param!("gain", "Gain", unlimited_float, 2.0, -5.0, 5.0),
-        param!("inner_twist", "Inner Twist", unlimited_float, 0.0, -10.0, 10.0),
-        param!("outer_twist", "Outer Twist", unlimited_float, 0.0, -10.0, 10.0),
+        param!("cellsize", "Cell Size", unlimited_float, 1.0, -10.0, 10.0, "Grid cell size."),
+        param!("space", "Space", unlimited_float, 0.0, -1.0, 1.0, "Inter-cell spacing factor. 0 = no space; larger = smaller bubble relative to cell."),
+        param!("gain", "Gain", unlimited_float, 2.0, -5.0, 5.0, "Bubble strength — controls both bubble size and twist intensity."),
+        param!("inner_twist", "Inner Twist", unlimited_float, 0.0, -10.0, 10.0, "Rotation amount applied at the bubble center."),
+        param!("outer_twist", "Outer Twist", unlimited_float, 0.0, -10.0, 10.0, "Rotation amount applied at the bubble edge. Interpolated radially with `inner_twist`."),
     ],
     needs_transform: true,
     writes_color: false,

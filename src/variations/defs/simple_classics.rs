@@ -342,7 +342,7 @@ fn variation_perspective(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3
 /// sin(δπ)·cos(φπ), sin(φπ))`. The 2D output drops the Z component.
 ///
 /// # Authors
-/// - ChronologicalDot
+/// - chronologicaldot
 pub static LINE: VariationDef = VariationDef {
     name: "line",
     display_name: "Line",

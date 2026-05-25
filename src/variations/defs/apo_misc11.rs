@@ -278,7 +278,7 @@ fn variation_invsquircular(p: vec3<f32>, xform_id: u32, variation_id: u32) -> ve
 /// producing a 3D sphere centered at `(shift_x, shift_y, 0)`.
 ///
 /// # Authors
-/// - Nicolaus Anderson
+/// - chronologicaldot
 pub static SPHERE_NJA: VariationDef = VariationDef {
     name: "sphere_nja",
     display_name: "Sphere NJA",
