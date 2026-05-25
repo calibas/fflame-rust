@@ -16,7 +16,7 @@
 //!     as dc_cylinder but `FPy += rr·FTy·y` (no `+rr` constant).
 //!     Same divide-out + fresh-randoms compromise.
 //!
-//!   - dc_triangle (Apophysis): barycentric-coordinate triangle
+//!   - dc_triangle: barycentric-coordinate triangle
 //!     mapping using the transform's affine as triangle vertices.
 //!     2 user (scatter_area, zero_edges int) + 1 init (_A =
 //!     clamp(scatter_area, -1, 1)). RNG. Body factors cleanly.
@@ -37,6 +37,14 @@ use crate::param;
 // dc_cylinder
 // ---------------------------------------------------------------------------
 
+/// Direct-color cylinder warp — wraps the input around a cylinder via
+/// `sin(x + rr·sin(a))` on X with a Gaussian-approximated Y blur (`rr =
+/// blur · (sum of 4 uniforms − 2)`). 3D mode adds a `cos(x + rr·cos(a))` Z
+/// component. The cpp source also writes a color value (TC); that color
+/// write is dropped per the writes_color compromise.
+///
+/// # Authors
+/// - FracFx
 pub static DC_CYLINDER: VariationDef = VariationDef {
     name: "dc_cylinder",
     display_name: "DC Cylinder",
@@ -44,12 +52,12 @@ pub static DC_CYLINDER: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("offset", "Offset", unlimited_float, 0.0, -10.0, 10.0),
-        param!("angle", "Angle", unlimited_float, 0.0, -10.0, 10.0),
-        param!("scale", "Scale", unlimited_float, 0.5, -10.0, 10.0),
-        param!("x", "X", unlimited_float, 0.125, -10.0, 10.0),
-        param!("y", "Y", unlimited_float, 0.125, -10.0, 10.0),
-        param!("blur", "Blur", unlimited_float, 1.0, -10.0, 10.0),
+        param!("offset", "Offset", unlimited_float, 0.0, -10.0, 10.0, "Cylinder phase offset. Init precomputes `offset · π` (but this isn't read in the body — kept for cpp parity)."),
+        param!("angle", "Angle", unlimited_float, 0.0, -10.0, 10.0, "Cylinder rotation angle (unused in body — kept for cpp parity)."),
+        param!("scale", "Scale", unlimited_float, 0.5, -10.0, 10.0, "Cylinder scale. Init precomputes `1/scale` (but this isn't read in the body — kept for cpp parity)."),
+        param!("x", "X", unlimited_float, 0.125, -10.0, 10.0, "X-axis output scale (multiplies the `sin(x + rr·sin(a))` term)."),
+        param!("y", "Y", unlimited_float, 0.125, -10.0, 10.0, "Y-axis output scale (multiplies the input Y in the output)."),
+        param!("blur", "Blur", unlimited_float, 1.0, -10.0, 10.0, "Gaussian blur amplitude — multiplies the sum-of-4-uniforms approximation."),
     ],
     needs_transform: true,
     writes_color: false,
@@ -120,6 +128,12 @@ fn variation_dc_cylinder(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: pt
 // dc_cylinder2
 // ---------------------------------------------------------------------------
 
+/// Variant of `dc_cylinder` — same XY/Z structure but the Y output is `rr ·
+/// y · y_scale` (multiplicative) instead of `rr + y · y_scale` (additive).
+/// The cpp source also writes color; the color write is dropped.
+///
+/// # Authors
+/// - FracFx
 pub static DC_CYLINDER2: VariationDef = VariationDef {
     name: "dc_cylinder2",
     display_name: "DC Cylinder 2",
@@ -127,12 +141,12 @@ pub static DC_CYLINDER2: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("offset", "Offset", unlimited_float, 0.0, -10.0, 10.0),
-        param!("angle", "Angle", unlimited_float, 0.0, -10.0, 10.0),
-        param!("scale", "Scale", unlimited_float, 0.5, -10.0, 10.0),
-        param!("x", "X", unlimited_float, 0.125, -10.0, 10.0),
-        param!("y", "Y", unlimited_float, 0.125, -10.0, 10.0),
-        param!("blur", "Blur", unlimited_float, 1.0, -10.0, 10.0),
+        param!("offset", "Offset", unlimited_float, 0.0, -10.0, 10.0, "Cylinder phase offset. Init precomputes `offset · π` (but this isn't read in the body — kept for cpp parity)."),
+        param!("angle", "Angle", unlimited_float, 0.0, -10.0, 10.0, "Cylinder rotation angle (unused in body — kept for cpp parity)."),
+        param!("scale", "Scale", unlimited_float, 0.5, -10.0, 10.0, "Cylinder scale. Init precomputes `1/scale` (but this isn't read in the body — kept for cpp parity)."),
+        param!("x", "X", unlimited_float, 0.125, -10.0, 10.0, "X-axis output scale (multiplies the `sin(x + rr·sin(a))` term)."),
+        param!("y", "Y", unlimited_float, 0.125, -10.0, 10.0, "Y-axis output scale (multiplies the input Y in the output)."),
+        param!("blur", "Blur", unlimited_float, 1.0, -10.0, 10.0, "Gaussian blur amplitude — multiplies the sum-of-4-uniforms approximation."),
     ],
     needs_transform: true,
     writes_color: false,
@@ -203,6 +217,12 @@ fn variation_dc_cylinder2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: p
 // dc_triangle
 // ---------------------------------------------------------------------------
 
+/// Barycentric-coordinate triangle mapping — uses the transform's affine
+/// `(a, b)` and `(-c, -d)` as the triangle edge basis, with `(e, f)` as the
+/// origin vertex. Tests whether the input lies inside the triangle via
+/// barycentric coordinates `(u, v)`. Inside, passes through. Outside,
+/// either collapses to origin (`zero_edges = 1`) or scatters by
+/// `scatter_area` from the nearest edge.
 pub static DC_TRIANGLE: VariationDef = VariationDef {
     name: "dc_triangle",
     display_name: "DC Triangle",
@@ -210,8 +230,8 @@ pub static DC_TRIANGLE: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("scatter_area", "Scatter Area", unlimited_float, 0.0, -1.0, 1.0),
-        param!("zero_edges", "Zero Edges", int, 0.0, 0.0, 1.0),
+        param!("scatter_area", "Scatter Area", unlimited_float, 0.0, -1.0, 1.0, "Random scatter amount applied to points outside the triangle. Clamped to `[-1, 1]` internally."),
+        param!("zero_edges", "Zero Edges", int, 0.0, 0.0, 1.0, "1 = collapse out-of-triangle points to origin; 0 = scatter them by `scatter_area`."),
     ],
     needs_transform: true,
     writes_color: false,
