@@ -26,6 +26,14 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Curl-power 3D variation with sign-preserving power — raises each axis to
+/// `pow` (preserving sign), applies a `c1`/`c2`-tuned Möbius-style curl
+/// warp with a configurable spread function (`sx`, `sy` exponents), then
+/// scales the output by `w/c` where `c = (re² + im²)^(1/pow)` is the
+/// squared output magnitude raised to the inverse power.
+///
+/// # Authors
+/// - Xyrus02
 pub static CURL_SP: VariationDef = VariationDef {
     name: "curl_sp",
     display_name: "Curl SP",
@@ -33,12 +41,12 @@ pub static CURL_SP: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("pow", "Power", unlimited_float, 1.0, -10.0, 10.0),
-        param!("c1", "C1", unlimited_float, -0.01, -10.0, 10.0),
-        param!("c2", "C2", unlimited_float, 0.03, -10.0, 10.0),
-        param!("sx", "SX", unlimited_float, 0.0, -10.0, 10.0),
-        param!("sy", "SY", unlimited_float, 0.0, -10.0, 10.0),
-        param!("dc", "DC", unlimited_float, 0.0, -10.0, 10.0),
+        param!("pow", "Power", unlimited_float, 1.0, -10.0, 10.0, "Sign-preserving power exponent applied to each input axis."),
+        param!("c1", "C1", unlimited_float, -0.01, -10.0, 10.0, "Linear-term coefficient in the curl warp."),
+        param!("c2", "C2", unlimited_float, 0.03, -10.0, 10.0, "Quadratic-term coefficient in the curl warp."),
+        param!("sx", "SX", unlimited_float, 0.0, -10.0, 10.0, "Spread function exponent for the X component."),
+        param!("sy", "SY", unlimited_float, 0.0, -10.0, 10.0, "Spread function exponent for the Y component."),
+        param!("dc", "DC", unlimited_float, 0.0, -10.0, 10.0, "Color drift amount. Preserved as a parameter for preset compatibility, but the actual color write was dropped during the port (see module header)."),
     ],
     needs_transform: true,
     writes_color: false,
