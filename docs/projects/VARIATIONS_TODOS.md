@@ -187,6 +187,38 @@ thresholds, or add a `legacy_import` hook on the param def.
 - `atan.mode` — declared `Integer` with `[0, 2]` range, 3-mode axis
   selector (Y only / X only / both). Should be `Enum`. See
   [singleton_misc.rs](../../src/variations/defs/singleton_misc.rs).
+- `tqmirror.type` — declared `Integer` with `[0, 1]` range, used as a
+  binary outer-boundary branch selector (swap x↔y vs pass through).
+  Should be `Boolean`. See
+  [stub_recoveries2.rs](../../src/variations/defs/stub_recoveries2.rs).
+
+### Numerical edge-case divergence from upstream
+
+Across the variations we systematically guard against NaN/inf with
+`max(x, 1e-30)` (before `log`/`pow`/`sqrt`) and
+`select(u, 1e-30, abs(u) < 1e-30)` (before division). Upstream cpp
+generally doesn't bother — it lets the float arithmetic produce NaN
+or ±inf, which propagates and typically gets discarded by the
+histogram-write step.
+
+For most cases this is a wash: our extreme-finite values either land
+off-canvas or get clamped, same as NaN. But a few cases produce
+visibly different output:
+
+- **`disc3` sqrt-clamp** — at
+  [stub_recoveries2.rs:84](../../src/variations/defs/stub_recoveries2.rs#L84)
+  we do `sqrt(max(x²·d·e + y²·f·g, 0.0))`. When `d·e < 0` or
+  `f·g < 0`, the argument can be negative; upstream cpp returns NaN
+  (which propagates to discarded points), while our clamp returns
+  `sqrt(0) = 0`, yielding `sin(0) = 0, cos(0) = 1` and a real plotted
+  point near the origin that wouldn't exist upstream.
+
+The general guard pattern is probably fine, but it's worth a render
+comparison on a flame with parameters that exercise the edge cases
+(e.g. `disc3` with `d = -1, e = 1`) to confirm we're not introducing
+spurious origin artifacts. If we are, we may need to special-case the
+`sqrt` clamp (and similar) to propagate a sentinel that the
+dispatcher recognizes as "drop this point."
 
 ### Init-slot optimization opportunities
 
