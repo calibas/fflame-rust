@@ -33,6 +33,13 @@ use crate::param;
 // =============================================================================
 // jac_sn
 // =============================================================================
+/// Jacobi elliptic sn-driven warp — emits `(sn(x,k)·dn(y,1−k),
+/// cn(x,k)·dn(x,k)·cn(y,1−k)·sn(y,1−k)) / (ε + sn²(x)·sn²(y)·k + cn²(y))`.
+/// Uses the Jacobi elliptic functions sn/cn/dn (computed via 8-iteration
+/// AGM descent) with the user-specified modulus `k`.
+///
+/// # Authors
+/// - IROIRO++
 pub static JAC_SN: VariationDef = VariationDef {
     name: "jac_sn",
     display_name: "Jac SN",
@@ -40,7 +47,7 @@ pub static JAC_SN: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("jac_sn_k", "K", unlimited_float, 0.5, -1.0, 1.0),
+        param!("jac_sn_k", "K", unlimited_float, 0.5, -1.0, 1.0, "Elliptic modulus k. Ranges over [−1, 1]; 0 reduces to circular trig, ±1 reduces to hyperbolic."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -234,6 +241,12 @@ fn variation_jac_sn(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 // =============================================================================
 // jac_cn
 // =============================================================================
+/// Jacobi elliptic cn-driven warp — same denominator as `jac_sn`, with
+/// numerators `(cn(x,k)·cn(y,1−k), −dn(x,k)·sn(x,k)·dn(y,1−k)·sn(y,1−k))`.
+/// Produces cn-flavored elliptic patterns.
+///
+/// # Authors
+/// - IROIRO++
 pub static JAC_CN: VariationDef = VariationDef {
     name: "jac_cn",
     display_name: "Jac CN",
@@ -241,7 +254,7 @@ pub static JAC_CN: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("jac_cn_k", "K", unlimited_float, 0.5, -1.0, 1.0),
+        param!("jac_cn_k", "K", unlimited_float, 0.5, -1.0, 1.0, "Elliptic modulus k. Ranges over [−1, 1]; 0 reduces to circular trig, ±1 reduces to hyperbolic."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -435,6 +448,12 @@ fn variation_jac_cn(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 // =============================================================================
 // jac_dn
 // =============================================================================
+/// Jacobi elliptic dn-driven warp — same denominator as `jac_sn`, with
+/// numerators `(dn(x,k)·cn(y,1−k)·dn(y,1−k),
+/// −cn(x,k)·sn(x,k)·sn(y,1−k)·k)`. Produces dn-flavored elliptic patterns.
+///
+/// # Authors
+/// - IROIRO++
 pub static JAC_DN: VariationDef = VariationDef {
     name: "jac_dn",
     display_name: "Jac DN",
@@ -442,7 +461,7 @@ pub static JAC_DN: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("jac_dn_k", "K", unlimited_float, 0.5, -1.0, 1.0),
+        param!("jac_dn_k", "K", unlimited_float, 0.5, -1.0, 1.0, "Elliptic modulus k. Ranges over [−1, 1]; 0 reduces to circular trig, ±1 reduces to hyperbolic."),
     ],
     needs_transform: false,
     writes_color: false,
