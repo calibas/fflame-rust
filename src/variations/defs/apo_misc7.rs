@@ -25,7 +25,7 @@
 //!                                          `floor(rand · power)`
 //!                                          (semantically equivalent
 //!                                          uniform N-th-root branch)
-//!   - `nPolar`     (Faber)             — N-power polar; 2 user
+//!   - `nPolar`                         — N-power polar; 2 user
 //!                                          (parity int, n int) + 4
 //!                                          init slots (nnz, isodd,
 //!                                          absn, cn). Body has
@@ -53,6 +53,15 @@ use crate::param;
 //   else:  rotate by α, do squareroot bend, rotate back  (asteria branch)
 // Body uses w internally throughout — needs_transform divide-out.
 // =============================================================================
+/// RNG-blended linear/asteria warp — splits behavior based on whether the
+/// input falls in a star-shaped region (inside the unit circle, with
+/// corners cut out by unit-discs around the four corners `(±1, ±1)`).
+/// Inside, linear pass-through dominates (with 35% chance of falling
+/// through to the asteria branch). Outside, applies a square-root-bend warp
+/// rotated by `alpha`.
+///
+/// # Authors
+/// - DarkBeam
 pub static ASTERIA: VariationDef = VariationDef {
     name: "asteria",
     display_name: "Asteria",
@@ -60,7 +69,7 @@ pub static ASTERIA: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("alpha", "Alpha", unlimited_float, 0.0, -10.0, 10.0),
+        param!("alpha", "Alpha", unlimited_float, 0.0, -10.0, 10.0, "Rotation angle (× π) applied before and inverted after the asteria branch's square-root bend."),
     ],
     needs_transform: true,
     writes_color: false,
@@ -174,6 +183,13 @@ fn variation_asteria(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fu
 // (In 2D mode `abs_v = |y|`; `a · y = e · sin(|y|) · sign(y)`;
 //  `e · c = e · cos(|y|) = e · cos(y)`. Reasonable degenerate.)
 // =============================================================================
+/// Quaternion exponential extension — emits `(e^x · cos|v|, e^x ·
+/// sin|v|/|v| · y, e^x · sin|v|/|v| · z)` where `|v| = sqrt(y² + z²)`.
+/// Generalizes the complex exponential `(x + iy → e^x · (cos y, sin y))` to
+/// a 3D quaternion-like form.
+///
+/// # Authors
+/// - zephyrtronium
 pub static ESTIQ: VariationDef = VariationDef {
     name: "estiq",
     display_name: "Estiq",
@@ -222,6 +238,14 @@ fn variation_estiq(p: vec3<f32>) -> vec3<f32> {
 // (cpp APO_VARIABLES empty — porter omitted all 8 params. Recovered
 // from Java setParameter.)
 // =============================================================================
+/// Fractal disc — combines an inverse-radius cosine wave `cos(2π / (r +
+/// ashift) + xshift)`, an angular term `(atan2(y,x)/π + rshift) / 2`, and
+/// four blending weights. Each `term_i` controls a different contribution
+/// to the output (pure-prx, x-scaled-prx, x-scaled-pr, pass-through),
+/// producing rich layered disc patterns.
+///
+/// # Authors
+/// - CozyG
 pub static FDISC: VariationDef = VariationDef {
     name: "fdisc",
     display_name: "F-Disc",
@@ -229,14 +253,14 @@ pub static FDISC: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("ashift", "A shift", unlimited_float, 1.0, -10.0, 10.0),
-        param!("rshift", "R shift", unlimited_float, 1.0, -10.0, 10.0),
-        param!("xshift", "X shift", unlimited_float, 0.0, -10.0, 10.0),
-        param!("yshift", "Y shift", unlimited_float, 0.0, -10.0, 10.0),
-        param!("term1", "Term 1", unlimited_float, 1.0, -10.0, 10.0),
-        param!("term2", "Term 2", unlimited_float, 0.0, -10.0, 10.0),
-        param!("term3", "Term 3", unlimited_float, 0.0, -10.0, 10.0),
-        param!("term4", "Term 4", unlimited_float, 0.0, -10.0, 10.0),
+        param!("ashift", "A shift", unlimited_float, 1.0, -10.0, 10.0, "Radial denominator offset added to `sqrt(x² + y²)`."),
+        param!("rshift", "R shift", unlimited_float, 1.0, -10.0, 10.0, "Angular offset added to `atan2(y, x) / π`."),
+        param!("xshift", "X shift", unlimited_float, 0.0, -10.0, 10.0, "Phase offset on the X cosine wave."),
+        param!("yshift", "Y shift", unlimited_float, 0.0, -10.0, 10.0, "Phase offset on the Y sine wave."),
+        param!("term1", "Term 1", unlimited_float, 1.0, -10.0, 10.0, "Weight on the pure `prx`/`pry` (radius × axis-wave) contribution."),
+        param!("term2", "Term 2", unlimited_float, 0.0, -10.0, 10.0, "Weight on the input-scaled `x·prx`/`y·pry` contribution."),
+        param!("term3", "Term 3", unlimited_float, 0.0, -10.0, 10.0, "Weight on the `x·pr`/`y·pr` (input-scaled radius) contribution."),
+        param!("term4", "Term 4", unlimited_float, 0.0, -10.0, 10.0, "Weight on the pass-through `x`/`y` contribution."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -310,6 +334,14 @@ fn variation_fdisc(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 //   out = (sinht / temp, sins / temp)
 // Clean factor through outer; needs_rng for the discrete-N branch.
 // =============================================================================
+/// Bipolar transform — extends the bipolar-coords mapping `(τ, σ)` with
+/// adjustable `power`, `move`, `rotate`, and `split` (asymmetric τ offset
+/// based on the sign of x). Picks a random angular branch from `floor(rand
+/// · power)`, producing a generalized bipolar warp with N-fold rotational
+/// structure.
+///
+/// # Authors
+/// - Michael Faber
 pub static BTRANSFORM: VariationDef = VariationDef {
     name: "bTransform",
     display_name: "B-Transform",
@@ -317,10 +349,10 @@ pub static BTRANSFORM: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("rotate", "Rotate", unlimited_float, 0.0, -10.0, 10.0),
-        param!("power", "Power", int, 1.0, 1.0, 100.0),
-        param!("move", "Move", unlimited_float, 0.0, -10.0, 10.0),
-        param!("split", "Split", unlimited_float, 0.0, -10.0, 10.0),
+        param!("rotate", "Rotate", unlimited_float, 0.0, -10.0, 10.0, "Additive rotation on the bipolar σ coordinate."),
+        param!("power", "Power", int, 1.0, 1.0, 100.0, "Number of angular branches (≥ 1)."),
+        param!("move", "Move", unlimited_float, 0.0, -10.0, 10.0, "Additive offset on τ."),
+        param!("split", "Split", unlimited_float, 0.0, -10.0, 10.0, "Asymmetric τ offset: added when x ≥ 0, subtracted when x < 0."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -396,7 +428,7 @@ fn variation_bTransform(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
 };
 
 // =============================================================================
-// nPolar (Faber)
+// nPolar 
 //   2 user params: parity (int), n (int)
 //   4 init slots: nnz = (n==0)?1:n;  isodd = |parity| mod 2;
 //                 absn = |nnz|;       cn = 1/(2·nnz)
@@ -416,6 +448,10 @@ fn variation_bTransform(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
 // FTy)`). The closing-form `atan2(cosa, sina)` (line 76) is also the
 // cpp swap. Preserved for parity with cpp output.
 // =============================================================================
+/// N-power polar warp with parity-based branch selection — even-parity
+/// (`|parity|` even) routes through a log-polar mid-step before the angular
+/// power; odd-parity stays in cartesian. A random `floor(rand · |n|)`
+/// selects one of `|n|` angular branches.
 pub static NPOLAR: VariationDef = VariationDef {
     name: "nPolar",
     display_name: "N-Polar",
@@ -423,8 +459,8 @@ pub static NPOLAR: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("parity", "Parity", int, 0.0, -100.0, 100.0),
-        param!("n", "N", int, 1.0, -100.0, 100.0),
+        param!("parity", "Parity", int, 0.0, -100.0, 100.0, "Parity selector. `|parity| mod 2` chooses the branch (even = log-polar mid-step, odd = cartesian); the value itself also flips the sign of the even-branch's radial magnitude."),
+        param!("n", "N", int, 1.0, -100.0, 100.0, "Angular branch count. 0 is forced to 1 internally; negative values use `|n|` branches."),
     ],
     needs_transform: true,
     writes_color: false,
