@@ -97,6 +97,7 @@ the answer is known — that's the convention for "unknown" per
 - `cloverleaf_wf` ([wf_curves.rs](../../src/variations/defs/wf_curves.rs))
 - `rose_wf` ([wf_curves.rs](../../src/variations/defs/wf_curves.rs))
 - `bubble_wf` ([wf_curves.rs](../../src/variations/defs/wf_curves.rs))
+- `dinis_surface_wf` ([waves_wf_family.rs](../../src/variations/defs/waves_wf_family.rs)) — surface documented at [mathworld.wolfram.com/DinisSurface](https://mathworld.wolfram.com/DinisSurface.html); WF implementation author unknown
 
 **Likely shared author** — all are JWildfire ports of complex-plane
 inverse hyperbolic functions (the plain ones in `hyperbolic.rs` and
@@ -260,6 +261,12 @@ thresholds, or add a `legacy_import` hook on the param def.
   the three WF polar curves. See
   [apo_misc20.rs](../../src/variations/defs/apo_misc20.rs) and
   [wf_curves.rs](../../src/variations/defs/wf_curves.rs).
+- `waves2_wf.use_cos_x`, `waves2_wf.use_cos_y`, `waves3_wf.use_cos_x`,
+  `waves3_wf.use_cos_y`, `waves4_wf.use_cos_x`, `waves4_wf.use_cos_y`
+  — all declared `Integer` with `[0, 1]` range, used as a binary
+  sin-vs-cos selector per axis. Should all be `Boolean`. Same enum
+  across all six instances (three variations × two axes). See
+  [waves_wf_family.rs](../../src/variations/defs/waves_wf_family.rs).
 - `butterfly_fay.unified_inner_outer` — declared `Integer` with
   `[0, 1]` range, used as a binary "always-outer vs inside-outside-
   dispatch" toggle. Should be `Boolean`. See
