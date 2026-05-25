@@ -225,6 +225,14 @@ thresholds, or add a `legacy_import` hook on the param def.
   Should all be `Boolean`. Same enum across all three phase variants.
   See [circlecrop_misc.rs](../../src/variations/defs/circlecrop_misc.rs)
   and [circlecrop_phase.rs](../../src/variations/defs/circlecrop_phase.rs).
+- `butterfly_fay.unified_inner_outer` — declared `Integer` with
+  `[0, 1]` range, used as a binary "always-outer vs inside-outside-
+  dispatch" toggle. Should be `Boolean`. See
+  [butterfly_fay_misc.rs](../../src/variations/defs/butterfly_fay_misc.rs).
+- `butterfly_fay.outer_mode`, `butterfly_fay.inner_mode` — both
+  declared `Integer` with `[0, 5]` range, 6-mode output-formula
+  selector. Same enum on both. Should be `Enum`. See
+  [butterfly_fay_misc.rs](../../src/variations/defs/butterfly_fay_misc.rs).
 
 ### Numerical edge-case divergence from upstream
 
