@@ -210,6 +210,10 @@ thresholds, or add a `legacy_import` hook on the param def.
   used as a binary distance-formula selector (Euclidean vs upstream-
   quirk product). Should be `Boolean`. See
   [apo_misc13.rs](../../src/variations/defs/apo_misc13.rs).
+- `rosoni.altshapes` — declared `Integer` with `[0, 1]` range, used as
+  a binary inner-shape family selector (circle/square vs
+  lemniscate/angle). Should be `Boolean`. See
+  [rosoni_misc.rs](../../src/variations/defs/rosoni_misc.rs).
 
 ### Numerical edge-case divergence from upstream
 
