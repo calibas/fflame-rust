@@ -91,6 +91,8 @@ the answer is known — that's the convention for "unknown" per
 - `heart_wf` ([apo_misc21.rs](../../src/variations/defs/apo_misc21.rs))
 - `post_ztranslate_wf` ([apo_misc21.rs](../../src/variations/defs/apo_misc21.rs))
 - `post_mirror_wf` ([apo_misc21.rs](../../src/variations/defs/apo_misc21.rs))
+- `dc_carpet` ([apo_misc22.rs](../../src/variations/defs/apo_misc22.rs))
+- `post_point_symmetry_wf` ([apo_misc22.rs](../../src/variations/defs/apo_misc22.rs))
 
 **Likely shared author** — all are JWildfire ports of complex-plane
 inverse hyperbolic functions (the plain ones in `hyperbolic.rs` and
@@ -242,6 +244,12 @@ thresholds, or add a `legacy_import` hook on the param def.
   — all declared `Integer` with `[0, 1]` range, used as a binary
   per-axis enable for the mirror branch. Should all be `Boolean`.
   See [apo_misc21.rs](../../src/variations/defs/apo_misc21.rs).
+- `cpow3_wf.discrete_spread` — declared `unlimited_float` with
+  `[0, 1]` range, but only checked `>= 1.0` (binary toggle between
+  discrete-integer and continuous angular branches). Type is
+  misleading; semantics are Boolean. Same pattern as
+  `tile_reverse.reversal`. See
+  [apo_misc22.rs](../../src/variations/defs/apo_misc22.rs).
 - `butterfly_fay.unified_inner_outer` — declared `Integer` with
   `[0, 1]` range, used as a binary "always-outer vs inside-outside-
   dispatch" toggle. Should be `Boolean`. See
@@ -337,7 +345,7 @@ this entry rather than spawning new ones.
 
 ### cpp-vs-Java port divergences (atan2-swap family)
 
-Seven variations so far show the same family of divergence: the
+Eight variations so far show the same family of divergence: the
 upstream cpp port swapped the order of `atan2` arguments (or, in
 `power`'s case, swapped sin↔cos directly in the output) relative to
 JWildfire's Java. Mechanically this collapses via the identity
@@ -396,6 +404,16 @@ exactly if we ever need to:
   sign flip on the `n·θ` term and an additive `−n·π/2` shift inside
   the sine, so the Z modulation is genuinely different (not just
   rotated).
+
+- **`cpow3_wf`** ([apo_misc22.rs:230](../../src/variations/defs/apo_misc22.rs#L230),
+  [:264](../../src/variations/defs/apo_misc22.rs#L264))
+  — cpp's `ai = atan2(x, y)` cascades through a branch (`if ai <
+  0.0: n += 1.0`), so the π/2 shift changes which iterations get
+  `n + 1` — that's a *branch-selection* divergence, not just a
+  coordinate flip. The shifted `ai` then feeds the radial term
+  `ri = exp(half_c · lnr2 − d · ai)` and the angular output
+  `ang2 = c · ai · half_d · lnr2 · ang · (...)`, so both the
+  radius and angle of the output differ from Java's.
 
 **Remediation if we add JWildfire flame import:** two general
 options. Either (a) pre-compose a `y↔x` swap into the affine that
