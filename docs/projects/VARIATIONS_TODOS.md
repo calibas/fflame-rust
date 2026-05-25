@@ -219,6 +219,12 @@ thresholds, or add a `legacy_import` hook on the param def.
   a binary inner-shape family selector (circle/square vs
   lemniscate/angle). Should be `Boolean`. See
   [rosoni_misc.rs](../../src/variations/defs/rosoni_misc.rs).
+- `circlecrop.zero`, `pre_circlecrop.zero`, `post_circlecrop.zero` —
+  all declared `Integer` with `[0, 1]` range, used as a binary
+  out-of-circle behavior selector (hide vs scatter-onto-boundary).
+  Should all be `Boolean`. Same enum across all three phase variants.
+  See [circlecrop_misc.rs](../../src/variations/defs/circlecrop_misc.rs)
+  and [circlecrop_phase.rs](../../src/variations/defs/circlecrop_phase.rs).
 
 ### Numerical edge-case divergence from upstream
 
