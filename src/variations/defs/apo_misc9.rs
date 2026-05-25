@@ -52,6 +52,15 @@ use crate::param;
 //   out = (cosh(mu)·cos(nu), sinh(mu)·sin(nu))
 // Clean factor through outer.
 // =============================================================================
+/// Elliptic-coordinate Julia — converts the input to elliptic coordinates
+/// `(μ, ν)`, divides both by `power`, adds a random angular branch
+/// `2π·floor(rand·|power|)/power` to ν, then emits `(cosh(μ)·cos(ν),
+/// sinh(μ)·sin(ν))`. With negative `power`, the input is first inverted
+/// through the unit circle. Produces N-fold rotationally symmetric Julia-
+/// style elliptic patterns.
+///
+/// # Authors
+/// - Michael Faber
 pub static EJULIA: VariationDef = VariationDef {
     name: "eJulia",
     display_name: "E-Julia",
@@ -59,7 +68,7 @@ pub static EJULIA: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("power", "Power", int, 2.0, -100.0, 100.0),
+        param!("power", "Power", int, 2.0, -100.0, 100.0, "Number of angular branches. Negative values invert the input through the unit circle first."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -149,6 +158,12 @@ fn variation_eJulia(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
 //   out = (cosh(mu)·cos(nu), sinh(mu)·sin(nu))
 // Clean factor through outer.
 // =============================================================================
+/// Elliptic-coordinate motion — converts the input to elliptic coordinates
+/// `(μ, ν)`, adds `move` to μ (with sign determined by ν), folds μ negative
+/// back onto positive (reflecting ν), then adds `rotate` to ν.
+///
+/// # Authors
+/// - Michael Faber
 pub static EMOTION: VariationDef = VariationDef {
     name: "eMotion",
     display_name: "E-Motion",
@@ -156,8 +171,8 @@ pub static EMOTION: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("move", "Move", unlimited_float, 0.0, -10.0, 10.0),
-        param!("rotate", "Rotate", unlimited_float, 0.0, -10.0, 10.0),
+        param!("move", "Move", unlimited_float, 0.0, -10.0, 10.0, "Additive offset on μ (sign chosen by the sign of ν)."),
+        param!("rotate", "Rotate", unlimited_float, 0.0, -10.0, 10.0, "Additive offset on ν."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -239,6 +254,15 @@ fn variation_eMotion(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 //       fz = -stem_length
 // 7 user params; Full3D; needs_transform divide-out.
 // =============================================================================
+/// Flower with stem — emits a flower-shaped XY pattern (radius modulated by
+/// `|spread + sin(petals·t)| · cos(petal_split·petals·t)`) plus a stem Z
+/// that grows downward with thickness controlled by `stem_thickness`.
+/// Optionally folds the petal Z upward outside a radius, and caps the stem
+/// at a maximum length.
+///
+/// # Authors
+/// - CozyG
+/// - DarkBeam
 pub static FLOWER_DB: VariationDef = VariationDef {
     name: "flower_db",
     display_name: "Flower DB",
@@ -246,13 +270,13 @@ pub static FLOWER_DB: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("petals", "Petals", unlimited_float, 6.0, -50.0, 50.0),
-        param!("petal_split", "Petal Split", unlimited_float, 0.0, -10.0, 10.0),
-        param!("petal_spread", "Petal Spread", unlimited_float, 1.0, -10.0, 10.0),
-        param!("stem_thickness", "Stem Thickness", unlimited_float, 1.0, -10.0, 10.0),
-        param!("stem_length", "Stem Length", unlimited_float, 0.0, -10.0, 10.0),
-        param!("petal_fold_strength", "Petal Fold Strength", unlimited_float, 0.0, -10.0, 10.0),
-        param!("petal_fold_radius", "Petal Fold Radius", unlimited_float, 1.0, -10.0, 10.0),
+        param!("petals", "Petals", unlimited_float, 6.0, -50.0, 50.0, "Number of petal lobes (angular frequency of the sin modulator)."),
+        param!("petal_split", "Petal Split", unlimited_float, 0.0, -10.0, 10.0, "Frequency multiplier on the inner cosine that creates per-petal sub-divisions."),
+        param!("petal_spread", "Petal Spread", unlimited_float, 1.0, -10.0, 10.0, "Constant offset added to the sin modulator. Controls how filled the petals appear."),
+        param!("stem_thickness", "Stem Thickness", unlimited_float, 1.0, -10.0, 10.0, "Magnitude of the Z output. Negative values point the stem downward."),
+        param!("stem_length", "Stem Length", unlimited_float, 0.0, -10.0, 10.0, "Maximum stem length. 0 disables the cap (stem extends without bound)."),
+        param!("petal_fold_strength", "Petal Fold Strength", unlimited_float, 0.0, -10.0, 10.0, "Z-axis fold strength applied to petals outside `petal_fold_radius`."),
+        param!("petal_fold_radius", "Petal Fold Radius", unlimited_float, 1.0, -10.0, 10.0, "Radial threshold beyond which the petal fold kicks in."),
     ],
     needs_transform: true,
     writes_color: false,
@@ -319,6 +343,13 @@ fn variation_flower_db(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
 //   out = r · (cos angle, sin angle)
 // Clean factor through outer.
 // =============================================================================
+/// JuliaN with affine pre-transform — applies a 2D affine `(X, Y) = (a·x +
+/// b·y + e, c·x + d·y + f)` first, then runs standard JuliaN: picks a
+/// random angular branch from `|power|`, computes the new angle `(atan2(Y,
+/// X) + 2π·k)/power`, and emits at radius `(X²+Y²)^(dist/(2·power))`.
+///
+/// # Authors
+/// - Xyrus02
 pub static JULIAN2: VariationDef = VariationDef {
     name: "julian2",
     display_name: "JuliaN 2",
@@ -326,14 +357,14 @@ pub static JULIAN2: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("power", "Power", int, 0.0, -100.0, 100.0),
-        param!("dist", "Distance", unlimited_float, 1.0, -100.0, 100.0),
-        param!("a", "A", unlimited_float, 1.0, -10.0, 10.0),
-        param!("b", "B", unlimited_float, 0.0, -10.0, 10.0),
-        param!("c", "C", unlimited_float, 0.0, -10.0, 10.0),
-        param!("d", "D", unlimited_float, 1.0, -10.0, 10.0),
-        param!("e", "E", unlimited_float, 0.0, -10.0, 10.0),
-        param!("f", "F", unlimited_float, 0.0, -10.0, 10.0),
+        param!("power", "Power", int, 0.0, -100.0, 100.0, "Number of angular branches. 0 produces zero output."),
+        param!("dist", "Distance", unlimited_float, 1.0, -100.0, 100.0, "Radial-power exponent — output radius is `(X²+Y²)^(dist/(2·power))`."),
+        param!("a", "A", unlimited_float, 1.0, -10.0, 10.0, "Pre-affine xx coefficient."),
+        param!("b", "B", unlimited_float, 0.0, -10.0, 10.0, "Pre-affine xy coefficient."),
+        param!("c", "C", unlimited_float, 0.0, -10.0, 10.0, "Pre-affine yx coefficient."),
+        param!("d", "D", unlimited_float, 1.0, -10.0, 10.0, "Pre-affine yy coefficient."),
+        param!("e", "E", unlimited_float, 0.0, -10.0, 10.0, "Pre-affine x offset."),
+        param!("f", "F", unlimited_float, 0.0, -10.0, 10.0, "Pre-affine y offset."),
     ],
     needs_transform: false,
     writes_color: false,

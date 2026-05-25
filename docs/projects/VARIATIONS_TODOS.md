@@ -299,6 +299,17 @@ Using `atan2(X, Y) = π/2 − atan2(Y, X)` and the variation's `vvar = w/π` fac
 
 Same remediation options as `power` if we add JWildfire imports — affine pre-compose vs in-body swap gated on import-source flag — with the additional wrinkle that the swap is only needed when `|parity|` is even, so the body-level fix is conditional.
 
+### `flower_db` follows cpp (Apophysis), not Java (JWildfire)
+
+Same pattern again — cpp uses `atan2(FTx, FTy)` swapped from Java's `atan2(FTy, FTx)` at the angle-extraction step. See [apo_misc9.rs:273](../../src/variations/defs/apo_misc9.rs#L273).
+
+The downstream uses two effects rather than one:
+
+1. **Output XY swap.** With `t_cpp = π/2 − t_java`, `sin(t_cpp) = cos(t_java)` and `cos(t_cpp) = sin(t_java)`. The output lines `(sin(t)·r, cos(t)·r)` therefore evaluate to `(x, y)·(r/|r_xy|)` in cpp but `(y, x)·(r/|r_xy|)` in Java — i.e., Java's XY output is transposed relative to cpp's. Visible diagonal-mirror.
+2. **`r` modulation differs non-trivially.** The radius modulator `|spread + sin(petals·t)| · cos(petal_split·petals·t)` evaluates `sin/cos` at `petals · t`, which under the π/2 shift becomes `sin(petals·π/2 − petals·t_java)` — a function of `petals` parity that mixes sin and cos. Unlike the output swap, this isn't a simple coordinate exchange; the petal pattern itself reshapes when ported.
+
+Same JWildfire-import remediation question as `power`/`nPolar` (affine pre-compose vs in-body swap). The radius-modulation effect means even fixing the angle won't perfectly match Java for arbitrary `petals` — but for integer `petals` the result is still recognizably the same flower with a rotation/reflection.
+
 ### Zero-weight variations should still count as "present"
 
 A variation with weight 0 is currently treated as if it doesn't exist
