@@ -1,6 +1,6 @@
 //! pointgrid family + apocarpet_js
 //!
-//!   - pointgrid_wf (Maschke): grid of cells in a rectangle, with each
+//!   - pointgrid_wf (Andreas Maschke): grid of cells in a rectangle, with each
 //!     cell jittered by a deterministic per-cell pseudo-random offset.
 //!     8 user params (xmin, xmax, xcount, ymin, ymax, ycount,
 //!     distortion, seed) + 2 init slots (_dx, _dy = (max−min)/count).
@@ -9,11 +9,11 @@
 //!     a deterministic integer hash (n^13 ^ n style) keyed on
 //!     (seed, xIdx, yIdx).
 //!
-//!   - pointgrid3d_wf (Maschke): 3D grid version. 11 user params + 3
+//!   - pointgrid3d_wf (Andreas Maschke): 3D grid version. 11 user params + 3
 //!     init slots (_dx, _dy, _dz). Same hash-based jitter approach.
 //!     Full3D.
 //!
-//!   - apocarpet_js (Sosa, based on Paul Bourke's roger17.c):
+//!   - apocarpet_js (Jesus Sosa, based on Paul Bourke's roger17.c):
 //!     Apollonian Carpet — 6-branch random IFS using inversion (cases
 //!     0, 5) and four scaled translates (cases 1-4) by `r = 1/(1+√2)`.
 //!     0 user params. RNG (1 call/iter for 6-way branch). Body
@@ -34,6 +34,15 @@ use crate::param;
 // pointgrid_wf
 // ---------------------------------------------------------------------------
 
+/// Point grid with deterministic jitter — each iteration picks a random
+/// cell from an `xcount × ycount` grid spanning `[xmin, xmax] × [ymin,
+/// ymax]`, then optionally jitters that cell's position by a deterministic
+/// per-cell offset (hashed from `seed` + cell index, scaled by
+/// `distortion`). Useful for placing IFS attractors at grid points with a
+/// controllable random perturbation.
+///
+/// # Authors
+/// - Andreas Maschke
 pub static POINTGRID_WF: VariationDef = VariationDef {
     name: "pointgrid_wf",
     display_name: "Point Grid WF",
@@ -41,14 +50,14 @@ pub static POINTGRID_WF: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("xmin", "X Min", unlimited_float, -3.0, -100.0, 100.0),
-        param!("xmax", "X Max", unlimited_float, 3.0, -100.0, 100.0),
-        param!("xcount", "X Count", int, 32.0, 1.0, 1000.0),
-        param!("ymin", "Y Min", unlimited_float, -3.0, -100.0, 100.0),
-        param!("ymax", "Y Max", unlimited_float, 3.0, -100.0, 100.0),
-        param!("ycount", "Y Count", int, 32.0, 1.0, 1000.0),
-        param!("distortion", "Distortion", unlimited_float, 2.3, -10.0, 10.0),
-        param!("seed", "Seed", int, 1234.0, -100000.0, 100000.0),
+        param!("xmin", "X Min", unlimited_float, -3.0, -100.0, 100.0, "Left edge of the grid region on the X axis."),
+        param!("xmax", "X Max", unlimited_float, 3.0, -100.0, 100.0, "Right edge of the grid region on the X axis."),
+        param!("xcount", "X Count", int, 32.0, 1.0, 1000.0, "Number of grid cells along X."),
+        param!("ymin", "Y Min", unlimited_float, -3.0, -100.0, 100.0, "Bottom edge of the grid region on the Y axis."),
+        param!("ymax", "Y Max", unlimited_float, 3.0, -100.0, 100.0, "Top edge of the grid region on the Y axis."),
+        param!("ycount", "Y Count", int, 32.0, 1.0, 1000.0, "Number of grid cells along Y."),
+        param!("distortion", "Distortion", unlimited_float, 2.3, -10.0, 10.0, "Per-cell jitter amplitude. 0 = no jitter (pure grid); larger = more scatter around each cell center."),
+        param!("seed", "Seed", int, 1234.0, -100000.0, 100000.0, "Hash seed for the per-cell jitter — changing it reshuffles the jitter pattern."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -134,6 +143,12 @@ fn variation_pointgrid_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: p
 // pointgrid3d_wf
 // ---------------------------------------------------------------------------
 
+/// 3D version of `pointgrid_wf` — same algorithm extended to a 3D `xcount ×
+/// ycount × zcount` grid spanning `[xmin, xmax] × [ymin, ymax] × [zmin,
+/// zmax]`. Each axis gets its own hashed jitter offset.
+///
+/// # Authors
+/// - Andreas Maschke
 pub static POINTGRID3D_WF: VariationDef = VariationDef {
     name: "pointgrid3d_wf",
     display_name: "Point Grid 3D WF",
@@ -141,17 +156,17 @@ pub static POINTGRID3D_WF: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("xmin", "X Min", unlimited_float, -3.0, -100.0, 100.0),
-        param!("xmax", "X Max", unlimited_float, 3.0, -100.0, 100.0),
-        param!("xcount", "X Count", int, 10.0, 1.0, 1000.0),
-        param!("ymin", "Y Min", unlimited_float, -3.0, -100.0, 100.0),
-        param!("ymax", "Y Max", unlimited_float, 3.0, -100.0, 100.0),
-        param!("ycount", "Y Count", int, 10.0, 1.0, 1000.0),
-        param!("zmin", "Z Min", unlimited_float, -1.0, -100.0, 100.0),
-        param!("zmax", "Z Max", unlimited_float, 1.0, -100.0, 100.0),
-        param!("zcount", "Z Count", int, 10.0, 1.0, 1000.0),
-        param!("distortion", "Distortion", unlimited_float, 2.3, -10.0, 10.0),
-        param!("seed", "Seed", int, 1234.0, -100000.0, 100000.0),
+        param!("xmin", "X Min", unlimited_float, -3.0, -100.0, 100.0, "Left edge of the grid region on the X axis."),
+        param!("xmax", "X Max", unlimited_float, 3.0, -100.0, 100.0, "Right edge of the grid region on the X axis."),
+        param!("xcount", "X Count", int, 10.0, 1.0, 1000.0, "Number of grid cells along X."),
+        param!("ymin", "Y Min", unlimited_float, -3.0, -100.0, 100.0, "Bottom edge of the grid region on the Y axis."),
+        param!("ymax", "Y Max", unlimited_float, 3.0, -100.0, 100.0, "Top edge of the grid region on the Y axis."),
+        param!("ycount", "Y Count", int, 10.0, 1.0, 1000.0, "Number of grid cells along Y."),
+        param!("zmin", "Z Min", unlimited_float, -1.0, -100.0, 100.0, "Floor edge of the grid region on the Z axis."),
+        param!("zmax", "Z Max", unlimited_float, 1.0, -100.0, 100.0, "Ceiling edge of the grid region on the Z axis."),
+        param!("zcount", "Z Count", int, 10.0, 1.0, 1000.0, "Number of grid cells along Z."),
+        param!("distortion", "Distortion", unlimited_float, 2.3, -10.0, 10.0, "Per-cell jitter amplitude. 0 = no jitter (pure grid); larger = more scatter around each cell center."),
+        param!("seed", "Seed", int, 1234.0, -100000.0, 100000.0, "Hash seed for the per-cell jitter — changing it reshuffles the jitter pattern."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -232,6 +247,13 @@ fn variation_pointgrid3d_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, rng:
 // apocarpet_js
 // ---------------------------------------------------------------------------
 
+/// Apollonian Carpet — 6-branch random IFS using complex inversion
+/// (branches 0 and 5) and four scaled translates by `r = 1/(1 + √2)`
+/// (branches 1-4). Produces the classic Apollonian Carpet fractal. Based on
+/// Paul Bourke's `roger17.c`.
+///
+/// # Authors
+/// - Jesus Sosa
 pub static APOCARPET_JS: VariationDef = VariationDef {
     name: "apocarpet_js",
     display_name: "Apocarpet (JS)",
