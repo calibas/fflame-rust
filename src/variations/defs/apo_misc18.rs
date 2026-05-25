@@ -29,6 +29,14 @@ use crate::param;
 // lazysensen
 // ---------------------------------------------------------------------------
 
+/// Per-axis floor-and-flip — for each axis with non-zero scale, negates the
+/// coordinate when `floor(coord · scale)` parity matches a sign-dependent
+/// rule (parity ≠ 0 for non-negative; parity = 0 for negative). Produces a
+/// zig-zag mirror pattern whose stripe width is controlled by the per-axis
+/// scale.
+///
+/// # Authors
+/// - bezo97
 pub static LAZYSENSEN: VariationDef = VariationDef {
     name: "lazysensen",
     display_name: "Lazy Sensen",
@@ -36,9 +44,9 @@ pub static LAZYSENSEN: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("scale_x", "Scale X", unlimited_float, 1.0, -10.0, 10.0),
-        param!("scale_y", "Scale Y", unlimited_float, 1.0, -10.0, 10.0),
-        param!("scale_z", "Scale Z", unlimited_float, 0.0, -10.0, 10.0),
+        param!("scale_x", "Scale X", unlimited_float, 1.0, -10.0, 10.0, "X-axis stripe scale. 0 disables the X flip; the stripe width is `1/|scale_x|`."),
+        param!("scale_y", "Scale Y", unlimited_float, 1.0, -10.0, 10.0, "Y-axis stripe scale."),
+        param!("scale_z", "Scale Z", unlimited_float, 0.0, -10.0, 10.0, "Z-axis stripe scale (3D only)."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -110,6 +118,14 @@ fn variation_lazysensen(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<
 // spherecrop
 // ---------------------------------------------------------------------------
 
+/// 3D version of `circlecrop` — tests whether the input lies inside a
+/// sphere of radius `radius` centered at `(x, y, z)`. Inside, the input
+/// passes through scaled by weight. Outside, behavior depends on `zero`: 1
+/// = hide (collapse to origin), 0 = scatter onto the sphere surface (with
+/// `scatter_area` randomization).
+///
+/// # Authors
+/// - Xyrus02
 pub static SPHERECROP: VariationDef = VariationDef {
     name: "spherecrop",
     display_name: "Sphere Crop",
@@ -117,12 +133,12 @@ pub static SPHERECROP: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("radius", "Radius", unlimited_float, 1.0, -10.0, 10.0),
-        param!("x", "X", unlimited_float, 0.0, -10.0, 10.0),
-        param!("y", "Y", unlimited_float, 0.0, -10.0, 10.0),
-        param!("z", "Z", unlimited_float, 0.0, -10.0, 10.0),
-        param!("scatter_area", "Scatter Area", unlimited_float, 0.0, -1.0, 1.0),
-        param!("zero", "Zero", int, 1.0, 0.0, 1.0),
+        param!("radius", "Radius", unlimited_float, 1.0, -10.0, 10.0, "Sphere radius."),
+        param!("x", "X", unlimited_float, 0.0, -10.0, 10.0, "X center of the sphere."),
+        param!("y", "Y", unlimited_float, 0.0, -10.0, 10.0, "Y center of the sphere."),
+        param!("z", "Z", unlimited_float, 0.0, -10.0, 10.0, "Z center of the sphere."),
+        param!("scatter_area", "Scatter Area", unlimited_float, 0.0, -1.0, 1.0, "Random scatter band along the sphere surface. 0 = snap to surface; ±1 = scatter across full half-radius."),
+        param!("zero", "Zero", int, 1.0, 0.0, 1.0, "Behavior outside the sphere: 1 = hide (collapse to origin), 0 = scatter onto surface."),
     ],
     needs_transform: true,
     writes_color: false,
@@ -214,6 +230,11 @@ fn variation_spherecrop(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
 // xheart_blur_wf
 // ---------------------------------------------------------------------------
 
+/// Random heart-shape blur — picks a uniform random point in `[-2, 2]²` and
+/// runs it through the `xheart` Möbius-style heart warp (rotated by
+/// `angle`, with Y-stretch controlled by `ratio`). Produces a scattered
+/// heart-silhouette splat that's independent of the iteration's input
+/// position.
 pub static XHEART_BLUR_WF: VariationDef = VariationDef {
     name: "xheart_blur_wf",
     display_name: "X-Heart Blur WF",
@@ -221,8 +242,8 @@ pub static XHEART_BLUR_WF: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("angle", "Angle", unlimited_float, 0.0, -10.0, 10.0),
-        param!("ratio", "Ratio", unlimited_float, 0.0, -10.0, 10.0),
+        param!("angle", "Angle", unlimited_float, 0.0, -10.0, 10.0, "Rotation angle of the heart shape (scaled by π/8 internally and offset from π/4)."),
+        param!("ratio", "Ratio", unlimited_float, 0.0, -10.0, 10.0, "Y-axis stretch factor (added to a base of 6 to control heart roundness, same as `xheart`)."),
     ],
     needs_transform: false,
     writes_color: false,
