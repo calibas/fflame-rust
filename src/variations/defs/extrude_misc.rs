@@ -21,6 +21,13 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Z-axis random extrusion — with probability `root_face`, sets Z to the
+/// variation weight (clamped at 0 for negative weights); otherwise sets Z
+/// to a random fraction of the weight. The XY output is zero. Useful as a
+/// Z-only depth contribution to give 2D flames a flat Z extrusion.
+///
+/// # Authors
+/// - Xyrus02
 pub static EXTRUDE: VariationDef = VariationDef {
     name: "extrude",
     display_name: "Extrude",
@@ -28,7 +35,7 @@ pub static EXTRUDE: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("root_face", "Root Face", unlimited_float, 0.5, -10.0, 10.0),
+        param!("root_face", "Root Face", unlimited_float, 0.5, -10.0, 10.0, "Probability threshold for the `root face` branch — values below it set Z to the (clamped) weight; values above set Z to `weight · rand`."),
     ],
     needs_transform: true,
     writes_color: false,
