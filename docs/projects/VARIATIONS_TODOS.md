@@ -61,6 +61,8 @@ the answer is known — that's the convention for "unknown" per
 - `blob3d` ([numbered_extras.rs](../../src/variations/defs/numbered_extras.rs))
 - `super_shape` ([shapes3.rs](../../src/variations/defs/shapes3.rs))
 - `spirograph` ([parametric_curves.rs](../../src/variations/defs/parametric_curves.rs))
+- `cylinder2` ([stub_recoveries.rs](../../src/variations/defs/stub_recoveries.rs))
+- `pulse` ([stub_recoveries.rs](../../src/variations/defs/stub_recoveries.rs))
 
 **Likely shared author** — all are JWildfire ports of complex-plane
 inverse hyperbolic functions (the plain ones in `hyperbolic.rs` and
@@ -137,6 +139,10 @@ type-correction pass.
   binary toggle (collapse-to-origin vs scatter-to-edge). Should be
   `Boolean`. See
   [parametric_curves.rs](../../src/variations/defs/parametric_curves.rs).
+- `hypercrop.zero` — declared `unlimited_float` with `[0, 2]` range,
+  dispatched as 3 modes via threshold comparisons (`> 1.5` snap to
+  corner, `> 0.5` collapse to origin, else scatter). See
+  [maurer_hyper.rs](../../src/variations/defs/maurer_hyper.rs).
 
 ---
 
