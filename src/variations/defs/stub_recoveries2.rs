@@ -5,7 +5,7 @@
 //!
 //!   - `disc3`        (Stefanov)             — disc with 8 tunable knobs
 //!   - `projective`   (eralex61)             — linear-fractional projective transform
-//!   - `tqmirror`     (Anderson / Stefanov)  — quadrant-based fold-mirror
+//!   - `tqmirror`     (chronologicaldot / Stefanov)  — quadrant-based fold-mirror
 //!   - `intersection` (Stefanov)             — random row-or-column tile blur
 //!
 //! Sources: each variation's `.cpp` file in
@@ -45,6 +45,14 @@ use crate::param;
 //   r = atan2(y, x) / π · c       (VVAR factored through outer)
 //   out = (sinr·h·r, cosr·h·r)
 // =============================================================================
+/// Disc-style warp with 8 tunable knobs — computes a per-axis-weighted
+/// radial argument `rPI = π · sqrt(x²·d·e + y²·f·g)`, then emits
+/// `(sin(rPI)·a, cos(rPI)·b)` scaled by `atan2(y,x)/π · c · h`. The 8
+/// parameters give independent control over the X/Y radial weights, the
+/// sin/cos amplitudes, and the overall output scale.
+///
+/// # Authors
+/// - Brad Stefanov
 pub static DISC3: VariationDef = VariationDef {
     name: "disc3",
     display_name: "Disc 3",
@@ -52,14 +60,14 @@ pub static DISC3: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("a", "A", unlimited_float, 1.0, -10.0, 10.0),
-        param!("b", "B", unlimited_float, 1.0, -10.0, 10.0),
-        param!("c", "C", unlimited_float, 1.0, -10.0, 10.0),
-        param!("d", "D", unlimited_float, 1.0, -10.0, 10.0),
-        param!("e", "E", unlimited_float, 1.0, -10.0, 10.0),
-        param!("f", "F", unlimited_float, 1.0, -10.0, 10.0),
-        param!("g", "G", unlimited_float, 1.0, -10.0, 10.0),
-        param!("h", "H", unlimited_float, 1.0, -10.0, 10.0),
+        param!("a", "A", unlimited_float, 1.0, -10.0, 10.0, "Sin amplitude scale on the X output."),
+        param!("b", "B", unlimited_float, 1.0, -10.0, 10.0, "Cos amplitude scale on the Y output."),
+        param!("c", "C", unlimited_float, 1.0, -10.0, 10.0, "Angular-term scale (multiplier on `atan2(y,x)/π`)."),
+        param!("d", "D", unlimited_float, 1.0, -10.0, 10.0, "X-axis radial-weight first factor (multiplied with `e` for the x² term)."),
+        param!("e", "E", unlimited_float, 1.0, -10.0, 10.0, "X-axis radial-weight second factor."),
+        param!("f", "F", unlimited_float, 1.0, -10.0, 10.0, "Y-axis radial-weight first factor (multiplied with `g` for the y² term)."),
+        param!("g", "G", unlimited_float, 1.0, -10.0, 10.0, "Y-axis radial-weight second factor."),
+        param!("h", "H", unlimited_float, 1.0, -10.0, 10.0, "Overall output scale (multiplied into both X and Y)."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -115,6 +123,13 @@ fn variation_disc3(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 //   U = A·x + B·y + C
 //   out = ((A1·x + B1·y + C1) / U, (A2·x + B2·y + C2) / U)
 // =============================================================================
+/// Linear-fractional projective transform — applies a 2D homography `out =
+/// ((A1·x + B1·y + C1) / U, (A2·x + B2·y + C2) / U)` where `U = A·x + B·y +
+/// C`. With identity coefficients reduces to the input; arbitrary
+/// coefficients implement any 2D projective warp.
+///
+/// # Authors
+/// - eralex61
 pub static PROJECTIVE: VariationDef = VariationDef {
     name: "projective",
     display_name: "Projective",
@@ -122,15 +137,15 @@ pub static PROJECTIVE: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("a", "A", unlimited_float, 0.0, -10.0, 10.0),
-        param!("b", "B", unlimited_float, 0.0, -10.0, 10.0),
-        param!("c", "C", unlimited_float, 1.0, -10.0, 10.0),
-        param!("a1", "A1", unlimited_float, 1.0, -10.0, 10.0),
-        param!("b1", "B1", unlimited_float, 0.0, -10.0, 10.0),
-        param!("c1", "C1", unlimited_float, 0.0, -10.0, 10.0),
-        param!("a2", "A2", unlimited_float, 0.0, -10.0, 10.0),
-        param!("b2", "B2", unlimited_float, 1.0, -10.0, 10.0),
-        param!("c2", "C2", unlimited_float, 0.0, -10.0, 10.0),
+        param!("a", "A", unlimited_float, 0.0, -10.0, 10.0, "Denominator X coefficient."),
+        param!("b", "B", unlimited_float, 0.0, -10.0, 10.0, "Denominator Y coefficient."),
+        param!("c", "C", unlimited_float, 1.0, -10.0, 10.0, "Denominator constant term."),
+        param!("a1", "A1", unlimited_float, 1.0, -10.0, 10.0, "Numerator X coefficient for X output."),
+        param!("b1", "B1", unlimited_float, 0.0, -10.0, 10.0, "Numerator Y coefficient for X output."),
+        param!("c1", "C1", unlimited_float, 0.0, -10.0, 10.0, "Numerator constant term for X output."),
+        param!("a2", "A2", unlimited_float, 0.0, -10.0, 10.0, "Numerator X coefficient for Y output."),
+        param!("b2", "B2", unlimited_float, 1.0, -10.0, 10.0, "Numerator Y coefficient for Y output."),
+        param!("c2", "C2", unlimited_float, 0.0, -10.0, 10.0, "Numerator constant term for Y output."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -183,7 +198,7 @@ fn variation_projective(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<
 };
 
 // =============================================================================
-// tqmirror: quadrant-based fold-mirror (Anderson / Stefanov)
+// tqmirror: quadrant-based fold-mirror (chronologicaldot / Brad Stefanov)
 //   if d+x < 0 OR e+y < 0:
 //     type=0:  out = (y, x)         (no VVAR — divide-out)
 //     type=1:  out = (x, y)
@@ -194,6 +209,17 @@ fn variation_projective(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<
 //   else:
 //     out = (x, y)                  (no VVAR — divide-out)
 // =============================================================================
+/// Quadrant-based fold-mirror — dispatches to one of four behaviors based
+/// on the input's position relative to per-axis thresholds: swap-or-pass on
+/// the outer boundary (controlled by `type`), additive shift in the third
+/// quadrant, scaled diagonal-mirror in a central region, or identity
+/// elsewhere. The variation weight is used both as a comparison threshold
+/// and an additive offset, so output can change shape qualitatively as
+/// weight changes sign.
+///
+/// # Authors
+/// - chronologicaldot
+/// - Brad Stefanov
 pub static TQMIRROR: VariationDef = VariationDef {
     name: "tqmirror",
     display_name: "TQ Mirror",
@@ -201,15 +227,15 @@ pub static TQMIRROR: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("a", "A", unlimited_float, 1.0, -10.0, 10.0),
-        param!("b", "B", unlimited_float, 1.0, -10.0, 10.0),
-        param!("c", "C", unlimited_float, 1.0, -10.0, 10.0),
-        param!("d", "D", unlimited_float, 1.0, -10.0, 10.0),
-        param!("e", "E", unlimited_float, 1.0, -10.0, 10.0),
-        param!("f", "F", unlimited_float, 1.0, -10.0, 10.0),
-        param!("g", "G", unlimited_float, 1.0, -10.0, 10.0),
-        param!("h", "H", unlimited_float, 1.0, -10.0, 10.0),
-        param!("type", "Type", int, 0.0, 0.0, 1.0),
+        param!("a", "A", unlimited_float, 1.0, -10.0, 10.0, "Y threshold for the central-region diagonal-mirror branch."),
+        param!("b", "B", unlimited_float, 1.0, -10.0, 10.0, "X offset added to the central-region's right-side gate."),
+        param!("c", "C", unlimited_float, 1.0, -10.0, 10.0, "Y offset added to the central-region's top-side gate."),
+        param!("d", "D", unlimited_float, 1.0, -10.0, 10.0, "X offset added to the outer-boundary swap gate."),
+        param!("e", "E", unlimited_float, 1.0, -10.0, 10.0, "Y offset added to the outer-boundary swap gate."),
+        param!("f", "F", unlimited_float, 1.0, -10.0, 10.0, "Additive X shift in the third-quadrant branch (scaled by weight)."),
+        param!("g", "G", unlimited_float, 1.0, -10.0, 10.0, "Additive Y shift in the third-quadrant branch."),
+        param!("h", "H", unlimited_float, 1.0, -10.0, 10.0, "Scale factor on the central-region diagonal-mirror output."),
+        param!("type", "Type", int, 0.0, 0.0, 1.0, "Outer-boundary branch selector: 0 = swap (x↔y), 1 = pass through."),
     ],
     needs_transform: true,
     writes_color: false,
@@ -304,6 +330,14 @@ fn variation_tqmirror(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
 //     column branch: similar but on Y
 //   (no VVAR multiplier on the output lines — divide-out)
 // =============================================================================
+/// Random row-or-column tile blur — flips a coin to decide whether to tile
+/// along rows or columns. On a row pass, X is shifted by `xtilesize ·
+/// round(±xwidth · log(rand))` to a random nearby tile, while Y gets
+/// piecewise fmod-folded around `xmod1`. Columns work analogously. Produces
+/// grid-like tile-shifted blur patterns.
+///
+/// # Authors
+/// - Brad Stefanov
 pub static INTERSECTION: VariationDef = VariationDef {
     name: "intersection",
     display_name: "Intersection",
@@ -311,16 +345,16 @@ pub static INTERSECTION: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("xwidth", "X Width", unlimited_float, 5.0, -50.0, 50.0),
-        param!("xtilesize", "X Tile", unlimited_float, 0.5, -10.0, 10.0),
-        param!("xmod1", "X Mod 1", unlimited_float, 0.3, -10.0, 10.0),
-        param!("xmod2", "X Mod 2", unlimited_float, 1.0, -10.0, 10.0),
-        param!("xheight", "X Height", unlimited_float, 0.5, -10.0, 10.0),
-        param!("yheight", "Y Height", unlimited_float, 5.0, -50.0, 50.0),
-        param!("ytilesize", "Y Tile", unlimited_float, 0.5, -10.0, 10.0),
-        param!("ymod1", "Y Mod 1", unlimited_float, 0.3, -10.0, 10.0),
-        param!("ymod2", "Y Mod 2", unlimited_float, 1.0, -10.0, 10.0),
-        param!("ywidth", "Y Width", unlimited_float, 0.5, -10.0, 10.0),
+        param!("xwidth", "X Width", unlimited_float, 5.0, -50.0, 50.0, "Row-branch X-shift magnitude (multiplied by `log(rand)`)."),
+        param!("xtilesize", "X Tile", unlimited_float, 0.5, -10.0, 10.0, "Row-branch X tile size — final X is `xtilesize · (x + shift)`."),
+        param!("xmod1", "X Mod 1", unlimited_float, 0.3, -10.0, 10.0, "Row-branch Y fold threshold."),
+        param!("xmod2", "X Mod 2", unlimited_float, 1.0, -10.0, 10.0, "Row-branch Y fold period (multiplied with `xmod1` to form the modulus)."),
+        param!("xheight", "X Height", unlimited_float, 0.5, -10.0, 10.0, "Row-branch Y output scale."),
+        param!("yheight", "Y Height", unlimited_float, 5.0, -50.0, 50.0, "Column-branch Y-shift magnitude."),
+        param!("ytilesize", "Y Tile", unlimited_float, 0.5, -10.0, 10.0, "Column-branch Y tile size."),
+        param!("ymod1", "Y Mod 1", unlimited_float, 0.3, -10.0, 10.0, "Column-branch X fold threshold."),
+        param!("ymod2", "Y Mod 2", unlimited_float, 1.0, -10.0, 10.0, "Column-branch X fold period."),
+        param!("ywidth", "Y Width", unlimited_float, 0.5, -10.0, 10.0, "Column-branch X output scale."),
     ],
     needs_transform: true,
     writes_color: false,
