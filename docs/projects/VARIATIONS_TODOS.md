@@ -125,6 +125,29 @@ Confirmed during review — currently declared as `Integer` but
 semantically picks among a few labeled modes. Convert during the Phase 3
 type-correction pass.
 
+**Apophysis-import compatibility:** the Phase 3 conversion has to
+preserve the meaning of values coming in from `.flame` XML written by
+Apophysis / JWildfire, which store these parameters as raw floats. For
+most candidates the mapping is mechanical:
+
+- `Integer [0, 1]` → `Boolean`: read as `value >= 0.5` (or `!= 0.0`).
+  Should be safe to automate across all entries below that fit this
+  shape.
+- `Integer [0, N-1]` → `Enum` with N variants: round to nearest, clamp
+  to `[0, N-1]`, look up by index. Also safe to automate.
+
+The tricky ones are parameters where the wire-format value space does
+**not** discretely line up with the enum's variant count — most
+visibly `hypercrop.zero`, which is currently `unlimited_float [0, 2]`
+but semantically tri-state via threshold comparisons (`> 1.5`,
+`> 0.5`, else). A naive enum mapping (e.g. `0/1/2`) round-trips fine
+for newly-saved values, but an imported flame with `zero = 0.7`
+currently means "collapse to origin" — under enum semantics that value
+has no slot, so we'd need an explicit per-parameter import shim that
+reproduces the original threshold dispatch when reading legacy XML.
+Decision pending: either keep this one as `Float` with documented
+thresholds, or add a `legacy_import` hook on the param def.
+
 - `falloff2.type`, `pre_falloff2.type`, `post_falloff2.type` — 3
   branches (0 = uniform, 1 = triangular, 2 = gaussian). Same enum
   across all three phase variants. See
@@ -158,6 +181,30 @@ type-correction pass.
   range, but only checked for `== 1.0` vs anything else (binary mirror
   toggle). Type is misleading; semantics are Boolean. See
   [misc_extras.rs](../../src/variations/defs/misc_extras.rs).
+- `corners.logmode` — declared `Integer` with `[0, 1]` range, used as
+  a binary formula selector (pow vs log-pow). Should be `Boolean`. See
+  [singleton_misc.rs](../../src/variations/defs/singleton_misc.rs).
+- `atan.mode` — declared `Integer` with `[0, 2]` range, 3-mode axis
+  selector (Y only / X only / both). Should be `Enum`. See
+  [singleton_misc.rs](../../src/variations/defs/singleton_misc.rs).
+
+### Init-slot optimization opportunities
+
+Variations whose bodies recompute values that depend only on user
+parameters (not the per-iteration input `p` or the per-iteration
+transform weight). Moving these to `wgsl_init` removes the work from
+the hot path — same model as `circus`, `modulus`, `spligon`, etc.
+that already do this.
+
+- `murl` — three precomputable per-flame values: `c` (rescaled
+  `c_user / (power − 1)` when `power ≠ 1`), `p2 = power / 2`, and
+  `vp = c + 1`. Upstream cpp stores these in its `Variables` struct
+  (`_c`, `_p2`, `_vp`) and the module header on
+  [singleton_misc.rs:33-36](../../src/variations/defs/singleton_misc.rs#L33-L36)
+  flagged-then-dismissed them as "per-iteration"; only the trig
+  follow-ups (`_a`, `_sina`) actually are. 3 init slots, no behavior
+  change. See
+  [singleton_misc.rs:639-646](../../src/variations/defs/singleton_misc.rs#L639-L646).
 
 ---
 
