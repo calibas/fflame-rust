@@ -1,6 +1,6 @@
 //! Apophysis miscellany batch 21: heart_wf, post_ztranslate_wf, post_mirror_wf
 //!
-//!   - heart_wf (Maschke): polar heart-curve mapping
+//!   - heart_wf: polar heart-curve mapping
 //!     `nx = 0.001 · (-t² + 40t + 1200) · sin(πt/180) · r`
 //!     `ny = -0.001 · (-t² + 40t + 400) · cos(πt/180) · r`
 //!     where `t = |a|/π · 60 · scale_r_{left,right} - shift_t`, capped at
@@ -8,11 +8,11 @@
 //!     scale_r_right; scale_t is unused in the body — kept to match
 //!     cpp). No init. Body factors cleanly through outer multiplier.
 //!
-//!   - post_ztranslate_wf (Maschke): post-phase Z translate.
+//!   - post_ztranslate_wf: post-phase Z translate.
 //!     `p.z += w` where `w` is the variation weight. 0 user params.
 //!     Trivial — uses needs_transform to read weight in post phase.
 //!
-//!   - post_mirror_wf (Maschke): post-phase axis mirroring with
+//!   - post_mirror_wf: post-phase axis mirroring with
 //!     independent 50% chance per axis. 8 spatial user params (xaxis,
 //!     yaxis, zaxis, xshift, yshift, zshift, xscale, yscale). cpp also
 //!     includes color-shift params; skipped per writes_color-model
@@ -34,6 +34,11 @@ use crate::param;
 // heart_wf
 // ---------------------------------------------------------------------------
 
+/// Polar heart-curve mapping — maps the input radius `r` and angle `a` onto
+/// a heart-shaped curve via `nx = ±0.001·(-t² + 40t + 1200)·sin(πt/180)·r`
+/// and `ny = -0.001·(-t² + 40t + 400)·cos(πt/180)·r` where `t = |a|/π · 60
+/// · scale_r − shift_t` (capped at 60). The sign of `a` selects the left vs
+/// right half of the heart, each with its own radial scale.
 pub static HEART_WF: VariationDef = VariationDef {
     name: "heart_wf",
     display_name: "Heart WF",
@@ -41,11 +46,11 @@ pub static HEART_WF: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("scale_x", "Scale X", unlimited_float, 1.0, -10.0, 10.0),
-        param!("scale_t", "Scale T", unlimited_float, 1.0, -10.0, 10.0),
-        param!("shift_t", "Shift T", unlimited_float, 0.0, -10.0, 10.0),
-        param!("scale_r_left", "Scale R Left", unlimited_float, 1.0, -10.0, 10.0),
-        param!("scale_r_right", "Scale R Right", unlimited_float, 1.0, -10.0, 10.0),
+        param!("scale_x", "Scale X", unlimited_float, 1.0, -10.0, 10.0, "X output scale factor (multiplies the final X output)."),
+        param!("scale_t", "Scale T", unlimited_float, 1.0, -10.0, 10.0, "Unused in body — preserved as a parameter for cpp parity and preset compatibility."),
+        param!("shift_t", "Shift T", unlimited_float, 0.0, -10.0, 10.0, "T parameter offset subtracted from the `|a|/π · 60 · scale_r` expression."),
+        param!("scale_r_left", "Scale R Left", unlimited_float, 1.0, -10.0, 10.0, "Radial scale for the left half of the heart (input angle `a < 0`)."),
+        param!("scale_r_right", "Scale R Right", unlimited_float, 1.0, -10.0, 10.0, "Radial scale for the right half (input angle `a ≥ 0`)."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -110,6 +115,9 @@ fn variation_heart_wf(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
 // post_ztranslate_wf
 // ---------------------------------------------------------------------------
 
+/// Post-phase Z translate — adds the variation weight to the Z coordinate.
+/// The XY coordinates pass through unchanged. Useful for offsetting the Z
+/// position of a transform's accumulated output.
 pub static POST_ZTRANSLATE_WF: VariationDef = VariationDef {
     name: "post_ztranslate_wf",
     display_name: "Post Z-Translate WF",
@@ -141,6 +149,11 @@ fn variation_post_ztranslate_wf(p: vec3<f32>, xform_id: u32, variation_id: u32) 
 // post_mirror_wf
 // ---------------------------------------------------------------------------
 
+/// Post-phase per-axis mirroring — for each enabled axis (`xaxis`, `yaxis`,
+/// `zaxis`), with 50% probability per iteration flips the corresponding
+/// output coordinate via `coord = −scale · (coord + shift)`. Each axis's
+/// RNG draw is independent, so multiple axes can flip in the same
+/// iteration.
 pub static POST_MIRROR_WF: VariationDef = VariationDef {
     name: "post_mirror_wf",
     display_name: "Post Mirror WF",
@@ -148,14 +161,14 @@ pub static POST_MIRROR_WF: VariationDef = VariationDef {
     phase: VariationPhase::Post,
     needs_rng: true,
     parameters: &[
-        param!("xaxis", "X Axis", int, 1.0, 0.0, 1.0),
-        param!("yaxis", "Y Axis", int, 0.0, 0.0, 1.0),
-        param!("zaxis", "Z Axis", int, 0.0, 0.0, 1.0),
-        param!("xshift", "X Shift", unlimited_float, 0.0, -10.0, 10.0),
-        param!("yshift", "Y Shift", unlimited_float, 0.0, -10.0, 10.0),
-        param!("zshift", "Z Shift", unlimited_float, 0.0, -10.0, 10.0),
-        param!("xscale", "X Scale", unlimited_float, 1.0, -10.0, 10.0),
-        param!("yscale", "Y Scale", unlimited_float, 1.0, -10.0, 10.0),
+        param!("xaxis", "X Axis", int, 1.0, 0.0, 1.0, "1 = enable X-axis mirror branch; 0 = disable."),
+        param!("yaxis", "Y Axis", int, 0.0, 0.0, 1.0, "1 = enable Y-axis mirror branch; 0 = disable."),
+        param!("zaxis", "Z Axis", int, 0.0, 0.0, 1.0, "1 = enable Z-axis mirror branch (3D only); 0 = disable."),
+        param!("xshift", "X Shift", unlimited_float, 0.0, -10.0, 10.0, "X mirror offset — applied as `-scale·(x + xshift)` when the X branch fires."),
+        param!("yshift", "Y Shift", unlimited_float, 0.0, -10.0, 10.0, "Y mirror offset."),
+        param!("zshift", "Z Shift", unlimited_float, 0.0, -10.0, 10.0, "Z mirror offset."),
+        param!("xscale", "X Scale", unlimited_float, 1.0, -10.0, 10.0, "X output scale (applied in both the X-branch and Y-branch paths)."),
+        param!("yscale", "Y Scale", unlimited_float, 1.0, -10.0, 10.0, "Y output scale (applied in both branch paths)."),
     ],
     needs_transform: false,
     writes_color: false,
