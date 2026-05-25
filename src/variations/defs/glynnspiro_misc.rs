@@ -28,6 +28,11 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Glynn warp combined with a Spirograph3D curve — same structure as
+/// `glynnlissa` but uses a Spirograph3D curve `((a+b)·cos(t) −
+/// c·cos((a+b)/b·t), (a+b)·sin(t) − c·sin((a+b)/b·t))` as the inner-curve
+/// sample instead of a Lissajous. The `t` parameter is sampled uniformly
+/// from `[0, 1000)`.
 pub static GLYNNSPIRO: VariationDef = VariationDef {
     name: "glynnspiro",
     display_name: "Glynn Spiro",
@@ -35,17 +40,17 @@ pub static GLYNNSPIRO: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("radius", "Radius", unlimited_float, 1.0, -10.0, 10.0),
-        param!("radius1", "Radius 1", unlimited_float, 0.5, -10.0, 10.0),
-        param!("thickness", "Thickness", unlimited_float, 1.0, -10.0, 10.0),
-        param!("phi1", "Phi 1", unlimited_float, 0.0, -360.0, 360.0),
-        param!("a", "A", unlimited_float, 1.0, -10.0, 10.0),
-        param!("b", "B", unlimited_float, -0.3, -10.0, 10.0),
-        param!("c", "C", unlimited_float, 0.4, -10.0, 10.0),
-        param!("width", "Width", unlimited_float, 0.0, -10.0, 10.0),
-        param!("scale", "Scale", unlimited_float, 0.71, -10.0, 10.0),
-        param!("pow", "Pow", unlimited_float, 1.5, -10.0, 10.0),
-        param!("contrast", "Contrast", unlimited_float, 0.5, -10.0, 10.0),
+        param!("radius", "Radius", unlimited_float, 1.0, -10.0, 10.0, "Outer cutoff radius. Points inside use the Spirograph curve; outside use the Glynn power-warp."),
+        param!("radius1", "Radius 1", unlimited_float, 0.5, -10.0, 10.0, "Inner-curve sampling radius. Negative values trigger a small-circle fallback inside the cutoff."),
+        param!("thickness", "Thickness", unlimited_float, 1.0, -10.0, 10.0, "Inner-circle thickness (used when `radius1 < 0`)."),
+        param!("phi1", "Phi 1", unlimited_float, 0.0, -360.0, 360.0, "Inner-curve center angle, in degrees."),
+        param!("a", "A", unlimited_float, 1.0, -10.0, 10.0, "Spirograph outer-wheel radius."),
+        param!("b", "B", unlimited_float, -0.3, -10.0, 10.0, "Spirograph inner-wheel radius (signed; negative produces an internal spirograph)."),
+        param!("c", "C", unlimited_float, 0.4, -10.0, 10.0, "Spirograph pen-arm length."),
+        param!("width", "Width", unlimited_float, 0.0, -10.0, 10.0, "Y-jitter amplitude (random per-iteration scatter on the inner-curve sample)."),
+        param!("scale", "Scale", unlimited_float, 0.71, -10.0, 10.0, "Inner-curve scale factor."),
+        param!("pow", "Pow", unlimited_float, 1.5, -10.0, 10.0, "Glynn power exponent (absolute value used internally)."),
+        param!("contrast", "Contrast", unlimited_float, 0.5, -10.0, 10.0, "Glynn warp probability threshold — higher = more aggressive warping outside the cutoff."),
     ],
     needs_transform: false,
     writes_color: false,

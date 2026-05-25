@@ -80,6 +80,9 @@ the answer is known — that's the convention for "unknown" per
 - `post_spin_z` ([spin_phase.rs](../../src/variations/defs/spin_phase.rs))
 - `pre_blur3D` ([apo_misc15.rs](../../src/variations/defs/apo_misc15.rs))
 - `spirograph3D` ([apo_misc17.rs](../../src/variations/defs/apo_misc17.rs))
+- `glynnlissa` ([glynnlissa_misc.rs](../../src/variations/defs/glynnlissa_misc.rs))
+- `glynnspiro` ([glynnspiro_misc.rs](../../src/variations/defs/glynnspiro_misc.rs))
+- `glynnSShape` ([glynnsshape_misc.rs](../../src/variations/defs/glynnsshape_misc.rs))
 
 **Likely shared author** — all are JWildfire ports of complex-plane
 inverse hyperbolic functions (the plain ones in `hyperbolic.rs` and

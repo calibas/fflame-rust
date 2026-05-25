@@ -28,6 +28,12 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Glynn warp combined with a Gielis super-shape — same structure as
+/// `glynnlissa` but uses a Gielis super-shape `r⁻¹ · (cos φ, sin φ)` (with
+/// `m, n1, n2, n3` shape parameters) as the inner-curve sample instead of a
+/// Lissajous. The Gielis super-shape can produce a wide variety of
+/// symmetric organic shapes (stars, polygons, flowers, etc.) depending on
+/// the parameters.
 pub static GLYNNSSHAPE: VariationDef = VariationDef {
     name: "glynnSShape",
     display_name: "Glynn S-Shape",
@@ -35,17 +41,17 @@ pub static GLYNNSSHAPE: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("radius", "Radius", unlimited_float, 1.0, -10.0, 10.0),
-        param!("radius1", "Radius 1", unlimited_float, 0.5, -10.0, 10.0),
-        param!("thickness", "Thickness", unlimited_float, 1.0, -10.0, 10.0),
-        param!("phi1", "Phi 1", unlimited_float, 0.0, -360.0, 360.0),
-        param!("m", "M", unlimited_float, 5.0, -50.0, 50.0),
-        param!("n1", "N1", unlimited_float, 1.7, -10.0, 10.0),
-        param!("n2", "N2", unlimited_float, 1.7, -10.0, 10.0),
-        param!("n3", "N3", unlimited_float, 1.7, -10.0, 10.0),
-        param!("scale", "Scale", unlimited_float, 0.71, -10.0, 10.0),
-        param!("pow", "Pow", unlimited_float, 1.5, -10.0, 10.0),
-        param!("contrast", "Contrast", unlimited_float, 0.5, -10.0, 10.0),
+        param!("radius", "Radius", unlimited_float, 1.0, -10.0, 10.0, "Outer cutoff radius. Points inside use the super-shape curve; outside use the Glynn power-warp."),
+        param!("radius1", "Radius 1", unlimited_float, 0.5, -10.0, 10.0, "Inner-curve sampling radius. Negative values trigger a small-circle fallback inside the cutoff."),
+        param!("thickness", "Thickness", unlimited_float, 1.0, -10.0, 10.0, "Inner-circle thickness (used when `radius1 < 0`)."),
+        param!("phi1", "Phi 1", unlimited_float, 0.0, -360.0, 360.0, "Inner-curve center angle, in degrees."),
+        param!("m", "M", unlimited_float, 5.0, -50.0, 50.0, "Super-shape symmetry parameter (number of lobes)."),
+        param!("n1", "N1", unlimited_float, 1.7, -10.0, 10.0, "Super-shape exponent 1 — outer envelope shape (controls overall sharpness)."),
+        param!("n2", "N2", unlimited_float, 1.7, -10.0, 10.0, "Super-shape exponent 2 — controls the cos-side shape."),
+        param!("n3", "N3", unlimited_float, 1.7, -10.0, 10.0, "Super-shape exponent 3 — controls the sin-side shape."),
+        param!("scale", "Scale", unlimited_float, 0.71, -10.0, 10.0, "Inner-curve scale factor."),
+        param!("pow", "Pow", unlimited_float, 1.5, -10.0, 10.0, "Glynn power exponent (absolute value used internally)."),
+        param!("contrast", "Contrast", unlimited_float, 0.5, -10.0, 10.0, "Glynn warp probability threshold — higher = more aggressive warping outside the cutoff."),
     ],
     needs_transform: false,
     writes_color: false,
