@@ -69,6 +69,8 @@ the answer is known — that's the convention for "unknown" per
 - `twoface` ([classic_blades_misc.rs](../../src/variations/defs/classic_blades_misc.rs))
 - `unpolar` ([classic_blades_misc.rs](../../src/variations/defs/classic_blades_misc.rs))
 - `power` ([apo_misc.rs](../../src/variations/defs/apo_misc.rs))
+- `exp2` ([simple_classics.rs](../../src/variations/defs/simple_classics.rs))
+- `invpolar` ([simple_classics.rs](../../src/variations/defs/simple_classics.rs))
 
 **Likely shared author** — all are JWildfire ports of complex-plane
 inverse hyperbolic functions (the plain ones in `hyperbolic.rs` and
