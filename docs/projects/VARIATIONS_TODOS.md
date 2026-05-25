@@ -65,6 +65,9 @@ the answer is known — that's the convention for "unknown" per
 - `pulse` ([stub_recoveries.rs](../../src/variations/defs/stub_recoveries.rs))
 - `ptransform` ([misc_extras.rs](../../src/variations/defs/misc_extras.rs))
 - `squircular` ([watchlist_misc.rs](../../src/variations/defs/watchlist_misc.rs))
+- `bi_linear` ([classic_blades_misc.rs](../../src/variations/defs/classic_blades_misc.rs))
+- `twoface` ([classic_blades_misc.rs](../../src/variations/defs/classic_blades_misc.rs))
+- `unpolar` ([classic_blades_misc.rs](../../src/variations/defs/classic_blades_misc.rs))
 
 **Likely shared author** — all are JWildfire ports of complex-plane
 inverse hyperbolic functions (the plain ones in `hyperbolic.rs` and

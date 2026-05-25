@@ -2,22 +2,22 @@
 //!
 //! Nine more variations:
 //!
-//!   - `arch`        (Z+ Jan 2007)        — RNG-driven angle bend
-//!   - `bi_linear`   (Apophysis classic)  — clean (y, x) swap
+//!   - `arch`        (Scott Draves)       — RNG-driven angle bend
+//!   - `bi_linear`                        — clean (y, x) swap
 //!   - `blade`       (Z+ Jan 2007)        — RNG-driven blade fan
 //!   - `blade3D`     (Z+ Jan 2007)        — blade with z output
 //!                                           (Full3D)
 //!   - `squarize`    (Faber)              — angle pack: square map
 //!   - `squish`      (Faber)              — square map + cell mod
 //!                                           power
-//!   - `twoface`     (Apophysis classic)  — half-spherical/half-pass
+//!   - `twoface`                          — half-spherical/half-pass
 //!   - `twintrian`   (Z+ Jan 2007)        — RNG twin trignal
-//!   - `unpolar`     (Apophysis classic)  — exp/sin polar inversion
+//!   - `unpolar`                          — exp/sin polar inversion
 //!
 //! Sources: each variation's `.cpp` file in
 //! `output/jwildfire-vars/output/`.
 //!
-//! Z+ family (`arch`, `blade`, `blade3D`, `twintrian`) has VVAR
+//! Z+ family (`blade`, `blade3D`, `twintrian`) has VVAR
 //! inside an angle (non-linear), so each uses `needs_transform`
 //! to divide-out the cpp's outer `VVAR ·` factor.
 //!
@@ -37,11 +37,17 @@ use crate::variations::{
 use crate::param;
 
 // =============================================================================
-// arch: RNG-driven angle bend (Z+ Jan 2007)
+// arch: RNG-driven angle bend
 //   ang = rand · w · π
 //   out = (w · sin ang, w · sin² ang / cos ang)
 // VVAR inside `ang` is non-linear → needs_transform divide-out.
 // =============================================================================
+/// RNG-driven angle bend — picks a random angle `ang = rand · w · π`, then
+/// emits `(w · sin(ang), w · sin²(ang) / cos(ang))`. The `sin²/cos = sin ·
+/// tan` term creates a smooth arch shape with a vertical asymptote.
+///
+/// # Authors
+/// - Scott Draves
 pub static ARCH: VariationDef = VariationDef {
     name: "arch",
     display_name: "Arch",
@@ -87,9 +93,12 @@ fn variation_arch(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<funct
 };
 
 // =============================================================================
-// bi_linear: clean (y, x) swap (Apophysis classic)
+// bi_linear: clean (y, x) swap
 //   out = (w·y, w·x) — clean factor through outer.
 // =============================================================================
+/// Coordinate swap — outputs `(y, x)`. The simplest possible 2D coordinate
+/// operation; useful as a building block in combination with other
+/// variations.
 pub static BI_LINEAR: VariationDef = VariationDef {
     name: "bi_linear",
     display_name: "Bi-Linear",
@@ -122,6 +131,13 @@ fn variation_bi_linear(p: vec3<f32>) -> vec3<f32> {
 //   out = (w · x · (cos r + sin r), w · x · (cos r - sin r))
 // VVAR inside r is non-linear → divide-out.
 // =============================================================================
+/// RNG-driven blade fan — picks a random radius `r = rand · w · sqrt(x² +
+/// y²)`, then emits `(w · x · (cos r + sin r), w · x · (cos r − sin r))`.
+/// Both output axes are driven by the input X, so the result spreads along
+/// the X axis like blades of a fan.
+///
+/// # Authors
+/// - Z+
 pub static BLADE: VariationDef = VariationDef {
     name: "blade",
     display_name: "Blade",
@@ -168,6 +184,12 @@ fn variation_blade(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<func
 //     z_out = w · y · (sin r - cos r)
 // Full3D variation (writes z explicitly, not preserve-z pass-through).
 // =============================================================================
+/// 3D extension of `blade` — same X/Y outputs as `blade`, plus a Z output
+/// `w · y · (sin r − cos r)` driven by input Y. Completes the 3D blade
+/// structure.
+///
+/// # Authors
+/// - Z+
 pub static BLADE3D: VariationDef = VariationDef {
     name: "blade3D",
     display_name: "Blade 3D",
@@ -217,6 +239,13 @@ fn variation_blade3D(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fu
 //   Five branches based on p vs k·s for k ∈ {1, 3, 5, 7}.
 // Clean factor through outer.
 // =============================================================================
+/// Angle-pack square map — converts polar coordinates `(s, a)` to a
+/// position on a square of side `s` by treating `q = 4·s·a/π` as a
+/// perimeter parameter and dispatching to one of 5 edge-segment branches.
+/// Effectively wraps the unit circle around a unit square.
+///
+/// # Authors
+/// - Michael Faber
 pub static SQUARIZE: VariationDef = VariationDef {
     name: "squarize",
     display_name: "Squarize",
@@ -288,6 +317,13 @@ fn variation_squarize(p: vec3<f32>) -> vec3<f32> {
 //   squarize-style branches.
 // Clean factor through outer; needs RNG for cell selection.
 // =============================================================================
+/// Square map with cell mod power — extends `squarize` with a random cell
+/// selection: adds an `8·s·floor(power · rand)` offset to the perimeter
+/// parameter before dispatch, then divides by `power`. Produces `power`
+/// discrete tiles of the squarize pattern.
+///
+/// # Authors
+/// - Michael Faber
 pub static SQUISH: VariationDef = VariationDef {
     name: "squish",
     display_name: "Squish",
@@ -295,7 +331,7 @@ pub static SQUISH: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("power", "Power", int, 2.0, 2.0, 100.0),
+        param!("power", "Power", int, 2.0, 2.0, 100.0, "Number of discrete tiles the squarize pattern is divided into (≥ 2)."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -393,11 +429,15 @@ fn variation_squish(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
 };
 
 // =============================================================================
-// twoface: half-spherical / half-pass (Apophysis classic)
+// twoface: half-spherical / half-pass 
 //   r = w; if x > 0: r /= x² + y²
 //   out = r · (x, y)
 // VVAR inside `r` is multiplied with input — needs_transform divide-out.
 // =============================================================================
+/// Half-spherical / half-pass — points with `x ≤ 0` get scaled output `w ·
+/// (x, y)`; points with `x > 0` get spherical-inverted (`w/(x²+y²) · (x,
+/// y)`). Combines a linear left side with a spherical right side — hence
+/// the name.
 pub static TWOFACE: VariationDef = VariationDef {
     name: "twoface",
     display_name: "Two Face",
@@ -445,6 +485,13 @@ fn variation_twoface(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 //   out = (w · x · diff, w · x · (diff - sin r · π))
 // VVAR inside `r` non-linear → divide-out.
 // =============================================================================
+/// RNG twin trigonal — picks a random `r = rand · w · sqrt(x² + y²)`,
+/// computes `diff = log₁₀(sin² r) + cos r` (forced to −30 when degenerate),
+/// then emits `(w · x · diff, w · x · (diff − sin r · π))`. The log term
+/// creates twin trigonometric interference patterns.
+///
+/// # Authors
+/// - Z+
 pub static TWINTRIAN: VariationDef = VariationDef {
     name: "twintrian",
     display_name: "Twin Trian",
@@ -500,13 +547,16 @@ fn variation_twintrian(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
 };
 
 // =============================================================================
-// unpolar: exp/sin polar inversion (Apophysis classic)
+// unpolar: exp/sin polar inversion 
 //   precompute vvar_2 = w / (2π)
 //   r = exp(y), s = sin(x), c = cos(x)
 //   out = (vvar_2 · r · s, vvar_2 · r · c)
 // VVAR inside vvar_2 → needs_transform divide-out (factor strips
 // one w; outer × w restores).
 // =============================================================================
+/// Exp/sin polar inversion — outputs `(w/(2π) · exp(y) · sin x, w/(2π) ·
+/// exp(y) · cos x)`. The inverse of `polar` — converts log-polar
+/// coordinates back to cartesian.
 pub static UNPOLAR: VariationDef = VariationDef {
     name: "unpolar",
     display_name: "Unpolar",
