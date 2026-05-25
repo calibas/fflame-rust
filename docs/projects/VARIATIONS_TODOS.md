@@ -79,6 +79,7 @@ the answer is known — that's the convention for "unknown" per
 - `pre_spin_z` ([spin_phase.rs](../../src/variations/defs/spin_phase.rs))
 - `post_spin_z` ([spin_phase.rs](../../src/variations/defs/spin_phase.rs))
 - `pre_blur3D` ([apo_misc15.rs](../../src/variations/defs/apo_misc15.rs))
+- `spirograph3D` ([apo_misc17.rs](../../src/variations/defs/apo_misc17.rs))
 
 **Likely shared author** — all are JWildfire ports of complex-plane
 inverse hyperbolic functions (the plain ones in `hyperbolic.rs` and
@@ -202,6 +203,10 @@ thresholds, or add a `legacy_import` hook on the param def.
 - `atan.mode` — declared `Integer` with `[0, 2]` range, 3-mode axis
   selector (Y only / X only / both). Should be `Enum`. See
   [singleton_misc.rs](../../src/variations/defs/singleton_misc.rs).
+- `spirograph3D.mode` — declared `Integer` with `[0, 4]` range, 5-mode
+  width-jitter pattern selector (single uniform / phased-sin /
+  independent uniform / Gaussian / ±width X only). Should be `Enum`.
+  See [apo_misc17.rs](../../src/variations/defs/apo_misc17.rs).
 - `tqmirror.type` — declared `Integer` with `[0, 1]` range, used as a
   binary outer-boundary branch selector (swap x↔y vs pass through).
   Should be `Boolean`. See

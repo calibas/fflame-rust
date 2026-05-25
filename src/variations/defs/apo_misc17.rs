@@ -44,6 +44,13 @@ use crate::param;
 // needs_transform divide-out: body returns cpp_output / w; outer ×
 // w restores.
 // =============================================================================
+/// 3D quaternion-Apo inverse-log — emits `(log(r²) / (2·log(base)), C·y,
+/// C·z)` where `C = atan2(|v|, x) / |v|` and `|v| = sqrt(y² + z²)`. Inverse
+/// of the `exp`/`q_log` family with a configurable log base. The X output
+/// is logarithmic; the Y and Z components scale by an angular factor.
+///
+/// # Authors
+/// - zephyrtronium
 pub static LOQ: VariationDef = VariationDef {
     name: "loq",
     display_name: "Loq",
@@ -51,7 +58,7 @@ pub static LOQ: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("base", "Base", unlimited_float, 2.7182818284590452, 1.01, 100.0),
+        param!("base", "Base", unlimited_float, 2.7182818284590452, 1.01, 100.0, "Log base for the X-output normalization. Defaults to e."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -107,6 +114,10 @@ fn variation_loq(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
 //   out = (x1 + w1, y1 + w2, z1 + w3)
 // 7 user; RNG; Full3D; clean factor through outer.
 // =============================================================================
+/// 3D spirograph curve sampler — picks a random `t ∈ [tmin, tmax]` and
+/// emits a 3D spirograph trajectory `((a+b)·cos(t) − c·cos((a+b)/b·t),
+/// (a+b)·sin(t) − c·sin((a+b)/b·t), c·sin((a+b)/b·t))`. The `mode`
+/// parameter selects one of 5 width-jitter patterns added to each axis.
 pub static SPIROGRAPH3D: VariationDef = VariationDef {
     name: "spirograph3D",
     display_name: "Spirograph 3D",
@@ -114,13 +125,13 @@ pub static SPIROGRAPH3D: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("a", "A", unlimited_float, 1.0, -10.0, 10.0),
-        param!("b", "B", unlimited_float, -0.3, -10.0, 10.0),
-        param!("c", "C", unlimited_float, 0.4, -10.0, 10.0),
-        param!("tmin", "T Min", unlimited_float, 0.0, -1000.0, 1000.0),
-        param!("tmax", "T Max", unlimited_float, 1000.0, -10000.0, 10000.0),
-        param!("width", "Width", unlimited_float, 0.0, -10.0, 10.0),
-        param!("mode", "Mode", int, 0.0, 0.0, 4.0),
+        param!("a", "A", unlimited_float, 1.0, -10.0, 10.0, "Outer wheel radius."),
+        param!("b", "B", unlimited_float, -0.3, -10.0, 10.0, "Inner wheel radius (signed; negative produces an internal spirograph)."),
+        param!("c", "C", unlimited_float, 0.4, -10.0, 10.0, "Pen-arm length."),
+        param!("tmin", "T Min", unlimited_float, 0.0, -1000.0, 1000.0, "Minimum value of the random parameter `t`."),
+        param!("tmax", "T Max", unlimited_float, 1000.0, -10000.0, 10000.0, "Maximum value of the random parameter `t`."),
+        param!("width", "Width", unlimited_float, 0.0, -10.0, 10.0, "Per-axis jitter magnitude (interpretation depends on `mode`)."),
+        param!("mode", "Mode", int, 0.0, 0.0, 4.0, "Jitter pattern: 0 = single uniform on all axes, 1 = phased-sin per axis, 2 = independent uniform per axis, 3 = central-limit Gaussian per axis, 4 = ±width on X only."),
     ],
     needs_transform: false,
     writes_color: false,
