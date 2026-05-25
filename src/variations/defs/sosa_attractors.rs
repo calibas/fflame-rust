@@ -42,6 +42,13 @@ use crate::param;
 // clifford_js
 // ---------------------------------------------------------------------------
 
+/// Clifford strange attractor — iterates `(sin(a·y) + c·cos(a·x), sin(b·x)
+/// + d·cos(b·y))`. Classic 4-parameter chaotic attractor with
+/// characteristic Lissajous-like curves and folds. From Paul Bourke's
+/// collection.
+///
+/// # Authors
+/// - Jesus Sosa
 pub static CLIFFORD_JS: VariationDef = VariationDef {
     name: "clifford_js",
     display_name: "Clifford (JS)",
@@ -49,10 +56,10 @@ pub static CLIFFORD_JS: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("a", "A", unlimited_float, -1.4, -10.0, 10.0),
-        param!("b", "B", unlimited_float, 1.6, -10.0, 10.0),
-        param!("c", "C", unlimited_float, 1.0, -10.0, 10.0),
-        param!("d", "D", unlimited_float, 0.7, -10.0, 10.0),
+        param!("a", "A", unlimited_float, -1.4, -10.0, 10.0, "Clifford attractor parameter `a` (in `sin(a·y) + c·cos(a·x)`)."),
+        param!("b", "B", unlimited_float, 1.6, -10.0, 10.0, "Clifford attractor parameter `b` (in `sin(b·x) + d·cos(b·y)`)."),
+        param!("c", "C", unlimited_float, 1.0, -10.0, 10.0, "Clifford attractor parameter `c` — cosine coefficient on the X output."),
+        param!("d", "D", unlimited_float, 0.7, -10.0, 10.0, "Clifford attractor parameter `d` — cosine coefficient on the Y output."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -89,6 +96,12 @@ fn variation_clifford_js(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3
 // svensson_js
 // ---------------------------------------------------------------------------
 
+/// Johnny Svensson attractor — iterates `(d·sin(a·x) − sin(b·y), c·cos(a·x)
+/// + cos(b·y))`. 4-parameter strange attractor from Paul Bourke's
+/// collection.
+///
+/// # Authors
+/// - Jesus Sosa
 pub static SVENSSON_JS: VariationDef = VariationDef {
     name: "svensson_js",
     display_name: "Svensson (JS)",
@@ -96,10 +109,10 @@ pub static SVENSSON_JS: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("a", "A", unlimited_float, 1.4, -10.0, 10.0),
-        param!("b", "B", unlimited_float, 1.56, -10.0, 10.0),
-        param!("c", "C", unlimited_float, 1.4, -10.0, 10.0),
-        param!("d", "D", unlimited_float, -6.56, -10.0, 10.0),
+        param!("a", "A", unlimited_float, 1.4, -10.0, 10.0, "Svensson attractor parameter `a` (X-axis sin/cos frequency)."),
+        param!("b", "B", unlimited_float, 1.56, -10.0, 10.0, "Svensson attractor parameter `b` (Y-axis sin/cos frequency)."),
+        param!("c", "C", unlimited_float, 1.4, -10.0, 10.0, "Svensson attractor parameter `c` — cosine amplitude on Y output."),
+        param!("d", "D", unlimited_float, -6.56, -10.0, 10.0, "Svensson attractor parameter `d` — sine amplitude on X output."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -136,6 +149,13 @@ fn variation_svensson_js(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3
 // sattractor_js
 // ---------------------------------------------------------------------------
 
+/// Sosa's 'S Attractor' — Henon-style IFS variant. Each iteration picks a
+/// random vertex angle `θ = 2π·l/m` (with `l ∈ [1, m]`) and chooses one of
+/// two affine maps with 50/50 probability: either a half-scale plus offset
+/// `(cos θ, sin θ)`, or a rotated quadratic warp.
+///
+/// # Authors
+/// - Jesus Sosa
 pub static SATTRACTOR_JS: VariationDef = VariationDef {
     name: "sattractor_js",
     display_name: "S-Attractor (JS)",
@@ -143,7 +163,7 @@ pub static SATTRACTOR_JS: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("m", "M", int, 10.0, 1.0, 12.0),
+        param!("m", "M", int, 10.0, 1.0, 12.0, "Number of vertex angles (1-12). Each iteration samples one of `m` evenly-spaced angles around the unit circle."),
     ],
     needs_transform: false,
     writes_color: false,
