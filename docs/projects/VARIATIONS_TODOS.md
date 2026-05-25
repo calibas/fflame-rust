@@ -88,6 +88,9 @@ the answer is known — that's the convention for "unknown" per
 - `cannabiscurve_wf` ([apo_misc20.rs](../../src/variations/defs/apo_misc20.rs)) — curve documented by Eric W. Weisstein at [mathworld.wolfram.com](https://mathworld.wolfram.com/CannabisCurve.html); WF implementation author unknown
 - `spherical3D_wf` ([apo_misc20.rs](../../src/variations/defs/apo_misc20.rs))
 - `swirl3D_wf` ([apo_misc20.rs](../../src/variations/defs/apo_misc20.rs))
+- `heart_wf` ([apo_misc21.rs](../../src/variations/defs/apo_misc21.rs))
+- `post_ztranslate_wf` ([apo_misc21.rs](../../src/variations/defs/apo_misc21.rs))
+- `post_mirror_wf` ([apo_misc21.rs](../../src/variations/defs/apo_misc21.rs))
 
 **Likely shared author** — all are JWildfire ports of complex-plane
 inverse hyperbolic functions (the plain ones in `hyperbolic.rs` and
@@ -235,6 +238,10 @@ thresholds, or add a `legacy_import` hook on the param def.
   [circlecrop_misc.rs](../../src/variations/defs/circlecrop_misc.rs),
   [circlecrop_phase.rs](../../src/variations/defs/circlecrop_phase.rs),
   and [apo_misc18.rs](../../src/variations/defs/apo_misc18.rs).
+- `post_mirror_wf.xaxis`, `post_mirror_wf.yaxis`, `post_mirror_wf.zaxis`
+  — all declared `Integer` with `[0, 1]` range, used as a binary
+  per-axis enable for the mirror branch. Should all be `Boolean`.
+  See [apo_misc21.rs](../../src/variations/defs/apo_misc21.rs).
 - `butterfly_fay.unified_inner_outer` — declared `Integer` with
   `[0, 1]` range, used as a binary "always-outer vs inside-outside-
   dispatch" toggle. Should be `Boolean`. See
