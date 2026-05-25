@@ -73,6 +73,8 @@ the answer is known — that's the convention for "unknown" per
 - `invpolar` ([simple_classics.rs](../../src/variations/defs/simple_classics.rs))
 - `nPolar` ([apo_misc7.rs](../../src/variations/defs/apo_misc7.rs))
 - `hyperbolicellipse` ([apo_misc8.rs](../../src/variations/defs/apo_misc8.rs))
+- `swirl3` ([apo_misc11.rs](../../src/variations/defs/apo_misc11.rs))
+- `invsquircular` ([apo_misc11.rs](../../src/variations/defs/apo_misc11.rs))
 
 **Likely shared author** — all are JWildfire ports of complex-plane
 inverse hyperbolic functions (the plain ones in `hyperbolic.rs` and
@@ -309,6 +311,22 @@ The downstream uses two effects rather than one:
 2. **`r` modulation differs non-trivially.** The radius modulator `|spread + sin(petals·t)| · cos(petal_split·petals·t)` evaluates `sin/cos` at `petals · t`, which under the π/2 shift becomes `sin(petals·π/2 − petals·t_java)` — a function of `petals` parity that mixes sin and cos. Unlike the output swap, this isn't a simple coordinate exchange; the petal pattern itself reshapes when ported.
 
 Same JWildfire-import remediation question as `power`/`nPolar` (affine pre-compose vs in-body swap). The radius-modulation effect means even fixing the angle won't perfectly match Java for arbitrary `petals` — but for integer `petals` the result is still recognizably the same flower with a rotation/reflection.
+
+### `swirl3` follows cpp (Apophysis), not Java (JWildfire)
+
+Same pattern, fourth case in this codebase. The cpp uses `atan2(FTx, FTy)` in [apo_misc11.rs:66](../../src/variations/defs/apo_misc11.rs#L66), swapped from Java's `atan2(FTy, FTx)`.
+
+Working through the substitution `atan2(X, Y) = π/2 − atan2(Y, X)`:
+
+- **Java:** `ang_java = θ_java + log(r) · shift`, output is `r · (cos ang_java, sin ang_java)`.
+- **cpp:** `ang_cpp = π/2 − θ_java + log(r) · shift`. Then `cos(ang_cpp) = sin(θ_java − log(r) · shift)` and `sin(ang_cpp) = cos(θ_java − log(r) · shift)`.
+
+So cpp emits `r · (sin(θ_java − log(r)·shift), cos(θ_java − log(r)·shift))` while Java emits `r · (cos(θ_java + log(r)·shift), sin(θ_java + log(r)·shift))`. Two changes combined:
+
+1. **Output XY swap** (sin ↔ cos in the output components).
+2. **Effective `shift` sign flip** (`+ log(r)·shift` becomes `− log(r)·shift` inside the trig functions).
+
+So an imported Java flame would need both the affine pre-compose (or in-body swap) and a sign-flip on the `shift` parameter to look identical under cpp semantics. Same family of remediation question as the other entries.
 
 ### Zero-weight variations should still count as "present"
 
