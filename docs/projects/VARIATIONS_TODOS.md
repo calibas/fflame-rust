@@ -84,6 +84,7 @@ the answer is known — that's the convention for "unknown" per
 - `glynnspiro` ([glynnspiro_misc.rs](../../src/variations/defs/glynnspiro_misc.rs))
 - `glynnSShape` ([glynnsshape_misc.rs](../../src/variations/defs/glynnsshape_misc.rs))
 - `xheart_blur_wf` ([apo_misc18.rs](../../src/variations/defs/apo_misc18.rs))
+- `circleLinear` ([apo_misc19.rs](../../src/variations/defs/apo_misc19.rs))
 
 **Likely shared author** — all are JWildfire ports of complex-plane
 inverse hyperbolic functions (the plain ones in `hyperbolic.rs` and
@@ -239,6 +240,11 @@ thresholds, or add a `legacy_import` hook on the param def.
   declared `Integer` with `[0, 5]` range, 6-mode output-formula
   selector. Same enum on both. Should be `Enum`. See
   [butterfly_fay_misc.rs](../../src/variations/defs/butterfly_fay_misc.rs).
+- `mobius_strip.width_mode`, `mobius_strip.radial_mode` — both
+  declared `Integer` with `[0, 3]` range, 4-mode out-of-range
+  behavior selector (wrap / clamp / hide / leave). Same enum on
+  both. Should be `Enum`. See
+  [apo_misc19.rs](../../src/variations/defs/apo_misc19.rs).
 
 ### Numerical edge-case divergence from upstream
 
