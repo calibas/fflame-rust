@@ -1,4 +1,4 @@
-//! `post_heat` (?, Java-recovered)
+//! `post_heat` (zephyrtronium)
 //!
 //! Post-phase 3D heat-distortion: applies sin-based perturbations to
 //! r/θ/φ spherical coordinates of the accumulator, then re-projects.
@@ -26,6 +26,14 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Post-phase 3D heat-distortion — converts the accumulated point to
+/// spherical coordinates `(r, θ, φ)`, applies sin-based perturbations to
+/// each (period/phase/amplitude per axis), then re-projects to cartesian.
+/// Inspired by heat-distortion atmospheric effects: each spherical
+/// coordinate gets `coord += amp · sin(2π·coord/period + phase/period)`.
+///
+/// # Authors
+/// - zephyrtronium
 pub static POST_HEAT: VariationDef = VariationDef {
     name: "post_heat",
     display_name: "Post Heat",
@@ -33,15 +41,15 @@ pub static POST_HEAT: VariationDef = VariationDef {
     phase: VariationPhase::Post,
     needs_rng: false,
     parameters: &[
-        param!("theta_period", "Theta Period", unlimited_float, 0.0, -100.0, 100.0),
-        param!("theta_phase", "Theta Phase", unlimited_float, 0.0, -10.0, 10.0),
-        param!("theta_amp", "Theta Amp", unlimited_float, 0.0, -10.0, 10.0),
-        param!("phi_period", "Phi Period", unlimited_float, 0.0, -100.0, 100.0),
-        param!("phi_phase", "Phi Phase", unlimited_float, 0.0, -10.0, 10.0),
-        param!("phi_amp", "Phi Amp", unlimited_float, 0.0, -10.0, 10.0),
-        param!("r_period", "R Period", unlimited_float, 0.0, -100.0, 100.0),
-        param!("r_phase", "R Phase", unlimited_float, 0.0, -10.0, 10.0),
-        param!("r_amp", "R Amp", unlimited_float, 0.0, -10.0, 10.0),
+        param!("theta_period", "Theta Period", unlimited_float, 0.0, -100.0, 100.0, "Period of the θ (azimuthal angle) sine perturbation. 0 disables theta perturbation."),
+        param!("theta_phase", "Theta Phase", unlimited_float, 0.0, -10.0, 10.0, "Phase offset on the θ sine."),
+        param!("theta_amp", "Theta Amp", unlimited_float, 0.0, -10.0, 10.0, "Amplitude of the θ sine perturbation."),
+        param!("phi_period", "Phi Period", unlimited_float, 0.0, -100.0, 100.0, "Period of the φ (polar angle) sine perturbation. 0 disables phi perturbation."),
+        param!("phi_phase", "Phi Phase", unlimited_float, 0.0, -10.0, 10.0, "Phase offset on the φ sine."),
+        param!("phi_amp", "Phi Amp", unlimited_float, 0.0, -10.0, 10.0, "Amplitude of the φ sine perturbation."),
+        param!("r_period", "R Period", unlimited_float, 0.0, -100.0, 100.0, "Period of the radial sine perturbation. 0 disables r perturbation."),
+        param!("r_phase", "R Phase", unlimited_float, 0.0, -10.0, 10.0, "Phase offset on the r sine."),
+        param!("r_amp", "R Amp", unlimited_float, 0.0, -10.0, 10.0, "Amplitude of the radial sine perturbation."),
     ],
     needs_transform: true,
     writes_color: false,

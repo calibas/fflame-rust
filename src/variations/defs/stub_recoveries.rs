@@ -50,7 +50,7 @@ use crate::param;
 ///
 /// # Authors
 /// - Raykoid666
-/// - ChronologicalDot
+/// - chronologicaldot
 pub static BSPLIT: VariationDef = VariationDef {
     name: "bsplit",
     display_name: "BSplit",
