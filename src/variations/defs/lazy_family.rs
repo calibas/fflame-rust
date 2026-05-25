@@ -37,6 +37,15 @@ use crate::param;
 //   When inside the designated area: rotate by `spin`, possibly flip
 //   into nearest corner. When outside: radial nudge by `space`.
 // =============================================================================
+/// N-gon rotate-and-flip warp — splits behavior based on whether the input
+/// lies inside or outside an inscribed regular N-gon. Inside, the point is
+/// rotated by `spin` and, if the rotated point is still inside, kept;
+/// otherwise it's flipped into the `corner`-indexed corner sector. Outside
+/// the N-gon, the point gets a radial nudge by `space`. The n = 2 special
+/// case uses an axis-aligned line-segment test instead of the polygon test.
+///
+/// # Authors
+/// - FarDareisMai
 pub static LAZYJESS: VariationDef = VariationDef {
     name: "lazyjess",
     display_name: "Lazy Jess",
@@ -44,10 +53,10 @@ pub static LAZYJESS: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("n", "N", int, 4.0, 2.0, 50.0),
-        param!("spin", "Spin", unlimited_float, 3.14159265, -10.0, 10.0),
-        param!("space", "Space", unlimited_float, 0.0, -10.0, 10.0),
-        param!("corner", "Corner", int, 1.0, 1.0, 50.0),
+        param!("n", "N", int, 4.0, 2.0, 50.0, "Polygon vertex count. The n = 2 special case uses a line-segment test instead of a true polygon."),
+        param!("spin", "Spin", unlimited_float, 3.14159265, -10.0, 10.0, "Rotation applied to points inside the N-gon, in radians."),
+        param!("space", "Space", unlimited_float, 0.0, -10.0, 10.0, "Radial nudge applied to points outside the N-gon (added to the radius, scaled inversely by `modulus`)."),
+        param!("corner", "Corner", int, 1.0, 1.0, 50.0, "Which of the N corners to flip to when the post-rotation inside-test fails (1-based)."),
     ],
     needs_transform: true,
     writes_color: false,
@@ -223,13 +232,22 @@ fn variation_lazyjess(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
 };
 
 // =============================================================================
-// lazytravis: square fold-mirror with quadrant routing (Faber)
+// lazytravis: square fold-mirror with quadrant routing (Michael Faber)
 //   if |x| > VVAR or |y| > VVAR: outside the square — fold around
 //     the box edge using a perimeter parameterization `p ∈ [0, 8s]`,
 //     then map p to a (x', y') on the larger box with `space`-padding
 //   else: inside — same perimeter idea but no padding, output =
 //     VVAR · (boundary point on inner box)
 // =============================================================================
+/// Square fold-mirror with quadrant routing — folds points around an axis-
+/// aligned square of side ±VVAR. Outside the square, points get folded back
+/// onto the square's outer edge via a perimeter parameterization with
+/// `spin_out`-driven angular offset and a `space` padding that stretches
+/// the perpendicular axis. Inside the square, the same parameterization
+/// runs with `spin_in` offset and no padding.
+///
+/// # Authors
+/// - Michael Faber
 pub static LAZYTRAVIS: VariationDef = VariationDef {
     name: "lazytravis",
     display_name: "Lazy Travis",
@@ -237,9 +255,9 @@ pub static LAZYTRAVIS: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("spin_in", "Spin In", unlimited_float, 1.0, -10.0, 10.0),
-        param!("spin_out", "Spin Out", unlimited_float, 0.5, -10.0, 10.0),
-        param!("space", "Space", unlimited_float, 1.5707963267948966, -10.0, 10.0),
+        param!("spin_in", "Spin In", unlimited_float, 1.0, -10.0, 10.0, "Inner-square angular offset along the perimeter (multiplied by 4 internally; one unit = one full lap of the square)."),
+        param!("spin_out", "Spin Out", unlimited_float, 0.5, -10.0, 10.0, "Outer-square angular offset along the perimeter (same scaling as `spin_in`)."),
+        param!("space", "Space", unlimited_float, 1.5707963267948966, -10.0, 10.0, "Outer-square padding — extends the box edge by `space` and proportionally stretches the perpendicular coordinate."),
     ],
     needs_transform: true,
     writes_color: false,
