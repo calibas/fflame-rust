@@ -75,6 +75,7 @@ the answer is known — that's the convention for "unknown" per
 - `hyperbolicellipse` ([apo_misc8.rs](../../src/variations/defs/apo_misc8.rs))
 - `swirl3` ([apo_misc11.rs](../../src/variations/defs/apo_misc11.rs))
 - `invsquircular` ([apo_misc11.rs](../../src/variations/defs/apo_misc11.rs))
+- `rings` ([apo_misc12.rs](../../src/variations/defs/apo_misc12.rs))
 
 **Likely shared author** — all are JWildfire ports of complex-plane
 inverse hyperbolic functions (the plain ones in `hyperbolic.rs` and
@@ -282,6 +283,12 @@ especially as the broader DC corpus gets ported:
 When more `dc_*` variations land, apply the same logic and add to
 this entry rather than spawning new ones.
 
+### cpp-vs-Java port divergences — recurring pattern
+
+**Five variations confirmed so far** all show the same family of cpp/Java divergence: the upstream cpp port swapped the order of `atan2` arguments (or equivalently, swapped the output X/Y components) relative to JWildfire's Java. Each renders mirrored across `y = x` (or with some additional sign/parameter twist) relative to the Java equivalent. We follow cpp; JWildfire flame import would need affine pre-compose or per-variation in-body swaps to render imported flames as the artist intended.
+
+The affected entries below: `power`, `nPolar`, `flower_db`, `swirl3`, `rings`. Each has its own per-variation analysis since the downstream effect varies (some involve parameter sign flips or radius-modulation reshaping that aren't pure coordinate swaps). If we add a sixth, time to consolidate into a single section.
+
 ### `power` follows cpp (Apophysis), not Java (JWildfire)
 
 The standard `power` variation has two upstream forms:
@@ -327,6 +334,15 @@ So cpp emits `r · (sin(θ_java − log(r)·shift), cos(θ_java − log(r)·shif
 2. **Effective `shift` sign flip** (`+ log(r)·shift` becomes `− log(r)·shift` inside the trig functions).
 
 So an imported Java flame would need both the affine pre-compose (or in-body swap) and a sign-flip on the `shift` parameter to look identical under cpp semantics. Same family of remediation question as the other entries.
+
+### `rings` follows cpp (Apophysis), not Java (JWildfire)
+
+Simplest of the cluster. The body computes `r0 = sqrt(x²+y²)`, then a modular `r`, then emits the output:
+
+- **Java:** `(r · cosA, r · sinA) = r · (x/r0, y/r0)`.
+- **cpp:** swapped — `(r · sinA, r · cosA) = r · (y/r0, x/r0)`.
+
+Pure diagonal mirror, no parameter-sign flips or radius-modulation effects. An imported Java flame using `rings` would need only the affine pre-compose (or in-body XY swap) to render correctly. See [apo_misc12.rs:71](../../src/variations/defs/apo_misc12.rs#L71).
 
 ### Zero-weight variations should still count as "present"
 

@@ -1,6 +1,6 @@
 //! Apophysis miscellany 12 — four more
 //!
-//!   - `rings`     (Apo classic)         — 0 user; reads affine `xf.e`
+//!   - `rings`     (?)                   — 0 user; reads affine `xf.e`
 //!                                            (XFORM_COEFF_20) for `dx`;
 //!                                            preserves cpp's xy-output
 //!                                            swap (Java uses cosA for x,
@@ -45,6 +45,11 @@ use crate::param;
 //   out = r · (y/r0, x/r0)   (cpp xy-output swap; Java uses (x/r0, y/r0))
 // Body lacks VVAR on output — needs_transform divide-out.
 // =============================================================================
+/// Modular-radius ring warp — folds the input radius around `2·dx` cycles
+/// where `dx = (transform's affine e coefficient)² + ε`, producing
+/// concentric rings. Reads the affine `e` coefficient directly (not a
+/// normal variation parameter), so the ring spacing changes with the
+/// transform's pre-affine.
 pub static RINGS: VariationDef = VariationDef {
     name: "rings",
     display_name: "Rings",
@@ -92,6 +97,12 @@ fn variation_rings(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 //       = (tanh(d) · x, cos(d) · y)
 // Clean factor through outer.
 // =============================================================================
+/// Tanh/cos ripple — emits `(tanh(x²+y²) · x, cos(x²+y²) · y)`. Soft
+/// saturation along X (via tanh) combined with cosine modulation along Y
+/// produces a ripple/wave pattern.
+///
+/// # Authors
+/// - Raykoid666
 pub static RIPPLED: VariationDef = VariationDef {
     name: "rippled",
     display_name: "Rippled",
@@ -132,6 +143,13 @@ fn variation_rippled(p: vec3<f32>) -> vec3<f32> {
 //          -sin_rot · a + cos_rot · r)
 // Clean factor through outer.
 // =============================================================================
+/// Waffle grid scatter — picks one of 5 sampling modes uniformly, then
+/// samples from a `slices × slices` grid with configurable per-axis line
+/// thickness. The output is rotated by `rotation`. Produces a woven-pattern
+/// scatter.
+///
+/// # Authors
+/// - Jed Kelsey
 pub static WAFFLE: VariationDef = VariationDef {
     name: "waffle",
     display_name: "Waffle",
@@ -139,10 +157,10 @@ pub static WAFFLE: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("slices", "Slices", int, 6.0, 1.0, 100.0),
-        param!("xthickness", "X thickness", unlimited_float, 0.5, -10.0, 10.0),
-        param!("ythickness", "Y thickness", unlimited_float, 0.5, -10.0, 10.0),
-        param!("rotation", "Rotation", unlimited_float, 0.0, -10.0, 10.0),
+        param!("slices", "Slices", int, 6.0, 1.0, 100.0, "Number of grid divisions per axis."),
+        param!("xthickness", "X thickness", unlimited_float, 0.5, -10.0, 10.0, "X-axis line thickness (0 = grid lines only, 1 = solid fill)."),
+        param!("ythickness", "Y thickness", unlimited_float, 0.5, -10.0, 10.0, "Y-axis line thickness."),
+        param!("rotation", "Rotation", unlimited_float, 0.0, -10.0, 10.0, "Output rotation in radians."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -239,6 +257,13 @@ fn variation_waffle(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
 //   Body has `+ fx_extra` not w-scaled; needs_transform divide-out
 //   (`fx_extra / w` carried so outer × w restores).
 // =============================================================================
+/// Strip-fit fold — folds the Y axis into `[-1, 1]` strips (via mod-2
+/// wrapping), with each fold adding a horizontal shift on X proportional to
+/// `dx · stripe_count`. The trailing X shift wasn't VVAR-scaled in upstream
+/// — handled via the divide-out pattern.
+///
+/// # Authors
+/// - DarkBeam
 pub static STRIPFIT: VariationDef = VariationDef {
     name: "stripfit",
     display_name: "Stripfit",
@@ -246,7 +271,7 @@ pub static STRIPFIT: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("dx", "DX", unlimited_float, 1.0, -10.0, 10.0),
+        param!("dx", "DX", unlimited_float, 1.0, -10.0, 10.0, "Per-strip horizontal shift amount (scaled by `-0.5` internally)."),
     ],
     needs_transform: true,
     writes_color: false,
