@@ -71,6 +71,7 @@ the answer is known — that's the convention for "unknown" per
 - `power` ([apo_misc.rs](../../src/variations/defs/apo_misc.rs))
 - `exp2` ([simple_classics.rs](../../src/variations/defs/simple_classics.rs))
 - `invpolar` ([simple_classics.rs](../../src/variations/defs/simple_classics.rs))
+- `nPolar` ([apo_misc7.rs](../../src/variations/defs/apo_misc7.rs))
 
 **Likely shared author** — all are JWildfire ports of complex-plane
 inverse hyperbolic functions (the plain ones in `hyperbolic.rs` and
@@ -288,6 +289,14 @@ The standard `power` variation has two upstream forms:
 These collapse to a single identity: **`cpp_power(x, y) ≡ java_power(y, x)`** — i.e. cpp's output is Java's output with the input transposed across the diagonal `y = x`. Visually this is a mirror, not a rotation, and the angular structure of the output really does differ between the two (because the exponent itself depends on angle). We follow cpp; see [apo_misc.rs](../../src/variations/defs/apo_misc.rs).
 
 Worth flagging once we add JWildfire flame import — any imported flame whose intended look came from Java's `power` will render mirrored unless we either (a) pre-compose a `y↔x` swap into the affine that feeds the variation (doesn't compose cleanly when multiple variations share a transform), or (b) add a per-variation in-body input swap gated on an import-source flag. Either path is a real change, so make the decision deliberately rather than just "do what JWildfire does."
+
+### `nPolar` follows cpp (Apophysis), not Java (JWildfire) — even-parity branch only
+
+`nPolar` has the same flavor of cpp-vs-Java divergence as `power`, but the divergence only manifests when `|parity|` is even (the log-polar mid-step branch). The cpp uses `atan2(FTx, FTy)` in two places where the Java uses `atan2(FTy, FTx)` — see [apo_misc7.rs:475](../../src/variations/defs/apo_misc7.rs#L475) (intermediate `x` in the even branch) and [apo_misc7.rs:491](../../src/variations/defs/apo_misc7.rs#L491) (closing `fy`).
+
+Using `atan2(X, Y) = π/2 − atan2(Y, X)` and the variation's `vvar = w/π` factor, each cpp atan2 site collapses to **`cpp_value = w/2 − java_value`** — an additive shift *and* a sign flip relative to Java. And because the intermediate `x` feeds the downstream `angle = atan2(y, x) / nnz` and `radial = pow(x²+y², cn)` calculations, the reflection cascades through the rest of the body. The odd-parity branch (which keeps the input in cartesian and skips the log-polar mid-step) is unaffected.
+
+Same remediation options as `power` if we add JWildfire imports — affine pre-compose vs in-body swap gated on import-source flag — with the additional wrinkle that the swap is only needed when `|parity|` is even, so the body-level fix is conditional.
 
 ### Zero-weight variations should still count as "present"
 
