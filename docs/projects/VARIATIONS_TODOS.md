@@ -83,6 +83,7 @@ the answer is known — that's the convention for "unknown" per
 - `glynnlissa` ([glynnlissa_misc.rs](../../src/variations/defs/glynnlissa_misc.rs))
 - `glynnspiro` ([glynnspiro_misc.rs](../../src/variations/defs/glynnspiro_misc.rs))
 - `glynnSShape` ([glynnsshape_misc.rs](../../src/variations/defs/glynnsshape_misc.rs))
+- `xheart_blur_wf` ([apo_misc18.rs](../../src/variations/defs/apo_misc18.rs))
 
 **Likely shared author** — all are JWildfire ports of complex-plane
 inverse hyperbolic functions (the plain ones in `hyperbolic.rs` and
@@ -222,12 +223,14 @@ thresholds, or add a `legacy_import` hook on the param def.
   a binary inner-shape family selector (circle/square vs
   lemniscate/angle). Should be `Boolean`. See
   [rosoni_misc.rs](../../src/variations/defs/rosoni_misc.rs).
-- `circlecrop.zero`, `pre_circlecrop.zero`, `post_circlecrop.zero` —
-  all declared `Integer` with `[0, 1]` range, used as a binary
-  out-of-circle behavior selector (hide vs scatter-onto-boundary).
-  Should all be `Boolean`. Same enum across all three phase variants.
-  See [circlecrop_misc.rs](../../src/variations/defs/circlecrop_misc.rs)
-  and [circlecrop_phase.rs](../../src/variations/defs/circlecrop_phase.rs).
+- `circlecrop.zero`, `pre_circlecrop.zero`, `post_circlecrop.zero`,
+  `spherecrop.zero` — all declared `Integer` with `[0, 1]` range, used
+  as a binary out-of-shape behavior selector (hide vs scatter-onto-
+  boundary). Should all be `Boolean`. Same enum across all four
+  variants. See
+  [circlecrop_misc.rs](../../src/variations/defs/circlecrop_misc.rs),
+  [circlecrop_phase.rs](../../src/variations/defs/circlecrop_phase.rs),
+  and [apo_misc18.rs](../../src/variations/defs/apo_misc18.rs).
 - `butterfly_fay.unified_inner_outer` — declared `Integer` with
   `[0, 1]` range, used as a binary "always-outer vs inside-outside-
   dispatch" toggle. Should be `Boolean`. See
