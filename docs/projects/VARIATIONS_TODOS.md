@@ -60,6 +60,7 @@ the answer is known — that's the convention for "unknown" per
 - `disc2` ([heavy_init.rs](../../src/variations/defs/heavy_init.rs))
 - `blob3d` ([numbered_extras.rs](../../src/variations/defs/numbered_extras.rs))
 - `super_shape` ([shapes3.rs](../../src/variations/defs/shapes3.rs))
+- `spirograph` ([parametric_curves.rs](../../src/variations/defs/parametric_curves.rs))
 
 **Likely shared author** — all are JWildfire ports of complex-plane
 inverse hyperbolic functions (the plain ones in `hyperbolic.rs` and
@@ -127,6 +128,15 @@ type-correction pass.
   [extended.rs](../../src/variations/defs/extended.rs),
   [pre_phase.rs](../../src/variations/defs/pre_phase.rs),
   [post_phase.rs](../../src/variations/defs/post_phase.rs).
+- `hole2.shape` — 10 distinct radial-formula branches (shape 0-9). See
+  [standalone_exotics.rs](../../src/variations/defs/standalone_exotics.rs).
+- `hole2.inside` — declared `Integer` with `[0, 1]` range, used as a
+  binary toggle (`r1 = w/r1` vs `r1 = w·r1`). Should be `Boolean`.
+  See [standalone_exotics.rs](../../src/variations/defs/standalone_exotics.rs).
+- `crop3d.zero` — declared `Integer` with `[0, 1]` range, used as a
+  binary toggle (collapse-to-origin vs scatter-to-edge). Should be
+  `Boolean`. See
+  [parametric_curves.rs](../../src/variations/defs/parametric_curves.rs).
 
 ---
 
