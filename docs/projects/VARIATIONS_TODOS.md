@@ -93,6 +93,10 @@ the answer is known — that's the convention for "unknown" per
 - `post_mirror_wf` ([apo_misc21.rs](../../src/variations/defs/apo_misc21.rs))
 - `dc_carpet` ([apo_misc22.rs](../../src/variations/defs/apo_misc22.rs))
 - `post_point_symmetry_wf` ([apo_misc22.rs](../../src/variations/defs/apo_misc22.rs))
+- `epispiral_wf` ([wf_curves.rs](../../src/variations/defs/wf_curves.rs))
+- `cloverleaf_wf` ([wf_curves.rs](../../src/variations/defs/wf_curves.rs))
+- `rose_wf` ([wf_curves.rs](../../src/variations/defs/wf_curves.rs))
+- `bubble_wf` ([wf_curves.rs](../../src/variations/defs/wf_curves.rs))
 
 **Likely shared author** — all are JWildfire ports of complex-plane
 inverse hyperbolic functions (the plain ones in `hyperbolic.rs` and
@@ -250,6 +254,12 @@ thresholds, or add a `legacy_import` hook on the param def.
   misleading; semantics are Boolean. Same pattern as
   `tile_reverse.reversal`. See
   [apo_misc22.rs](../../src/variations/defs/apo_misc22.rs).
+- `cannabiscurve_wf.filled`, `cloverleaf_wf.filled`, `rose_wf.filled`
+  — all declared `Integer` with `[0, 1]` range, used as a binary
+  fill-vs-outline toggle. Should all be `Boolean`. Same enum across
+  the three WF polar curves. See
+  [apo_misc20.rs](../../src/variations/defs/apo_misc20.rs) and
+  [wf_curves.rs](../../src/variations/defs/wf_curves.rs).
 - `butterfly_fay.unified_inner_outer` — declared `Integer` with
   `[0, 1]` range, used as a binary "always-outer vs inside-outside-
   dispatch" toggle. Should be `Boolean`. See
@@ -345,7 +355,7 @@ this entry rather than spawning new ones.
 
 ### cpp-vs-Java port divergences (atan2-swap family)
 
-Eight variations so far show the same family of divergence: the
+Eleven variations so far show the same family of divergence: the
 upstream cpp port swapped the order of `atan2` arguments (or, in
 `power`'s case, swapped sin↔cos directly in the output) relative to
 JWildfire's Java. Mechanically this collapses via the identity
@@ -414,6 +424,18 @@ exactly if we ever need to:
   `ri = exp(half_c · lnr2 − d · ai)` and the angular output
   `ang2 = c · ai · half_d · lnr2 · ang · (...)`, so both the
   radius and angle of the output differ from Java's.
+
+- **`epispiral_wf`, `cloverleaf_wf`, `rose_wf`** (three at once;
+  see [wf_curves.rs](../../src/variations/defs/wf_curves.rs)) — all
+  three are polar curves of the form `r = f(a)` with output `(sin a ·
+  r, cos a · r)`, where cpp uses `a = atan2(x, y)` (swapped from
+  Java's `atan2(y, x)`). The output angular direction matches Java's
+  thanks to the `sin/cos` swap cancelling out, but the radius is
+  evaluated at `π/2 − a_java` instead of `a_java`. For polar curves
+  this is a reflection across the π/4 line; the exact visible effect
+  depends on `f`. For rose-style `cos(waves · a)` the result is a
+  rotation by `waves · π/2` (a different orientation per integer
+  `waves` parity).
 
 **Remediation if we add JWildfire flame import:** two general
 options. Either (a) pre-compose a `y↔x` swap into the affine that
