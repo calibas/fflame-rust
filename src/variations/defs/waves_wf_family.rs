@@ -17,7 +17,8 @@
 //!   - waves4_wf (Joel F): triple-trig product, `c·s·c` or `s·c·s`.
 //!     Same params/init as waves2_wf.
 //!
-//!   - dinis_surface_wf (Maschke): Dini's Surface parametric mapping.
+//!   - dinis_surface_wf: Dini's Surface parametric mapping. From 
+//!     Dini's Surface, http://mathworld.wolfram.com/DinisSurface.html
 //!     2 user params (a, b). Full3D. Body factors cleanly. Uses
 //!     `log(tan(v/2))` which can produce NaN for negative tangents —
 //!     guarded with abs+max.
@@ -72,6 +73,13 @@ fn init_waves4_wf(user: array<f32, 8>) -> array<f32, 2> {
 // waves2_wf
 // ---------------------------------------------------------------------------
 
+/// WF waves2 (single-trig perturbation) — adds a per-axis sin or cos wave
+/// to the input: `output = (x + dampX·scalex·trig(y·freqx), y +
+/// dampY·scaley·trig(x·freqy))`, with the whole output scaled by the per-
+/// axis damping factors. `use_cos_x`/`use_cos_y` pick sin or cos per axis.
+///
+/// # Authors
+/// - Joel Faber
 pub static WAVES2_WF: VariationDef = VariationDef {
     name: "waves2_wf",
     display_name: "Waves 2 WF",
@@ -79,14 +87,14 @@ pub static WAVES2_WF: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("scalex", "Scale X", unlimited_float, 0.25, -10.0, 10.0),
-        param!("scaley", "Scale Y", unlimited_float, 0.5, -10.0, 10.0),
-        param!("freqx", "Freq X", unlimited_float, 1.5707963267948966, -100.0, 100.0),
-        param!("freqy", "Freq Y", unlimited_float, 0.7853981633974483, -100.0, 100.0),
-        param!("use_cos_x", "Use Cos X", int, 1.0, 0.0, 1.0),
-        param!("use_cos_y", "Use Cos Y", int, 0.0, 0.0, 1.0),
-        param!("dampx", "Damp X", unlimited_float, 0.0, -10.0, 10.0),
-        param!("dampy", "Damp Y", unlimited_float, 0.0, -10.0, 10.0),
+        param!("scalex", "Scale X", unlimited_float, 0.25, -10.0, 10.0, "X-axis wave amplitude."),
+        param!("scaley", "Scale Y", unlimited_float, 0.5, -10.0, 10.0, "Y-axis wave amplitude."),
+        param!("freqx", "Freq X", unlimited_float, 1.5707963267948966, -100.0, 100.0, "X-axis wave frequency (applied to the Y input)."),
+        param!("freqy", "Freq Y", unlimited_float, 0.7853981633974483, -100.0, 100.0, "Y-axis wave frequency (applied to the X input)."),
+        param!("use_cos_x", "Use Cos X", int, 1.0, 0.0, 1.0, "1 = use cosine on the X axis; 0 = use sine."),
+        param!("use_cos_y", "Use Cos Y", int, 0.0, 0.0, 1.0, "1 = use cosine on the Y axis; 0 = use sine."),
+        param!("dampx", "Damp X", unlimited_float, 0.0, -10.0, 10.0, "X-axis exponential damping factor — the output is multiplied by `exp(dampx)` (or 1 when `|dampx|` is tiny)."),
+        param!("dampy", "Damp Y", unlimited_float, 0.0, -10.0, 10.0, "Y-axis exponential damping factor — same as dampx but for Y."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -135,6 +143,12 @@ fn variation_waves2_wf(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
 // waves3_wf
 // ---------------------------------------------------------------------------
 
+/// WF waves3 (squared-trig perturbation) — same structure as `waves2_wf`
+/// but the trig terms are squared (`trig²`), producing always-positive
+/// waves with double the apparent frequency.
+///
+/// # Authors
+/// - Joel Faber
 pub static WAVES3_WF: VariationDef = VariationDef {
     name: "waves3_wf",
     display_name: "Waves 3 WF",
@@ -142,14 +156,14 @@ pub static WAVES3_WF: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("scalex", "Scale X", unlimited_float, 0.25, -10.0, 10.0),
-        param!("scaley", "Scale Y", unlimited_float, 0.5, -10.0, 10.0),
-        param!("freqx", "Freq X", unlimited_float, 1.5707963267948966, -100.0, 100.0),
-        param!("freqy", "Freq Y", unlimited_float, 0.7853981633974483, -100.0, 100.0),
-        param!("use_cos_x", "Use Cos X", int, 1.0, 0.0, 1.0),
-        param!("use_cos_y", "Use Cos Y", int, 0.0, 0.0, 1.0),
-        param!("dampx", "Damp X", unlimited_float, 0.0, -10.0, 10.0),
-        param!("dampy", "Damp Y", unlimited_float, 0.0, -10.0, 10.0),
+        param!("scalex", "Scale X", unlimited_float, 0.25, -10.0, 10.0, "X-axis wave amplitude."),
+        param!("scaley", "Scale Y", unlimited_float, 0.5, -10.0, 10.0, "Y-axis wave amplitude."),
+        param!("freqx", "Freq X", unlimited_float, 1.5707963267948966, -100.0, 100.0, "X-axis wave frequency (applied to the Y input)."),
+        param!("freqy", "Freq Y", unlimited_float, 0.7853981633974483, -100.0, 100.0, "Y-axis wave frequency (applied to the X input)."),
+        param!("use_cos_x", "Use Cos X", int, 1.0, 0.0, 1.0, "1 = use cosine on the X axis; 0 = use sine."),
+        param!("use_cos_y", "Use Cos Y", int, 0.0, 0.0, 1.0, "1 = use cosine on the Y axis; 0 = use sine."),
+        param!("dampx", "Damp X", unlimited_float, 0.0, -10.0, 10.0, "X-axis exponential damping factor — the output is multiplied by `exp(dampx)` (or 1 when `|dampx|` is tiny)."),
+        param!("dampy", "Damp Y", unlimited_float, 0.0, -10.0, 10.0, "Y-axis exponential damping factor — same as dampx but for Y."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -202,6 +216,13 @@ fn variation_waves3_wf(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
 // waves4_wf
 // ---------------------------------------------------------------------------
 
+/// WF waves4 (triple-trig product perturbation) — same structure as
+/// `waves2_wf` but the trig terms are triple products: `cos·sin·cos` when
+/// `use_cos = 1`, `sin·cos·sin` when `use_cos = 0`. Produces a sharper,
+/// more lobed wave shape.
+///
+/// # Authors
+/// - Joel Faber
 pub static WAVES4_WF: VariationDef = VariationDef {
     name: "waves4_wf",
     display_name: "Waves 4 WF",
@@ -209,14 +230,14 @@ pub static WAVES4_WF: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("scalex", "Scale X", unlimited_float, 0.25, -10.0, 10.0),
-        param!("scaley", "Scale Y", unlimited_float, 0.5, -10.0, 10.0),
-        param!("freqx", "Freq X", unlimited_float, 1.5707963267948966, -100.0, 100.0),
-        param!("freqy", "Freq Y", unlimited_float, 0.7853981633974483, -100.0, 100.0),
-        param!("use_cos_x", "Use Cos X", int, 1.0, 0.0, 1.0),
-        param!("use_cos_y", "Use Cos Y", int, 0.0, 0.0, 1.0),
-        param!("dampx", "Damp X", unlimited_float, 0.0, -10.0, 10.0),
-        param!("dampy", "Damp Y", unlimited_float, 0.0, -10.0, 10.0),
+        param!("scalex", "Scale X", unlimited_float, 0.25, -10.0, 10.0, "X-axis wave amplitude."),
+        param!("scaley", "Scale Y", unlimited_float, 0.5, -10.0, 10.0, "Y-axis wave amplitude."),
+        param!("freqx", "Freq X", unlimited_float, 1.5707963267948966, -100.0, 100.0, "X-axis wave frequency (applied to the Y input)."),
+        param!("freqy", "Freq Y", unlimited_float, 0.7853981633974483, -100.0, 100.0, "Y-axis wave frequency (applied to the X input)."),
+        param!("use_cos_x", "Use Cos X", int, 1.0, 0.0, 1.0, "1 = use cosine on the X axis; 0 = use sine."),
+        param!("use_cos_y", "Use Cos Y", int, 0.0, 0.0, 1.0, "1 = use cosine on the Y axis; 0 = use sine."),
+        param!("dampx", "Damp X", unlimited_float, 0.0, -10.0, 10.0, "X-axis exponential damping factor — the output is multiplied by `exp(dampx)` (or 1 when `|dampx|` is tiny)."),
+        param!("dampy", "Damp Y", unlimited_float, 0.0, -10.0, 10.0, "Y-axis exponential damping factor — same as dampx but for Y."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -273,6 +294,11 @@ fn variation_waves4_wf(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
 // dinis_surface_wf
 // ---------------------------------------------------------------------------
 
+/// Dini's Surface parametric mapping — emits `(a·cos(u)·sin(v),
+/// a·sin(u)·sin(v), −(a·(cos(v) + log tan(v/2)) + b·u))` where `(u, v) =
+/// (x, y)`. Dini's surface is a helicoid of constant negative Gaussian
+/// curvature, a generalization of the pseudosphere. See [mathworld.wolfram.
+/// com/DinisSurface](https://mathworld.wolfram.com/DinisSurface.html).
 pub static DINIS_SURFACE_WF: VariationDef = VariationDef {
     name: "dinis_surface_wf",
     display_name: "Dini's Surface WF",
@@ -280,8 +306,8 @@ pub static DINIS_SURFACE_WF: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("a", "A", unlimited_float, 0.8, -10.0, 10.0),
-        param!("b", "B", unlimited_float, 0.2, -10.0, 10.0),
+        param!("a", "A", unlimited_float, 0.8, -10.0, 10.0, "Radial scale of the surface (controls XY radius and Z magnitude)."),
+        param!("b", "B", unlimited_float, 0.2, -10.0, 10.0, "Helical twist coefficient — multiplies the input U to add a linear helical Z offset."),
     ],
     needs_transform: false,
     writes_color: false,
