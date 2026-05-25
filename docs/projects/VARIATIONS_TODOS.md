@@ -72,6 +72,7 @@ the answer is known — that's the convention for "unknown" per
 - `exp2` ([simple_classics.rs](../../src/variations/defs/simple_classics.rs))
 - `invpolar` ([simple_classics.rs](../../src/variations/defs/simple_classics.rs))
 - `nPolar` ([apo_misc7.rs](../../src/variations/defs/apo_misc7.rs))
+- `hyperbolicellipse` ([apo_misc8.rs](../../src/variations/defs/apo_misc8.rs))
 
 **Likely shared author** — all are JWildfire ports of complex-plane
 inverse hyperbolic functions (the plain ones in `hyperbolic.rs` and
