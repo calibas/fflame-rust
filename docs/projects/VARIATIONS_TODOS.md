@@ -76,6 +76,8 @@ the answer is known — that's the convention for "unknown" per
 - `swirl3` ([apo_misc11.rs](../../src/variations/defs/apo_misc11.rs))
 - `invsquircular` ([apo_misc11.rs](../../src/variations/defs/apo_misc11.rs))
 - `rings` ([apo_misc12.rs](../../src/variations/defs/apo_misc12.rs))
+- `pre_spin_z` ([spin_phase.rs](../../src/variations/defs/spin_phase.rs))
+- `post_spin_z` ([spin_phase.rs](../../src/variations/defs/spin_phase.rs))
 
 **Likely shared author** — all are JWildfire ports of complex-plane
 inverse hyperbolic functions (the plain ones in `hyperbolic.rs` and
@@ -287,66 +289,69 @@ especially as the broader DC corpus gets ported:
 When more `dc_*` variations land, apply the same logic and add to
 this entry rather than spawning new ones.
 
-### cpp-vs-Java port divergences — recurring pattern
+### cpp-vs-Java port divergences (atan2-swap family)
 
-**Five variations confirmed so far** all show the same family of cpp/Java divergence: the upstream cpp port swapped the order of `atan2` arguments (or equivalently, swapped the output X/Y components) relative to JWildfire's Java. Each renders mirrored across `y = x` (or with some additional sign/parameter twist) relative to the Java equivalent. We follow cpp; JWildfire flame import would need affine pre-compose or per-variation in-body swaps to render imported flames as the artist intended.
+Six variations so far show the same family of divergence: the upstream
+cpp port swapped the order of `atan2` arguments (or, in `power`'s
+case, swapped sin↔cos directly in the output) relative to JWildfire's
+Java. Mechanically this collapses via the identity
+`atan2(X, Y) = π/2 − atan2(Y, X)`. Each variation renders mirrored
+across `y = x` (sometimes with additional sign/parameter twists)
+relative to the Java equivalent. We follow cpp throughout.
 
-The affected entries below: `power`, `nPolar`, `flower_db`, `swirl3`, `rings`. Each has its own per-variation analysis since the downstream effect varies (some involve parameter sign flips or radius-modulation reshaping that aren't pure coordinate swaps). If we add a sixth, time to consolidate into a single section.
+The per-variation forms — keep these so we can match Java's output
+exactly if we ever need to:
 
-### `power` follows cpp (Apophysis), not Java (JWildfire)
+- **`power`** ([apo_misc.rs](../../src/variations/defs/apo_misc.rs))
+  — exponent and output components both swapped. Collapses to
+  **`cpp_power(x, y) ≡ java_power(y, x)`** — a clean diagonal mirror
+  of the input. Angular structure differs (because the exponent
+  itself depends on angle), so it's a real mirror, not just a rotation.
 
-The standard `power` variation has two upstream forms:
+- **`nPolar`** ([apo_misc7.rs:475](../../src/variations/defs/apo_misc7.rs#L475),
+  [:491](../../src/variations/defs/apo_misc7.rs#L491)) — atan2 swap
+  in two places, **`|parity|` even branch only**. With the variation's
+  `vvar = w/π` factor, each cpp atan2 site collapses to
+  **`cpp_value = w/2 − java_value`** (additive shift + sign flip).
+  The reflection cascades through `angle = atan2(y, x) / nnz` and
+  `radial = pow(x²+y², cn)`. Odd-parity branch (cartesian, skips
+  log-polar mid-step) is unaffected.
 
-- **Java (JWildfire):** exponent is `sinA = y/r`, output is `(r·cosA, r·sinA) = pow(r, y/r) · (x/r, y/r)`.
-- **cpp (Chaotica / Apophysis ports):** exponent is `cosA = x/r`, output is `(r·sinA, r·cosA) = pow(r, x/r) · (y/r, x/r)`.
+- **`flower_db`** ([apo_misc9.rs:273](../../src/variations/defs/apo_misc9.rs#L273))
+  — two compounded effects: (1) output XY swap from `sin(t_cpp) =
+  cos(t_java)` etc., and (2) the radius modulator `|spread +
+  sin(petals·t)| · cos(petal_split·petals·t)` reshapes
+  non-trivially because `sin(petals·(π/2 − t_java))` mixes sin and
+  cos depending on `petals` parity. The petal pattern itself
+  changes when ported, not just its orientation.
 
-These collapse to a single identity: **`cpp_power(x, y) ≡ java_power(y, x)`** — i.e. cpp's output is Java's output with the input transposed across the diagonal `y = x`. Visually this is a mirror, not a rotation, and the angular structure of the output really does differ between the two (because the exponent itself depends on angle). We follow cpp; see [apo_misc.rs](../../src/variations/defs/apo_misc.rs).
+- **`swirl3`** ([apo_misc11.rs:66](../../src/variations/defs/apo_misc11.rs#L66))
+  — two effects: (1) output XY swap (sin ↔ cos), and (2) effective
+  `shift` parameter sign flip: cpp emits `r · (sin(θ_java − log(r)·shift),
+  cos(θ_java − log(r)·shift))` vs Java's
+  `r · (cos(θ_java + log(r)·shift), sin(θ_java + log(r)·shift))`.
 
-Worth flagging once we add JWildfire flame import — any imported flame whose intended look came from Java's `power` will render mirrored unless we either (a) pre-compose a `y↔x` swap into the affine that feeds the variation (doesn't compose cleanly when multiple variations share a transform), or (b) add a per-variation in-body input swap gated on an import-source flag. Either path is a real change, so make the decision deliberately rather than just "do what JWildfire does."
+- **`rings`** ([apo_misc12.rs:71](../../src/variations/defs/apo_misc12.rs#L71))
+  — simplest. Direct output swap: Java emits `r · (x/r0, y/r0)`, cpp
+  emits `r · (y/r0, x/r0)`. Pure diagonal mirror.
 
-### `nPolar` follows cpp (Apophysis), not Java (JWildfire) — even-parity branch only
+- **`pre_disc3d`** ([spin_phase.rs:178](../../src/variations/defs/spin_phase.rs#L178),
+  [:190](../../src/variations/defs/spin_phase.rs#L190))
+  — cpp's `vv = w · atan2(x, y) / pi` becomes `vv = w/2 − java_vv`
+  (additive shift + sign flip). Because `vv` multiplies all three
+  output components (`vv · sr, vv · cr, vv · r · cos(z)`), the
+  whole-output magnitude differs, not just the angular direction.
 
-`nPolar` has the same flavor of cpp-vs-Java divergence as `power`, but the divergence only manifests when `|parity|` is even (the log-polar mid-step branch). The cpp uses `atan2(FTx, FTy)` in two places where the Java uses `atan2(FTy, FTx)` — see [apo_misc7.rs:475](../../src/variations/defs/apo_misc7.rs#L475) (intermediate `x` in the even branch) and [apo_misc7.rs:491](../../src/variations/defs/apo_misc7.rs#L491) (closing `fy`).
-
-Using `atan2(X, Y) = π/2 − atan2(Y, X)` and the variation's `vvar = w/π` factor, each cpp atan2 site collapses to **`cpp_value = w/2 − java_value`** — an additive shift *and* a sign flip relative to Java. And because the intermediate `x` feeds the downstream `angle = atan2(y, x) / nnz` and `radial = pow(x²+y², cn)` calculations, the reflection cascades through the rest of the body. The odd-parity branch (which keeps the input in cartesian and skips the log-polar mid-step) is unaffected.
-
-Same remediation options as `power` if we add JWildfire imports — affine pre-compose vs in-body swap gated on import-source flag — with the additional wrinkle that the swap is only needed when `|parity|` is even, so the body-level fix is conditional.
-
-### `flower_db` follows cpp (Apophysis), not Java (JWildfire)
-
-Same pattern again — cpp uses `atan2(FTx, FTy)` swapped from Java's `atan2(FTy, FTx)` at the angle-extraction step. See [apo_misc9.rs:273](../../src/variations/defs/apo_misc9.rs#L273).
-
-The downstream uses two effects rather than one:
-
-1. **Output XY swap.** With `t_cpp = π/2 − t_java`, `sin(t_cpp) = cos(t_java)` and `cos(t_cpp) = sin(t_java)`. The output lines `(sin(t)·r, cos(t)·r)` therefore evaluate to `(x, y)·(r/|r_xy|)` in cpp but `(y, x)·(r/|r_xy|)` in Java — i.e., Java's XY output is transposed relative to cpp's. Visible diagonal-mirror.
-2. **`r` modulation differs non-trivially.** The radius modulator `|spread + sin(petals·t)| · cos(petal_split·petals·t)` evaluates `sin/cos` at `petals · t`, which under the π/2 shift becomes `sin(petals·π/2 − petals·t_java)` — a function of `petals` parity that mixes sin and cos. Unlike the output swap, this isn't a simple coordinate exchange; the petal pattern itself reshapes when ported.
-
-Same JWildfire-import remediation question as `power`/`nPolar` (affine pre-compose vs in-body swap). The radius-modulation effect means even fixing the angle won't perfectly match Java for arbitrary `petals` — but for integer `petals` the result is still recognizably the same flower with a rotation/reflection.
-
-### `swirl3` follows cpp (Apophysis), not Java (JWildfire)
-
-Same pattern, fourth case in this codebase. The cpp uses `atan2(FTx, FTy)` in [apo_misc11.rs:66](../../src/variations/defs/apo_misc11.rs#L66), swapped from Java's `atan2(FTy, FTx)`.
-
-Working through the substitution `atan2(X, Y) = π/2 − atan2(Y, X)`:
-
-- **Java:** `ang_java = θ_java + log(r) · shift`, output is `r · (cos ang_java, sin ang_java)`.
-- **cpp:** `ang_cpp = π/2 − θ_java + log(r) · shift`. Then `cos(ang_cpp) = sin(θ_java − log(r) · shift)` and `sin(ang_cpp) = cos(θ_java − log(r) · shift)`.
-
-So cpp emits `r · (sin(θ_java − log(r)·shift), cos(θ_java − log(r)·shift))` while Java emits `r · (cos(θ_java + log(r)·shift), sin(θ_java + log(r)·shift))`. Two changes combined:
-
-1. **Output XY swap** (sin ↔ cos in the output components).
-2. **Effective `shift` sign flip** (`+ log(r)·shift` becomes `− log(r)·shift` inside the trig functions).
-
-So an imported Java flame would need both the affine pre-compose (or in-body swap) and a sign-flip on the `shift` parameter to look identical under cpp semantics. Same family of remediation question as the other entries.
-
-### `rings` follows cpp (Apophysis), not Java (JWildfire)
-
-Simplest of the cluster. The body computes `r0 = sqrt(x²+y²)`, then a modular `r`, then emits the output:
-
-- **Java:** `(r · cosA, r · sinA) = r · (x/r0, y/r0)`.
-- **cpp:** swapped — `(r · sinA, r · cosA) = r · (y/r0, x/r0)`.
-
-Pure diagonal mirror, no parameter-sign flips or radius-modulation effects. An imported Java flame using `rings` would need only the affine pre-compose (or in-body XY swap) to render correctly. See [apo_misc12.rs:71](../../src/variations/defs/apo_misc12.rs#L71).
+**Remediation if we add JWildfire flame import:** two general
+options. Either (a) pre-compose a `y↔x` swap into the affine that
+feeds the variation — doesn't compose cleanly when multiple
+variations share a transform — or (b) add a per-variation in-body
+input swap gated on an import-source flag. For variations with
+additional parameter-side effects (`swirl3`'s sign flip,
+`flower_db`'s radius reshape, `pre_disc3d`'s magnitude shift), the
+in-body fix has to handle those too — not just the coordinate swap.
+Make the decision deliberately rather than just "do what JWildfire
+does."
 
 ### Zero-weight variations should still count as "present"
 
