@@ -6,10 +6,10 @@
 //!   - `ho`           (Larry Berlin)        — 3D hyperbolic-octahedron
 //!                                            mapping
 //!   - `chunk`        (zephyrtronium)        — quadratic-conic mask
-//!   - `ptransform`   (Maschke / Apophysis) — log-polar transform
+//!   - `ptransform`                         — log-polar transform
 //!   - `rational3`    (Xyrus / CozyG)       — degree-3 complex rational
 //!   - `tile_reverse` (Whittaker Courtney)  — random-mirror tile blur
-//!   - `ortho`        (Faber)               — orthogonal Möbius warp
+//!   - `ortho`        (Michael Faber)       — orthogonal Möbius warp
 //!
 //! Sources: each variation's `.cpp` file in
 //! `output/jwildfire-vars/output/`. All factor VVAR cleanly as outer
@@ -32,6 +32,13 @@ use crate::param;
 //   z = sv^zpow + zpow · sv
 //   where u, v, w are the input p.x, p.y, p.z
 // =============================================================================
+/// 3D hyperbolic-octahedron mapping — outputs `(cos(x)·cos(y))^xpow +
+/// xpow·cos(x)·cos(y) + 0.25·atan2(y², z²)` on X, with analogous formulas
+/// on Y and Z. The power-plus-linear-plus-arctangent combination traces an
+/// octahedral hyperbolic shape in 3D space.
+///
+/// # Authors
+/// - Larry Berlin
 pub static HO: VariationDef = VariationDef {
     name: "ho",
     display_name: "HO",
@@ -39,9 +46,9 @@ pub static HO: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("xpow", "X Power", unlimited_float, 3.0, -10.0, 10.0),
-        param!("ypow", "Y Power", unlimited_float, 3.0, -10.0, 10.0),
-        param!("zpow", "Z Power", unlimited_float, 3.0, -10.0, 10.0),
+        param!("xpow", "X Power", unlimited_float, 3.0, -10.0, 10.0, "Exponent applied to `cos(x)·cos(y)` in the X output."),
+        param!("ypow", "Y Power", unlimited_float, 3.0, -10.0, 10.0, "Exponent applied to `sin(x)·cos(y)` in the Y output."),
+        param!("zpow", "Z Power", unlimited_float, 3.0, -10.0, 10.0, "Exponent applied to `sin(y)` in the Z output."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -110,6 +117,14 @@ fn sign_or_one_3d(v: f32) -> f32 {
 //   - output is identity-pass `(x, y, z)`; we return `p / w` so outer
 //     × w restores `p`.
 // =============================================================================
+/// Quadratic-conic mask — evaluates `r = a·x² + b·xy + c·y² + d·x + e·y +
+/// f` (a general 2D quadratic) and either keeps or discards the input based
+/// on whether `r` is positive or negative (controlled by `mode`). The
+/// boundary `r = 0` is a conic section — an ellipse, parabola, or
+/// hyperbola, depending on coefficients.
+///
+/// # Authors
+/// - zephyrtronium
 pub static CHUNK: VariationDef = VariationDef {
     name: "chunk",
     display_name: "Chunk",
@@ -117,13 +132,13 @@ pub static CHUNK: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("a", "A", unlimited_float, 1.0, -10.0, 10.0),
-        param!("b", "B", unlimited_float, 0.0, -10.0, 10.0),
-        param!("c", "C", unlimited_float, 1.0, -10.0, 10.0),
-        param!("d", "D", unlimited_float, 0.0, -10.0, 10.0),
-        param!("e", "E", unlimited_float, 0.0, -10.0, 10.0),
-        param!("f", "F", unlimited_float, -1.0, -10.0, 10.0),
-        param!("mode", "Mode", int, 0.0, 0.0, 1.0),
+        param!("a", "A", unlimited_float, 1.0, -10.0, 10.0, "x² coefficient."),
+        param!("b", "B", unlimited_float, 0.0, -10.0, 10.0, "x·y coefficient."),
+        param!("c", "C", unlimited_float, 1.0, -10.0, 10.0, "y² coefficient."),
+        param!("d", "D", unlimited_float, 0.0, -10.0, 10.0, "x linear coefficient."),
+        param!("e", "E", unlimited_float, 0.0, -10.0, 10.0, "y linear coefficient."),
+        param!("f", "F", unlimited_float, -1.0, -10.0, 10.0, "Constant offset."),
+        param!("mode", "Mode", int, 0.0, 0.0, 1.0, "Which side of `r = 0` to keep: 0 = keep where r ≤ 0, 1 = keep where r > 0."),
     ],
     needs_transform: true,
     writes_color: false,
@@ -187,7 +202,7 @@ fn variation_chunk(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 };
 
 // =============================================================================
-// ptransform: log-polar transform (Maschke / Apophysis pack)
+// ptransform: log-polar transform 
 //   r0    = sqrt(x² + y²) + ε
 //   ρ     = (use_log ? log(r0) : r0) / power + move
 //   θ     = atan2(x, y) + rotate              (upstream cpp swap)
@@ -195,6 +210,12 @@ fn variation_chunk(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 //   if use_log: ρ = exp(ρ)
 //   out   = (ρ · cos θ, ρ · sin θ)
 // =============================================================================
+/// Log-polar transform — maps the input to `(ρ·cos(θ), ρ·sin(θ))` where `ρ`
+/// is the input radius (optionally log-transformed) divided by `power` and
+/// then optionally exponentiated. `θ` is the input angle plus `rotate`.
+/// `split` adds an asymmetric ρ offset based on the sign of x. With
+/// `use_log` enabled this becomes a true log-polar transform; disabled,
+/// it's a simple radius rescaling.
 pub static PTRANSFORM: VariationDef = VariationDef {
     name: "ptransform",
     display_name: "P Transform",
@@ -202,11 +223,11 @@ pub static PTRANSFORM: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("rotate", "Rotate", unlimited_float, 0.0, -10.0, 10.0),
-        param!("power", "Power", int, 1.0, -50.0, 50.0),
-        param!("move", "Move", unlimited_float, 0.0, -10.0, 10.0),
-        param!("split", "Split", unlimited_float, 0.0, -10.0, 10.0),
-        param!("use_log", "Use Log", int, 1.0, 0.0, 1.0),
+        param!("rotate", "Rotate", unlimited_float, 0.0, -10.0, 10.0, "Angular rotation added to θ, in radians."),
+        param!("power", "Power", int, 1.0, -50.0, 50.0, "Radial divisor. When `use_log` is off, this is the reciprocal scaling factor on the input radius."),
+        param!("move", "Move", unlimited_float, 0.0, -10.0, 10.0, "Additive offset on ρ."),
+        param!("split", "Split", unlimited_float, 0.0, -10.0, 10.0, "Asymmetric ρ offset, added when x ≥ 0 and subtracted when x < 0."),
+        param!("use_log", "Use Log", int, 1.0, 0.0, 1.0, "Whether to apply log/exp around ρ: 0 = linear radius, 1 = true log-polar."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -257,6 +278,14 @@ fn variation_ptransform(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<
 //   a, b, c, d (numerator) and e, f, g, h (denominator) coefficients.
 //   The complex-arithmetic body is ported verbatim.
 // =============================================================================
+/// Degree-3 complex-rational warp — evaluates a complex-valued rational
+/// function of `x + i·y`, with degree-3 polynomial numerator (coefficients
+/// a, b, c, d) and denominator (e, f, g, h). The output is the complex
+/// division `numerator / denominator`.
+///
+/// # Authors
+/// - Xyrus
+/// - CozyG
 pub static RATIONAL3: VariationDef = VariationDef {
     name: "rational3",
     display_name: "Rational 3",
@@ -264,14 +293,14 @@ pub static RATIONAL3: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("a", "A", unlimited_float, 0.5, -10.0, 10.0),
-        param!("b", "B", unlimited_float, 0.0, -10.0, 10.0),
-        param!("c", "C", unlimited_float, 0.0, -10.0, 10.0),
-        param!("d", "D", unlimited_float, 1.0, -10.0, 10.0),
-        param!("e", "E", unlimited_float, 0.0, -10.0, 10.0),
-        param!("f", "F", unlimited_float, 1.0, -10.0, 10.0),
-        param!("g", "G", unlimited_float, 0.0, -10.0, 10.0),
-        param!("h", "H", unlimited_float, 1.0, -10.0, 10.0),
+        param!("a", "A", unlimited_float, 0.5, -10.0, 10.0, "Numerator coefficient on the `x³ − 3xy²` term."),
+        param!("b", "B", unlimited_float, 0.0, -10.0, 10.0, "Numerator coefficient on the `x² − y²` term."),
+        param!("c", "C", unlimited_float, 0.0, -10.0, 10.0, "Numerator linear coefficient on x."),
+        param!("d", "D", unlimited_float, 1.0, -10.0, 10.0, "Numerator constant term."),
+        param!("e", "E", unlimited_float, 0.0, -10.0, 10.0, "Denominator coefficient on the `x³ − 3xy²` term."),
+        param!("f", "F", unlimited_float, 1.0, -10.0, 10.0, "Denominator coefficient on the `x² − y²` term."),
+        param!("g", "G", unlimited_float, 0.0, -10.0, 10.0, "Denominator linear coefficient on x."),
+        param!("h", "H", unlimited_float, 1.0, -10.0, 10.0, "Denominator constant term."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -355,6 +384,13 @@ fn variation_rational3(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
 //     out_x = rev · x ± space
 //     out_y = y
 // =============================================================================
+/// Random-mirror tile blur — shifts the input along one axis by ±space
+/// (direction chosen by coin flip). With `reversal = 1` the same axis is
+/// mirrored as well. `vertical` selects which axis gets the tiling
+/// treatment.
+///
+/// # Authors
+/// - Whittaker Courtney
 pub static TILE_REVERSE: VariationDef = VariationDef {
     name: "tile_reverse",
     display_name: "Tile Reverse",
@@ -362,9 +398,9 @@ pub static TILE_REVERSE: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("space", "Space", unlimited_float, 1.0, -10.0, 10.0),
-        param!("reversal", "Reversal", unlimited_float, 1.0, -10.0, 10.0),
-        param!("vertical", "Vertical", int, 0.0, 0.0, 1.0),
+        param!("space", "Space", unlimited_float, 1.0, -10.0, 10.0, "Tile offset along the active axis."),
+        param!("reversal", "Reversal", unlimited_float, 1.0, -10.0, 10.0, "When equal to 1.0, the active axis is also mirrored. Any other value passes through unchanged."),
+        param!("vertical", "Vertical", int, 0.0, 0.0, 1.0, "Tiling axis selector: 0 = horizontal, 1 = vertical."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -406,7 +442,7 @@ fn variation_tile_reverse(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: p
 };
 
 // =============================================================================
-// ortho: orthogonal Möbius warp (Faber)
+// ortho: orthogonal Möbius warp (Michael Faber)
 //   Inside the unit disc (r² < 1):
 //     positive-x branch:   xo = (r²+1)/(2x);  ro = dist((x,y), (xo, 0))
 //                          a = fmod(in·θ + atan2(y, xo−x) + θ, 2θ) − θ
@@ -418,6 +454,14 @@ fn variation_tile_reverse(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: p
 // Lots of conditionals; VVAR strictly outer multiplier throughout.
 // Body is a fairly direct port of the upstream cpp.
 // =============================================================================
+/// Orthogonal Möbius warp — maps points inside the unit disc through an
+/// orthogonal-circle Möbius transformation (branch chosen by the sign of
+/// x). Outside the disc, the input is first inverted through the unit
+/// circle, the same transform is applied, then re-inverted. Produces
+/// hyperbolic-tiling-like patterns.
+///
+/// # Authors
+/// - Michael Faber
 pub static ORTHO: VariationDef = VariationDef {
     name: "ortho",
     display_name: "Ortho",
@@ -425,8 +469,8 @@ pub static ORTHO: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("in_p", "In", unlimited_float, 0.0, -10.0, 10.0),
-        param!("out_p", "Out", unlimited_float, 0.0, -10.0, 10.0),
+        param!("in_p", "In", unlimited_float, 0.0, -10.0, 10.0, "Branch-selector multiplier for the inside-disc Möbius transform."),
+        param!("out_p", "Out", unlimited_float, 0.0, -10.0, 10.0, "Branch-selector multiplier for the outside-disc Möbius transform."),
     ],
     needs_transform: false,
     writes_color: false,
