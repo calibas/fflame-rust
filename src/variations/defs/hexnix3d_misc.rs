@@ -31,6 +31,19 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Animation-friendly sister of `hexaplay3D`. Adds: a `smooth` factor that
+/// fades between pass-through and full hex effect when `|weight| ≤ 0.5`;
+/// three majplane modes (`|majp| ≤ 1` single plate / `1 < |majp| < 2`
+/// transition / `|majp| ≥ 2` split planes with boost `(|majp| - 2) · 0.5`)
+/// with extra negative-`majp` branches that flip Z for animation
+/// transitions; a `3side` parameter that scales the inscribed triangle
+/// vertices independently; randomized (rather than sequential) vertex
+/// selection to reduce stepping artifacts; and a rotation-and-blend X/Y
+/// formula (rather than hexaplay's translate-to-vertex). Vertex layouts
+/// also differ — `seg60` y-signs mirrored and `seg120` rotated 30°.
+///
+/// # Authors
+/// - Larry Berlin
 pub static HEXNIX_3D: VariationDef = VariationDef {
     name: "hexnix3D",
     display_name: "Hexnix 3D",
@@ -38,10 +51,10 @@ pub static HEXNIX_3D: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("majp", "Major Plane", unlimited_float, 1.0, -10.0, 10.0),
-        param!("scale", "Scale", unlimited_float, 0.25, -10.0, 10.0),
-        param!("zlift", "Z Lift", unlimited_float, 0.0, -10.0, 10.0),
-        param!("3side", "Triangle Scale", unlimited_float, 0.667, -10.0, 10.0),
+        param!("majp", "Major Plane", unlimited_float, 1.0, -10.0, 10.0, "Major-plane threshold for Z behavior (3 modes based on `|majp|`): ≤ 1 = single plate (Z from `zlift` only); 1 < |majp| < 2 = transition mode (with extra negative-`majp` Z-flip branches for animation); ≥ 2 = split planes with boost = `(|majp| - 2) · 0.5`. Negative `majp` adds Z-flip branches in modes 1 and 2 that mirror the accumulator across Z=0 for animation transitions. Unused in 2D mode."),
+        param!("scale", "Scale", unlimited_float, 0.25, -10.0, 10.0, "Input-blend scale for the rotation-and-blend X/Y formula. The body mixes `(accum + p)` rotated by the chosen vertex angle with the vertex itself, scaled by `scale`."),
+        param!("zlift", "Z Lift", unlimited_float, 0.0, -10.0, 10.0, "Z input scale. Combined with `scale` and `p.z` to set the baseline Z output. Unused in 2D mode."),
+        param!("3side", "Triangle Scale", unlimited_float, 0.667, -10.0, 10.0, "Inscribed-triangle vertex scale. Multiplies the 3-vertex (triangle) branch's `weight · vertex` term, letting the triangle and hexagon contributions be scaled independently. Hexagon branch ignores this param."),
     ],
     needs_transform: true,
     writes_color: false,
