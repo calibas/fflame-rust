@@ -441,6 +441,55 @@ justifies the phase-system plumbing. If yes, add the
 `VariationPhase::PrePost` variant and port them properly. If no,
 document the family as permanently skipped and move on.
 
+### Direct-color (DC) port roadmap — what "fully ported" requires
+
+The DC story is split across several docs and per-file headers. This
+section is the index — points at where the open work lives and
+distinguishes infrastructure that exists-but-isn't-used from infra
+that's actually missing.
+
+**What works today:**
+
+- `writes_color: true` variations get a `vc` color-register pointer
+  passed by the shader builder (see
+  [shader_builder_v2.rs:1272-1340](../../src/shader_builder_v2.rs#L1272-L1340)).
+  The *write* side is fully wired up. `dc_linear`, `dc_bubble`,
+  `macmillan` and others use this today.
+- `needs_accum` + per-thread state (resolved 2026-05-04) cover the
+  common pattern of computing TC from `FPx + FPy` after the
+  variation's own contribution. See blocker #5 in
+  [variation-port-blockers.md](variation-port-blockers.md).
+
+**What's missing — needs architectural work** (each is a blocker in
+[variation-port-blockers.md](variation-port-blockers.md)):
+
+- **#5 — TC reads in the spatial path.** Variations that read the
+  current point's color value to drive *spatial* output (e.g.
+  `dc_ztransl` reads TC for Z displacement). Distinct from computing
+  TC from an accumulator, which works.
+- **#11 — Color-write coupled to spatial output.** Variations where
+  color *is* the spatial differentiator (e.g. `dc_carpet3D`'s
+  `dz = color · scale_z + offset_z`). Without a write-then-read color
+  pipeline the spatial output collapses to a constant or to linear/blur.
+- **#8 — `DC_BaseFunc` + 31 derivatives.** Unlocked once #11 lands;
+  without DC writes the derivatives don't gain spatial distinctiveness
+  over plain linear/blur.
+
+**What's missing — per-variation grunt work:**
+
+- Variations ported with `writes_color: false` as a deliberate
+  compromise: the geometry was ported but the color write was dropped
+  even though the infrastructure would support it. Examples include
+  `dc_carpet3D` and the `direct_color` toggle cases in `truchet`,
+  `truchet2`, and `waveblur_wf`. Most of these would just need the
+  flag flipped + the color body added once they get attention. The
+  carpet-style cases (spatial output also depends on reading the color
+  back) are gated by #11 above, not the write itself.
+
+Per-variation interface-parity decisions (color-from-position
+approximations, Java-vs-C++ porter-bug choices, parity-only param
+retention) live in the section below.
+
 ### Direct-color (DC) port decisions to verify
 
 Deliberate divergences from upstream C++ in
