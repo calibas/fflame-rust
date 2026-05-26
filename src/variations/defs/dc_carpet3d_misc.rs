@@ -31,6 +31,18 @@ use crate::variations::{
 };
 use crate::param;
 
+/// 3D Sierpinski-carpet IFS — picks a random corner of the unit square by
+/// independent ±1 sign choices on X and Y (with per-axis offsets
+/// `stretch_x`/`stretch_y`), then runs the result through the transform's
+/// affine and scales by `scale_x`/`scale_y`. Originally a direct-color
+/// variation with color-coupled Z output (`z = color · scale_z +
+/// offset_z`); since we don't write color, the Z output collapses to a
+/// constant `offset_z` bump and the color/scale_z/reset_z params are kept
+/// only for interface parity with the C++/Java original.
+///
+/// # Authors
+/// - Xyrus02
+/// - Brad Stefanov
 pub static DC_CARPET3D: VariationDef = VariationDef {
     name: "dc_carpet3D",
     display_name: "DC Carpet 3D",
@@ -38,20 +50,20 @@ pub static DC_CARPET3D: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("origin", "Origin", unlimited_float, 0.5, -10.0, 10.0),
-        param!("color_a", "Color A", unlimited_float, 0.5, -10.0, 10.0),
-        param!("color_b", "Color B", unlimited_float, 1.0, -10.0, 10.0),
-        param!("color_c", "Color C", unlimited_float, 1.0, -10.0, 10.0),
-        param!("color_d", "Color D", unlimited_float, 1.0, -10.0, 10.0),
-        param!("color_e", "Color E", unlimited_float, 0.5, -10.0, 10.0),
-        param!("color_f", "Color F", unlimited_float, 1.0, -10.0, 10.0),
-        param!("stretch_x", "Stretch X", unlimited_float, 1.0, -10.0, 10.0),
-        param!("stretch_y", "Stretch Y", unlimited_float, 1.0, -10.0, 10.0),
-        param!("scale_x", "Scale X", unlimited_float, 1.0, -10.0, 10.0),
-        param!("scale_y", "Scale Y", unlimited_float, 1.0, -10.0, 10.0),
-        param!("scale_z", "Scale Z", unlimited_float, 1.0, -10.0, 10.0),
-        param!("offset_z", "Offset Z", unlimited_float, 0.0, -10.0, 10.0),
-        param!("reset_z", "Reset Z", unlimited_float, 0.0, 0.0, 1.0),
+        param!("origin", "Origin", unlimited_float, 0.5, -10.0, 10.0, "Original `origin` parameter that controlled color in the C++/Java source. Unused in the Rust port since color writes are dropped — kept for interface parity."),
+        param!("color_a", "Color A", unlimited_float, 0.5, -10.0, 10.0, "Color parameter (unused — color writes dropped). Kept for cpp/Java interface parity."),
+        param!("color_b", "Color B", unlimited_float, 1.0, -10.0, 10.0, "Color parameter (unused — color writes dropped). Kept for cpp/Java interface parity."),
+        param!("color_c", "Color C", unlimited_float, 1.0, -10.0, 10.0, "Color parameter (unused — color writes dropped). Kept for cpp/Java interface parity."),
+        param!("color_d", "Color D", unlimited_float, 1.0, -10.0, 10.0, "Color parameter (unused — color writes dropped). Kept for cpp/Java interface parity."),
+        param!("color_e", "Color E", unlimited_float, 0.5, -10.0, 10.0, "Color parameter (unused — color writes dropped). Kept for cpp/Java interface parity."),
+        param!("color_f", "Color F", unlimited_float, 1.0, -10.0, 10.0, "Color parameter (unused — color writes dropped). Kept for cpp/Java interface parity."),
+        param!("stretch_x", "Stretch X", unlimited_float, 1.0, -10.0, 10.0, "Magnitude of the ±1 X corner offset added to the input. Larger values pull the carpet's corners further apart along X."),
+        param!("stretch_y", "Stretch Y", unlimited_float, 1.0, -10.0, 10.0, "Magnitude of the ±1 Y corner offset added to the input."),
+        param!("scale_x", "Scale X", unlimited_float, 1.0, -10.0, 10.0, "Post-affine X scale applied to the carpet position."),
+        param!("scale_y", "Scale Y", unlimited_float, 1.0, -10.0, 10.0, "Post-affine Y scale applied to the carpet position."),
+        param!("scale_z", "Scale Z", unlimited_float, 1.0, -10.0, 10.0, "Color-to-Z coupling multiplier (unused — color writes dropped). Kept for cpp/Java interface parity."),
+        param!("offset_z", "Offset Z", unlimited_float, 0.0, -10.0, 10.0, "Constant Z bump added to the output per iteration. Originally a fallback added to the color-derived Z; in this port it's the only contribution to Z."),
+        param!("reset_z", "Reset Z", unlimited_float, 0.0, 0.0, 1.0, "Color-driven Z reset switch (unused — color writes dropped). Kept for cpp/Java interface parity."),
     ],
     needs_transform: true,
     writes_color: false,

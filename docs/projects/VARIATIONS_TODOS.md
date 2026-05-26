@@ -443,9 +443,9 @@ document the family as permanently skipped and move on.
 
 ### Direct-color (DC) port decisions to verify
 
-Two deliberate divergences from upstream C++ in
-[dc.rs](../../src/variations/defs/dc.rs) that warrant later review,
-especially as the broader DC corpus gets ported:
+Deliberate divergences from upstream C++ in
+[dc.rs](../../src/variations/defs/dc.rs) and related DC files that
+warrant later review, especially as the broader DC corpus gets ported:
 
 - **Color from weighted post-variation position.** Both `dc_linear` and
   `dc_bubble` (and likely most DC variations) compute color from
@@ -466,6 +466,19 @@ especially as the broader DC corpus gets ported:
   decisions deliberate — flag if a flame imported from a C++-based
   Apophysis renders visibly different from the same flame in
   JWildfire.
+
+- **`dc_carpet3D`: color-coupled Z dropped, ancillary params kept for
+  parity.** Upstream couples Z output to color (`dz = color · scale_z +
+  offset_z`, then `z = dz` or `z += dz`); a `reset_z` flag optionally
+  re-randomizes Z from the same color-driven term. With color writes
+  dropped, the entire color→Z pipeline collapses, so the Rust port
+  emits just `z + w · offset_z` (constant Z bump) and the
+  `color_a..color_f`, `scale_z`, `reset_z`, and `origin` params are
+  retained only for interface parity (they're declared but ignored in
+  the body). If/when DC writes get a proper port, this needs to be
+  revisited — the color-coupled Z is presumably the variation's
+  defining 3D feature. See
+  [dc_carpet3d_misc.rs](../../src/variations/defs/dc_carpet3d_misc.rs).
 
 When more `dc_*` variations land, apply the same logic and add to
 this entry rather than spawning new ones.
