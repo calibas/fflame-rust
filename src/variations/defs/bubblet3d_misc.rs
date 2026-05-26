@@ -37,6 +37,18 @@ use crate::variations::{
 };
 use crate::param;
 
+/// 3D bubble inversion with stripes and Z-axis hole — first does a bubble
+/// (sphere) inversion of `(x, y)` (`/= (x²+y²)/4 + 1`), optionally erases
+/// or rotates wedge-shaped stripes around the XY plane (count via
+/// `number_of_stripes`, width-ratio via `ratio_of_stripes`), and finally
+/// erases or blends a cap on the Z axis based on `angle_of_hole` (with
+/// `exponent_z` controlling the Z bubble shape). `modus_blur = 0` does hard
+/// cutouts; `modus_blur = 1` does a smooth angular blend (only effective
+/// for the Z hole when `exponent_z == 1`). Negative `number_of_stripes` or
+/// `angle_of_hole` inverts which side of the boundary is drawn vs blanked.
+///
+/// # Authors
+/// - FractalDesire
 pub static BUBBLE_T3D: VariationDef = VariationDef {
     name: "bubbleT3D",
     display_name: "Bubble T3D",
@@ -44,12 +56,12 @@ pub static BUBBLE_T3D: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("number_of_stripes", "Number of Stripes", int, 0.0, -50.0, 50.0),
-        param!("ratio_of_stripes", "Ratio of Stripes", unlimited_float, 1.0, 0.01, 1.99),
-        param!("angle_of_hole", "Angle of Hole", unlimited_float, 0.0, -180.0, 180.0),
-        param!("exponent_z", "Exponent Z", unlimited_float, 1.0, 0.1, 10.0),
-        param!("symmetry_z", "Symmetry Z", int, 0.0, 0.0, 1.0),
-        param!("modus_blur", "Modus Blur", int, 0.0, 0.0, 1.0),
+        param!("number_of_stripes", "Number of Stripes", int, 0.0, -50.0, 50.0, "Number of angular stripe sectors around the XY plane. 0 disables stripes entirely. Negative value inverts the stripe pattern (swap drawn vs blanked sectors)."),
+        param!("ratio_of_stripes", "Ratio of Stripes", unlimited_float, 1.0, 0.01, 1.99, "Width fraction of the drawn stripe within each sector, clamped to [0.01, 1.99]. 1.0 = stripes and gaps are equal width."),
+        param!("angle_of_hole", "Angle of Hole", unlimited_float, 0.0, -180.0, 180.0, "Half-angle of the Z-axis hole in degrees. Negative value inverts which side of the hole is drawn vs blanked."),
+        param!("exponent_z", "Exponent Z", unlimited_float, 1.0, 0.1, 10.0, "Z-axis bubble shape exponent. 1.0 = standard inversion; smaller values flatten the bubble, larger values elongate it."),
+        param!("symmetry_z", "Symmetry Z", int, 0.0, 0.0, 1.0, "When 1, mirror the Z hole symmetrically across the XY plane (clamps `|angle_of_hole|` to < 180°). When 0, apply the hole only to one Z-pole."),
+        param!("modus_blur", "Modus Blur", int, 0.0, 0.0, 1.0, "0 = hard cutout (zero out points inside stripes/hole). 1 = smooth blend via angular rotation (only effective for the Z hole when `exponent_z == 1`; otherwise falls back to hard cutout)."),
     ],
     needs_transform: false,
     writes_color: false,
