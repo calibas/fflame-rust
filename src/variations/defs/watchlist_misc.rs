@@ -32,12 +32,19 @@ use crate::variations::{
 use crate::param;
 
 // =============================================================================
-// trade: two-disc swap (Faber)
+// trade: two-disc swap (Michael Faber)
 //   Init: c1 = r1 + d1;  c2 = r2 + d2
 //   Body: if x > 0: try fitting into right disc (radius r1, center (c1, 0))
 //                   and re-emit at left disc; or pass-through if outside
 //         else:    mirror: fit left disc, re-emit at right; pass-through outside
 // =============================================================================
+/// Two-disc swap — defines two discs (one at `(r1+d1, 0)` with radius `r1`,
+/// one at `(-(r2+d2), 0)` with radius `r2`). Points inside the right disc
+/// get warped to the corresponding position in the left disc, and vice
+/// versa; points outside both pass through.
+///
+/// # Authors
+/// - Michael Faber
 pub static TRADE: VariationDef = VariationDef {
     name: "trade",
     display_name: "Trade",
@@ -45,10 +52,10 @@ pub static TRADE: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("r1", "R1", unlimited_float, 1.0, 0.001, 10.0),
-        param!("d1", "D1", unlimited_float, 1.0, -10.0, 10.0),
-        param!("r2", "R2", unlimited_float, 1.0, 0.001, 10.0),
-        param!("d2", "D2", unlimited_float, 1.0, -10.0, 10.0),
+        param!("r1", "R1", unlimited_float, 1.0, 0.001, 10.0, "Right-disc radius."),
+        param!("d1", "D1", unlimited_float, 1.0, -10.0, 10.0, "Right-disc center offset from origin — center sits at `(r1 + d1, 0)`."),
+        param!("r2", "R2", unlimited_float, 1.0, 0.001, 10.0, "Left-disc radius."),
+        param!("d2", "D2", unlimited_float, 1.0, -10.0, 10.0, "Left-disc center offset from origin — center sits at `(-(r2 + d2), 0)`."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -129,6 +136,14 @@ fn variation_trade(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 //                     · AM    where AM = 1/2147483647 ≈ 4.66e−10
 //   (cpp's int math wraps on overflow; WGSL i32 also wraps. Match.)
 // =============================================================================
+/// Voronoi-cell snap with hash noise — scans the 3×3 grid of cells around
+/// the input, generates 1–`num` deterministic Voronoi site positions per
+/// cell via a bit-mixed integer hash, finds the nearest site, and lerps the
+/// input toward it by factor `k`. Produces classic Voronoi cellular
+/// patterns.
+///
+/// # Authors
+/// - eralex61
 pub static VORON: VariationDef = VariationDef {
     name: "voron",
     display_name: "Voron",
@@ -136,11 +151,11 @@ pub static VORON: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("k", "K", unlimited_float, 0.99, -10.0, 10.0),
-        param!("step", "Step", unlimited_float, 0.25, 0.001, 10.0),
-        param!("num", "Num", int, 1.0, 1.0, 5.0),
-        param!("xseed", "X seed", int, 3.0, -1000.0, 1000.0),
-        param!("yseed", "Y seed", int, 7.0, -1000.0, 1000.0),
+        param!("k", "K", unlimited_float, 0.99, -10.0, 10.0, "Lerp factor toward the nearest Voronoi site. 1 = snap fully to site; 0 = pass through unchanged."),
+        param!("step", "Step", unlimited_float, 0.25, 0.001, 10.0, "Voronoi cell size."),
+        param!("num", "Num", int, 1.0, 1.0, 5.0, "Maximum sites per cell (1–5). Actual count per cell is hashed from the cell index."),
+        param!("xseed", "X seed", int, 3.0, -1000.0, 1000.0, "Hash seed for X-coordinate site generation."),
+        param!("yseed", "Y seed", int, 7.0, -1000.0, 1000.0, "Hash seed for Y-coordinate site generation."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -240,6 +255,10 @@ fn variation_voron(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 //   FPy += v/u · r. Body lacks VVAR multiplier on the output —
 //   needs_transform + divide-out.
 // =============================================================================
+/// Squircular Möbius warp — maps the input through a "squircle"-style
+/// transformation (intermediate between a circle and a square). The
+/// variation weight enters non-linearly in the body, so the output shape
+/// changes qualitatively with weight rather than just scaling.
 pub static SQUIRCULAR: VariationDef = VariationDef {
     name: "squircular",
     display_name: "Squircular",
@@ -306,6 +325,14 @@ fn variation_squircular(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<
 //   out = avgr · (cos avga, sin avga)
 // (additive use of VVAR in xpw/xmw — needs_transform)
 // =============================================================================
+/// VVAR-shift Möbius warp — computes `xpw = x + w` and `xmw = x − w` (where
+/// `w` is the variation weight), then emits a Möbius-style radial × angular
+/// combination: `r = w·(2 + spread)·sqrt(sqrt(y² + xpw²) / sqrt(y² +
+/// xmw²))` and `a = (atan2(y, xmw) − atan2(y, xpw)) / 2`. Produces flux-
+/// like field-line patterns between two virtual poles at `±w`.
+///
+/// # Authors
+/// - meckie
 pub static FLUX: VariationDef = VariationDef {
     name: "flux",
     display_name: "Flux",
@@ -313,7 +340,7 @@ pub static FLUX: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("spread", "Spread", unlimited_float, 0.3, -10.0, 10.0),
+        param!("spread", "Spread", unlimited_float, 0.3, -10.0, 10.0, "Output magnitude scale, offset from a base value of 2."),
     ],
     needs_transform: true,
     writes_color: false,
@@ -362,6 +389,13 @@ fn variation_flux(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
 //   out = (tanr · cos(x), tanr · sin(y))
 // (Output is cubic in VVAR — needs_transform divide-out)
 // =============================================================================
+/// RNG-driven ray spread — picks a random angle `ang = w · rand · π`, then
+/// emits `(tan(ang) · r · cos(x), tan(ang) · r · sin(y))` with `r = w / (x²
+/// + y²)`. The tangent term creates spiky rays radiating in random angular
+/// directions.
+///
+/// # Authors
+/// - Z+
 pub static RAYS: VariationDef = VariationDef {
     name: "rays",
     display_name: "Rays",
@@ -407,6 +441,12 @@ fn variation_rays(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<funct
 //   out = (VVAR · u · t / x, VVAR · u · t / y)
 // (additive VVAR inside `u` — needs_transform)
 // =============================================================================
+/// Cotangent + (2/π)² ray spread — computes `u = cot(sqrt(x²+y²)) + w ·
+/// (2/π)²`, then emits `(u·t/x, u·t/y)` where `t = x² + y²`. Produces
+/// concentric-ring ray patterns driven by the cotangent's pole structure.
+///
+/// # Authors
+/// - Raykoid666
 pub static RAYS1: VariationDef = VariationDef {
     name: "rays1",
     display_name: "Rays 1",
@@ -469,6 +509,14 @@ fn variation_rays1(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 //         then mix by `cosc`/`sinc`, square or signed-square based on i.
 //         Branch on sign of r2 vs sqrvvar.
 // =============================================================================
+/// N-sided loonie — generalizes the standard `loonie` warp to N-sided
+/// star/circle hybrids. Computes a maximum projection across `sides`
+/// rotations, then mixes with a circular term via `circle` and optionally
+/// folds with a star pattern via `star`. Inside the squared-weight
+/// threshold the input scales outward; outside, it passes through.
+///
+/// # Authors
+/// - DarkBeam
 pub static LOONIE2: VariationDef = VariationDef {
     name: "loonie2",
     display_name: "Loonie 2",
@@ -476,9 +524,9 @@ pub static LOONIE2: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("sides", "Sides", int, 4.0, 1.0, 50.0),
-        param!("star", "Star", unlimited_float, 0.0, -10.0, 10.0),
-        param!("circle", "Circle", unlimited_float, 0.0, -10.0, 10.0),
+        param!("sides", "Sides", int, 4.0, 1.0, 50.0, "Polygon side count (≥ 1)."),
+        param!("star", "Star", unlimited_float, 0.0, -10.0, 10.0, "Star-fold rotation amount (scaled by −π/2 internally)."),
+        param!("circle", "Circle", unlimited_float, 0.0, -10.0, 10.0, "Circularity mixing factor: 0 = pure star/polygon shape, 1 = pure circle."),
     ],
     needs_transform: true,
     writes_color: false,
@@ -616,6 +664,14 @@ fn variation_loonie2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 // Mostly clean except the Q3 "susan" branch has `+ x_param`/`− y_param`
 // add-on terms without VVAR — divide-out via needs_transform.
 // =============================================================================
+/// 4-quadrant compound — applies a different variation in each quadrant of
+/// the input: `(+,+)` uses spherical, `(+,−)` uses loonie (with squared-
+/// weight threshold), `(−,+)` uses lazysusan (shift + spin + twist),
+/// `(−,−)` is linear pass-through. Useful for combining four distinct
+/// behaviors in a single transform.
+///
+/// # Authors
+/// - guagapunyaimel
 pub static FOURTH: VariationDef = VariationDef {
     name: "fourth",
     display_name: "Fourth",
@@ -623,11 +679,11 @@ pub static FOURTH: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("spin", "Spin", unlimited_float, 3.14159265, -10.0, 10.0),
-        param!("space", "Space", unlimited_float, 0.0, -10.0, 10.0),
-        param!("twist", "Twist", unlimited_float, 0.0, -10.0, 10.0),
-        param!("x", "X", unlimited_float, 0.0, -10.0, 10.0),
-        param!("y", "Y", unlimited_float, 0.0, -10.0, 10.0),
+        param!("spin", "Spin", unlimited_float, 3.14159265, -10.0, 10.0, "Lazysusan-quadrant rotation amount, in radians."),
+        param!("space", "Space", unlimited_float, 0.0, -10.0, 10.0, "Lazysusan-quadrant radial nudge for the outside-threshold case."),
+        param!("twist", "Twist", unlimited_float, 0.0, -10.0, 10.0, "Lazysusan-quadrant additional rotation, proportional to distance from the threshold edge."),
+        param!("x", "X", unlimited_float, 0.0, -10.0, 10.0, "Lazysusan-quadrant X center offset."),
+        param!("y", "Y", unlimited_float, 0.0, -10.0, 10.0, "Lazysusan-quadrant Y center offset."),
     ],
     needs_transform: true,
     writes_color: false,

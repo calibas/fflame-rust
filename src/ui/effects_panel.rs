@@ -113,9 +113,13 @@ pub fn render_effects_panel(
                                     param_def.min_value.unwrap_or(0.0)
                                         ..=param_def.max_value.unwrap_or(1.0),
                                 )
-                                .text(info.translated_param_name(&param_def.name));
+                                .text(&param_def.display_name);
 
-                                if ui.add(slider).changed() {
+                                let mut response = ui.add(slider);
+                                if let Some(desc) = &param_def.description {
+                                    response = response.on_hover_text(desc);
+                                }
+                                if response.changed() {
                                     if let Err(e) = config_manager.update_param(
                                         ConfigPath::ColorEffectParam {
                                             index: idx,
@@ -288,9 +292,13 @@ pub fn render_effects_panel(
                                         param_def.min_value.unwrap_or(0.0)
                                             ..=param_def.max_value.unwrap_or(1.0),
                                     )
-                                    .text(info.translated_param_name(&param_def.name));
+                                    .text(&param_def.display_name);
 
-                                    if ui.add(slider).changed() {
+                                    let mut response = ui.add(slider);
+                                    if let Some(desc) = &param_def.description {
+                                        response = response.on_hover_text(desc);
+                                    }
+                                    if response.changed() {
                                         if let Err(e) = config_manager.update_param(
                                             ConfigPath::DensityEffectParam {
                                                 index: idx,

@@ -1,9 +1,9 @@
 //! Additional blur variations
 //!
 //! Three small RNG-based blur variations from upstream's blur cluster:
-//!   - `sineblur`     (Zyorg)             — radial sine-density blur
-//!   - `starblur`     (Zyorg)             — N-pointed star-shape blur
-//!   - `r_circleblur` (Zabanova/Stefanov) — radial-truncated circle blur
+//!   - `sineblur`     (Zy0rg)             — radial sine-density blur
+//!   - `starblur`     (Zy0rg)             — N-pointed star-shape blur
+//!   - `r_circleblur` (Tatyana Zabanova) — radial-truncated circle blur
 //!
 //! Sources:
 //!   - output/jwildfire-vars/output/sineblur.cpp
@@ -39,6 +39,12 @@ use crate::param;
 //   out = (r · cos ang, r · sin ang)
 // (weight applied outside)
 // =============================================================================
+/// Radial sine-density blur — samples points uniformly on the unit disc
+/// with `acos`-based radial distribution. `power` controls how the density
+/// falls off.
+///
+/// # Authors
+/// - Zy0rg
 pub static SINEBLUR: VariationDef = VariationDef {
     name: "sineblur",
     display_name: "Sine Blur",
@@ -46,7 +52,7 @@ pub static SINEBLUR: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("power", "Power", unlimited_float, 1.0, 0.0, 10.0),
+        param!("power", "Power", unlimited_float, 1.0, 0.0, 10.0, "Density power. 1.0 gives uniform-on-disc; higher values concentrate density near the edge."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -103,6 +109,12 @@ fn variation_sineblur(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
 // Init computes alpha and length from (power, range); we keep both
 // as float user params (the C++ `power` is int but we store as f32).
 // =============================================================================
+/// N-pointed star-shape blur — samples points uniformly within a star
+/// polygon. Each arm is parameterized so the random distribution is area-
+/// uniform across the whole star.
+///
+/// # Authors
+/// - Zy0rg
 pub static STARBLUR: VariationDef = VariationDef {
     name: "starblur",
     display_name: "Star Blur",
@@ -110,8 +122,8 @@ pub static STARBLUR: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("power", "Power", int, 5.0, 2.0, 50.0),
-        param!("range", "Range", unlimited_float, 0.40162283, 0.0, 1.0),
+        param!("power", "Power", int, 5.0, 2.0, 50.0, "Number of star points."),
+        param!("range", "Range", unlimited_float, 0.40162283, 0.0, 1.0, "Inner-vertex radius — 0 gives a circle (no points), 1 gives sharp points."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -196,6 +208,12 @@ fn variation_starblur(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
 //   choose circle position, then samples a small disc within that cell
 //   with size driven by the user `min`/`max` range and `dist` jitter.
 // =============================================================================
+/// Radial-truncated circle blur — truncates the input radius into bands of
+/// width `n` and places a randomly-positioned small disc within each band
+/// cell. Hash-based per-cell positioning.
+///
+/// # Authors
+/// - Tatyana Zabanova
 pub static R_CIRCLEBLUR: VariationDef = VariationDef {
     name: "r_circleblur",
     display_name: "R Circle Blur",
@@ -203,11 +221,11 @@ pub static R_CIRCLEBLUR: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("n", "N", unlimited_float, 1.0, 0.1, 50.0),
-        param!("seed", "Seed", unlimited_float, 0.0, -100.0, 100.0),
-        param!("dist", "Dist", unlimited_float, 0.5, 0.0, 5.0),
-        param!("min", "Min", float, 0.1, 0.0, 1.0),
-        param!("max", "Max", float, 1.0, 0.0, 1.0),
+        param!("n", "N", unlimited_float, 1.0, 0.1, 50.0, "Band width — radius is truncated modulo this value."),
+        param!("seed", "Seed", unlimited_float, 0.0, -100.0, 100.0, "Random seed for the per-cell hash — change to vary the pattern."),
+        param!("dist", "Dist", unlimited_float, 0.5, 0.0, 5.0, "Per-cell jitter strength."),
+        param!("min", "Min", float, 0.1, 0.0, 1.0, "Minimum cell-disc radius (fraction of cell)."),
+        param!("max", "Max", float, 1.0, 0.0, 1.0, "Maximum cell-disc radius (fraction of cell)."),
     ],
     needs_transform: false,
     writes_color: false,

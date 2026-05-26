@@ -24,6 +24,15 @@ use crate::variations::{
 };
 use crate::param;
 
+/// 3D Gaussian blur centered at an offset origin — computes spherical
+/// coordinates around `(x_origin, -y_origin, z_origin)`, jitters by two
+/// random angles plus a Gaussian-approximated scalar (sum of 4 uniforms −
+/// 2), and scales by `pow(distance², dist)`. The blur intensity grows with
+/// distance from the offset origin.
+///
+/// # Authors
+/// - zephyrtronium
+/// - DarkBeam
 pub static EXBLUR: VariationDef = VariationDef {
     name: "exblur",
     display_name: "Ex Blur",
@@ -31,11 +40,11 @@ pub static EXBLUR: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("dist", "Dist", unlimited_float, 0.5, -10.0, 10.0),
-        param!("r", "R", unlimited_float, 0.0, -10.0, 10.0),
-        param!("x_origin", "X Origin", unlimited_float, 0.0, -10.0, 10.0),
-        param!("y_origin", "Y Origin", unlimited_float, 0.0, -10.0, 10.0),
-        param!("z_origin", "Z Origin", unlimited_float, 0.0, -10.0, 10.0),
+        param!("dist", "Dist", unlimited_float, 0.5, -10.0, 10.0, "Power exponent on the squared-distance scaling. Controls how the blur intensity grows with distance from the origin."),
+        param!("r", "R", unlimited_float, 0.0, -10.0, 10.0, "Scaling factor on the perpendicular jitter."),
+        param!("x_origin", "X Origin", unlimited_float, 0.0, -10.0, 10.0, "X center of the blur (subtracted from input X)."),
+        param!("y_origin", "Y Origin", unlimited_float, 0.0, -10.0, 10.0, "Y center of the blur — note the upstream sign convention: added to input Y rather than subtracted."),
+        param!("z_origin", "Z Origin", unlimited_float, 0.0, -10.0, 10.0, "Z center of the blur (subtracted from input Z; 3D only)."),
     ],
     needs_transform: false,
     writes_color: false,

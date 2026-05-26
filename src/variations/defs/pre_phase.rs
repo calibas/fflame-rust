@@ -8,6 +8,9 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Scales the Z coordinate before the rest of the variations run. The
+/// variation's weight is the scale factor — weight 2.0 doubles depth, 0.5
+/// halves it.
 pub static PRE_ZSCALE: VariationDef = VariationDef {
     name: "pre_zscale",
     display_name: "Pre-ZScale",
@@ -37,6 +40,8 @@ fn variation_pre_zscale(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<
 "#),
 };
 
+/// Shifts the Z coordinate up or down before the rest of the variations
+/// run. The variation's weight is the offset.
 pub static PRE_ZTRANSLATE: VariationDef = VariationDef {
     name: "pre_ztranslate",
     display_name: "Pre-ZTranslate",
@@ -66,6 +71,11 @@ fn variation_pre_ztranslate(p: vec3<f32>, xform_id: u32, variation_id: u32) -> v
 "#),
 };
 
+/// Same math as Spherical (inverts through the unit circle) but runs before
+/// the rest of the variations instead of contributing to the weighted sum.
+///
+/// # Authors
+/// - Scott Draves
 pub static PRE_SPHERICAL: VariationDef = VariationDef {
     name: "pre_spherical",
     display_name: "Pre-Spherical",
@@ -96,6 +106,11 @@ fn variation_pre_spherical(p: vec3<f32>) -> vec3<f32> {
 "#),
 };
 
+/// Same math as Sinusoidal (sine on each axis) but runs before the rest of
+/// the variations. The variation's weight scales the output.
+///
+/// # Authors
+/// - Scott Draves
 pub static PRE_SINUSOIDAL: VariationDef = VariationDef {
     name: "pre_sinusoidal",
     display_name: "Pre-Sinusoidal",
@@ -126,6 +141,11 @@ fn variation_pre_sinusoidal(p: vec3<f32>, xform_id: u32, variation_id: u32) -> v
 "#),
 };
 
+/// Same math as Disc (wraps the plane onto a disc) but runs before the rest
+/// of the variations. The variation's weight scales the result.
+///
+/// # Authors
+/// - Scott Draves
 pub static PRE_DISC: VariationDef = VariationDef {
     name: "pre_disc",
     display_name: "Pre-Disc",
@@ -162,6 +182,9 @@ fn variation_pre_disc(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
 "#),
 };
 
+/// Wraps the plane into a grid of soft bubbles, each with its own internal
+/// twist. Runs before the rest of the variations so the rest see the
+/// bubbled coordinates.
 pub static PRE_BWRAPS: VariationDef = VariationDef {
     name: "pre_bwraps",
     display_name: "Pre Bwraps",
@@ -169,11 +192,11 @@ pub static PRE_BWRAPS: VariationDef = VariationDef {
     phase: VariationPhase::Pre,
     needs_rng: false,
     parameters: &[
-        param!("cellsize", "Cell Size", unlimited_float, 1.0, -10.0, 10.0),
-        param!("space", "Space", unlimited_float, 0.0, -1.0, 1.0),
-        param!("gain", "Gain", unlimited_float, 1.0, -5.0, 5.0),
-        param!("inner_twist", "Inner Twist", unlimited_float, 0.0, -10.0, 10.0),
-        param!("outer_twist", "Outer Twist", unlimited_float, 0.0, -10.0, 10.0),
+        param!("cellsize", "Cell Size", unlimited_float, 1.0, -10.0, 10.0, "Width of each grid cell — the plane is divided into cells of this size, each becoming a bubble."),
+        param!("space", "Space", unlimited_float, 0.0, -1.0, 1.0, "Gap between cells. 0 = no gap; positive values push the bubbles apart."),
+        param!("gain", "Gain", unlimited_float, 1.0, -5.0, 5.0, "How strongly each bubble wraps its contents inward."),
+        param!("inner_twist", "Inner Twist", unlimited_float, 0.0, -10.0, 10.0, "Rotation (in degrees) applied at the center of each bubble."),
+        param!("outer_twist", "Outer Twist", unlimited_float, 0.0, -10.0, 10.0, "Rotation (in degrees) applied at the edge of each bubble."),
     ],
     // 5 derived values at slots 5..10:
     //   5: g2                  (gain² / (radius + ε) + ε)
@@ -306,6 +329,12 @@ fn variation_pre_bwraps(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<
 "#),
 };
 
+/// Constrains points to a rectangle before the rest of the variations run.
+/// Points outside the rectangle either collapse to zero or get scattered
+/// along the nearest edge.
+/// 
+/// # Authors
+/// - Xyrus02
 pub static PRE_CROP: VariationDef = VariationDef {
     name: "pre_crop",
     display_name: "Pre Crop",
@@ -313,12 +342,12 @@ pub static PRE_CROP: VariationDef = VariationDef {
     phase: VariationPhase::Pre,
     needs_rng: true,
     parameters: &[
-        param!("left", "Left", unlimited_float, -1.0, -5.0, 5.0),
-        param!("top", "Top", unlimited_float, -1.0, -5.0, 5.0),
-        param!("right", "Right", unlimited_float, 1.0, -5.0, 5.0),
-        param!("bottom", "Bottom", unlimited_float, 1.0, -5.0, 5.0),
-        param!("scatter_area", "Scatter Area", float, 0.0, -1.0, 1.0),
-        param!("zero", "Zero", bool, false),
+        param!("left", "Left", unlimited_float, -1.0, -5.0, 5.0, "Left edge of the rectangle the points are constrained to."),
+        param!("top", "Top", unlimited_float, -1.0, -5.0, 5.0, "Top edge of the rectangle."),
+        param!("right", "Right", unlimited_float, 1.0, -5.0, 5.0, "Right edge of the rectangle."),
+        param!("bottom", "Bottom", unlimited_float, 1.0, -5.0, 5.0, "Bottom edge of the rectangle."),
+        param!("scatter_area", "Scatter Area", float, 0.0, -1.0, 1.0, "Width of the random scatter band along the rectangle's edges. 0 = points snap exactly to the edge."),
+        param!("zero", "Zero", bool, false, "When on, points outside the rectangle collapse to the origin. When off, they scatter back to the nearest edge."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -409,6 +438,10 @@ fn variation_pre_crop(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
 "#),
 };
 
+/// Adds random scatter that varies with distance from a chosen center
+/// point. Closer points get less scatter (or more, with `invert`); the
+/// random distribution shape is selectable. Runs before the rest of the
+/// variations.
 pub static PRE_FALLOFF2: VariationDef = VariationDef {
     name: "pre_falloff2",
     display_name: "Pre Falloff2",
@@ -416,16 +449,16 @@ pub static PRE_FALLOFF2: VariationDef = VariationDef {
     phase: VariationPhase::Pre,
     needs_rng: true,
     parameters: &[
-        param!("scatter", "Scatter", unlimited_float, 1.0, 0.000001, 10.0),
-        param!("mindist", "Min Distance", unlimited_float, 0.5, 0.0, 10.0),
-        param!("mul_x", "Multiply X", float, 1.0, 0.0, 1.0),
-        param!("mul_y", "Multiply Y", float, 1.0, 0.0, 1.0),
-        param!("mul_z", "Multiply Z", float, 0.0, 0.0, 1.0),
-        param!("mul_c", "Multiply Color", float, 0.0, 0.0, 1.0),
-        param!("x0", "X Center", unlimited_float, 0.0, -10.0, 10.0),
-        param!("y0", "Y Center", unlimited_float, 0.0, -10.0, 10.0),
-        param!("z0", "Z Center", unlimited_float, 0.0, -10.0, 10.0),
-        param!("invert", "Invert", bool, false),
+        param!("scatter", "Scatter", unlimited_float, 1.0, 0.000001, 10.0, "Maximum random scatter applied at full strength."),
+        param!("mindist", "Min Distance", unlimited_float, 0.5, 0.0, 10.0, "Distance from the center where the falloff kicks in. Points inside this radius get full strength scatter."),
+        param!("mul_x", "Multiply X", float, 1.0, 0.0, 1.0, "How strongly the scatter affects the X axis (0 = ignore, 1 = full)."),
+        param!("mul_y", "Multiply Y", float, 1.0, 0.0, 1.0, "How strongly the scatter affects the Y axis (0 = ignore, 1 = full)."),
+        param!("mul_z", "Multiply Z", float, 0.0, 0.0, 1.0, "How strongly the scatter affects the Z axis (0 = ignore, 1 = full). 3D mode only."),
+        param!("mul_c", "Multiply Color", float, 0.0, 0.0, 1.0, "Color-channel scatter strength. Currently unused — direct color writing is not wired up for this variation."),
+        param!("x0", "X Center", unlimited_float, 0.0, -10.0, 10.0, "X coordinate of the falloff center."),
+        param!("y0", "Y Center", unlimited_float, 0.0, -10.0, 10.0, "Y coordinate of the falloff center."),
+        param!("z0", "Z Center", unlimited_float, 0.0, -10.0, 10.0, "Z coordinate of the falloff center."),
+        param!("invert", "Invert", bool, false, "When on, flips the falloff direction — full scatter applies far from the center, nothing near it."),
         VariationParamDef {
             name: "type",
             display_name: "Blur Type",
@@ -433,6 +466,7 @@ pub static PRE_FALLOFF2: VariationDef = VariationDef {
             default_value: 0.0,
             min_value: Some(0.0),
             max_value: Some(2.0),
+            description: Some("Random distribution shape. 0 = uniform, 1 = triangular (smoother), 2 = gaussian (concentrated near zero)."),
         },
     ],
     needs_transform: false,

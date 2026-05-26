@@ -22,6 +22,13 @@ use crate::variations::{
 //
 // COEFF_20 = our xform.e (X translation), COEFF_21 = our xform.f (Y).
 // =============================================================================
+/// Adds sinusoidal displacement to each axis using the transform's affine
+/// translation fields (`e` and `f`) as amplitudes. Like Popcorn2 but takes
+/// its strength directly from the affine matrix instead of dedicated
+/// sliders.
+///
+/// # Authors
+/// - Scott Draves
 pub static POPCORN: VariationDef = VariationDef {
     name: "popcorn",
     display_name: "Popcorn",

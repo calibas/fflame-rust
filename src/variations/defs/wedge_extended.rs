@@ -35,6 +35,11 @@ use crate::param;
 //     a       = a · cf + c · angle                  (cf = 1 − angle·count/(2π))
 //     out     = (cos(sin(a)), sin(a)) · r           (cos(sin(a)) — quirk, see notes)
 // =============================================================================
+/// N-th-root-branched wedge — combines JuliaN angular branching (`power`,
+/// random branch per iteration) with wedge sectoring (`angle`, `count`).
+///
+/// # Authors
+/// - Apophysis Plugin Pack
 pub static WEDGE_JULIA: VariationDef = VariationDef {
     name: "wedge_julia",
     display_name: "Wedge Julia",
@@ -42,10 +47,10 @@ pub static WEDGE_JULIA: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("power", "Power", unlimited_float, 7.0, -20.0, 20.0),
-        param!("dist", "Distance", unlimited_float, 0.2, -10.0, 10.0),
-        param!("count", "Count", unlimited_float, 2.0, -10.0, 10.0),
-        param!("angle", "Angle", unlimited_float, 0.3, -10.0, 10.0),
+        param!("power", "Power", unlimited_float, 7.0, -20.0, 20.0, "Number of Julia branches. Higher = more arms."),
+        param!("dist", "Distance", unlimited_float, 0.2, -10.0, 10.0, "Radial distance scaling — pushes arms inward or outward."),
+        param!("count", "Count", unlimited_float, 2.0, -10.0, 10.0, "Number of wedge sectors around the center."),
+        param!("angle", "Angle", unlimited_float, 0.3, -10.0, 10.0, "Wedge sector rotation, in radians."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -128,6 +133,12 @@ fn variation_wedge_julia(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: pt
 //     r        = r + hole                         (weight applied outside)
 //     out      = r · (cos(a), sin(a))
 // =============================================================================
+/// Wedge applied in spherical-inversion space — like Wedge but the input
+/// is first inverted through the unit circle, producing a wrapped/folded
+/// version of the wedge pattern.
+///
+/// # Authors
+/// - Apophysis Plugin Pack
 pub static WEDGE_SPH: VariationDef = VariationDef {
     name: "wedge_sph",
     display_name: "Wedge Sph",
@@ -135,10 +146,10 @@ pub static WEDGE_SPH: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("angle", "Angle", unlimited_float, 0.2, -10.0, 10.0),
-        param!("hole", "Hole", unlimited_float, 0.2, -10.0, 10.0),
-        param!("count", "Count", unlimited_float, 2.0, -10.0, 10.0),
-        param!("swirl", "Swirl", unlimited_float, 0.3, -10.0, 10.0),
+        param!("angle", "Angle", unlimited_float, 0.2, -10.0, 10.0, "Wedge sector rotation, in radians."),
+        param!("hole", "Hole", unlimited_float, 0.2, -10.0, 10.0, "Radial offset added after the inversion. Positive opens a hole at the center; negative compresses inward."),
+        param!("count", "Count", unlimited_float, 2.0, -10.0, 10.0, "Number of wedge sectors around the center."),
+        param!("swirl", "Swirl", unlimited_float, 0.3, -10.0, 10.0, "Extra rotation that grows with distance — gives the wedges a spiral."),
     ],
     needs_transform: false,
     writes_color: false,

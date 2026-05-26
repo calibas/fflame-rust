@@ -11,7 +11,7 @@
 //!                                                  cos x·π)`
 //!   - `perspective`  (Apo classic)              — 2 user params (angle,
 //!                                                  dist), 2 init slots
-//!   - `line`         (Anderson 2013)            — 2 user (Java-recovered;
+//!   - `line`         (chronologicaldot)            — 2 user (Java-recovered;
 //!                                                  cpp APO_VARIABLES
 //!                                                  empty, defaults
 //!                                                  embedded as constants;
@@ -45,6 +45,9 @@ use crate::param;
 // exp2: w · exp(x·π) · (cos y·π, sin y·π)
 // Clean factor through outer.
 // =============================================================================
+/// Exponential polar warp — emits `exp(x·π) · (cos(y·π), sin(y·π))`. The X
+/// coordinate drives an exponential radial scaling, and Y drives the
+/// angular position.
 pub static EXP2: VariationDef = VariationDef {
     name: "exp2",
     display_name: "Exp 2",
@@ -79,6 +82,13 @@ fn variation_exp2(p: vec3<f32>) -> vec3<f32> {
 // exponential: w · exp(x-1) · (cos π·y, sin π·y)
 // Clean factor through outer.
 // =============================================================================
+/// Classic exponential variation — emits `exp(x − 1) · (cos(π·y),
+/// sin(π·y))`. Same shape as `exp2` but with a slightly different
+/// exponential argument (subtracts 1 so the unit radius lies at x = 1
+/// instead of x = 0).
+///
+/// # Authors
+/// - Scott Draves
 pub static EXPONENTIAL: VariationDef = VariationDef {
     name: "exponential",
     display_name: "Exponential",
@@ -117,6 +127,12 @@ fn variation_exponential(p: vec3<f32>) -> vec3<f32> {
 //   else:   out = (x,  y)
 // Clean.
 // =============================================================================
+/// Y-flip when x > 0 — leaves the input alone when `x ≤ 0`; flips the sign
+/// of Y when `x > 0`. Useful as a building block for left/right asymmetric
+/// flames.
+///
+/// # Authors
+/// - Michael Faber
 pub static FLIPY: VariationDef = VariationDef {
     name: "flipy",
     display_name: "Flip Y",
@@ -151,6 +167,13 @@ fn variation_flipy(p: vec3<f32>) -> vec3<f32> {
 //          tanh y · (1/cos y + effect·π))
 // Clean factor through outer; 1 user param (effect int, default 8).
 // =============================================================================
+/// Tangent · secant + offset funnel — per axis, emits `tanh(coord) ·
+/// (sec(coord) + effect · π)`. The hyperbolic tangent saturates the input
+/// toward ±1, and the secant term creates poles where the input's cosine
+/// hits zero.
+///
+/// # Authors
+/// - Raykoid666
 pub static FUNNEL: VariationDef = VariationDef {
     name: "funnel",
     display_name: "Funnel",
@@ -158,7 +181,7 @@ pub static FUNNEL: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("effect", "Effect", int, 8.0, -100.0, 100.0),
+        param!("effect", "Effect", int, 8.0, -100.0, 100.0, "Additive angular offset on each axis (scaled by π). Higher = more horizontal/vertical bias."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -201,6 +224,9 @@ fn variation_funnel(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 //   out = ny · (sin(π·x), cos(π·x))
 // Clean factor through outer.
 // =============================================================================
+/// Inverse polar — emits `(1 + y) · (sin(π·x), cos(π·x))`. Treats X as the
+/// angle (in units of π) and `1 + y` as the radius — the inverse of the
+/// `polar` variation.
 pub static INVPOLAR: VariationDef = VariationDef {
     name: "invpolar",
     display_name: "Inv Polar",
@@ -239,6 +265,13 @@ fn variation_invpolar(p: vec3<f32>) -> vec3<f32> {
 //   out = (dist · x · t, vfcos · y · t)
 // Clean factor through outer.
 // =============================================================================
+/// 2D perspective projection — applies a perspective foreshortening with `t
+/// = 1 / (dist − y · sin(angle·π/2))`, then emits `(dist · x · t, dist ·
+/// cos(angle·π/2) · y · t)`. The `angle` parameter tilts the projection
+/// plane; `dist` sets the viewing distance.
+///
+/// # Authors
+/// - Scott Draves
 pub static PERSPECTIVE: VariationDef = VariationDef {
     name: "perspective",
     display_name: "Perspective",
@@ -246,8 +279,8 @@ pub static PERSPECTIVE: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("angle", "Angle", unlimited_float, 0.62, -10.0, 10.0),
-        param!("dist", "Dist", unlimited_float, 2.2, -10.0, 10.0),
+        param!("angle", "Angle", unlimited_float, 0.62, -10.0, 10.0, "Tilt of the projection plane (in units of π/2). 0 = parallel (no perspective); 1 = perpendicular."),
+        param!("dist", "Dist", unlimited_float, 2.2, -10.0, 10.0, "Viewing distance from the projection plane. Larger = milder perspective effect."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -295,7 +328,7 @@ fn variation_perspective(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3
 };
 
 // =============================================================================
-// line: project to a random spot on a 3D line (Anderson 2013)
+// line: project to a random spot on a 3D line (chronologicaldot)
 //   2 user params (delta, phi) — Java-recovered; cpp omitted both
 //   Unit vector u = (cos(δπ)·cos(φπ), sin(δπ)·cos(φπ), sin(φπ))
 //   (drop normalization — |u| ≡ 1 by construction)
@@ -304,6 +337,12 @@ fn variation_perspective(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3
 // Body has internal w in `r` — needs_transform divide-out.
 // Full3D (writes z explicitly).
 // =============================================================================
+/// Project to a random spot on a 3D line — picks a random distance `r =
+/// rand · w` and emits along a unit vector `(cos(δπ)·cos(φπ),
+/// sin(δπ)·cos(φπ), sin(φπ))`. The 2D output drops the Z component.
+///
+/// # Authors
+/// - chronologicaldot
 pub static LINE: VariationDef = VariationDef {
     name: "line",
     display_name: "Line",
@@ -311,8 +350,8 @@ pub static LINE: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("delta", "Delta", unlimited_float, 0.0, -10.0, 10.0),
-        param!("phi", "Phi", unlimited_float, 0.0, -10.0, 10.0),
+        param!("delta", "Delta", unlimited_float, 0.0, -10.0, 10.0, "Azimuthal angle of the line direction (in units of π)."),
+        param!("phi", "Phi", unlimited_float, 0.0, -10.0, 10.0, "Polar angle of the line direction (in units of π). When `δ = φ = 0`, the line projects onto the X axis."),
     ],
     needs_transform: true,
     writes_color: false,
@@ -368,6 +407,13 @@ fn variation_line(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<funct
 // needs_transform divide-out (the offsets become ±1/(2w) in the
 // stripped result; outer × w restores ±1/2).
 // =============================================================================
+/// Square hole — outside the square `|x| + |y| > 1` the input passes
+/// through; inside, the dominant-axis coordinate gets folded toward `±0.5`
+/// based on its sign and the magnitude of the perpendicular coordinate.
+/// Produces a square-hole-shaped scatter pattern.
+///
+/// # Authors
+/// - DarkBeam
 pub static HOLESQ: VariationDef = VariationDef {
     name: "holesq",
     display_name: "Hole Square",

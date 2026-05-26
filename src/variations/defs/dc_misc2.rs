@@ -1,6 +1,6 @@
 //! Direct-color + pre-rect: dc_cube, pre_rect_wf
 //!
-//!   - dc_cube (Apophysis): random face of a unit cube — picks one of
+//!   - dc_cube: random face of a unit cube — picks one of
 //!     6 cube faces (i in {0, 1, 2}, j in {0, 1}) and emits a random
 //!     point on that face. 3 user params (x, y, z scales). cpp also
 //!     declared 6 color params (c1..c6) for direct-color writes —
@@ -8,7 +8,7 @@
 //!     uses none of them). RNG (4 calls/iter for face + 2 unit-square
 //!     coords). Full3D. Body factors cleanly through outer multiplier.
 //!
-//!   - pre_rect_wf (Maschke): pre-phase variation that replaces the
+//!   - pre_rect_wf: pre-phase variation that replaces the
 //!     affine input with a uniform random sample from a rectangle.
 //!     4 user params (x0, x1, y0, y1) + 2 init slots (_dx = x1-x0,
 //!     _dy = y1-y0). RNG (2 calls/iter). needs_transform to access
@@ -28,6 +28,11 @@ use crate::param;
 // dc_cube
 // ---------------------------------------------------------------------------
 
+/// Random cube-face sampler — picks one of 6 unit cube faces (3 axes × 2
+/// sides) and emits a random point on that face, scaled per-axis by `(x, y,
+/// z)`. Discards the input position entirely (it samples a new point per
+/// iteration). The cpp source also writes per-face color values; those
+/// color writes are dropped per the writes_color compromise.
 pub static DC_CUBE: VariationDef = VariationDef {
     name: "dc_cube",
     display_name: "DC Cube",
@@ -35,9 +40,9 @@ pub static DC_CUBE: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("x", "X Scale", unlimited_float, 1.0, -10.0, 10.0),
-        param!("y", "Y Scale", unlimited_float, 1.0, -10.0, 10.0),
-        param!("z", "Z Scale", unlimited_float, 1.0, -10.0, 10.0),
+        param!("x", "X Scale", unlimited_float, 1.0, -10.0, 10.0, "X-axis output scale."),
+        param!("y", "Y Scale", unlimited_float, 1.0, -10.0, 10.0, "Y-axis output scale."),
+        param!("z", "Z Scale", unlimited_float, 1.0, -10.0, 10.0, "Z-axis output scale (3D only)."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -105,6 +110,9 @@ fn variation_dc_cube(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fu
 // pre_rect_wf
 // ---------------------------------------------------------------------------
 
+/// Pre-phase uniform rectangle sample — replaces the input with a random
+/// point uniformly sampled from the rectangle `[x0, x1] × [y0, y1]`, scaled
+/// by the variation weight. Discards the input position entirely.
 pub static PRE_RECT_WF: VariationDef = VariationDef {
     name: "pre_rect_wf",
     display_name: "Pre Rect WF",
@@ -112,10 +120,10 @@ pub static PRE_RECT_WF: VariationDef = VariationDef {
     phase: VariationPhase::Pre,
     needs_rng: true,
     parameters: &[
-        param!("x0", "X0", unlimited_float, -0.5, -10.0, 10.0),
-        param!("x1", "X1", unlimited_float, 0.5, -10.0, 10.0),
-        param!("y0", "Y0", unlimited_float, -0.5, -10.0, 10.0),
-        param!("y1", "Y1", unlimited_float, 0.5, -10.0, 10.0),
+        param!("x0", "X0", unlimited_float, -0.5, -10.0, 10.0, "Left edge of the sampling rectangle."),
+        param!("x1", "X1", unlimited_float, 0.5, -10.0, 10.0, "Right edge of the sampling rectangle."),
+        param!("y0", "Y0", unlimited_float, -0.5, -10.0, 10.0, "Bottom edge of the sampling rectangle."),
+        param!("y1", "Y1", unlimited_float, 0.5, -10.0, 10.0, "Top edge of the sampling rectangle."),
     ],
     needs_transform: true,
     writes_color: false,

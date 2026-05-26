@@ -47,6 +47,11 @@ use crate::param;
 //   FTx = (x·re + y·im) · r
 //   FTy = (y·re − x·im) · r
 // =============================================================================
+/// Pre-phase version of Curl — applies the same complex-polynomial twist as
+/// Curl but before the rest of the variations run.
+///
+/// # Authors
+/// - Xyrus02
 pub static PRE_CURL: VariationDef = VariationDef {
     name: "pre_curl",
     display_name: "Pre Curl",
@@ -54,8 +59,8 @@ pub static PRE_CURL: VariationDef = VariationDef {
     phase: VariationPhase::Pre,
     needs_rng: false,
     parameters: &[
-        param!("c1", "C1", unlimited_float, 0.0, -5.0, 5.0),
-        param!("c2", "C2", unlimited_float, 0.0, -5.0, 5.0),
+        param!("c1", "C1", unlimited_float, 0.0, -5.0, 5.0, "Linear twist strength. Stronger = tighter curl around the center."),
+        param!("c2", "C2", unlimited_float, 0.0, -5.0, 5.0, "Quadratic twist strength. Adds a second-order curl that grows away from the origin."),
     ],
     needs_transform: true,
     writes_color: false,
@@ -108,6 +113,11 @@ fn variation_pre_curl(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
 //   r = w · (x² + y²)^half_inv_power
 //   out = (r·cos(a), r·sin(a))
 // =============================================================================
+/// Post-phase version of JuliaQ — applies the rational-power Julia
+/// branching after all other variations have run.
+///
+/// # Authors
+/// - Zueuk
 pub static POST_JULIAQ: VariationDef = VariationDef {
     name: "post_juliaq",
     display_name: "Post JuliaQ",
@@ -115,8 +125,8 @@ pub static POST_JULIAQ: VariationDef = VariationDef {
     phase: VariationPhase::Post,
     needs_rng: true,
     parameters: &[
-        param!("power", "Power", int, 3.0, -50.0, 50.0),
-        param!("divisor", "Divisor", int, 2.0, -50.0, 50.0),
+        param!("power", "Power", int, 3.0, -50.0, 50.0, "Number of Julia branches in the rational power."),
+        param!("divisor", "Divisor", int, 2.0, -50.0, 50.0, "Rational-power divisor. Combined with `power` lets you pick non-integer branch counts (e.g. power=3, divisor=2 → 1.5 branches)."),
     ],
     needs_transform: true,
     writes_color: false,
@@ -184,6 +194,11 @@ fn variation_post_juliaq(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: pt
 //   r *= sqrt(x² + y²)
 //   out = (r·cos(a), r·sin(a), out_z)
 // =============================================================================
+/// Post-phase version of Julia3DQ — applies the 3D rational-power Julia
+/// branching after all other variations have run.
+///
+/// # Authors
+/// - Zueuk
 pub static POST_JULIA3DQ: VariationDef = VariationDef {
     name: "post_julia3dq",
     display_name: "Post Julia3DQ",
@@ -191,8 +206,8 @@ pub static POST_JULIA3DQ: VariationDef = VariationDef {
     phase: VariationPhase::Post,
     needs_rng: true,
     parameters: &[
-        param!("power", "Power", int, 3.0, -50.0, 50.0),
-        param!("divisor", "Divisor", int, 2.0, -50.0, 50.0),
+        param!("power", "Power", int, 3.0, -50.0, 50.0, "Number of Julia branches."),
+        param!("divisor", "Divisor", int, 2.0, -50.0, 50.0, "Rational-power divisor."),
     ],
     needs_transform: true,
     writes_color: false,

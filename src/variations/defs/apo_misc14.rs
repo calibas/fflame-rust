@@ -50,6 +50,14 @@ use crate::param;
 //          y + factor · sin(x · freqy) · scaley)
 // 6 user params; clean factor through outer.
 // =============================================================================
+/// Radially-falloff variant of `waves2` — applies the `waves2` per-axis
+/// sine offsets (`sin(y·freqx)·scalex` on X, `sin(x·freqy)·scaley` on Y)
+/// with a smooth radial falloff: full effect below the `null` radius, zero
+/// above the `distance` radius, linearly interpolated in between.
+///
+/// # Authors
+/// - Tatyana Zabanova
+/// - Brad Stefanov
 pub static WAVES2_RADIAL: VariationDef = VariationDef {
     name: "waves2_radial",
     display_name: "Waves2 Radial",
@@ -57,12 +65,12 @@ pub static WAVES2_RADIAL: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("w2r_scalex", "Scale X", unlimited_float, 0.1, -10.0, 10.0),
-        param!("w2r_scaley", "Scale Y", unlimited_float, 0.1, -10.0, 10.0),
-        param!("w2r_freqx", "Freq X", unlimited_float, 7.0, -50.0, 50.0),
-        param!("w2r_freqy", "Freq Y", unlimited_float, 13.0, -50.0, 50.0),
-        param!("w2r_null", "Null", unlimited_float, 2.0, -10.0, 10.0),
-        param!("w2r_distance", "Distance", unlimited_float, 10.0, -100.0, 100.0),
+        param!("w2r_scalex", "Scale X", unlimited_float, 0.1, -10.0, 10.0, "X-axis sine amplitude."),
+        param!("w2r_scaley", "Scale Y", unlimited_float, 0.1, -10.0, 10.0, "Y-axis sine amplitude."),
+        param!("w2r_freqx", "Freq X", unlimited_float, 7.0, -50.0, 50.0, "X-axis sine frequency."),
+        param!("w2r_freqy", "Freq Y", unlimited_float, 13.0, -50.0, 50.0, "Y-axis sine frequency."),
+        param!("w2r_null", "Null", unlimited_float, 2.0, -10.0, 10.0, "Inner radius — full effect below this distance from the origin."),
+        param!("w2r_distance", "Distance", unlimited_float, 10.0, -100.0, 100.0, "Outer radius — zero effect above this distance."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -127,6 +135,14 @@ fn variation_waves2_radial(p: vec3<f32>, xform_id: u32, variation_id: u32) -> ve
 // needs_transform divide-out: the `± x_p` / `± y_p` constant offsets
 // don't factor through outer. Body returns cpp_output / w.
 // =============================================================================
+/// Elliptic-coordinate warp with random Y-sign + constant offsets —
+/// converts the input to elliptic coordinates, emits `v · atan2(a, b)` on X
+/// (sign-shifted by `±x_p`), and `±v · log(xmax + sqrt(xmax−1))` on Y (sign
+/// chosen randomly each iteration, with `±y_p` offset). A Stefanov-tuned
+/// elliptic warp.
+///
+/// # Authors
+/// - Brad Stefanov
 pub static SPLIPTIC_BS: VariationDef = VariationDef {
     name: "spliptic_bs",
     display_name: "Spliptic BS",
@@ -134,8 +150,8 @@ pub static SPLIPTIC_BS: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("x", "X", unlimited_float, 0.05, -10.0, 10.0),
-        param!("y", "Y", unlimited_float, 0.05, -10.0, 10.0),
+        param!("x", "X", unlimited_float, 0.05, -10.0, 10.0, "X-axis constant offset. Sign added when input x ≥ 0, subtracted when input x < 0."),
+        param!("y", "Y", unlimited_float, 0.05, -10.0, 10.0, "Y-axis constant offset. Sign chosen by the same random branch that picks the Y-output sign."),
     ],
     needs_transform: true,
     writes_color: false,
@@ -239,6 +255,14 @@ fn variation_spliptic_bs(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: pt
 //               z · s2z + cz · (y2cy + x2cx − r2 − 1))
 // Full3D; clean factor through outer.
 // =============================================================================
+/// Poincaré-disc-style 3D hyperbolic-tiling generator — projects the input
+/// through a Möbius inversion centered at `c = (-r·cos(a·π/2)·cos(b·π/2),
+/// r·sin(a·π/2)·cos(b·π/2), -r·sin(b·π/2))`. The `r, a, b` parameters
+/// control the center's distance from origin and its angular position on a
+/// sphere of radius `r`.
+///
+/// # Authors
+/// - Zueuk
 pub static POINCARE3D: VariationDef = VariationDef {
     name: "poincare3D",
     display_name: "Poincare 3D",
@@ -246,9 +270,9 @@ pub static POINCARE3D: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("r", "R", unlimited_float, 0.0, -10.0, 10.0),
-        param!("a", "A", unlimited_float, 0.0, -10.0, 10.0),
-        param!("b", "B", unlimited_float, 0.0, -10.0, 10.0),
+        param!("r", "R", unlimited_float, 0.0, -10.0, 10.0, "Center distance from origin (radius of the inversion center)."),
+        param!("a", "A", unlimited_float, 0.0, -10.0, 10.0, "Azimuthal angle of the inversion center (in units of π/2)."),
+        param!("b", "B", unlimited_float, 0.0, -10.0, 10.0, "Polar angle of the inversion center (in units of π/2)."),
     ],
     needs_transform: false,
     writes_color: false,

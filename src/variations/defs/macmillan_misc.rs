@@ -27,6 +27,15 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Self-iterating McMillan-map walker. The McMillan map is the discrete
+/// dynamical system `y' = -x + 2a · y/(1+y²) + b·y` (from Edwin McMillan's
+/// 1971 nonlinear-dynamics work); each iteration applies the 2nd-order form
+/// twice from a per-thread state `(xa, x, y)` initialized to `(startx,
+/// startx, starty)`. Ignores the input position and emits the post-
+/// iteration `(x, y)` as a deterministic trajectory; also writes a color
+/// register `vc` derived from the running accumulator plus this iteration's
+/// own contribution. First port to exercise the full feature set
+/// (`needs_accum + needs_transform + writes_color + wgsl_state_init`).
 pub static MACMILLAN: VariationDef = VariationDef {
     name: "macmillan",
     display_name: "MacMillan",
@@ -34,11 +43,11 @@ pub static MACMILLAN: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("a", "A", unlimited_float, 1.6, -10.0, 10.0),
-        param!("b", "B", unlimited_float, 0.4, -10.0, 10.0),
-        param!("N", "N", unlimited_float, 1.0, -10.0, 10.0),
-        param!("startx", "Start X", unlimited_float, 0.1, -10.0, 10.0),
-        param!("starty", "Start Y", unlimited_float, 0.1, -10.0, 10.0),
+        param!("a", "A", unlimited_float, 1.6, -10.0, 10.0, "McMillan-map parameter `a` — coefficient of the nonlinear term `2a · y/(1+y²)`. The classic chaotic regime is around `a ≈ 1.6`."),
+        param!("b", "B", unlimited_float, 0.4, -10.0, 10.0, "McMillan-map parameter `b` — linear coefficient on `y`. Together with `a` determines whether the trajectory is bounded, periodic, or chaotic."),
+        param!("N", "N", unlimited_float, 1.0, -10.0, 10.0, "Declared but unused in the body — the map is hardcoded to two iterations per call. Possibly a port omission (upstream cpp may use `N` as an inner-loop bound). Tracked in TODO."),
+        param!("startx", "Start X", unlimited_float, 0.1, -10.0, 10.0, "Initial X coordinate for the per-thread state (read once via `wgsl_state_init` at thread start). Sets both `xa` and `x` slots."),
+        param!("starty", "Start Y", unlimited_float, 0.1, -10.0, 10.0, "Initial Y coordinate for the per-thread state."),
     ],
     needs_transform: true,
     writes_color: true,

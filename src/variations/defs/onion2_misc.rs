@@ -1,4 +1,4 @@
-//! `onion2` (Nicolaus Anderson, 2013, Java-recovered)
+//! `onion2` (Nicolaus Anderson (chronologicaldot), 2013, Java-recovered)
 //!
 //! Onion-shaped 3D transform that smoothly transitions a circle into
 //! a (negative) exponential curve at a "meeting point", projecting
@@ -25,6 +25,14 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Onion-shaped 3D transform — smoothly transitions a circle into a
+/// (negative) exponential curve at a `meeting_pt`, projecting the result
+/// onto a sphere. Below the meeting point the input lies on a sphere of
+/// radius `cos(t)`; above it, on an exponential decay curve. `top_crop`
+/// optionally truncates the exponential tail.
+///
+/// # Authors
+/// - chronologicaldot
 pub static ONION2: VariationDef = VariationDef {
     name: "onion2",
     display_name: "Onion 2",
@@ -32,14 +40,14 @@ pub static ONION2: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("meeting_pt", "Meeting Pt", unlimited_float, 0.5, -10.0, 10.0),
-        param!("circle_a", "Circle A", unlimited_float, 1.0, -10.0, 10.0),
-        param!("circle_b", "Circle B", unlimited_float, 1.0, -10.0, 10.0),
-        param!("shift_x", "Shift X", unlimited_float, 0.0, -10.0, 10.0),
-        param!("shift_y", "Shift Y", unlimited_float, 0.0, -10.0, 10.0),
-        param!("shift_z", "Shift Z", unlimited_float, 0.0, -10.0, 10.0),
-        param!("top_crop", "Top Crop", unlimited_float, 0.0, -10.0, 10.0),
-        param!("stretch", "Stretch", unlimited_float, 1.0, -10.0, 10.0),
+        param!("meeting_pt", "Meeting Pt", unlimited_float, 0.5, -10.0, 10.0, "Where the circle and exponential curves meet (in radians)."),
+        param!("circle_a", "Circle A", unlimited_float, 1.0, -10.0, 10.0, "Radius scale for the circle branch (controls overall onion radius)."),
+        param!("circle_b", "Circle B", unlimited_float, 1.0, -10.0, 10.0, "Radius scale for the exponential branch (controls Z output)."),
+        param!("shift_x", "Shift X", unlimited_float, 0.0, -10.0, 10.0, "X center offset (subtracted from input, added back to output)."),
+        param!("shift_y", "Shift Y", unlimited_float, 0.0, -10.0, 10.0, "Y center offset."),
+        param!("shift_z", "Shift Z", unlimited_float, 0.0, -10.0, 10.0, "Z center offset — unused in the body, preserved as a parameter for preset compatibility."),
+        param!("top_crop", "Top Crop", unlimited_float, 0.0, -10.0, 10.0, "Crops Z above this value in the exponential branch. 0 disables cropping."),
+        param!("stretch", "Stretch", unlimited_float, 1.0, -10.0, 10.0, "Radial divisor — `t = sqtr / stretch − π/2`."),
     ],
     needs_transform: true,
     writes_color: false,

@@ -30,6 +30,18 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Two-axis Gielis super-shape projected onto a 3D surface — each iteration
+/// picks two random angles `ρ` and `φ` (uniform in `[0, rho]` and `[-phi,
+/// phi]`) and evaluates the Gielis super-shape formula `r(θ) =
+/// (|cos(m·θ/4)/a|^n2 + |sin(m·θ/4)/b|^n3)^(-1/n1)` independently for each
+/// angle (subscript 1 for the ρ axis, 2 for the φ axis). The two radii `r1`
+/// and `r2` then combine into either a spherical product (`r1·r2·cos·cos`,
+/// etc.) or a toroidal sum (`cos·(r1 + r2·cos)`, etc.) based on
+/// `toroidmap`. Optional `spiral` term advances the ρ-axis radius linearly
+/// with the ρ angle to produce a spiraling output.
+///
+/// # Authors
+/// - David Young
 pub static SUPERSHAPE_3D: VariationDef = VariationDef {
     name: "superShape3d",
     display_name: "SuperShape 3D",
@@ -37,22 +49,22 @@ pub static SUPERSHAPE_3D: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("rho", "Rho", unlimited_float, 9.9, -100.0, 100.0),
-        param!("phi", "Phi", unlimited_float, 2.5, -100.0, 100.0),
-        param!("m1", "M1", unlimited_float, 6.0, -50.0, 50.0),
-        param!("m2", "M2", unlimited_float, 3.0, -50.0, 50.0),
-        param!("a1", "A1", unlimited_float, 1.0, -10.0, 10.0),
-        param!("a2", "A2", unlimited_float, 1.0, -10.0, 10.0),
-        param!("b1", "B1", unlimited_float, 1.0, -10.0, 10.0),
-        param!("b2", "B2", unlimited_float, 1.0, -10.0, 10.0),
-        param!("n1_1", "N1.1", unlimited_float, 1.0, -10.0, 10.0),
-        param!("n1_2", "N1.2", unlimited_float, 1.0, -10.0, 10.0),
-        param!("n2_1", "N2.1", unlimited_float, 1.0, -10.0, 10.0),
-        param!("n2_2", "N2.2", unlimited_float, 1.0, -10.0, 10.0),
-        param!("n3_1", "N3.1", unlimited_float, 1.0, -10.0, 10.0),
-        param!("n3_2", "N3.2", unlimited_float, 1.0, -10.0, 10.0),
-        param!("spiral", "Spiral", unlimited_float, 0.0, -10.0, 10.0),
-        param!("toroidmap", "Toroidal", int, 0.0, 0.0, 1.0),
+        param!("rho", "Rho", unlimited_float, 9.9, -100.0, 100.0, "Angular range (radians) for uniform random sampling of the ρ axis. Larger values sweep through more of the shape per iteration; default 9.9 (~3π)."),
+        param!("phi", "Phi", unlimited_float, 2.5, -100.0, 100.0, "Angular range (radians) for the φ axis (sampled in `[-phi, phi]`). Default 2.5 (~0.8π)."),
+        param!("m1", "M1", unlimited_float, 6.0, -50.0, 50.0, "Petal count for the ρ-axis Gielis shape — controls rotational symmetry. Higher values produce more spokes."),
+        param!("m2", "M2", unlimited_float, 3.0, -50.0, 50.0, "Petal count for the φ-axis Gielis shape."),
+        param!("a1", "A1", unlimited_float, 1.0, -10.0, 10.0, "Cosine-term width scaling for the ρ-axis shape. Smaller values pinch the cos-side petals narrower."),
+        param!("a2", "A2", unlimited_float, 1.0, -10.0, 10.0, "Cosine-term width scaling for the φ-axis shape."),
+        param!("b1", "B1", unlimited_float, 1.0, -10.0, 10.0, "Sine-term width scaling for the ρ-axis shape."),
+        param!("b2", "B2", unlimited_float, 1.0, -10.0, 10.0, "Sine-term width scaling for the φ-axis shape."),
+        param!("n1_1", "N1.1", unlimited_float, 1.0, -10.0, 10.0, "Outer exponent for the ρ-axis shape: final radius is `pr^(-1/n1_1)`. Controls overall radial blow-up — small values produce sharp spikes, larger values rounder shapes."),
+        param!("n1_2", "N1.2", unlimited_float, 1.0, -10.0, 10.0, "Outer exponent for the φ-axis shape."),
+        param!("n2_1", "N2.1", unlimited_float, 1.0, -10.0, 10.0, "Cosine-term exponent for the ρ-axis shape — controls petal sharpness on the cos side."),
+        param!("n2_2", "N2.2", unlimited_float, 1.0, -10.0, 10.0, "Cosine-term exponent for the φ-axis shape."),
+        param!("n3_1", "N3.1", unlimited_float, 1.0, -10.0, 10.0, "Sine-term exponent for the ρ-axis shape — controls petal sharpness on the sin side."),
+        param!("n3_2", "N3.2", unlimited_float, 1.0, -10.0, 10.0, "Sine-term exponent for the φ-axis shape."),
+        param!("spiral", "Spiral", unlimited_float, 0.0, -10.0, 10.0, "Spiral phase advance: `r1` is incremented by `spiral · ρ`, producing a linear radial growth with angle. 0 disables."),
+        param!("toroidmap", "Toroidal", int, 0.0, 0.0, 1.0, "0 = spherical projection (output = `r1·r2·cos·cos`, etc.). 1 = toroidal projection (output = `cos·(r1 + r2·cos)`, etc.). Both modes use `r2·sin(φ)` for Z."),
     ],
     needs_transform: false,
     writes_color: false,

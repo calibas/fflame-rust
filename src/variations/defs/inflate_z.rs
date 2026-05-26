@@ -42,6 +42,12 @@ use crate::param;
 // =============================================================================
 // inflateZ_1: sin(ang) - 2y into Z
 // =============================================================================
+/// Z-axis inflation #1 — adds `sin(atan2(y,x)) − 2y` to the Z output. XY
+/// pass through unchanged. The angular sine plus linear-Y term produces a
+/// saddle-shaped Z surface.
+///
+/// # Authors
+/// - Larry Berlin
 pub static INFLATEZ_1: VariationDef = VariationDef {
     name: "inflateZ_1",
     display_name: "Inflate Z 1",
@@ -73,6 +79,11 @@ fn variation_inflateZ_1(p: vec3<f32>) -> vec3<f32> {
 // =============================================================================
 // inflateZ_2: 0.25 - 0.333·(2x + 2y) into Z
 // =============================================================================
+/// Z-axis inflation #2 — adds `0.25 − (2x + 2y)/3` to the Z output. XY pass
+/// through unchanged. Z is a tilted plane depending on `x + y`.
+///
+/// # Authors
+/// - Larry Berlin
 pub static INFLATEZ_2: VariationDef = VariationDef {
     name: "inflateZ_2",
     display_name: "Inflate Z 2",
@@ -105,6 +116,12 @@ fn variation_inflateZ_2(p: vec3<f32>) -> vec3<f32> {
 // =============================================================================
 // inflateZ_3: 0.2·(π - ang)·cos(3·ang + (y - x)) into Z
 // =============================================================================
+/// Z-axis inflation #3 — adds `0.2 · (π − atan2(y,x)) · cos(3·atan2(y,x) +
+/// (y − x))` to the Z output. An angular-cosine modulated radial term
+/// producing a wavy 3D surface.
+///
+/// # Authors
+/// - Larry Berlin
 pub static INFLATEZ_3: VariationDef = VariationDef {
     name: "inflateZ_3",
     display_name: "Inflate Z 3",
@@ -137,6 +154,12 @@ fn variation_inflateZ_3(p: vec3<f32>) -> vec3<f32> {
 // =============================================================================
 // inflateZ_4: ±(π/2 - ang) · 0.25 into Z (RNG sign)
 // =============================================================================
+/// Z-axis inflation #4 — adds `±(π/2 − atan2(y,x)) · 0.25` to the Z output,
+/// with the sign chosen randomly each iteration. Produces a Z surface
+/// that's a stochastic mirror of the input angle.
+///
+/// # Authors
+/// - Larry Berlin
 pub static INFLATEZ_4: VariationDef = VariationDef {
     name: "inflateZ_4",
     display_name: "Inflate Z 4",
@@ -173,6 +196,12 @@ fn variation_inflateZ_4(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32>
 // =============================================================================
 // inflateZ_5: cos(π/2 - ang) / 2 into Z
 // =============================================================================
+/// Z-axis inflation #5 — adds `cos(π/2 − atan2(y,x)) / 2 = sin(atan2(y,x))
+/// / 2` to the Z output. The simplest of the family — a sinusoidal Z
+/// surface.
+///
+/// # Authors
+/// - Larry Berlin
 pub static INFLATEZ_5: VariationDef = VariationDef {
     name: "inflateZ_5",
     display_name: "Inflate Z 5",
@@ -205,6 +234,12 @@ fn variation_inflateZ_5(p: vec3<f32>) -> vec3<f32> {
 // =============================================================================
 // inflateZ_6: 1.5 - acos(sin(ang) · ang · sin(y - x) · 0.5) into Z
 // =============================================================================
+/// Z-axis inflation #6 — adds `1.5 − acos(sin(atan2(y,x)) · atan2(y,x) ·
+/// sin(y − x) · 0.5)` to the Z output. The most complex of the family — an
+/// arc-cosine of a triple-product term.
+///
+/// # Authors
+/// - Larry Berlin
 pub static INFLATEZ_6: VariationDef = VariationDef {
     name: "inflateZ_6",
     display_name: "Inflate Z 6",
@@ -244,6 +279,12 @@ fn variation_inflateZ_6(p: vec3<f32>) -> vec3<f32> {
 //  only normal variation in its transform. Same handling as
 //  anamorphcyl/ennepers/crop3d.)
 // =============================================================================
+/// Sin × (squared − weighted-radius) — per axis emits `sin(coord) · (coord²
+/// + w − (x² + y²)·w)`. The trailing weighted-radius subtraction modulates
+/// the local sin profile based on distance from the origin.
+///
+/// # Authors
+/// - Ffey
 pub static SINTRANGE: VariationDef = VariationDef {
     name: "sintrange",
     display_name: "Sin T Range",
@@ -251,7 +292,7 @@ pub static SINTRANGE: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("w", "W", unlimited_float, 1.0, -10.0, 10.0),
+        param!("w", "W", unlimited_float, 1.0, -10.0, 10.0, "Weight on the radius term `(x²+y²)·w` and the constant offset `+w`. Distinct from the variation's outer weight (VVAR)."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -290,6 +331,13 @@ fn variation_sintrange(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
 // In 2D mode (`p: vec2<f32>`), z is unavailable so use the kikr
 // fallback unconditionally.
 // =============================================================================
+/// 3D extension of the `foci` variation — emits `(expx − expnx, sin(y),
+/// sin(boot)) / (expx + expnx − cos(y)·cos(boot))` where `expx = e^x / 2,
+/// expnx = e^(−x) / 2`, and `boot = z` (or `atan2(y, x)` when `z = 0`, the
+/// 2D fallback). Adds a depth dimension to the classic foci warp.
+///
+/// # Authors
+/// - Larry Berlin
 pub static FOCI_3D: VariationDef = VariationDef {
     name: "foci_3D",
     display_name: "Foci 3D",

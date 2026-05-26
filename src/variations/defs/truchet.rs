@@ -24,7 +24,7 @@ use crate::variations::{
 use crate::param;
 
 // =============================================================================
-// truchet_fill: Truchet tile fill (Zabanova)
+// truchet_fill: Truchet tile fill (Tatyana Zabanova)
 //   Init clamps:
 //     _exponent  = clamp(exponent, 0.001, 2.0)
 //     _onen      = 1 / _exponent
@@ -43,6 +43,12 @@ use crate::param;
 //     FPx += x1 [+ second-arc term] − x   (no VVAR multiplier in upstream)
 //     FPy += y1 [+ second-arc term] − y
 // =============================================================================
+/// Truchet-style tile fill — divides the plane into unit cells and draws
+/// arc patterns through each cell with hash-based per-cell orientation.
+/// Produces interlocking curved-tile patterns.
+///
+/// # Authors
+/// - Tatyana Zabanova
 pub static TRUCHET_FILL: VariationDef = VariationDef {
     name: "truchet_fill",
     display_name: "Truchet Fill",
@@ -50,9 +56,12 @@ pub static TRUCHET_FILL: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("exponent", "Exponent", unlimited_float, 2.0, 0.001, 2.0),
-        param!("arc_width", "Arc Width", unlimited_float, 0.5, 0.001, 1.0),
-        param!("seed", "Seed", unlimited_float, 0.0, 0.0, 100.0),
+        param!("exponent", "Exponent", unlimited_float, 2.0, 0.001, 2.0,
+            "Lp-norm exponent for the cell distance metric — controls how rounded or cornered the arcs are. Clamped to [0.001, 2.0]."),
+        param!("arc_width", "Arc Width", unlimited_float, 0.5, 0.001, 1.0,
+            "Arc thickness within each cell. Clamped to [0.001, 1.0]."),
+        param!("seed", "Seed", unlimited_float, 0.0, 0.0, 100.0,
+            "Hash seed for per-cell tile orientation. 0 = all same orientation; 1 = all flipped; other values produce a varied pattern."),
     ],
     needs_transform: true,
     writes_color: false,

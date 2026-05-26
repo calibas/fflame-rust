@@ -7,6 +7,9 @@ use crate::variations::{
     VariationCategory, VariationPhase,
 };
 
+/// Projects each point onto a hemisphere. The XY position picks a spot on
+/// the dome and Z becomes the height at that spot — points near the
+/// origin sit high, points far away curve down toward the rim.
 pub static HEMISPHERE: VariationDef = VariationDef {
     name: "hemisphere",
     display_name: "Hemisphere",

@@ -45,6 +45,12 @@ use crate::variations::{
 //     th = c · a + half_d · lnr2 + ang · floor(divisor · rand)
 //     (r_out · cos(th), r_out · sin(th))
 // =============================================================================
+/// Range-clamped variant of CPow — combines a complex-power Julia (with `re
+/// + ai` exponent set via the `r` and `a` parameters) with random branch
+/// selection across `range` rotational sectors.
+///
+/// # Authors
+/// - Zueuk
 pub static CPOW2: VariationDef = VariationDef {
     name: "cpow2",
     display_name: "CPow2",
@@ -53,13 +59,13 @@ pub static CPOW2: VariationDef = VariationDef {
     needs_rng: true,
     parameters: &[
         VariationParamDef { name: "r", display_name: "R", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Magnitude of the complex exponent.") },
         VariationParamDef { name: "a", display_name: "A", param_type: ParamType::UnlimitedFloat,
-                            default_value: 0.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 0.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Argument (angle) of the complex exponent — multiplied by π/2 internally, so `a = 1` gives a 90° rotation.") },
         VariationParamDef { name: "divisor", display_name: "Divisor", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Number of rotational branches.") },
         VariationParamDef { name: "range", display_name: "Range", param_type: ParamType::Integer,
-                            default_value: 1.0, min_value: Some(1.0), max_value: Some(64.0) },
+                            default_value: 1.0, min_value: Some(1.0), max_value: Some(64.0), description: Some("Random branch range — each iteration picks an integer in `[0, range)` to shift the angle.") },
     ],
     // 7 derived values stored in slots 4..11 of this variation's slot range:
     //   4: ang        (2π / divisor)
@@ -167,6 +173,12 @@ fn variation_cpow2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<func
 //     r_out = exp(half_c · lnr2 − d_calc · a)
 //     th = c · a + half_d · lnr2 + ang · floor(divisor · rand)
 // =============================================================================
+/// Logarithm-shifted variant of CPow. Replaces the `i` parameter with `d`
+/// (taken through a log transform) and adds a `spread` slider for log-
+/// distributed angle perturbation.
+///
+/// # Authors
+/// - Zueuk
 pub static CPOW3: VariationDef = VariationDef {
     name: "cpow3",
     display_name: "CPow3",
@@ -175,13 +187,13 @@ pub static CPOW3: VariationDef = VariationDef {
     needs_rng: true,
     parameters: &[
         VariationParamDef { name: "r", display_name: "R", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Magnitude of the complex exponent.") },
         VariationParamDef { name: "d", display_name: "D", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Logarithmic argument scaling. Negative values are absorbed via `-log(-d)`.") },
         VariationParamDef { name: "divisor", display_name: "Divisor", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Number of rotational branches.") },
         VariationParamDef { name: "spread", display_name: "Spread", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Logarithmic spread of the random angle perturbation.") },
     ],
     // 6 derived values stored in slots 4..10 of this variation's slot range:
     //   4: ang        (2π / divisor)
@@ -279,6 +291,9 @@ fn variation_cpow3(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<func
 //     r = atan2(x, y) / π                            (C++ porter swap)
 //     return ((sin(t) + cosadd)·r, (cos(t) + sinadd)·r)
 // =============================================================================
+/// Variant of Disc with extra twist and rotation. The `rot` slider scales
+/// the wave frequency; `twist` adds rotational drift that amplifies beyond
+/// ±2π.
 pub static DISC2: VariationDef = VariationDef {
     name: "disc2",
     display_name: "Disc2",
@@ -287,9 +302,9 @@ pub static DISC2: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[
         VariationParamDef { name: "rot", display_name: "Rot", param_type: ParamType::UnlimitedFloat,
-                            default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Wave frequency for the disc pattern — multiplied by π internally.") },
         VariationParamDef { name: "twist", display_name: "Twist", param_type: ParamType::UnlimitedFloat,
-                            default_value: 0.5, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 0.5, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Rotational drift added to the disc output. Beyond ±2π the effect amplifies linearly.") },
     ],
     // 3 derived values stored in slots 2..5:
     //   2: timespi  (rot · π)

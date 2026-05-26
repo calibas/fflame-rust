@@ -1,7 +1,10 @@
-//! `butterfly_fay`
+//! `butterfly_fay` (CozyG)
 //!
 //! Parametric butterfly curve with mode-based spread for points
-//! inside vs outside the curve. Body computes:
+//! inside vs outside the curve. Based on the Butterfly curve, 
+//! discovered ~1988 by Temple H. Fay
+//! 
+//! Body computes:
 //!
 //!   t = _number_of_cycles · atan2(y, x)
 //!   r = ½ · (exp(cos t) − 2·cos 4t − sin⁵(t/12) + offset)
@@ -32,6 +35,15 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Parametric butterfly curve — emits points on a butterfly curve `r =
+/// ½·(exp(cos t) − 2·cos 4t − sin⁵(t/12) + offset)` driven by the input
+/// angle `t = cycles · atan2(y, x)`. Based on the Butterfly curve
+/// discovered ~1988 by Temple H. Fay. Routes through one of 6 output modes
+/// (controlled by `outer_mode`/`inner_mode`) depending on whether the input
+/// lies inside or outside the curve, with optional `fill` randomization.
+///
+/// # Authors
+/// - CozyG
 pub static BUTTERFLY_FAY: VariationDef = VariationDef {
     name: "butterfly_fay",
     display_name: "Butterfly Fay",
@@ -39,17 +51,17 @@ pub static BUTTERFLY_FAY: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("cycles", "Cycles", unlimited_float, 0.0, -100.0, 100.0),
-        param!("offset", "Offset", unlimited_float, 0.0, -10.0, 10.0),
-        param!("unified_inner_outer", "Unified", int, 1.0, 0.0, 1.0),
-        param!("outer_mode", "Outer Mode", int, 1.0, 0.0, 5.0),
-        param!("inner_mode", "Inner Mode", int, 1.0, 0.0, 5.0),
-        param!("outer_spread", "Outer Spread", unlimited_float, 0.0, -10.0, 10.0),
-        param!("inner_spread", "Inner Spread", unlimited_float, 0.0, -10.0, 10.0),
-        param!("outer_spread_ratio", "Outer Ratio", unlimited_float, 1.0, -10.0, 10.0),
-        param!("inner_spread_ratio", "Inner Ratio", unlimited_float, 1.0, -10.0, 10.0),
-        param!("spread_split", "Spread Split", unlimited_float, 1.0, -10.0, 10.0),
-        param!("fill", "Fill", unlimited_float, 0.0, -10.0, 10.0),
+        param!("cycles", "Cycles", unlimited_float, 0.0, -100.0, 100.0, "Number of butterfly-curve cycles per full input rotation. 0 falls back to π² internally."),
+        param!("offset", "Offset", unlimited_float, 0.0, -10.0, 10.0, "Additive offset on the curve radius formula."),
+        param!("unified_inner_outer", "Unified", int, 1.0, 0.0, 1.0, "1 = always use the outer mode/spread/ratio; 0 = pick based on whether the input is inside or outside the curve."),
+        param!("outer_mode", "Outer Mode", int, 1.0, 0.0, 5.0, "Output mode for points outside the curve. 0-5; same enum as `inner_mode`."),
+        param!("inner_mode", "Inner Mode", int, 1.0, 0.0, 5.0, "Output mode for points inside the curve. 0-5; same enum as `outer_mode`."),
+        param!("outer_spread", "Outer Spread", unlimited_float, 0.0, -10.0, 10.0, "Outer-mode spread amount (interpretation depends on `outer_mode`)."),
+        param!("inner_spread", "Inner Spread", unlimited_float, 0.0, -10.0, 10.0, "Inner-mode spread amount (interpretation depends on `inner_mode`)."),
+        param!("outer_spread_ratio", "Outer Ratio", unlimited_float, 1.0, -10.0, 10.0, "X-vs-Y ratio for outer-mode spread."),
+        param!("inner_spread_ratio", "Inner Ratio", unlimited_float, 1.0, -10.0, 10.0, "X-vs-Y ratio for inner-mode spread."),
+        param!("spread_split", "Spread Split", unlimited_float, 1.0, -10.0, 10.0, "Multiplier on the input radius used to decide inner vs outer (compared against the curve radius)."),
+        param!("fill", "Fill", unlimited_float, 0.0, -10.0, 10.0, "Random fill amount added to the curve radius. 0 disables; non-zero triggers an RNG call."),
     ],
     needs_transform: false,
     writes_color: false,

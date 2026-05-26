@@ -39,6 +39,17 @@ use crate::param;
 // z — pure radial boost
 // ---------------------------------------------------------------------------
 
+/// Pure radial boost using Michael Faber's *Lost Variations* four-shape
+/// blender. Computes a per-angle `total` by summing contributions from up
+/// to four named shapes — `hypergon` (regular polygon with adjustable inner
+/// radius), `star` (star polygon with slope-defined arms), `lituus` (polar
+/// spiral `(a/π + 1)^(-lituus_a)`), and `super` (Gielis super-shape) — each
+/// gated by its weight parameter (zero = disabled) and shaped by its own
+/// family of sub-parameters. Output is then `(r_in + total) · (cos a, sin
+/// a)`: the input point shoved outward along its own angle.
+///
+/// # Authors
+/// - Michael Faber
 pub static Z_VARIATION: VariationDef = VariationDef {
     name: "z",
     display_name: "Z (Faber)",
@@ -46,19 +57,19 @@ pub static Z_VARIATION: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("hypergon", "Hypergon", unlimited_float, 0.0, -10.0, 10.0),
-        param!("hypergon_n", "Hypergon N", int, 4.0, 1.0, 50.0),
-        param!("hypergon_r", "Hypergon R", unlimited_float, 1.0, -10.0, 10.0),
-        param!("star", "Star", unlimited_float, 0.0, -10.0, 10.0),
-        param!("star_n", "Star N", int, 5.0, 1.0, 50.0),
-        param!("star_slope", "Star Slope", unlimited_float, 2.0, -10.0, 10.0),
-        param!("lituus", "Lituus", unlimited_float, 0.0, -10.0, 10.0),
-        param!("lituus_a", "Lituus A", unlimited_float, 1.0, -10.0, 10.0),
-        param!("super", "Super", unlimited_float, 0.0, -10.0, 10.0),
-        param!("super_m", "Super M", unlimited_float, 1.0, -50.0, 50.0),
-        param!("super_n1", "Super N1", unlimited_float, 1.0, -10.0, 10.0),
-        param!("super_n2", "Super N2", unlimited_float, 1.0, -10.0, 10.0),
-        param!("super_n3", "Super N3", unlimited_float, 0.0, -10.0, 10.0),
+        param!("hypergon", "Hypergon", unlimited_float, 0.0, -10.0, 10.0, "Weight of the hypergon (regular-polygon) shape's contribution to the per-angle radius blender. 0 disables this shape."),
+        param!("hypergon_n", "Hypergon N", int, 4.0, 1.0, 50.0, "Hypergon symmetry count (number of sides). Used as the modular reduction divisor for the per-sector angle lookup."),
+        param!("hypergon_r", "Hypergon R", unlimited_float, 1.0, -10.0, 10.0, "Hypergon inner-radius parameter. Combined with the per-sector angle to decide whether the shape edge is convex or hollow at that angle."),
+        param!("star", "Star", unlimited_float, 0.0, -10.0, 10.0, "Weight of the star-polygon shape's contribution. 0 disables this shape."),
+        param!("star_n", "Star N", int, 5.0, 1.0, 50.0, "Star symmetry count (number of points)."),
+        param!("star_slope", "Star Slope", unlimited_float, 2.0, -10.0, 10.0, "Star arm slope angle (radians). Internally pre-computed as `tan(star_slope)` and used as the slope of each star arm."),
+        param!("lituus", "Lituus", unlimited_float, 0.0, -10.0, 10.0, "Weight of the lituus (polar spiral) shape's contribution. 0 disables this shape."),
+        param!("lituus_a", "Lituus A", unlimited_float, 1.0, -10.0, 10.0, "Lituus exponent. Internally negated; the contribution is `(a/π + 1)^(-lituus_a)` — a classical polar spiral."),
+        param!("super", "Super", unlimited_float, 0.0, -10.0, 10.0, "Weight of the Gielis super-shape's contribution. 0 disables this shape."),
+        param!("super_m", "Super M", unlimited_float, 1.0, -50.0, 50.0, "Super-shape symmetry count (petal count). Internally divided by 4 to feed the Gielis sin/cos formula."),
+        param!("super_n1", "Super N1", unlimited_float, 1.0, -10.0, 10.0, "Super-shape outer exponent. Internally `-1/(super_n1 + ε)` is used as the radial blow-up power — small values produce sharper points."),
+        param!("super_n2", "Super N2", unlimited_float, 1.0, -10.0, 10.0, "Super-shape cosine-term exponent (controls one half of the petal asymmetry)."),
+        param!("super_n3", "Super N3", unlimited_float, 0.0, -10.0, 10.0, "Super-shape sine-term exponent."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -232,6 +243,16 @@ fn variation_z(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
 // w — angle-rotate-and-clip variant
 // ---------------------------------------------------------------------------
 
+/// Angle-rotated radial clip using the same four-shape blender as `z`
+/// (hypergon, star, lituus, super-shape). Computes `total` at the input
+/// angle `a`; if `|p| ≤ total` (the input is inside the shape), rotates the
+/// angle by `angle` to get `a2`, computes `total2` at `a2`, and emits a new
+/// point at radius `total2 · |p| / total` in the rotated direction `a2`.
+/// Points outside the shape pass through unchanged. Effectively shears the
+/// inside of the four-shape silhouette by a constant rotation.
+///
+/// # Authors
+/// - Michael Faber
 pub static W_VARIATION: VariationDef = VariationDef {
     name: "w",
     display_name: "W (Faber)",
@@ -239,20 +260,20 @@ pub static W_VARIATION: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("angle", "Angle", unlimited_float, 0.0, -10.0, 10.0),
-        param!("hypergon", "Hypergon", unlimited_float, 0.0, -10.0, 10.0),
-        param!("hypergon_n", "Hypergon N", int, 4.0, 1.0, 50.0),
-        param!("hypergon_r", "Hypergon R", unlimited_float, 1.0, -10.0, 10.0),
-        param!("star", "Star", unlimited_float, 0.0, -10.0, 10.0),
-        param!("star_n", "Star N", int, 5.0, 1.0, 50.0),
-        param!("star_slope", "Star Slope", unlimited_float, 2.0, -10.0, 10.0),
-        param!("lituus", "Lituus", unlimited_float, 0.0, -10.0, 10.0),
-        param!("lituus_a", "Lituus A", unlimited_float, 1.0, -10.0, 10.0),
-        param!("super", "Super", unlimited_float, 0.0, -10.0, 10.0),
-        param!("super_m", "Super M", unlimited_float, 1.0, -50.0, 50.0),
-        param!("super_n1", "Super N1", unlimited_float, 1.0, -10.0, 10.0),
-        param!("super_n2", "Super N2", unlimited_float, 1.0, -10.0, 10.0),
-        param!("super_n3", "Super N3", unlimited_float, 0.0, -10.0, 10.0),
+        param!("angle", "Angle", unlimited_float, 0.0, -10.0, 10.0, "Rotation angle (radians) applied to the input angle before the radial rebake. The output direction is `a + angle` (wrapped into `[-π, π]`)."),
+        param!("hypergon", "Hypergon", unlimited_float, 0.0, -10.0, 10.0, "Weight of the hypergon (regular-polygon) shape's contribution to the per-angle radius blender. 0 disables this shape."),
+        param!("hypergon_n", "Hypergon N", int, 4.0, 1.0, 50.0, "Hypergon symmetry count (number of sides). Used as the modular reduction divisor for the per-sector angle lookup."),
+        param!("hypergon_r", "Hypergon R", unlimited_float, 1.0, -10.0, 10.0, "Hypergon inner-radius parameter. Combined with the per-sector angle to decide whether the shape edge is convex or hollow at that angle."),
+        param!("star", "Star", unlimited_float, 0.0, -10.0, 10.0, "Weight of the star-polygon shape's contribution. 0 disables this shape."),
+        param!("star_n", "Star N", int, 5.0, 1.0, 50.0, "Star symmetry count (number of points)."),
+        param!("star_slope", "Star Slope", unlimited_float, 2.0, -10.0, 10.0, "Star arm slope angle (radians). Internally pre-computed as `tan(star_slope)` and used as the slope of each star arm."),
+        param!("lituus", "Lituus", unlimited_float, 0.0, -10.0, 10.0, "Weight of the lituus (polar spiral) shape's contribution. 0 disables this shape."),
+        param!("lituus_a", "Lituus A", unlimited_float, 1.0, -10.0, 10.0, "Lituus exponent. Internally negated; the contribution is `(a/π + 1)^(-lituus_a)` — a classical polar spiral."),
+        param!("super", "Super", unlimited_float, 0.0, -10.0, 10.0, "Weight of the Gielis super-shape's contribution. 0 disables this shape."),
+        param!("super_m", "Super M", unlimited_float, 1.0, -50.0, 50.0, "Super-shape symmetry count (petal count). Internally divided by 4 to feed the Gielis sin/cos formula."),
+        param!("super_n1", "Super N1", unlimited_float, 1.0, -10.0, 10.0, "Super-shape outer exponent. Internally `-1/(super_n1 + ε)` is used as the radial blow-up power — small values produce sharper points."),
+        param!("super_n2", "Super N2", unlimited_float, 1.0, -10.0, 10.0, "Super-shape cosine-term exponent (controls one half of the petal asymmetry)."),
+        param!("super_n3", "Super N3", unlimited_float, 0.0, -10.0, 10.0, "Super-shape sine-term exponent."),
     ],
     needs_transform: false,
     writes_color: false,

@@ -8,6 +8,9 @@ use crate::variations::{
     VariationCategory, VariationPhase,
 };
 
+/// Lifts every point along the Z axis by its horizontal distance from
+/// the origin. Turns a flat XY input into a cone whose tip sits at the
+/// origin and whose base spreads outward.
 pub static ZCONE: VariationDef = VariationDef {
     name: "zcone",
     display_name: "ZCone",
@@ -37,6 +40,9 @@ fn variation_zcone(p: vec3<f32>, weight: f32) -> vec3<f32> {
 "#),
 };
 
+/// Cancels the Z coordinate, projecting everything back onto the XY
+/// plane. Runs in the post phase to undo accumulated depth from earlier
+/// 3D variations.
 pub static FLATTEN: VariationDef = VariationDef {
     name: "flatten",
     display_name: "Flatten",
@@ -67,6 +73,9 @@ fn variation_flatten(p: vec3<f32>, weight: f32) -> vec3<f32> {
 "#),
 };
 
+/// Multiplies the Z coordinate by the variation's weight slider. Combine
+/// with other 3D variations to amplify or dampen the depth they
+/// contribute.
 pub static ZSCALE: VariationDef = VariationDef {
     name: "zscale",
     display_name: "ZScale",

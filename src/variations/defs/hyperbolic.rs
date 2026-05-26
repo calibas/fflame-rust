@@ -19,6 +19,12 @@ use crate::variations::{
 //   AcotH(z) = (1/2) * ln((z+1)/(z-1))
 //   Flip swaps real and imaginary parts (JWildfire convention)
 // =============================================================================
+/// Treats the input as a complex number and applies the inverse hyperbolic
+/// cotangent, then swaps the real and imaginary parts. Creates two
+/// singularity points at (±1, 0) with the pattern flowing between them.
+/// 
+/// # Authors
+/// - Whittaker Courtney
 pub static ACOTH: VariationDef = VariationDef {
     name: "acoth",
     display_name: "ACoth",
@@ -64,6 +70,12 @@ fn variation_acoth(p: vec3<f32>) -> vec3<f32> {
 // acosh: (2/π) * AcosH(z), with random ±sign chosen each iteration
 //   AcosH(z) = ln(z + sqrt(z² - 1))
 // =============================================================================
+/// Inverse hyperbolic cosine on the complex input. Each iteration randomly
+/// picks one of the two branches, producing a symmetric upper/lower
+/// pattern.
+/// 
+/// # Authors
+/// - Whittaker Courtney
 pub static ACOSH: VariationDef = VariationDef {
     name: "acosh",
     display_name: "ACosh",
@@ -122,6 +134,9 @@ fn variation_acosh(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
 // acosech: (2/π) * Flip(AcosecH(z)), with random ±sign each iteration
 //   AcosecH(z) = ArcSinh(1/z) = ln(1/z + sqrt(1/z² + 1))
 // =============================================================================
+/// Inverse hyperbolic cosecant on the complex input (arcsinh of 1/z), then
+/// swaps the real and imaginary parts. Random branch selection per
+/// iteration produces symmetric two-branch patterns.
 pub static ACOSECH: VariationDef = VariationDef {
     name: "acosech",
     display_name: "ACosecH",
@@ -190,6 +205,8 @@ fn variation_acosech(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
 // Note: upstream omits Z preservation, so the 3D version writes p.z through
 // via the standard outer affine — i.e. variation contributes nothing to Z.
 // =============================================================================
+/// Inverse hyperbolic secant on the complex input (arccosh of 1/z).
+/// Singular at the origin and outflows along the real axis.
 pub static ARCSECH: VariationDef = VariationDef {
     name: "arcsech",
     display_name: "ArcSech",
@@ -266,6 +283,8 @@ fn variation_arcsech(p: vec3<f32>) -> vec3<f32> {
 // =============================================================================
 // arcsech2: 2 * (2/π) * ArcCosh(1/z), with translation by ±i depending on sign(im)
 // =============================================================================
+/// Variant of ArcSecH with translation by ±i depending on the imaginary
+/// sign — produces two parallel arcs instead of one.
 pub static ARCSECH2: VariationDef = VariationDef {
     name: "arcsech2",
     display_name: "ArcSech2",
@@ -349,6 +368,8 @@ fn variation_arcsech2(p: vec3<f32>) -> vec3<f32> {
 // =============================================================================
 // arcsinh: (2/π) * ArcSinh(z) = (2/π) * ln(z + sqrt(z² + 1))
 // =============================================================================
+/// Inverse hyperbolic sine on the complex input. Maps the entire plane onto
+/// a horizontal strip — acts as a `spreading` transform.
 pub static ARCSINH: VariationDef = VariationDef {
     name: "arcsinh",
     display_name: "ArcSinh",
@@ -404,6 +425,9 @@ fn variation_arcsinh(p: vec3<f32>) -> vec3<f32> {
 // =============================================================================
 // arctanh: (2/π) * ArcTanh(z) = (2/π) * (1/2) * ln((1 + z)/(1 - z))
 // =============================================================================
+/// Inverse hyperbolic tangent on the complex input. Maps the unit disc onto
+/// the entire plane; everything inside |z|=1 expands outward, everything
+/// outside compresses inward.
 pub static ARCTANH: VariationDef = VariationDef {
     name: "arctanh",
     display_name: "ArcTanh",

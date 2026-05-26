@@ -1,4 +1,4 @@
-//! pre_wave3d_wf (Maschke)
+//! pre_wave3d_wf
 //!
 //! Pre-phase wave perturbation that displaces the affine input along
 //! one of four axis modes (XY, YZ, ZX, RADIAL). For axial modes,
@@ -26,6 +26,12 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Pre-phase 3D wave perturbation — displaces the affine input by a sine-
+/// wave amplitude `amp = w · exp(-dl · damping) · sin(2π·dl + phase)` where
+/// `dl = distance/wavelen`. The displacement direction depends on `axis`:
+/// planar modes (XY/YZ/ZX) push perpendicular to the plane; radial mode
+/// pushes along the unit vector from the center. Damping is disabled when
+/// `|damping| ≈ 0`.
 pub static PRE_WAVE3D_WF: VariationDef = VariationDef {
     name: "pre_wave3D_wf",
     display_name: "Pre Wave 3D WF",
@@ -33,13 +39,13 @@ pub static PRE_WAVE3D_WF: VariationDef = VariationDef {
     phase: VariationPhase::Pre,
     needs_rng: false,
     parameters: &[
-        param!("axis", "Axis", int, 0.0, 0.0, 3.0),
-        param!("wavelen", "Wavelength", unlimited_float, 0.5, -10.0, 10.0),
-        param!("phase", "Phase", unlimited_float, 0.0, -10.0, 10.0),
-        param!("damping", "Damping", unlimited_float, 0.01, -10.0, 10.0),
-        param!("centre_x", "Centre X", unlimited_float, 0.0, -10.0, 10.0),
-        param!("centre_y", "Centre Y", unlimited_float, 0.0, -10.0, 10.0),
-        param!("centre_z", "Centre Z", unlimited_float, 0.0, -10.0, 10.0),
+        param!("axis", "Axis", int, 0.0, 0.0, 3.0, "Wave plane / displacement axis: 0 = XY plane (displaces Z), 1 = YZ plane (displaces X), 2 = ZX plane (displaces Y), 3 = RADIAL (displaces along the unit vector from center)."),
+        param!("wavelen", "Wavelength", unlimited_float, 0.5, -10.0, 10.0, "Wavelength of the sine perturbation."),
+        param!("phase", "Phase", unlimited_float, 0.0, -10.0, 10.0, "Phase offset on the sine argument."),
+        param!("damping", "Damping", unlimited_float, 0.01, -10.0, 10.0, "Exponential damping rate (proportional to `dl`). 0 disables damping."),
+        param!("centre_x", "Centre X", unlimited_float, 0.0, -10.0, 10.0, "X coordinate of the wave center (subtracted from input before the distance calculation)."),
+        param!("centre_y", "Centre Y", unlimited_float, 0.0, -10.0, 10.0, "Y coordinate of the wave center."),
+        param!("centre_z", "Centre Z", unlimited_float, 0.0, -10.0, 10.0, "Z coordinate of the wave center."),
     ],
     needs_transform: true,
     writes_color: false,

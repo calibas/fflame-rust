@@ -31,6 +31,13 @@ use crate::param;
 //   if cos(x · xsize · π) >= 0:  out_y = +y  else: out_y = -y
 //   if cos(y · ysize · π) >= 0:  out_x = +x  else: out_x = -x
 // =============================================================================
+/// Coin-flip mirror per axis — flips Y based on the sign of
+/// `cos(x · xsize · π)`, and flips X based on the sign of
+/// `cos(y · ysize · π)`. Produces a tiled mirroring pattern whose tile
+/// spacing is controlled by `xsize` and `ysize`.
+///
+/// # Authors
+/// - Apophysis Plugin Pack
 pub static SPLIT: VariationDef = VariationDef {
     name: "split",
     display_name: "Split",
@@ -38,8 +45,8 @@ pub static SPLIT: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("xsize", "X size", unlimited_float, 0.4, -10.0, 10.0),
-        param!("ysize", "Y size", unlimited_float, 0.6, -10.0, 10.0),
+        param!("xsize", "X size", unlimited_float, 0.4, -10.0, 10.0, "X-axis frequency of the mirror-flip cosine."),
+        param!("ysize", "Y size", unlimited_float, 0.6, -10.0, 10.0, "Y-axis frequency of the mirror-flip cosine."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -84,6 +91,12 @@ fn variation_split(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 // the only normal variation in its transform — typical use; documented
 // in the existing crop3d caveat pattern.
 // =============================================================================
+/// Cos/tan composite warp — outputs `(cos(s)·tan(x), sin(s)·tan(y))` where
+/// `s = sqrt(a·x² + b·y²)`. The tangent terms produce vertical and
+/// horizontal stripes near `x = π/2 + kπ` etc.
+///
+/// # Authors
+/// - Raykoid666
 pub static SQUIRREL: VariationDef = VariationDef {
     name: "squirrel",
     display_name: "Squirrel",
@@ -91,8 +104,8 @@ pub static SQUIRREL: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("a", "A", unlimited_float, 1.0, -10.0, 10.0),
-        param!("b", "B", unlimited_float, 1.0, -10.0, 10.0),
+        param!("a", "A", unlimited_float, 1.0, -10.0, 10.0, "X² weight in the radius term."),
+        param!("b", "B", unlimited_float, 1.0, -10.0, 10.0, "Y² weight in the radius term."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -129,6 +142,13 @@ fn variation_squirrel(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
 //   out_x = off · (1 − space) + round_x
 //   out_y = y + off² · warp
 // =============================================================================
+/// Vertical-stripe warp with parabolic Y bend — snaps X toward the
+/// nearest integer (with the local offset compressed by `1 − space`),
+/// and bends Y as a parabola of the local stripe offset. Produces
+/// vertical stripes that arch up or down depending on `warp`.
+///
+/// # Authors
+/// - Apophysis Plugin Pack
 pub static STRIPES: VariationDef = VariationDef {
     name: "stripes",
     display_name: "Stripes",
@@ -136,8 +156,8 @@ pub static STRIPES: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("space", "Space", unlimited_float, 0.2, -5.0, 5.0),
-        param!("warp", "Warp", unlimited_float, 0.6, -5.0, 5.0),
+        param!("space", "Space", unlimited_float, 0.2, -5.0, 5.0, "Compression factor for X within each stripe — 1 collapses to integer values, 0 disables compression."),
+        param!("warp", "Warp", unlimited_float, 0.6, -5.0, 5.0, "Parabolic Y-bend amplitude as a function of local stripe offset."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -180,6 +200,13 @@ fn variation_stripes(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 //   out_y = y − cos(ang) · shift_y − sin(ang) · shift_x
 //   (pre-computes sin/cos of ang via init slot pair)
 // =============================================================================
+/// Rotated additive shift — adds a 2D shift vector to the input, where the
+/// shift direction is rotated by `angle` degrees. Equivalent to translating
+/// in a rotated frame.
+///
+/// # Authors
+/// - Tatyana Zabanova
+/// - Brad Stefanov
 pub static SHIFT: VariationDef = VariationDef {
     name: "shift",
     display_name: "Shift",
@@ -187,9 +214,9 @@ pub static SHIFT: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("shift_x", "Shift X", unlimited_float, 0.0, -10.0, 10.0),
-        param!("shift_y", "Shift Y", unlimited_float, 0.0, -10.0, 10.0),
-        param!("angle", "Angle (deg)", angle, 0.0),
+        param!("shift_x", "Shift X", unlimited_float, 0.0, -10.0, 10.0, "X-axis shift amount (in the rotated frame)."),
+        param!("shift_y", "Shift Y", unlimited_float, 0.0, -10.0, 10.0, "Y-axis shift amount (in the rotated frame)."),
+        param!("angle", "Angle (deg)", angle, 0.0, "Rotation angle of the shift vector, in degrees."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -247,6 +274,14 @@ fn variation_shift(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 // bug; the actual derivation lives in Java's `setParameter`. Recovered
 // from the comment block.)
 // =============================================================================
+/// Sin-wave additive distortion — adds `sin(2π·freq·coord) / (2π·freq)` to
+/// each axis. Amplitude is inversely proportional to frequency, so higher-
+/// frequency ripples are smaller. With `freq = 0`, the term degenerates to
+/// `sin(coord)`.
+///
+/// # Authors
+/// - timothy-vincent
+/// - DarkBeam
 pub static PRESSURE_WAVE: VariationDef = VariationDef {
     name: "pressure_wave",
     display_name: "Pressure Wave",
@@ -254,8 +289,8 @@ pub static PRESSURE_WAVE: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("x_freq", "X freq", unlimited_float, 1.0, -50.0, 50.0),
-        param!("y_freq", "Y freq", unlimited_float, 1.0, -50.0, 50.0),
+        param!("x_freq", "X freq", unlimited_float, 1.0, -50.0, 50.0, "X-axis sine frequency. Amplitude scales as `1 / (2π·freq)`; 0 degenerates to `sin(x)`."),
+        param!("y_freq", "Y freq", unlimited_float, 1.0, -50.0, 50.0, "Y-axis sine frequency. Same scaling rule as x_freq."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -317,6 +352,13 @@ fn variation_pressure_wave(p: vec3<f32>, xform_id: u32, variation_id: u32) -> ve
 //   α = atan2(y, x) + N · 2π / floor(power)
 //   out = (cos α / R, sin α / R)
 // =============================================================================
+/// N-power spherical with random branch — combines a spherical inversion
+/// `1/r^dist` with a random angular shift `n · 2π / ⌊|power|⌋` where `n =
+/// ⌊power · rand⌋`. Equivalent to spherical-inverting the input and then
+/// rotating by one of `⌊|power|⌋` random angles.
+/// 
+/// # Authors
+/// - eralex61
 pub static SPHERICALN: VariationDef = VariationDef {
     name: "sphericaln",
     display_name: "Spherical N",
@@ -324,8 +366,8 @@ pub static SPHERICALN: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("power", "Power", unlimited_float, 1.0, -50.0, 50.0),
-        param!("dist", "Distance", unlimited_float, 1.0, -10.0, 10.0),
+        param!("power", "Power", unlimited_float, 1.0, -50.0, 50.0, "Number of angular branches — `⌊|power|⌋` determines the spoke count, and each iteration picks one at random."),
+        param!("dist", "Distance", unlimited_float, 1.0, -10.0, 10.0, "Radial-power exponent — output radius is `1 / r^dist`. `dist = 1` reduces to a standard spherical inversion."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -370,6 +412,13 @@ fn variation_sphericaln(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
 //   t     = thi · floor(atan2(x, y) · th) + j      (upstream cpp swap)
 //   out   = (x + cos(t), y + sin(t))               (r = 1, hardcoded)
 // =============================================================================
+/// Polygonal spike-tiler — snaps the input angle to the nearest of `sides`
+/// polygon spokes (with a per-spoke offset from `i`), then adds a unit-
+/// length spike at that angle to the input. Creates a tiling of spikes
+/// radiating at regular angles.
+///
+/// # Authors
+/// - DarkBeam
 pub static SPLIGON: VariationDef = VariationDef {
     name: "spligon",
     display_name: "Spligon",
@@ -377,8 +426,8 @@ pub static SPLIGON: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("sides", "Sides", unlimited_float, 3.0, 1.0, 50.0),
-        param!("i", "I", unlimited_float, 1.0, -10.0, 10.0),
+        param!("sides", "Sides", unlimited_float, 3.0, 1.0, 50.0, "Number of polygon spokes."),
+        param!("i", "I", unlimited_float, 1.0, -10.0, 10.0, "Spike angular offset — rotates the spike direction within its spoke sector."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -442,6 +491,15 @@ fn variation_spligon(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 // outer-multiplier factor (the branch decision uses width and rand, not
 // w). Read w via needs_transform and let the body apply it directly.
 // =============================================================================
+/// Tile-stripe blur — divides X into stripes of given `width`, and per
+/// iteration either shifts X by ±width to a neighboring stripe (with the
+/// probability driven by stripe position and a uniform random) or leaves it
+/// alone. Y passes through. Produces blurred banding along X.
+///
+/// # Authors
+/// - Zy0rg
+/// - Tatyana Zabanova
+/// - Brad Stefanov
 pub static TILE_HLP: VariationDef = VariationDef {
     name: "tile_hlp",
     display_name: "Tile HLP",
@@ -449,7 +507,7 @@ pub static TILE_HLP: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("width", "Width", unlimited_float, 1.0, -10.0, 10.0),
+        param!("width", "Width", unlimited_float, 1.0, -10.0, 10.0, "Stripe width along X. Smaller width = more, narrower stripes."),
     ],
     needs_transform: true,
     writes_color: false,

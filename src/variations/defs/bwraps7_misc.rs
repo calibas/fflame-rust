@@ -23,6 +23,15 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Newer version of `bwraps` (v7) — same Bubble Wrap algorithm as the
+/// original (each grid cell hosts a bubble; inside the bubble the input
+/// twists toward the cell center, outside it passes through), but with an
+/// updated `g2 = gain² + ε` formula instead of the old `g2 = gain² / radius
+/// + ε`. The difference shows up at small `gain` values where the bubbles
+/// fill the cells differently.
+///
+/// # Authors
+/// - slobo777
 pub static BWRAPS7: VariationDef = VariationDef {
     name: "bwraps7",
     display_name: "BWraps 7",
@@ -30,11 +39,11 @@ pub static BWRAPS7: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("cellsize", "Cell Size", unlimited_float, 1.0, -10.0, 10.0),
-        param!("space", "Space", unlimited_float, 0.0, -1.0, 1.0),
-        param!("gain", "Gain", unlimited_float, 2.0, -5.0, 5.0),
-        param!("inner_twist", "Inner Twist", unlimited_float, 0.0, -10.0, 10.0),
-        param!("outer_twist", "Outer Twist", unlimited_float, 0.0, -10.0, 10.0),
+        param!("cellsize", "Cell Size", unlimited_float, 1.0, -10.0, 10.0, "Grid cell size."),
+        param!("space", "Space", unlimited_float, 0.0, -1.0, 1.0, "Inter-cell spacing factor. 0 = no space (bubble fills the cell); larger = smaller bubble relative to the cell."),
+        param!("gain", "Gain", unlimited_float, 2.0, -5.0, 5.0, "Bubble strength — controls both bubble size and twist intensity."),
+        param!("inner_twist", "Inner Twist", unlimited_float, 0.0, -10.0, 10.0, "Rotation amount applied at the bubble center."),
+        param!("outer_twist", "Outer Twist", unlimited_float, 0.0, -10.0, 10.0, "Rotation amount applied at the bubble edge. Interpolated radially with `inner_twist`."),
     ],
     needs_transform: false,
     writes_color: false,

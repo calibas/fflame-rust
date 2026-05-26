@@ -30,6 +30,18 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Far-distance random blur — emits a spherical-coordinate random offset
+/// whose magnitude scales with the squared distance of the running
+/// accumulator from a configurable origin, so points further from the
+/// origin receive proportionally more blur. The scale factor is modulated
+/// by a rolling buffer of 4 random samples (`r[0..3]`), refreshed one slot
+/// per iteration; their sum minus 2 gives a slowly-varying signed
+/// multiplier. In 2D the missing Z accumulator collapses the `dz` term to a
+/// constant `(0 - z_origin)²`, so `z_origin` becomes a constant additive
+/// offset on the radial magnitude.
+///
+/// # Authors
+/// - zephyrtronium
 pub static FARBLUR: VariationDef = VariationDef {
     name: "farblur",
     display_name: "Far Blur",
@@ -37,12 +49,12 @@ pub static FARBLUR: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("x", "X Scale", unlimited_float, 1.0, -10.0, 10.0),
-        param!("y", "Y Scale", unlimited_float, 1.0, -10.0, 10.0),
-        param!("z", "Z Scale", unlimited_float, 1.0, -10.0, 10.0),
-        param!("x_origin", "X Origin", unlimited_float, 0.0, -10.0, 10.0),
-        param!("y_origin", "Y Origin", unlimited_float, 0.0, -10.0, 10.0),
-        param!("z_origin", "Z Origin", unlimited_float, 0.0, -10.0, 10.0),
+        param!("x", "X Scale", unlimited_float, 1.0, -10.0, 10.0, "X-axis blur scale. Multiplies the X component of the random spherical offset."),
+        param!("y", "Y Scale", unlimited_float, 1.0, -10.0, 10.0, "Y-axis blur scale."),
+        param!("z", "Z Scale", unlimited_float, 1.0, -10.0, 10.0, "Z-axis blur scale (3D only)."),
+        param!("x_origin", "X Origin", unlimited_float, 0.0, -10.0, 10.0, "Origin X coordinate. The accumulator's distance from this point (squared) modulates the blur magnitude — larger distance → more blur."),
+        param!("y_origin", "Y Origin", unlimited_float, 0.0, -10.0, 10.0, "Origin Y coordinate."),
+        param!("z_origin", "Z Origin", unlimited_float, 0.0, -10.0, 10.0, "Origin Z coordinate. In 2D mode this becomes a constant offset (the 2D accumulator has no Z, so `dz` reduces to `-z_origin`)."),
     ],
     needs_transform: false,
     writes_color: false,

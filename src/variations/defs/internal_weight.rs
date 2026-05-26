@@ -51,6 +51,12 @@ use crate::param;
 //   else:             out = (x, y)
 //   (weight applied outside in both branches)
 // =============================================================================
+/// Variant 3 of Loonie — same coin-shape inversion as Loonie but uses
+/// `(r²)²/x²` for the radial threshold check, producing a stretched single-
+/// arm form.
+///
+/// # Authors
+/// - DarkBeam
 pub static LOONIE3: VariationDef = VariationDef {
     name: "loonie3",
     display_name: "Loonie 3",
@@ -111,6 +117,12 @@ fn variation_loonie3(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 //
 // Upstream computes `rmod` from RNG but never uses it — skipped here.
 // =============================================================================
+/// 3D version of Loonie — inverts points inside a sphere sized by the
+/// variation's weight; Z gets folded through an atan2 substitution for non-
+/// zero depth handling.
+///
+/// # Authors
+/// - Larry Berlin
 pub static LOONIE_3D: VariationDef = VariationDef {
     name: "loonie_3d",
     display_name: "Loonie 3D",
@@ -170,6 +182,13 @@ fn variation_loonie_3d(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
 // |w| in cpp; we read w via needs_transform and emit `sign(w) · out` so
 // outer multiplier (w) yields |w| · out.
 // =============================================================================
+/// Saturating sigmoid in both axes — pushes coordinates through `1/(1 +
+/// exp(...))` to compress them toward the [-1, 1] range. `shiftx` /
+/// `shifty` control how steep the saturation curve is on each axis.
+///
+/// # Authors
+/// - Xyrus02
+/// - Brad Stefanov
 pub static SIGMOID: VariationDef = VariationDef {
     name: "sigmoid",
     display_name: "Sigmoid",
@@ -177,8 +196,8 @@ pub static SIGMOID: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("shiftx", "Shift X", unlimited_float, 1.0, -10.0, 10.0),
-        param!("shifty", "Shift Y", unlimited_float, 1.0, -10.0, 10.0),
+        param!("shiftx", "Shift X", unlimited_float, 1.0, -10.0, 10.0, "X-axis saturation curve. Higher absolute value = steeper transition."),
+        param!("shifty", "Shift Y", unlimited_float, 1.0, -10.0, 10.0, "Y-axis saturation curve. Higher absolute value = steeper transition."),
     ],
     needs_transform: true,
     writes_color: false,
@@ -278,6 +297,12 @@ fn variation_sigmoid(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 // instead of its function argument). We follow the obvious Java intent
 // `sqrt(max(1 − a², 0))` rather than reproducing the bug.
 // =============================================================================
+/// 2D-block warp — maps points through an ellipse-bounded arctan to produce
+/// angular blocky patterns. `mp` controls block size; `x` and `y` set per-
+/// axis aspect.
+///
+/// # Authors
+/// - Brad Stefanov
 pub static BLOCKY: VariationDef = VariationDef {
     name: "blocky",
     display_name: "Blocky",
@@ -285,9 +310,9 @@ pub static BLOCKY: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("x", "X", unlimited_float, 1.0, -10.0, 10.0),
-        param!("y", "Y", unlimited_float, 1.0, -10.0, 10.0),
-        param!("mp", "MP", unlimited_float, 4.0, 0.1, 20.0),
+        param!("x", "X", unlimited_float, 1.0, -10.0, 10.0, "X-axis scaling on the arctan output."),
+        param!("y", "Y", unlimited_float, 1.0, -10.0, 10.0, "Y-axis scaling on the arctan output."),
+        param!("mp", "MP", unlimited_float, 4.0, 0.1, 20.0, "Block size — smaller values produce more, finer blocks."),
     ],
     needs_transform: true,
     writes_color: false,

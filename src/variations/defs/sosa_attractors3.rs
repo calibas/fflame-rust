@@ -29,6 +29,13 @@ use crate::param;
 // lace_js
 // ---------------------------------------------------------------------------
 
+/// 4-branch Sierpinski-triangle-like IFS — picks one of four branches
+/// uniformly per iteration, each pivoting around the origin or one of the
+/// three vertices of an equilateral triangle. Each branch is a
+/// rotation+half-scale around its pivot. Based on Paul Bourke's `lace.c`.
+///
+/// # Authors
+/// - Jesus Sosa
 pub static LACE_JS: VariationDef = VariationDef {
     name: "lace_js",
     display_name: "Lace (JS)",
@@ -109,6 +116,13 @@ fn variation_lace_js(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
 // wallpaper_js
 // ---------------------------------------------------------------------------
 
+/// Random Mira/identity blend — with 50% probability applies a Mira-style
+/// sqrt warp `(y − sign(trunc x) · sqrt|b·x − c|, a − x)`; otherwise passes
+/// through. Produces wallpaper-like tiling patterns based on Paul Bourke's
+/// wallpaper attractor.
+///
+/// # Authors
+/// - Jesus Sosa
 pub static WALLPAPER_JS: VariationDef = VariationDef {
     name: "wallpaper_js",
     display_name: "Wallpaper (JS)",
@@ -116,9 +130,9 @@ pub static WALLPAPER_JS: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("a", "A", unlimited_float, 1.156, -10.0, 10.0),
-        param!("b", "B", unlimited_float, -0.28, -10.0, 10.0),
-        param!("c", "C", unlimited_float, 21.288, -100.0, 100.0),
+        param!("a", "A", unlimited_float, 1.156, -10.0, 10.0, "Wallpaper parameter `a` — Y-output offset (`y' = a − x`)."),
+        param!("b", "B", unlimited_float, -0.28, -10.0, 10.0, "Wallpaper parameter `b` — coefficient on x inside the sqrt term."),
+        param!("c", "C", unlimited_float, 21.288, -100.0, 100.0, "Wallpaper parameter `c` — constant subtracted inside the sqrt term."),
     ],
     needs_transform: true,
     writes_color: false,

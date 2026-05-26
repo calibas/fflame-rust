@@ -26,6 +26,12 @@ use crate::variations::{
 // =============================================================================
 // sinq: (sin(x)·cosh(v), C·y, C·z), C = cos(x)·sinh(v)/v
 // =============================================================================
+/// Quaternion sine — extends the complex Sin to 3D by treating (x, y, z) as
+/// a split quaternion. In 2D mode (z = 0) it collapses to the same shape as
+/// Sin.
+///
+/// # Authors
+/// - zephyrtronium
 pub static SINQ: VariationDef = VariationDef {
     name: "sinq",
     display_name: "Sinq",
@@ -63,6 +69,11 @@ fn variation_sinq(p: vec3<f32>) -> vec3<f32> {
 // =============================================================================
 // cosq: (cos(x)·cosh(v), C·y, C·z), C = -sin(x)·sinh(v)/v
 // =============================================================================
+/// Quaternion cosine — 3D extension of Cos. In 2D it collapses to the same
+/// shape as Cos.
+///
+/// # Authors
+/// - zephyrtronium
 pub static COSQ: VariationDef = VariationDef {
     name: "cosq",
     display_name: "Cosq",
@@ -100,6 +111,10 @@ fn variation_cosq(p: vec3<f32>) -> vec3<f32> {
 // =============================================================================
 // sinhq: (sinh(x)·cos(v), C·y, C·z), C = cosh(x)·sin(v)/v
 // =============================================================================
+/// Quaternion hyperbolic sine — 3D extension of Sinh.
+///
+/// # Authors
+/// - zephyrtronium
 pub static SINHQ: VariationDef = VariationDef {
     name: "sinhq",
     display_name: "Sinhq",
@@ -137,6 +152,10 @@ fn variation_sinhq(p: vec3<f32>) -> vec3<f32> {
 // =============================================================================
 // coshq: (cosh(x)·cos(v), C·y, C·z), C = sinh(x)·sin(v)/v
 // =============================================================================
+/// Quaternion hyperbolic cosine — 3D extension of Cosh.
+///
+/// # Authors
+/// - zephyrtronium
 pub static COSHQ: VariationDef = VariationDef {
     name: "coshq",
     display_name: "Coshq",
@@ -177,6 +196,10 @@ fn variation_coshq(p: vec3<f32>) -> vec3<f32> {
 //   ends up as (cos(x)·cosh(v)·ni, sin(x)·sinh(v)·ni·y/v, sin(x)·sinh(v)·ni·z/v)
 //   ni = 1/(x² + y² + z²)
 // =============================================================================
+/// Quaternion secant — 3D extension of Sec (1/cos).
+///
+/// # Authors
+/// - zephyrtronium
 pub static SECQ: VariationDef = VariationDef {
     name: "secq",
     display_name: "Secq",
@@ -218,6 +241,10 @@ fn variation_secq(p: vec3<f32>) -> vec3<f32> {
 // =============================================================================
 // cscq: 1/sinq, divides by full quaternion norm
 // =============================================================================
+/// Quaternion cosecant — 3D extension of Csc (1/sin).
+///
+/// # Authors
+/// - zephyrtronium
 pub static CSCQ: VariationDef = VariationDef {
     name: "cscq",
     display_name: "Cscq",
@@ -259,6 +286,10 @@ fn variation_cscq(p: vec3<f32>) -> vec3<f32> {
 // =============================================================================
 // sechq: 1/coshq, divides by full quaternion norm
 // =============================================================================
+/// Quaternion hyperbolic secant — 3D extension of Sech.
+///
+/// # Authors
+/// - zephyrtronium
 pub static SECHQ: VariationDef = VariationDef {
     name: "sechq",
     display_name: "Sechq",
@@ -300,6 +331,10 @@ fn variation_sechq(p: vec3<f32>) -> vec3<f32> {
 // =============================================================================
 // cschq: 1/sinhq, divides by full quaternion norm
 // =============================================================================
+/// Quaternion hyperbolic cosecant — 3D extension of Csch.
+///
+/// # Authors
+/// - zephyrtronium
 pub static CSCHQ: VariationDef = VariationDef {
     name: "cschq",
     display_name: "Cschq",
@@ -346,6 +381,10 @@ fn variation_cschq(p: vec3<f32>) -> vec3<f32> {
 //   x out: (stcv·ctcv + C·B·sysz) · ni
 //   y out: (-stcv·B·y + C·y·ctcv) · ni
 // =============================================================================
+/// Quaternion tangent — 3D extension of Tan (sin/cos).
+///
+/// # Authors
+/// - zephyrtronium
 pub static TANQ: VariationDef = VariationDef {
     name: "tanq",
     display_name: "Tanq",
@@ -398,6 +437,10 @@ fn variation_tanq(p: vec3<f32>) -> vec3<f32> {
 // =============================================================================
 // cotq: same as tanq but y/z signs negated (subtract the y/z components)
 // =============================================================================
+/// Quaternion cotangent — 3D extension of Cot (cos/sin).
+///
+/// # Authors
+/// - zephyrtronium
 pub static COTQ: VariationDef = VariationDef {
     name: "cotq",
     display_name: "Cotq",
@@ -452,6 +495,10 @@ fn variation_cotq(p: vec3<f32>) -> vec3<f32> {
 // roles swapped (sh/ch become x-based; s/c become v-based)
 //   B in upstream is +sh*s/v (no negation, unlike tanq)
 // =============================================================================
+/// Quaternion hyperbolic tangent — 3D extension of Tanh.
+///
+/// # Authors
+/// - zephyrtronium
 pub static TANHQ: VariationDef = VariationDef {
     name: "tanhq",
     display_name: "Tanhq",
@@ -505,6 +552,10 @@ fn variation_tanhq(p: vec3<f32>) -> vec3<f32> {
 // cothq: same as tanhq but y/z components added with opposite sign... wait,
 // upstream cothq uses `+=` for y/z (matching tanhq), unlike cotq vs tanq.
 // =============================================================================
+/// Quaternion hyperbolic cotangent — 3D extension of Coth.
+///
+/// # Authors
+/// - zephyrtronium
 pub static COTHQ: VariationDef = VariationDef {
     name: "cothq",
     display_name: "Cothq",

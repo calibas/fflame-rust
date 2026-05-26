@@ -29,6 +29,15 @@ use crate::variations::{
 };
 use crate::param;
 
+/// General 3D affine transform — applies translation, per-axis scaling,
+/// yaw/pitch/roll rotation, and optional shear in a single combined
+/// transform. The 15 parameters cover translate (3), scale (3), rotate (3
+/// in degrees), and shear (6 cross-axis terms). The body automatically
+/// detects whether shear is significant (`|sxy| + |sxz| + ... > ε`) and
+/// skips the sheared path when all 6 shear params are below threshold.
+///
+/// # Authors
+/// - Framelet
 pub static AFFINE3D: VariationDef = VariationDef {
     name: "affine3D",
     display_name: "Affine 3D",
@@ -36,21 +45,21 @@ pub static AFFINE3D: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("translateX", "Translate X", unlimited_float, 0.0, -10.0, 10.0),
-        param!("translateY", "Translate Y", unlimited_float, 0.0, -10.0, 10.0),
-        param!("translateZ", "Translate Z", unlimited_float, 0.0, -10.0, 10.0),
-        param!("scaleX", "Scale X", unlimited_float, 1.0, -10.0, 10.0),
-        param!("scaleY", "Scale Y", unlimited_float, 1.0, -10.0, 10.0),
-        param!("scaleZ", "Scale Z", unlimited_float, 1.0, -10.0, 10.0),
-        param!("rotateX", "Rotate X", unlimited_float, 0.0, -360.0, 360.0),
-        param!("rotateY", "Rotate Y", unlimited_float, 0.0, -360.0, 360.0),
-        param!("rotateZ", "Rotate Z", unlimited_float, 0.0, -360.0, 360.0),
-        param!("shearXY", "Shear XY", unlimited_float, 0.0, -10.0, 10.0),
-        param!("shearXZ", "Shear XZ", unlimited_float, 0.0, -10.0, 10.0),
-        param!("shearYX", "Shear YX", unlimited_float, 0.0, -10.0, 10.0),
-        param!("shearYZ", "Shear YZ", unlimited_float, 0.0, -10.0, 10.0),
-        param!("shearZX", "Shear ZX", unlimited_float, 0.0, -10.0, 10.0),
-        param!("shearZY", "Shear ZY", unlimited_float, 0.0, -10.0, 10.0),
+        param!("translateX", "Translate X", unlimited_float, 0.0, -10.0, 10.0, "X-axis translation (added to the final output)."),
+        param!("translateY", "Translate Y", unlimited_float, 0.0, -10.0, 10.0, "Y-axis translation."),
+        param!("translateZ", "Translate Z", unlimited_float, 0.0, -10.0, 10.0, "Z-axis translation (3D only)."),
+        param!("scaleX", "Scale X", unlimited_float, 1.0, -10.0, 10.0, "X-axis scale (multiplies x before rotation)."),
+        param!("scaleY", "Scale Y", unlimited_float, 1.0, -10.0, 10.0, "Y-axis scale."),
+        param!("scaleZ", "Scale Z", unlimited_float, 1.0, -10.0, 10.0, "Z-axis scale."),
+        param!("rotateX", "Rotate X", unlimited_float, 0.0, -360.0, 360.0, "Rotation around the X axis (pitch), in degrees."),
+        param!("rotateY", "Rotate Y", unlimited_float, 0.0, -360.0, 360.0, "Rotation around the Y axis (yaw), in degrees."),
+        param!("rotateZ", "Rotate Z", unlimited_float, 0.0, -360.0, 360.0, "Rotation around the Z axis (roll), in degrees."),
+        param!("shearXY", "Shear XY", unlimited_float, 0.0, -10.0, 10.0, "Shear factor applied to Y in the X output."),
+        param!("shearXZ", "Shear XZ", unlimited_float, 0.0, -10.0, 10.0, "Shear factor applied to Z in the X output."),
+        param!("shearYX", "Shear YX", unlimited_float, 0.0, -10.0, 10.0, "Shear factor applied to X in the Y output."),
+        param!("shearYZ", "Shear YZ", unlimited_float, 0.0, -10.0, 10.0, "Shear factor applied to Z in the Y output."),
+        param!("shearZX", "Shear ZX", unlimited_float, 0.0, -10.0, 10.0, "Shear factor applied to X in the Z output."),
+        param!("shearZY", "Shear ZY", unlimited_float, 0.0, -10.0, 10.0, "Shear factor applied to Y in the Z output."),
     ],
     needs_transform: false,
     writes_color: false,

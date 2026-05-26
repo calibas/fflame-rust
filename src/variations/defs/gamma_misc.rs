@@ -49,6 +49,15 @@ fn gm_lgamma(x: f32) -> f32 {
 }
 "#;
 
+/// Log-gamma in polar form — outputs `(lgamma(r), θ)` where `r = √(x²+y²)`
+/// and `θ = atan2(y, x)`. The log-gamma function is implemented via the
+/// Lanczos approximation (g = 7, 8 coefficients) with a reflection branch
+/// for negative arguments — though since `r ≥ 0`, the reflection is
+/// unreachable in practice and kept only for safety.
+///
+/// # Authors
+/// - zephyrtronium
+/// - DarkBeam
 pub static GAMMA: VariationDef = VariationDef {
     name: "gamma",
     display_name: "Gamma",

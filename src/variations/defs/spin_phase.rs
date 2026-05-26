@@ -5,7 +5,7 @@
 //!
 //!   - `pre_spin_z`     — pre-phase rotation by `w · π/2`
 //!   - `post_spin_z`    — post-phase rotation by `w · π/2`
-//!   - `post_spherical` — post-phase spherical inversion `r = w / (p²)`
+//!   - `post_spherical` (Scott Draves)   — post-phase spherical inversion `r = w / (p²)`
 //!   - `pre_disc3d`     (gossamer light) — pre-phase disc with explicit
 //!                                          z output `vv · r · cos(z)`,
 //!                                          1 user param `pi`
@@ -31,6 +31,9 @@ use crate::param;
 //   sina = sin(w · π/2);  cosa = cos(w · π/2)
 //   out = (sina · y + cosa · x, cosa · y − sina · x, z)
 // =============================================================================
+/// Pre-phase Z-axis rotation — applies a rotation by `w · π/2` around the Z
+/// axis to the input before any normal-phase variations run. Useful as a
+/// per-transform pre-rotation step driven by the variation weight.
 pub static PRE_SPIN_Z: VariationDef = VariationDef {
     name: "pre_spin_z",
     display_name: "Pre Spin Z",
@@ -71,6 +74,8 @@ fn variation_pre_spin_z(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<
 // post_spin_z: post-phase rotation by `w · π/2` around Z
 //   Same body as pre_spin_z, applied at post phase.
 // =============================================================================
+/// Post-phase Z-axis rotation — same rotation as `pre_spin_z` (`w · π/2`
+/// around Z), applied after all normal-phase variations.
 pub static POST_SPIN_Z: VariationDef = VariationDef {
     name: "post_spin_z",
     display_name: "Post Spin Z",
@@ -108,10 +113,17 @@ fn variation_post_spin_z(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3
 };
 
 // =============================================================================
-// post_spherical: post-phase spherical inversion
+// post_spherical: post-phase spherical inversion (Scott Draves)
 //   r = w / (x² + y² + ε)
 //   out = (x · r, y · r)
 // =============================================================================
+/// Post-phase spherical inversion — applies `r = w / (x² + y² + ε)` then
+/// `(x·r, y·r)` to the accumulated output. Scott Draves's classic
+/// `spherical` variation, applied in post-phase rather than as a normal
+/// variation.
+///
+/// # Authors
+/// - Scott Draves
 pub static POST_SPHERICAL: VariationDef = VariationDef {
     name: "post_spherical",
     display_name: "Post Spherical",
@@ -151,6 +163,14 @@ fn variation_post_spherical(p: vec3<f32>, xform_id: u32, variation_id: u32) -> v
 //   out = (vv · sr, vv · cr, vv · r · cos(z))
 // 1 user param `pi` (default π — yes, weirdly user-configurable).
 // =============================================================================
+/// Pre-phase 3D disc warp — applies a disc-style warp with an explicit Z
+/// output `vv · r · cos(z)`. The `pi` parameter is user-configurable
+/// (default π) and supplies the divisor in the `vv = w · atan2(x, y) / pi`
+/// term, which makes it a non-standard variation where the meaning of π is
+/// itself tunable.
+///
+/// # Authors
+/// - gossamer light
 pub static PRE_DISC3D: VariationDef = VariationDef {
     name: "pre_disc3d",
     display_name: "Pre Disc 3D",
@@ -158,7 +178,7 @@ pub static PRE_DISC3D: VariationDef = VariationDef {
     phase: VariationPhase::Pre,
     needs_rng: false,
     parameters: &[
-        param!("pi", "Pi", unlimited_float, 3.141592653589793, -10.0, 10.0),
+        param!("pi", "Pi", unlimited_float, 3.141592653589793, -10.0, 10.0, "Divisor in the `vv = w · atan2(x, y) / pi` term. Default is the literal value of π."),
     ],
     needs_transform: true,
     writes_color: false,

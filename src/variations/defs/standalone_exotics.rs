@@ -42,6 +42,12 @@ use crate::param;
 //     FPy += (rotate · y) · cos(45) + x · sin(45) − pull − line_up
 // (cos(45) / sin(45) are radians here — preserved from upstream)
 // =============================================================================
+/// Half-plane mirror warp — rotates and reflects the input across the X
+/// axis with separate behavior above and below the line. Produces the
+/// classic kaleidoscope mirror pattern.
+///
+/// # Authors
+/// - Will Evans
 pub static KALEIDOSCOPE: VariationDef = VariationDef {
     name: "kaleidoscope",
     display_name: "Kaleidoscope",
@@ -49,11 +55,11 @@ pub static KALEIDOSCOPE: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("pull", "Pull", unlimited_float, 0.0, -5.0, 5.0),
-        param!("rotate", "Rotate", unlimited_float, 1.0, -5.0, 5.0),
-        param!("line_up", "Line Up", unlimited_float, 1.0, -5.0, 5.0),
-        param!("x", "X", unlimited_float, 0.0, -5.0, 5.0),
-        param!("y", "Y", unlimited_float, 0.0, -5.0, 5.0),
+        param!("pull", "Pull", unlimited_float, 0.0, -5.0, 5.0, "Y-axis pull strength — pulls the upper and lower halves apart."),
+        param!("rotate", "Rotate", unlimited_float, 1.0, -5.0, 5.0, "Rotation scaling on both axes."),
+        param!("line_up", "Line Up", unlimited_float, 1.0, -5.0, 5.0, "Linear offset along the mirror line."),
+        param!("x", "X", unlimited_float, 0.0, -5.0, 5.0, "Additional X offset."),
+        param!("y", "Y", unlimited_float, 0.0, -5.0, 5.0, "Additional Y offset for the upper half."),
     ],
     needs_transform: true,
     writes_color: false,
@@ -116,6 +122,11 @@ fn variation_kaleidoscope(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec
 //   FPy += w · sx · (ir + sy)
 //   FPz += w · sor · cy + (1 − sor) · y     (last term lacks w — divide-out)
 // =============================================================================
+/// Torus-section mapping — wraps the input through a torus-shaped surface
+/// modulated by `n`, creating 3D donut-like structures.
+///
+/// # Authors
+/// - gossamer light
 pub static TAURUS: VariationDef = VariationDef {
     name: "taurus",
     display_name: "Taurus",
@@ -123,10 +134,10 @@ pub static TAURUS: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("r", "R", unlimited_float, 3.0, -10.0, 10.0),
-        param!("n", "N", unlimited_float, 5.0, -20.0, 20.0),
-        param!("inv", "Inv", unlimited_float, 1.5, -10.0, 10.0),
-        param!("sor", "Sor", unlimited_float, 1.0, -10.0, 10.0),
+        param!("r", "R", unlimited_float, 3.0, -10.0, 10.0, "Torus radius."),
+        param!("n", "N", unlimited_float, 5.0, -20.0, 20.0, "Number of cosine-modulation cycles around the torus."),
+        param!("inv", "Inv", unlimited_float, 1.5, -10.0, 10.0, "Blend between fixed and modulated radius. 0 = fully modulated; 1 = fixed."),
+        param!("sor", "Sor", unlimited_float, 1.0, -10.0, 10.0, "Spherical-coordinate blend factor for the Z output."),
     ],
     needs_transform: true,
     writes_color: false,
@@ -175,7 +186,7 @@ fn variation_taurus(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 };
 
 // =============================================================================
-// hole2: 10-shape radial hole (Faber/Stefanov/Sidwell)
+// hole2: 10-shape radial hole (Michael Faber/Brad Stefanov/Rick Sidwell)
 //   theta = atan2(y, x) · d
 //   delta = (theta/π + 1)^a · c
 //   r1 = one of 10 radial formulas, selected by `shape`
@@ -184,6 +195,14 @@ fn variation_taurus(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 //   out = (r1 · cos(theta), r1 · sin(theta))
 // (cpp body was an unported_stub — translated from the Java comment block)
 // =============================================================================
+/// 10-shape radial hole — applies one of 10 user-selectable radial shape
+/// formulas to create a hole pattern. `shape` picks which formula; `inside`
+/// toggles whether the hole inverts (`w/r`) or scales (`w·r`).
+///
+/// # Authors
+/// - Michael Faber
+/// - Brad Stefanov
+/// - Rick Sidwell
 pub static HOLE2: VariationDef = VariationDef {
     name: "hole2",
     display_name: "Hole 2",
@@ -191,12 +210,12 @@ pub static HOLE2: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("a", "A", unlimited_float, 1.0, -10.0, 10.0),
-        param!("b", "B", unlimited_float, 2.0, -10.0, 10.0),
-        param!("c", "C", unlimited_float, 1.0, -10.0, 10.0),
-        param!("d", "D", unlimited_float, 1.0, -10.0, 10.0),
-        param!("inside", "Inside", int, 0.0, 0.0, 1.0),
-        param!("shape", "Shape", int, 0.0, 0.0, 9.0),
+        param!("a", "A", unlimited_float, 1.0, -10.0, 10.0, "Power for the angle-derived scaling factor."),
+        param!("b", "B", unlimited_float, 2.0, -10.0, 10.0, "Angular wave frequency — used by shapes 2, 6, 7, 8, 9 to vary their angular modulation."),
+        param!("c", "C", unlimited_float, 1.0, -10.0, 10.0, "Multiplier on the angle-derived scaling factor."),
+        param!("d", "D", unlimited_float, 1.0, -10.0, 10.0, "Angle multiplier on the input."),
+        param!("inside", "Inside", int, 0.0, 0.0, 1.0, "When on, inverts the radial formula (`w/r`) instead of scaling (`w·r`)."),
+        param!("shape", "Shape", int, 0.0, 0.0, 9.0, "Picks one of 10 radial formulas (0-9)."),
     ],
     needs_transform: false,
     writes_color: false,

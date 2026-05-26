@@ -34,6 +34,15 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Symmetric Icon Attractor — implements one of 17 baked-in presets from
+/// Field & Golubitsky's *Symmetry in Chaos*. Each preset is a `(degree, a,
+/// b, g, o, l)` tuple selected by `preset_id`. The body computes the
+/// standard symmetric-icon iteration: `p = a·|z|² + l + b·Re(z^degree)`,
+/// then `out = p·z + g·Re(z^(degree-1)) − o·rot90(z)`. The complex-power
+/// iteration is bounded at 24 to keep WGSL happy.
+///
+/// # Authors
+/// - Jesus Sosa
 pub static ICONATTRACTOR_JS: VariationDef = VariationDef {
     name: "iconattractor_js",
     display_name: "Icon Attractor (JS)",
@@ -41,10 +50,10 @@ pub static ICONATTRACTOR_JS: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("preset_id", "Preset ID", int, 0.0, 0.0, 16.0),
-        param!("centerx", "Center X", unlimited_float, 0.0, -10.0, 10.0),
-        param!("centery", "Center Y", unlimited_float, 0.0, -10.0, 10.0),
-        param!("scale", "Scale", unlimited_float, 5.0, -100.0, 100.0),
+        param!("preset_id", "Preset ID", int, 0.0, 0.0, 16.0, "Which Field & Golubitsky preset to use (0-16). Each corresponds to a different symmetric icon attractor shape from the original book."),
+        param!("centerx", "Center X", unlimited_float, 0.0, -10.0, 10.0, "Color register X center — unused since the color write is dropped. Preserved as a parameter for cpp parity."),
+        param!("centery", "Center Y", unlimited_float, 0.0, -10.0, 10.0, "Color register Y center — unused since the color write is dropped. Preserved as a parameter for cpp parity."),
+        param!("scale", "Scale", unlimited_float, 5.0, -100.0, 100.0, "Color register scale — unused since the color write is dropped. Init still precomputes `1/scale` to match cpp's `_bdcs`. Preserved as a parameter for cpp parity."),
     ],
     needs_transform: false,
     writes_color: false,

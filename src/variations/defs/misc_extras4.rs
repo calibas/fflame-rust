@@ -42,6 +42,13 @@ use crate::param;
 // outer multiplier matches when anamorphcyl is the only normal
 // variation.)
 // =============================================================================
+/// Anamorphic cylinder warp — wraps the input around a cylinder. Outputs
+/// `(f·cos(k·x), f·sin(k·x))` where `f = a·(y + b)`. The X coordinate
+/// drives the angular position (× frequency `k`), and Y drives the radial
+/// position (offset by `b`, scaled by `a`).
+///
+/// # Authors
+/// - Jesus Sosa
 pub static ANAMORPHCYL: VariationDef = VariationDef {
     name: "anamorphcyl",
     display_name: "Anamorph Cyl",
@@ -49,9 +56,9 @@ pub static ANAMORPHCYL: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("a", "A", unlimited_float, 1.0, -10.0, 10.0),
-        param!("b", "B", unlimited_float, 1.3, -10.0, 10.0),
-        param!("k", "K", unlimited_float, 3.0, -50.0, 50.0),
+        param!("a", "A", unlimited_float, 1.0, -10.0, 10.0, "Radial scale (multiplies the entire output magnitude)."),
+        param!("b", "B", unlimited_float, 1.3, -10.0, 10.0, "Y offset added before the radial multiplication."),
+        param!("k", "K", unlimited_float, 3.0, -50.0, 50.0, "Angular frequency of the X coordinate."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -86,6 +93,13 @@ fn variation_anamorphcyl(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3
 //   out = (cy · cn · cx, cy · cn · sx, sy · cn)
 //   where cx = cos(x), sx = sin(x), cy = cos(y), sy = sin(y)
 // =============================================================================
+/// 3D single-value function — combines trigonometric terms in a fixed
+/// pattern: `cos(y) · cos(n·y) · (cos(x), sin(x), sin(y))`. The `n`
+/// frequency parameter controls how many oscillations appear along the Y
+/// axis.
+///
+/// # Authors
+/// - gossamer light
 pub static SVF: VariationDef = VariationDef {
     name: "svf",
     display_name: "SVF",
@@ -93,7 +107,7 @@ pub static SVF: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("n", "N", unlimited_float, 2.0, -50.0, 50.0),
+        param!("n", "N", unlimited_float, 2.0, -50.0, 50.0, "Frequency multiplier on Y in the inner `cos(n·y)` term."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -129,6 +143,13 @@ fn variation_svf(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
 //   (same form for y; cpp uses `FPx = vv · ...` assignment but VVAR
 //   strictly outer)
 // =============================================================================
+/// Linear shred grid — splits each axis into tiles of size `distance`, then
+/// within each tile compresses the position by `width` and shifts by `(0.5
+/// − sign_offset) · (1 − width)`. Produces a discontinuous shred-like grid
+/// pattern.
+///
+/// # Authors
+/// - Zy0rg
 pub static SHREDLIN: VariationDef = VariationDef {
     name: "shredlin",
     display_name: "Shred Lin",
@@ -136,10 +157,10 @@ pub static SHREDLIN: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("xdistance", "X distance", unlimited_float, 1.0, -10.0, 10.0),
-        param!("xwidth", "X width", unlimited_float, 0.5, -10.0, 10.0),
-        param!("ydistance", "Y distance", unlimited_float, 1.0, -10.0, 10.0),
-        param!("ywidth", "Y width", unlimited_float, 0.5, -10.0, 10.0),
+        param!("xdistance", "X distance", unlimited_float, 1.0, -10.0, 10.0, "X-axis tile size."),
+        param!("xwidth", "X width", unlimited_float, 0.5, -10.0, 10.0, "X-axis intra-tile compression. 1 = no shred; 0 = collapse to tile center."),
+        param!("ydistance", "Y distance", unlimited_float, 1.0, -10.0, 10.0, "Y-axis tile size."),
+        param!("ywidth", "Y width", unlimited_float, 0.5, -10.0, 10.0, "Y-axis intra-tile compression."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -199,6 +220,12 @@ fn variation_shredlin(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
 //   zang  = (frac(xang) · w + floor(xang)) · α − π − α/2 · w
 //   out   = r · (cos zang, sin zang)
 // =============================================================================
+/// Radial shred — splits the angular space into `n` wedges of width `2π/n`,
+/// then within each wedge compresses the angular position by `width`. The
+/// radius passes through unchanged. Radial analogue of `shredlin`.
+///
+/// # Authors
+/// - Zy0rg
 pub static SHREDRAD: VariationDef = VariationDef {
     name: "shredrad",
     display_name: "Shred Rad",
@@ -206,8 +233,8 @@ pub static SHREDRAD: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("n", "N", unlimited_float, 4.0, 0.001, 100.0),
-        param!("width", "Width", float, 0.5, -1.0, 1.0),
+        param!("n", "N", unlimited_float, 4.0, 0.001, 100.0, "Number of angular wedges."),
+        param!("width", "Width", float, 0.5, -1.0, 1.0, "Intra-wedge compression. 1 = no shred; 0 = collapse to wedge boundary."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -271,6 +298,13 @@ fn variation_shredrad(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
 //   y = sin(ang) · (bx·x) + cos(ang) · (by·y)
 //   if x > 0:  out = (x, y)  else: out = (x, -y)
 // =============================================================================
+/// Heart-shaped Möbius warp — applies a Möbius-like inversion `(bx·x,
+/// by·y)` where `bx = 4/(r²+4)` and `by = (6+2·ratio)/(r²+4)`, then rotates
+/// the result by `π/4 + π/8·angle`. The Y axis is flipped where the rotated
+/// X is negative, producing a heart-shaped silhouette.
+///
+/// # Authors
+/// - Xyrus02
 pub static XHEART: VariationDef = VariationDef {
     name: "xheart",
     display_name: "X Heart",
@@ -278,8 +312,8 @@ pub static XHEART: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("angle", "Angle", unlimited_float, 0.0, -10.0, 10.0),
-        param!("ratio", "Ratio", unlimited_float, 0.0, -10.0, 10.0),
+        param!("angle", "Angle", unlimited_float, 0.0, -10.0, 10.0, "Rotation angle of the heart shape (scaled by π/8 internally and offset from π/4)."),
+        param!("ratio", "Ratio", unlimited_float, 0.0, -10.0, 10.0, "Y-axis stretch factor (added to a base of 6 to control heart roundness)."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -352,6 +386,13 @@ fn variation_xheart(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 // `result` lacks VVAR; output line `w · x + result` doesn't factor
 // cleanly. Body uses `needs_transform` to read w and divide-out.
 // =============================================================================
+/// Sin-weighted twin warp — adds a sin-modulated correction
+/// `(x²−y²)·sin(2π·distort·(x+y+offset_xy·0.1)) / (x²+y²)` to both the X
+/// and Y outputs (the same correction term is applied identically to each
+/// axis).
+///
+/// # Authors
+/// - Xyrus02
 pub static STWIN: VariationDef = VariationDef {
     name: "stwin",
     display_name: "STwin",
@@ -359,10 +400,10 @@ pub static STWIN: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("distort", "Distort", unlimited_float, 1.0, -10.0, 10.0),
-        param!("offset_xy", "Offset XY", unlimited_float, 0.0, -10.0, 10.0),
-        param!("offset_x2", "Offset X²", unlimited_float, 0.0, -10.0, 10.0),
-        param!("offset_y2", "Offset Y²", unlimited_float, 0.0, -10.0, 10.0),
+        param!("distort", "Distort", unlimited_float, 1.0, -10.0, 10.0, "Frequency multiplier on the sin term (× 2π internally)."),
+        param!("offset_xy", "Offset XY", unlimited_float, 0.0, -10.0, 10.0, "Phase offset added to the sin argument (× 0.1 internally)."),
+        param!("offset_x2", "Offset X²", unlimited_float, 0.0, -10.0, 10.0, "Additive offset on x² (× 0.0001 internally). Prevents division by zero at the origin."),
+        param!("offset_y2", "Offset Y²", unlimited_float, 0.0, -10.0, 10.0, "Additive offset on y² (× 0.0001 internally)."),
     ],
     needs_transform: true,
     writes_color: false,
@@ -424,6 +465,14 @@ fn variation_stwin(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 //   else:        a = atan2(x, y) + outside / (w − r)
 //   out = r · (cos a, sin a)            (VVAR strictly outer)
 // =============================================================================
+/// Radial whorl with inside/outside knobs — adds a `1/(w − r)` angular
+/// term to the polar angle, with separate `inside` and `outside`
+/// multipliers depending on whether the input lies inside (`r < w`) or
+/// outside (`r ≥ w`) the unit-weight radius. Produces a whorl/swirl
+/// pattern that diverges as the radius approaches the variation weight.
+///
+/// # Authors
+/// - Apophysis Plugin Pack
 pub static WHORL: VariationDef = VariationDef {
     name: "whorl",
     display_name: "Whorl",
@@ -431,8 +480,8 @@ pub static WHORL: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("inside", "Inside", unlimited_float, 0.1, -10.0, 10.0),
-        param!("outside", "Outside", unlimited_float, 0.2, -10.0, 10.0),
+        param!("inside", "Inside", unlimited_float, 0.1, -10.0, 10.0, "Angular-shift coefficient applied where `r < w`."),
+        param!("outside", "Outside", unlimited_float, 0.2, -10.0, 10.0, "Angular-shift coefficient applied where `r ≥ w`."),
     ],
     needs_transform: true,
     writes_color: false,
@@ -483,6 +532,14 @@ fn variation_whorl(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 //   r = clamp(r, rmin, rmax) · effect
 //   FPx += x · (1 + r);  FPy += y · (1 + r)         (no VVAR — divide-out)
 // =============================================================================
+/// Power-warp with rmin/rmax clamp — computes a complex radial term `r =
+/// (x² + r²·b·y²)^warp − (y² + r²·a·x²)^warp` (with `r² = 1/(x²+y²)`),
+/// clamps it to `[rmin, rmax]`, scales it by `effect`, and emits `(x·(1+r),
+/// y·(1+r))`. The clamp prevents the power expression from blowing up at
+/// large or singular inputs.
+///
+/// # Authors
+/// - DarkBeam
 pub static DEVIL_WARP: VariationDef = VariationDef {
     name: "devil_warp",
     display_name: "Devil Warp",
@@ -490,12 +547,12 @@ pub static DEVIL_WARP: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("a", "A", unlimited_float, 2.0, -10.0, 10.0),
-        param!("b", "B", unlimited_float, 1.0, -10.0, 10.0),
-        param!("effect", "Effect", unlimited_float, 1.0, -10.0, 10.0),
-        param!("warp", "Warp", unlimited_float, 0.5, -10.0, 10.0),
-        param!("rmin", "R min", unlimited_float, -0.24, -100.0, 100.0),
-        param!("rmax", "R max", unlimited_float, 100.0, -1000.0, 1000.0),
+        param!("a", "A", unlimited_float, 2.0, -10.0, 10.0, "x² weight in the second power term."),
+        param!("b", "B", unlimited_float, 1.0, -10.0, 10.0, "y² weight in the first power term."),
+        param!("effect", "Effect", unlimited_float, 1.0, -10.0, 10.0, "Scale on the final radial-warp magnitude."),
+        param!("warp", "Warp", unlimited_float, 0.5, -10.0, 10.0, "Power exponent for both radial terms."),
+        param!("rmin", "R min", unlimited_float, -0.24, -100.0, 100.0, "Lower clamp on the radial-warp magnitude."),
+        param!("rmax", "R max", unlimited_float, 100.0, -1000.0, 1000.0, "Upper clamp on the radial-warp magnitude."),
     ],
     needs_transform: true,
     writes_color: false,

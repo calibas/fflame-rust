@@ -32,6 +32,34 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Eight-region grid offset — partitions the XY plane into 8 wedges based
+/// on `round(p.x)·xx` and `round(p.y)·yy` (the rounding turns the param
+/// space into a coarse grid), then adds or subtracts a per-region offset
+/// triplet to `(x, y, z)`. The 8 regions split each quadrant along its
+/// diagonal; for `y ≤ 0` (regions A-D) the Z offset is added, for `y > 0`
+/// (regions E-H) the Z offset is multiplied into Z instead.
+///
+/// Region table (input X/Y signs after gate-rounding by `xx`/`yy`):
+///
+/// | Region | Condition (`y`, `x` are gate-rounded) | X op | Y op | Z op |
+/// |---|---|---|---|---|
+/// | A | `y ≤ 0`, `x > 0`, `-y ≥ x`  | `+xa` | `+ya` | `+za` |
+/// | B | `y ≤ 0`, `x > 0`, `-y < x`  | `+xb` | `+yb` | `+zb` |
+/// | C | `y ≤ 0`, `x ≤ 0`, `y ≤ x`   | `+xc` | `+yc` | `+zc` |
+/// | D | `y ≤ 0`, `x ≤ 0`, `y > x`   | `+xd` | `-yd` | `+zd` |
+/// | E | `y > 0`, `x > 0`, `y ≥ x`   | `-xe` | `+ye` | `·ze` |
+/// | F | `y > 0`, `x > 0`, `y < x`   | `+xf` | `+yf` | `·zf` |
+/// | G | `y > 0`, `x ≤ 0`, `y ≥ -x`  | `-xg` | `+yg` | `·zg` |
+/// | H | `y > 0`, `x ≤ 0`, `y < -x`  | `+xh` | `-yh` | `·zh` |
+///
+/// Sign flips on `-yd`, `-xe`, `-xg`, `-yh` and the add-vs-multiply Z split
+/// between A-D and E-H are preserved verbatim from upstream.
+///
+/// # Authors
+/// - Michael Faber
+/// - Joel Faber
+/// - DarkBeam
+/// - Brad Stefanov
 pub static GRIDOUT_3D: VariationDef = VariationDef {
     name: "gridout3D",
     display_name: "Gridout 3D",
@@ -39,32 +67,32 @@ pub static GRIDOUT_3D: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("xx", "X Gate", unlimited_float, 1.0, -10.0, 10.0),
-        param!("yy", "Y Gate", unlimited_float, 1.0, -10.0, 10.0),
-        param!("xa", "XA", unlimited_float, 1.0, -10.0, 10.0),
-        param!("xb", "XB", unlimited_float, 0.0, -10.0, 10.0),
-        param!("xc", "XC", unlimited_float, 1.0, -10.0, 10.0),
-        param!("xd", "XD", unlimited_float, 0.0, -10.0, 10.0),
-        param!("xe", "XE", unlimited_float, 1.0, -10.0, 10.0),
-        param!("xf", "XF", unlimited_float, 0.0, -10.0, 10.0),
-        param!("xg", "XG", unlimited_float, 1.0, -10.0, 10.0),
-        param!("xh", "XH", unlimited_float, 0.0, -10.0, 10.0),
-        param!("ya", "YA", unlimited_float, 0.0, -10.0, 10.0),
-        param!("yb", "YB", unlimited_float, 1.0, -10.0, 10.0),
-        param!("yc", "YC", unlimited_float, 0.0, -10.0, 10.0),
-        param!("yd", "YD", unlimited_float, 1.0, -10.0, 10.0),
-        param!("ye", "YE", unlimited_float, 0.0, -10.0, 10.0),
-        param!("yf", "YF", unlimited_float, 1.0, -10.0, 10.0),
-        param!("yg", "YG", unlimited_float, 0.0, -10.0, 10.0),
-        param!("yh", "YH", unlimited_float, 1.0, -10.0, 10.0),
-        param!("za", "ZA", unlimited_float, 0.0, -10.0, 10.0),
-        param!("zb", "ZB", unlimited_float, 0.0, -10.0, 10.0),
-        param!("zc", "ZC", unlimited_float, 0.0, -10.0, 10.0),
-        param!("zd", "ZD", unlimited_float, 0.0, -10.0, 10.0),
-        param!("ze", "ZE", unlimited_float, 1.0, -10.0, 10.0),
-        param!("zf", "ZF", unlimited_float, 1.0, -10.0, 10.0),
-        param!("zg", "ZG", unlimited_float, 1.0, -10.0, 10.0),
-        param!("zh", "ZH", unlimited_float, 1.0, -10.0, 10.0),
+        param!("xx", "X Gate", unlimited_float, 1.0, -10.0, 10.0, "X gate scale: input `x` is rounded then multiplied by `xx` before the region comparison. Setting to 0 collapses all regions onto `x = 0` (only the y-half decision still applies)."),
+        param!("yy", "Y Gate", unlimited_float, 1.0, -10.0, 10.0, "Y gate scale: input `y` is rounded then multiplied by `yy` before the region comparison. Setting to 0 collapses all regions onto `y = 0` (only the x-sign decision still applies)."),
+        param!("xa", "XA", unlimited_float, 1.0, -10.0, 10.0, "Region A (y ≤ 0, x > 0, -y ≥ x) X offset, added to X."),
+        param!("xb", "XB", unlimited_float, 0.0, -10.0, 10.0, "Region B (y ≤ 0, x > 0, -y < x) X offset, added to X."),
+        param!("xc", "XC", unlimited_float, 1.0, -10.0, 10.0, "Region C (y ≤ 0, x ≤ 0, y ≤ x) X offset, added to X."),
+        param!("xd", "XD", unlimited_float, 0.0, -10.0, 10.0, "Region D (y ≤ 0, x ≤ 0, y > x) X offset, added to X."),
+        param!("xe", "XE", unlimited_float, 1.0, -10.0, 10.0, "Region E (y > 0, x > 0, y ≥ x) X offset, subtracted from X."),
+        param!("xf", "XF", unlimited_float, 0.0, -10.0, 10.0, "Region F (y > 0, x > 0, y < x) X offset, added to X."),
+        param!("xg", "XG", unlimited_float, 1.0, -10.0, 10.0, "Region G (y > 0, x ≤ 0, y ≥ -x) X offset, subtracted from X."),
+        param!("xh", "XH", unlimited_float, 0.0, -10.0, 10.0, "Region H (y > 0, x ≤ 0, y < -x) X offset, added to X."),
+        param!("ya", "YA", unlimited_float, 0.0, -10.0, 10.0, "Region A (y ≤ 0, x > 0, -y ≥ x) Y offset, added to Y."),
+        param!("yb", "YB", unlimited_float, 1.0, -10.0, 10.0, "Region B (y ≤ 0, x > 0, -y < x) Y offset, added to Y."),
+        param!("yc", "YC", unlimited_float, 0.0, -10.0, 10.0, "Region C (y ≤ 0, x ≤ 0, y ≤ x) Y offset, added to Y."),
+        param!("yd", "YD", unlimited_float, 1.0, -10.0, 10.0, "Region D (y ≤ 0, x ≤ 0, y > x) Y offset, subtracted from Y."),
+        param!("ye", "YE", unlimited_float, 0.0, -10.0, 10.0, "Region E (y > 0, x > 0, y ≥ x) Y offset, added to Y."),
+        param!("yf", "YF", unlimited_float, 1.0, -10.0, 10.0, "Region F (y > 0, x > 0, y < x) Y offset, added to Y."),
+        param!("yg", "YG", unlimited_float, 0.0, -10.0, 10.0, "Region G (y > 0, x ≤ 0, y ≥ -x) Y offset, added to Y."),
+        param!("yh", "YH", unlimited_float, 1.0, -10.0, 10.0, "Region H (y > 0, x ≤ 0, y < -x) Y offset, subtracted from Y."),
+        param!("za", "ZA", unlimited_float, 0.0, -10.0, 10.0, "Region A (y ≤ 0, x > 0, -y ≥ x) Z offset, added to Z."),
+        param!("zb", "ZB", unlimited_float, 0.0, -10.0, 10.0, "Region B (y ≤ 0, x > 0, -y < x) Z offset, added to Z."),
+        param!("zc", "ZC", unlimited_float, 0.0, -10.0, 10.0, "Region C (y ≤ 0, x ≤ 0, y ≤ x) Z offset, added to Z."),
+        param!("zd", "ZD", unlimited_float, 0.0, -10.0, 10.0, "Region D (y ≤ 0, x ≤ 0, y > x) Z offset, added to Z."),
+        param!("ze", "ZE", unlimited_float, 1.0, -10.0, 10.0, "Region E (y > 0, x > 0, y ≥ x) Z offset, multiplied into Z (regions E-H multiply; A-D add)."),
+        param!("zf", "ZF", unlimited_float, 1.0, -10.0, 10.0, "Region F (y > 0, x > 0, y < x) Z offset, multiplied into Z (regions E-H multiply; A-D add)."),
+        param!("zg", "ZG", unlimited_float, 1.0, -10.0, 10.0, "Region G (y > 0, x ≤ 0, y ≥ -x) Z offset, multiplied into Z (regions E-H multiply; A-D add)."),
+        param!("zh", "ZH", unlimited_float, 1.0, -10.0, 10.0, "Region H (y > 0, x ≤ 0, y < -x) Z offset, multiplied into Z (regions E-H multiply; A-D add)."),
     ],
     needs_transform: false,
     writes_color: false,

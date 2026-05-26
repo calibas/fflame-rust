@@ -28,6 +28,12 @@ use crate::variations::{
 // =============================================================================
 // sin2_bs: parameterized sin
 // =============================================================================
+/// Parameterized Sin — independent scaling on each sin/cos/sinh/cosh term.
+/// At defaults (1.0), reduces to Sin.
+///
+/// # Authors
+/// - cothe
+/// - Brad Stefanov
 pub static SIN2_BS: VariationDef = VariationDef {
     name: "sin2_bs",
     display_name: "Sin2 BS",
@@ -36,13 +42,13 @@ pub static SIN2_BS: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[
         VariationParamDef { name: "x1", display_name: "X1", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `sin(x)` in the internal computation.") },
         VariationParamDef { name: "x2", display_name: "X2", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `cos(x)` in the internal computation.") },
         VariationParamDef { name: "y1", display_name: "Y1", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `sinh(y)` in the internal computation.") },
         VariationParamDef { name: "y2", display_name: "Y2", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `cosh(y)` in the internal computation.") },
     ],
     needs_transform: false,
     writes_color: false,
@@ -78,6 +84,11 @@ fn variation_sin2_bs(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 // =============================================================================
 // cos2_bs: parameterized cos
 // =============================================================================
+/// Parameterized Cos. At defaults (1.0), reduces to Cos.
+///
+/// # Authors
+/// - cothe
+/// - Brad Stefanov
 pub static COS2_BS: VariationDef = VariationDef {
     name: "cos2_bs",
     display_name: "Cos2 BS",
@@ -86,13 +97,13 @@ pub static COS2_BS: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[
         VariationParamDef { name: "x1", display_name: "X1", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `sin(x)` in the internal computation.") },
         VariationParamDef { name: "x2", display_name: "X2", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `cos(x)` in the internal computation.") },
         VariationParamDef { name: "y1", display_name: "Y1", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `sinh(y)` in the internal computation.") },
         VariationParamDef { name: "y2", display_name: "Y2", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `cosh(y)` in the internal computation.") },
     ],
     needs_transform: false,
     writes_color: false,
@@ -130,6 +141,12 @@ fn variation_cos2_bs(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 //   FPx += den * sin(x1·x), FPy += den * sinh(y1·y)
 //   den = 1 / (cos(x2·x) + cosh(y2·y))
 // =============================================================================
+/// Parameterized Tan. At defaults (2.0, matching the upstream doubling),
+/// reduces to Tan.
+///
+/// # Authors
+/// - cothe
+/// - Brad Stefanov
 pub static TAN2_BS: VariationDef = VariationDef {
     name: "tan2_bs",
     display_name: "Tan2 BS",
@@ -138,13 +155,13 @@ pub static TAN2_BS: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[
         VariationParamDef { name: "x1", display_name: "X1", param_type: ParamType::UnlimitedFloat,
-                            default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `sin(x)` in the internal computation.") },
         VariationParamDef { name: "x2", display_name: "X2", param_type: ParamType::UnlimitedFloat,
-                            default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `cos(x)` in the internal computation.") },
         VariationParamDef { name: "y1", display_name: "Y1", param_type: ParamType::UnlimitedFloat,
-                            default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `sinh(y)` in the internal computation.") },
         VariationParamDef { name: "y2", display_name: "Y2", param_type: ParamType::UnlimitedFloat,
-                            default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `cosh(y)` in the internal computation.") },
     ],
     needs_transform: false,
     writes_color: false,
@@ -184,6 +201,11 @@ fn variation_tan2_bs(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 // =============================================================================
 // sec2_bs: parameterized sec
 // =============================================================================
+/// Parameterized Sec (1/cos). At defaults (1.0), reduces to Sec.
+///
+/// # Authors
+/// - cothe
+/// - Brad Stefanov
 pub static SEC2_BS: VariationDef = VariationDef {
     name: "sec2_bs",
     display_name: "Sec2 BS",
@@ -192,13 +214,13 @@ pub static SEC2_BS: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[
         VariationParamDef { name: "x1", display_name: "X1", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `sin(x)` in the internal computation.") },
         VariationParamDef { name: "x2", display_name: "X2", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `cos(x)` in the internal computation.") },
         VariationParamDef { name: "y1", display_name: "Y1", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `sinh(y)` in the internal computation.") },
         VariationParamDef { name: "y2", display_name: "Y2", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `cosh(y)` in the internal computation.") },
     ],
     needs_transform: false,
     writes_color: false,
@@ -238,6 +260,11 @@ fn variation_sec2_bs(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 // =============================================================================
 // csc2_bs: parameterized csc
 // =============================================================================
+/// Parameterized Csc (1/sin). At defaults (1.0), reduces to Csc.
+///
+/// # Authors
+/// - cothe
+/// - Brad Stefanov
 pub static CSC2_BS: VariationDef = VariationDef {
     name: "csc2_bs",
     display_name: "Csc2 BS",
@@ -246,13 +273,13 @@ pub static CSC2_BS: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[
         VariationParamDef { name: "x1", display_name: "X1", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `sin(x)` in the internal computation.") },
         VariationParamDef { name: "x2", display_name: "X2", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `cos(x)` in the internal computation.") },
         VariationParamDef { name: "y1", display_name: "Y1", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `sinh(y)` in the internal computation.") },
         VariationParamDef { name: "y2", display_name: "Y2", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `cosh(y)` in the internal computation.") },
     ],
     needs_transform: false,
     writes_color: false,
@@ -294,6 +321,11 @@ fn variation_csc2_bs(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 //   FPx += den * sin(x1·x), FPy += -den * sinh(y1·y)
 //   den = 1 / (cosh(y2·y) - cos(x2·x))
 // =============================================================================
+/// Parameterized Cot (cos/sin). At defaults (2.0), reduces to Cot.
+///
+/// # Authors
+/// - cothe
+/// - Brad Stefanov
 pub static COT2_BS: VariationDef = VariationDef {
     name: "cot2_bs",
     display_name: "Cot2 BS",
@@ -302,13 +334,13 @@ pub static COT2_BS: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[
         VariationParamDef { name: "x1", display_name: "X1", param_type: ParamType::UnlimitedFloat,
-                            default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `sin(x)` in the internal computation.") },
         VariationParamDef { name: "x2", display_name: "X2", param_type: ParamType::UnlimitedFloat,
-                            default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `cos(x)` in the internal computation.") },
         VariationParamDef { name: "y1", display_name: "Y1", param_type: ParamType::UnlimitedFloat,
-                            default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `sinh(y)` in the internal computation.") },
         VariationParamDef { name: "y2", display_name: "Y2", param_type: ParamType::UnlimitedFloat,
-                            default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `cosh(y)` in the internal computation.") },
     ],
     needs_transform: false,
     writes_color: false,
@@ -351,6 +383,11 @@ fn variation_cot2_bs(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 //   FPx += sinh(x1·x) · cos(y2·y)
 //   FPy += cosh(x2·x) · sin(y1·y)
 // =============================================================================
+/// Parameterized Sinh. At defaults (1.0), reduces to Sinh.
+///
+/// # Authors
+/// - cothe
+/// - Brad Stefanov
 pub static SINH2_BS: VariationDef = VariationDef {
     name: "sinh2_bs",
     display_name: "Sinh2 BS",
@@ -359,13 +396,13 @@ pub static SINH2_BS: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[
         VariationParamDef { name: "x1", display_name: "X1", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `sin(x)` in the internal computation.") },
         VariationParamDef { name: "x2", display_name: "X2", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `cos(x)` in the internal computation.") },
         VariationParamDef { name: "y1", display_name: "Y1", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `sinh(y)` in the internal computation.") },
         VariationParamDef { name: "y2", display_name: "Y2", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `cosh(y)` in the internal computation.") },
     ],
     needs_transform: false,
     writes_color: false,
@@ -401,6 +438,11 @@ fn variation_sinh2_bs(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
 // =============================================================================
 // cosh2_bs: parameterized cosh
 // =============================================================================
+/// Parameterized Cosh. At defaults (1.0), reduces to Cosh.
+///
+/// # Authors
+/// - cothe
+/// - Brad Stefanov
 pub static COSH2_BS: VariationDef = VariationDef {
     name: "cosh2_bs",
     display_name: "Cosh2 BS",
@@ -409,13 +451,13 @@ pub static COSH2_BS: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[
         VariationParamDef { name: "x1", display_name: "X1", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `sin(x)` in the internal computation.") },
         VariationParamDef { name: "x2", display_name: "X2", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `cos(x)` in the internal computation.") },
         VariationParamDef { name: "y1", display_name: "Y1", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `sinh(y)` in the internal computation.") },
         VariationParamDef { name: "y2", display_name: "Y2", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `cosh(y)` in the internal computation.") },
     ],
     needs_transform: false,
     writes_color: false,
@@ -453,6 +495,11 @@ fn variation_cosh2_bs(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
 //   FPx += den · sinh(x1·x), FPy += den · sin(y1·y)
 //   den = 1 / (cos(y2·y) + cosh(x2·x))
 // =============================================================================
+/// Parameterized Tanh. At defaults (2.0), reduces to Tanh.
+///
+/// # Authors
+/// - cothe
+/// - Brad Stefanov
 pub static TANH2_BS: VariationDef = VariationDef {
     name: "tanh2_bs",
     display_name: "Tanh2 BS",
@@ -461,13 +508,13 @@ pub static TANH2_BS: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[
         VariationParamDef { name: "x1", display_name: "X1", param_type: ParamType::UnlimitedFloat,
-                            default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `sin(x)` in the internal computation.") },
         VariationParamDef { name: "x2", display_name: "X2", param_type: ParamType::UnlimitedFloat,
-                            default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `cos(x)` in the internal computation.") },
         VariationParamDef { name: "y1", display_name: "Y1", param_type: ParamType::UnlimitedFloat,
-                            default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `sinh(y)` in the internal computation.") },
         VariationParamDef { name: "y2", display_name: "Y2", param_type: ParamType::UnlimitedFloat,
-                            default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `cosh(y)` in the internal computation.") },
     ],
     needs_transform: false,
     writes_color: false,
@@ -509,6 +556,11 @@ fn variation_tanh2_bs(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
 //   FPx += den · sinh(x1·x), FPy += den · sin(y1·y)
 //   den = 1 / (cosh(x2·x) - cos(y2·y))
 // =============================================================================
+/// Parameterized Coth. At defaults (2.0), reduces to Coth.
+///
+/// # Authors
+/// - cothe
+/// - Brad Stefanov
 pub static COTH2_BS: VariationDef = VariationDef {
     name: "coth2_bs",
     display_name: "Coth2 BS",
@@ -517,13 +569,13 @@ pub static COTH2_BS: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[
         VariationParamDef { name: "x1", display_name: "X1", param_type: ParamType::UnlimitedFloat,
-                            default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `sin(x)` in the internal computation.") },
         VariationParamDef { name: "x2", display_name: "X2", param_type: ParamType::UnlimitedFloat,
-                            default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `cos(x)` in the internal computation.") },
         VariationParamDef { name: "y1", display_name: "Y1", param_type: ParamType::UnlimitedFloat,
-                            default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `sinh(y)` in the internal computation.") },
         VariationParamDef { name: "y2", display_name: "Y2", param_type: ParamType::UnlimitedFloat,
-                            default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `cosh(y)` in the internal computation.") },
     ],
     needs_transform: false,
     writes_color: false,
@@ -567,6 +619,12 @@ fn variation_coth2_bs(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
 //   FPy += -den · sin(y1·y) · sinh(x1·x)
 //   den = 2 / (cos(2y) + cosh(2x))
 // =============================================================================
+/// Parameterized Sech. At defaults (1.0), reduces to Sech (with the same
+/// JWildfire formula quirk noted in trig.rs).
+///
+/// # Authors
+/// - cothe
+/// - Brad Stefanov
 pub static SECH2_BS: VariationDef = VariationDef {
     name: "sech2_bs",
     display_name: "Sech2 BS",
@@ -575,13 +633,13 @@ pub static SECH2_BS: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[
         VariationParamDef { name: "x1", display_name: "X1", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `sin(x)` in the internal computation.") },
         VariationParamDef { name: "x2", display_name: "X2", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `cos(x)` in the internal computation.") },
         VariationParamDef { name: "y1", display_name: "Y1", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `sinh(y)` in the internal computation.") },
         VariationParamDef { name: "y2", display_name: "Y2", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `cosh(y)` in the internal computation.") },
     ],
     needs_transform: false,
     writes_color: false,
@@ -621,6 +679,11 @@ fn variation_sech2_bs(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
 // =============================================================================
 // csch2_bs: parameterized csch
 // =============================================================================
+/// Parameterized Csch. At defaults (1.0), reduces to Csch.
+///
+/// # Authors
+/// - cothe
+/// - Brad Stefanov
 pub static CSCH2_BS: VariationDef = VariationDef {
     name: "csch2_bs",
     display_name: "Csch2 BS",
@@ -629,13 +692,13 @@ pub static CSCH2_BS: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[
         VariationParamDef { name: "x1", display_name: "X1", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `sin(x)` in the internal computation.") },
         VariationParamDef { name: "x2", display_name: "X2", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `cos(x)` in the internal computation.") },
         VariationParamDef { name: "y1", display_name: "Y1", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `sinh(y)` in the internal computation.") },
         VariationParamDef { name: "y2", display_name: "Y2", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `cosh(y)` in the internal computation.") },
     ],
     needs_transform: false,
     writes_color: false,
@@ -677,6 +740,13 @@ fn variation_csch2_bs(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
 //   exp(x1·x) · (cos(y2·y), sin(y1·y))
 //   Note only THREE params upstream (no x2).
 // =============================================================================
+/// Parameterized complex exponential — `e^(x·x1)` modulated by `sin(y·y1)`
+/// and `cos(y·y2)`. At defaults (1.0), reduces to the unparameterized
+/// complex exp.
+///
+/// # Authors
+/// - cothe
+/// - Brad Stefanov
 pub static EXP2_BS: VariationDef = VariationDef {
     name: "exp2_bs",
     display_name: "Exp2 BS",
@@ -685,11 +755,11 @@ pub static EXP2_BS: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[
         VariationParamDef { name: "x1", display_name: "X1", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the X exponent — output uses `exp(x · x1)`.") },
         VariationParamDef { name: "y1", display_name: "Y1", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `sin(y)`.") },
         VariationParamDef { name: "y2", display_name: "Y2", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
+                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `cos(y)`.") },
     ],
     needs_transform: false,
     writes_color: false,

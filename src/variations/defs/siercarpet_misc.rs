@@ -30,6 +30,14 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Cross Carpet IFS (Roger Bagula) — picks a random index `l ∈ [1, 2m]` per
+/// iteration and applies one of two affine maps based on `l` parity: odd
+/// `l` uses a single vertex at angle `2π·i/m`; even `l` uses the midpoint
+/// between consecutive vertices. The mapping is `(x/3 + (a − b)/√2, y/3 +
+/// (a + b)/√2)`, producing a Sierpinski-style cross carpet with `m` arms.
+///
+/// # Authors
+/// - Jesus Sosa
 pub static SIERCARPET_JS: VariationDef = VariationDef {
     name: "siercarpet_js",
     display_name: "Siercarpet (JS)",
@@ -37,7 +45,7 @@ pub static SIERCARPET_JS: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("m", "M", int, 3.0, 3.0, 12.0),
+        param!("m", "M", int, 3.0, 3.0, 12.0, "Number of arms in the cross (3-12). Each iteration picks one of `2m` vertex-or-midpoint positions around the circle."),
     ],
     needs_transform: false,
     writes_color: false,
