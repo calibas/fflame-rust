@@ -208,84 +208,64 @@ most candidates the mapping is mechanical:
 - `Integer [0, N-1]` → `Enum` with N variants: round to nearest, clamp
   to `[0, N-1]`, look up by index. Also safe to automate.
 
-**Status:** 35 binary `Integer [0, 1]` → `Boolean` conversions landed
-in commit `4aa4290` (full list captured in
-`scripts/convert_int_to_bool.py`). Wire format unchanged — values
-still serialize as `f32`; only the UI control changed. The remaining
-work splits into the two buckets below.
+**Status:**
+- **35 binary `Integer [0, 1]` → `Boolean`** conversions landed in
+  commit `4aa4290` (full list in `scripts/convert_int_to_bool.py`).
+- **10 multi-mode `Integer [0, N-1]` → `Enum`** conversions landed in
+  commit `567e860` (full list in `scripts/convert_int_to_enum.py`):
+  `falloff2.type` + pre/post variants, `atan.mode`,
+  `post_axis_symmetry_wf.axis`, `pre_wave3D_wf.axis`,
+  `mobius_strip.width_mode/radial_mode`, `spirograph3D.mode`,
+  `klein_group.recipe`.
+- Description cleanup (drop now-redundant "0 = X, 1 = Y" enumerations)
+  landed in `scripts/cleanup_enum_bool_descriptions.py`.
 
-#### Enum (`Integer [0, N-1]` → `Enum`) — still pending
+Wire format unchanged across all of these — values still serialize as
+`f32`; only the UI control changed. The remaining work splits into the
+two buckets below.
 
-- `falloff2.type`, `pre_falloff2.type`, `post_falloff2.type` — 3
-  branches (0 = uniform, 1 = triangular, 2 = gaussian). Same enum
-  across all three phase variants. See
-  [extended.rs](../../src/variations/defs/extended.rs),
-  [pre_phase.rs](../../src/variations/defs/pre_phase.rs),
-  [post_phase.rs](../../src/variations/defs/post_phase.rs).
-- `hole2.shape` — 10 distinct radial-formula branches (shape 0-9). See
+#### Enum (`Integer [0, N-1]` → `Enum`) — needs design decisions
+
+These weren't included in the mechanical batch because each has a
+question that needs answering before conversion.
+
+- `hole2.shape` — 10 distinct radial-formula branches (shape 0-9).
+  Mechanically convertible, just needs short semantic labels per
+  shape (read the WGSL body to name each formula). See
   [standalone_exotics.rs](../../src/variations/defs/standalone_exotics.rs).
-- `atan.mode` — declared `Integer` with `[0, 2]` range, 3-mode axis
-  selector (Y only / X only / both). Should be `Enum`. See
-  [singleton_misc.rs](../../src/variations/defs/singleton_misc.rs).
-- `spirograph3D.mode` — declared `Integer` with `[0, 4]` range, 5-mode
-  width-jitter pattern selector (single uniform / phased-sin /
-  independent uniform / Gaussian / ±width X only). Should be `Enum`.
-  See [apo_misc17.rs](../../src/variations/defs/apo_misc17.rs).
-- `post_axis_symmetry_wf.axis` — declared `Integer` with `[0, 2]`
-  range, 3-mode axis selector (X / Y / Z). Should be `Enum`. See
-  [post_axis_symmetry_misc.rs](../../src/variations/defs/post_axis_symmetry_misc.rs).
-- `pre_wave3D_wf.axis` — declared `Integer` with `[0, 3]` range,
-  4-mode displacement-axis selector (XY plane → Z / YZ plane → X /
-  ZX plane → Y / RADIAL). Should be `Enum`. See
-  [pre_wave3d_misc.rs](../../src/variations/defs/pre_wave3d_misc.rs).
-- `iconattractor_js.preset_id` — declared `Integer` with `[0, 16]`
-  range, 17-mode selector for Field & Golubitsky's symmetric-icon
-  preset table. Should be `Enum`. See
+- `iconattractor_js.preset_id` — 17-mode selector for Field &
+  Golubitsky's symmetric-icon preset table. Same shape as `hole2`:
+  mechanically convertible, but labels would need shape descriptors
+  per preset (read the WGSL or the original paper). See
   [iconattractor_misc.rs](../../src/variations/defs/iconattractor_misc.rs).
-- `butterfly_fay.outer_mode`, `butterfly_fay.inner_mode` — both
-  declared `Integer` with `[0, 5]` range, 6-mode output-formula
-  selector. Same enum on both. Should be `Enum`. See
+- `butterfly_fay.outer_mode`, `butterfly_fay.inner_mode` — 6-mode
+  output-formula selector. Shares the spread-formula family with
+  `rhodonea.inner_mode/outer_mode` (modes 0-4 match exactly); best
+  done together for consistent labels. See
   [butterfly_fay_misc.rs](../../src/variations/defs/butterfly_fay_misc.rs).
-- `mobius_strip.width_mode`, `mobius_strip.radial_mode` — both
-  declared `Integer` with `[0, 3]` range, 4-mode out-of-range
-  behavior selector (wrap / clamp / hide / leave). Same enum on
-  both. Should be `Enum`. See
-  [apo_misc19.rs](../../src/variations/defs/apo_misc19.rs).
-- `jac_asn.jac_asn_type` — declared `Integer` with `[0, 7]` range,
-  8-mode selector for which inverse Jacobi elliptic function to
-  compute (0/4 = invdn, 1/5 = inverse sn, 2/6 = inverse cn, 3/7 =
-  inverse sc). The high bit (`type > 3`) additionally swaps modulus
-  and phi, so this is two orthogonal toggles disguised as a single
-  enum — when converting, consider whether to expose them as two
-  separate fields (function-kind enum + swap-modulus boolean) or
-  keep the flat 8-variant enum to match the wire format. See
-  [jac_asn_misc.rs](../../src/variations/defs/jac_asn_misc.rs).
-- `rhodonea.inner_mode`, `rhodonea.outer_mode` — both declared
-  `Integer` with `[0, 6]` range, 7-mode spread/mask behavior selector
-  (0 = normal, 1-4 = four spread formulas, 5/6 = mask hide/pass-
-  through). Same enum across both — though note the mask semantics
-  on 5/6 are inverted between inner and outer (5 hides for inner /
-  passes for outer; 6 passes for inner / hides for outer). Should be
-  `Enum`. See
+- `rhodonea.inner_mode`, `rhodonea.outer_mode` — 7-mode spread/mask
+  behavior selector. Same 0-4 spread family as `butterfly_fay`; modes
+  5/6 are mask hide/pass-through with **inverted semantics between
+  inner and outer** (5 hides for inner / passes for outer; 6 passes
+  for inner / hides for outer). Need two separate enum variant lists
+  to label each correctly. See
   [rhodonea_misc.rs](../../src/variations/defs/rhodonea_misc.rs).
-- `klein_group.recipe` — declared `Integer` with `[0, 6]` range,
-  7-mode selector for the Kleinian generator-pair construction
-  recipe: GRANDMA_STANDARD (0), MASKIT_MU (1), JORGENSEN (2),
-  RILEY (3), RILEY_MODIFIED (4), MASKIT_MU_MODIFIED (5),
-  MASKIT_LEYS_MODIFIED (6). The recipe also changes the meaning of
-  `b_re`/`b_im` (unused in recipes 1 and 3), so an `Enum` UI would
-  ideally also gate the visibility of those params. See
-  [klein_group_misc.rs](../../src/variations/defs/klein_group_misc.rs).
+- `jac_asn.jac_asn_type` — 8-mode selector that's really
+  `2 × 4` (function-kind × swap-modulus-and-phi). Decision: convert
+  to a flat 8-variant enum to match the wire format, or split into
+  two separate params (a 4-variant enum + a Boolean)? Splitting is
+  cleaner UX but changes the param list — would need a legacy_import
+  shim. See
+  [jac_asn_misc.rs](../../src/variations/defs/jac_asn_misc.rs).
 - `subflame_wf.color_mode` — declared `Integer` with `[-1, 4]` range,
   6-mode color-handling selector: -1 = Off (default), 0 = Direct
   (overwrite parent's `vc` with subflame's color), 1-4 = JWildfire's
-  CM_RED/GREEN/BLUE/BRIGHTNESS modes. Should be `Enum` — but note
-  that modes 1-4 are currently declared but **silently no-op'd**
-  (treated as Off); only Off and Direct are implemented. Either
-  finish the port for 1-4 or drop them from the range when
-  converting. The `-1` baseline is also awkward for `Enum` (which
-  expects `[0, N-1]`); could remap to `0 = Off, 1 = Direct, ...` but
-  that changes the wire format — needs a legacy_import shim. See
+  CM_RED/GREEN/BLUE/BRIGHTNESS modes. Two issues: the `-1` baseline
+  is awkward for `Enum` (which expects `[0, N-1]`); and modes 1-4 are
+  currently declared but **silently no-op'd** (only Off and Direct
+  are implemented). Either finish the port for 1-4 or drop them from
+  the range. Remapping to `0 = Off, 1 = Direct, ...` would change the
+  wire format and need a legacy_import shim. See
   [subflame.rs](../../src/variations/defs/subflame.rs).
 
 #### Float-threshold dispatch — keep as Float (or add legacy_import shim)

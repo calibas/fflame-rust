@@ -73,7 +73,7 @@ pub static CORNERS: VariationDef = VariationDef {
         param!("xpower", "X Power", unlimited_float, 0.75, -10.0, 10.0, "X-axis power exponent (combined additively with `xypower`)."),
         param!("ypower", "Y Power", unlimited_float, 0.75, -10.0, 10.0, "Y-axis power exponent (combined additively with `xypower`)."),
         param!("xypower", "XY Power Add", unlimited_float, 0.0, -10.0, 10.0, "Additional power offset added to both `xpower` and `ypower`."),
-        param!("logmode", "Log Mode", bool, false, "Formula selector: 0 = `pow(x², …)`, 1 = `pow(log_base(x²·mult + 3), …) − 1.33`."),
+        param!("logmode", "Log Mode", bool, false, "When on, use the log-base formula `pow(log_base(x²·mult + 3), …) − 1.33`. When off, plain `pow(x², …)`."),
         param!("log_base", "Log Base", unlimited_float, 2.71828, 0.01, 100.0, "Log base used by the `logmode = 1` formula. Default ≈ e."),
     ],
     needs_transform: true,
@@ -603,7 +603,7 @@ pub static ATAN_VAR: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("mode", "Mode", enum, 0, &["Y Only", "X Only", "Both"], "Which axes get arctangent-transformed: 0 = Y only, 1 = X only, 2 = both."),
+        param!("mode", "Mode", enum, 0, &["Y Only", "X Only", "Both"], "Which axes get the arctangent transform."),
         param!("stretch", "Stretch", unlimited_float, 1.0, -10.0, 10.0, "Pre-atan input scaling. Higher = sharper saturation toward ±1."),
     ],
     needs_transform: false,
