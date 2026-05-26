@@ -125,7 +125,7 @@ fn variation_target(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 /// discarded.
 ///
 /// # Authors
-/// - dark-beam
+/// - DarkBeam
 pub static YIN_YANG: VariationDef = VariationDef {
     name: "yin_yang",
     display_name: "Yin Yang",

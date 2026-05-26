@@ -1151,7 +1151,7 @@ fn variation_separation(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<
 /// warping; classic hyperbolic-geometry effect.
 /// 
 /// # Authors
-/// - eralex
+/// - eralex61
 pub static MOBIUS: VariationDef = VariationDef {
     name: "mobius",
     display_name: "Mobius",
