@@ -36,6 +36,12 @@ use crate::param;
 // circleRand
 // ---------------------------------------------------------------------------
 
+/// Random-circle sampler — repeatedly samples a random `(rx, ry)` point in
+/// the rectangle `[-X, X] × [-Y, Y]`, checks whether the point falls inside
+/// an 'active' cell (cell density ≤ `Dens` AND distance from cell center ≤
+/// a hashed per-cell radius). Returns the first accepted sample. Rejection-
+/// sampling loop is capped at 32 iterations to avoid WGSL non-uniform-
+/// control-flow issues; the last sample is returned if none accept.
 pub static CIRCLE_RAND: VariationDef = VariationDef {
     name: "circleRand",
     display_name: "Circle Rand",
@@ -43,11 +49,11 @@ pub static CIRCLE_RAND: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("Sc", "Scale", unlimited_float, 1.0, -10.0, 10.0),
-        param!("Dens", "Density", unlimited_float, 0.5, 0.0, 1.0),
-        param!("X", "X", unlimited_float, 10.0, -100.0, 100.0),
-        param!("Y", "Y", unlimited_float, 10.0, -100.0, 100.0),
-        param!("Seed", "Seed", int, 0.0, -1000.0, 1000.0),
+        param!("Sc", "Scale", unlimited_float, 1.0, -10.0, 10.0, "Cell size — each cell occupies a `2·Sc × 2·Sc` region."),
+        param!("Dens", "Density", unlimited_float, 0.5, 0.0, 1.0, "Per-cell density threshold (probability that a cell is 'active' and accepts a sample)."),
+        param!("X", "X", unlimited_float, 10.0, -100.0, 100.0, "Bounding-rectangle X half-extent (samples drawn from `[-X, X]`)."),
+        param!("Y", "Y", unlimited_float, 10.0, -100.0, 100.0, "Bounding-rectangle Y half-extent."),
+        param!("Seed", "Seed", int, 0.0, -1000.0, 1000.0, "Hash seed for the per-cell deterministic noise."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -140,6 +146,12 @@ fn variation_circleRand(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
 // CircleTrans1
 // ---------------------------------------------------------------------------
 
+/// Halfway-translate + conditional resample — first applies a halfway
+/// translation of the input toward the target point `(X, Y)`. If the
+/// translated point lands in a sparse cell (`noise(M+seed, N) > Dens`) or
+/// outside the cell's circular radius, returns it directly. Otherwise
+/// resamples a new point on a random circle within an active cell (up to 32
+/// rejection attempts).
 pub static CIRCLE_TRANS1: VariationDef = VariationDef {
     name: "CircleTrans1",
     display_name: "Circle Trans 1",
@@ -147,11 +159,11 @@ pub static CIRCLE_TRANS1: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("Sc", "Scale", unlimited_float, 1.0, -10.0, 10.0),
-        param!("Dens", "Density", unlimited_float, 0.5, 0.0, 1.0),
-        param!("X", "X", unlimited_float, 10.0, -100.0, 100.0),
-        param!("Y", "Y", unlimited_float, 10.0, -100.0, 100.0),
-        param!("Seed", "Seed", int, 0.0, -1000.0, 1000.0),
+        param!("Sc", "Scale", unlimited_float, 1.0, -10.0, 10.0, "Cell size — each cell occupies a `2·Sc × 2·Sc` region."),
+        param!("Dens", "Density", unlimited_float, 0.5, 0.0, 1.0, "Per-cell density threshold (probability that a cell is 'active' and triggers resampling)."),
+        param!("X", "X", unlimited_float, 10.0, -100.0, 100.0, "X coordinate of the halfway-translate target point. Also bounds the resample rectangle (`|X|`)."),
+        param!("Y", "Y", unlimited_float, 10.0, -100.0, 100.0, "Y coordinate of the halfway-translate target point. Also bounds the resample rectangle."),
+        param!("Seed", "Seed", int, 0.0, -1000.0, 1000.0, "Hash seed for the per-cell deterministic noise."),
     ],
     needs_transform: false,
     writes_color: false,
