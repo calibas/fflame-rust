@@ -161,9 +161,9 @@ pub static POST_MIRROR_WF: VariationDef = VariationDef {
     phase: VariationPhase::Post,
     needs_rng: true,
     parameters: &[
-        param!("xaxis", "X Axis", int, 1.0, 0.0, 1.0, "1 = enable X-axis mirror branch; 0 = disable."),
-        param!("yaxis", "Y Axis", int, 0.0, 0.0, 1.0, "1 = enable Y-axis mirror branch; 0 = disable."),
-        param!("zaxis", "Z Axis", int, 0.0, 0.0, 1.0, "1 = enable Z-axis mirror branch (3D only); 0 = disable."),
+        param!("xaxis", "X Axis", bool, true, "1 = enable X-axis mirror branch; 0 = disable."),
+        param!("yaxis", "Y Axis", bool, false, "1 = enable Y-axis mirror branch; 0 = disable."),
+        param!("zaxis", "Z Axis", bool, false, "1 = enable Z-axis mirror branch (3D only); 0 = disable."),
         param!("xshift", "X Shift", unlimited_float, 0.0, -10.0, 10.0, "X mirror offset — applied as `-scale·(x + xshift)` when the X branch fires."),
         param!("yshift", "Y Shift", unlimited_float, 0.0, -10.0, 10.0, "Y mirror offset."),
         param!("zshift", "Z Shift", unlimited_float, 0.0, -10.0, 10.0, "Z mirror offset."),

@@ -214,7 +214,7 @@ pub static HOLE2: VariationDef = VariationDef {
         param!("b", "B", unlimited_float, 2.0, -10.0, 10.0, "Angular wave frequency — used by shapes 2, 6, 7, 8, 9 to vary their angular modulation."),
         param!("c", "C", unlimited_float, 1.0, -10.0, 10.0, "Multiplier on the angle-derived scaling factor."),
         param!("d", "D", unlimited_float, 1.0, -10.0, 10.0, "Angle multiplier on the input."),
-        param!("inside", "Inside", int, 0.0, 0.0, 1.0, "When on, inverts the radial formula (`w/r`) instead of scaling (`w·r`)."),
+        param!("inside", "Inside", bool, false, "When on, inverts the radial formula (`w/r`) instead of scaling (`w·r`)."),
         param!("shape", "Shape", int, 0.0, 0.0, 9.0, "Picks one of 10 radial formulas (0-9)."),
     ],
     needs_transform: false,

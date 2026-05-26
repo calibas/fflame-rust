@@ -169,7 +169,7 @@ pub static RIPPLE: VariationDef = VariationDef {
         param!("centery", "Center Y", unlimited_float, 0.0, -10.0, 10.0, "Y-axis center of the radial wave."),
         param!("phase", "Phase", unlimited_float, 0.0, -10.0, 10.0, "Phase interpolation factor: 0 = first phase-shifted position, 1 = second."),
         param!("scale", "Scale", unlimited_float, 1.0, -10.0, 10.0, "Input pre-scale factor."),
-        param!("fixed_dist_calc", "Fixed Dist Calc", int, 0.0, 0.0, 1.0, "Distance formula selector: 0 = product `sqrt(x²·y²)`, 1 = Euclidean `sqrt(x² + y²)`."),
+        param!("fixed_dist_calc", "Fixed Dist Calc", bool, false, "Distance formula selector: 0 = product `sqrt(x²·y²)`, 1 = Euclidean `sqrt(x² + y²)`."),
     ],
     needs_transform: false,
     writes_color: false,

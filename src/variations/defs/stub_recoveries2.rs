@@ -235,7 +235,7 @@ pub static TQMIRROR: VariationDef = VariationDef {
         param!("f", "F", unlimited_float, 1.0, -10.0, 10.0, "Additive X shift in the third-quadrant branch (scaled by weight)."),
         param!("g", "G", unlimited_float, 1.0, -10.0, 10.0, "Additive Y shift in the third-quadrant branch."),
         param!("h", "H", unlimited_float, 1.0, -10.0, 10.0, "Scale factor on the central-region diagonal-mirror output."),
-        param!("type", "Type", int, 0.0, 0.0, 1.0, "Outer-boundary branch selector: 0 = swap (x↔y), 1 = pass through."),
+        param!("type", "Type", bool, false, "Outer-boundary branch selector: 0 = swap (x↔y), 1 = pass through."),
     ],
     needs_transform: true,
     writes_color: false,
