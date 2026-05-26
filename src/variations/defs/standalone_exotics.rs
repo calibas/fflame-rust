@@ -126,7 +126,7 @@ fn variation_kaleidoscope(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec
 /// modulated by `n`, creating 3D donut-like structures.
 ///
 /// # Authors
-/// - gossamer_light
+/// - gossamer light
 pub static TAURUS: VariationDef = VariationDef {
     name: "taurus",
     display_name: "Taurus",

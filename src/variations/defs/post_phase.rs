@@ -262,7 +262,7 @@ fn variation_post_crop(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
 /// based scatter is applied to the final output coordinates.
 /// 
 /// # Authors
-/// - xyrus02
+/// - Xyrus02
 pub static POST_FALLOFF2: VariationDef = VariationDef {
     name: "post_falloff2",
     display_name: "Post Falloff2",

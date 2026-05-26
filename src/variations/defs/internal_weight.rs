@@ -56,7 +56,7 @@ use crate::param;
 /// arm form.
 ///
 /// # Authors
-/// - dark-beam
+/// - DarkBeam
 pub static LOONIE3: VariationDef = VariationDef {
     name: "loonie3",
     display_name: "Loonie 3",

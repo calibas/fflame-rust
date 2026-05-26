@@ -65,7 +65,7 @@ fn variation_spherical3d(p: vec3<f32>) -> vec3<f32> {
 /// `atan2(x², y²) · cos(z)` on the Z axis.
 ///
 /// # Authors
-/// - gossamer_light
+/// - gossamer light
 pub static SINUSOIDAL3D: VariationDef = VariationDef {
     name: "sinusoidal3d",
     display_name: "Sinusoidal 3D",

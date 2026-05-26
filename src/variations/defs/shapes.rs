@@ -328,7 +328,7 @@ fn variation_cardioid(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
 /// shift by `width`.
 ///
 /// # Authors
-/// - zy0rg
+/// - Zy0rg
 pub static HELIX: VariationDef = VariationDef {
     name: "helix",
     display_name: "Helix",
@@ -374,7 +374,7 @@ fn variation_helix(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 /// the radius from the origin. In 2D mode collapses to identity.
 ///
 /// # Authors
-/// - zy0rg
+/// - Zy0rg
 pub static HELICOID: VariationDef = VariationDef {
     name: "helicoid",
     display_name: "Helicoid",

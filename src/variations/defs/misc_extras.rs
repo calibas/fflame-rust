@@ -284,7 +284,7 @@ fn variation_ptransform(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<
 /// division `numerator / denominator`.
 ///
 /// # Authors
-/// - Xyrus
+/// - Xyrus02
 /// - CozyG
 pub static RATIONAL3: VariationDef = VariationDef {
     name: "rational3",
