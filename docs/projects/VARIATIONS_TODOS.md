@@ -352,6 +352,17 @@ thresholds, or add a `legacy_import` hook on the param def.
   smooth handoff at the boundaries. Probably stays as `Float` with
   documented thresholds — flagging for visibility. See
   [waves2b_misc.rs](../../src/variations/defs/waves2b_misc.rs).
+- `hexaplay3D.majp`, `hexnix3D.majp` — both declared
+  `unlimited_float` but dispatch on `|majp|` thresholds, with the
+  value above the threshold also feeding a continuous `boost` term.
+  `hexaplay3D` is two-mode (`≤ 1` single plate, `> 1` split planes
+  with `boost = (|majp| - 1) · 0.5`); `hexnix3D` is three-mode
+  (`≤ 1`, `1-2`, `≥ 2`) plus additional negative-`majp` branches
+  for animation Z-flips. Same shape as `waves2b.pwx` — keep as
+  `Float` with documented thresholds. See
+  [hexaplay3d_misc.rs](../../src/variations/defs/hexaplay3d_misc.rs)
+  and
+  [hexnix3d_misc.rs](../../src/variations/defs/hexnix3d_misc.rs).
 
 ### Numerical edge-case divergence from upstream
 
