@@ -73,7 +73,7 @@ pub static CORNERS: VariationDef = VariationDef {
         param!("xpower", "X Power", unlimited_float, 0.75, -10.0, 10.0, "X-axis power exponent (combined additively with `xypower`)."),
         param!("ypower", "Y Power", unlimited_float, 0.75, -10.0, 10.0, "Y-axis power exponent (combined additively with `xypower`)."),
         param!("xypower", "XY Power Add", unlimited_float, 0.0, -10.0, 10.0, "Additional power offset added to both `xpower` and `ypower`."),
-        param!("logmode", "Log Mode", int, 0.0, 0.0, 1.0, "Formula selector: 0 = `pow(x², …)`, 1 = `pow(log_base(x²·mult + 3), …) − 1.33`."),
+        param!("logmode", "Log Mode", bool, false, "Formula selector: 0 = `pow(x², …)`, 1 = `pow(log_base(x²·mult + 3), …) − 1.33`."),
         param!("log_base", "Log Base", unlimited_float, 2.71828, 0.01, 100.0, "Log base used by the `logmode = 1` formula. Default ≈ e."),
     ],
     needs_transform: true,

@@ -42,7 +42,7 @@ pub static ROSONI: VariationDef = VariationDef {
     parameters: &[
         param!("maxiter", "Max Iter", int, 25.0, 1.0, 100.0, "Number of rotation iterations (each rotates by `2π/maxiter`)."),
         param!("sweetiter", "Sweet Iter", int, 3.0, 0.0, 100.0, "Which iteration's position is used as the output when the toggle ends true."),
-        param!("altshapes", "Alt Shapes", int, 0.0, 0.0, 1.0, "Inner-shape family selector: 0 = circle/square, 1 = lemniscate/angle."),
+        param!("altshapes", "Alt Shapes", bool, false, "Inner-shape family selector: 0 = circle/square, 1 = lemniscate/angle."),
         param!("cutoff", "Cutoff", unlimited_float, 1.0, -10.0, 10.0, "Outer-region radius. Positive = circular cutoff; negative = square (Chebyshev) cutoff."),
         param!("radius", "Radius", unlimited_float, 0.4, -10.0, 10.0, "Inner-shape size. Positive = filled-shape test; negative = wireframe via Chebyshev distance or atan2 angle."),
         param!("dx", "DX", unlimited_float, 0.6, -10.0, 10.0, "Inner-shape X offset (also acts as the rotation pivot)."),
