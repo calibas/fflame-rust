@@ -603,7 +603,7 @@ pub static ATAN_VAR: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("mode", "Mode", int, 0.0, 0.0, 2.0, "Which axes get arctangent-transformed: 0 = Y only, 1 = X only, 2 = both."),
+        param!("mode", "Mode", enum, 0, &["Y Only", "X Only", "Both"], "Which axes get arctangent-transformed: 0 = Y only, 1 = X only, 2 = both."),
         param!("stretch", "Stretch", unlimited_float, 1.0, -10.0, 10.0, "Pre-atan input scaling. Higher = sharper saturation toward ±1."),
     ],
     needs_transform: false,
