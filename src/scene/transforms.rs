@@ -1494,17 +1494,21 @@ impl Flame {
         self.transforms.push(transform);
     }
 
-    /// Extract all active variation names from all three pools.
-    /// Used by the shader builder to compile only the variations a
-    /// flame actually uses.
+    /// Extract all variation names present in any transform across all
+    /// three pools. Used by the shader builder to decide which variations
+    /// to compile into the flame's shader.
+    ///
+    /// Includes zero-weight variations so the user can keyframe a
+    /// variation from 0 → 1 without triggering a shader recompile when
+    /// the weight first crosses the threshold. Adding a variation to
+    /// the flame's transform list is the explicit signal to include it
+    /// in the shader; if it's truly unused, the user can remove it.
     pub fn extract_active_variations(&self) -> HashMap<String, f32> {
         let mut all_variations = HashMap::new();
         let absorb = |t: &Transform, all: &mut HashMap<String, f32>| {
             for (name, weight) in &t.variations {
-                if weight.abs() > 1e-6 {
-                    let existing = all.entry(name.clone()).or_insert(0.0);
-                    *existing = f32::max(*existing, *weight);
-                }
+                let existing = all.entry(name.clone()).or_insert(0.0);
+                *existing = f32::max(*existing, *weight);
             }
         };
 
