@@ -409,6 +409,38 @@ that already do this.
 
 ## Out of scope (defer to other branches)
 
+### Prepost (priority-2) variations — needs architectural decision
+
+Reverted the single-phase compromise port of `prepost_circlize` and
+`prepost_mobius` (removed
+`src/variations/defs/prepost_compromise.rs` and the corresponding
+smoke test). The compromise ran just the post-half as a normal-phase
+variation, which collapses to the same behavior as plain `circlize` /
+`mobius` (neither of which exist yet either) — the entire point of
+the "prepost" family is the **sandwich**: a pre-phase warp and a
+post-phase inverse-warp bracketing the rest of the iteration.
+
+To port these properly we need a new `VariationPhase::PrePost` that
+takes two WGSL bodies (pre and post) and registers them in both phase
+slots of the iteration pipeline. The pre-phase body typically does
+the inverse of the post-phase body, so coordinates flow:
+
+```
+input → pre_affine → PREPOST.pre_body → normal_variations →
+        PREPOST.post_body → post_affine → output
+```
+
+Upstream JWildfire candidates (from
+[variation-upstream-only.txt](variation-upstream-only.txt) and
+[variation-port-blockers.md](variation-port-blockers.md) blocker
+\#12): `prepost_affine`, `prepost_circlize`, `prepost_mobius`. The
+research task: enumerate JWildfire's full `prepost_*` corpus, check
+which ones are popular in real flames (Apophysis import frequency,
+JWildfire community presets), and decide if the user-visible payoff
+justifies the phase-system plumbing. If yes, add the
+`VariationPhase::PrePost` variant and port them properly. If no,
+document the family as permanently skipped and move on.
+
 ### Direct-color (DC) port decisions to verify
 
 Two deliberate divergences from upstream C++ in

@@ -116,7 +116,6 @@ mod plusrecip_misc;
 mod gamma_misc;
 mod bubblet3d_misc;
 mod waves2b_misc;
-mod prepost_compromise;
 mod dc_carpet3d_misc;
 mod vibration2_misc;
 mod gridout3d_misc;
@@ -249,7 +248,6 @@ pub use plusrecip_misc::*;
 pub use gamma_misc::*;
 pub use bubblet3d_misc::*;
 pub use waves2b_misc::*;
-pub use prepost_compromise::*;
 pub use dc_carpet3d_misc::*;
 pub use vibration2_misc::*;
 pub use gridout3d_misc::*;
@@ -864,9 +862,6 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &BUBBLE_T3D,
     // waves2b_misc: waves2b
     &WAVES2B,
-    // prepost_compromise: prepost_circlize, prepost_mobius (single-phase compromise)
-    &PREPOST_CIRCLIZE,
-    &PREPOST_MOBIUS,
     // dc_carpet3d_misc: dc_carpet3D (color-z coupling dropped)
     &DC_CARPET3D,
     // vibration2_misc: vibration2 (26 user — first port unblocked by packed buffer)
