@@ -354,6 +354,15 @@ thresholds, or add a `legacy_import` hook on the param def.
   range, binary toggle for the avoid-immediate-cancellation rule.
   Should be `Boolean`. See
   [klein_group_misc.rs](../../src/variations/defs/klein_group_misc.rs).
+- `subflame_wf.color_mode` — declared `Integer` with `[-1, 4]` range,
+  6-mode color-handling selector: -1 = Off (default), 0 = Direct
+  (overwrite parent's `vc` with subflame's color), 1-4 = JWildfire's
+  CM_RED/GREEN/BLUE/BRIGHTNESS modes. Should be `Enum` — but note
+  that modes 1-4 are currently declared but **silently no-op'd**
+  (treated as Off); only Off and Direct are implemented. Either
+  finish the port for 1-4 or drop them from the range when
+  converting. See
+  [subflame.rs](../../src/variations/defs/subflame.rs).
 - `waves2b.pwx`, `waves2b.pwy` — declared `unlimited_float` but
   semantically tri-state via threshold comparisons: `pw ∈ [0, 1e-4)`
   → Jacobi `sn` mode, `pw ∈ (-1e-4, 0)` → Bessel `J1` mode, else →

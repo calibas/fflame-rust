@@ -1,4 +1,4 @@
-//! Subflame variations (JWildfire subflame_wf family)
+//! Subflame variation (Andreas Maschke)
 //!
 //! A subflame is **not** a layered render. The `subflame_wf` variation
 //! owns a complete inner flame definition (referenced by index into
@@ -36,6 +36,23 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Subflame — nested chaos-game variation. Owns a complete inner flame
+/// definition (referenced by `subflame_id` into `FractalConfig.subflames`);
+/// during each step of the parent flame's chaos game it advances a *nested*
+/// chaos game by one iteration on the subflame's IFS and uses the resulting
+/// point as the variation's output. Classified as a **blur** variation in
+/// JWildfire: it ignores both the input `p` (the parent chaos-game state)
+/// and the variation `amount` — users scale/rotate the subflame via the
+/// parent xform's post-affine instead, though `scale`/`angle`/`offset_*`
+/// are also kept here for round-trip fidelity with existing JWildfire /
+/// Apophysis flame files. Per-thread state (5 slots) carries the subflame's
+/// chaos-game point, current xform index, and color scalar across
+/// iterations. The nested chaos-game step is implemented in
+/// [`shaders/core/subflame.wgsl`](../../shaders/core/subflame.wgsl),
+/// injected by the shader builder when `subflame_wf` is active.
+///
+/// # Authors
+/// - Andreas Maschke
 pub static SUBFLAME_WF: VariationDef = VariationDef {
     name: "subflame_wf",
     display_name: "Subflame",
@@ -49,27 +66,27 @@ pub static SUBFLAME_WF: VariationDef = VariationDef {
         // to u32 before indexing the metadata array. Range is the
         // current MAX_SUBFLAMES (8) — bumping the cap requires only
         // changing the constant in gpu/buffers.rs.
-        param!("subflame_id", "Subflame", int, 0.0, 0.0, 7.0),
+        param!("subflame_id", "Subflame", int, 0.0, 0.0, 7.0, "Index into `FractalConfig.subflames` (0..MAX_SUBFLAMES-1). Selects which inner flame definition this variation iterates. Not really an enum — `MAX_SUBFLAMES` is a config-time constant in `gpu/buffers.rs` and the param range tracks it."),
         // scale & angle: applied to the subflame's q INSIDE the
         // variation, before adding to FP. The sanctuary spec
         // recommends users go through the parent xform's post-affine
         // instead, but we keep these for round-trip fidelity with
         // existing JWildfire / Apophysis flame files that set them.
-        param!("scale", "Scale", unlimited_float, 1.0, -10.0, 10.0),
-        param!("angle", "Angle", angle, 0.0),
-        param!("offset_x", "Offset X", unlimited_float, 0.0, -10.0, 10.0),
-        param!("offset_y", "Offset Y", unlimited_float, 0.0, -10.0, 10.0),
-        param!("offset_z", "Offset Z", unlimited_float, 0.0, -10.0, 10.0),
+        param!("scale", "Scale", unlimited_float, 1.0, -10.0, 10.0, "Scale factor applied to the subflame's per-step XY output (and Z output in 3D mode) before adding to the parent's accumulator. JWildfire's spec recommends using the parent xform's post-affine for this instead; the param is preserved for round-trip fidelity with files that set it."),
+        param!("angle", "Angle", angle, 0.0, "Rotation angle (degrees) applied to the subflame's XY output before adding to the parent's accumulator. Same round-trip-fidelity note as `scale`."),
+        param!("offset_x", "Offset X", unlimited_float, 0.0, -10.0, 10.0, "X translation added to the subflame's output after scale + rotation."),
+        param!("offset_y", "Offset Y", unlimited_float, 0.0, -10.0, 10.0, "Y translation."),
+        param!("offset_z", "Offset Z", unlimited_float, 0.0, -10.0, 10.0, "Z translation (3D mode only — added to the subflame's Z after `scale · q.z` and `colorscale_z · q.w`)."),
         // colorscale_z: multiplies the subflame's color scalar and
         // adds the product to the variation's z output. JWildfire's
         // `colorscale_wf`-style mechanism.
-        param!("colorscale_z", "Color Scale Z", unlimited_float, 0.0, -10.0, 10.0),
+        param!("colorscale_z", "Color Scale Z", unlimited_float, 0.0, -10.0, 10.0, "Multiplier applied to the subflame's color scalar (0..1) and added to the Z output. JWildfire's `colorscale_wf`-style depth-from-color mechanism — non-zero values let the subflame's color drive a Z offset for pseudo-3D effects in 2D-classified subflames. 3D mode only."),
         // color_mode: -1 (Off, default) leaves the parent's color
         // alone. 0 (Direct) overrides with the subflame's color
         // scalar. 1..4 are JWildfire's CM_RED / GREEN / BLUE /
         // BRIGHTNESS modes (rarely used in practice, but supported
         // for round-trip fidelity).
-        param!("color_mode", "Color Mode", int, -1.0, -1.0, 4.0),
+        param!("color_mode", "Color Mode", int, -1.0, -1.0, 4.0, "How the subflame's color scalar interacts with the parent's color register. -1 = Off (default; leave parent's color alone), 0 = Direct (overwrite parent's vc with subflame's color). Modes 1-4 are JWildfire's CM_RED/GREEN/BLUE/BRIGHTNESS — declared in the param range but currently silently no-op'd (treated as Off); v1 only implements Off and Direct."),
     ],
     needs_transform: false,
     writes_color: true,
