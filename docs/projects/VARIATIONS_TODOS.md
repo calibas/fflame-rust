@@ -313,6 +313,15 @@ thresholds, or add a `legacy_import` hook on the param def.
   behavior selector (wrap / clamp / hide / leave). Same enum on
   both. Should be `Enum`. See
   [apo_misc19.rs](../../src/variations/defs/apo_misc19.rs).
+- `jac_asn.jac_asn_type` — declared `Integer` with `[0, 7]` range,
+  8-mode selector for which inverse Jacobi elliptic function to
+  compute (0/4 = invdn, 1/5 = inverse sn, 2/6 = inverse cn, 3/7 =
+  inverse sc). The high bit (`type > 3`) additionally swaps modulus
+  and phi, so this is two orthogonal toggles disguised as a single
+  enum — when converting, consider whether to expose them as two
+  separate fields (function-kind enum + swap-modulus boolean) or
+  keep the flat 8-variant enum to match the wire format. See
+  [jac_asn_misc.rs](../../src/variations/defs/jac_asn_misc.rs).
 
 ### Numerical edge-case divergence from upstream
 

@@ -36,6 +36,16 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Inverse Jacobi elliptic functions — implements `asn`, `acn`, `asc`, and
+/// `invdn` (the incomplete elliptic integral of the first kind) using
+/// Norbert Rosch's Landen-transformation method. `jac_asn_type` selects
+/// which inverse function to apply; types > 3 swap the modulus and phi. The
+/// body uses a self-contained inline complex-arithmetic toolkit and bounds
+/// the Landen iteration at 10 steps with early-exit when the modulus
+/// converges to 1.
+///
+/// # Authors
+/// - DarkBeam
 pub static JAC_ASN: VariationDef = VariationDef {
     name: "jac_asn",
     display_name: "Jac asn",
@@ -43,9 +53,9 @@ pub static JAC_ASN: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("jac_asn_kr", "Modulus Real", unlimited_float, 0.5, -10.0, 10.0),
-        param!("jac_asn_ki", "Modulus Imag", unlimited_float, 0.0, -10.0, 10.0),
-        param!("jac_asn_type", "Type", int, 1.0, 0.0, 7.0),
+        param!("jac_asn_kr", "Modulus Real", unlimited_float, 0.5, -10.0, 10.0, "Real part of the elliptic modulus k. Together with `jac_asn_ki` defines the complex modulus used by the Jacobi inverse."),
+        param!("jac_asn_ki", "Modulus Imag", unlimited_float, 0.0, -10.0, 10.0, "Imaginary part of the elliptic modulus k."),
+        param!("jac_asn_type", "Type", int, 1.0, 0.0, 7.0, "Which inverse to compute (0-7). 0/4 = invdn (elliptic F), 1/5 = inverse sn, 2/6 = inverse cn, 3/7 = inverse sc. Types > 3 swap the modulus and phi after the initial branch."),
     ],
     needs_transform: true,
     writes_color: false,
