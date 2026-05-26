@@ -23,6 +23,14 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Joukowski-airfoil-style complex map — computes `k = z + sqrt(z² - a)`
+/// (one root of the quadratic `k² - 2k·z + a = 0`), then mirrors small-
+/// magnitude outputs back out via a conjugate-and-rotate step (`k → conj(k)
+/// · (-a/|a|)` when `|k|² < |a|`) and forces a positive real part. Named
+/// for its resemblance to the Joukowski transform `z + 1/z`.
+///
+/// # Authors
+/// - DarkBeam
 pub static PLUSRECIP: VariationDef = VariationDef {
     name: "plusrecip",
     display_name: "Plus Recip",
@@ -30,8 +38,8 @@ pub static PLUSRECIP: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("ar", "A Real", unlimited_float, 4.0, -10.0, 10.0),
-        param!("ai", "A Imag", unlimited_float, 0.0, -10.0, 10.0),
+        param!("ar", "A Real", unlimited_float, 4.0, -10.0, 10.0, "Real part of the complex constant `a` in `k = z + sqrt(z² - a)`. Controls the location of the branch cut."),
+        param!("ai", "A Imag", unlimited_float, 0.0, -10.0, 10.0, "Imaginary part of the complex constant `a`."),
     ],
     needs_transform: false,
     writes_color: false,
