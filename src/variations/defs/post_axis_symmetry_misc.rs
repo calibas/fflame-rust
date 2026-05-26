@@ -1,4 +1,4 @@
-//! post_axis_symmetry_wf (Maschke)
+//! post_axis_symmetry_wf 
 //!
 //! Post-phase axis-symmetry mirror across X, Y, or Z axis at a chosen
 //! center, with optional rotation. RNG (1 call/iter) picks one of two
@@ -28,6 +28,12 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Post-phase axis-symmetry mirror — with 50% probability per iteration,
+/// mirrors the post-phase accumulator across the chosen axis (X/Y/Z) at a
+/// configurable center, with optional `rotation` applied to the mirrored
+/// point. The other 50% adds a half-weight shift in the same direction (no
+/// mirror). Each iteration's coin flip independently chooses mirror vs
+/// shift.
 pub static POST_AXIS_SYMMETRY_WF: VariationDef = VariationDef {
     name: "post_axis_symmetry_wf",
     display_name: "Post Axis Symmetry WF",
@@ -35,11 +41,11 @@ pub static POST_AXIS_SYMMETRY_WF: VariationDef = VariationDef {
     phase: VariationPhase::Post,
     needs_rng: true,
     parameters: &[
-        param!("axis", "Axis", int, 0.0, 0.0, 2.0),
-        param!("centre_x", "Centre X", unlimited_float, 0.25, -10.0, 10.0),
-        param!("centre_y", "Centre Y", unlimited_float, 0.5, -10.0, 10.0),
-        param!("centre_z", "Centre Z", unlimited_float, 0.5, -10.0, 10.0),
-        param!("rotation", "Rotation", unlimited_float, 30.0, -360.0, 360.0),
+        param!("axis", "Axis", int, 0.0, 0.0, 2.0, "Axis to mirror across: 0 = X, 1 = Y, 2 = Z (3D only)."),
+        param!("centre_x", "Centre X", unlimited_float, 0.25, -10.0, 10.0, "X coordinate of the symmetry plane center."),
+        param!("centre_y", "Centre Y", unlimited_float, 0.5, -10.0, 10.0, "Y coordinate of the symmetry plane center."),
+        param!("centre_z", "Centre Z", unlimited_float, 0.5, -10.0, 10.0, "Z coordinate of the symmetry plane center (3D only)."),
+        param!("rotation", "Rotation", unlimited_float, 30.0, -360.0, 360.0, "Post-mirror rotation angle, in degrees. Full circle = 360. Init precomputes `sin/cos(rotation · 2π/180 / 2)`."),
     ],
     needs_transform: true,
     writes_color: false,

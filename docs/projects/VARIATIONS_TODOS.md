@@ -101,6 +101,8 @@ the answer is known — that's the convention for "unknown" per
 - `dc_triangle` ([dc_misc.rs](../../src/variations/defs/dc_misc.rs))
 - `dc_cube` ([dc_misc2.rs](../../src/variations/defs/dc_misc2.rs))
 - `pre_rect_wf` ([dc_misc2.rs](../../src/variations/defs/dc_misc2.rs))
+- `post_axis_symmetry_wf` ([post_axis_symmetry_misc.rs](../../src/variations/defs/post_axis_symmetry_misc.rs))
+- `pre_wave3D_wf` ([pre_wave3d_misc.rs](../../src/variations/defs/pre_wave3d_misc.rs))
 
 **Likely shared author** — all are JWildfire ports of complex-plane
 inverse hyperbolic functions (the plain ones in `hyperbolic.rs` and
@@ -228,6 +230,13 @@ thresholds, or add a `legacy_import` hook on the param def.
   width-jitter pattern selector (single uniform / phased-sin /
   independent uniform / Gaussian / ±width X only). Should be `Enum`.
   See [apo_misc17.rs](../../src/variations/defs/apo_misc17.rs).
+- `post_axis_symmetry_wf.axis` — declared `Integer` with `[0, 2]`
+  range, 3-mode axis selector (X / Y / Z). Should be `Enum`. See
+  [post_axis_symmetry_misc.rs](../../src/variations/defs/post_axis_symmetry_misc.rs).
+- `pre_wave3D_wf.axis` — declared `Integer` with `[0, 3]` range,
+  4-mode displacement-axis selector (XY plane → Z / YZ plane → X /
+  ZX plane → Y / RADIAL). Should be `Enum`. See
+  [pre_wave3d_misc.rs](../../src/variations/defs/pre_wave3d_misc.rs).
 - `tqmirror.type` — declared `Integer` with `[0, 1]` range, used as a
   binary outer-boundary branch selector (swap x↔y vs pass through).
   Should be `Boolean`. See
