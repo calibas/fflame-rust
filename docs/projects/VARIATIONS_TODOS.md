@@ -342,6 +342,18 @@ thresholds, or add a `legacy_import` hook on the param def.
   passes for outer; 6 passes for inner / hides for outer). Should be
   `Enum`. See
   [rhodonea_misc.rs](../../src/variations/defs/rhodonea_misc.rs).
+- `klein_group.recipe` — declared `Integer` with `[0, 6]` range,
+  7-mode selector for the Kleinian generator-pair construction
+  recipe: GRANDMA_STANDARD (0), MASKIT_MU (1), JORGENSEN (2),
+  RILEY (3), RILEY_MODIFIED (4), MASKIT_MU_MODIFIED (5),
+  MASKIT_LEYS_MODIFIED (6). The recipe also changes the meaning of
+  `b_re`/`b_im` (unused in recipes 1 and 3), so an `Enum` UI would
+  ideally also gate the visibility of those params. See
+  [klein_group_misc.rs](../../src/variations/defs/klein_group_misc.rs).
+- `klein_group.avoid_reversal` — declared `Integer` with `[0, 1]`
+  range, binary toggle for the avoid-immediate-cancellation rule.
+  Should be `Boolean`. See
+  [klein_group_misc.rs](../../src/variations/defs/klein_group_misc.rs).
 - `waves2b.pwx`, `waves2b.pwy` — declared `unlimited_float` but
   semantically tri-state via threshold comparisons: `pw ∈ [0, 1e-4)`
   → Jacobi `sn` mode, `pw ∈ (-1e-4, 0)` → Bessel `J1` mode, else →
