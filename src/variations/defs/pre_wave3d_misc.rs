@@ -39,7 +39,7 @@ pub static PRE_WAVE3D_WF: VariationDef = VariationDef {
     phase: VariationPhase::Pre,
     needs_rng: false,
     parameters: &[
-        param!("axis", "Axis", int, 0.0, 0.0, 3.0, "Wave plane / displacement axis: 0 = XY plane (displaces Z), 1 = YZ plane (displaces X), 2 = ZX plane (displaces Y), 3 = RADIAL (displaces along the unit vector from center)."),
+        param!("axis", "Axis", enum, 0, &["XY → Z", "YZ → X", "ZX → Y", "Radial"], "Wave plane / displacement axis: 0 = XY plane (displaces Z), 1 = YZ plane (displaces X), 2 = ZX plane (displaces Y), 3 = RADIAL (displaces along the unit vector from center)."),
         param!("wavelen", "Wavelength", unlimited_float, 0.5, -10.0, 10.0, "Wavelength of the sine perturbation."),
         param!("phase", "Phase", unlimited_float, 0.0, -10.0, 10.0, "Phase offset on the sine argument."),
         param!("damping", "Damping", unlimited_float, 0.01, -10.0, 10.0, "Exponential damping rate (proportional to `dl`). 0 disables damping."),
