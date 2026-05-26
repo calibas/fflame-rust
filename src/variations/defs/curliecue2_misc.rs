@@ -28,6 +28,17 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Self-iterating Curlicue walker — ignores the input position and emits a
+/// deterministic point sequence from a 4-slot per-thread state machine `(x,
+/// y, θ, φ)`. Each iteration advances `(x, y)` by `0.001 · (cos φ, sin φ)`,
+/// then updates `φ ← (θ + φ) mod 2π` and `θ ← (θ + 2π·speed) mod 2π`. With
+/// `speed` set to an irrational fraction (e.g. golden ratio), the
+/// trajectory traces the classical curlicue fractal of Berry and Goldberg.
+/// Upstream cpp randomizes `speed` once at flame init via `GOODRAND_01`; we
+/// expose it as a user parameter for reproducibility.
+///
+/// # Authors
+/// - Jesus Sosa
 pub static CURLIECUE2: VariationDef = VariationDef {
     name: "curliecue2",
     display_name: "Curliecue 2",
@@ -35,7 +46,7 @@ pub static CURLIECUE2: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("speed", "Speed", float, 0.5, 0.0, 1.0),
+        param!("speed", "Speed", float, 0.5, 0.0, 1.0, "Angular velocity of the curlicue walker as a fraction of 2π per iteration. Small irrational values (e.g. golden-ratio fractions) produce the classical curlicue fractal pattern; rational values produce closed loops."),
     ],
     needs_transform: false,
     writes_color: false,
