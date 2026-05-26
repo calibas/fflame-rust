@@ -31,6 +31,18 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Hybrid of julian2 and Mobiq — first applies a quaternion Möbius
+/// transform `M(q) = (A·q + B) / (C·q + D)` in 4D (with `q = (FTx, FTy,
+/// FTz, 0)`), then a `julian`-style angular pick (one of `|power|` equally-
+/// spaced angles, scaled by `dist`) and radial scaling, then wraps the XY
+/// output with an affine (`a..f`). In 3D, the Z output adds the quaternion
+/// Z component to a preserve-Z radial inversion term derived from `1 /
+/// (r3d^1.5)`. Mathematically a chimera; visually a way to combine the
+/// quaternion-Möbius distortion of `mobiq` with the radial-symmetry blow-up
+/// of `julian2`.
+///
+/// # Authors
+/// - Brad Stefanov
 pub static JUBIQ: VariationDef = VariationDef {
     name: "jubiq",
     display_name: "Jubiq",
@@ -38,30 +50,30 @@ pub static JUBIQ: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("power", "Power", int, 1.0, -50.0, 50.0),
-        param!("dist", "Distance", unlimited_float, 1.0, -10.0, 10.0),
-        param!("a", "A", unlimited_float, 1.0, -10.0, 10.0),
-        param!("b", "B", unlimited_float, 0.0, -10.0, 10.0),
-        param!("c", "C", unlimited_float, 0.0, -10.0, 10.0),
-        param!("d", "D", unlimited_float, 1.0, -10.0, 10.0),
-        param!("e", "E", unlimited_float, 0.0, -10.0, 10.0),
-        param!("f", "F", unlimited_float, 0.0, -10.0, 10.0),
-        param!("qat", "QA t", unlimited_float, 0.0, -10.0, 10.0),
-        param!("qax", "QA x", unlimited_float, 0.0, -10.0, 10.0),
-        param!("qay", "QA y", unlimited_float, 0.0, -10.0, 10.0),
-        param!("qaz", "QA z", unlimited_float, 0.0, -10.0, 10.0),
-        param!("qbt", "QB t", unlimited_float, 0.0, -10.0, 10.0),
-        param!("qbx", "QB x", unlimited_float, 0.0, -10.0, 10.0),
-        param!("qby", "QB y", unlimited_float, 0.0, -10.0, 10.0),
-        param!("qbz", "QB z", unlimited_float, 0.0, -10.0, 10.0),
-        param!("qct", "QC t", unlimited_float, 0.0, -10.0, 10.0),
-        param!("qcx", "QC x", unlimited_float, 0.0, -10.0, 10.0),
-        param!("qcy", "QC y", unlimited_float, 0.0, -10.0, 10.0),
-        param!("qcz", "QC z", unlimited_float, 0.0, -10.0, 10.0),
-        param!("qdt", "QD t", unlimited_float, 1.0, -10.0, 10.0),
-        param!("qdx", "QD x", unlimited_float, 0.0, -10.0, 10.0),
-        param!("qdy", "QD y", unlimited_float, 0.0, -10.0, 10.0),
-        param!("qdz", "QD z", unlimited_float, 0.0, -10.0, 10.0),
+        param!("power", "Power", int, 1.0, -50.0, 50.0, "Julia angular branch count (integer). 0 collapses the variation to the origin. Otherwise: picks one of `|power|` equally-spaced angles per iteration and divides the polar angle by `power`."),
+        param!("dist", "Distance", unlimited_float, 1.0, -10.0, 10.0, "Radial exponent multiplier. Combines with `power` to set the radial power as `0.5 · dist / power` (negative `dist` flips the radial sense)."),
+        param!("a", "A", unlimited_float, 1.0, -10.0, 10.0, "Output XY affine wrapper, component A (X-to-X scale). Applied to the input `(p.x, p.y)` and added to the Möbius output."),
+        param!("b", "B", unlimited_float, 0.0, -10.0, 10.0, "Output XY affine wrapper, component B (Y-to-X scale)."),
+        param!("c", "C", unlimited_float, 0.0, -10.0, 10.0, "Output XY affine wrapper, component C (X-to-Y scale)."),
+        param!("d", "D", unlimited_float, 1.0, -10.0, 10.0, "Output XY affine wrapper, component D (Y-to-Y scale)."),
+        param!("e", "E", unlimited_float, 0.0, -10.0, 10.0, "Output XY affine wrapper, component E (X translation)."),
+        param!("f", "F", unlimited_float, 0.0, -10.0, 10.0, "Output XY affine wrapper, component F (Y translation)."),
+        param!("qat", "QA t", unlimited_float, 0.0, -10.0, 10.0, "Möbius numerator quaternion A (`M(q) = (A·q + B) / (C·q + D)`), scalar (t) component."),
+        param!("qax", "QA x", unlimited_float, 0.0, -10.0, 10.0, "Möbius numerator quaternion A (`M(q) = (A·q + B) / (C·q + D)`), X component."),
+        param!("qay", "QA y", unlimited_float, 0.0, -10.0, 10.0, "Möbius numerator quaternion A (`M(q) = (A·q + B) / (C·q + D)`), Y component."),
+        param!("qaz", "QA z", unlimited_float, 0.0, -10.0, 10.0, "Möbius numerator quaternion A (`M(q) = (A·q + B) / (C·q + D)`), Z component."),
+        param!("qbt", "QB t", unlimited_float, 0.0, -10.0, 10.0, "Möbius numerator quaternion B, scalar (t) component."),
+        param!("qbx", "QB x", unlimited_float, 0.0, -10.0, 10.0, "Möbius numerator quaternion B, X component."),
+        param!("qby", "QB y", unlimited_float, 0.0, -10.0, 10.0, "Möbius numerator quaternion B, Y component."),
+        param!("qbz", "QB z", unlimited_float, 0.0, -10.0, 10.0, "Möbius numerator quaternion B, Z component."),
+        param!("qct", "QC t", unlimited_float, 0.0, -10.0, 10.0, "Möbius denominator quaternion C, scalar (t) component."),
+        param!("qcx", "QC x", unlimited_float, 0.0, -10.0, 10.0, "Möbius denominator quaternion C, X component."),
+        param!("qcy", "QC y", unlimited_float, 0.0, -10.0, 10.0, "Möbius denominator quaternion C, Y component."),
+        param!("qcz", "QC z", unlimited_float, 0.0, -10.0, 10.0, "Möbius denominator quaternion C, Z component."),
+        param!("qdt", "QD t", unlimited_float, 1.0, -10.0, 10.0, "Möbius denominator quaternion D, scalar (t) component."),
+        param!("qdx", "QD x", unlimited_float, 0.0, -10.0, 10.0, "Möbius denominator quaternion D, X component."),
+        param!("qdy", "QD y", unlimited_float, 0.0, -10.0, 10.0, "Möbius denominator quaternion D, Y component."),
+        param!("qdz", "QD z", unlimited_float, 0.0, -10.0, 10.0, "Möbius denominator quaternion D, Z component."),
     ],
     needs_transform: false,
     writes_color: false,
