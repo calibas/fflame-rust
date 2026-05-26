@@ -322,6 +322,23 @@ thresholds, or add a `legacy_import` hook on the param def.
   separate fields (function-kind enum + swap-modulus boolean) or
   keep the flat 8-variant enum to match the wire format. See
   [jac_asn_misc.rs](../../src/variations/defs/jac_asn_misc.rs).
+- `bubbleT3D.symmetry_z`, `bubbleT3D.modus_blur` — both declared
+  `Integer` with `[0, 1]` range, used as binary toggles
+  (Z-symmetric vs one-pole; hard-cutout vs smooth-blend). Should
+  both be `Boolean`. Note: `modus_blur = 1` is only effective on
+  the Z hole when `exponent_z == 1` — otherwise it falls back to
+  hard cutout regardless. See
+  [bubblet3d_misc.rs](../../src/variations/defs/bubblet3d_misc.rs).
+- `waves2b.pwx`, `waves2b.pwy` — declared `unlimited_float` but
+  semantically tri-state via threshold comparisons: `pw ∈ [0, 1e-4)`
+  → Jacobi `sn` mode, `pw ∈ (-1e-4, 0)` → Bessel `J1` mode, else →
+  power-mode sine with `pw` as the actual exponent. Same shape as
+  `hypercrop.zero` but worse: the "power-mode" arm uses `pw` as a
+  continuous parameter, so the value space cannot cleanly split
+  into an `(enum mode, float power)` pair without losing the
+  smooth handoff at the boundaries. Probably stays as `Float` with
+  documented thresholds — flagging for visibility. See
+  [waves2b_misc.rs](../../src/variations/defs/waves2b_misc.rs).
 
 ### Numerical edge-case divergence from upstream
 
