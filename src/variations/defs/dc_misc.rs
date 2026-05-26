@@ -231,7 +231,7 @@ pub static DC_TRIANGLE: VariationDef = VariationDef {
     needs_rng: true,
     parameters: &[
         param!("scatter_area", "Scatter Area", unlimited_float, 0.0, -1.0, 1.0, "Random scatter amount applied to points outside the triangle. Clamped to `[-1, 1]` internally."),
-        param!("zero_edges", "Zero Edges", bool, false, "1 = collapse out-of-triangle points to origin; 0 = scatter them by `scatter_area`."),
+        param!("zero_edges", "Zero Edges", bool, false, "When on, out-of-triangle points collapse to the origin. When off, they scatter by `scatter_area`."),
     ],
     needs_transform: true,
     writes_color: false,

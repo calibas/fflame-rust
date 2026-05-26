@@ -42,7 +42,7 @@ pub static CIRCLECROP: VariationDef = VariationDef {
         param!("x", "X", unlimited_float, 0.0, -10.0, 10.0, "X center of the crop circle."),
         param!("y", "Y", unlimited_float, 0.0, -10.0, 10.0, "Y center of the crop circle."),
         param!("scatter_area", "Scatter Area", unlimited_float, 0.0, -1.0, 1.0, "Random scatter band along the circle boundary. 0 = snap to boundary; ±1 = scatter across full half-radius."),
-        param!("zero", "Zero", bool, true, "Behavior outside the circle: 1 = hide (collapse to origin), 0 = scatter onto boundary."),
+        param!("zero", "Zero", bool, true, "When on, points outside the circle collapse to the origin. When off, they scatter onto the boundary."),
     ],
     needs_transform: true,
     writes_color: false,

@@ -41,7 +41,7 @@ pub static POST_AXIS_SYMMETRY_WF: VariationDef = VariationDef {
     phase: VariationPhase::Post,
     needs_rng: true,
     parameters: &[
-        param!("axis", "Axis", enum, 0, &["X", "Y", "Z"], "Axis to mirror across: 0 = X, 1 = Y, 2 = Z (3D only)."),
+        param!("axis", "Axis", enum, 0, &["X", "Y", "Z"], "Axis of symmetry to mirror across. Z is 3D-only."),
         param!("centre_x", "Centre X", unlimited_float, 0.25, -10.0, 10.0, "X coordinate of the symmetry plane center."),
         param!("centre_y", "Centre Y", unlimited_float, 0.5, -10.0, 10.0, "Y coordinate of the symmetry plane center."),
         param!("centre_z", "Centre Z", unlimited_float, 0.5, -10.0, 10.0, "Z coordinate of the symmetry plane center (3D only)."),
