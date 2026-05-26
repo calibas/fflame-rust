@@ -24,18 +24,17 @@
 // attractor and the (0,0) check is essentially guaranteed false
 // for subsequent calls.
 //
-// v1 limitations (documented in `docs/projects/subflames.md`):
-//   - Subflame xforms use a synthetic xform_id (= 128 + offset)
-//     that falls outside the parent's get_param/get_state switch
-//     range. So subflame xforms see variation defaults for any
-//     parameter (julian power → defaults to 2, etc.) and zero state
-//     for stateful variations. This makes parameterless +
-//     stateless variations render correctly (linear, sinusoidal,
-//     spherical, swirl, etc.), and parameterized variations render
-//     with their *default* params rather than the .flame's
-//     specified ones. v2 will allocate real slots for subflame
-//     xforms.
-//   - No xaos in subflames — transforms are picked by raw weight.
+// Subflame xforms occupy real slots in the variation_params,
+// thread_state, and transforms buffers immediately after parent
+// xforms — addressed by `xform_id = SUBFLAME_XFORM_ID_BASE + offset`
+// (= 128 + offset). get_param, get_state, and needs_transform reads
+// all work the same way as for parent xforms, so parametric
+// variations (julian, blob, klein_group, etc.) render with their
+// configured params rather than defaults. See archived design doc
+// `docs/archive/subflame-variations-v2.md` for the unification work.
+//
+// Remaining limitation: no xaos in subflames — transforms are picked
+// by raw weight.
 
 const SUBFLAME_PREFUSE_ITERS: u32 = 20u;
 

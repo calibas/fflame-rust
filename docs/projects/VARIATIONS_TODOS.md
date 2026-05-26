@@ -10,6 +10,36 @@ prune when something lands.
 
 ---
 
+## Related variation project docs
+
+The other active project docs in this directory that touch the
+variations system. Completed projects have been moved to
+[`docs/archive/`](../archive/).
+
+- [VARIATIONS_BULK_METADATA_IMPORT.md](VARIATIONS_BULK_METADATA_IMPORT.md)
+  — the parent project plan for this branch (bulk doc-comments + per-param
+  descriptions + author attribution). Most phases complete; this TODO doc
+  is the deferred-work residue.
+- [VARIATIONS_WIRE_FORMAT.md](VARIATIONS_WIRE_FORMAT.md) — client/API
+  wire contract for variations served from the fractalsforall API. Pure
+  reference; update if you change either side.
+- [variation-bulk-port.md](variation-bulk-port.md) — the long-tail
+  porting log (JWildfire/Chaotica → our registry). ~491 ported as of
+  the most recent batch; ~67 candidates remain.
+- [variation-port-blockers.md](variation-port-blockers.md) — numbered
+  index of architectural blockers that prevent specific variations from
+  being ported. Cross-referenced from several entries below.
+- [subflames.md](subflames.md) — architecture reference for the
+  `subflame_wf` variation (v1 shipped). Subflame v2 (real param/state
+  slots for variations inside subflames) shipped 2026-05-17 — see
+  [`docs/archive/subflame-variations-v2.md`](../archive/subflame-variations-v2.md).
+
+Run `python scripts/audit_variations.py` to sanity-check the corpus
+(defined/registered/documented counts + author normalization). Catches
+drift introduced by new variation additions.
+
+---
+
 ## In scope (variations-bulk-metadata branch)
 
 ### Author attribution research
