@@ -239,6 +239,10 @@ thresholds, or add a `legacy_import` hook on the param def.
   4-mode displacement-axis selector (XY plane → Z / YZ plane → X /
   ZX plane → Y / RADIAL). Should be `Enum`. See
   [pre_wave3d_misc.rs](../../src/variations/defs/pre_wave3d_misc.rs).
+- `iconattractor_js.preset_id` — declared `Integer` with `[0, 16]`
+  range, 17-mode selector for Field & Golubitsky's symmetric-icon
+  preset table. Should be `Enum`. See
+  [iconattractor_misc.rs](../../src/variations/defs/iconattractor_misc.rs).
 - `tqmirror.type` — declared `Integer` with `[0, 1]` range, used as a
   binary outer-boundary branch selector (swap x↔y vs pass through).
   Should be `Boolean`. See
