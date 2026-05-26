@@ -1,4 +1,4 @@
-//! waveblur_wf (Maschke)
+//! waveblur_wf
 //!
 //! Polar wave-blur — emits points on a circle whose radius is a wave
 //! function of a uniform-random angle. The wave function uses
@@ -26,6 +26,11 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Polar wave-blur — emits points on a circle whose radius is a wave
+/// function `(acos(±rnd) − (n+1)·π + phase) / (count·π)` of a uniform-
+/// random `rnd ∈ [-1, 1]`, with a random integer `n ∈ [0, count)`. The
+/// angular position is uniform. 3D mode adds a Z component `(cos(rnd) −
+/// 0.5) · amplitude_z`, optionally exponentially damped by `damping_z`.
 pub static WAVEBLUR_WF: VariationDef = VariationDef {
     name: "waveblur_wf",
     display_name: "Wave Blur WF",
@@ -33,13 +38,13 @@ pub static WAVEBLUR_WF: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("count", "Count", int, 5.0, 1.0, 100.0),
-        param!("amplitude_z", "Amplitude Z", unlimited_float, 0.5, -10.0, 10.0),
-        param!("phase", "Phase", unlimited_float, 0.0, -10.0, 10.0),
-        param!("damping_z", "Damping Z", unlimited_float, 0.0, 0.0, 10.0),
-        param!("color_scale", "Color Scale", unlimited_float, 0.5, -10.0, 10.0),
-        param!("color_offset", "Color Offset", unlimited_float, 0.0, -10.0, 10.0),
-        param!("direct_color", "Direct Color", int, 0.0, 0.0, 1.0),
+        param!("count", "Count", int, 5.0, 1.0, 100.0, "Maximum integer multiplier of π in the wave-radius formula (≥ 1)."),
+        param!("amplitude_z", "Amplitude Z", unlimited_float, 0.5, -10.0, 10.0, "Z-axis wave amplitude (3D only). 0 zeroes the Z output."),
+        param!("phase", "Phase", unlimited_float, 0.0, -10.0, 10.0, "Phase offset added to the wave-radius numerator."),
+        param!("damping_z", "Damping Z", unlimited_float, 0.0, 0.0, 10.0, "Exponential damping rate on Z (clamped ≥ 0 in upstream). 0 disables damping."),
+        param!("color_scale", "Color Scale", unlimited_float, 0.5, -10.0, 10.0, "Color register scale — unused since the color write is dropped. Preserved for cpp parity."),
+        param!("color_offset", "Color Offset", unlimited_float, 0.0, -10.0, 10.0, "Color register offset — unused. Preserved for cpp parity."),
+        param!("direct_color", "Direct Color", int, 0.0, 0.0, 1.0, "1 = enable direct-color writes (dropped in this port). Preserved for cpp parity."),
     ],
     needs_transform: true,
     writes_color: false,
