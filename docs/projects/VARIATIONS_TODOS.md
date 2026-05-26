@@ -106,6 +106,7 @@ the answer is known — that's the convention for "unknown" per
 - `circleRand` ([circle_rand_misc.rs](../../src/variations/defs/circle_rand_misc.rs))
 - `CircleTrans1` ([circle_rand_misc.rs](../../src/variations/defs/circle_rand_misc.rs))
 - `waveblur_wf` ([waveblur_misc.rs](../../src/variations/defs/waveblur_misc.rs))
+- `macmillan` ([macmillan_misc.rs](../../src/variations/defs/macmillan_misc.rs)) — McMillan map itself is from Edwin McMillan's 1971 nonlinear-dynamics work; variation porter unknown
 
 **Likely shared author** — all are JWildfire ports of complex-plane
 inverse hyperbolic functions (the plain ones in `hyperbolic.rs` and
@@ -408,6 +409,35 @@ that already do this.
   follow-ups (`_a`, `_sina`) actually are. 3 init slots, no behavior
   change. See
   [singleton_misc.rs:639-646](../../src/variations/defs/singleton_misc.rs#L639-L646).
+
+### Declared-but-unused user parameters
+
+Parameters listed in `parameters: &[...]` that the WGSL body never
+reads. Two subcategories:
+
+**Intentional (kept for cpp/Java interface parity):**
+
+- `harmonograph_js.seed` — upstream cpp re-seeds `GOODRAND` per
+  Prepare; we use the per-thread RNG, so the seed value has no
+  effect. Kept so `.flame` XML round-trips and so users importing
+  from JWildfire don't see a "missing param" warning. See
+  [harmonograph_misc.rs:13-15](../../src/variations/defs/harmonograph_misc.rs#L13-L15).
+
+(For DC variations whose params are kept-for-parity because the
+color-write side is dropped — `dc_carpet3D.color_a..color_f`,
+`scale_z`, `reset_z`, `origin` — see the *Direct-color (DC) port
+decisions* section below rather than duplicating here.)
+
+**Possibly port omissions (needs upstream verification):**
+
+- `macmillan.N` — the body hardcodes exactly two iterations of the
+  McMillan map per call; `N` is declared (`unlimited_float [-10, 10]`,
+  default `1.0`) but never read. Upstream cpp may use it as an inner-
+  loop bound (`for (i = 0; i < N; i++) { ... }`) that the Rust port
+  collapsed. Verify against
+  `output/jwildfire-vars/output/macmillan.cpp` and either rewire it
+  or drop the param. See
+  [macmillan_misc.rs:36-42](../../src/variations/defs/macmillan_misc.rs#L36-L42).
 
 ---
 
