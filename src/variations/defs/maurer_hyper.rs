@@ -52,6 +52,15 @@ use crate::param;
 //     pick line / point / endpoint / curve by RNG and weights
 //     out = sampled point on chosen geometry
 // =============================================================================
+/// Maurer-rose curve sampler — a Maurer rose steps around a rhodonea (rose)
+/// curve at fixed angular increments and connects consecutive samples with
+/// straight lines. This variation picks a random point on the nearest
+/// Maurer line, on one of its endpoints, or directly on the underlying rose
+/// curve, with the mix between the three modes controlled by relative
+/// weights.
+///
+/// # Authors
+/// - CozyG
 pub static MAURER_ROSE: VariationDef = VariationDef {
     name: "maurer_rose",
     display_name: "Maurer Rose",
@@ -59,17 +68,17 @@ pub static MAURER_ROSE: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("kn", "K Numerator", unlimited_float, 2.0, -50.0, 50.0),
-        param!("kd", "K Denominator", unlimited_float, 1.0, -50.0, 50.0),
-        param!("c", "C Offset", unlimited_float, 0.0, -10.0, 10.0),
-        param!("line_count", "Line Count", unlimited_float, 360.0, 1.0, 10000.0),
-        param!("line_offset_degrees", "Line Offset (deg)", unlimited_float, 71.0, -3600.0, 3600.0),
-        param!("show_lines", "Show Lines", float, 1.0, 0.0, 10.0),
-        param!("show_points", "Show Points", float, 0.0, 0.0, 10.0),
-        param!("show_curve", "Show Curve", float, 0.05, 0.0, 10.0),
-        param!("line_thickness", "Line Thick (×100)", unlimited_float, 0.5, 0.0, 100.0),
-        param!("point_thickness", "Point Thick (×100)", unlimited_float, 3.0, 0.0, 100.0),
-        param!("curve_thickness", "Curve Thick (×100)", unlimited_float, 1.0, 0.0, 100.0),
+        param!("kn", "K Numerator", unlimited_float, 2.0, -50.0, 50.0, "K numerator — the rose's petal ratio is `kn/kd`."),
+        param!("kd", "K Denominator", unlimited_float, 1.0, -50.0, 50.0, "K denominator."),
+        param!("c", "C Offset", unlimited_float, 0.0, -10.0, 10.0, "Constant offset added to the rose radius. Shifts the curve outward."),
+        param!("line_count", "Line Count", unlimited_float, 360.0, 1.0, 10000.0, "Number of Maurer-rose line segments per cycle."),
+        param!("line_offset_degrees", "Line Offset (deg)", unlimited_float, 71.0, -3600.0, 3600.0, "Angular step between successive samples on the rhodonea, in degrees. Together with line_count, controls how many cycles wrap around the rose."),
+        param!("show_lines", "Show Lines", float, 1.0, 0.0, 10.0, "Relative weight of sampling along the Maurer line segments."),
+        param!("show_points", "Show Points", float, 0.0, 0.0, 10.0, "Relative weight of sampling at the segment endpoints."),
+        param!("show_curve", "Show Curve", float, 0.05, 0.0, 10.0, "Relative weight of sampling directly on the underlying rhodonea curve."),
+        param!("line_thickness", "Line Thick (×100)", unlimited_float, 0.5, 0.0, 100.0, "Random jitter width around line samples (×100)."),
+        param!("point_thickness", "Point Thick (×100)", unlimited_float, 3.0, 0.0, 100.0, "Random scatter radius around endpoint samples (×100)."),
+        param!("curve_thickness", "Curve Thick (×100)", unlimited_float, 1.0, 0.0, 100.0, "Random jitter width around rose-curve samples (×100)."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -290,6 +299,15 @@ fn variation_maurer_rose(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: pt
 //
 // (Recovered from Java comment; cpp PluginVarCalc was unported_stub.)
 // =============================================================================
+/// N-gon corner-cropping warp — snaps the input angle to the nearest n-gon
+/// spoke, finds that spoke's corner, and tests whether the input lies
+/// inside a small disc around the corner. Inside, behavior depends on
+/// `zero`: snap to corner, collapse to origin, or scatter around the disc
+/// edge. Outside, the point passes through.
+///
+/// # Authors
+/// - Tatyana Zabanova
+/// - Brad Stefanov
 pub static HYPERCROP: VariationDef = VariationDef {
     name: "hypercrop",
     display_name: "Hypercrop",
@@ -297,9 +315,9 @@ pub static HYPERCROP: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("n", "N", int, 4.0, 3.0, 50.0),
-        param!("rad", "Radius", unlimited_float, 1.0, 0.0, 10.0),
-        param!("zero", "Zero", unlimited_float, 0.0, 0.0, 2.0),
+        param!("n", "N", int, 4.0, 3.0, 50.0, "Number of n-gon sides (≥ 3)."),
+        param!("rad", "Radius", unlimited_float, 1.0, 0.0, 10.0, "Radius of the corner-cropping disc, relative to the n-gon corner radius."),
+        param!("zero", "Zero", unlimited_float, 0.0, 0.0, 2.0, "Behavior inside the corner disc. `> 1.5` snaps to the corner; `> 0.5` collapses to origin; else scatters around the disc edge."),
     ],
     needs_transform: false,
     writes_color: false,

@@ -10,7 +10,7 @@
 //!     (_regularForm = |exponent - 2| < ε, stored as float). Body
 //!     factors cleanly. Full3D.
 //!
-//!   - swirl3D_wf (Maschke): 3D swirl with z-modulation. 1 user param
+//!   - swirl3D_wf: 3D swirl with z-modulation. 1 user param
 //!     `n`. No init. Body factors cleanly; cpp also writes color (TC),
 //!     skipped here per `writes_color`-model conflict (compromise
 //!     established in batch 60 for spirograph3D).
@@ -30,6 +30,12 @@ use crate::param;
 // cannabiscurve_wf
 // ---------------------------------------------------------------------------
 
+/// Cannabis-curve polar plot — emits a point on the cannabis curve `r = (1
+/// + 0.9·cos 8a) · (1 + 0.1·cos 24a) · (0.9 + 0.1·cos 200a) · (1 + sin a)`.
+/// The curve is documented at
+/// [MathWorld](https://mathworld.wolfram.com/CannabisCurve.html) by Eric W.
+/// Weisstein. When `filled = 1`, randomizes the radius to fill the interior
+/// of the curve.
 pub static CANNABISCURVE_WF: VariationDef = VariationDef {
     name: "cannabiscurve_wf",
     display_name: "Cannabis Curve WF",
@@ -37,7 +43,7 @@ pub static CANNABISCURVE_WF: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("filled", "Filled", int, 1.0, 0.0, 1.0),
+        param!("filled", "Filled", int, 1.0, 0.0, 1.0, "1 = fill the curve interior by randomizing the radius per iteration; 0 = trace only the curve outline."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -82,6 +88,11 @@ fn variation_cannabiscurve_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, rn
 // spherical3D_wf
 // ---------------------------------------------------------------------------
 
+/// 3D spherical inversion with adjustable exponent — emits `(x, y, z) /
+/// r^exponent` where `r² = x² + y² + z²`. With `exponent = 2` (the default)
+/// this reduces to a standard 3D spherical inversion; other values produce
+/// stronger or weaker radial scaling. `invert` flips the sign of the
+/// output.
 pub static SPHERICAL3D_WF: VariationDef = VariationDef {
     name: "spherical3D_wf",
     display_name: "Spherical 3D WF",
@@ -89,8 +100,8 @@ pub static SPHERICAL3D_WF: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("invert", "Invert", int, 0.0, 0.0, 1.0),
-        param!("exponent", "Exponent", unlimited_float, 2.0, -10.0, 10.0),
+        param!("invert", "Invert", int, 0.0, 0.0, 1.0, "1 = flip the sign of the output (inverts through the origin); 0 = standard direction."),
+        param!("exponent", "Exponent", unlimited_float, 2.0, -10.0, 10.0, "Radial-inversion exponent. 2 = standard spherical (`r⁻²`); higher = stronger inverse; lower = weaker."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -153,6 +164,10 @@ fn variation_spherical3D_wf(p: vec3<f32>, xform_id: u32, variation_id: u32) -> v
 // swirl3D_wf
 // ---------------------------------------------------------------------------
 
+/// 3D swirl with Z modulation — re-emits the input radius and angle in
+/// cartesian form (the XY output is effectively the input swapped, per the
+/// cpp's `atan2(x, y)` convention) plus a Z output `sin(6·cos(rad) −
+/// n·ang)` that introduces a sinusoidal Z modulation parameterized by `n`.
 pub static SWIRL3D_WF: VariationDef = VariationDef {
     name: "swirl3D_wf",
     display_name: "Swirl 3D WF",
@@ -160,7 +175,7 @@ pub static SWIRL3D_WF: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("n", "N", unlimited_float, 0.0, -10.0, 10.0),
+        param!("n", "N", unlimited_float, 0.0, -10.0, 10.0, "Angular multiplier on the Z-output sine: `sin(6·cos(rad) − n·ang)`."),
     ],
     needs_transform: false,
     writes_color: false,

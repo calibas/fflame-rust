@@ -24,10 +24,16 @@ pub enum EffectCategory {
 }
 
 /// Definition of a single effect parameter
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct EffectParameter {
-    /// Parameter name (e.g., "intensity", "radius")
+    /// Parameter name (canonical, lowercase, e.g. "intensity", "radius")
     pub name: String,
+
+    /// Display name for UI (e.g. "Intensity", "Hue Offset"). Single
+    /// English locale by policy — these are technical labels, not
+    /// subject to i18n. Replaces the previous
+    /// `EffectInfo::translated_param_name()` lookup pattern.
+    pub display_name: String,
 
     /// Parameter type (reuse from variations)
     pub param_type: ParamType,
@@ -40,6 +46,11 @@ pub struct EffectParameter {
 
     /// Maximum value (None = no limit)
     pub max_value: Option<f32>,
+
+    /// Free-form help / tooltip prose shown under the parameter
+    /// control. `None` renders the control without a tooltip. Single
+    /// English locale by policy.
+    pub description: Option<String>,
 }
 
 /// Metadata for a registered effect
@@ -62,12 +73,6 @@ impl EffectInfo {
     /// Get the translated display name for this effect
     pub fn translated_name(&self) -> String {
         let key = format!("effects.{}.name", self.name);
-        t!(&key).to_string()
-    }
-
-    /// Get the translated display name for a parameter
-    pub fn translated_param_name(&self, param_name: &str) -> String {
-        let key = format!("effects.{}.params.{}", self.name, param_name);
         t!(&key).to_string()
     }
 
@@ -269,6 +274,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 0.5,
                 min_value: Some(0.0),
                 max_value: Some(1.0),
+                display_name: "Intensity".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "radius".to_string(),
@@ -276,6 +283,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 0.5,
                 min_value: Some(0.0),
                 max_value: Some(1.0),
+                display_name: "Radius".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "softness".to_string(),
@@ -283,6 +292,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 0.5,
                 min_value: Some(0.0),
                 max_value: Some(1.0),
+                display_name: "Softness".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "blend_mode".to_string(),
@@ -290,6 +301,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 0.0, // Normal
                 min_value: Some(0.0),
                 max_value: Some(12.0),
+                display_name: "Blend Mode".to_string(),
+                description: None,
             },
         ],
     });
@@ -306,6 +319,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 0.1,
                 min_value: Some(0.0),
                 max_value: Some(1.0),
+                display_name: "Intensity".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "seed".to_string(),
@@ -313,6 +328,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 0.0,
                 min_value: Some(0.0),
                 max_value: Some(256.0),
+                display_name: "Seed".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "blend_mode".to_string(),
@@ -320,6 +337,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 4.0, // Overlay (good for grain)
                 min_value: Some(0.0),
                 max_value: Some(12.0),
+                display_name: "Blend Mode".to_string(),
+                description: None,
             },
         ],
     });
@@ -336,6 +355,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 2.0,
                 min_value: Some(0.0),
                 max_value: Some(20.0),
+                display_name: "Amount".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "radial".to_string(),
@@ -343,6 +364,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 1.0, // true
                 min_value: None,
                 max_value: None,
+                display_name: "Radial".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "intensity".to_string(),
@@ -350,6 +373,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 1.0,
                 min_value: Some(0.0),
                 max_value: Some(1.0),
+                display_name: "Intensity".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "blend_mode".to_string(),
@@ -357,6 +382,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 0.0, // Normal
                 min_value: Some(0.0),
                 max_value: Some(12.0),
+                display_name: "Blend Mode".to_string(),
+                description: None,
             },
         ],
     });
@@ -373,6 +400,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 0.0,
                 min_value: Some(0.0),
                 max_value: Some(360.0),
+                display_name: "Hue Offset".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "intensity".to_string(),
@@ -380,6 +409,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 1.0,
                 min_value: Some(0.0),
                 max_value: Some(1.0),
+                display_name: "Intensity".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "blend_mode".to_string(),
@@ -387,6 +418,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 0.0, // Normal
                 min_value: Some(0.0),
                 max_value: Some(12.0),
+                display_name: "Blend Mode".to_string(),
+                description: None,
             },
         ],
     });
@@ -405,6 +438,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 3.0,
                 min_value: Some(0.0),
                 max_value: Some(10.0),
+                display_name: "Radius".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "threshold".to_string(),
@@ -412,6 +447,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 0.25,
                 min_value: Some(0.0),
                 max_value: Some(1.0),
+                display_name: "Density Threshold".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "falloff".to_string(),
@@ -419,6 +456,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 0.5,
                 min_value: Some(0.0),
                 max_value: Some(1.0),
+                display_name: "Falloff".to_string(),
+                description: None,
             },
         ],
     });
@@ -435,6 +474,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 1.0,
                 min_value: Some(0.0),
                 max_value: Some(2.0),
+                display_name: "Amount".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "radius".to_string(),
@@ -442,6 +483,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 1.0,
                 min_value: Some(0.5),
                 max_value: Some(5.0),
+                display_name: "Radius".to_string(),
+                description: None,
             },
         ],
     });
@@ -458,6 +501,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 3.0,
                 min_value: Some(1.0),
                 max_value: Some(10.0),
+                display_name: "Radius".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "sigma_spatial".to_string(),
@@ -465,6 +510,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 3.0,
                 min_value: Some(1.0),
                 max_value: Some(10.0),
+                display_name: "Spatial Sigma".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "sigma_range".to_string(),
@@ -472,6 +519,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 0.1,
                 min_value: Some(0.05),
                 max_value: Some(0.5),
+                display_name: "Range Sigma".to_string(),
+                description: None,
             },
         ],
     });
@@ -490,6 +539,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 6.0,
                 min_value: Some(2.0),
                 max_value: Some(16.0),
+                display_name: "Segments".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "rotation".to_string(),
@@ -497,6 +548,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 0.0,
                 min_value: Some(0.0),
                 max_value: Some(360.0),
+                display_name: "Source Angle".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "zoom".to_string(),
@@ -504,6 +557,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 1.0,
                 min_value: Some(0.1),
                 max_value: Some(3.0),
+                display_name: "Zoom".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "intensity".to_string(),
@@ -511,6 +566,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 1.0,
                 min_value: Some(0.0),
                 max_value: Some(1.0),
+                display_name: "Intensity".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "blend_mode".to_string(),
@@ -518,6 +575,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 0.0, // Normal
                 min_value: Some(0.0),
                 max_value: Some(12.0),
+                display_name: "Blend Mode".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "square_mode".to_string(),
@@ -525,6 +584,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 1.0, // 1 = Square (1:1 perfect symmetry), 0 = Screen ratio (stretched)
                 min_value: Some(0.0),
                 max_value: Some(1.0),
+                display_name: "Square Mode".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "edge_offset".to_string(),
@@ -532,6 +593,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 0.0, // 0 = no offset (existing behavior)
                 min_value: Some(0.0),
                 max_value: Some(2000.0),
+                display_name: "Edge Offset".to_string(),
+                description: None,
             },
         ],
     });
@@ -548,6 +611,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 0.3,
                 min_value: Some(0.0),
                 max_value: Some(1.0),
+                display_name: "Intensity".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "scale".to_string(),
@@ -555,6 +620,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 3.0,
                 min_value: Some(0.1),
                 max_value: Some(100.0),
+                display_name: "Scale".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "speed".to_string(),
@@ -562,6 +629,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 1.0,
                 min_value: Some(0.0),
                 max_value: Some(10.0),
+                display_name: "Speed".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "time".to_string(),
@@ -569,6 +638,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 0.0,
                 min_value: Some(0.0),
                 max_value: Some(1000.0),
+                display_name: "Time".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "blend_mode".to_string(),
@@ -576,6 +647,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 1.0, // Add (classic plasma look)
                 min_value: Some(0.0),
                 max_value: Some(12.0),
+                display_name: "Blend Mode".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "direction".to_string(),
@@ -583,6 +656,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 225.0, // Default: up-left (legacy behavior)
                 min_value: Some(0.0),
                 max_value: Some(360.0),
+                display_name: "Direction".to_string(),
+                description: None,
             },
         ],
     });
@@ -599,6 +674,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 1.0,
                 min_value: Some(0.0),
                 max_value: Some(5.0),
+                display_name: "Speed".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "rotation_speed".to_string(),
@@ -606,6 +683,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 0.5,
                 min_value: Some(0.0),
                 max_value: Some(5.0),
+                display_name: "Rotation Speed".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "distortion".to_string(),
@@ -613,6 +692,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 0.0,
                 min_value: Some(0.0),
                 max_value: Some(1.0),
+                display_name: "Distortion".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "time".to_string(),
@@ -620,6 +701,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 0.0,
                 min_value: Some(0.0),
                 max_value: Some(1000.0),
+                display_name: "Time".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "intensity".to_string(),
@@ -627,6 +710,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 1.0,
                 min_value: Some(0.0),
                 max_value: Some(1.0),
+                display_name: "Intensity".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "blend_mode".to_string(),
@@ -634,6 +719,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 0.0, // Normal
                 min_value: Some(0.0),
                 max_value: Some(12.0),
+                display_name: "Blend Mode".to_string(),
+                description: None,
             },
         ],
     });
@@ -650,6 +737,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 1.0,
                 min_value: Some(0.0),
                 max_value: Some(2.0),
+                display_name: "Intensity".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "threshold".to_string(),
@@ -657,6 +746,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 0.1,
                 min_value: Some(0.0),
                 max_value: Some(1.0),
+                display_name: "Threshold".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "glow".to_string(),
@@ -664,6 +755,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 0.5,
                 min_value: Some(0.0),
                 max_value: Some(1.0),
+                display_name: "Glow".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "preserve_color".to_string(),
@@ -671,6 +764,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 0.5,
                 min_value: Some(0.0),
                 max_value: Some(1.0),
+                display_name: "Preserve Color".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "blend_mode".to_string(),
@@ -678,6 +773,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 1.0, // Add (good for neon glow)
                 min_value: Some(0.0),
                 max_value: Some(12.0),
+                display_name: "Blend Mode".to_string(),
+                description: None,
             },
         ],
     });
@@ -694,6 +791,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 0.1,
                 min_value: Some(0.0),
                 max_value: Some(0.5),
+                display_name: "Intensity".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "scale".to_string(),
@@ -701,6 +800,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 3.0,
                 min_value: Some(0.5),
                 max_value: Some(10.0),
+                display_name: "Scale".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "octaves".to_string(),
@@ -708,6 +809,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 4.0,
                 min_value: Some(1.0),
                 max_value: Some(6.0),
+                display_name: "Octaves".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "time".to_string(),
@@ -715,6 +818,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 0.0,
                 min_value: Some(0.0),
                 max_value: Some(1000.0),
+                display_name: "Time".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "blend_mode".to_string(),
@@ -722,6 +827,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 0.0, // Normal
                 min_value: Some(0.0),
                 max_value: Some(12.0),
+                display_name: "Blend Mode".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "direction".to_string(),
@@ -729,6 +836,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 225.0, // Default: up-left (legacy behavior)
                 min_value: Some(0.0),
                 max_value: Some(360.0),
+                display_name: "Direction".to_string(),
+                description: None,
             },
         ],
     });
@@ -745,6 +854,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 0.5,
                 min_value: Some(0.0),
                 max_value: Some(1.0),
+                display_name: "Intensity".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "scale".to_string(),
@@ -752,6 +863,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 5.0,
                 min_value: Some(0.5),
                 max_value: Some(20.0),
+                display_name: "Scale".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "octaves".to_string(),
@@ -759,6 +872,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 4.0,
                 min_value: Some(1.0),
                 max_value: Some(6.0),
+                display_name: "Octaves".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "time".to_string(),
@@ -766,6 +881,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 0.0,
                 min_value: Some(0.0),
                 max_value: Some(1000.0),
+                display_name: "Time".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "mode".to_string(),
@@ -773,6 +890,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 0.0, // 0=Color, 1=Distort, 2=Mask
                 min_value: Some(0.0),
                 max_value: Some(2.0),
+                display_name: "Mode".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "blend_mode".to_string(),
@@ -780,6 +899,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 4.0, // Overlay (good for noise)
                 min_value: Some(0.0),
                 max_value: Some(12.0),
+                display_name: "Blend Mode".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "direction".to_string(),
@@ -787,6 +908,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 225.0, // Default: up-left (legacy behavior)
                 min_value: Some(0.0),
                 max_value: Some(360.0),
+                display_name: "Direction".to_string(),
+                description: None,
             },
         ],
     });
@@ -803,6 +926,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 0.5,
                 min_value: Some(0.0),
                 max_value: Some(1.0),
+                display_name: "Intensity".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "scale".to_string(),
@@ -810,6 +935,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 8.0,
                 min_value: Some(1.0),
                 max_value: Some(20.0),
+                display_name: "Scale".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "time".to_string(),
@@ -817,6 +944,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 0.0,
                 min_value: Some(0.0),
                 max_value: Some(1000.0),
+                display_name: "Time".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "mode".to_string(),
@@ -824,6 +953,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 0.0, // 0=Cells, 1=Edges, 2=Organic, 3=Crystal
                 min_value: Some(0.0),
                 max_value: Some(3.0),
+                display_name: "Pattern".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "color_mode".to_string(),
@@ -831,6 +962,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 1.0, // 0=Grayscale, 1=Rainbow, 2=Original
                 min_value: Some(0.0),
                 max_value: Some(2.0),
+                display_name: "Color Mode".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "blend_mode".to_string(),
@@ -838,6 +971,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 4.0, // Overlay
                 min_value: Some(0.0),
                 max_value: Some(12.0),
+                display_name: "Blend Mode".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "direction".to_string(),
@@ -845,6 +980,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 225.0, // Default: up-left (legacy behavior)
                 min_value: Some(0.0),
                 max_value: Some(360.0),
+                display_name: "Direction".to_string(),
+                description: None,
             },
         ],
     });
@@ -861,6 +998,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 1.0, // 0=Mandelbrot, 1=Julia
                 min_value: Some(0.0),
                 max_value: Some(1.0),
+                display_name: "Mode".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "julia_cx".to_string(),
@@ -868,6 +1007,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: -0.7,
                 min_value: Some(-2.0),
                 max_value: Some(2.0),
+                display_name: "Julia C (Real)".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "julia_cy".to_string(),
@@ -875,6 +1016,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 0.27,
                 min_value: Some(-2.0),
                 max_value: Some(2.0),
+                display_name: "Julia C (Imag)".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "max_iter".to_string(),
@@ -882,6 +1025,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 100.0,
                 min_value: Some(10.0),
                 max_value: Some(500.0),
+                display_name: "Max Iterations".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "zoom".to_string(),
@@ -889,6 +1034,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 1.0,
                 min_value: Some(0.1),
                 max_value: Some(100.0),
+                display_name: "Zoom".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "center_x".to_string(),
@@ -896,6 +1043,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 0.0,
                 min_value: Some(-3.0),
                 max_value: Some(3.0),
+                display_name: "Center X".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "center_y".to_string(),
@@ -903,6 +1052,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 0.0,
                 min_value: Some(-3.0),
                 max_value: Some(3.0),
+                display_name: "Center Y".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "color_mode".to_string(),
@@ -910,6 +1061,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 1.0, // 0=Escape, 1=Smooth, 2=Original mask
                 min_value: Some(0.0),
                 max_value: Some(2.0),
+                display_name: "Color Mode".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "intensity".to_string(),
@@ -917,6 +1070,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 1.0,
                 min_value: Some(0.0),
                 max_value: Some(1.0),
+                display_name: "Intensity".to_string(),
+                description: None,
             },
             EffectParameter {
                 name: "blend_mode".to_string(),
@@ -924,6 +1079,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 0.0, // Normal
                 min_value: Some(0.0),
                 max_value: Some(12.0),
+                display_name: "Blend Mode".to_string(),
+                description: None,
             },
         ],
     });

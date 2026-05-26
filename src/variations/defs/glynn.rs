@@ -2,7 +2,7 @@
 //!
 //! Five popular organic-shape variations from JWildfire:
 //!   - `glynnia`   (Michael Faber)  — RNG branch on radius and on θ-quadrant
-//!   - `glynnia3`  (Faber, params)  — glynnia with 4 user-tunable knobs
+//!   - `glynnia3`                   — glynnia with 4 user-tunable knobs
 //!   - `glynnSim1` (eralex61)       — Glynn-set inversion + circle generator
 //!   - `glynnSim2` (eralex61)       — Glynn-set with arc-segment generator
 //!   - `glynnSim3` (eralex61)       — Glynn-set with two-radius branching
@@ -38,7 +38,7 @@ use crate::variations::{
 use crate::param;
 
 // =============================================================================
-// glynnia: random-branched glynn-set warp (Faber)
+// glynnia: random-branched glynn-set warp (Michael Faber)
 //   r = sqrt(x² + y²)
 //   if r >= 1:
 //     if rand > 0.5:   out = (sqrt(2)/2) · (sqrt(r+x), -y/sqrt(r+x))
@@ -47,6 +47,12 @@ use crate::param;
 //     if rand > 0.5:   out = -(sqrt(2)/2) · (sqrt(r+x), y/sqrt(r+x))
 //     else:            d = r+x; dx = sqrt(r·(y² + d²));  out = (-d/dx, y/dx)
 // =============================================================================
+/// Random-branched Glynn-set warp — splits into 4 branches per iteration
+/// based on radius and a random coin flip. Produces the characteristic
+/// organic Glynn fractal shapes.
+///
+/// # Authors
+/// - Michael Faber
 pub static GLYNNIA: VariationDef = VariationDef {
     name: "glynnia",
     display_name: "Glynnia",
@@ -120,12 +126,19 @@ fn variation_glynnia(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
 };
 
 // =============================================================================
-// glynnia3: glynnia with 4 user-tunable knobs (Faber)
+// glynnia3: glynnia with 4 user-tunable knobs (Michael Faber, Maulana Randa, CozyG)
 //   Like glynnia but:
 //     r = rscale · sqrt(x² + y²)
 //     d = dscale · (r + x)   (or sqrt(d) where glynnia took sqrt directly)
 //     branch threshold: r > rthresh && y > ythresh   (vs r >= 1)
 // =============================================================================
+/// Glynnia with 4 user-tunable knobs — exposes the radius/distance scaling
+/// and the branch threshold as parameters.
+///
+/// # Authors
+/// - Michael Faber
+/// - Maulana Randa
+/// - CozyG
 pub static GLYNNIA3: VariationDef = VariationDef {
     name: "glynnia3",
     display_name: "Glynnia 3",
@@ -133,10 +146,10 @@ pub static GLYNNIA3: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("rscale", "R scale", unlimited_float, 1.0, -10.0, 10.0),
-        param!("dscale", "D scale", unlimited_float, 1.0, -10.0, 10.0),
-        param!("rthresh", "R threshold", unlimited_float, 0.0, -10.0, 10.0),
-        param!("ythresh", "Y threshold", unlimited_float, 0.0, -10.0, 10.0),
+        param!("rscale", "R scale", unlimited_float, 1.0, -10.0, 10.0, "Radial scaling on the input distance."),
+        param!("dscale", "D scale", unlimited_float, 1.0, -10.0, 10.0, "Scaling on the `d = r + x` term used by both branches."),
+        param!("rthresh", "R threshold", unlimited_float, 0.0, -10.0, 10.0, "Radius threshold for the inside-vs-outside branch split."),
+        param!("ythresh", "Y threshold", unlimited_float, 0.0, -10.0, 10.0, "Y threshold added to the branch condition — only points with `y > ythresh` take the outer branch."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -231,6 +244,12 @@ fn variation_glynnia3(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
 //     φ  = 2π · rand
 //     out = (r2·cos(φ) + x1, r2·sin(φ) + y1)
 // =============================================================================
+/// Glynn-set inversion with an offset-circle generator — points inside the
+/// radius spawn new points on a circle at `(x1, y1)`; outside, points get
+/// inverted with probabilistic threshold.
+///
+/// # Authors
+/// - eralex61
 pub static GLYNN_SIM1: VariationDef = VariationDef {
     name: "glynnSim1",
     display_name: "Glynn Sim 1",
@@ -238,12 +257,12 @@ pub static GLYNN_SIM1: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("radius", "Radius", unlimited_float, 1.0, -5.0, 5.0),
-        param!("radius1", "Radius 1", unlimited_float, 0.1, -5.0, 5.0),
-        param!("phi1", "Phi 1", unlimited_float, 110.0, -360.0, 360.0),
-        param!("thickness", "Thickness", float, 0.1, 0.0, 1.0),
-        param!("pow", "Pow", unlimited_float, 1.5, -10.0, 10.0),
-        param!("contrast", "Contrast", float, 0.5, 0.0, 1.0),
+        param!("radius", "Radius", unlimited_float, 1.0, -5.0, 5.0, "Main Glynn-set inversion radius."),
+        param!("radius1", "Radius 1", unlimited_float, 0.1, -5.0, 5.0, "Offset-circle radius for the generator."),
+        param!("phi1", "Phi 1", unlimited_float, 110.0, -360.0, 360.0, "Angular position of the offset circle (degrees)."),
+        param!("thickness", "Thickness", float, 0.1, 0.0, 1.0, "Circle thickness — fraction of the radius (0 = points on the boundary, 1 = filled disc)."),
+        param!("pow", "Pow", unlimited_float, 1.5, -10.0, 10.0, "Power for the contrast probability — higher concentrates points near the boundary."),
+        param!("contrast", "Contrast", float, 0.5, 0.0, 1.0, "Probability scaling for the inversion-vs-pass-through branch."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -367,6 +386,12 @@ fn variation_glynnSim1(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
 //     φ  = phi10 + δ · rand          (segment of an arc, not full circle)
 //     out = (r2·cos(φ), r2·sin(φ))
 // =============================================================================
+/// Glynn-set with arc-segment generator — like GlynnSim1 but the generator
+/// spawns points along an arc instead of a full circle. `phi1` / `phi2`
+/// define the arc bounds.
+///
+/// # Authors
+/// - eralex61
 pub static GLYNN_SIM2: VariationDef = VariationDef {
     name: "glynnSim2",
     display_name: "Glynn Sim 2",
@@ -374,12 +399,12 @@ pub static GLYNN_SIM2: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("radius", "Radius", unlimited_float, 1.0, -5.0, 5.0),
-        param!("thickness", "Thickness", float, 0.1, 0.0, 1.0),
-        param!("contrast", "Contrast", float, 0.5, 0.0, 1.0),
-        param!("pow", "Pow", unlimited_float, 1.5, -10.0, 10.0),
-        param!("phi1", "Phi 1", unlimited_float, 110.0, -360.0, 360.0),
-        param!("phi2", "Phi 2", unlimited_float, 150.0, -360.0, 360.0),
+        param!("radius", "Radius", unlimited_float, 1.0, -5.0, 5.0, "Main Glynn-set inversion radius."),
+        param!("thickness", "Thickness", float, 0.1, 0.0, 1.0, "Arc thickness — fraction of the radius."),
+        param!("contrast", "Contrast", float, 0.5, 0.0, 1.0, "Probability scaling for the inversion-vs-pass-through branch."),
+        param!("pow", "Pow", unlimited_float, 1.5, -10.0, 10.0, "Power for the contrast probability."),
+        param!("phi1", "Phi 1", unlimited_float, 110.0, -360.0, 360.0, "Start angle of the arc segment (degrees)."),
+        param!("phi2", "Phi 2", unlimited_float, 150.0, -360.0, 360.0, "End angle of the arc segment (degrees)."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -474,6 +499,11 @@ fn variation_glynnSim2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
 //        if rand > contrast · α^|pow|:  out = (x, y)
 //        else:                          out = α² · (x, y)
 // =============================================================================
+/// Glynn-set with two-radius branching — generator picks between two
+/// circles (`r1` and `r2 = radius²/r1`) with probability γ.
+///
+/// # Authors
+/// - eralex61
 pub static GLYNN_SIM3: VariationDef = VariationDef {
     name: "glynnSim3",
     display_name: "Glynn Sim 3",
@@ -481,10 +511,10 @@ pub static GLYNN_SIM3: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("radius", "Radius", unlimited_float, 1.0, -5.0, 5.0),
-        param!("thickness", "Thickness", float, 0.1, 0.0, 1.0),
-        param!("contrast", "Contrast", float, 0.5, 0.0, 1.0),
-        param!("pow", "Pow", unlimited_float, 1.5, -10.0, 10.0),
+        param!("radius", "Radius", unlimited_float, 1.0, -5.0, 5.0, "Main Glynn-set inversion radius."),
+        param!("thickness", "Thickness", float, 0.1, 0.0, 1.0, "Outer-circle thickness — combined with radius to form `r1` and `r2 = radius² / r1`."),
+        param!("contrast", "Contrast", float, 0.5, 0.0, 1.0, "Probability scaling for the inversion-vs-pass-through branch."),
+        param!("pow", "Pow", unlimited_float, 1.5, -10.0, 10.0, "Power for the contrast probability."),
     ],
     needs_transform: false,
     writes_color: false,

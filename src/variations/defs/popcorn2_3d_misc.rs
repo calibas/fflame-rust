@@ -31,6 +31,15 @@ use crate::variations::{
 };
 use crate::param;
 
+/// 3D extension of `popcorn2` — modulates XY by `0.5 · (coord + scale ·
+/// sin(tan(c · other_coord)))` (the standard popcorn2 form, halved) and
+/// adds a Z output combining `sin(tan(c)) · atan2(y, x)` with an optional
+/// Z-dependent term scaled by `popcorn2_3D_z`. The accumulator-read path in
+/// the cpp (`otherZ ≠ 0`) is unreachable in our model since `FPz` starts at
+/// 0 each iteration, so we always take the `otherZ == 0` branch.
+///
+/// # Authors
+/// - Larry Berlin
 pub static POPCORN2_3D: VariationDef = VariationDef {
     name: "popcorn2_3D",
     display_name: "Popcorn2 3D",
@@ -38,10 +47,10 @@ pub static POPCORN2_3D: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("popcorn2_3D_x", "X", unlimited_float, 0.1, -10.0, 10.0),
-        param!("popcorn2_3D_y", "Y", unlimited_float, 0.1, -10.0, 10.0),
-        param!("popcorn2_3D_z", "Z", unlimited_float, 0.1, -10.0, 10.0),
-        param!("popcorn2_3D_c", "C", unlimited_float, 3.0, -10.0, 10.0),
+        param!("popcorn2_3D_x", "X", unlimited_float, 0.1, -10.0, 10.0, "X-axis sine amplitude (multiplies `sin(tan(c · y))` in the X output)."),
+        param!("popcorn2_3D_y", "Y", unlimited_float, 0.1, -10.0, 10.0, "Y-axis sine amplitude (multiplies `sin(tan(c · x))` in the Y output)."),
+        param!("popcorn2_3D_z", "Z", unlimited_float, 0.1, -10.0, 10.0, "Z-axis amplitude on the secondary `sin(tan(c)) · temp_tz` term."),
+        param!("popcorn2_3D_c", "C", unlimited_float, 3.0, -10.0, 10.0, "Frequency multiplier inside `tan(c · coord)` for the XY modulators and `tan(c)` for the Z term."),
     ],
     needs_transform: true,
     writes_color: false,

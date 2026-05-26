@@ -137,6 +137,12 @@ pub struct VariationParamDef {
 
     /// Maximum value (None = no limit for slider, typing still allowed)
     pub max_value: Option<f32>,
+
+    /// Free-form help / tooltip prose shown under the parameter
+    /// control. `None` renders the control without a tooltip. Single
+    /// English locale by policy (technical descriptions, not subject
+    /// to i18n).
+    pub description: Option<&'static str>,
 }
 
 impl VariationParamDef {
@@ -149,6 +155,7 @@ impl VariationParamDef {
             default_value: self.default_value,
             min_value: self.min_value,
             max_value: self.max_value,
+            description: self.description.map(|s| s.to_string()),
         }
     }
 }
@@ -238,73 +245,160 @@ fn {func_name}({params}) -> vec3<f32> {{
     }
 }
 
-/// Macro to simplify variation parameter definition
+/// Macro to simplify variation parameter definition.
+///
+/// Each typed form has two arms: one without description (default
+/// `None`), one with a trailing `$desc:expr` arg. Pick whichever matches
+/// the call site — macro_rules dispatches by arity.
 #[macro_export]
 macro_rules! param {
-    // Float with full range
+    // ---- Float ----
     ($name:expr, $display:expr, float, $default:expr, $min:expr, $max:expr) => {
         VariationParamDef {
-            name: $name,
-            display_name: $display,
-            param_type: ParamType::Float,
-            default_value: $default,
-            min_value: Some($min),
-            max_value: Some($max),
+            name: $name, display_name: $display, param_type: ParamType::Float,
+            default_value: $default, min_value: Some($min), max_value: Some($max),
+            description: None,
         }
     };
-    // UnlimitedFloat
+    ($name:expr, $display:expr, float, $default:expr, $min:expr, $max:expr, $desc:expr) => {
+        VariationParamDef {
+            name: $name, display_name: $display, param_type: ParamType::Float,
+            default_value: $default, min_value: Some($min), max_value: Some($max),
+            description: Some($desc),
+        }
+    };
+    // ---- UnlimitedFloat ----
     ($name:expr, $display:expr, unlimited_float, $default:expr, $min:expr, $max:expr) => {
         VariationParamDef {
-            name: $name,
-            display_name: $display,
-            param_type: ParamType::UnlimitedFloat,
-            default_value: $default,
-            min_value: Some($min),
-            max_value: Some($max),
+            name: $name, display_name: $display, param_type: ParamType::UnlimitedFloat,
+            default_value: $default, min_value: Some($min), max_value: Some($max),
+            description: None,
         }
     };
-    // Integer
+    ($name:expr, $display:expr, unlimited_float, $default:expr, $min:expr, $max:expr, $desc:expr) => {
+        VariationParamDef {
+            name: $name, display_name: $display, param_type: ParamType::UnlimitedFloat,
+            default_value: $default, min_value: Some($min), max_value: Some($max),
+            description: Some($desc),
+        }
+    };
+    // ---- Integer ----
     ($name:expr, $display:expr, int, $default:expr, $min:expr, $max:expr) => {
         VariationParamDef {
-            name: $name,
-            display_name: $display,
-            param_type: ParamType::Integer,
-            default_value: $default,
-            min_value: Some($min),
-            max_value: Some($max),
+            name: $name, display_name: $display, param_type: ParamType::Integer,
+            default_value: $default, min_value: Some($min), max_value: Some($max),
+            description: None,
         }
     };
-    // UnlimitedInteger
+    ($name:expr, $display:expr, int, $default:expr, $min:expr, $max:expr, $desc:expr) => {
+        VariationParamDef {
+            name: $name, display_name: $display, param_type: ParamType::Integer,
+            default_value: $default, min_value: Some($min), max_value: Some($max),
+            description: Some($desc),
+        }
+    };
+    // ---- UnlimitedInteger ----
     ($name:expr, $display:expr, unlimited_int, $default:expr, $min:expr, $max:expr) => {
         VariationParamDef {
-            name: $name,
-            display_name: $display,
-            param_type: ParamType::UnlimitedInteger,
-            default_value: $default,
-            min_value: Some($min),
-            max_value: Some($max),
+            name: $name, display_name: $display, param_type: ParamType::UnlimitedInteger,
+            default_value: $default, min_value: Some($min), max_value: Some($max),
+            description: None,
         }
     };
-    // Angle
+    ($name:expr, $display:expr, unlimited_int, $default:expr, $min:expr, $max:expr, $desc:expr) => {
+        VariationParamDef {
+            name: $name, display_name: $display, param_type: ParamType::UnlimitedInteger,
+            default_value: $default, min_value: Some($min), max_value: Some($max),
+            description: Some($desc),
+        }
+    };
+    // ---- Angle ----
     ($name:expr, $display:expr, angle, $default:expr) => {
         VariationParamDef {
-            name: $name,
-            display_name: $display,
-            param_type: ParamType::Angle,
-            default_value: $default,
-            min_value: Some(-360.0),
-            max_value: Some(360.0),
+            name: $name, display_name: $display, param_type: ParamType::Angle,
+            default_value: $default, min_value: Some(-360.0), max_value: Some(360.0),
+            description: None,
         }
     };
-    // Boolean
+    ($name:expr, $display:expr, angle, $default:expr, $desc:expr) => {
+        VariationParamDef {
+            name: $name, display_name: $display, param_type: ParamType::Angle,
+            default_value: $default, min_value: Some(-360.0), max_value: Some(360.0),
+            description: Some($desc),
+        }
+    };
+    // ---- Boolean ----
     ($name:expr, $display:expr, bool, $default:expr) => {
         VariationParamDef {
-            name: $name,
-            display_name: $display,
-            param_type: ParamType::Boolean,
+            name: $name, display_name: $display, param_type: ParamType::Boolean,
             default_value: if $default { 1.0 } else { 0.0 },
-            min_value: None,
-            max_value: None,
+            min_value: None, max_value: None,
+            description: None,
         }
     };
+    ($name:expr, $display:expr, bool, $default:expr, $desc:expr) => {
+        VariationParamDef {
+            name: $name, display_name: $display, param_type: ParamType::Boolean,
+            default_value: if $default { 1.0 } else { 0.0 },
+            min_value: None, max_value: None,
+            description: Some($desc),
+        }
+    };
+    // ---- Enum ----
+    // Choices is a `&'static [&'static str]` slice literal.
+    // Default value is the index of the initially selected choice.
+    // Example: param!("mode", "Mode", enum, 0, &["Wrap", "Clamp", "Zero"])
+    ($name:expr, $display:expr, enum, $default:expr, $choices:expr) => {
+        VariationParamDef {
+            name: $name, display_name: $display,
+            param_type: ParamType::Enum { choices: $choices },
+            default_value: $default as f32,
+            min_value: Some(0.0),
+            max_value: Some(($choices.len() as f32) - 1.0),
+            description: None,
+        }
+    };
+    ($name:expr, $display:expr, enum, $default:expr, $choices:expr, $desc:expr) => {
+        VariationParamDef {
+            name: $name, display_name: $display,
+            param_type: ParamType::Enum { choices: $choices },
+            default_value: $default as f32,
+            min_value: Some(0.0),
+            max_value: Some(($choices.len() as f32) - 1.0),
+            description: Some($desc),
+        }
+    };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::param;
+
+    // Smoke test: the enum arm must produce a const-evaluable value
+    // so it can live in a `pub static VariationDef`. If
+    // ParamType::Enum.choices ever drifts back to a non-const-compatible
+    // type (Vec<String>, etc.), this declaration fails to compile.
+    static _ENUM_ARM_COMPILES_IN_STATIC: VariationParamDef = param!(
+        "mode", "Mode", enum, 1, &["Wrap", "Clamp", "Zero"]
+    );
+
+    static _ENUM_ARM_WITH_DESC: VariationParamDef = param!(
+        "mode", "Mode", enum, 0, &["Off", "On"],
+        "Toggles the thing."
+    );
+
+    #[test]
+    fn enum_arm_fields_correct() {
+        assert_eq!(_ENUM_ARM_COMPILES_IN_STATIC.default_value, 1.0);
+        assert_eq!(_ENUM_ARM_COMPILES_IN_STATIC.min_value, Some(0.0));
+        assert_eq!(_ENUM_ARM_COMPILES_IN_STATIC.max_value, Some(2.0));
+        match _ENUM_ARM_COMPILES_IN_STATIC.param_type {
+            ParamType::Enum { choices } => {
+                assert_eq!(choices, &["Wrap", "Clamp", "Zero"]);
+            }
+            _ => panic!("expected Enum param_type"),
+        }
+        assert_eq!(_ENUM_ARM_WITH_DESC.description, Some("Toggles the thing."));
+    }
 }

@@ -33,6 +33,18 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Rose curves (rhodonea) — `r = cos(k·θ) + radial_offset` with `k =
+/// knumer/kdenom`. Maps incoming points onto the rose with 7 inner modes
+/// (when `|rin| ≤ |r|`) and 7 outer modes (when `|rin| > |r|`), giving 49
+/// spread/mask combinations. The init logic computes the minimum cycle
+/// count needed to close the curve, handling integer `k` (1 or ½ cycle
+/// depending on parity), rational `k` (Euclidean gcd reduction), and
+/// irrational `k` (16-cycle fallback). `metacycle_expansion` distorts
+/// amplitude across cycles for spiral-like radial growth; `fill` adds
+/// uniform random radial jitter.
+///
+/// # Authors
+/// - CozyG
 pub static RHODONEA: VariationDef = VariationDef {
     name: "rhodonea",
     display_name: "Rhodonea",
@@ -40,21 +52,21 @@ pub static RHODONEA: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("knumer", "K Numer", unlimited_float, 3.0, -50.0, 50.0),
-        param!("kdenom", "K Denom", unlimited_float, 4.0, -50.0, 50.0),
-        param!("radial_offset", "Radial Offset", unlimited_float, 0.0, -10.0, 10.0),
-        param!("inner_mode", "Inner Mode", int, 1.0, 0.0, 6.0),
-        param!("outer_mode", "Outer Mode", int, 1.0, 0.0, 6.0),
-        param!("inner_spread", "Inner Spread", unlimited_float, 0.0, -10.0, 10.0),
-        param!("outer_spread", "Outer Spread", unlimited_float, 0.0, -10.0, 10.0),
-        param!("inner_spread_ratio", "Inner Spread Ratio", unlimited_float, 1.0, -10.0, 10.0),
-        param!("outer_spread_ratio", "Outer Spread Ratio", unlimited_float, 1.0, -10.0, 10.0),
-        param!("spread_split", "Spread Split", unlimited_float, 1.0, -10.0, 10.0),
-        param!("cycles", "Cycles", unlimited_float, 0.0, 0.0, 100.0),
-        param!("cycle_offset", "Cycle Offset", unlimited_float, 0.0, -10.0, 10.0),
-        param!("metacycle_expansion", "Metacycle Expansion", unlimited_float, 0.0, -10.0, 10.0),
-        param!("metacycles", "Metacycles", unlimited_float, 1.0, 0.0, 100.0),
-        param!("fill", "Fill", unlimited_float, 0.0, 0.0, 1.0),
+        param!("knumer", "K Numer", unlimited_float, 3.0, -50.0, 50.0, "Rose-curve `k = knumer/kdenom` numerator. Integer `k` produces `k` petals (even) or `2k` petals (odd); rational `k` produces nested petal patterns with `cycles_to_close = kdenom` cycles."),
+        param!("kdenom", "K Denom", unlimited_float, 4.0, -50.0, 50.0, "Rose-curve `k = knumer/kdenom` denominator."),
+        param!("radial_offset", "Radial Offset", unlimited_float, 0.0, -10.0, 10.0, "Additive offset to the radial formula: `r = cos(k·θ) + radial_offset`. Non-zero values create an inner loop or distort the petals away from the origin."),
+        param!("inner_mode", "Inner Mode", int, 1.0, 0.0, 6.0, "Behavior when input is inside the rose curve (`|rin| ≤ |r|`). 0=normal (point on curve), 1=spread linear, 2=spread radial-mirror, 3=spread axis-abs, 4=spread half-add, 5=mask inside (hide → collapses to origin), 6=mask outside (pass-through original input)."),
+        param!("outer_mode", "Outer Mode", int, 1.0, 0.0, 6.0, "Behavior when input is outside the rose curve (`|rin| > |r|`). 0-4 use the same spread formulas as `inner_mode` (with `outer_spread` instead of `inner_spread`); 5=mask inside (pass-through original input), 6=mask outside (hide → collapses to origin). Note the mask semantics on 5/6 are inverted relative to `inner_mode`."),
+        param!("inner_spread", "Inner Spread", unlimited_float, 0.0, -10.0, 10.0, "Spread amplitude for inner modes 1-4. Scales how strongly the input position influences the displacement from the rose curve."),
+        param!("outer_spread", "Outer Spread", unlimited_float, 0.0, -10.0, 10.0, "Spread amplitude for outer modes 1-4."),
+        param!("inner_spread_ratio", "Inner Spread Ratio", unlimited_float, 1.0, -10.0, 10.0, "X/Y asymmetry for the inner spread. 1.0 = symmetric; other values stretch the spread along X relative to Y."),
+        param!("outer_spread_ratio", "Outer Spread Ratio", unlimited_float, 1.0, -10.0, 10.0, "X/Y asymmetry for the outer spread."),
+        param!("spread_split", "Spread Split", unlimited_float, 1.0, -10.0, 10.0, "Scale factor for the input-radius comparison: `rin = spread_split · |p|`. Larger values make the curve appear smaller (more inputs classify as outside)."),
+        param!("cycles", "Cycles", unlimited_float, 0.0, 0.0, 100.0, "Number of θ cycles to traverse per iteration. 0 = auto-compute as `cycles_to_close × metacycles`; non-zero overrides the auto-compute."),
+        param!("cycle_offset", "Cycle Offset", unlimited_float, 0.0, -10.0, 10.0, "Phase offset for θ in fractions of 2π. Rotates the rose orientation."),
+        param!("metacycle_expansion", "Metacycle Expansion", unlimited_float, 0.0, -10.0, 10.0, "Per-metacycle radial expansion factor. Non-zero values cause the rose amplitude to grow linearly across subsequent metacycles, creating spiral patterns."),
+        param!("metacycles", "Metacycles", unlimited_float, 1.0, 0.0, 100.0, "Number of metacycles when `cycles == 0`. Each metacycle is one `cycles_to_close` worth of θ."),
+        param!("fill", "Fill", unlimited_float, 0.0, 0.0, 1.0, "Random radial jitter amplitude. Adds `fill · (rng - 0.5)` to `r` per iteration, filling in the rose shape with noise."),
     ],
     needs_transform: true,
     writes_color: false,

@@ -5,7 +5,7 @@
 //! `crop3D` (a popular axis-aligned 3D crop) since they share the same
 //! "pick random + emit shape" pattern.
 //!
-//!   - `spirograph` (Apophysis pack)        — hypotrochoid sampler
+//!   - `spirograph`                         — hypotrochoid sampler
 //!   - `lissajous`  (Jed Kelsey)            — Lissajous-figure sampler
 //!   - `vogel`      (Victor Ganora)         — Vogel-spiral sampler (φ²)
 //!   - `crop3D`     (Xyrus02)               — axis-aligned 3D crop
@@ -46,6 +46,9 @@ use crate::param;
 //   y1 = (a+b)·sin(t) − c2·sin((a+b)/b · t)
 //   out = (x1 + d·cos(t) + y, y1 + d·sin(t) + y)
 // =============================================================================
+/// Hypotrochoid curve sampler — picks a random parameter `t` and emits a
+/// point on the classic spirograph curve. `a`/`b` are the outer/inner wheel
+/// radii; `c1`/`c2` give per-axis amplitudes; `d` is the pen-arm length.
 pub static SPIROGRAPH: VariationDef = VariationDef {
     name: "spirograph",
     display_name: "Spirograph",
@@ -53,15 +56,15 @@ pub static SPIROGRAPH: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("a", "A", unlimited_float, 3.0, -10.0, 10.0),
-        param!("b", "B", unlimited_float, 2.0, -10.0, 10.0),
-        param!("d", "D", unlimited_float, 0.0, -10.0, 10.0),
-        param!("c1", "C1", unlimited_float, 0.0, -10.0, 10.0),
-        param!("c2", "C2", unlimited_float, 0.0, -10.0, 10.0),
-        param!("tmin", "T Min", unlimited_float, -1.0, -100.0, 100.0),
-        param!("tmax", "T Max", unlimited_float, 1.0, -100.0, 100.0),
-        param!("ymin", "Y Min", unlimited_float, -1.0, -100.0, 100.0),
-        param!("ymax", "Y Max", unlimited_float, 1.0, -100.0, 100.0),
+        param!("a", "A", unlimited_float, 3.0, -10.0, 10.0, "Outer-wheel radius."),
+        param!("b", "B", unlimited_float, 2.0, -10.0, 10.0, "Inner-wheel radius."),
+        param!("d", "D", unlimited_float, 0.0, -10.0, 10.0, "Pen-arm length added to the output."),
+        param!("c1", "C1", unlimited_float, 0.0, -10.0, 10.0, "X-axis amplitude of the inner-wheel cosine term."),
+        param!("c2", "C2", unlimited_float, 0.0, -10.0, 10.0, "Y-axis amplitude of the inner-wheel sine term."),
+        param!("tmin", "T Min", unlimited_float, -1.0, -100.0, 100.0, "Minimum value of the random parameter `t`."),
+        param!("tmax", "T Max", unlimited_float, 1.0, -100.0, 100.0, "Maximum value of the random parameter `t`."),
+        param!("ymin", "Y Min", unlimited_float, -1.0, -100.0, 100.0, "Minimum random Y offset added to both output coordinates."),
+        param!("ymax", "Y Max", unlimited_float, 1.0, -100.0, 100.0, "Maximum random Y offset added to both output coordinates."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -127,6 +130,11 @@ fn variation_spirograph(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
 //   x1 = sin(a·t + d);  y1 = sin(b·t)
 //   out = (x1 + c·t + e·y, y1 + c·t + e·y)
 // =============================================================================
+/// Lissajous-figure sampler — picks a random `t` and emits `(sin(a·t + d),
+/// sin(b·t))`. Adds linear drift `c·t` and noise `e·y` for thicker curves.
+///
+/// # Authors
+/// - Jed Kelsey
 pub static LISSAJOUS: VariationDef = VariationDef {
     name: "lissajous",
     display_name: "Lissajous",
@@ -134,13 +142,13 @@ pub static LISSAJOUS: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("tmin", "T Min", unlimited_float, -3.14159265, -100.0, 100.0),
-        param!("tmax", "T Max", unlimited_float, 3.14159265, -100.0, 100.0),
-        param!("a", "A", unlimited_float, 3.0, -20.0, 20.0),
-        param!("b", "B", unlimited_float, 2.0, -20.0, 20.0),
-        param!("c", "C", unlimited_float, 0.0, -10.0, 10.0),
-        param!("d", "D", unlimited_float, 0.0, -10.0, 10.0),
-        param!("e", "E", unlimited_float, 0.0, -10.0, 10.0),
+        param!("tmin", "T Min", unlimited_float, -3.14159265, -100.0, 100.0, "Minimum value of the random parameter `t`."),
+        param!("tmax", "T Max", unlimited_float, 3.14159265, -100.0, 100.0, "Maximum value of the random parameter `t`."),
+        param!("a", "A", unlimited_float, 3.0, -20.0, 20.0, "X-axis frequency multiplier."),
+        param!("b", "B", unlimited_float, 2.0, -20.0, 20.0, "Y-axis frequency multiplier."),
+        param!("c", "C", unlimited_float, 0.0, -10.0, 10.0, "Linear drift added to both axes."),
+        param!("d", "D", unlimited_float, 0.0, -10.0, 10.0, "Phase offset on the X axis."),
+        param!("e", "E", unlimited_float, 0.0, -10.0, 10.0, "Noise scale added to both axes."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -199,6 +207,12 @@ fn variation_lissajous(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
 //   r = w · (sqrt(x²+y²) + ε + sqrt(i))
 //   out = r · (cos(a) + scale·x, sin(a) + scale·y)
 // =============================================================================
+/// Vogel-spiral sampler — places points at integer-indexed angles `i ·
+/// 2π/φ²` from a golden-angle spiral. Produces the iconic sunflower-seed
+/// pattern.
+///
+/// # Authors
+/// - Victor Ganora
 pub static VOGEL: VariationDef = VariationDef {
     name: "vogel",
     display_name: "Vogel",
@@ -206,8 +220,8 @@ pub static VOGEL: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("n", "N", int, 20.0, 1.0, 1000.0),
-        param!("scale", "Scale", unlimited_float, 1.0, -10.0, 10.0),
+        param!("n", "N", int, 20.0, 1.0, 1000.0, "Number of seed positions (1-1000). Larger = more points around the spiral."),
+        param!("scale", "Scale", unlimited_float, 1.0, -10.0, 10.0, "Mixes the radial distance with the input coordinates. 0 = pure spiral; higher = blended with input."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -281,6 +295,12 @@ fn variation_vogel(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<func
 //     when mixed with others.
 //   - Z preserve isn't needed here — body explicitly handles Z output.
 // =============================================================================
+/// Axis-aligned 3D crop with optional jitter — constrains points to a 3D
+/// box. Outside the box, points either collapse to zero (`zero` on) or
+/// scatter back toward the nearest edge with `scatter_area` randomness.
+///
+/// # Authors
+/// - Xyrus02
 pub static CROP3D: VariationDef = VariationDef {
     name: "crop3d",
     display_name: "Crop 3D",
@@ -288,14 +308,14 @@ pub static CROP3D: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("left", "Left", unlimited_float, -1.0, -10.0, 10.0),
-        param!("top", "Top", unlimited_float, -1.0, -10.0, 10.0),
-        param!("floor", "Floor", unlimited_float, -1.0, -10.0, 10.0),
-        param!("right", "Right", unlimited_float, 1.0, -10.0, 10.0),
-        param!("bottom", "Bottom", unlimited_float, 1.0, -10.0, 10.0),
-        param!("ceiling", "Ceiling", unlimited_float, 1.0, -10.0, 10.0),
-        param!("scatter_area", "Scatter Area", unlimited_float, 0.0, 0.0, 1.0),
-        param!("zero", "Zero", int, 0.0, 0.0, 1.0),
+        param!("left", "Left", unlimited_float, -1.0, -10.0, 10.0, "Left bound of the cropping box (X axis)."),
+        param!("top", "Top", unlimited_float, -1.0, -10.0, 10.0, "Top bound (Y axis)."),
+        param!("floor", "Floor", unlimited_float, -1.0, -10.0, 10.0, "Floor bound (Z axis)."),
+        param!("right", "Right", unlimited_float, 1.0, -10.0, 10.0, "Right bound (X axis)."),
+        param!("bottom", "Bottom", unlimited_float, 1.0, -10.0, 10.0, "Bottom bound (Y axis)."),
+        param!("ceiling", "Ceiling", unlimited_float, 1.0, -10.0, 10.0, "Ceiling bound (Z axis)."),
+        param!("scatter_area", "Scatter Area", unlimited_float, 0.0, 0.0, 1.0, "Width of the scatter band along each box edge. 0 = snap to edge; 1 = scatter across the full box width."),
+        param!("zero", "Zero", int, 0.0, 0.0, 1.0, "When on, out-of-box points collapse to origin. When off, they scatter back toward the nearest edge."),
     ],
     needs_transform: false,
     writes_color: false,

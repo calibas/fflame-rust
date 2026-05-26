@@ -115,6 +115,16 @@ fn w2b_jac_sn(uu: f32, emmc_in: f32) -> f32 {
 }
 "#;
 
+/// Per-axis sine-perturbation displacement (generalization of `waves2`) —
+/// adds a wave term to each axis driven by the *other* axis's coordinate.
+/// The wave function is chosen by the per-axis power param: `pw > 1e-4` or
+/// `pw < -1e-4` → power-mode sine `sin(sgn(c)·|c|^pw·freq)`; `pw ∈ [0,
+/// 1e-4)` → Jacobi `sn` (with modulus `jacok`); `pw ∈ (-1e-4, 0)` → Bessel
+/// `J1`. Per-axis amplitude is a smooth interpolation between `scale*` (at
+/// origin) and `scaleinf*` (at infinity), controlled by `unity`.
+///
+/// # Authors
+/// - DarkBeam
 pub static WAVES2B: VariationDef = VariationDef {
     name: "waves2b",
     display_name: "Waves2 B",
@@ -122,16 +132,16 @@ pub static WAVES2B: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("freqx", "Freq X", unlimited_float, 2.0, -10.0, 10.0),
-        param!("freqy", "Freq Y", unlimited_float, 2.0, -10.0, 10.0),
-        param!("pwx", "Power X", unlimited_float, 1.0, -10.0, 10.0),
-        param!("pwy", "Power Y", unlimited_float, 1.0, -10.0, 10.0),
-        param!("scalex", "Scale X", unlimited_float, 1.0, -10.0, 10.0),
-        param!("scaleinfx", "Scale Inf X", unlimited_float, 1.0, -10.0, 10.0),
-        param!("scaley", "Scale Y", unlimited_float, 1.0, -10.0, 10.0),
-        param!("scaleinfy", "Scale Inf Y", unlimited_float, 1.0, -10.0, 10.0),
-        param!("unity", "Unity", unlimited_float, 1.0, -10.0, 10.0),
-        param!("jacok", "Jacobi K", unlimited_float, 0.25, -10.0, 10.0),
+        param!("freqx", "Freq X", unlimited_float, 2.0, -10.0, 10.0, "Frequency of the wave applied to the X axis (driven by Y)."),
+        param!("freqy", "Freq Y", unlimited_float, 2.0, -10.0, 10.0, "Frequency of the wave applied to the Y axis (driven by X)."),
+        param!("pwx", "Power X", unlimited_float, 1.0, -10.0, 10.0, "X-axis power exponent — also selects the wave function. `> 1e-4` or `< -1e-4` = power-mode sine of `|c|^pw`; `[0, 1e-4)` = Jacobi `sn`; `(-1e-4, 0)` = Bessel `J1`."),
+        param!("pwy", "Power Y", unlimited_float, 1.0, -10.0, 10.0, "Y-axis power exponent — same threshold-based mode selector as `pwx`."),
+        param!("scalex", "Scale X", unlimited_float, 1.0, -10.0, 10.0, "X-axis amplitude at the origin (full damping)."),
+        param!("scaleinfx", "Scale Inf X", unlimited_float, 1.0, -10.0, 10.0, "X-axis amplitude at infinity (the limiting amplitude as `x → ±∞`)."),
+        param!("scaley", "Scale Y", unlimited_float, 1.0, -10.0, 10.0, "Y-axis amplitude at the origin."),
+        param!("scaleinfy", "Scale Inf Y", unlimited_float, 1.0, -10.0, 10.0, "Y-axis amplitude at infinity."),
+        param!("unity", "Unity", unlimited_float, 1.0, -10.0, 10.0, "Crossover scale for the amplitude interpolation between `scale*` and `scaleinf*`. Larger values keep the origin-amplitude active over a wider region."),
+        param!("jacok", "Jacobi K", unlimited_float, 0.25, -10.0, 10.0, "Modulus `k` for the Jacobi `sn` mode (only used when `pwx` or `pwy` falls in `[0, 1e-4)`)."),
     ],
     needs_transform: false,
     writes_color: false,

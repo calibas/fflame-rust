@@ -56,6 +56,13 @@ use crate::param;
 //   fy_cpp = q07 + q08·x + q09·x² + q10·x·y + w·q11·y + q12·y²
 //   needs_transform divide-out: body returns fx_cpp/w, fy_cpp/w.
 // =============================================================================
+/// Quadratic ODE warp — a 12-parameter quadratic polynomial mapping. Emits
+/// `(q01 + q02·x + q03·x² + q04·xy + q05·y + q06·y², q07 + q08·x + q09·x² +
+/// q10·xy + q11·y + q12·y²)`. Implements a general quadratic vector field
+/// in 2D — useful for modeling phase-space portraits of 2D ODEs.
+///
+/// # Authors
+/// - DarkBeam
 pub static Q_ODE: VariationDef = VariationDef {
     name: "q_ode",
     display_name: "Q ODE",
@@ -63,18 +70,18 @@ pub static Q_ODE: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("q_ode01", "Q ODE 01", unlimited_float, 0.0, -10.0, 10.0),
-        param!("q_ode02", "Q ODE 02", unlimited_float, 1.0, -10.0, 10.0),
-        param!("q_ode03", "Q ODE 03", unlimited_float, 0.0, -10.0, 10.0),
-        param!("q_ode04", "Q ODE 04", unlimited_float, 0.0, -10.0, 10.0),
-        param!("q_ode05", "Q ODE 05", unlimited_float, 0.0, -10.0, 10.0),
-        param!("q_ode06", "Q ODE 06", unlimited_float, 0.0, -10.0, 10.0),
-        param!("q_ode07", "Q ODE 07", unlimited_float, 0.0, -10.0, 10.0),
-        param!("q_ode08", "Q ODE 08", unlimited_float, 1.0, -10.0, 10.0),
-        param!("q_ode09", "Q ODE 09", unlimited_float, 0.0, -10.0, 10.0),
-        param!("q_ode10", "Q ODE 10", unlimited_float, 0.0, -10.0, 10.0),
-        param!("q_ode11", "Q ODE 11", unlimited_float, 0.0, -10.0, 10.0),
-        param!("q_ode12", "Q ODE 12", unlimited_float, 0.0, -10.0, 10.0),
+        param!("q_ode01", "Q ODE 01", unlimited_float, 0.0, -10.0, 10.0, "Constant term on X output."),
+        param!("q_ode02", "Q ODE 02", unlimited_float, 1.0, -10.0, 10.0, "x linear coefficient on X output."),
+        param!("q_ode03", "Q ODE 03", unlimited_float, 0.0, -10.0, 10.0, "x² coefficient on X output."),
+        param!("q_ode04", "Q ODE 04", unlimited_float, 0.0, -10.0, 10.0, "xy coefficient on X output."),
+        param!("q_ode05", "Q ODE 05", unlimited_float, 0.0, -10.0, 10.0, "y linear coefficient on X output."),
+        param!("q_ode06", "Q ODE 06", unlimited_float, 0.0, -10.0, 10.0, "y² coefficient on X output."),
+        param!("q_ode07", "Q ODE 07", unlimited_float, 0.0, -10.0, 10.0, "Constant term on Y output."),
+        param!("q_ode08", "Q ODE 08", unlimited_float, 1.0, -10.0, 10.0, "x linear coefficient on Y output."),
+        param!("q_ode09", "Q ODE 09", unlimited_float, 0.0, -10.0, 10.0, "x² coefficient on Y output."),
+        param!("q_ode10", "Q ODE 10", unlimited_float, 0.0, -10.0, 10.0, "xy coefficient on Y output."),
+        param!("q_ode11", "Q ODE 11", unlimited_float, 0.0, -10.0, 10.0, "y linear coefficient on Y output."),
+        param!("q_ode12", "Q ODE 12", unlimited_float, 0.0, -10.0, 10.0, "y² coefficient on Y output."),
     ],
     needs_transform: true,
     writes_color: false,
@@ -139,6 +146,15 @@ fn variation_q_ode(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 //   Body computes wave-distorted position then linearly interpolates
 //   between two phases. Clean factor through outer.
 // =============================================================================
+/// Cosine-wave radial distortion — applies a radial cosine wave centered at
+/// `(centerx, centery)` with adjustable `frequency`, `velocity` (phase),
+/// `amplitude`, and `scale`. Linearly interpolates between two phase-
+/// shifted positions via `phase`. `fixed_dist_calc` toggles whether the
+/// distance uses Euclidean `sqrt(x² + y²)` or the upstream-quirk product
+/// `sqrt(x²·y²)`.
+///
+/// # Authors
+/// - Xyrus02
 pub static RIPPLE: VariationDef = VariationDef {
     name: "ripple",
     display_name: "Ripple",
@@ -146,14 +162,14 @@ pub static RIPPLE: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("frequency", "Frequency", unlimited_float, 2.0, -10.0, 10.0),
-        param!("velocity", "Velocity", unlimited_float, 1.0, -10.0, 10.0),
-        param!("amplitude", "Amplitude", unlimited_float, 0.5, -10.0, 10.0),
-        param!("centerx", "Center X", unlimited_float, 0.0, -10.0, 10.0),
-        param!("centery", "Center Y", unlimited_float, 0.0, -10.0, 10.0),
-        param!("phase", "Phase", unlimited_float, 0.0, -10.0, 10.0),
-        param!("scale", "Scale", unlimited_float, 1.0, -10.0, 10.0),
-        param!("fixed_dist_calc", "Fixed Dist Calc", int, 0.0, 0.0, 1.0),
+        param!("frequency", "Frequency", unlimited_float, 2.0, -10.0, 10.0, "Spatial frequency of the cosine wave (scaled by 5 internally)."),
+        param!("velocity", "Velocity", unlimited_float, 1.0, -10.0, 10.0, "Phase velocity multiplier (× the internal `phase·2π − π` term)."),
+        param!("amplitude", "Amplitude", unlimited_float, 0.5, -10.0, 10.0, "Wave amplitude (× 0.01 internally)."),
+        param!("centerx", "Center X", unlimited_float, 0.0, -10.0, 10.0, "X-axis center of the radial wave."),
+        param!("centery", "Center Y", unlimited_float, 0.0, -10.0, 10.0, "Y-axis center of the radial wave."),
+        param!("phase", "Phase", unlimited_float, 0.0, -10.0, 10.0, "Phase interpolation factor: 0 = first phase-shifted position, 1 = second."),
+        param!("scale", "Scale", unlimited_float, 1.0, -10.0, 10.0, "Input pre-scale factor."),
+        param!("fixed_dist_calc", "Fixed Dist Calc", int, 0.0, 0.0, 1.0, "Distance formula selector: 0 = product `sqrt(x²·y²)`, 1 = Euclidean `sqrt(x² + y²)`."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -269,6 +285,14 @@ fn variation_ripple(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 //     r1 = r2;  d = r1·(r2 + 1/w);  r = 1/d;  out = (x·r, y·r)
 //   Body has 1/w internally — needs_transform divide-out.
 // =============================================================================
+/// N-sided scry — generalizes the `scry` variation to N-sided star/circle
+/// hybrids. Computes a max-projection across `sides` rotations, mixes with
+/// a circular term via `circle`, optionally folds with a star pattern via
+/// `star`. The output is `(x, y) / (r1 · (r2 + 1/w))` — `1/w` appears
+/// internally, so the divide-out pattern handles it.
+///
+/// # Authors
+/// - DarkBeam
 pub static SCRY2: VariationDef = VariationDef {
     name: "scry2",
     display_name: "Scry 2",
@@ -276,9 +300,9 @@ pub static SCRY2: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("sides", "Sides", int, 4.0, 1.0, 50.0),
-        param!("star", "Star", unlimited_float, 0.0, -10.0, 10.0),
-        param!("circle", "Circle", unlimited_float, 0.0, -10.0, 10.0),
+        param!("sides", "Sides", int, 4.0, 1.0, 50.0, "Polygon side count."),
+        param!("star", "Star", unlimited_float, 0.0, -10.0, 10.0, "Star-fold rotation amount (scaled by `-π/2` internally)."),
+        param!("circle", "Circle", unlimited_float, 0.0, -10.0, 10.0, "Circularity mixing factor: 0 = pure star/polygon, 1 = pure circle."),
     ],
     needs_transform: true,
     writes_color: false,

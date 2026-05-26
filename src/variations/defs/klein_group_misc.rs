@@ -1,4 +1,4 @@
-//! klein_group — Kleinian limit-set chaos game
+//! klein_group — Kleinian limit-set chaos game (CozyG)
 //!
 //! Discrete subgroup of Möbius transformations on the Riemann sphere,
 //! rendered via the chaos-game algorithm from *Indra's Pearls: The
@@ -45,6 +45,23 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Kleinian limit-set chaos game from Mumford, Series & Wright's *Indra's
+/// Pearls: The Vision of Felix Klein* (2002). Each iteration picks one of
+/// the four group generators `{a, b, A=a⁻¹, B=b⁻¹}` at random, applies the
+/// corresponding Möbius transformation `(α·z + β)/(γ·z + δ)`, and plots the
+/// result. `avoid_reversal` skips immediately-cancelling pairs (`aA, bB,
+/// Aa, Bb`) so the trajectory drifts through the limit set instead of
+/// bouncing back. Seven recipes are available for constructing the
+/// generator pair from the complex parameters `(a_re + i·a_im)` and `(b_re
+/// + i·b_im)`: Grandma's standard parabolic-commutator construction (0),
+/// Maskit's μ slice (1), Jørgensen's trace-based parameterization (2),
+/// Riley's c parameter (3), Riley-modified with extra `b` (4), Maskit-
+/// modified with extra `b` (5), and Jos Leys' n-fold Maskit variant (6).
+/// Inverses are computed on-the-fly via the `SL(2,ℂ)` shortcut `[d, -b, -c,
+/// a]` since all generator matrices have determinant 1 by construction.
+///
+/// # Authors
+/// - CozyG
 pub static KLEIN_GROUP: VariationDef = VariationDef {
     name: "klein_group",
     display_name: "Klein Group",
@@ -52,12 +69,12 @@ pub static KLEIN_GROUP: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("a_re", "A (real)", unlimited_float, 2.0, -10.0, 10.0),
-        param!("a_im", "A (imag)", unlimited_float, 0.0, -10.0, 10.0),
-        param!("b_re", "B (real)", unlimited_float, 2.0, -10.0, 10.0),
-        param!("b_im", "B (imag)", unlimited_float, 0.0, -10.0, 10.0),
-        param!("recipe", "Recipe", int, 0.0, 0.0, 6.0),
-        param!("avoid_reversal", "Avoid Reversal", int, 1.0, 0.0, 1.0),
+        param!("a_re", "A (real)", unlimited_float, 2.0, -10.0, 10.0, "Real part of the first complex parameter. Interpretation depends on `recipe`: trace of generator A (recipes 0 GRANDMA, 2 JORGENSEN), Maskit's μ parameter (1, 5, 6), or Riley's c parameter (3, 4)."),
+        param!("a_im", "A (imag)", unlimited_float, 0.0, -10.0, 10.0, "Imaginary part of the first complex parameter. See `a_re` for recipe-dependent role."),
+        param!("b_re", "B (real)", unlimited_float, 2.0, -10.0, 10.0, "Real part of the second complex parameter. Interpretation depends on `recipe`: trace of generator B (0, 2), `b1` translation coefficient (4, 5), the `n` in Leys' `2·cos(π/n)` formula (6). Unused in recipes 1 (MASKIT_MU) and 3 (RILEY) — those have a hardcoded `b = 2`."),
+        param!("b_im", "B (imag)", unlimited_float, 0.0, -10.0, 10.0, "Imaginary part of the second complex parameter. See `b_re` for recipe-dependent role."),
+        param!("recipe", "Recipe", int, 0.0, 0.0, 6.0, "Generator-pair construction recipe (0-6): 0 = GRANDMA_STANDARD (parabolic commutator from *Indra's Pearls* Ch. 6), 1 = MASKIT_MU (single complex μ — the Maskit slice), 2 = JORGENSEN (Troels Jørgensen's trace-based parameterization), 3 = RILEY (Robert Riley's single complex c), 4 = RILEY_MODIFIED (Riley with extra b1), 5 = MASKIT_MU_MODIFIED (Maskit with extra b1), 6 = MASKIT_LEYS_MODIFIED (Jos Leys' n-fold variant)."),
+        param!("avoid_reversal", "Avoid Reversal", int, 1.0, 0.0, 1.0, "When 1, the next-matrix pick excludes the inverse of the previous matrix (no `aA`, `Aa`, `bB`, or `Bb` cancellations), so the trajectory drifts through the limit set instead of bouncing back-and-forth on a small subset. When 0, all four matrices are equally likely each iteration."),
     ],
     needs_transform: true,
     writes_color: false,

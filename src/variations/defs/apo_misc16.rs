@@ -37,6 +37,14 @@ use crate::param;
 //   out = (x, y, z)
 // 4 user (a, b, c, n int) Java-recovered; cpp APO_VARIABLES empty.
 // =============================================================================
+/// Parametric sea shell — samples random `(t, s)` over `[0, 2π]²` and emits
+/// a 3D sea-shell surface. The X/Y components trace a spiral of `n` turns
+/// with radius tapering as `1 − t/2π`; the Z component is a linear ramp `b
+/// · t/2π` plus a radial oscillation `a · (1 − t/2π) · sin s`. `c` adds an
+/// inner-spiral offset.
+///
+/// # Authors
+/// - Jesus Sosa
 pub static SEASHELL3D: VariationDef = VariationDef {
     name: "seashell3D",
     display_name: "Seashell 3D",
@@ -44,10 +52,10 @@ pub static SEASHELL3D: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("a", "Final Radius", unlimited_float, 2.0, -10.0, 10.0),
-        param!("b", "Height", unlimited_float, 6.0, -20.0, 20.0),
-        param!("c", "Inner Radius", unlimited_float, 0.0, -10.0, 10.0),
-        param!("n", "N Spirals", int, 5.0, 1.0, 50.0),
+        param!("a", "Final Radius", unlimited_float, 2.0, -10.0, 10.0, "Final-spiral radius (outer-edge radius coefficient)."),
+        param!("b", "Height", unlimited_float, 6.0, -20.0, 20.0, "Height ramp coefficient on Z."),
+        param!("c", "Inner Radius", unlimited_float, 0.0, -10.0, 10.0, "Inner-spiral radial offset added to X and Y."),
+        param!("n", "N Spirals", int, 5.0, 1.0, 50.0, "Number of spiral turns."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -117,6 +125,15 @@ fn variation_seashell3D(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
 //   FPz = z · rad
 // Body has w in `rad` cleanly; clean factor through outer.
 // =============================================================================
+/// Hyperbolic {p, q} tiling — generates a hyperbolic tiling whose faces are
+/// regular `p`-gons meeting `q`-fold at each vertex (e.g., {3,7} = the
+/// order-7 triangular tiling). Reflects the input through a hyperbolic
+/// shift transform tuned by the `(p, q)` Schläfli pair, then rotates to one
+/// of `p` random angular sectors per iteration.
+///
+/// # Authors
+/// - Tatyana Zabanova
+/// - Brad Stefanov
 pub static HYPERSHIFT2: VariationDef = VariationDef {
     name: "hypershift2",
     display_name: "Hyper Shift 2",
@@ -124,8 +141,8 @@ pub static HYPERSHIFT2: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("p", "P", int, 3.0, 2.0, 50.0),
-        param!("q", "Q", int, 7.0, 2.0, 50.0),
+        param!("p", "P", int, 3.0, 2.0, 50.0, "Polygon side count — the {p, q} tiling has regular `p`-gon faces."),
+        param!("q", "Q", int, 7.0, 2.0, 50.0, "Vertices per polygon — `q` of them meet at each vertex of the tiling."),
     ],
     needs_transform: false,
     writes_color: false,

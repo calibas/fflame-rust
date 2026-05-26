@@ -23,6 +23,16 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Clipping/rotational kaleidoscope — inside a `cutoff` radius, iterates
+/// the input through up to `maxiter` rotations of `2π/maxiter`, XOR-
+/// toggling a `cerc` flag based on whether each rotated point falls inside
+/// an inner test shape (circle/square or lemniscate/angle, controlled by
+/// `altshapes`). The output is the position at iteration `sweetiter` if the
+/// toggle ends true; otherwise the input passes through. Outside the
+/// cutoff, the input always passes through unchanged.
+///
+/// # Authors
+/// - DarkBeam
 pub static ROSONI: VariationDef = VariationDef {
     name: "rosoni",
     display_name: "Rosoni",
@@ -30,13 +40,13 @@ pub static ROSONI: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("maxiter", "Max Iter", int, 25.0, 1.0, 100.0),
-        param!("sweetiter", "Sweet Iter", int, 3.0, 0.0, 100.0),
-        param!("altshapes", "Alt Shapes", int, 0.0, 0.0, 1.0),
-        param!("cutoff", "Cutoff", unlimited_float, 1.0, -10.0, 10.0),
-        param!("radius", "Radius", unlimited_float, 0.4, -10.0, 10.0),
-        param!("dx", "DX", unlimited_float, 0.6, -10.0, 10.0),
-        param!("dy", "DY", unlimited_float, 0.0, -10.0, 10.0),
+        param!("maxiter", "Max Iter", int, 25.0, 1.0, 100.0, "Number of rotation iterations (each rotates by `2π/maxiter`)."),
+        param!("sweetiter", "Sweet Iter", int, 3.0, 0.0, 100.0, "Which iteration's position is used as the output when the toggle ends true."),
+        param!("altshapes", "Alt Shapes", int, 0.0, 0.0, 1.0, "Inner-shape family selector: 0 = circle/square, 1 = lemniscate/angle."),
+        param!("cutoff", "Cutoff", unlimited_float, 1.0, -10.0, 10.0, "Outer-region radius. Positive = circular cutoff; negative = square (Chebyshev) cutoff."),
+        param!("radius", "Radius", unlimited_float, 0.4, -10.0, 10.0, "Inner-shape size. Positive = filled-shape test; negative = wireframe via Chebyshev distance or atan2 angle."),
+        param!("dx", "DX", unlimited_float, 0.6, -10.0, 10.0, "Inner-shape X offset (also acts as the rotation pivot)."),
+        param!("dy", "DY", unlimited_float, 0.0, -10.0, 10.0, "Inner-shape Y offset."),
     ],
     needs_transform: false,
     writes_color: false,

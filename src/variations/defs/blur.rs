@@ -7,6 +7,9 @@ use crate::variations::{
     VariationCategory, VariationPhase,
 };
 
+/// Adds gaussian random noise on the Z axis only — XY position is kept,
+/// Z is replaced with a bell-curve random value. Useful for softening
+/// the depth profile of an otherwise crisp 3D shape.
 pub static ZBLUR: VariationDef = VariationDef {
     name: "zblur",
     display_name: "Z-Blur",
@@ -37,6 +40,9 @@ fn variation_zblur(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
 "#),
 };
 
+/// Random gaussian scatter across all three axes — replaces the point
+/// with a random sample from a spherical cloud around the origin. The
+/// 3D counterpart of Gaussian Blur.
 pub static BLUR3D: VariationDef = VariationDef {
     name: "blur3d",
     display_name: "Blur 3D",
@@ -76,6 +82,9 @@ fn variation_blur3d(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
 "#),
 };
 
+/// Adds gaussian random offset to the input point before the rest of
+/// the variations run. Softens sharp features by jittering each
+/// iteration's starting position.
 pub static PRE_BLUR: VariationDef = VariationDef {
     name: "pre_blur",
     display_name: "Pre-Blur",

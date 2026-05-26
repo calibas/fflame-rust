@@ -36,6 +36,13 @@ use crate::param;
 // threepoint_js
 // ---------------------------------------------------------------------------
 
+/// 3-branch Sierpinski-triangle IFS — picks one of three affine maps
+/// uniformly per iteration (rotated half-scale, XY swap, mirrored half-
+/// scale) to trace a Sierpinski-like triangle attractor. Based on Roger
+/// Bagula's IFS.
+///
+/// # Authors
+/// - Jesus Sosa
 pub static THREEPOINT_JS: VariationDef = VariationDef {
     name: "threepoint_js",
     display_name: "Three Point IFS (JS)",
@@ -98,6 +105,13 @@ fn variation_threepoint_js(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f
 // lorenz_js
 // ---------------------------------------------------------------------------
 
+/// Lorenz attractor (Euler-step IFS) — integrates one Euler step of the
+/// Lorenz system: `dx/dt = a·(y − x)`, `dy/dt = x·(b − z) − y`, `dz/dt =
+/// x·y − c·z`. With the classic parameters `a = 10, b = 28, c = 8/3` and
+/// small `h`, produces the iconic butterfly attractor.
+///
+/// # Authors
+/// - Jesus Sosa
 pub static LORENZ_JS: VariationDef = VariationDef {
     name: "lorenz_js",
     display_name: "Lorenz (JS)",
@@ -105,13 +119,13 @@ pub static LORENZ_JS: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("a", "A", unlimited_float, 10.0, -100.0, 100.0),
-        param!("b", "B", unlimited_float, 28.0, -100.0, 100.0),
-        param!("c", "C", unlimited_float, 1.66, -100.0, 100.0),
-        param!("h", "H (step)", unlimited_float, 0.00001, -1.0, 1.0),
-        param!("centerx", "Center X", unlimited_float, 0.0, -10.0, 10.0),
-        param!("centery", "Center Y", unlimited_float, 0.0, -10.0, 10.0),
-        param!("scale", "Scale", unlimited_float, 1000.0, -10000.0, 10000.0),
+        param!("a", "A", unlimited_float, 10.0, -100.0, 100.0, "Lorenz parameter `a` (Prandtl number; classic value 10)."),
+        param!("b", "B", unlimited_float, 28.0, -100.0, 100.0, "Lorenz parameter `b` (Rayleigh number; classic value 28)."),
+        param!("c", "C", unlimited_float, 1.66, -100.0, 100.0, "Lorenz parameter `c` (geometric ratio; classic value 8/3 ≈ 2.67)."),
+        param!("h", "H (step)", unlimited_float, 0.00001, -1.0, 1.0, "Euler integration step size."),
+        param!("centerx", "Center X", unlimited_float, 0.0, -10.0, 10.0, "Unused in body — preserved as a parameter for cpp parity."),
+        param!("centery", "Center Y", unlimited_float, 0.0, -10.0, 10.0, "Unused in body — preserved as a parameter for cpp parity."),
+        param!("scale", "Scale", unlimited_float, 1000.0, -10000.0, 10000.0, "Unused in body — preserved as a parameter for cpp parity (init slot `1/scale` is computed but never read)."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -157,6 +171,13 @@ fn variation_lorenz_js(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
 // woggle_js
 // ---------------------------------------------------------------------------
 
+/// N-tile fold attractor — for each iteration picks a random tile index `c
+/// ∈ [0, m)`, computes the angle `θ = 2π·c/m`, and applies a sign-dependent
+/// fold based on tile parity. Each tile contributes a different rotated
+/// map; the result is an N-fold woggle pattern.
+///
+/// # Authors
+/// - Jesus Sosa
 pub static WOGGLE_JS: VariationDef = VariationDef {
     name: "woggle_js",
     display_name: "Woggle (JS)",
@@ -164,7 +185,7 @@ pub static WOGGLE_JS: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("m", "M", int, 2.0, 2.0, 12.0),
+        param!("m", "M", int, 2.0, 2.0, 12.0, "Number of tiles (2-12). Each iteration samples one of `m` evenly-spaced angles."),
     ],
     needs_transform: false,
     writes_color: false,

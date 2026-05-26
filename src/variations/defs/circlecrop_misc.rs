@@ -23,6 +23,14 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Normal-phase circle-crop — tests whether the input lies inside a circle
+/// of radius `radius` centered at `(x, y)`. Inside, the input passes
+/// through scaled by weight. Outside, behavior depends on `zero`: if 1, the
+/// point is hidden (collapsed to origin); if 0, it scatters onto the circle
+/// boundary with `scatter_area` randomization.
+///
+/// # Authors
+/// - Xyrus02
 pub static CIRCLECROP: VariationDef = VariationDef {
     name: "circlecrop",
     display_name: "Circle Crop",
@@ -30,11 +38,11 @@ pub static CIRCLECROP: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("radius", "Radius", unlimited_float, 1.0, -10.0, 10.0),
-        param!("x", "X", unlimited_float, 0.0, -10.0, 10.0),
-        param!("y", "Y", unlimited_float, 0.0, -10.0, 10.0),
-        param!("scatter_area", "Scatter Area", unlimited_float, 0.0, -1.0, 1.0),
-        param!("zero", "Zero", int, 1.0, 0.0, 1.0),
+        param!("radius", "Radius", unlimited_float, 1.0, -10.0, 10.0, "Crop circle radius."),
+        param!("x", "X", unlimited_float, 0.0, -10.0, 10.0, "X center of the crop circle."),
+        param!("y", "Y", unlimited_float, 0.0, -10.0, 10.0, "Y center of the crop circle."),
+        param!("scatter_area", "Scatter Area", unlimited_float, 0.0, -1.0, 1.0, "Random scatter band along the circle boundary. 0 = snap to boundary; ±1 = scatter across full half-radius."),
+        param!("zero", "Zero", int, 1.0, 0.0, 1.0, "Behavior outside the circle: 1 = hide (collapse to origin), 0 = scatter onto boundary."),
     ],
     needs_transform: true,
     writes_color: false,

@@ -1,4 +1,4 @@
-//! xtrb (TriBorders) — Cyberxaos / Zueuk
+//! xtrb (TriBorders) — Xyrus02
 //!
 //! Triangle-grid dual tessellation in trilinear coordinates: the input
 //! point is mapped to a triangular cell, optionally hex-folded by the
@@ -23,7 +23,7 @@
 //! Hex paths — only one fires per iter, but allocate three names). Body
 //! drops the cpp `VVAR` factor since our outer multiplier supplies it.
 //!
-//! Source: `output/jwildfire-vars/output/xtrb.cpp` (Zueuk 2014).
+//! Source: `output/jwildfire-vars/output/xtrb.cpp` 
 
 use crate::variations::{
     definition::{VariationDef, VariationParamDef},
@@ -31,6 +31,18 @@ use crate::variations::{
 };
 use crate::param;
 
+/// TriBorders — triangular-grid dual tessellation in trilinear coordinates.
+/// Maps the input point to a triangular cell whose interior angles are set
+/// by `xtrb_a` and `xtrb_b` (the third follows from the angle-sum law),
+/// optionally hex-folds it through a band of width `xtrb_width`, then
+/// projects via a Julia-N style angular sampling (`xtrb_power` equally-
+/// spaced angles, radial exponent `xtrb_dist`) back to Cartesian. The body
+/// has six branches depending on the relative ordering of the three
+/// trilinear offsets, each with a hex-fold sub-branch gated by `width3 = 1
+/// - w²`.
+///
+/// # Authors
+/// - Xyrus02
 pub static XTRB: VariationDef = VariationDef {
     name: "xtrb",
     display_name: "XTrB (TriBorders)",
@@ -38,12 +50,12 @@ pub static XTRB: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("xtrb_power", "Power", int, 2.0, 1.0, 50.0),
-        param!("xtrb_radius", "Radius", unlimited_float, 1.0, -10.0, 10.0),
-        param!("xtrb_width", "Width", unlimited_float, 0.5, -10.0, 10.0),
-        param!("xtrb_dist", "Dist", unlimited_float, 1.0, -10.0, 10.0),
-        param!("xtrb_a", "A", unlimited_float, 1.0, -10.0, 10.0),
-        param!("xtrb_b", "B", unlimited_float, 1.0, -10.0, 10.0),
+        param!("xtrb_power", "Power", int, 2.0, 1.0, 50.0, "Julia-N branch count (integer). Each iteration picks one of `|power|` equally-spaced angles from the projected coordinate, scaling the polar angle by `1/power`."),
+        param!("xtrb_radius", "Radius", unlimited_float, 1.0, -10.0, 10.0, "Triangle inscribed radius — sets the overall scale of the triangular cells in the tessellation."),
+        param!("xtrb_width", "Width", unlimited_float, 0.5, -10.0, 10.0, "Hex-fold band width within each cell. 0 = no hex fold (pure triangle dual); larger values push more of the cell area through the hex sub-branches before the Julia projection."),
+        param!("xtrb_dist", "Dist", unlimited_float, 1.0, -10.0, 10.0, "Radial exponent multiplier. Combines with `xtrb_power` as `dist / (2·power)` to set the radial blow-up power."),
+        param!("xtrb_a", "A", unlimited_float, 1.0, -10.0, 10.0, "Angle parameter A (radians). Internally `0.047 + a` becomes one of the triangle's interior angles; the third angle is derived from the angle-sum law `π - angle_b - angle_c`."),
+        param!("xtrb_b", "B", unlimited_float, 1.0, -10.0, 10.0, "Angle parameter B (radians). Internally `0.047 + b` becomes another interior angle."),
     ],
     needs_transform: false,
     writes_color: false,

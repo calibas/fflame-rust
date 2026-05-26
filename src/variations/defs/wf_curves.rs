@@ -4,21 +4,21 @@
 //! (Wildfire) family. All four are simple, clean ports — body factors
 //! cleanly through the outer multiplier.
 //!
-//!   - epispiral_wf (Maschke): epispiral curve `r = 0.5 / cos(waves·a)`.
+//!   - epispiral_wf: epispiral curve `r = 0.5 / cos(waves·a)`.
 //!     1 user param `waves` (default 4). Returns (0, 0) when the cosine
 //!     hits zero (cpp early-returns leaving FPx/FPy unchanged; closest
 //!     equivalent in our outer-multiplier convention is to add nothing).
 //!     Preserves cpp's `atan2(x, y)` swap.
 //!
-//!   - cloverleaf_wf (Maschke): cloverleaf curve `r = sin(2a) +
+//!   - cloverleaf_wf: cloverleaf curve `r = sin(2a) +
 //!     0.25·sin(6a)`. 1 user param `filled` (int, default 1). RNG when
 //!     filled==1. Preserves cpp's `atan2(x, y)` swap.
 //!
-//!   - rose_wf (Maschke): rose curve `r = amp · cos(waves·a)`. 3 user
+//!   - rose_wf: rose curve `r = amp · cos(waves·a)`. 3 user
 //!     params (amp default 0.5, waves int default 4, filled int default 0).
 //!     RNG when filled==1. Preserves cpp's `atan2(x, y)` swap.
 //!
-//!   - bubble_wf (Maschke): standard bubble inversion plus a random
+//!   - bubble_wf: standard bubble inversion plus a random
 //!     ±z bump (`±(2/r − 1)`). 0 user params. RNG (1 call/iter for
 //!     z-sign). Full3D.
 //!
@@ -38,6 +38,9 @@ use crate::param;
 // epispiral_wf
 // ---------------------------------------------------------------------------
 
+/// Epispiral curve — emits a point on the epispiral `r = 0.5 / cos(waves ·
+/// a)`. The curve produces `waves` symmetric petals radiating from the
+/// origin. Returns `(0, 0)` at the cos-zero singularities.
 pub static EPISPIRAL_WF: VariationDef = VariationDef {
     name: "epispiral_wf",
     display_name: "Epispiral WF",
@@ -45,7 +48,7 @@ pub static EPISPIRAL_WF: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("waves", "Waves", unlimited_float, 4.0, -50.0, 50.0),
+        param!("waves", "Waves", unlimited_float, 4.0, -50.0, 50.0, "Number of petals (frequency of the cosine denominator)."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -84,6 +87,9 @@ fn variation_epispiral_wf(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec
 // cloverleaf_wf
 // ---------------------------------------------------------------------------
 
+/// Cloverleaf curve — emits a point on `r = sin(2a) + 0.25 · sin(6a)`.
+/// Produces a 4-leaf clover shape. With `filled = 1`, randomizes the radius
+/// to fill the interior.
 pub static CLOVERLEAF_WF: VariationDef = VariationDef {
     name: "cloverleaf_wf",
     display_name: "Cloverleaf WF",
@@ -91,7 +97,7 @@ pub static CLOVERLEAF_WF: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("filled", "Filled", int, 1.0, 0.0, 1.0),
+        param!("filled", "Filled", int, 1.0, 0.0, 1.0, "1 = fill the curve interior by randomizing the radius per iteration; 0 = trace only the curve outline."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -128,6 +134,9 @@ fn variation_cloverleaf_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: 
 // rose_wf
 // ---------------------------------------------------------------------------
 
+/// Rose curve — emits a point on the classic rose `r = amp · cos(waves ·
+/// a)`. Produces `waves` petals (or `2·waves` if `waves` is even). With
+/// `filled = 1`, randomizes the radius to fill the interior.
 pub static ROSE_WF: VariationDef = VariationDef {
     name: "rose_wf",
     display_name: "Rose WF",
@@ -135,9 +144,9 @@ pub static ROSE_WF: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("amp", "Amplitude", unlimited_float, 0.5, -10.0, 10.0),
-        param!("waves", "Waves", int, 4.0, -50.0, 50.0),
-        param!("filled", "Filled", int, 0.0, 0.0, 1.0),
+        param!("amp", "Amplitude", unlimited_float, 0.5, -10.0, 10.0, "Radial amplitude (multiplies the cosine)."),
+        param!("waves", "Waves", int, 4.0, -50.0, 50.0, "Number of petals (`waves` petals if odd, `2·waves` if even)."),
+        param!("filled", "Filled", int, 0.0, 0.0, 1.0, "1 = fill the curve interior; 0 = trace only the outline."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -178,6 +187,11 @@ fn variation_rose_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fu
 // bubble_wf
 // ---------------------------------------------------------------------------
 
+/// Bubble inversion with random Z bump — applies the standard bubble
+/// inversion `(x, y) / (1 + r²/4)` to XY, plus a random `±(2/r − 1)` Z bump
+/// (sign chosen by coin flip). The XY portion matches the classic `bubble`
+/// variation; Z gets per-iteration random spheres above and below the
+/// bubble.
 pub static BUBBLE_WF: VariationDef = VariationDef {
     name: "bubble_wf",
     display_name: "Bubble WF",

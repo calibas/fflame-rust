@@ -46,6 +46,13 @@ use crate::param;
 //   out = (erf(x), erf(y))
 // Clean factor through outer.
 // =============================================================================
+/// 2D component-wise erf — applies the error function `erf(coord)` to each
+/// axis independently. Saturates the input smoothly toward ±1, like a soft
+/// clip.
+///
+/// # Authors
+/// - zephyrtronium
+/// - DarkBeam
 pub static ERF: VariationDef = VariationDef {
     name: "erf",
     display_name: "Erf",
@@ -110,6 +117,12 @@ fn variation_erf(p: vec3<f32>) -> vec3<f32> {
 //   out = (erf(x), erf(y), erf(z))
 // Clean factor through outer; Full3D (writes z explicitly).
 // =============================================================================
+/// 3D component-wise erf — same as `erf` but with `erf(z)` applied to the Z
+/// axis too.
+///
+/// # Authors
+/// - zephyrtronium
+/// - DarkBeam
 pub static ERF3D: VariationDef = VariationDef {
     name: "erf3D",
     display_name: "Erf 3D",
@@ -179,6 +192,13 @@ fn variation_erf3D(p: vec3<f32>) -> vec3<f32> {
 //   else:                     out = (x·w, y·w)        (linear)
 // Both branches factor cleanly through outer.
 // =============================================================================
+/// Random-blend spherical/linear — each iteration flips a weighted coin:
+/// with probability `d_spher_weight` applies a spherical inversion `(x, y)
+/// / (x²+y²)`, otherwise passes through unchanged. Smoothly blends the two
+/// effects across many samples.
+///
+/// # Authors
+/// - Tatyana Zabanova
 pub static D_SPHERICAL: VariationDef = VariationDef {
     name: "d_spherical",
     display_name: "D-Spherical",
@@ -186,7 +206,7 @@ pub static D_SPHERICAL: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("d_spher_weight", "D Spher Weight", unlimited_float, 0.5, 0.0, 1.0),
+        param!("d_spher_weight", "D Spher Weight", unlimited_float, 0.5, 0.0, 1.0, "Probability of applying the spherical inversion (vs linear pass-through)."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -227,6 +247,14 @@ fn variation_d_spherical(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: pt
 //     else:   (x/3 + 2/3, y/3)
 // Clean factor through outer.
 // =============================================================================
+/// 3-point pivot/overlap IFS triangle — picks one of three sub-
+/// transformations uniformly: a Y-sign-flipped polar pivot, a scale-to-
+/// origin by 1/3, or a scale-by-1/3 with X offset of 2/3. Together these
+/// implement an IFS that draws a Sierpinski-like dust pattern with a
+/// circular pivot.
+///
+/// # Authors
+/// - Jesus Sosa
 pub static DUSTPOINT: VariationDef = VariationDef {
     name: "dustpoint",
     display_name: "Dust Point",
@@ -276,6 +304,13 @@ fn variation_dustpoint(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> 
 //   out = avgr · (cos avga, sin avga)
 // Body has w in `avgr` → needs_transform divide-out.
 // =============================================================================
+/// Radial ratio + half angle difference — emits `r · (cos a, sin a)` where
+/// `r = sqrt(y² + (x+1)²) / sqrt(y² + (x−1)²)` (ratio of distances to two
+/// foci at `(∓1, 0)`) and `a` is half the angular difference between the
+/// focus-angles. Produces conformal-mapping-style patterns.
+///
+/// # Authors
+/// - Michael Faber
 pub static DELTAA: VariationDef = VariationDef {
     name: "deltaA",
     display_name: "Delta A",
@@ -329,6 +364,14 @@ fn variation_deltaA(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 // Body has w in `wlocal` → needs_transform divide-out.
 // (11.57034632 ≈ 4·acosh(2) — the Apophysis classic empirical scale.)
 // =============================================================================
+/// Elliptic disc — maps the input through an elliptic-coordinate
+/// transformation: `xmax = (sqrt(r² + 2x + 1) + sqrt(r² − 2x + 1)) / 2`,
+/// then emits `(wlocal · cosh(−acos(x/xmax)) · cos(log(xmax + sqrt(xmax² − 1))),
+/// wlocal · sinh(−acos(x/xmax)) · sin(...))`. The `1/11.57 ≈ 1/(4·acosh(2))`
+/// scaling is the empirical Apophysis normalization.
+///
+/// # Authors
+/// - Apophysis Plugin Pack
 pub static EDISC: VariationDef = VariationDef {
     name: "edisc",
     display_name: "E-Disc",
@@ -402,6 +445,13 @@ fn variation_edisc(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 //   out_y = y + yamp · exp(-x² / pc_ylen)
 // Clean factor through outer.
 // =============================================================================
+/// Gaussian X/Y bumps — adds a gaussian bump `xamp · exp(−y²/xlength²)`
+/// to the X output and `yamp · exp(−x²/ylength²)` to the Y output. The
+/// bumps decay smoothly away from the X and Y axes respectively, producing
+/// a soft cross-shaped distortion.
+///
+/// # Authors
+/// - Apophysis Plugin Pack
 pub static CURVE: VariationDef = VariationDef {
     name: "curve",
     display_name: "Curve",
@@ -409,10 +459,10 @@ pub static CURVE: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("xamp", "X Amp", unlimited_float, 0.25, -10.0, 10.0),
-        param!("yamp", "Y Amp", unlimited_float, 0.5, -10.0, 10.0),
-        param!("xlength", "X Length", unlimited_float, 1.0, -10.0, 10.0),
-        param!("ylength", "Y Length", unlimited_float, 1.0, -10.0, 10.0),
+        param!("xamp", "X Amp", unlimited_float, 0.25, -10.0, 10.0, "X-axis gaussian bump amplitude."),
+        param!("yamp", "Y Amp", unlimited_float, 0.5, -10.0, 10.0, "Y-axis gaussian bump amplitude."),
+        param!("xlength", "X Length", unlimited_float, 1.0, -10.0, 10.0, "X-axis gaussian width — the Y-direction decay scale of the X bump."),
+        param!("ylength", "Y Length", unlimited_float, 1.0, -10.0, 10.0, "Y-axis gaussian width — the X-direction decay scale of the Y bump."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -471,6 +521,14 @@ fn variation_curve(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 // needs_transform divide-out — `+ ps / w` carried so outer × w restores
 // `+ ps`.
 // =============================================================================
+/// Elliptic warp with 11 knobs — heavily parameterized elliptic variation.
+/// Computes `xmax = c·(sqrt(x²+y²+a1+b1·x) + sqrt(x²+y²+a1−b1·x))`, then
+/// emits `(v·atan2(a, b) + ps, ±v·log(xmax + sqrt(xmax − f or g)))` with
+/// the Y branch chosen by random vs `e`. The 11 parameters give fine-
+/// grained control over the elliptic shape.
+///
+/// # Authors
+/// - Brad Stefanov
 pub static ELLIPTIC2: VariationDef = VariationDef {
     name: "elliptic2",
     display_name: "Elliptic 2",
@@ -478,17 +536,17 @@ pub static ELLIPTIC2: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("a1", "A1", unlimited_float, 1.0, -10.0, 10.0),
-        param!("a2", "A2", unlimited_float, 1.0, -10.0, 10.0),
-        param!("a3", "A3", unlimited_float, 0.0, -10.0, 10.0),
-        param!("b1", "B1", unlimited_float, 2.0, -10.0, 10.0),
-        param!("b2", "B2", unlimited_float, 1.0, -10.0, 10.0),
-        param!("c", "C", unlimited_float, 0.5, -10.0, 10.0),
-        param!("d", "D", unlimited_float, 1.0, -10.0, 10.0),
-        param!("e", "E", unlimited_float, 0.5, 0.0, 1.0),
-        param!("f", "F", unlimited_float, 1.0, -10.0, 10.0),
-        param!("g", "G", unlimited_float, 1.0, -10.0, 10.0),
-        param!("h", "H", unlimited_float, 2.0, -10.0, 10.0),
+        param!("a1", "A1", unlimited_float, 1.0, -10.0, 10.0, "Constant offset added to `x² + y²` in the elliptic-radius formula."),
+        param!("a2", "A2", unlimited_float, 1.0, -10.0, 10.0, "Scale on the `atan2` argument `a = (x/xmax) · a2`."),
+        param!("a3", "A3", unlimited_float, 0.0, -10.0, 10.0, "Phase shift on the X output (scaled by −π/2)."),
+        param!("b1", "B1", unlimited_float, 2.0, -10.0, 10.0, "Multiplier on x in the xmax sqrt-difference."),
+        param!("b2", "B2", unlimited_float, 1.0, -10.0, 10.0, "Scale on `sqrt(d − a²)` in the b term."),
+        param!("c", "C", unlimited_float, 0.5, -10.0, 10.0, "Overall scale on xmax."),
+        param!("d", "D", unlimited_float, 1.0, -10.0, 10.0, "Constant in the `sqrt(d − a²)` term."),
+        param!("e", "E", unlimited_float, 0.5, 0.0, 1.0, "Probability threshold for the Y output sign."),
+        param!("f", "F", unlimited_float, 1.0, -10.0, 10.0, "Sqrt offset for the positive-Y branch (`sqrt(xmax − f)`)."),
+        param!("g", "G", unlimited_float, 1.0, -10.0, 10.0, "Sqrt offset for the negative-Y branch (`sqrt(xmax − g)`)."),
+        param!("h", "H", unlimited_float, 2.0, -10.0, 10.0, "V-multiplier — output is scaled by `v = w · h / π`."),
     ],
     needs_transform: true,
     writes_color: false,

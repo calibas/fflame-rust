@@ -19,6 +19,13 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Post-phase radial blur — jitters the accumulator point by an amount
+/// proportional to its distance from `(center_x, center_y)` minus `offset`,
+/// scaled by `2·strength`. Two uniform-random jitter offsets per axis.
+/// Inside the `offset` radius the jitter is suppressed (clamped to 0).
+///
+/// # Authors
+/// - Xyrus02
 pub static POST_RBLUR: VariationDef = VariationDef {
     name: "post_rblur",
     display_name: "Post R-Blur",
@@ -26,10 +33,10 @@ pub static POST_RBLUR: VariationDef = VariationDef {
     phase: VariationPhase::Post,
     needs_rng: true,
     parameters: &[
-        param!("strength", "Strength", unlimited_float, 1.0, -10.0, 10.0),
-        param!("offset", "Offset", unlimited_float, 1.0, -10.0, 10.0),
-        param!("center_x", "Center X", unlimited_float, 0.0, -10.0, 10.0),
-        param!("center_y", "Center Y", unlimited_float, 1.0, -10.0, 10.0),
+        param!("strength", "Strength", unlimited_float, 1.0, -10.0, 10.0, "Jitter intensity (multiplied by 2 internally and by the radial distance)."),
+        param!("offset", "Offset", unlimited_float, 1.0, -10.0, 10.0, "Inner radius — jitter is suppressed to 0 inside this distance from the center."),
+        param!("center_x", "Center X", unlimited_float, 0.0, -10.0, 10.0, "X center of the radial blur."),
+        param!("center_y", "Center Y", unlimited_float, 1.0, -10.0, 10.0, "Y center of the radial blur."),
     ],
     needs_transform: true,
     writes_color: false,

@@ -27,6 +27,17 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Truchet variant with interpolated parameters — same tile algorithm as
+/// `truchet`, but the exponent and width are interpolated linearly based on
+/// the X-position within each cell (`xp ∈ [0, 1]` via fmod-and-fold). Cells
+/// transition smoothly between `(exponent1, width1)` at the left and
+/// `(exponent2, width2)` at the right. `inverse = 1` plots the complement
+/// (cells outside the arcs) instead.
+///
+/// # Authors
+/// - Tatyana Zabanova
+/// - Brad Stefanov
+/// - Jesus Sosa
 pub static TRUCHET2: VariationDef = VariationDef {
     name: "truchet2",
     display_name: "Truchet 2",
@@ -34,13 +45,13 @@ pub static TRUCHET2: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("exponent1", "Exponent 1", unlimited_float, 1.0, -1.0, 3.0),
-        param!("exponent2", "Exponent 2", unlimited_float, 2.0, -1.0, 3.0),
-        param!("width1", "Width 1", unlimited_float, 0.5, -1.0, 2.0),
-        param!("width2", "Width 2", unlimited_float, 0.5, -1.0, 2.0),
-        param!("scale", "Scale", unlimited_float, 10.0, -100.0, 100.0),
-        param!("seed", "Seed", unlimited_float, 50.0, -1000.0, 1000.0),
-        param!("inverse", "Inverse", int, 0.0, 0.0, 1.0),
+        param!("exponent1", "Exponent 1", unlimited_float, 1.0, -1.0, 3.0, "Lp-norm exponent at the left edge of each cell."),
+        param!("exponent2", "Exponent 2", unlimited_float, 2.0, -1.0, 3.0, "Lp-norm exponent at the right edge."),
+        param!("width1", "Width 1", unlimited_float, 0.5, -1.0, 2.0, "Arc width at the left edge of each cell."),
+        param!("width2", "Width 2", unlimited_float, 0.5, -1.0, 2.0, "Arc width at the right edge."),
+        param!("scale", "Scale", unlimited_float, 10.0, -100.0, 100.0, "Input pre-scale for the per-cell X-position calculation."),
+        param!("seed", "Seed", unlimited_float, 50.0, -1000.0, 1000.0, "Hash seed for the per-cell tile-type selection."),
+        param!("inverse", "Inverse", int, 0.0, 0.0, 1.0, "1 = output the complement (cells outside the arc test); 0 = standard output."),
     ],
     needs_transform: false,
     writes_color: false,

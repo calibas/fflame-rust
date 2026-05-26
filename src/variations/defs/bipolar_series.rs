@@ -36,6 +36,13 @@ use crate::param;
 //   if alt even: σ = alt · π/num + ((σ + a·π/num) mod π/num)
 //   else:        σ = alt · π/num + ((σ − a·π/num) mod π/num)
 // =============================================================================
+/// Bipolar warp with σ-axis branch-and-mod — converts the input to bipolar
+/// coordinates `(τ, σ)`, splits σ into `num` equal arcs, and mirrors
+/// alternating arcs around their boundaries with a per-arc offset `a`.
+/// Produces a bipolar tiling with controllable wedge count.
+///
+/// # Authors
+/// - Michael Faber
 pub static BCOLLIDE: VariationDef = VariationDef {
     name: "bcollide",
     display_name: "BCollide",
@@ -43,8 +50,8 @@ pub static BCOLLIDE: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("num", "N", int, 1.0, 1.0, 50.0),
-        param!("a", "A", unlimited_float, 0.0, -10.0, 10.0),
+        param!("num", "N", int, 1.0, 1.0, 50.0, "Number of σ wedges. Higher = finer tiling."),
+        param!("a", "A", unlimited_float, 0.0, -10.0, 10.0, "Per-wedge angular offset."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -107,6 +114,13 @@ fn variation_bcollide(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
 // bmod: bipolar-τ clamp-and-mod (Faber)
 //   if |τ| < radius: τ = ((τ + radius + distance·radius) mod 2·radius) − radius
 // =============================================================================
+/// Bipolar warp with τ-axis clamp-and-mod — converts to bipolar
+/// coordinates, then wraps τ around within `±radius` (offset by
+/// `distance·radius`). Points with τ outside the band pass through
+/// unchanged.
+///
+/// # Authors
+/// - Michael Faber
 pub static BMOD: VariationDef = VariationDef {
     name: "bmod",
     display_name: "BMod",
@@ -114,8 +128,8 @@ pub static BMOD: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("radius", "Radius", unlimited_float, 1.0, -10.0, 10.0),
-        param!("distance", "Distance", unlimited_float, 0.0, -10.0, 10.0),
+        param!("radius", "Radius", unlimited_float, 1.0, -10.0, 10.0, "Half-width of the τ band to mod-wrap."),
+        param!("distance", "Distance", unlimited_float, 0.0, -10.0, 10.0, "Additional τ offset applied before mod, in units of `radius`."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -168,6 +182,12 @@ fn variation_bmod(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
 // bswirl: bipolar swirl (Faber)
 //   σ' = σ + τ · out + in / τ
 // =============================================================================
+/// Bipolar swirl — adds `τ·out + in/τ` to the bipolar σ coordinate. The
+/// combination of an additive (`out`) and reciprocal (`in`) term produces a
+/// hyperbolic-style swirl pattern aligned with the bipolar grid.
+///
+/// # Authors
+/// - Michael Faber
 pub static BSWIRL: VariationDef = VariationDef {
     name: "bswirl",
     display_name: "BSwirl",
@@ -175,8 +195,8 @@ pub static BSWIRL: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("in_p", "In", unlimited_float, 0.0, -10.0, 10.0),
-        param!("out_p", "Out", unlimited_float, 0.0, -10.0, 10.0),
+        param!("in_p", "In", unlimited_float, 0.0, -10.0, 10.0, "Reciprocal-τ swirl coefficient — adds `in/τ` to σ."),
+        param!("out_p", "Out", unlimited_float, 0.0, -10.0, 10.0, "Linear-τ swirl coefficient — adds `τ·out` to σ."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -223,6 +243,14 @@ fn variation_bswirl(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 //   Compute (u, v) as barycentric coords of (x, y) in triangle.
 //   Output: (sign(u) · sqrt(u² + x²), sign(v) · sqrt(v² + y²))
 // =============================================================================
+/// Barycentric-coordinate warp — treats the input as the third vertex of a
+/// triangle whose other two vertices are user-defined: `V0 = (a, b)`, `V1 =
+/// (c, d)`, `V2 = (x, y)`. Computes barycentric coordinates `(u, v)` of
+/// `(x, y)` in the triangle, then emits `(sign(u)·sqrt(u²+x²),
+/// sign(v)·sqrt(v²+y²))`.
+///
+/// # Authors
+/// - Xyrus02
 pub static BARYCENTROID: VariationDef = VariationDef {
     name: "barycentroid",
     display_name: "Barycentroid",
@@ -230,10 +258,10 @@ pub static BARYCENTROID: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("a", "V0.x", unlimited_float, 1.0, -10.0, 10.0),
-        param!("b", "V0.y", unlimited_float, 0.0, -10.0, 10.0),
-        param!("c", "V1.x", unlimited_float, 0.0, -10.0, 10.0),
-        param!("d", "V1.y", unlimited_float, 1.0, -10.0, 10.0),
+        param!("a", "V0.x", unlimited_float, 1.0, -10.0, 10.0, "V0 X coordinate (first triangle vertex)."),
+        param!("b", "V0.y", unlimited_float, 0.0, -10.0, 10.0, "V0 Y coordinate."),
+        param!("c", "V1.x", unlimited_float, 0.0, -10.0, 10.0, "V1 X coordinate (second triangle vertex)."),
+        param!("d", "V1.y", unlimited_float, 1.0, -10.0, 10.0, "V1 Y coordinate."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -307,6 +335,13 @@ fn variation_barycentroid(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec
 // =============================================================================
 // ecollide: elliptic-ν branch-and-mod (Faber)
 // =============================================================================
+/// Elliptic warp with ν-axis branch-and-mod — converts to elliptic
+/// coordinates `(μ, ν)`, splits ν into `num` equal wedges, and mirrors
+/// alternating wedges with a per-wedge offset. Elliptic analogue of
+/// `bcollide`.
+///
+/// # Authors
+/// - Michael Faber
 pub static ECOLLIDE: VariationDef = VariationDef {
     name: "ecollide",
     display_name: "ECollide",
@@ -314,8 +349,8 @@ pub static ECOLLIDE: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("num", "N", int, 1.0, 1.0, 50.0),
-        param!("a", "A", unlimited_float, 0.0, -10.0, 10.0),
+        param!("num", "N", int, 1.0, 1.0, 50.0, "Number of ν wedges."),
+        param!("a", "A", unlimited_float, 0.0, -10.0, 10.0, "Per-wedge angular offset."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -384,6 +419,12 @@ fn variation_ecollide(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
 // =============================================================================
 // emod: elliptic-μ clamp-and-mod (Faber)
 // =============================================================================
+/// Elliptic warp with μ-axis clamp-and-mod — wraps μ around within
+/// `±radius` (offset by `distance·radius`). The sign of ν determines the
+/// mod direction. Elliptic analogue of `bmod`.
+///
+/// # Authors
+/// - Michael Faber
 pub static EMOD: VariationDef = VariationDef {
     name: "emod",
     display_name: "EMod",
@@ -391,8 +432,8 @@ pub static EMOD: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("radius", "Radius", unlimited_float, 1.0, -10.0, 10.0),
-        param!("distance", "Distance", unlimited_float, 0.0, -10.0, 10.0),
+        param!("radius", "Radius", unlimited_float, 1.0, -10.0, 10.0, "Half-width of the μ band to mod-wrap."),
+        param!("distance", "Distance", unlimited_float, 0.0, -10.0, 10.0, "Additional μ offset, in units of `radius`."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -457,6 +498,11 @@ fn variation_emod(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
 // eswirl: elliptic-ν swirl (Faber)
 //   ν' = ν + μ · out + in / μ
 // =============================================================================
+/// Elliptic swirl — adds `μ·out + in/μ` to the elliptic ν coordinate.
+/// Elliptic analogue of `bswirl`.
+///
+/// # Authors
+/// - Michael Faber
 pub static ESWIRL: VariationDef = VariationDef {
     name: "eswirl",
     display_name: "ESwirl",
@@ -464,8 +510,8 @@ pub static ESWIRL: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("in_p", "In", unlimited_float, 1.2, -10.0, 10.0),
-        param!("out_p", "Out", unlimited_float, 0.2, -10.0, 10.0),
+        param!("in_p", "In", unlimited_float, 1.2, -10.0, 10.0, "Reciprocal-μ swirl coefficient — adds `in/μ` to ν."),
+        param!("out_p", "Out", unlimited_float, 0.2, -10.0, 10.0, "Linear-μ swirl coefficient — adds `μ·out` to ν."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -513,6 +559,12 @@ fn variation_eswirl(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 //   μ' = μ · scale
 //   ν' = ((ν+π+angle)·scale mod 2π·scale) − angle − scale·π   (mod 2π)
 // =============================================================================
+/// Elliptic scale + angular wrap — scales μ by `scale` and applies a scale-
+/// plus-angle modular operation to ν, wrapping the result into `[-π, π]`.
+/// Useful for periodic ellipse-tiled patterns.
+///
+/// # Authors
+/// - Michael Faber
 pub static ESCALE: VariationDef = VariationDef {
     name: "escale",
     display_name: "EScale",
@@ -520,8 +572,8 @@ pub static ESCALE: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("scale", "Scale", unlimited_float, 1.0, -10.0, 10.0),
-        param!("angle", "Angle", angle, 0.0),
+        param!("scale", "Scale", unlimited_float, 1.0, -10.0, 10.0, "Multiplicative scale on μ; also scales the ν mod-wrap window."),
+        param!("angle", "Angle", angle, 0.0, "Angular offset applied to ν before scaling, in degrees."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -587,6 +639,11 @@ fn variation_escale(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 //   ν' = ν + rotate
 //   μ' = μ · dist + push
 // =============================================================================
+/// Elliptic push — additively offsets μ by `push`, multiplicatively scales
+/// μ by `dist`, and rotates ν by `rotate`.
+///
+/// # Authors
+/// - Michael Faber
 pub static EPUSH: VariationDef = VariationDef {
     name: "epush",
     display_name: "EPush",
@@ -594,9 +651,9 @@ pub static EPUSH: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("push", "Push", unlimited_float, 0.0, -10.0, 10.0),
-        param!("dist", "Dist", unlimited_float, 1.0, -10.0, 10.0),
-        param!("rotate", "Rotate", unlimited_float, 0.0, -10.0, 10.0),
+        param!("push", "Push", unlimited_float, 0.0, -10.0, 10.0, "Additive offset on μ."),
+        param!("dist", "Dist", unlimited_float, 1.0, -10.0, 10.0, "Multiplicative scale on μ."),
+        param!("rotate", "Rotate", unlimited_float, 0.0, -10.0, 10.0, "Angular shift on ν, in radians."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -647,6 +704,13 @@ fn variation_epush(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 //   Output uses xmax · cos ν / sqrt-twin · sin ν (NOT cosh/sinh — same
 //   form as ecollide).
 // =============================================================================
+/// Elliptic rotation — adds `rotate` to the elliptic ν coordinate and wraps
+/// the result into `[-π, π]`. Uses the `xmax·cos(ν)` and
+/// `sqrt(xmax²−1)·sin(ν)` output form (matching `ecollide`) rather than the
+/// cosh/sinh form used by the other E-series variations.
+///
+/// # Authors
+/// - Michael Faber
 pub static EROTATE: VariationDef = VariationDef {
     name: "erotate",
     display_name: "ERotate",
@@ -654,7 +718,7 @@ pub static EROTATE: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("rotate", "Rotate", unlimited_float, 0.0, -10.0, 10.0),
+        param!("rotate", "Rotate", unlimited_float, 0.0, -10.0, 10.0, "Angular shift on ν, in radians."),
     ],
     needs_transform: false,
     writes_color: false,

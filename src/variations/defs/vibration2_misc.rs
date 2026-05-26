@@ -27,6 +27,20 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Two-wave directional vibration — adds the sum of two independent sine
+/// waves to the input, where each wave's direction, angle, frequency, and
+/// amplitude are themselves modulated by sinusoids of the projected
+/// coordinate along the wave's direction. Each wave has 5 base params
+/// (`dir`, `angle`, `freq`, `amp`, `phase`) plus 4 modulation pairs
+/// (`dm`/`dmfreq` for direction, `tm`/`tmfreq` for angle, `fm`/`fmfreq` for
+/// frequency, `am`/`amfreq` for amplitude) — 13 params per wave × 2 waves =
+/// 26 user params total, which was the first variation to exceed the old
+/// 16-slot per-variation buffer ceiling and motivated switching to the
+/// packed-variation-params buffer layout.
+///
+/// # Authors
+/// - FarDareisMai
+/// - Brad Stefanov
 pub static VIBRATION2: VariationDef = VariationDef {
     name: "vibration2",
     display_name: "Vibration 2",
@@ -34,32 +48,32 @@ pub static VIBRATION2: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("dir", "Direction", unlimited_float, 0.0, -10.0, 10.0),
-        param!("angle", "Angle", unlimited_float, 1.5708, -10.0, 10.0),
-        param!("freq", "Frequency", unlimited_float, 1.0, -10.0, 10.0),
-        param!("amp", "Amplitude", unlimited_float, 0.25, -10.0, 10.0),
-        param!("phase", "Phase", unlimited_float, 0.0, -10.0, 10.0),
-        param!("dir2", "Direction 2", unlimited_float, 1.5708, -10.0, 10.0),
-        param!("angle2", "Angle 2", unlimited_float, 1.5708, -10.0, 10.0),
-        param!("freq2", "Frequency 2", unlimited_float, 1.0, -10.0, 10.0),
-        param!("amp2", "Amplitude 2", unlimited_float, 0.25, -10.0, 10.0),
-        param!("phase2", "Phase 2", unlimited_float, 0.0, -10.0, 10.0),
-        param!("dm", "Dir Modulation", unlimited_float, 0.0, -10.0, 10.0),
-        param!("dmfreq", "Dir Mod Freq", unlimited_float, 0.1, -10.0, 10.0),
-        param!("tm", "Angle Modulation", unlimited_float, 0.0, -10.0, 10.0),
-        param!("tmfreq", "Angle Mod Freq", unlimited_float, 0.1, -10.0, 10.0),
-        param!("fm", "Freq Modulation", unlimited_float, 0.0, -10.0, 10.0),
-        param!("fmfreq", "Freq Mod Freq", unlimited_float, 0.1, -10.0, 10.0),
-        param!("am", "Amp Modulation", unlimited_float, 0.0, -10.0, 10.0),
-        param!("amfreq", "Amp Mod Freq", unlimited_float, 0.1, -10.0, 10.0),
-        param!("d2m", "Dir 2 Modulation", unlimited_float, 0.0, -10.0, 10.0),
-        param!("d2mfreq", "Dir 2 Mod Freq", unlimited_float, 0.1, -10.0, 10.0),
-        param!("t2m", "Angle 2 Modulation", unlimited_float, 0.0, -10.0, 10.0),
-        param!("t2mfreq", "Angle 2 Mod Freq", unlimited_float, 0.1, -10.0, 10.0),
-        param!("f2m", "Freq 2 Modulation", unlimited_float, 0.0, -10.0, 10.0),
-        param!("f2mfreq", "Freq 2 Mod Freq", unlimited_float, 0.1, -10.0, 10.0),
-        param!("a2m", "Amp 2 Modulation", unlimited_float, 0.0, -10.0, 10.0),
-        param!("a2mfreq", "Amp 2 Mod Freq", unlimited_float, 0.1, -10.0, 10.0),
+        param!("dir", "Direction", unlimited_float, 0.0, -10.0, 10.0, "Wave 1: direction angle (radians) along which the wave propagates. The input is projected onto this direction before phase computation."),
+        param!("angle", "Angle", unlimited_float, 1.5708, -10.0, 10.0, "Wave 1: output rotation angle (radians) — controls which direction in the output plane the wave's displacement points."),
+        param!("freq", "Frequency", unlimited_float, 1.0, -10.0, 10.0, "Wave 1: spatial frequency. Smaller = longer wavelength."),
+        param!("amp", "Amplitude", unlimited_float, 0.25, -10.0, 10.0, "Wave 1: amplitude (peak displacement magnitude)."),
+        param!("phase", "Phase", unlimited_float, 0.0, -10.0, 10.0, "Wave 1: phase offset in cycles; converted internally to radians as `2π·phase/freq`."),
+        param!("dir2", "Direction 2", unlimited_float, 1.5708, -10.0, 10.0, "Wave 2: direction angle. See `dir`."),
+        param!("angle2", "Angle 2", unlimited_float, 1.5708, -10.0, 10.0, "Wave 2: output rotation angle. See `angle`."),
+        param!("freq2", "Frequency 2", unlimited_float, 1.0, -10.0, 10.0, "Wave 2: spatial frequency. See `freq`."),
+        param!("amp2", "Amplitude 2", unlimited_float, 0.25, -10.0, 10.0, "Wave 2: amplitude. See `amp`."),
+        param!("phase2", "Phase 2", unlimited_float, 0.0, -10.0, 10.0, "Wave 2: phase offset. See `phase`."),
+        param!("dm", "Dir Modulation", unlimited_float, 0.0, -10.0, 10.0, "Wave 1: direction modulation depth. The propagation direction wobbles by `dm · cos(d · dmfreq · 2π)` where `d` is the projected coordinate."),
+        param!("dmfreq", "Dir Mod Freq", unlimited_float, 0.1, -10.0, 10.0, "Wave 1: spatial frequency of the direction-modulation wobble."),
+        param!("tm", "Angle Modulation", unlimited_float, 0.0, -10.0, 10.0, "Wave 1: output-angle modulation depth (same shape as `dm` but applied to the output rotation angle)."),
+        param!("tmfreq", "Angle Mod Freq", unlimited_float, 0.1, -10.0, 10.0, "Wave 1: spatial frequency of the output-angle modulation."),
+        param!("fm", "Freq Modulation", unlimited_float, 0.0, -10.0, 10.0, "Wave 1: frequency-modulation depth. Modulates the wave's phase term by `fm · cos(d · fmfreq · 2π) / freq`."),
+        param!("fmfreq", "Freq Mod Freq", unlimited_float, 0.1, -10.0, 10.0, "Wave 1: spatial frequency of the frequency modulation."),
+        param!("am", "Amp Modulation", unlimited_float, 0.0, -10.0, 10.0, "Wave 1: amplitude-modulation depth. Multiplies amplitude by `1 + am · cos(d · amfreq · 2π)`."),
+        param!("amfreq", "Amp Mod Freq", unlimited_float, 0.1, -10.0, 10.0, "Wave 1: spatial frequency of the amplitude modulation."),
+        param!("d2m", "Dir 2 Modulation", unlimited_float, 0.0, -10.0, 10.0, "Wave 2: direction modulation depth. See `dm`."),
+        param!("d2mfreq", "Dir 2 Mod Freq", unlimited_float, 0.1, -10.0, 10.0, "Wave 2: direction modulation frequency. See `dmfreq`."),
+        param!("t2m", "Angle 2 Modulation", unlimited_float, 0.0, -10.0, 10.0, "Wave 2: angle modulation depth. See `tm`."),
+        param!("t2mfreq", "Angle 2 Mod Freq", unlimited_float, 0.1, -10.0, 10.0, "Wave 2: angle modulation frequency. See `tmfreq`."),
+        param!("f2m", "Freq 2 Modulation", unlimited_float, 0.0, -10.0, 10.0, "Wave 2: frequency modulation depth. See `fm`."),
+        param!("f2mfreq", "Freq 2 Mod Freq", unlimited_float, 0.1, -10.0, 10.0, "Wave 2: frequency modulation frequency. See `fmfreq`."),
+        param!("a2m", "Amp 2 Modulation", unlimited_float, 0.0, -10.0, 10.0, "Wave 2: amplitude modulation depth. See `am`."),
+        param!("a2mfreq", "Amp 2 Mod Freq", unlimited_float, 0.1, -10.0, 10.0, "Wave 2: amplitude modulation frequency. See `amfreq`."),
     ],
     needs_transform: false,
     writes_color: false,

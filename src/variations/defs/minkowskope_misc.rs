@@ -23,6 +23,18 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Minkowski-question-mark oscilloscope — like
+/// `oscilloscope`/`oscilloscope2` but uses Minkowski's question-mark
+/// function as the wave shape instead of a cosine. Builds a wave `t(x) =
+/// amplitude · minkowski_cosine(0.5·freqx·x + perturbation ·
+/// minkowski_sine(0.5·freqy·y)) [· exp(−|x|·damping)] + separation`, then
+/// flips both X and Y signs when `|y| ≤ t(x)`. Negative `frequencyx`
+/// enables an alternative wave variant where the Minkowski result is offset
+/// by its input.
+///
+/// # Authors
+/// - Apophysis Plugin Pack
+/// - DarkBeam
 pub static MINKOWSKOPE: VariationDef = VariationDef {
     name: "minkowskope",
     display_name: "Minkowskope",
@@ -30,12 +42,12 @@ pub static MINKOWSKOPE: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("separation", "Separation", unlimited_float, 0.5, -10.0, 10.0),
-        param!("frequencyx", "Frequency X", unlimited_float, 1.5, -10.0, 10.0),
-        param!("frequencyy", "Frequency Y", unlimited_float, 1.0, -10.0, 10.0),
-        param!("amplitude", "Amplitude", unlimited_float, 0.5, -10.0, 10.0),
-        param!("perturbation", "Perturbation", unlimited_float, 0.3, -10.0, 10.0),
-        param!("damping", "Damping", unlimited_float, 0.0, -10.0, 10.0),
+        param!("separation", "Separation", unlimited_float, 0.5, -10.0, 10.0, "Vertical offset of the band threshold."),
+        param!("frequencyx", "Frequency X", unlimited_float, 1.5, -10.0, 10.0, "X-axis Minkowski-cosine frequency (multiplied by 0.5 internally). Negative values enable the `alt_wave` variant."),
+        param!("frequencyy", "Frequency Y", unlimited_float, 1.0, -10.0, 10.0, "Y-axis Minkowski-sine frequency for the perturbation term (multiplied by 0.5 internally)."),
+        param!("amplitude", "Amplitude", unlimited_float, 0.5, -10.0, 10.0, "Wave amplitude."),
+        param!("perturbation", "Perturbation", unlimited_float, 0.3, -10.0, 10.0, "Magnitude of the Y-driven X-perturbation."),
+        param!("damping", "Damping", unlimited_float, 0.0, -10.0, 10.0, "Exponential damping rate. Near-zero disables the damping term."),
     ],
     needs_transform: false,
     writes_color: false,

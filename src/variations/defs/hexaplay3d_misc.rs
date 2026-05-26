@@ -27,6 +27,19 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Hexagonal vertex sequencer for snowflake designs. Places successive
+/// iterations at the 6 vertices of a unit hexagon (when internal state
+/// `rswtch ≤ 1`) or the 3 vertices of an inscribed triangle (when `rswtch >
+/// 1`), cycling through them with internal `fcycle`/`bcycle` counters and
+/// re-randomizing `rswtch ∈ {0, 1, 2}` each time a cycle completes. `majp`
+/// controls Z-plane behavior: `|majp| ≤ 1` puts all points on a single Z
+/// plane; `|majp| > 1` splits into two planes separated by `±(|majp| - 1) ·
+/// 0.5` along Z, sign picked randomly per iteration. Uses `needs_accum +
+/// needs_transform` to implement cpp's replacement-style FPx/FPy via the
+/// `(desired - accum) / weight` workaround.
+///
+/// # Authors
+/// - Larry Berlin
 pub static HEXAPLAY_3D: VariationDef = VariationDef {
     name: "hexaplay3D",
     display_name: "Hexaplay 3D",
@@ -34,9 +47,9 @@ pub static HEXAPLAY_3D: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("majp", "Major Plane", unlimited_float, 1.0, -10.0, 10.0),
-        param!("scale", "Scale", unlimited_float, 0.25, -10.0, 10.0),
-        param!("zlift", "Z Lift", unlimited_float, 0.25, -10.0, 10.0),
+        param!("majp", "Major Plane", unlimited_float, 1.0, -10.0, 10.0, "Major-plane threshold for Z behavior. `|majp| ≤ 1` = all points on a single Z plane (no Z split). `|majp| > 1` = points split into two planes separated by `±(|majp| - 1) · 0.5` along Z; sign picked randomly per iteration. Unused in 2D mode (Z param)."),
+        param!("scale", "Scale", unlimited_float, 0.25, -10.0, 10.0, "Input-blend scale. Internally pre-multiplied by 0.5; the X/Y output is `(accum · (scale - 1) + p · scale) / weight + vertex_offset`."),
+        param!("zlift", "Z Lift", unlimited_float, 0.25, -10.0, 10.0, "Z input scale: `oz = p.z · 0.5 · zlift / weight`. Unused in 2D mode."),
     ],
     needs_transform: true,
     writes_color: false,

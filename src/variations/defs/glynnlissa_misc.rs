@@ -25,6 +25,12 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Glynn warp combined with a Lissajous curve — inside the cutoff radius
+/// the output samples a Lissajous point (when `radius1 ≥ 0`) or a small
+/// jittered circle (when `radius1 < 0`). Outside the cutoff, applies a
+/// Glynn-style power-warp with a probabilistic toggle, then a secondary
+/// Lissajous fill if the warped point falls inside the inner Lissajous
+/// disc.
 pub static GLYNNLISSA: VariationDef = VariationDef {
     name: "glynnlissa",
     display_name: "Glynn Lissa",
@@ -32,17 +38,17 @@ pub static GLYNNLISSA: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("radius", "Radius", unlimited_float, 1.0, -10.0, 10.0),
-        param!("radius1", "Radius 1", unlimited_float, 0.5, -10.0, 10.0),
-        param!("thickness", "Thickness", unlimited_float, 1.0, -10.0, 10.0),
-        param!("phi1", "Phi 1", unlimited_float, 0.0, -360.0, 360.0),
-        param!("a", "A", unlimited_float, 3.0, -50.0, 50.0),
-        param!("b", "B", unlimited_float, 2.0, -50.0, 50.0),
-        param!("width", "Width", unlimited_float, 0.0, -10.0, 10.0),
-        param!("phase", "Phase", unlimited_float, 0.0, -10.0, 10.0),
-        param!("scale", "Scale", unlimited_float, 0.71, -10.0, 10.0),
-        param!("pow", "Pow", unlimited_float, 1.5, -10.0, 10.0),
-        param!("contrast", "Contrast", unlimited_float, 0.5, -10.0, 10.0),
+        param!("radius", "Radius", unlimited_float, 1.0, -10.0, 10.0, "Outer cutoff radius. Points inside use the inner curve; outside use the Glynn power-warp."),
+        param!("radius1", "Radius 1", unlimited_float, 0.5, -10.0, 10.0, "Inner-curve sampling radius. Negative values trigger a small-circle fallback inside the cutoff."),
+        param!("thickness", "Thickness", unlimited_float, 1.0, -10.0, 10.0, "Inner-circle thickness (used when `radius1 < 0`)."),
+        param!("phi1", "Phi 1", unlimited_float, 0.0, -360.0, 360.0, "Inner-curve center angle, in degrees."),
+        param!("a", "A", unlimited_float, 3.0, -50.0, 50.0, "Lissajous X-axis frequency."),
+        param!("b", "B", unlimited_float, 2.0, -50.0, 50.0, "Lissajous Y-axis frequency."),
+        param!("width", "Width", unlimited_float, 0.0, -10.0, 10.0, "Y-jitter amplitude (random per-iteration scatter on the inner-curve sample)."),
+        param!("phase", "Phase", unlimited_float, 0.0, -10.0, 10.0, "Lissajous phase offset on the X frequency term."),
+        param!("scale", "Scale", unlimited_float, 0.71, -10.0, 10.0, "Inner-curve scale factor."),
+        param!("pow", "Pow", unlimited_float, 1.5, -10.0, 10.0, "Glynn power exponent (absolute value used internally)."),
+        param!("contrast", "Contrast", unlimited_float, 0.5, -10.0, 10.0, "Glynn warp probability threshold — higher = more aggressive warping outside the cutoff."),
     ],
     needs_transform: false,
     writes_color: false,

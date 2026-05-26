@@ -44,6 +44,12 @@ use crate::param;
 //   r   = sqrt(x² + y²)
 //   out = r · (cos(a), sin(a))   (weight applied outside)
 // =============================================================================
+/// Affine-driven fan sweep — wraps points into pie wedges sized by the
+/// affine's X-translation field (`e`). The wedge angle and rotation are
+/// read directly from the transform's affine matrix.
+///
+/// # Authors
+/// - Scott Draves
 pub static FAN: VariationDef = VariationDef {
     name: "fan",
     display_name: "Fan",
@@ -100,6 +106,12 @@ fn variation_fan(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
 //   out = r'/r · (y, x)   (X/Y SWAPPED — preserved cpp porter bug; the
 //                          corrected form is `eyefish` already in our registry)
 // =============================================================================
+/// Classic fisheye distortion — `2r/(r+1)` radial scaling that pulls
+/// distant points inward. Note: preserves a long-standing Apophysis X/Y
+/// swap bug; use Eyefish for the corrected form.
+///
+/// # Authors
+/// - Scott Draves
 pub static FISHEYE: VariationDef = VariationDef {
     name: "fisheye",
     display_name: "Fisheye",
@@ -137,6 +149,12 @@ fn variation_fisheye(p: vec3<f32>) -> vec3<f32> {
 //   Compares (rint(x), rint(y)) to chase the point onto a grid cell edge,
 //   producing a discrete tile pattern.
 // =============================================================================
+/// Snaps points onto a discrete grid by following the nearest cell-edge
+/// direction. Produces a chunky, tile-like output.
+///
+/// # Authors
+/// - Michael Faber
+/// - DarkBeam
 pub static GRIDOUT: VariationDef = VariationDef {
     name: "gridout",
     display_name: "Gridout",
@@ -204,6 +222,12 @@ fn variation_gridout(p: vec3<f32>) -> vec3<f32> {
 //   rnd = (2 · (rand() + aux) − 2) · c_a
 //   out = (cos(θ + rnd), sin(θ + rnd)) · r
 // =============================================================================
+/// Randomized rotation by a deterministic-plus-RNG term — each iteration
+/// adds a small random angle to the point's polar angle. The `seed`
+/// parameter changes the noise pattern.
+///
+/// # Authors
+/// - Tatyana Zabanova
 pub static CIRCULAR: VariationDef = VariationDef {
     name: "circular",
     display_name: "Circular",
@@ -211,8 +235,8 @@ pub static CIRCULAR: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("angle", "Angle", angle, 90.0),
-        param!("seed", "Seed", unlimited_float, 0.0, -100.0, 100.0),
+        param!("angle", "Angle", angle, 90.0, "Maximum rotation per iteration (degrees)."),
+        param!("seed", "Seed", unlimited_float, 0.0, -100.0, 100.0, "Random seed for the noise term — change to vary the pattern."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -255,6 +279,13 @@ fn variation_circular(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
 //   x1, y1 = aux · (x, y)
 //   out = (atan2(x1, y1)/π, sqrt(x1² + y1²) − 0.5)
 // =============================================================================
+/// Spherical-style panoramic projection — maps the plane onto a
+/// hemispherical fisheye then unwraps it into longitude/latitude
+/// coordinates.
+///
+/// # Authors
+/// - Tatyana Zabanova
+/// - DarkBeam
 pub static PANORAMA1: VariationDef = VariationDef {
     name: "panorama1",
     display_name: "Panorama 1",
@@ -292,6 +323,13 @@ fn variation_panorama1(p: vec3<f32>) -> vec3<f32> {
 // =============================================================================
 // panorama2: alt-spherical (denom uses sqrt(x²+y²)+1 instead of sqrt(x²+y²+1))
 // =============================================================================
+/// Variant of Panorama 1 using `1/(r+1)` instead of `1/sqrt(r²+1)` as the
+/// radial denominator — same overall shape with subtly different
+/// distortion.
+///
+/// # Authors
+/// - Tatyana Zabanova
+/// - DarkBeam
 pub static PANORAMA2: VariationDef = VariationDef {
     name: "panorama2",
     display_name: "Panorama 2",

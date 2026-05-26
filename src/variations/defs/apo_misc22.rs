@@ -1,6 +1,6 @@
 //! Apophysis miscellany batch 22: dc_carpet, post_point_symmetry_wf, cpow3_wf
 //!
-//!   - dc_carpet (Apophysis): randomized fractal carpet using
+//!   - dc_carpet: randomized fractal carpet using
 //!     `signum(c) · fmod(|c|, 1)` (toward-zero fractional part) plus a
 //!     random `±1` cell offset per axis, then mapped through the
 //!     transform's affine. 2 user params (origin, iterations;
@@ -9,7 +9,7 @@
 //!     affine transform. RNG (2 calls/iter for ±1 sign choices). cpp's
 //!     direct-color writes (TC) skipped per writes_color compromise.
 //!
-//!   - post_point_symmetry_wf (Maschke): post-phase N-fold rotational
+//!   - post_point_symmetry_wf: post-phase N-fold rotational
 //!     symmetry around (centre_x, centre_y). 3 user params (centre_x,
 //!     centre_y, order); cpp's colorshift omitted per writes_color
 //!     compromise. Computes the per-iteration rotation angle on-the-fly
@@ -17,7 +17,7 @@
 //!     would overflow our 16-slot budget). RNG (1 call/iter to pick
 //!     the rotation index in [0, order)).
 //!
-//!   - cpow3_wf (CozyG / WF): randomized complex-power variation, the
+//!   - cpow3_wf (CozyG): randomized complex-power variation, the
 //!     CPow3 family with discrete spread, secondary spread, and offset.
 //!     7 user params (r, a, divisor, spread, discrete_spread, spread2,
 //!     offset2) + 7 init slots (_c, _d, _half_c, _half_d, _ang,
@@ -39,6 +39,11 @@ use crate::param;
 // dc_carpet
 // ---------------------------------------------------------------------------
 
+/// Randomized fractal-carpet warp — splits the input into a fractional part
+/// `frac(|coord|)` (toward-zero rounding) and adds a per-axis random `±1`
+/// cell offset, then passes through the transform's pre-affine `(a·x + b·y
+/// + e, c·x + d·y + f)`. Produces a recursive Sierpinski-carpet-style
+/// scatter pattern when combined with self-similar transforms.
 pub static DC_CARPET: VariationDef = VariationDef {
     name: "dc_carpet",
     display_name: "DC Carpet",
@@ -46,8 +51,8 @@ pub static DC_CARPET: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("origin", "Origin", unlimited_float, 1.0, -10.0, 10.0),
-        param!("iterations", "Iterations", int, 5.0, 1.0, 100.0),
+        param!("origin", "Origin", unlimited_float, 1.0, -10.0, 10.0, "Unused in the body — preserved as a parameter for cpp parity and preset compatibility."),
+        param!("iterations", "Iterations", int, 5.0, 1.0, 100.0, "Unused in the body — preserved as a parameter for cpp parity."),
     ],
     needs_transform: true,
     writes_color: false,
@@ -106,6 +111,10 @@ fn variation_dc_carpet(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
 // post_point_symmetry_wf
 // ---------------------------------------------------------------------------
 
+/// Post-phase N-fold rotational symmetry — each iteration picks a random
+/// rotation index in `[0, order)` and rotates the accumulator point by `idx
+/// · 2π/order` around `(centre_x, centre_y)`. Produces N-fold rotational
+/// symmetry around a configurable center.
 pub static POST_POINT_SYMMETRY_WF: VariationDef = VariationDef {
     name: "post_point_symmetry_wf",
     display_name: "Post Point Symmetry WF",
@@ -113,9 +122,9 @@ pub static POST_POINT_SYMMETRY_WF: VariationDef = VariationDef {
     phase: VariationPhase::Post,
     needs_rng: true,
     parameters: &[
-        param!("centre_x", "Centre X", unlimited_float, 0.25, -10.0, 10.0),
-        param!("centre_y", "Centre Y", unlimited_float, 0.5, -10.0, 10.0),
-        param!("order", "Order", int, 3.0, 1.0, 16.0),
+        param!("centre_x", "Centre X", unlimited_float, 0.25, -10.0, 10.0, "X center of the rotational symmetry."),
+        param!("centre_y", "Centre Y", unlimited_float, 0.5, -10.0, 10.0, "Y center of the rotational symmetry."),
+        param!("order", "Order", int, 3.0, 1.0, 16.0, "Number of rotational-symmetry orders (≥ 1). 3 = 3-fold rotation, 4 = 4-fold, etc."),
     ],
     needs_transform: true,
     writes_color: false,
@@ -168,6 +177,15 @@ fn variation_post_point_symmetry_wf(p: vec3<f32>, xform_id: u32, variation_id: u
 // cpow3_wf
 // ---------------------------------------------------------------------------
 
+/// Randomized complex-power warp (CPow3 family) — combines a complex-power
+/// radial-angular mapping with discrete and continuous angular spreads,
+/// plus a secondary multiplicative random offset on the final angle. Per-
+/// iteration: random shift of the angle index `n` (truncated to integer if
+/// `discrete_spread = 1`), a probabilistic angle subtraction, and a
+/// `spread2 · rand + offset2` random multiplier on the output angle.
+///
+/// # Authors
+/// - CozyG
 pub static CPOW3_WF: VariationDef = VariationDef {
     name: "cpow3_wf",
     display_name: "CPow3 WF",
@@ -175,13 +193,13 @@ pub static CPOW3_WF: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("r", "R", unlimited_float, 1.0, -10.0, 10.0),
-        param!("a", "A", unlimited_float, 0.1, -10.0, 10.0),
-        param!("divisor", "Divisor", unlimited_float, 1.0, -10.0, 10.0),
-        param!("spread", "Spread", unlimited_float, 1.0, -10.0, 10.0),
-        param!("discrete_spread", "Discrete Spread", unlimited_float, 1.0, 0.0, 1.0),
-        param!("spread2", "Spread 2", unlimited_float, 0.0, -10.0, 10.0),
-        param!("offset2", "Offset 2", unlimited_float, 1.0, -10.0, 10.0),
+        param!("r", "R", unlimited_float, 1.0, -10.0, 10.0, "Complex-power magnitude."),
+        param!("a", "A", unlimited_float, 0.1, -10.0, 10.0, "Complex-power angle (scaled by π/2 internally)."),
+        param!("divisor", "Divisor", unlimited_float, 1.0, -10.0, 10.0, "Divides both r and a contributions; controls how the power scales."),
+        param!("spread", "Spread", unlimited_float, 1.0, -10.0, 10.0, "Range of the random angle index `n`. Each iteration picks `n` uniformly in `[0, spread)`."),
+        param!("discrete_spread", "Discrete Spread", unlimited_float, 1.0, 0.0, 1.0, "≥ 1 = truncate `n` to an integer (discrete angular branches); < 1 = continuous angle."),
+        param!("spread2", "Spread 2", unlimited_float, 0.0, -10.0, 10.0, "Range of the secondary multiplicative random offset on the final angle."),
+        param!("offset2", "Offset 2", unlimited_float, 1.0, -10.0, 10.0, "Constant offset added to the secondary random multiplier."),
     ],
     needs_transform: false,
     writes_color: false,

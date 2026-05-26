@@ -35,6 +35,17 @@ use crate::param;
 // mobius_strip
 // ---------------------------------------------------------------------------
 
+/// Parametric Möbius strip surface — maps the input `(x, y)` onto a Möbius
+/// strip with adjustable `radius`, `width`, and number of `twists`.
+/// `radial_mode` controls how x (the around-the-strip coordinate) handles
+/// out-of-range values; `width_mode` does the same for y (the across-the-
+/// strip coordinate). Optional rotation around X and Y axes via
+/// `rotate_x`/`rotate_y`.
+///
+/// # Authors
+/// - slobo777
+/// - chronologicaldot
+/// - CozyG
 pub static MOBIUS_STRIP: VariationDef = VariationDef {
     name: "mobius_strip",
     display_name: "Mobius Strip",
@@ -42,16 +53,16 @@ pub static MOBIUS_STRIP: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("radius", "Radius", unlimited_float, 1.0, -10.0, 10.0),
-        param!("width", "Width", unlimited_float, 1.0, -10.0, 10.0),
-        param!("twists", "Twists", int, 1.0, -10.0, 10.0),
-        param!("range_x", "Range X", unlimited_float, 1.0, -10.0, 10.0),
-        param!("range_y", "Range Y", unlimited_float, 1.0, -10.0, 10.0),
-        param!("rotate_x", "Rotate X", unlimited_float, 0.0, -1.0, 1.0),
-        param!("rotate_y", "Rotate Y", unlimited_float, 0.0, -1.0, 1.0),
-        param!("modify_z", "Modify Z", unlimited_float, 1.0, -10.0, 10.0),
-        param!("width_mode", "Width Mode", int, 0.0, 0.0, 3.0),
-        param!("radial_mode", "Radial Mode", int, 0.0, 0.0, 3.0),
+        param!("radius", "Radius", unlimited_float, 1.0, -10.0, 10.0, "Strip's central-circle radius."),
+        param!("width", "Width", unlimited_float, 1.0, -10.0, 10.0, "Strip width."),
+        param!("twists", "Twists", int, 1.0, -10.0, 10.0, "Number of half-twists in the strip (odd = Möbius topology, even = orientable ring)."),
+        param!("range_x", "Range X", unlimited_float, 1.0, -10.0, 10.0, "Range of the X input mapped onto the strip's circumference."),
+        param!("range_y", "Range Y", unlimited_float, 1.0, -10.0, 10.0, "Range of the Y input mapped onto the strip's width."),
+        param!("rotate_x", "Rotate X", unlimited_float, 0.0, -1.0, 1.0, "Rotation around the X axis (in units of 2π)."),
+        param!("rotate_y", "Rotate Y", unlimited_float, 0.0, -1.0, 1.0, "Rotation around the Y axis (in units of 2π)."),
+        param!("modify_z", "Modify Z", unlimited_float, 1.0, -10.0, 10.0, "Z output scale factor. 0 disables Z output (only relevant in 3D mode)."),
+        param!("width_mode", "Width Mode", int, 0.0, 0.0, 3.0, "Y out-of-range behavior: 0 = wrap, 1 = clamp, 2 = hide, 3 = leave (pass through)."),
+        param!("radial_mode", "Radial Mode", int, 0.0, 0.0, 3.0, "X out-of-range behavior: same 4-mode enum as `width_mode`."),
     ],
     needs_transform: true,
     writes_color: false,
@@ -238,6 +249,12 @@ fn variation_mobius_strip(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec
 // circleLinear
 // ---------------------------------------------------------------------------
 
+/// Grid of linear blobs — divides the input plane into a `2·Sc × 2·Sc` cell
+/// grid and per-cell uses deterministic hash noise to either pass through,
+/// scale by `K`, or remap to a noise-driven ring radius. `Dens1` and
+/// `Dens2` control the density and ratio of the two non-identity branches;
+/// `Reverse` swaps which sub-branch gets the scale and which gets the ring
+/// map.
 pub static CIRCLE_LINEAR: VariationDef = VariationDef {
     name: "circleLinear",
     display_name: "Circle Linear",
@@ -245,14 +262,14 @@ pub static CIRCLE_LINEAR: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[
-        param!("Sc", "Scale", unlimited_float, 1.0, -10.0, 10.0),
-        param!("K", "K", unlimited_float, 0.5, -10.0, 10.0),
-        param!("Dens1", "Density 1", unlimited_float, 0.5, 0.0, 1.0),
-        param!("Dens2", "Density 2", unlimited_float, 0.5, 0.0, 1.0),
-        param!("Reverse", "Reverse", unlimited_float, 1.0, -10.0, 10.0),
-        param!("X", "X", unlimited_float, 10.0, -100.0, 100.0),
-        param!("Y", "Y", unlimited_float, 10.0, -100.0, 100.0),
-        param!("Seed", "Seed", int, 0.0, -1000.0, 1000.0),
+        param!("Sc", "Scale", unlimited_float, 1.0, -10.0, 10.0, "Cell size — each cell occupies a `2·Sc × 2·Sc` region."),
+        param!("K", "K", unlimited_float, 0.5, -10.0, 10.0, "Linear-scale factor for the non-identity branch."),
+        param!("Dens1", "Density 1", unlimited_float, 0.5, 0.0, 1.0, "Per-cell density threshold (probability that the cell is 'active' and modifies the output)."),
+        param!("Dens2", "Density 2", unlimited_float, 0.5, 0.0, 1.0, "Sub-density ratio for the ring-vs-scale split inside an active cell."),
+        param!("Reverse", "Reverse", unlimited_float, 1.0, -10.0, 10.0, "When > 0, swaps which sub-branch gets the scale vs the ring map."),
+        param!("X", "X", unlimited_float, 10.0, -100.0, 100.0, "Unused in the body — preserved for cpp parity and preset compatibility."),
+        param!("Y", "Y", unlimited_float, 10.0, -100.0, 100.0, "Unused in the body — preserved for cpp parity and preset compatibility."),
+        param!("Seed", "Seed", int, 0.0, -1000.0, 1000.0, "Hash seed for the per-cell deterministic noise."),
     ],
     needs_transform: false,
     writes_color: false,
