@@ -334,6 +334,14 @@ thresholds, or add a `legacy_import` hook on the param def.
   used as a binary projection-mode toggle (spherical product vs
   toroidal sum). Should be `Boolean`. See
   [supershape3d_misc.rs](../../src/variations/defs/supershape3d_misc.rs).
+- `rhodonea.inner_mode`, `rhodonea.outer_mode` — both declared
+  `Integer` with `[0, 6]` range, 7-mode spread/mask behavior selector
+  (0 = normal, 1-4 = four spread formulas, 5/6 = mask hide/pass-
+  through). Same enum across both — though note the mask semantics
+  on 5/6 are inverted between inner and outer (5 hides for inner /
+  passes for outer; 6 passes for inner / hides for outer). Should be
+  `Enum`. See
+  [rhodonea_misc.rs](../../src/variations/defs/rhodonea_misc.rs).
 - `waves2b.pwx`, `waves2b.pwy` — declared `unlimited_float` but
   semantically tri-state via threshold comparisons: `pw ∈ [0, 1e-4)`
   → Jacobi `sn` mode, `pw ∈ (-1e-4, 0)` → Bessel `J1` mode, else →
