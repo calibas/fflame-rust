@@ -115,10 +115,17 @@ haven't built it yet" and could be added with focused work.
     spatial state.
 
 12. **Prepost (priority-2) execution** — variations like
-    `prepost_circlize` and `prepost_mobius` run *both* a pre-affine
-    transform and its post-affine inverse in the same iteration. We
-    only have pre xor post phases. Workaround already shipped for two:
-    port as single-phase applying just the post half (compromise).
+    `prepost_circlize` and `prepost_mobius` run *both* a pre-variation
+    body and a post-variation body in the same iteration, typically
+    inverses of each other, forming a non-linear sandwich around the
+    normal variations + post-affine. We only have pre xor post phases.
+    A single-phase compromise port (running just the post half as a
+    normal-phase variation) was tried and reverted — it loses the
+    sandwich semantics entirely and is indistinguishable from plain
+    `circlize` / `mobius`. Proper port needs a `VariationPhase::PrePost`
+    that registers two bodies and runs them in both slots; deferred
+    pending architectural decision on whether the family is worth the
+    plumbing.
 
 13. **Unbounded / data-dependent loops** — some variations have
     `do { } while (cond)` rejection sampling or accumulator-state-
