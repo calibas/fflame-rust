@@ -103,6 +103,8 @@ the answer is known — that's the convention for "unknown" per
 - `pre_rect_wf` ([dc_misc2.rs](../../src/variations/defs/dc_misc2.rs))
 - `post_axis_symmetry_wf` ([post_axis_symmetry_misc.rs](../../src/variations/defs/post_axis_symmetry_misc.rs))
 - `pre_wave3D_wf` ([pre_wave3d_misc.rs](../../src/variations/defs/pre_wave3d_misc.rs))
+- `circleRand` ([circle_rand_misc.rs](../../src/variations/defs/circle_rand_misc.rs))
+- `CircleTrans1` ([circle_rand_misc.rs](../../src/variations/defs/circle_rand_misc.rs))
 
 **Likely shared author** — all are JWildfire ports of complex-plane
 inverse hyperbolic functions (the plain ones in `hyperbolic.rs` and
