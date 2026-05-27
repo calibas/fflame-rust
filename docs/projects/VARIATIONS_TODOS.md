@@ -620,27 +620,29 @@ in-body fix has to handle those too — not just the coordinate swap.
 Make the decision deliberately rather than just "do what JWildfire
 does."
 
-### Zero-weight variations should still count as "present"
+### ~~Zero-weight variations should still count as "present"~~ — RESOLVED
 
-A variation with weight 0 is currently treated as if it doesn't exist
-in some code paths:
+Resolved on the `variations-param-type-cleanup` branch. Both
+suspected call sites had been silently dropping zero-weight
+variations:
 
-- **Animation system**: zero-weight variations don't appear in the
-  target list, so they can't be picked as animation targets.
-- **Shader builder** (suspected, needs verification): the generated
-  WGSL may skip emitting calls for zero-weight variations, which
-  means animating the weight up from zero wouldn't take effect on the
-  fly.
+- **Animation system** (commit `6b0883a`): the target selector
+  filtered out variations with `weight == 0.0` in all three pool
+  builders (Transform, LinkedTransform, FinalTransform). Created a
+  catch-22 — the variation was invisible until it had weight, but
+  you couldn't give it weight via animation without selecting it as
+  a target. Filter removed.
+- **Shader builder** (commit `7a990eb`): `extract_active_variations`
+  filtered with `weight.abs() > 1e-6`, so variations at weight 0
+  never got compiled into the shader. Animating from 0 → nonzero
+  triggered a shader recompile mid-animation (visible as a hitch on
+  the threshold-crossing frame). Filter removed — variations
+  present in any transform's variations map now compile into the
+  shader regardless of weight.
 
-The intended contract: **if a variation is part of a flame, plan on
-it being used.** A weight of 0 is a valid resting state — the user
-may want to animate to/from it, or set it conditionally — and
-shouldn't make the variation invisible to the rest of the pipeline.
-
-Investigate both call sites; either bring the behavior in line with
-"present means used" or document the cases where dropping zero-weight
-variations is intentional (likely none, but worth confirming before
-ripping the optimization out).
+Contract is now consistent: **if a variation is in the flame, plan
+on it being used.** The user controls what's in the flame; explicit
+adds-then-zero are respected as "include this in the shader".
 
 ### ~~Stray `weight: f32` parameter in some WGSL bodies~~ — RESOLVED
 
