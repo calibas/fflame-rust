@@ -97,7 +97,7 @@ pub static CLOVERLEAF_WF: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("filled", "Filled", int, 1.0, 0.0, 1.0, "1 = fill the curve interior by randomizing the radius per iteration; 0 = trace only the curve outline."),
+        param!("filled", "Filled", bool, true, "1 = fill the curve interior by randomizing the radius per iteration; 0 = trace only the curve outline."),
     ],
     needs_transform: false,
     writes_color: false,
@@ -146,7 +146,7 @@ pub static ROSE_WF: VariationDef = VariationDef {
     parameters: &[
         param!("amp", "Amplitude", unlimited_float, 0.5, -10.0, 10.0, "Radial amplitude (multiplies the cosine)."),
         param!("waves", "Waves", int, 4.0, -50.0, 50.0, "Number of petals (`waves` petals if odd, `2·waves` if even)."),
-        param!("filled", "Filled", int, 0.0, 0.0, 1.0, "1 = fill the curve interior; 0 = trace only the outline."),
+        param!("filled", "Filled", bool, false, "1 = fill the curve interior; 0 = trace only the outline."),
     ],
     needs_transform: false,
     writes_color: false,

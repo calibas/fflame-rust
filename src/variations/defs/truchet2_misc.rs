@@ -51,7 +51,7 @@ pub static TRUCHET2: VariationDef = VariationDef {
         param!("width2", "Width 2", unlimited_float, 0.5, -1.0, 2.0, "Arc width at the right edge."),
         param!("scale", "Scale", unlimited_float, 10.0, -100.0, 100.0, "Input pre-scale for the per-cell X-position calculation."),
         param!("seed", "Seed", unlimited_float, 50.0, -1000.0, 1000.0, "Hash seed for the per-cell tile-type selection."),
-        param!("inverse", "Inverse", int, 0.0, 0.0, 1.0, "1 = output the complement (cells outside the arc test); 0 = standard output."),
+        param!("inverse", "Inverse", bool, false, "When on, output the complement (cells outside the arc test). When off, standard output."),
     ],
     needs_transform: false,
     writes_color: false,

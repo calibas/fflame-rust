@@ -43,7 +43,7 @@ pub static CANNABISCURVE_WF: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[
-        param!("filled", "Filled", int, 1.0, 0.0, 1.0, "1 = fill the curve interior by randomizing the radius per iteration; 0 = trace only the curve outline."),
+        param!("filled", "Filled", bool, true, "When on, fill the curve interior by randomizing the radius per iteration. When off, trace only the outline."),
     ],
     needs_transform: false,
     writes_color: false,

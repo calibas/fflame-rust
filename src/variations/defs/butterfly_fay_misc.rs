@@ -53,9 +53,9 @@ pub static BUTTERFLY_FAY: VariationDef = VariationDef {
     parameters: &[
         param!("cycles", "Cycles", unlimited_float, 0.0, -100.0, 100.0, "Number of butterfly-curve cycles per full input rotation. 0 falls back to π² internally."),
         param!("offset", "Offset", unlimited_float, 0.0, -10.0, 10.0, "Additive offset on the curve radius formula."),
-        param!("unified_inner_outer", "Unified", int, 1.0, 0.0, 1.0, "1 = always use the outer mode/spread/ratio; 0 = pick based on whether the input is inside or outside the curve."),
-        param!("outer_mode", "Outer Mode", int, 1.0, 0.0, 5.0, "Output mode for points outside the curve. 0-5; same enum as `inner_mode`."),
-        param!("inner_mode", "Inner Mode", int, 1.0, 0.0, 5.0, "Output mode for points inside the curve. 0-5; same enum as `outer_mode`."),
+        param!("unified_inner_outer", "Unified", bool, true, "When on, always use the outer mode/spread/ratio. When off, pick based on whether the input is inside or outside the curve."),
+        param!("outer_mode", "Outer Mode", enum, 1, &["On Curve", "Radial Stretch", "Mirror Blend", "Mirror Add", "Half + Offset", "Linear Input"], "Output mode for points outside the butterfly curve."),
+        param!("inner_mode", "Inner Mode", enum, 1, &["On Curve", "Radial Stretch", "Mirror Blend", "Mirror Add", "Half + Offset", "Linear Input"], "Output mode for points inside the butterfly curve."),
         param!("outer_spread", "Outer Spread", unlimited_float, 0.0, -10.0, 10.0, "Outer-mode spread amount (interpretation depends on `outer_mode`)."),
         param!("inner_spread", "Inner Spread", unlimited_float, 0.0, -10.0, 10.0, "Inner-mode spread amount (interpretation depends on `inner_mode`)."),
         param!("outer_spread_ratio", "Outer Ratio", unlimited_float, 1.0, -10.0, 10.0, "X-vs-Y ratio for outer-mode spread."),

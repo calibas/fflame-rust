@@ -138,7 +138,7 @@ pub static SPHERECROP: VariationDef = VariationDef {
         param!("y", "Y", unlimited_float, 0.0, -10.0, 10.0, "Y center of the sphere."),
         param!("z", "Z", unlimited_float, 0.0, -10.0, 10.0, "Z center of the sphere."),
         param!("scatter_area", "Scatter Area", unlimited_float, 0.0, -1.0, 1.0, "Random scatter band along the sphere surface. 0 = snap to surface; ±1 = scatter across full half-radius."),
-        param!("zero", "Zero", int, 1.0, 0.0, 1.0, "Behavior outside the sphere: 1 = hide (collapse to origin), 0 = scatter onto surface."),
+        param!("zero", "Zero", bool, true, "When on, points outside the sphere collapse to the origin. When off, they scatter onto the surface."),
     ],
     needs_transform: true,
     writes_color: false,

@@ -138,6 +138,41 @@ fn variation_iconattractor_js(p: vec2<f32>, xform_id: u32, variation_id: u32) ->
 }
 "#,
     wgsl_3d: Some(r#"
+fn ic_preset(id: i32) -> array<f32, 6> {
+    // Returns [degree, a, b, g, o, l] for preset id in [0, 16].
+    var out: array<f32, 6>;
+    let i = clamp(id, 0, 16);
+    var deg: f32 = 5.0;
+    var a: f32 = 5.0;
+    var b: f32 = -1.9;
+    var g: f32 = 1.0;
+    var o: f32 = 0.188;
+    var l: f32 = -2.5;
+    if (i == 1) { deg = 3.0; a = -1.0; b = 0.1; g = -0.82; o = 0.12; l = 1.56; }
+    else if (i == 2) { deg = 5.0; a = 1.806; b = 0.0; g = 1.0; o = 0.0; l = -1.806; }
+    else if (i == 3) { deg = 3.0; a = 10.0; b = -12.0; g = 1.0; o = 0.0; l = -2.195; }
+    else if (i == 4) { deg = 3.0; a = -2.5; b = 0.0; g = 0.9; o = 0.0; l = 2.5; }
+    else if (i == 5) { deg = 9.0; a = 3.0; b = -16.79; g = 1.0; o = 0.0; l = -2.05; }
+    else if (i == 6) { deg = 6.0; a = 5.0; b = 1.5; g = 1.0; o = 0.0; l = -2.7; }
+    else if (i == 7) { deg = 23.0; a = -2.5; b = 0.0; g = 0.9; o = 0.0; l = 2.409; }
+    else if (i == 8) { deg = 7.0; a = 1.0; b = -0.1; g = 0.167; o = 0.0; l = -2.08; }
+    else if (i == 9) { deg = 5.0; a = 2.32; b = 0.0; g = 0.75; o = 0.0; l = -2.32; }
+    else if (i == 10) { deg = 5.0; a = -2.0; b = 0.0; g = -0.5; o = 0.0; l = 2.6; }
+    else if (i == 11) { deg = 5.0; a = 2.0; b = 0.2; g = 0.1; o = 0.0; l = -2.34; }
+    else if (i == 12) { deg = 4.0; a = 2.0; b = 0.0; g = 1.0; o = 0.1; l = -1.86; }
+    else if (i == 13) { deg = 3.0; a = -1.0; b = 0.1; g = -0.82; o = 0.0; l = 1.56; }
+    else if (i == 14) { deg = 3.0; a = -1.0; b = 0.1; g = -0.805; o = 0.0; l = 1.5; }
+    else if (i == 15) { deg = 3.0; a = -1.0; b = 0.03; g = -0.80; o = 0.0; l = 1.455; }
+    else if (i == 16) { deg = 16.0; a = -2.5; b = -0.1; g = 0.90; o = -0.15; l = 2.39; }
+    out[0] = deg;
+    out[1] = a;
+    out[2] = b;
+    out[3] = g;
+    out[4] = o;
+    out[5] = l;
+    return out;
+}
+
 fn variation_iconattractor_js(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let preset_id = i32(get_param(xform_id, variation_id, 0u));
     let preset = ic_preset(preset_id);

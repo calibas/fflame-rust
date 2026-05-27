@@ -587,31 +587,32 @@ fn get_transform_items(index: usize, transform: &crate::scene::transforms::Trans
         ));
     }
 
-    // Active variations and their parameters
+    // Variations and their parameters. Include zero-weight variations so
+    // users can keyframe a variation from 0 → 1 (it'd otherwise be a
+    // catch-22: the variation is invisible until it has weight, but you
+    // can't give it weight via animation without selecting it as a target).
     let registry = global_registry();
-    for (var_name, weight) in &transform.variations {
-        if *weight != 0.0 {
-            // Variation weight
-            items.push(TargetItem::new(
-                ConfigPath::TransformVariation {
-                    index,
-                    variation: var_name.clone(),
-                },
-                &format!("{}", capitalize_first(var_name)),
-            ));
+    for (var_name, _weight) in &transform.variations {
+        // Variation weight
+        items.push(TargetItem::new(
+            ConfigPath::TransformVariation {
+                index,
+                variation: var_name.clone(),
+            },
+            &format!("{}", capitalize_first(var_name)),
+        ));
 
-            // Variation parameters (if any)
-            if let Some(info) = registry.get(var_name) {
-                for param in &info.parameters {
-                    items.push(TargetItem::new(
-                        ConfigPath::TransformVariationParam {
-                            index,
-                            variation: var_name.clone(),
-                            param: param.name.clone(),
-                        },
-                        &format!("{} → {}", capitalize_first(var_name), &param.display_name),
-                    ));
-                }
+        // Variation parameters (if any)
+        if let Some(info) = registry.get(var_name) {
+            for param in &info.parameters {
+                items.push(TargetItem::new(
+                    ConfigPath::TransformVariationParam {
+                        index,
+                        variation: var_name.clone(),
+                        param: param.name.clone(),
+                    },
+                    &format!("{} → {}", capitalize_first(var_name), &param.display_name),
+                ));
             }
         }
     }
@@ -668,8 +669,7 @@ fn get_linked_transform_items(index: usize, transform: &crate::scene::transforms
     }
 
     let registry = global_registry();
-    for (var_name, weight) in &transform.variations {
-        if *weight == 0.0 { continue; }
+    for (var_name, _weight) in &transform.variations {
         items.push(TargetItem::new(
             ConfigPath::LinkedTransformVariation { index, variation: var_name.clone() },
             &capitalize_first(var_name),
@@ -738,8 +738,7 @@ fn get_pool_final_transform_items(index: usize, transform: &crate::scene::transf
     }
 
     let registry = global_registry();
-    for (var_name, weight) in &transform.variations {
-        if *weight == 0.0 { continue; }
+    for (var_name, _weight) in &transform.variations {
         items.push(TargetItem::new(
             ConfigPath::FinalTransformVariation { index, variation: var_name.clone() },
             &capitalize_first(var_name),
