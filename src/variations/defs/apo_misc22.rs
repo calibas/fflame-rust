@@ -245,7 +245,7 @@ fn variation_cpow3_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
     let full_spread = get_param(xform_id, variation_id, 13u);
     let two_pi = 6.28318530717959;
 
-    var ai = atan2(p.x, p.y);
+    var ai = atan2(p.y, p.x);
     var n = rng_nextf(rng) * spread;
     if (discrete_spread >= 1.0) {
         n = trunc(n);
@@ -279,7 +279,7 @@ fn variation_cpow3_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
     let full_spread = get_param(xform_id, variation_id, 13u);
     let two_pi = 6.28318530717959;
 
-    var ai = atan2(p.x, p.y);
+    var ai = atan2(p.y, p.x);
     var n = rng_nextf(rng) * spread;
     if (discrete_spread >= 1.0) {
         n = trunc(n);

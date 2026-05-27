@@ -388,6 +388,7 @@ fn variation_wedge(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 /// lobes, `thickness` adds randomness, `holes` punches gaps in the pattern.
 /// 
 /// # Authors
+/// - Joel Faber
 /// - cyberxaos
 pub static EPISPIRAL: VariationDef = VariationDef {
     name: "epispiral",
