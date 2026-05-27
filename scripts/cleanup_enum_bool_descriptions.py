@@ -55,6 +55,10 @@ REPLACEMENTS: list[tuple[str, str, str, int]] = [
      '"Generator-pair construction recipe (0-6): 0 = GRANDMA_STANDARD (parabolic commutator from *Indra\'s Pearls* Ch. 6), 1 = MASKIT_MU (single complex μ — the Maskit slice), 2 = JORGENSEN (Troels Jørgensen\'s trace-based parameterization), 3 = RILEY (Robert Riley\'s single complex c), 4 = RILEY_MODIFIED (Riley with extra b1), 5 = MASKIT_MU_MODIFIED (Maskit with extra b1), 6 = MASKIT_LEYS_MODIFIED (Jos Leys\' n-fold variant)."',
      '"Generator-pair construction recipe. Grandma is the parabolic commutator from *Indra\'s Pearls* Ch. 6. Maskit Mu is the Maskit slice (single complex μ). Jorgensen uses Troels Jørgensen\'s trace-based parameterization. Riley uses Robert Riley\'s single complex c. The `+` variants add an extra `b1`. Maskit-Leys is Jos Leys\' n-fold variant."', 1),
 
+    ("standalone_exotics.rs",
+     '"Picks one of 10 radial formulas (0-9)."',
+     '"Radial-formula family. Each option applies a different geometric term inside the `sqrt(rhosq + …)` that determines the output radius."', 1),
+
     # ---- Booleans ----
     ("apo_misc13.rs",
      '"Distance formula selector: 0 = product `sqrt(x²·y²)`, 1 = Euclidean `sqrt(x² + y²)`."',

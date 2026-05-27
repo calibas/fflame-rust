@@ -67,6 +67,13 @@ CONVERSIONS = [
     # klein_group Kleinian generator recipe (7 modes)
     ("klein_group_misc.rs", "KLEIN_GROUP", "recipe",
      ["Grandma", "Maskit Mu", "Jorgensen", "Riley", "Riley+", "Maskit+", "Maskit-Leys"]),
+
+    # hole2 radial-formula shape selector (10 modes; labels derived from the
+    # WGSL formula structure — Linear is the only one with the delta added
+    # outside the sqrt; others wrap the delta inside it).
+    ("standalone_exotics.rs", "HOLE2", "shape",
+     ["Linear", "Constant", "Petals", "Dipolar", "Quadratic", "Spiked",
+      "Cardioid", "Half-Petals", "Nested Sin", "Harmonic"]),
 ]
 
 
