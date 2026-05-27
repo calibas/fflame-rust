@@ -321,13 +321,17 @@ visibly different output:
   (which propagates to discarded points), while our clamp returns
   `sqrt(0) = 0`, yielding `sin(0) = 0, cos(0) = 1` and a real plotted
   point near the origin that wouldn't exist upstream.
+- **`wave3` artifacts** — user-reported visible difference; root cause
+  not yet investigated. Likely the same clamp-vs-NaN family. Worth
+  pinning down before any architectural decision about a point-discard
+  sentinel.
 
 The general guard pattern is probably fine, but it's worth a render
-comparison on a flame with parameters that exercise the edge cases
-(e.g. `disc3` with `d = -1, e = 1`) to confirm we're not introducing
-spurious origin artifacts. If we are, we may need to special-case the
-`sqrt` clamp (and similar) to propagate a sentinel that the
-dispatcher recognizes as "drop this point."
+comparison on flames that exercise the edge cases (e.g. `disc3` with
+`d = -1, e = 1`; plus reproducing the `wave3` artifact) to confirm
+we're not introducing spurious origin artifacts. If we are, we may
+need to special-case the `sqrt` clamp (and similar) to propagate a
+sentinel that the dispatcher recognizes as "drop this point."
 
 ### Init-slot optimization opportunities
 
@@ -369,31 +373,28 @@ that already do this.
 ### Declared-but-unused user parameters
 
 Parameters listed in `parameters: &[...]` that the WGSL body never
-reads. Two subcategories:
-
-**Intentional (kept for cpp/Java interface parity):**
+reads. All currently in the "intentional / dead upstream too"
+category — kept for cpp/Java interface parity so saved flames
+round-trip cleanly:
 
 - `harmonograph_js.seed` — upstream cpp re-seeds `GOODRAND` per
   Prepare; we use the per-thread RNG, so the seed value has no
   effect. Kept so `.flame` XML round-trips and so users importing
   from JWildfire don't see a "missing param" warning. See
   [harmonograph_misc.rs:13-15](../../src/variations/defs/harmonograph_misc.rs#L13-L15).
+- `macmillan.N` — declared (`unlimited_float [-10, 10]`, default
+  `1.0`) but never read. Verified against `output/jwildfire-vars/
+  output/macmillan.cpp` and JWildfire's Java `MacMillanFunc.java`:
+  **N is dead in upstream too** — both declare it as a `VAR_REAL`
+  but neither reads it in `PluginVarCalc`. The body is hardcoded to
+  exactly two McMillan iterations regardless of N. We're being
+  faithful to upstream — not a port omission. See
+  [macmillan_misc.rs:36-42](../../src/variations/defs/macmillan_misc.rs#L36-L42).
 
 (For DC variations whose params are kept-for-parity because the
 color-write side is dropped — `dc_carpet3D.color_a..color_f`,
 `scale_z`, `reset_z`, `origin` — see the *Direct-color (DC) port
 decisions* section below rather than duplicating here.)
-
-**Possibly port omissions (needs upstream verification):**
-
-- `macmillan.N` — the body hardcodes exactly two iterations of the
-  McMillan map per call; `N` is declared (`unlimited_float [-10, 10]`,
-  default `1.0`) but never read. Upstream cpp may use it as an inner-
-  loop bound (`for (i = 0; i < N; i++) { ... }`) that the Rust port
-  collapsed. Verify against
-  `output/jwildfire-vars/output/macmillan.cpp` and either rewire it
-  or drop the param. See
-  [macmillan_misc.rs:36-42](../../src/variations/defs/macmillan_misc.rs#L36-L42).
 
 ---
 
