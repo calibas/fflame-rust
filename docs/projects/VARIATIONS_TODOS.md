@@ -211,12 +211,12 @@ most candidates the mapping is mechanical:
 **Status:**
 - **35 binary `Integer [0, 1]` → `Boolean`** conversions landed in
   commit `4aa4290` (full list in `scripts/convert_int_to_bool.py`).
-- **10 multi-mode `Integer [0, N-1]` → `Enum`** conversions landed in
-  commit `567e860` (full list in `scripts/convert_int_to_enum.py`):
-  `falloff2.type` + pre/post variants, `atan.mode`,
-  `post_axis_symmetry_wf.axis`, `pre_wave3D_wf.axis`,
-  `mobius_strip.width_mode/radial_mode`, `spirograph3D.mode`,
-  `klein_group.recipe`.
+- **11 multi-mode `Integer [0, N-1]` → `Enum`** conversions landed in
+  commits `567e860` and follow-up (full list in
+  `scripts/convert_int_to_enum.py`): `falloff2.type` + pre/post
+  variants, `atan.mode`, `post_axis_symmetry_wf.axis`,
+  `pre_wave3D_wf.axis`, `mobius_strip.width_mode/radial_mode`,
+  `spirograph3D.mode`, `klein_group.recipe`, `hole2.shape`.
 - Description cleanup (drop now-redundant "0 = X, 1 = Y" enumerations)
   landed in `scripts/cleanup_enum_bool_descriptions.py`.
 
@@ -229,14 +229,10 @@ two buckets below.
 These weren't included in the mechanical batch because each has a
 question that needs answering before conversion.
 
-- `hole2.shape` — 10 distinct radial-formula branches (shape 0-9).
-  Mechanically convertible, just needs short semantic labels per
-  shape (read the WGSL body to name each formula). See
-  [standalone_exotics.rs](../../src/variations/defs/standalone_exotics.rs).
 - `iconattractor_js.preset_id` — 17-mode selector for Field &
-  Golubitsky's symmetric-icon preset table. Same shape as `hole2`:
-  mechanically convertible, but labels would need shape descriptors
-  per preset (read the WGSL or the original paper). See
+  Golubitsky's symmetric-icon preset table. Mechanically convertible,
+  but labels would need shape descriptors per preset (read the WGSL
+  or the original paper). See
   [iconattractor_misc.rs](../../src/variations/defs/iconattractor_misc.rs).
 - `butterfly_fay.outer_mode`, `butterfly_fay.inner_mode` — 6-mode
   output-formula selector. Shares the spread-formula family with

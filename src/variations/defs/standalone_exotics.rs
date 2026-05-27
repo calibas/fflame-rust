@@ -215,7 +215,7 @@ pub static HOLE2: VariationDef = VariationDef {
         param!("c", "C", unlimited_float, 1.0, -10.0, 10.0, "Multiplier on the angle-derived scaling factor."),
         param!("d", "D", unlimited_float, 1.0, -10.0, 10.0, "Angle multiplier on the input."),
         param!("inside", "Inside", bool, false, "When on, inverts the radial formula (`w/r`) instead of scaling (`w·r`)."),
-        param!("shape", "Shape", int, 0.0, 0.0, 9.0, "Picks one of 10 radial formulas (0-9)."),
+        param!("shape", "Shape", enum, 0, &["Linear", "Constant", "Petals", "Dipolar", "Quadratic", "Spiked", "Cardioid", "Half-Petals", "Nested Sin", "Harmonic"], "Radial-formula family. Each option applies a different geometric term inside the `sqrt(rhosq + …)` that determines the output radius."),
     ],
     needs_transform: false,
     writes_color: false,
