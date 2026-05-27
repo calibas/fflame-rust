@@ -336,39 +336,41 @@ sentinel that the dispatcher recognizes as "drop this point."
 ### Init-slot optimization opportunities
 
 Variations whose bodies recompute values that depend only on user
-parameters (not the per-iteration input `p` or the per-iteration
-transform weight). Moving these to `wgsl_init` removes the work from
-the hot path — same model as `circus`, `modulus`, `spligon`, etc.
-that already do this.
+parameters were moved to `wgsl_init` after the packed-variation-params
+layout retired the historical 16-slot per-variation ceiling. Same
+model as `circus`, `modulus`, `spligon`, etc. that already did this.
 
-- `affine3D` — six precomputable per-flame values: `sin(rx·π/180)`,
-  `cos(rx·π/180)`, and likewise for `ry` and `rz`. Upstream cpp
-  caches all six in `_sinX/cosX/sinY/cosY/sinZ/cosZ`; our port
-  skipped this because the historical 16-slot per-variation budget
-  couldn't fit them alongside the 15 user params. That budget is
-  gone — the shader builder now packs variation params contiguously
-  with no fixed stride (see
-  [shader_builder_v2.rs:799-842](../../src/shader_builder_v2.rs#L799-L842)),
-  so 6 init slots cost only what they cost. Worth revisiting now
-  that the constraint is lifted. See
-  [affine3d_misc.rs:10-14](../../src/variations/defs/affine3d_misc.rs#L10-L14)
-  for the original justification.
+**Done** (this branch):
 
-  More broadly: any variation whose module header cites the
-  "16-slot budget" as the reason for inlining derived values is a
-  candidate for the same revisit — `maurer_hyper.rs`,
-  `stub_recoveries2.rs`, `sosa_attractors2.rs`, `apo_misc22.rs`,
-  and `parametric_curves.rs` all mention it as of this commit.
+- `affine3D` — 7 init slots: 6 sin/cos of rotation angles +
+  `_hasShear`. Matches upstream cpp's `_sinX/cosX/sinY/cosY/sinZ/cosZ`
+  + `_hasShear`. ~14 ops/iter saved.
+- `murl` — 3 init slots (`_c`, `_p2`, `_vp`). Matches upstream
+  `Variables` struct. ~5 ops/iter saved.
+- `maurer_rose` — 10 init slots: `k`, `step_size`, `safe_step`,
+  `cycles`, three sampling thresholds, three thicknesses. ~12
+  ops/iter saved.
+- `hypercrop` — 4 init slots (`coef`, `a0`, `len`, `d`). ~6 ops/iter
+  saved.
 
-- `murl` — three precomputable per-flame values: `c` (rescaled
-  `c_user / (power − 1)` when `power ≠ 1`), `p2 = power / 2`, and
-  `vp = c + 1`. Upstream cpp stores these in its `Variables` struct
-  (`_c`, `_p2`, `_vp`) and the module header on
-  [singleton_misc.rs:33-36](../../src/variations/defs/singleton_misc.rs#L33-L36)
-  flagged-then-dismissed them as "per-iteration"; only the trig
-  follow-ups (`_a`, `_sina`) actually are. 3 init slots, no behavior
-  change. See
-  [singleton_misc.rs:639-646](../../src/variations/defs/singleton_misc.rs#L639-L646).
+**Audited and skipped** — files that cited the 16-slot budget but
+either had no per-iter constants worth moving, were citing overflow
+not inlining, or already had appropriate init usage:
+
+- `stub_recoveries2.rs` — the 16-slot mention was about gridout3d's
+  26-param overflow (different problem). `disc3`, `projective`,
+  `tqmirror` bodies all per-iter (every op depends on `p`).
+- `sosa_attractors2.rs` — 16-slot mention is overflow context, not
+  inlining. `lorenz_js` has 1 already-dead init slot (`1/scale`,
+  for cpp parity); `woggle_js` has marginal candidates (~3 ops/iter,
+  not worth a slot).
+- `apo_misc22.rs` — `cpow3_wf` already has 7 init slots.
+  `dc_carpet` and `post_point_symmetry_wf` have only marginal
+  candidates.
+- `parametric_curves.rs` — `crop3d` already has 6 init slots; could
+  add 3 more (`w/h/l_range = (xmax-xmin)*0.5*scatter`) but the
+  savings are ~6 ops/iter for 3 slots — not worth it unless the
+  variation becomes a bottleneck.
 
 ### Declared-but-unused user parameters
 
