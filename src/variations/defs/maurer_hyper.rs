@@ -16,10 +16,11 @@
 //!
 //! Both factor VVAR through the outer-multiplier convention.
 //!
-//! Note: We inline `maurer_rose`'s init values per-iteration rather than
-//! stash them in init slots — the per-flame budget is 16 slots, and the
-//! cpp's 11 init derivations are all cheap arithmetic. With 11 user
-//! params that leaves 5 free slots; we use 0 of them and inline.
+//! `maurer_rose` now uses 10 init slots for values that depend only on
+//! user params (k, step_size, safe_step, cycles, the three sampling
+//! thresholds, and the three thicknesses). The 16-slot ceiling that
+//! originally motivated inlining is gone with the packed-variation-
+//! params layout.
 //!
 //! Skipped from the originally-planned set:
 //!   - `synth` (35 user params) and `maurer_lines` (36 user params)
@@ -82,41 +83,58 @@ pub static MAURER_ROSE: VariationDef = VariationDef {
     ],
     needs_transform: false,
     writes_color: false,
-    init_param_count: 0,
-    wgsl_init: None,
+    init_param_count: 10,
+    wgsl_init: Some(r#"
+fn init_maurer_rose(user: array<f32, 11>) -> array<f32, 10> {
+    let kn = user[0];
+    let kd = user[1];
+    let line_count = user[3];
+    let line_offset_deg = user[4];
+    let show_lines = user[5];
+    let show_points = user[6];
+    let show_curve = user[7];
+    let line_thick_in = user[8];
+    let point_thick_in = user[9];
+    let curve_thick_in = user[10];
+    let two_pi = 6.28318530717959;
+
+    let safe_kd = select(kd, 1e-30, kd == 0.0);
+    let step_size = two_pi * (line_offset_deg / 360.0);
+
+    let show_sum = max(show_lines + show_points + show_curve, 1e-30);
+    let line_frac = show_lines / show_sum;
+    let point_frac = show_points / show_sum;
+
+    var out: array<f32, 10>;
+    out[0] = kn / safe_kd;                              // k
+    out[1] = step_size;                                  // step_size
+    out[2] = select(step_size, 1e-30, step_size == 0.0); // safe_step
+    out[3] = (line_count * step_size) / two_pi;          // cycles
+    out[4] = line_frac;                                  // line_thr
+    out[5] = line_frac + point_frac;                     // point_thr
+    out[6] = line_frac + 0.5 * point_frac;               // point_half_thr
+    out[7] = line_thick_in / 100.0;                      // line_thickness
+    out[8] = point_thick_in / 100.0;                     // point_thickness
+    out[9] = curve_thick_in / 100.0;                     // curve_thickness
+    return out;
+}
+"#),
     state_count: 0,
     wgsl_state_init: None,
     needs_accum: false,
     wgsl_2d: r#"
 fn variation_maurer_rose(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
-    let kn = get_param(xform_id, variation_id, 0u);
-    let kd = get_param(xform_id, variation_id, 1u);
     let c = get_param(xform_id, variation_id, 2u);
-    let line_count = get_param(xform_id, variation_id, 3u);
-    let line_offset_deg = get_param(xform_id, variation_id, 4u);
-    let show_lines = get_param(xform_id, variation_id, 5u);
-    let show_points = get_param(xform_id, variation_id, 6u);
-    let show_curve = get_param(xform_id, variation_id, 7u);
-    let line_thick_in = get_param(xform_id, variation_id, 8u);
-    let point_thick_in = get_param(xform_id, variation_id, 9u);
-    let curve_thick_in = get_param(xform_id, variation_id, 10u);
-    let two_pi = 6.28318530717959;
-
-    let safe_kd = select(kd, 1e-30, kd == 0.0);
-    let k = kn / safe_kd;
-    let step_size = two_pi * (line_offset_deg / 360.0);
-    let safe_step = select(step_size, 1e-30, step_size == 0.0);
-    let cycles = (line_count * step_size) / two_pi;
-
-    let show_sum = max(show_lines + show_points + show_curve, 1e-30);
-    let line_frac = show_lines / show_sum;
-    let point_frac = show_points / show_sum;
-    let line_thr = line_frac;
-    let point_thr = line_frac + point_frac;
-    let point_half_thr = line_frac + 0.5 * point_frac;
-    let line_thickness = line_thick_in / 100.0;
-    let point_thickness = point_thick_in / 100.0;
-    let curve_thickness = curve_thick_in / 100.0;
+    let k = get_param(xform_id, variation_id, 11u);
+    let step_size = get_param(xform_id, variation_id, 12u);
+    let safe_step = get_param(xform_id, variation_id, 13u);
+    let cycles = get_param(xform_id, variation_id, 14u);
+    let line_thr = get_param(xform_id, variation_id, 15u);
+    let point_thr = get_param(xform_id, variation_id, 16u);
+    let point_half_thr = get_param(xform_id, variation_id, 17u);
+    let line_thickness = get_param(xform_id, variation_id, 18u);
+    let point_thickness = get_param(xform_id, variation_id, 19u);
+    let curve_thickness = get_param(xform_id, variation_id, 20u);
 
     let tin = atan2(p.y, p.x);
     let t = cycles * tin;
@@ -187,34 +205,17 @@ fn variation_maurer_rose(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: pt
 "#,
     wgsl_3d: Some(r#"
 fn variation_maurer_rose(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
-    let kn = get_param(xform_id, variation_id, 0u);
-    let kd = get_param(xform_id, variation_id, 1u);
     let c = get_param(xform_id, variation_id, 2u);
-    let line_count = get_param(xform_id, variation_id, 3u);
-    let line_offset_deg = get_param(xform_id, variation_id, 4u);
-    let show_lines = get_param(xform_id, variation_id, 5u);
-    let show_points = get_param(xform_id, variation_id, 6u);
-    let show_curve = get_param(xform_id, variation_id, 7u);
-    let line_thick_in = get_param(xform_id, variation_id, 8u);
-    let point_thick_in = get_param(xform_id, variation_id, 9u);
-    let curve_thick_in = get_param(xform_id, variation_id, 10u);
-    let two_pi = 6.28318530717959;
-
-    let safe_kd = select(kd, 1e-30, kd == 0.0);
-    let k = kn / safe_kd;
-    let step_size = two_pi * (line_offset_deg / 360.0);
-    let safe_step = select(step_size, 1e-30, step_size == 0.0);
-    let cycles = (line_count * step_size) / two_pi;
-
-    let show_sum = max(show_lines + show_points + show_curve, 1e-30);
-    let line_frac = show_lines / show_sum;
-    let point_frac = show_points / show_sum;
-    let line_thr = line_frac;
-    let point_thr = line_frac + point_frac;
-    let point_half_thr = line_frac + 0.5 * point_frac;
-    let line_thickness = line_thick_in / 100.0;
-    let point_thickness = point_thick_in / 100.0;
-    let curve_thickness = curve_thick_in / 100.0;
+    let k = get_param(xform_id, variation_id, 11u);
+    let step_size = get_param(xform_id, variation_id, 12u);
+    let safe_step = get_param(xform_id, variation_id, 13u);
+    let cycles = get_param(xform_id, variation_id, 14u);
+    let line_thr = get_param(xform_id, variation_id, 15u);
+    let point_thr = get_param(xform_id, variation_id, 16u);
+    let point_half_thr = get_param(xform_id, variation_id, 17u);
+    let line_thickness = get_param(xform_id, variation_id, 18u);
+    let point_thickness = get_param(xform_id, variation_id, 19u);
+    let curve_thickness = get_param(xform_id, variation_id, 20u);
 
     let tin = atan2(p.y, p.x);
     let t = cycles * tin;
@@ -321,23 +322,33 @@ pub static HYPERCROP: VariationDef = VariationDef {
     ],
     needs_transform: false,
     writes_color: false,
-    init_param_count: 0,
-    wgsl_init: None,
+    init_param_count: 4,
+    wgsl_init: Some(r#"
+fn init_hypercrop(user: array<f32, 3>) -> array<f32, 4> {
+    let n = max(user[0], 3.0);
+    let rad = user[1];
+    let pi = 3.14159265358979;
+    let two_pi = 6.28318530717959;
+    let a0 = pi / n;
+    let len = 1.0 / cos(a0);
+    var out: array<f32, 4>;
+    out[0] = n / two_pi;        // coef
+    out[1] = a0;                // a0
+    out[2] = len;               // len
+    out[3] = rad * sin(a0) * len; // d
+    return out;
+}
+"#),
     state_count: 0,
     wgsl_state_init: None,
     needs_accum: false,
     wgsl_2d: r#"
 fn variation_hypercrop(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
-    let n = max(get_param(xform_id, variation_id, 0u), 3.0);
-    let rad = get_param(xform_id, variation_id, 1u);
     let zero = get_param(xform_id, variation_id, 2u);
-    let pi = 3.14159265358979;
-    let two_pi = 6.28318530717959;
-
-    let coef = n / two_pi;
-    let a0 = pi / n;
-    let len = 1.0 / cos(a0);
-    let d = rad * sin(a0) * len;
+    let coef = get_param(xform_id, variation_id, 3u);
+    let a0 = get_param(xform_id, variation_id, 4u);
+    let len = get_param(xform_id, variation_id, 5u);
+    let d = get_param(xform_id, variation_id, 6u);
 
     var angle = atan2(p.y, p.x);
     angle = floor(angle * coef) / coef + a0;
@@ -361,16 +372,11 @@ fn variation_hypercrop(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f
 "#,
     wgsl_3d: Some(r#"
 fn variation_hypercrop(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
-    let n = max(get_param(xform_id, variation_id, 0u), 3.0);
-    let rad = get_param(xform_id, variation_id, 1u);
     let zero = get_param(xform_id, variation_id, 2u);
-    let pi = 3.14159265358979;
-    let two_pi = 6.28318530717959;
-
-    let coef = n / two_pi;
-    let a0 = pi / n;
-    let len = 1.0 / cos(a0);
-    let d = rad * sin(a0) * len;
+    let coef = get_param(xform_id, variation_id, 3u);
+    let a0 = get_param(xform_id, variation_id, 4u);
+    let len = get_param(xform_id, variation_id, 5u);
+    let d = get_param(xform_id, variation_id, 6u);
 
     var angle = atan2(p.y, p.x);
     angle = floor(angle * coef) / coef + a0;
