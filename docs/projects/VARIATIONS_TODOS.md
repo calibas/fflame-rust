@@ -642,33 +642,20 @@ Investigate both call sites; either bring the behavior in line with
 variations is intentional (likely none, but worth confirming before
 ripping the optimization out).
 
-### Stray `weight: f32` parameter in some WGSL bodies — why does it work?
+### ~~Stray `weight: f32` parameter in some WGSL bodies~~ — RESOLVED
 
-Several 3D variations declare their WGSL function with a trailing
-`weight: f32` parameter that the shader builder doesn't pass:
+Resolved on the `variations-init-slot-and-macmillan` branch. The
+mechanism turned out to be hand-inlined special cases in
+`shader_builder_v2.rs` for `zcone`, `zscale`, `ztranslate`, and
+`flatten` that bypassed the standard `variation_NAME(...)` dispatch
+entirely — the function definitions were never called, so their
+signature mismatches were harmless.
 
-- All three in [depth3d.rs](../../src/variations/defs/depth3d.rs)
-  (`zcone`, `flatten`, `zscale`).
-- All four in [rotation3d.rs](../../src/variations/defs/rotation3d.rs)
-  (`pre_rotate_x/y`, `post_rotate_x/y`) — confirmed working in
-  practice despite the apparent signature mismatch.
-
-Per the signature contract in
-[VARIATIONS_WIRE_FORMAT.md §4](VARIATIONS_WIRE_FORMAT.md), with
-`parameters: &[]`, `needs_rng: false`, `needs_transform: false` (or
-true with `(xform_id, variation_id)` already covering it),
-`writes_color: false`, `needs_accum: false`, the only argument should
-be `p: vec3<f32>`. The extra `weight: f32` shouldn't link — but
-rotation3d demonstrably renders correctly.
-
-Possibilities:
-- WGSL is silently tolerant of an unused trailing parameter in
-  declarations the caller doesn't reference.
-- The shader builder has special-case handling we haven't traced.
-- The function is being inlined/elided before the linker sees the
-  mismatch.
-
-Investigate, then either remove the stale `weight: f32` parameters
-from the WGSL bodies (they're unused even where they appear), or
-document the actual mechanism. Correctness/cleanup task, not a
-metadata task.
+Cleanup: removed the four special-case branches, fixed
+`variation_flatten`'s body to produce equivalent math under standard
+dispatch (`return vec3(p.x, p.y, 0)` instead of the stale
+`vec3(0, 0, -p.z)`), and dropped the stale `, weight: f32` parameter
+from the zcone/flatten/zscale signatures. The rotation3d variations
+already had clean `(p, xform_id, variation_id)` signatures — no
+change needed there. Verified bit-identical pixel output via 3D
+smoke tests for zcone, flatten, and zscale.

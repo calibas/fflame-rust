@@ -32,9 +32,10 @@ fn variation_zcone(p: vec2<f32>) -> vec2<f32> {
 }
 "#,
     wgsl_3d: Some(r#"
-fn variation_zcone(p: vec3<f32>, weight: f32) -> vec3<f32> {
-    // Z-only variation: adds distance from origin to Z
-    // result.z += weight * length(p.xy)
+fn variation_zcone(p: vec3<f32>) -> vec3<f32> {
+    // Normal-phase Z-only contribution. Standard dispatch is
+    // `result += weight * variation_zcone(p)`, so returning
+    // `(0, 0, length(p.xy))` accumulates `weight * length(p.xy)` into Z.
     return vec3<f32>(0.0, 0.0, length(p.xy));
 }
 "#),
@@ -65,10 +66,11 @@ fn variation_flatten(p: vec2<f32>) -> vec2<f32> {
 }
 "#,
     wgsl_3d: Some(r#"
-fn variation_flatten(p: vec3<f32>, weight: f32) -> vec3<f32> {
-    // Z-only variation: flattens Z toward zero
-    // result.z -= weight * p.z (subtracts to cancel out Z)
-    return vec3<f32>(0.0, 0.0, -p.z);
+fn variation_flatten(p: vec3<f32>) -> vec3<f32> {
+    // Post-phase Z-zeroing. Standard post dispatch is
+    // `result = variation_flatten(result)` (gated on weight != 0), so
+    // returning `(p.x, p.y, 0)` matches Apophysis's `FPz := 0`.
+    return vec3<f32>(p.x, p.y, 0.0);
 }
 "#),
 };
@@ -97,9 +99,10 @@ fn variation_zscale(p: vec2<f32>) -> vec2<f32> {
 }
 "#,
     wgsl_3d: Some(r#"
-fn variation_zscale(p: vec3<f32>, weight: f32) -> vec3<f32> {
-    // Z-only variation: scales Z by weight
-    // result.z += weight * p.z (adds scaled Z)
+fn variation_zscale(p: vec3<f32>) -> vec3<f32> {
+    // Normal-phase Z-only contribution. Standard dispatch is
+    // `result += weight * variation_zscale(p)`, so returning
+    // `(0, 0, p.z)` accumulates `weight * p.z` into Z.
     return vec3<f32>(0.0, 0.0, p.z);
 }
 "#),
