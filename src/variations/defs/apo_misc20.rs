@@ -165,9 +165,10 @@ fn variation_spherical3D_wf(p: vec3<f32>, xform_id: u32, variation_id: u32) -> v
 // ---------------------------------------------------------------------------
 
 /// 3D swirl with Z modulation — re-emits the input radius and angle in
-/// cartesian form (the XY output is effectively the input swapped, per the
-/// cpp's `atan2(x, y)` convention) plus a Z output `sin(6·cos(rad) −
-/// n·ang)` that introduces a sinusoidal Z modulation parameterized by `n`.
+/// cartesian form (XY output passes the input through unchanged), plus a Z
+/// output `sin(6·cos(rad) − n·ang)` that introduces a sinusoidal Z
+/// modulation parameterized by `n`. Matches JWildfire's `Swirl3DWFFunc`
+/// (uses `getPrecalcAtanYX()` = `atan2(y, x)`).
 pub static SWIRL3D_WF: VariationDef = VariationDef {
     name: "swirl3D_wf",
     display_name: "Swirl 3D WF",
@@ -188,7 +189,7 @@ pub static SWIRL3D_WF: VariationDef = VariationDef {
 fn variation_swirl3D_wf(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let small = 1e-30;
     let rad = sqrt(p.x * p.x + p.y * p.y) + small;
-    let ang = atan2(p.x, p.y);
+    let ang = atan2(p.y, p.x);
     return vec2<f32>(rad * cos(ang), rad * sin(ang));
 }
 "#,
@@ -197,7 +198,7 @@ fn variation_swirl3D_wf(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<
     let n = get_param(xform_id, variation_id, 0u);
     let small = 1e-30;
     let rad = sqrt(p.x * p.x + p.y * p.y) + small;
-    let ang = atan2(p.x, p.y);
+    let ang = atan2(p.y, p.x);
     return vec3<f32>(
         rad * cos(ang),
         rad * sin(ang),
