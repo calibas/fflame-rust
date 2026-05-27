@@ -131,7 +131,7 @@ pub static SPIROGRAPH3D: VariationDef = VariationDef {
         param!("tmin", "T Min", unlimited_float, 0.0, -1000.0, 1000.0, "Minimum value of the random parameter `t`."),
         param!("tmax", "T Max", unlimited_float, 1000.0, -10000.0, 10000.0, "Maximum value of the random parameter `t`."),
         param!("width", "Width", unlimited_float, 0.0, -10.0, 10.0, "Per-axis jitter magnitude (interpretation depends on `mode`)."),
-        param!("mode", "Mode", int, 0.0, 0.0, 4.0, "Jitter pattern: 0 = single uniform on all axes, 1 = phased-sin per axis, 2 = independent uniform per axis, 3 = central-limit Gaussian per axis, 4 = ±width on X only."),
+        param!("mode", "Mode", enum, 0, &["Uniform", "Phased Sin", "Independent", "Gaussian", "X Only"], "Random jitter pattern applied to the width offset."),
     ],
     needs_transform: false,
     writes_color: false,

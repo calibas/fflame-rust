@@ -64,7 +64,7 @@ pub static SUPERSHAPE_3D: VariationDef = VariationDef {
         param!("n3_1", "N3.1", unlimited_float, 1.0, -10.0, 10.0, "Sine-term exponent for the ρ-axis shape — controls petal sharpness on the sin side."),
         param!("n3_2", "N3.2", unlimited_float, 1.0, -10.0, 10.0, "Sine-term exponent for the φ-axis shape."),
         param!("spiral", "Spiral", unlimited_float, 0.0, -10.0, 10.0, "Spiral phase advance: `r1` is incremented by `spiral · ρ`, producing a linear radial growth with angle. 0 disables."),
-        param!("toroidmap", "Toroidal", int, 0.0, 0.0, 1.0, "0 = spherical projection (output = `r1·r2·cos·cos`, etc.). 1 = toroidal projection (output = `cos·(r1 + r2·cos)`, etc.). Both modes use `r2·sin(φ)` for Z."),
+        param!("toroidmap", "Toroidal", bool, false, "When on, toroidal projection (`cos·(r1 + r2·cos)`, etc.). When off, spherical product (`r1·r2·cos·cos`, etc.). Both modes use `r2·sin(φ)` for Z."),
     ],
     needs_transform: false,
     writes_color: false,

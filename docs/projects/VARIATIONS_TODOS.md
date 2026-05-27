@@ -204,204 +204,91 @@ Apophysis / JWildfire, which store these parameters as raw floats. For
 most candidates the mapping is mechanical:
 
 - `Integer [0, 1]` → `Boolean`: read as `value >= 0.5` (or `!= 0.0`).
-  Should be safe to automate across all entries below that fit this
-  shape.
+  Safe to automate.
 - `Integer [0, N-1]` → `Enum` with N variants: round to nearest, clamp
   to `[0, N-1]`, look up by index. Also safe to automate.
 
-The tricky ones are parameters where the wire-format value space does
-**not** discretely line up with the enum's variant count — most
-visibly `hypercrop.zero`, which is currently `unlimited_float [0, 2]`
-but semantically tri-state via threshold comparisons (`> 1.5`,
-`> 0.5`, else). A naive enum mapping (e.g. `0/1/2`) round-trips fine
-for newly-saved values, but an imported flame with `zero = 0.7`
-currently means "collapse to origin" — under enum semantics that value
-has no slot, so we'd need an explicit per-parameter import shim that
-reproduces the original threshold dispatch when reading legacy XML.
-Decision pending: either keep this one as `Float` with documented
-thresholds, or add a `legacy_import` hook on the param def.
+**Status:**
+- **35 binary `Integer [0, 1]` → `Boolean`** conversions landed in
+  commit `4aa4290` (full list in `scripts/convert_int_to_bool.py`).
+- **16 multi-mode `Integer [0, N-1]` → `Enum`** conversions landed in
+  commits `567e860` and follow-ups (full list in
+  `scripts/convert_int_to_enum.py`): `falloff2.type` + pre/post
+  variants, `atan.mode`, `post_axis_symmetry_wf.axis`,
+  `pre_wave3D_wf.axis`, `mobius_strip.width_mode/radial_mode`,
+  `spirograph3D.mode`, `klein_group.recipe`, `hole2.shape`,
+  `butterfly_fay.outer_mode/inner_mode`,
+  `rhodonea.outer_mode/inner_mode`, `jac_asn.jac_asn_type`.
+- Description cleanup (drop now-redundant "0 = X, 1 = Y" enumerations)
+  landed in `scripts/cleanup_enum_bool_descriptions.py`.
 
-- `falloff2.type`, `pre_falloff2.type`, `post_falloff2.type` — 3
-  branches (0 = uniform, 1 = triangular, 2 = gaussian). Same enum
-  across all three phase variants. See
-  [extended.rs](../../src/variations/defs/extended.rs),
-  [pre_phase.rs](../../src/variations/defs/pre_phase.rs),
-  [post_phase.rs](../../src/variations/defs/post_phase.rs).
-- `hole2.shape` — 10 distinct radial-formula branches (shape 0-9). See
-  [standalone_exotics.rs](../../src/variations/defs/standalone_exotics.rs).
-- `hole2.inside` — declared `Integer` with `[0, 1]` range, used as a
-  binary toggle (`r1 = w/r1` vs `r1 = w·r1`). Should be `Boolean`.
-  See [standalone_exotics.rs](../../src/variations/defs/standalone_exotics.rs).
-- `crop3d.zero` — declared `Integer` with `[0, 1]` range, used as a
-  binary toggle (collapse-to-origin vs scatter-to-edge). Should be
-  `Boolean`. See
-  [parametric_curves.rs](../../src/variations/defs/parametric_curves.rs).
+Wire format unchanged across all of these — values still serialize as
+`f32`; only the UI control changed. The remaining work splits into the
+two buckets below.
+
+#### Enum candidates — deferred (not urgent)
+
+Wire format is unchanged after the Phase 3 conversions, so old
+configs round-trip cleanly through both the Boolean and Enum cases
+that landed. The two remaining candidates aren't urgent — they're
+both Integer sliders today, which is functional. Revisit when the
+underlying questions get answered.
+
+- `iconattractor_js.preset_id` — 17-mode selector for Field &
+  Golubitsky's symmetric-icon preset table. Blocker: the WGSL preset
+  table is just raw `(degree, a, b, g, o, l)` tuples with no
+  per-preset comments, so labels would have to come from rendering
+  each preset and matching against the named figures in *Symmetry in
+  Chaos*. Degree-based labels (5 presets share `degree=5`, 6 share
+  `degree=3`) wouldn't disambiguate enough to be worth the
+  conversion. Plain numeric `Preset 0..16` (still as Integer) is
+  honestly more useful than a dropdown of `D5 #1, D5 #2, …`.
+  Revisit once someone renders the 17 presets and picks book-derived
+  names. See
+  [iconattractor_misc.rs](../../src/variations/defs/iconattractor_misc.rs).
+- `subflame_wf.color_mode` — declared `Integer` with `[-1, 4]` range,
+  6-mode color-handling selector: -1 = Off (default), 0 = Direct
+  (overwrite parent's `vc` with subflame's color), 1-4 = JWildfire's
+  CM_RED/GREEN/BLUE/BRIGHTNESS modes. Blockers: the `-1` baseline is
+  awkward for `Enum` (which expects `[0, N-1]`); and modes 1-4 are
+  currently declared but **silently no-op'd** (only Off and Direct
+  are implemented). Revisit when either CM_* gets implemented (and
+  the range can stay) or we decide to shrink the range to `[-1, 0]`
+  and document the no-op'd modes as removed. See
+  [subflame.rs](../../src/variations/defs/subflame.rs).
+
+#### Float-threshold dispatch — keep as Float (or add legacy_import shim)
+
+These don't cleanly fit an `Enum` because the float value space carries
+information beyond just selecting a mode. A naive enum mapping (e.g.
+`0/1/2`) round-trips fine for newly-saved values, but an imported flame
+with a value like `zero = 0.7` (currently meaning "collapse to origin"
+via threshold dispatch) has no slot under enum semantics. Decision
+pending: either keep these as `Float` with documented thresholds, or
+add a per-parameter `legacy_import` hook that reproduces the threshold
+dispatch when reading legacy XML.
+
 - `hypercrop.zero` — declared `unlimited_float` with `[0, 2]` range,
   dispatched as 3 modes via threshold comparisons (`> 1.5` snap to
   corner, `> 0.5` collapse to origin, else scatter). See
   [maurer_hyper.rs](../../src/variations/defs/maurer_hyper.rs).
-- `chunk.mode` — declared `Integer` with `[0, 1]` range, used as a
-  binary toggle (keep r ≤ 0 vs keep r > 0). Should be `Boolean`. See
-  [misc_extras.rs](../../src/variations/defs/misc_extras.rs).
-- `ptransform.use_log` — declared `Integer` with `[0, 1]` range, used
-  as a binary toggle (linear vs log-polar ρ). Should be `Boolean`. See
-  [misc_extras.rs](../../src/variations/defs/misc_extras.rs).
-- `tile_reverse.vertical` — declared `Integer` with `[0, 1]` range,
-  used as a binary axis selector (horizontal vs vertical). Should be
-  `Boolean`. See
-  [misc_extras.rs](../../src/variations/defs/misc_extras.rs).
 - `tile_reverse.reversal` — declared `unlimited_float` with `[-10, 10]`
   range, but only checked for `== 1.0` vs anything else (binary mirror
-  toggle). Type is misleading; semantics are Boolean. See
+  toggle). Type is misleading; semantics are Boolean — but the float
+  range is preserved in the wire format. See
   [misc_extras.rs](../../src/variations/defs/misc_extras.rs).
-- `corners.logmode` — declared `Integer` with `[0, 1]` range, used as
-  a binary formula selector (pow vs log-pow). Should be `Boolean`. See
-  [singleton_misc.rs](../../src/variations/defs/singleton_misc.rs).
-- `atan.mode` — declared `Integer` with `[0, 2]` range, 3-mode axis
-  selector (Y only / X only / both). Should be `Enum`. See
-  [singleton_misc.rs](../../src/variations/defs/singleton_misc.rs).
-- `spirograph3D.mode` — declared `Integer` with `[0, 4]` range, 5-mode
-  width-jitter pattern selector (single uniform / phased-sin /
-  independent uniform / Gaussian / ±width X only). Should be `Enum`.
-  See [apo_misc17.rs](../../src/variations/defs/apo_misc17.rs).
-- `post_axis_symmetry_wf.axis` — declared `Integer` with `[0, 2]`
-  range, 3-mode axis selector (X / Y / Z). Should be `Enum`. See
-  [post_axis_symmetry_misc.rs](../../src/variations/defs/post_axis_symmetry_misc.rs).
-- `pre_wave3D_wf.axis` — declared `Integer` with `[0, 3]` range,
-  4-mode displacement-axis selector (XY plane → Z / YZ plane → X /
-  ZX plane → Y / RADIAL). Should be `Enum`. See
-  [pre_wave3d_misc.rs](../../src/variations/defs/pre_wave3d_misc.rs).
-- `iconattractor_js.preset_id` — declared `Integer` with `[0, 16]`
-  range, 17-mode selector for Field & Golubitsky's symmetric-icon
-  preset table. Should be `Enum`. See
-  [iconattractor_misc.rs](../../src/variations/defs/iconattractor_misc.rs).
-- `tqmirror.type` — declared `Integer` with `[0, 1]` range, used as a
-  binary outer-boundary branch selector (swap x↔y vs pass through).
-  Should be `Boolean`. See
-  [stub_recoveries2.rs](../../src/variations/defs/stub_recoveries2.rs).
-- `ripple.fixed_dist_calc` — declared `Integer` with `[0, 1]` range,
-  used as a binary distance-formula selector (Euclidean vs upstream-
-  quirk product). Should be `Boolean`. See
-  [apo_misc13.rs](../../src/variations/defs/apo_misc13.rs).
-- `rosoni.altshapes` — declared `Integer` with `[0, 1]` range, used as
-  a binary inner-shape family selector (circle/square vs
-  lemniscate/angle). Should be `Boolean`. See
-  [rosoni_misc.rs](../../src/variations/defs/rosoni_misc.rs).
-- `circlecrop.zero`, `pre_circlecrop.zero`, `post_circlecrop.zero`,
-  `spherecrop.zero` — all declared `Integer` with `[0, 1]` range, used
-  as a binary out-of-shape behavior selector (hide vs scatter-onto-
-  boundary). Should all be `Boolean`. Same enum across all four
-  variants. See
-  [circlecrop_misc.rs](../../src/variations/defs/circlecrop_misc.rs),
-  [circlecrop_phase.rs](../../src/variations/defs/circlecrop_phase.rs),
-  and [apo_misc18.rs](../../src/variations/defs/apo_misc18.rs).
-- `post_mirror_wf.xaxis`, `post_mirror_wf.yaxis`, `post_mirror_wf.zaxis`
-  — all declared `Integer` with `[0, 1]` range, used as a binary
-  per-axis enable for the mirror branch. Should all be `Boolean`.
-  See [apo_misc21.rs](../../src/variations/defs/apo_misc21.rs).
 - `cpow3_wf.discrete_spread` — declared `unlimited_float` with
   `[0, 1]` range, but only checked `>= 1.0` (binary toggle between
-  discrete-integer and continuous angular branches). Type is
-  misleading; semantics are Boolean. Same pattern as
+  discrete-integer and continuous angular branches). Same pattern as
   `tile_reverse.reversal`. See
   [apo_misc22.rs](../../src/variations/defs/apo_misc22.rs).
-- `cannabiscurve_wf.filled`, `cloverleaf_wf.filled`, `rose_wf.filled`
-  — all declared `Integer` with `[0, 1]` range, used as a binary
-  fill-vs-outline toggle. Should all be `Boolean`. Same enum across
-  the three WF polar curves. See
-  [apo_misc20.rs](../../src/variations/defs/apo_misc20.rs) and
-  [wf_curves.rs](../../src/variations/defs/wf_curves.rs).
-- `waves2_wf.use_cos_x`, `waves2_wf.use_cos_y`, `waves3_wf.use_cos_x`,
-  `waves3_wf.use_cos_y`, `waves4_wf.use_cos_x`, `waves4_wf.use_cos_y`
-  — all declared `Integer` with `[0, 1]` range, used as a binary
-  sin-vs-cos selector per axis. Should all be `Boolean`. Same enum
-  across all six instances (three variations × two axes). See
-  [waves_wf_family.rs](../../src/variations/defs/waves_wf_family.rs).
-- `dc_triangle.zero_edges` — declared `Integer` with `[0, 1]` range,
-  used as a binary out-of-triangle behavior selector (collapse-to-
-  origin vs scatter). Should be `Boolean`. See
-  [dc_misc.rs](../../src/variations/defs/dc_misc.rs).
-- `truchet.extended`, `truchet.direct_color`, `truchet2.inverse`,
-  `waveblur_wf.direct_color` — all declared `Integer` with `[0, 1]`
-  range, used as binary toggles. Should all be `Boolean`. Note:
-  `truchet.direct_color` and `waveblur_wf.direct_color` are
-  currently dead (color writes were dropped in the port) but still
-  flagged so the type change is consistent if the color writes are
-  ever restored. See
-  [truchet_misc.rs](../../src/variations/defs/truchet_misc.rs),
-  [truchet2_misc.rs](../../src/variations/defs/truchet2_misc.rs),
-  and [waveblur_misc.rs](../../src/variations/defs/waveblur_misc.rs).
-- `butterfly_fay.unified_inner_outer` — declared `Integer` with
-  `[0, 1]` range, used as a binary "always-outer vs inside-outside-
-  dispatch" toggle. Should be `Boolean`. See
-  [butterfly_fay_misc.rs](../../src/variations/defs/butterfly_fay_misc.rs).
-- `butterfly_fay.outer_mode`, `butterfly_fay.inner_mode` — both
-  declared `Integer` with `[0, 5]` range, 6-mode output-formula
-  selector. Same enum on both. Should be `Enum`. See
-  [butterfly_fay_misc.rs](../../src/variations/defs/butterfly_fay_misc.rs).
-- `mobius_strip.width_mode`, `mobius_strip.radial_mode` — both
-  declared `Integer` with `[0, 3]` range, 4-mode out-of-range
-  behavior selector (wrap / clamp / hide / leave). Same enum on
-  both. Should be `Enum`. See
-  [apo_misc19.rs](../../src/variations/defs/apo_misc19.rs).
-- `jac_asn.jac_asn_type` — declared `Integer` with `[0, 7]` range,
-  8-mode selector for which inverse Jacobi elliptic function to
-  compute (0/4 = invdn, 1/5 = inverse sn, 2/6 = inverse cn, 3/7 =
-  inverse sc). The high bit (`type > 3`) additionally swaps modulus
-  and phi, so this is two orthogonal toggles disguised as a single
-  enum — when converting, consider whether to expose them as two
-  separate fields (function-kind enum + swap-modulus boolean) or
-  keep the flat 8-variant enum to match the wire format. See
-  [jac_asn_misc.rs](../../src/variations/defs/jac_asn_misc.rs).
-- `bubbleT3D.symmetry_z`, `bubbleT3D.modus_blur` — both declared
-  `Integer` with `[0, 1]` range, used as binary toggles
-  (Z-symmetric vs one-pole; hard-cutout vs smooth-blend). Should
-  both be `Boolean`. Note: `modus_blur = 1` is only effective on
-  the Z hole when `exponent_z == 1` — otherwise it falls back to
-  hard cutout regardless. See
-  [bubblet3d_misc.rs](../../src/variations/defs/bubblet3d_misc.rs).
-- `superShape3d.toroidmap` — declared `Integer` with `[0, 1]` range,
-  used as a binary projection-mode toggle (spherical product vs
-  toroidal sum). Should be `Boolean`. See
-  [supershape3d_misc.rs](../../src/variations/defs/supershape3d_misc.rs).
-- `rhodonea.inner_mode`, `rhodonea.outer_mode` — both declared
-  `Integer` with `[0, 6]` range, 7-mode spread/mask behavior selector
-  (0 = normal, 1-4 = four spread formulas, 5/6 = mask hide/pass-
-  through). Same enum across both — though note the mask semantics
-  on 5/6 are inverted between inner and outer (5 hides for inner /
-  passes for outer; 6 passes for inner / hides for outer). Should be
-  `Enum`. See
-  [rhodonea_misc.rs](../../src/variations/defs/rhodonea_misc.rs).
-- `klein_group.recipe` — declared `Integer` with `[0, 6]` range,
-  7-mode selector for the Kleinian generator-pair construction
-  recipe: GRANDMA_STANDARD (0), MASKIT_MU (1), JORGENSEN (2),
-  RILEY (3), RILEY_MODIFIED (4), MASKIT_MU_MODIFIED (5),
-  MASKIT_LEYS_MODIFIED (6). The recipe also changes the meaning of
-  `b_re`/`b_im` (unused in recipes 1 and 3), so an `Enum` UI would
-  ideally also gate the visibility of those params. See
-  [klein_group_misc.rs](../../src/variations/defs/klein_group_misc.rs).
-- `klein_group.avoid_reversal` — declared `Integer` with `[0, 1]`
-  range, binary toggle for the avoid-immediate-cancellation rule.
-  Should be `Boolean`. See
-  [klein_group_misc.rs](../../src/variations/defs/klein_group_misc.rs).
-- `subflame_wf.color_mode` — declared `Integer` with `[-1, 4]` range,
-  6-mode color-handling selector: -1 = Off (default), 0 = Direct
-  (overwrite parent's `vc` with subflame's color), 1-4 = JWildfire's
-  CM_RED/GREEN/BLUE/BRIGHTNESS modes. Should be `Enum` — but note
-  that modes 1-4 are currently declared but **silently no-op'd**
-  (treated as Off); only Off and Direct are implemented. Either
-  finish the port for 1-4 or drop them from the range when
-  converting. See
-  [subflame.rs](../../src/variations/defs/subflame.rs).
 - `waves2b.pwx`, `waves2b.pwy` — declared `unlimited_float` but
   semantically tri-state via threshold comparisons: `pw ∈ [0, 1e-4)`
   → Jacobi `sn` mode, `pw ∈ (-1e-4, 0)` → Bessel `J1` mode, else →
-  power-mode sine with `pw` as the actual exponent. Same shape as
-  `hypercrop.zero` but worse: the "power-mode" arm uses `pw` as a
-  continuous parameter, so the value space cannot cleanly split
-  into an `(enum mode, float power)` pair without losing the
-  smooth handoff at the boundaries. Probably stays as `Float` with
-  documented thresholds — flagging for visibility. See
+  power-mode sine with `pw` as the actual exponent. The "power-mode"
+  arm uses `pw` as a continuous parameter, so the value space cannot
+  cleanly split into an `(enum mode, float power)` pair without
+  losing the smooth handoff at the boundaries. See
   [waves2b_misc.rs](../../src/variations/defs/waves2b_misc.rs).
 - `hexaplay3D.majp`, `hexnix3D.majp` — both declared
   `unlimited_float` but dispatch on `|majp|` thresholds, with the
@@ -409,8 +296,7 @@ thresholds, or add a `legacy_import` hook on the param def.
   `hexaplay3D` is two-mode (`≤ 1` single plate, `> 1` split planes
   with `boost = (|majp| - 1) · 0.5`); `hexnix3D` is three-mode
   (`≤ 1`, `1-2`, `≥ 2`) plus additional negative-`majp` branches
-  for animation Z-flips. Same shape as `waves2b.pwx` — keep as
-  `Float` with documented thresholds. See
+  for animation Z-flips. See
   [hexaplay3d_misc.rs](../../src/variations/defs/hexaplay3d_misc.rs)
   and
   [hexnix3d_misc.rs](../../src/variations/defs/hexnix3d_misc.rs).

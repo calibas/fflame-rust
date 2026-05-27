@@ -44,7 +44,7 @@ pub static WAVEBLUR_WF: VariationDef = VariationDef {
         param!("damping_z", "Damping Z", unlimited_float, 0.0, 0.0, 10.0, "Exponential damping rate on Z (clamped ≥ 0 in upstream). 0 disables damping."),
         param!("color_scale", "Color Scale", unlimited_float, 0.5, -10.0, 10.0, "Color register scale — unused since the color write is dropped. Preserved for cpp parity."),
         param!("color_offset", "Color Offset", unlimited_float, 0.0, -10.0, 10.0, "Color register offset — unused. Preserved for cpp parity."),
-        param!("direct_color", "Direct Color", int, 0.0, 0.0, 1.0, "1 = enable direct-color writes (dropped in this port). Preserved for cpp parity."),
+        param!("direct_color", "Direct Color", bool, false, "Enable direct-color writes. (Dropped in this port — preserved for cpp parity.)"),
     ],
     needs_transform: true,
     writes_color: false,

@@ -315,7 +315,7 @@ pub static CROP3D: VariationDef = VariationDef {
         param!("bottom", "Bottom", unlimited_float, 1.0, -10.0, 10.0, "Bottom bound (Y axis)."),
         param!("ceiling", "Ceiling", unlimited_float, 1.0, -10.0, 10.0, "Ceiling bound (Z axis)."),
         param!("scatter_area", "Scatter Area", unlimited_float, 0.0, 0.0, 1.0, "Width of the scatter band along each box edge. 0 = snap to edge; 1 = scatter across the full box width."),
-        param!("zero", "Zero", int, 0.0, 0.0, 1.0, "When on, out-of-box points collapse to origin. When off, they scatter back toward the nearest edge."),
+        param!("zero", "Zero", bool, false, "When on, out-of-box points collapse to origin. When off, they scatter back toward the nearest edge."),
     ],
     needs_transform: false,
     writes_color: false,
