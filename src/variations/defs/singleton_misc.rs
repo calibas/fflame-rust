@@ -31,9 +31,10 @@
 //!   - `circlize2` (Faber's Angle Pack) folds `hole` into the
 //!     VVAR-scaled `r`, so it factors cleanly.
 //!   - `murl`'s cpp puts a bunch of intermediates in the per-thread
-//!     `Variables` struct (`_c, _p2, _vp, _a, _sina, ...`) but they
-//!     all derive from per-iteration values inside `PluginVarCalc`.
-//!     We treat them as local variables.
+//!     `Variables` struct (`_c, _p2, _vp, _a, _sina, ...`). Of these,
+//!     `_c, _p2, _vp` depend only on user params and now live in our
+//!     init slots; `_a, _sina` truly are per-iteration (they involve
+//!     the input `(x, y)`) so they stay in the body.
 
 use crate::variations::{
     definition::{VariationDef, VariationParamDef},
@@ -681,23 +682,33 @@ pub static MURL: VariationDef = VariationDef {
     ],
     needs_transform: false,
     writes_color: false,
-    init_param_count: 0,
-    wgsl_init: None,
-    state_count: 0,
-    wgsl_state_init: None,
-    needs_accum: false,
-    wgsl_2d: r#"
-fn variation_murl(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
-    let c_in = get_param(xform_id, variation_id, 0u);
-    let power = get_param(xform_id, variation_id, 1u);
+    init_param_count: 3,
+    wgsl_init: Some(r#"
+fn init_murl(user: array<f32, 2>) -> array<f32, 3> {
+    let c_in = user[0];
+    let power = user[1];
     var c = c_in;
     if (power != 1.0) {
         let pm1 = power - 1.0;
         let safe_pm1 = select(pm1, 1e-30, abs(pm1) < 1e-30);
         c = c / safe_pm1;
     }
-    let p2 = power * 0.5;
-    let vp = c + 1.0;  // VVAR factored out — outer multiplier reapplies
+    var out: array<f32, 3>;
+    out[0] = c;             // _c (rescaled)
+    out[1] = power * 0.5;   // _p2
+    out[2] = c + 1.0;       // _vp (VVAR factored out — outer multiplier reapplies)
+    return out;
+}
+"#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
+    wgsl_2d: r#"
+fn variation_murl(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
+    let power = get_param(xform_id, variation_id, 1u);
+    let c = get_param(xform_id, variation_id, 2u);
+    let p2 = get_param(xform_id, variation_id, 3u);
+    let vp = get_param(xform_id, variation_id, 4u);
     let a = atan2(p.y, p.x) * power;
     let r = c * pow(max(p.x * p.x + p.y * p.y, 1e-30), p2);
     let re = r * cos(a) + 1.0;
@@ -711,16 +722,10 @@ fn variation_murl(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
 "#,
     wgsl_3d: Some(r#"
 fn variation_murl(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
-    let c_in = get_param(xform_id, variation_id, 0u);
     let power = get_param(xform_id, variation_id, 1u);
-    var c = c_in;
-    if (power != 1.0) {
-        let pm1 = power - 1.0;
-        let safe_pm1 = select(pm1, 1e-30, abs(pm1) < 1e-30);
-        c = c / safe_pm1;
-    }
-    let p2 = power * 0.5;
-    let vp = c + 1.0;
+    let c = get_param(xform_id, variation_id, 2u);
+    let p2 = get_param(xform_id, variation_id, 3u);
+    let vp = get_param(xform_id, variation_id, 4u);
     let a = atan2(p.y, p.x) * power;
     let r = c * pow(max(p.x * p.x + p.y * p.y, 1e-30), p2);
     let re = r * cos(a) + 1.0;

@@ -7,15 +7,11 @@
 //!   - rotate:    rX, rY, rZ (degrees)
 //!   - shear:     sXY, sXZ, sYX, sYZ, sZX, sZY
 //!
-//! No init slots — sin/cos of the rotation angles are computed inline
-//! per iteration. cpp's `_sinX/cosX/sinY/cosY/sinZ/cosZ` precompute is
-//! skipped because storing them would push us past the 16-slot per-
-//! variation budget. The GPU compiler can hoist sin/cos out of the
-//! body since the rotation params are constant per flame.
-//!
-//! cpp's separate "_hasShear" boolean (stored in init) is replaced by
-//! an inline `|sXY| + |sXZ| + … > ε` test. The clean affine path runs
-//! when shear is below threshold; the full sheared path runs otherwise.
+//! 7 init slots — `_sinX, _cosX, _sinY, _cosY, _sinZ, _cosZ,
+//! _hasShear`. Matches upstream cpp's `_sinX/cosX/sinY/cosY/sinZ/cosZ`
+//! plus its `_hasShear` boolean. (Previously inlined per-iteration
+//! because of the now-defunct 16-slot per-variation buffer ceiling;
+//! the packed-variation-params layout removes that constraint.)
 //!
 //! Body factors cleanly through outer multiplier (cpp uses VVAR
 //! consistently on every output term, including the translate
@@ -63,8 +59,31 @@ pub static AFFINE3D: VariationDef = VariationDef {
     ],
     needs_transform: false,
     writes_color: false,
-    init_param_count: 0,
-    wgsl_init: None,
+    init_param_count: 7,
+    wgsl_init: Some(r#"
+fn init_affine3D(user: array<f32, 15>) -> array<f32, 7> {
+    let d2r = 0.017453292519943295;
+    let rx = user[6];
+    let ry = user[7];
+    let rz = user[8];
+    let shxy = user[9];
+    let shxz = user[10];
+    let shyx = user[11];
+    let shyz = user[12];
+    let shzx = user[13];
+    let shzy = user[14];
+    let has_shear = abs(shxy) + abs(shxz) + abs(shyx) + abs(shyz) + abs(shzx) + abs(shzy) > 1e-6;
+    var out: array<f32, 7>;
+    out[0] = sin(rx * d2r);                       // _sinX
+    out[1] = cos(rx * d2r);                       // _cosX
+    out[2] = sin(ry * d2r);                       // _sinY
+    out[3] = cos(ry * d2r);                       // _cosY
+    out[4] = sin(rz * d2r);                       // _sinZ
+    out[5] = cos(rz * d2r);                       // _cosZ
+    out[6] = select(0.0, 1.0, has_shear);         // _hasShear (0/1)
+    return out;
+}
+"#),
     state_count: 0,
     wgsl_state_init: None,
     needs_accum: false,
@@ -75,25 +94,19 @@ fn variation_affine3D(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f3
     let sx_p = get_param(xform_id, variation_id, 3u);
     let sy_p = get_param(xform_id, variation_id, 4u);
     let sz_p = get_param(xform_id, variation_id, 5u);
-    let rx = get_param(xform_id, variation_id, 6u);
-    let ry = get_param(xform_id, variation_id, 7u);
-    let rz = get_param(xform_id, variation_id, 8u);
     let shxy = get_param(xform_id, variation_id, 9u);
     let shxz = get_param(xform_id, variation_id, 10u);
     let shyx = get_param(xform_id, variation_id, 11u);
     let shyz = get_param(xform_id, variation_id, 12u);
     let shzx = get_param(xform_id, variation_id, 13u);
     let shzy = get_param(xform_id, variation_id, 14u);
-
-    let d2r = 0.017453292519943295;
-    let sinx = sin(rx * d2r);
-    let cosx = cos(rx * d2r);
-    let siny = sin(ry * d2r);
-    let cosy = cos(ry * d2r);
-    let sinz = sin(rz * d2r);
-    let cosz = cos(rz * d2r);
-
-    let has_shear = abs(shxy) + abs(shxz) + abs(shyx) + abs(shyz) + abs(shzx) + abs(shzy) > 1e-6;
+    let sinx = get_param(xform_id, variation_id, 15u);
+    let cosx = get_param(xform_id, variation_id, 16u);
+    let siny = get_param(xform_id, variation_id, 17u);
+    let cosy = get_param(xform_id, variation_id, 18u);
+    let sinz = get_param(xform_id, variation_id, 19u);
+    let cosz = get_param(xform_id, variation_id, 20u);
+    let has_shear = get_param(xform_id, variation_id, 21u) > 0.5;
 
     let x = p.x;
     let y = p.y;
@@ -120,25 +133,19 @@ fn variation_affine3D(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
     let sx_p = get_param(xform_id, variation_id, 3u);
     let sy_p = get_param(xform_id, variation_id, 4u);
     let sz_p = get_param(xform_id, variation_id, 5u);
-    let rx = get_param(xform_id, variation_id, 6u);
-    let ry = get_param(xform_id, variation_id, 7u);
-    let rz = get_param(xform_id, variation_id, 8u);
     let shxy = get_param(xform_id, variation_id, 9u);
     let shxz = get_param(xform_id, variation_id, 10u);
     let shyx = get_param(xform_id, variation_id, 11u);
     let shyz = get_param(xform_id, variation_id, 12u);
     let shzx = get_param(xform_id, variation_id, 13u);
     let shzy = get_param(xform_id, variation_id, 14u);
-
-    let d2r = 0.017453292519943295;
-    let sinx = sin(rx * d2r);
-    let cosx = cos(rx * d2r);
-    let siny = sin(ry * d2r);
-    let cosy = cos(ry * d2r);
-    let sinz = sin(rz * d2r);
-    let cosz = cos(rz * d2r);
-
-    let has_shear = abs(shxy) + abs(shxz) + abs(shyx) + abs(shyz) + abs(shzx) + abs(shzy) > 1e-6;
+    let sinx = get_param(xform_id, variation_id, 15u);
+    let cosx = get_param(xform_id, variation_id, 16u);
+    let siny = get_param(xform_id, variation_id, 17u);
+    let cosy = get_param(xform_id, variation_id, 18u);
+    let sinz = get_param(xform_id, variation_id, 19u);
+    let cosz = get_param(xform_id, variation_id, 20u);
+    let has_shear = get_param(xform_id, variation_id, 21u) > 0.5;
 
     let x = p.x;
     let y = p.y;
