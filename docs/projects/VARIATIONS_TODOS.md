@@ -226,32 +226,35 @@ Wire format unchanged across all of these — values still serialize as
 `f32`; only the UI control changed. The remaining work splits into the
 two buckets below.
 
-#### Enum (`Integer [0, N-1]` → `Enum`) — needs design decisions
+#### Enum candidates — deferred (not urgent)
 
-These weren't included in the mechanical batch because each has a
-question that needs answering before conversion.
+Wire format is unchanged after the Phase 3 conversions, so old
+configs round-trip cleanly through both the Boolean and Enum cases
+that landed. The two remaining candidates aren't urgent — they're
+both Integer sliders today, which is functional. Revisit when the
+underlying questions get answered.
 
 - `iconattractor_js.preset_id` — 17-mode selector for Field &
-  Golubitsky's symmetric-icon preset table. Deferred: the WGSL preset
+  Golubitsky's symmetric-icon preset table. Blocker: the WGSL preset
   table is just raw `(degree, a, b, g, o, l)` tuples with no
   per-preset comments, so labels would have to come from rendering
   each preset and matching against the named figures in *Symmetry in
   Chaos*. Degree-based labels (5 presets share `degree=5`, 6 share
   `degree=3`) wouldn't disambiguate enough to be worth the
   conversion. Plain numeric `Preset 0..16` (still as Integer) is
-  honestly more useful than a dropdown of `D5 #1, D5 #2, …`. Revisit
-  once someone renders the 17 presets and picks book-derived names.
-  See
+  honestly more useful than a dropdown of `D5 #1, D5 #2, …`.
+  Revisit once someone renders the 17 presets and picks book-derived
+  names. See
   [iconattractor_misc.rs](../../src/variations/defs/iconattractor_misc.rs).
 - `subflame_wf.color_mode` — declared `Integer` with `[-1, 4]` range,
   6-mode color-handling selector: -1 = Off (default), 0 = Direct
   (overwrite parent's `vc` with subflame's color), 1-4 = JWildfire's
-  CM_RED/GREEN/BLUE/BRIGHTNESS modes. Two issues: the `-1` baseline
-  is awkward for `Enum` (which expects `[0, N-1]`); and modes 1-4 are
+  CM_RED/GREEN/BLUE/BRIGHTNESS modes. Blockers: the `-1` baseline is
+  awkward for `Enum` (which expects `[0, N-1]`); and modes 1-4 are
   currently declared but **silently no-op'd** (only Off and Direct
-  are implemented). Either finish the port for 1-4 or drop them from
-  the range. Remapping to `0 = Off, 1 = Direct, ...` would change the
-  wire format and need a legacy_import shim. See
+  are implemented). Revisit when either CM_* gets implemented (and
+  the range can stay) or we decide to shrink the range to `[-1, 0]`
+  and document the no-op'd modes as removed. See
   [subflame.rs](../../src/variations/defs/subflame.rs).
 
 #### Float-threshold dispatch — keep as Float (or add legacy_import shim)
