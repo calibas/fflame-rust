@@ -1528,117 +1528,49 @@ impl ShaderBuilder {
         code.push_str("    var result = vec3<f32>(0.0, 0.0, 0.0);\n\n");
 
         for (name, idx, info) in &normal_variations {
-            // Special inline implementations for Z-only variations
-            match name.as_str() {
-                "zcone" => {
-                    if use_inlined {
-                        code.push_str(&format!(
-                            "    // {}: {} (NORMAL - Z-only - INLINED)\n\
-                             \x20   {{\n\
-                             \x20       let w = get_inlined_var_weight(xform_id, {}u);\n\
-                             \x20       if (w != 0.0) {{\n\
-                             \x20           let r = length(temp.xy);\n\
-                             \x20           result.z += w * r;\n\
-                             \x20       }}\n\
-                             \x20   }}\n\n",
-                            idx, info.display_name, idx
-                        ));
-                    } else {
-                        code.push_str(&format!(
-                            "    // {}: {} (NORMAL - Z-only)\n\
-                             \x20   if (xform.variations[{}] != 0.0) {{\n\
-                             \x20       let r = length(temp.xy);\n\
-                             \x20       result.z += xform.variations[{}] * r;\n\
-                             \x20   }}\n\n",
-                            idx, info.display_name, idx, idx
-                        ));
-                    }
-                }
-                "zscale" => {
-                    if use_inlined {
-                        code.push_str(&format!(
-                            "    // {}: {} (NORMAL - Z-only - INLINED)\n\
-                             \x20   {{\n\
-                             \x20       let w = get_inlined_var_weight(xform_id, {}u);\n\
-                             \x20       if (w != 0.0) {{\n\
-                             \x20           result.z += w * temp.z;\n\
-                             \x20       }}\n\
-                             \x20   }}\n\n",
-                            idx, info.display_name, idx
-                        ));
-                    } else {
-                        code.push_str(&format!(
-                            "    // {}: {} (NORMAL - Z-only)\n\
-                             \x20   if (xform.variations[{}] != 0.0) {{\n\
-                             \x20       result.z += xform.variations[{}] * temp.z;\n\
-                             \x20   }}\n\n",
-                            idx, info.display_name, idx, idx
-                        ));
-                    }
-                }
-                "ztranslate" => {
-                    if use_inlined {
-                        code.push_str(&format!(
-                            "    // {}: {} (NORMAL - Z-only - INLINED)\n\
-                             \x20   {{\n\
-                             \x20       let w = get_inlined_var_weight(xform_id, {}u);\n\
-                             \x20       if (w != 0.0) {{\n\
-                             \x20           result.z += w;\n\
-                             \x20       }}\n\
-                             \x20   }}\n\n",
-                            idx, info.display_name, idx
-                        ));
-                    } else {
-                        code.push_str(&format!(
-                            "    // {}: {} (NORMAL - Z-only)\n\
-                             \x20   if (xform.variations[{}] != 0.0) {{\n\
-                             \x20       result.z += xform.variations[{}];\n\
-                             \x20   }}\n\n",
-                            idx, info.display_name, idx, idx
-                        ));
-                    }
-                }
-                _ => {
-                    // Standard variation with function call
-                    let mut args = String::from("temp");
-                    // needs_accum: pass current 3D `result` so the variation
-                    // can read the running accumulator (cpp's FPx/FPy/FPz).
-                    if info.needs_accum {
-                        args.push_str(", result");
-                    }
-                    if !info.parameters.is_empty() || info.needs_transform {
-                        args.push_str(&format!(", xform_id, {}u", idx));
-                    }
-                    if info.needs_rng {
-                        args.push_str(", rng");
-                    }
-                    if info.writes_color {
-                        args.push_str(", vc");
-                    }
-                    let call = format!("{}({})", info.wgsl_function, args);
+            let _ = name;
+            // Standard variation with function call. (zcone, zscale,
+            // ztranslate previously had hand-inlined special cases here;
+            // they were removed because the WGSL function bodies
+            // already produce equivalent math under the standard
+            // `result += w · variation(p)` dispatch.)
+            let mut args = String::from("temp");
+            // needs_accum: pass current 3D `result` so the variation
+            // can read the running accumulator (cpp's FPx/FPy/FPz).
+            if info.needs_accum {
+                args.push_str(", result");
+            }
+            if !info.parameters.is_empty() || info.needs_transform {
+                args.push_str(&format!(", xform_id, {}u", idx));
+            }
+            if info.needs_rng {
+                args.push_str(", rng");
+            }
+            if info.writes_color {
+                args.push_str(", vc");
+            }
+            let call = format!("{}({})", info.wgsl_function, args);
 
-                    // Use inlined weights when available
-                    if use_inlined {
-                        code.push_str(&format!(
-                            "    // {}: {} (NORMAL - INLINED)\n\
-                             \x20   {{\n\
-                             \x20       let w = get_inlined_var_weight(xform_id, {}u);\n\
-                             \x20       if (w != 0.0) {{\n\
-                             \x20           result += w * {};\n\
-                             \x20       }}\n\
-                             \x20   }}\n\n",
-                            idx, info.display_name, idx, call
-                        ));
-                    } else {
-                        code.push_str(&format!(
-                            "    // {}: {} (NORMAL)\n\
-                             \x20   if (xform.variations[{}] != 0.0) {{\n\
-                             \x20       result += xform.variations[{}] * {};\n\
-                             \x20   }}\n\n",
-                            idx, info.display_name, idx, idx, call
-                        ));
-                    }
-                }
+            // Use inlined weights when available
+            if use_inlined {
+                code.push_str(&format!(
+                    "    // {}: {} (NORMAL - INLINED)\n\
+                     \x20   {{\n\
+                     \x20       let w = get_inlined_var_weight(xform_id, {}u);\n\
+                     \x20       if (w != 0.0) {{\n\
+                     \x20           result += w * {};\n\
+                     \x20       }}\n\
+                     \x20   }}\n\n",
+                    idx, info.display_name, idx, call
+                ));
+            } else {
+                code.push_str(&format!(
+                    "    // {}: {} (NORMAL)\n\
+                     \x20   if (xform.variations[{}] != 0.0) {{\n\
+                     \x20       result += xform.variations[{}] * {};\n\
+                     \x20   }}\n\n",
+                    idx, info.display_name, idx, idx, call
+                ));
             }
         }
 
@@ -1647,45 +1579,35 @@ impl ShaderBuilder {
             code.push_str("    // Phase 4: Post-variations (modify output)\n\n");
 
             for (name, idx, info) in &post_variations {
-                // Post-variations directly modify result (NOT weighted sum!)
-                match name.as_str() {
-                    "flatten" => {
-                        // Flatten sets Z to zero (Apophysis: FPz := 0)
-                        code.push_str(&format!(
-                            "    // {}: {} (POST - Z-only)\n\
-                             \x20   if (xform.variations[{}] != 0.0) {{\n\
-                             \x20       result.z = 0.0;\n\
-                             \x20   }}\n\n",
-                            idx, info.display_name, idx
-                        ));
-                    }
-                    _ => {
-                        // Generic post-variations (rotation, post_bwraps, etc.)
-                        let mut params = String::from("result");
-                        // needs_accum: in post-phase, cpp's FP* is `result`.
-                        if info.needs_accum {
-                            params.push_str(", result");
-                        }
-
-                        if !info.parameters.is_empty() || info.needs_transform {
-                            params.push_str(&format!(", xform_id, {}u", idx));
-                        }
-                        if info.needs_rng {
-                            params.push_str(", rng");
-                        }
-                        if info.writes_color {
-                            params.push_str(", vc");
-                        }
-
-                        code.push_str(&format!(
-                            "    // {}: {} (POST)\n\
-                             \x20   if (xform.variations[{}] != 0.0) {{\n\
-                             \x20       result = {}({});\n\
-                             \x20   }}\n\n",
-                            idx, info.display_name, idx, info.wgsl_function, params
-                        ));
-                    }
+                let _ = name;
+                // Post-variations directly modify result (NOT weighted sum!).
+                // (flatten previously had a hand-inlined special case here;
+                // it was removed because variation_flatten's body already
+                // produces equivalent math under the standard
+                // `result = variation(result)` dispatch.)
+                let mut params = String::from("result");
+                // needs_accum: in post-phase, cpp's FP* is `result`.
+                if info.needs_accum {
+                    params.push_str(", result");
                 }
+
+                if !info.parameters.is_empty() || info.needs_transform {
+                    params.push_str(&format!(", xform_id, {}u", idx));
+                }
+                if info.needs_rng {
+                    params.push_str(", rng");
+                }
+                if info.writes_color {
+                    params.push_str(", vc");
+                }
+
+                code.push_str(&format!(
+                    "    // {}: {} (POST)\n\
+                     \x20   if (xform.variations[{}] != 0.0) {{\n\
+                     \x20       result = {}({});\n\
+                     \x20   }}\n\n",
+                    idx, info.display_name, idx, info.wgsl_function, params
+                ));
             }
         }
 
