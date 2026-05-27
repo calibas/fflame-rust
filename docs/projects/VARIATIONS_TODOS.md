@@ -230,9 +230,16 @@ These weren't included in the mechanical batch because each has a
 question that needs answering before conversion.
 
 - `iconattractor_js.preset_id` — 17-mode selector for Field &
-  Golubitsky's symmetric-icon preset table. Mechanically convertible,
-  but labels would need shape descriptors per preset (read the WGSL
-  or the original paper). See
+  Golubitsky's symmetric-icon preset table. Deferred: the WGSL preset
+  table is just raw `(degree, a, b, g, o, l)` tuples with no
+  per-preset comments, so labels would have to come from rendering
+  each preset and matching against the named figures in *Symmetry in
+  Chaos*. Degree-based labels (5 presets share `degree=5`, 6 share
+  `degree=3`) wouldn't disambiguate enough to be worth the
+  conversion. Plain numeric `Preset 0..16` (still as Integer) is
+  honestly more useful than a dropdown of `D5 #1, D5 #2, …`. Revisit
+  once someone renders the 17 presets and picks book-derived names.
+  See
   [iconattractor_misc.rs](../../src/variations/defs/iconattractor_misc.rs).
 - `butterfly_fay.outer_mode`, `butterfly_fay.inner_mode` — 6-mode
   output-formula selector. Shares the spread-formula family with
