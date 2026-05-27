@@ -59,6 +59,22 @@ REPLACEMENTS: list[tuple[str, str, str, int]] = [
      '"Picks one of 10 radial formulas (0-9)."',
      '"Radial-formula family. Each option applies a different geometric term inside the `sqrt(rhosq + …)` that determines the output radius."', 1),
 
+    # butterfly_fay outer_mode + inner_mode (same shared family)
+    ("butterfly_fay_misc.rs",
+     '"Output mode for points outside the curve. 0-5; same enum as `inner_mode`."',
+     '"Output mode for points outside the butterfly curve."', 1),
+    ("butterfly_fay_misc.rs",
+     '"Output mode for points inside the curve. 0-5; same enum as `outer_mode`."',
+     '"Output mode for points inside the butterfly curve."', 1),
+
+    # rhodonea inner_mode + outer_mode (shared family + asymmetric masks)
+    ("rhodonea_misc.rs",
+     '"Behavior when input is inside the rose curve (`|rin| ≤ |r|`). 0=normal (point on curve), 1=spread linear, 2=spread radial-mirror, 3=spread axis-abs, 4=spread half-add, 5=mask inside (hide → collapses to origin), 6=mask outside (pass-through original input)."',
+     '"Behavior for points inside the rose curve (`|rin| ≤ |r|`)."', 1),
+    ("rhodonea_misc.rs",
+     '"Behavior when input is outside the rose curve (`|rin| > |r|`). 0-4 use the same spread formulas as `inner_mode` (with `outer_spread` instead of `inner_spread`); 5=mask inside (pass-through original input), 6=mask outside (hide → collapses to origin). Note the mask semantics on 5/6 are inverted relative to `inner_mode`."',
+     '"Behavior for points outside the rose curve (`|rin| > |r|`). Modes 0-4 mirror the spread formulas of `inner_mode` (using `outer_spread` instead). The mask modes (Pass Through / Hide) have the opposite ordering from `inner_mode` — each label describes what happens at *this* side, so the underlying inversion is invisible to the user."', 1),
+
     # ---- Booleans ----
     ("apo_misc13.rs",
      '"Distance formula selector: 0 = product `sqrt(x²·y²)`, 1 = Euclidean `sqrt(x² + y²)`."',

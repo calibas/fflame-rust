@@ -211,12 +211,14 @@ most candidates the mapping is mechanical:
 **Status:**
 - **35 binary `Integer [0, 1]` → `Boolean`** conversions landed in
   commit `4aa4290` (full list in `scripts/convert_int_to_bool.py`).
-- **11 multi-mode `Integer [0, N-1]` → `Enum`** conversions landed in
-  commits `567e860` and follow-up (full list in
+- **15 multi-mode `Integer [0, N-1]` → `Enum`** conversions landed in
+  commits `567e860` and follow-ups (full list in
   `scripts/convert_int_to_enum.py`): `falloff2.type` + pre/post
   variants, `atan.mode`, `post_axis_symmetry_wf.axis`,
   `pre_wave3D_wf.axis`, `mobius_strip.width_mode/radial_mode`,
-  `spirograph3D.mode`, `klein_group.recipe`, `hole2.shape`.
+  `spirograph3D.mode`, `klein_group.recipe`, `hole2.shape`,
+  `butterfly_fay.outer_mode/inner_mode`,
+  `rhodonea.outer_mode/inner_mode`.
 - Description cleanup (drop now-redundant "0 = X, 1 = Y" enumerations)
   landed in `scripts/cleanup_enum_bool_descriptions.py`.
 
@@ -241,18 +243,6 @@ question that needs answering before conversion.
   once someone renders the 17 presets and picks book-derived names.
   See
   [iconattractor_misc.rs](../../src/variations/defs/iconattractor_misc.rs).
-- `butterfly_fay.outer_mode`, `butterfly_fay.inner_mode` — 6-mode
-  output-formula selector. Shares the spread-formula family with
-  `rhodonea.inner_mode/outer_mode` (modes 0-4 match exactly); best
-  done together for consistent labels. See
-  [butterfly_fay_misc.rs](../../src/variations/defs/butterfly_fay_misc.rs).
-- `rhodonea.inner_mode`, `rhodonea.outer_mode` — 7-mode spread/mask
-  behavior selector. Same 0-4 spread family as `butterfly_fay`; modes
-  5/6 are mask hide/pass-through with **inverted semantics between
-  inner and outer** (5 hides for inner / passes for outer; 6 passes
-  for inner / hides for outer). Need two separate enum variant lists
-  to label each correctly. See
-  [rhodonea_misc.rs](../../src/variations/defs/rhodonea_misc.rs).
 - `jac_asn.jac_asn_type` — 8-mode selector that's really
   `2 × 4` (function-kind × swap-modulus-and-phi). Decision: convert
   to a flat 8-variant enum to match the wire format, or split into

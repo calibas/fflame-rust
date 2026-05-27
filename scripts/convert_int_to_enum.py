@@ -74,6 +74,28 @@ CONVERSIONS = [
     ("standalone_exotics.rs", "HOLE2", "shape",
      ["Linear", "Constant", "Petals", "Dipolar", "Quadratic", "Spiked",
       "Cardioid", "Half-Petals", "Nested Sin", "Harmonic"]),
+
+    # butterfly_fay outer_mode = inner_mode (6 modes; shared spread-formula
+    # family with rhodonea modes 0-4, plus a "Linear Input" mode 5 unique
+    # to butterfly_fay).
+    ("butterfly_fay_misc.rs", "BUTTERFLY_FAY", "outer_mode",
+     ["On Curve", "Radial Stretch", "Mirror Blend", "Mirror Add",
+      "Half + Offset", "Linear Input"]),
+    ("butterfly_fay_misc.rs", "BUTTERFLY_FAY", "inner_mode",
+     ["On Curve", "Radial Stretch", "Mirror Blend", "Mirror Add",
+      "Half + Offset", "Linear Input"]),
+
+    # rhodonea outer_mode (7 modes; modes 0-4 shared with butterfly_fay,
+    # mode 5 = pass-through, mode 6 = hide).
+    ("rhodonea_misc.rs", "RHODONEA", "outer_mode",
+     ["On Curve", "Radial Stretch", "Mirror Blend", "Mirror Add",
+      "Half + Offset", "Pass Through", "Hide"]),
+
+    # rhodonea inner_mode (7 modes; mode 5/6 swapped vs outer_mode because
+    # the underlying mask semantics are inverted on the inner side).
+    ("rhodonea_misc.rs", "RHODONEA", "inner_mode",
+     ["On Curve", "Radial Stretch", "Mirror Blend", "Mirror Add",
+      "Half + Offset", "Hide", "Pass Through"]),
 ]
 
 
