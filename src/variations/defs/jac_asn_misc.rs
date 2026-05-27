@@ -55,7 +55,7 @@ pub static JAC_ASN: VariationDef = VariationDef {
     parameters: &[
         param!("jac_asn_kr", "Modulus Real", unlimited_float, 0.5, -10.0, 10.0, "Real part of the elliptic modulus k. Together with `jac_asn_ki` defines the complex modulus used by the Jacobi inverse."),
         param!("jac_asn_ki", "Modulus Imag", unlimited_float, 0.0, -10.0, 10.0, "Imaginary part of the elliptic modulus k."),
-        param!("jac_asn_type", "Type", int, 1.0, 0.0, 7.0, "Which inverse to compute (0-7). 0/4 = invdn (elliptic F), 1/5 = inverse sn, 2/6 = inverse cn, 3/7 = inverse sc. Types > 3 swap the modulus and phi after the initial branch."),
+        param!("jac_asn_type", "Type", enum, 1, &["Inverse DN", "Inverse SN", "Inverse CN", "Inverse SC", "Inverse DN (swap)", "Inverse SN (swap)", "Inverse CN (swap)", "Inverse SC (swap)"], "Which inverse Jacobi function to compute. The `(swap)` variants additionally swap the modulus and phi after the initial branch — same function-kind axis, different parameter roles."),
     ],
     needs_transform: true,
     writes_color: false,

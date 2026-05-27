@@ -96,6 +96,15 @@ CONVERSIONS = [
     ("rhodonea_misc.rs", "RHODONEA", "inner_mode",
      ["On Curve", "Radial Stretch", "Mirror Blend", "Mirror Add",
       "Half + Offset", "Hide", "Pass Through"]),
+
+    # jac_asn function-kind × swap-modulus selector (8 modes: 4 inverse
+    # Jacobi functions × 2 swap modes). Flat 8-variant enum to preserve
+    # wire-format compatibility — could split into two separate params
+    # (4-enum + bool) but that requires a legacy_import shim.
+    ("jac_asn_misc.rs", "JAC_ASN", "jac_asn_type",
+     ["Inverse DN", "Inverse SN", "Inverse CN", "Inverse SC",
+      "Inverse DN (swap)", "Inverse SN (swap)", "Inverse CN (swap)",
+      "Inverse SC (swap)"]),
 ]
 
 

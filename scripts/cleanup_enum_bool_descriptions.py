@@ -75,6 +75,11 @@ REPLACEMENTS: list[tuple[str, str, str, int]] = [
      '"Behavior when input is outside the rose curve (`|rin| > |r|`). 0-4 use the same spread formulas as `inner_mode` (with `outer_spread` instead of `inner_spread`); 5=mask inside (pass-through original input), 6=mask outside (hide → collapses to origin). Note the mask semantics on 5/6 are inverted relative to `inner_mode`."',
      '"Behavior for points outside the rose curve (`|rin| > |r|`). Modes 0-4 mirror the spread formulas of `inner_mode` (using `outer_spread` instead). The mask modes (Pass Through / Hide) have the opposite ordering from `inner_mode` — each label describes what happens at *this* side, so the underlying inversion is invisible to the user."', 1),
 
+    # jac_asn.jac_asn_type — kept flat 8-variant enum to preserve wire format
+    ("jac_asn_misc.rs",
+     '"Which inverse to compute (0-7). 0/4 = invdn (elliptic F), 1/5 = inverse sn, 2/6 = inverse cn, 3/7 = inverse sc. Types > 3 swap the modulus and phi after the initial branch."',
+     '"Which inverse Jacobi function to compute. The `(swap)` variants additionally swap the modulus and phi after the initial branch — same function-kind axis, different parameter roles."', 1),
+
     # ---- Booleans ----
     ("apo_misc13.rs",
      '"Distance formula selector: 0 = product `sqrt(x²·y²)`, 1 = Euclidean `sqrt(x² + y²)`."',
