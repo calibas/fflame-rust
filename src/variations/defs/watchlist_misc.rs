@@ -210,6 +210,13 @@ fn variation_voron(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> 
 }
 "#,
     wgsl_3d: Some(r#"
+fn voron_noise(x_seed: i32) -> f32 {
+    var n = x_seed;
+    n = (n << 13) ^ n;
+    let v = n * (n * n * 15731 + 789221) + 1376312589;
+    return f32(v & 0x7fffffff) * 4.6566128752457969e-10;
+}
+
 fn variation_voron(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let k = get_param(xform_id, variation_id, 0u);
     let step = get_param(xform_id, variation_id, 1u);
