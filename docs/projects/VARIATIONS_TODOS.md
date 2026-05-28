@@ -104,7 +104,6 @@ the answer is known — that's the convention for "unknown" per
 - `nPolar` ([apo_misc7.rs](../../src/variations/defs/apo_misc7.rs))
 - `hyperbolicellipse` ([apo_misc8.rs](../../src/variations/defs/apo_misc8.rs))
 - `invsquircular` ([apo_misc11.rs](../../src/variations/defs/apo_misc11.rs))
-- `rings` ([apo_misc12.rs](../../src/variations/defs/apo_misc12.rs))
 - `pre_spin_z` ([spin_phase.rs](../../src/variations/defs/spin_phase.rs))
 - `post_spin_z` ([spin_phase.rs](../../src/variations/defs/spin_phase.rs))
 - `pre_blur3D` ([apo_misc15.rs](../../src/variations/defs/apo_misc15.rs))
@@ -560,6 +559,29 @@ canon. For non-`_wf` variants (Apo-side, mostly), Apo 7X is canon.
 - **`epispiral`** (plain, not `_wf`) — Apo 7X's
   `varEpispiral.pas` uses standard `atan2(FTy, FTx)`; our port
   matches. Author Joel Faber (added to authors block).
+- **`power`** ([apo_misc.rs](../../src/variations/defs/apo_misc.rs))
+  — one of Scott Draves's original 27 from the *Fractal Flames*
+  paper. flam3's `var19_power` and JWildfire's `PowerFunc.java`
+  both use the swapped-angle convention via flam3's
+  `precalc_sina = x/r` / `precalc_cosa = y/r` (which are sin/cos
+  of `atan2(x, y)`, not the standard angle) and Java's
+  equivalent `getPrecalcSinA()` / `getPrecalcCosA()`. Our port
+  produces `r^sin(a) · (cos a, sin a)` where `a = atan2(x, y)`,
+  matching both upstreams. The TODO's earlier "cpp_power(x,y) ≡
+  java_power(y,x)" claim was wrong — the swapped variable names
+  in flam3 hide that the underlying convention is identical.
+- **`rings`** ([apo_misc12.rs](../../src/variations/defs/apo_misc12.rs))
+  — also one of Scott Draves's original 27. flam3's `var21_rings`
+  and JWildfire's `RingsFunc.java` both produce output
+  `(r · cosA, r · sinA)` where `cosA = y/r0`, `sinA = x/r0` in
+  their swapped-angle precalc convention. Our `(r · y/r0,
+  r · x/r0)` matches both. The doc-comment's earlier claim about
+  "cpp's xy-output swap (Java uses cosA for x, sinA for y; cpp
+  swaps)" was misleading: Java does use `cosA` for x, but with
+  the swapped precalc `cosA = y/r0`, so Java output equals our
+  output. No swap relative to upstream — the "swap" is just the
+  canonical math of this variation. Author Scott Draves added to
+  the file.
 
 #### Fixed — converter bug, matches Java now
 
@@ -582,16 +604,9 @@ canon. For non-`_wf` variants (Apo-side, mostly), Apo 7X is canon.
 
 #### Pending research
 
-The remaining four are harder — they're not standard Apo 7X plugins,
-and Apo 7X core variations like `power`/`rings` live inline in the
-Pascal renderer, not in separate `.pas` files. Need to consult
-non-Apo-7X canonical sources per variation:
+The remaining two aren't standard Apo 7X plugins, so they need
+non-Apo-7X canonical sources:
 
-- **`power`** ([apo_misc.rs](../../src/variations/defs/apo_misc.rs)) —
-  one of Scott Draves's original 27 from the *Fractal Flames* paper.
-  Canon = flam3 source ([scottdraves/flam3](https://github.com/scottdraves/flam3)).
-- **`rings`** ([apo_misc12.rs](../../src/variations/defs/apo_misc12.rs)) —
-  also from the original 27. Canon = flam3.
 - **`flower_db`** ([apo_misc9.rs:273](../../src/variations/defs/apo_misc9.rs#L273))
   — DarkBeam plugin (`_db` suffix). Not in Apo 7X repo. Canon = DarkBeam's
   original deviantart post (hard to locate) or use JWildfire as
