@@ -1398,6 +1398,7 @@ impl App {
                                 Ok(png_data) => {
                                     // Open file dialog
                                     if let Some(path) = rfd::FileDialog::new()
+                                        .set_parent(self.window.as_ref())
                                         .add_filter("PNG Image", &["png"])
                                         .set_file_name("fractal.png")
                                         .save_file()

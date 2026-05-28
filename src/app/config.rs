@@ -280,6 +280,7 @@ impl App {
                     Ok(png_data) => {
                         // Open file dialog
                         if let Some(path) = rfd::FileDialog::new()
+                            .set_parent(self.window.as_ref())
                             .add_filter("PNG Image", &["png"])
                             .set_file_name("fractal.png")
                             .save_file()
@@ -328,6 +329,12 @@ impl App {
 
         // Clone the Arc for the background thread
         let progress_arc = Arc::clone(&self.png_export_progress);
+        // Clone the window handle so the dialog opened from the
+        // background thread can parent itself to the main window.
+        // Without this the save dialog can appear behind the app
+        // window on Windows and freeze interaction (modal but
+        // hidden).
+        let window_for_dialog = Arc::clone(&self.window);
 
         // Spawn background thread
         std::thread::spawn(move || {
@@ -428,6 +435,7 @@ impl App {
 
                     // Open file dialog (note: this blocks until user responds)
                     if let Some(path) = rfd::FileDialog::new()
+                        .set_parent(window_for_dialog.as_ref())
                         .add_filter("PNG Image", &["png"])
                         .set_file_name("fractal.png")
                         .save_file()

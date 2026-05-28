@@ -8,6 +8,8 @@ pub fn render_menu_bar(
     menu_actions: &mut MenuActions,
     menu_state: &MenuState,
     save_online_dialog_state: &mut super::save_online_dialog::SaveOnlineDialogState,
+    #[cfg(not(target_arch = "wasm32"))]
+    window: &winit::window::Window,
 ) {
     #[allow(deprecated)]
     egui::Panel::top("menu_bar").show(ctx, |ui| {
@@ -387,6 +389,7 @@ pub fn render_menu_bar(
                                 #[cfg(not(target_arch = "wasm32"))]
                                 {
                                     rfd::MessageDialog::new()
+                                        .set_parent(window)
                                         .set_title("Font Required")
                                         .set_description(&format!(
                                             "The {} language requires additional fonts that are not installed.\n\n\

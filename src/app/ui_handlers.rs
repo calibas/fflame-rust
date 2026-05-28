@@ -60,6 +60,7 @@ impl App {
             #[cfg(not(target_arch = "wasm32"))]
             {
                 if let Some(path) = rfd::FileDialog::new()
+                    .set_parent(self.window.as_ref())
                     .add_filter("Fractal Flame Config", &["fflame"])
                     .set_file_name("fractal.fflame")
                     .save_file()
@@ -461,6 +462,7 @@ impl App {
             {
                 // Desktop: synchronous file dialog
                 if let Some(path) = rfd::FileDialog::new()
+                    .set_parent(self.window.as_ref())
                     .add_filter("Palette", &["palette"])
                     .set_file_name("palette.palette")
                     .save_file()
@@ -575,6 +577,7 @@ impl App {
             {
                 // Desktop: synchronous file dialog
                 if let Some(path) = rfd::FileDialog::new()
+                    .set_parent(self.window.as_ref())
                     .add_filter("Palette", &["palette"])
                     .pick_file()
                 {
@@ -644,6 +647,7 @@ impl App {
             #[cfg(not(target_arch = "wasm32"))]
             {
                 if let Some(path) = rfd::FileDialog::new()
+                    .set_parent(self.window.as_ref())
                     .add_filter("Fractal Flame Config", &["fflame"])
                     .pick_file()
                 {
@@ -717,6 +721,7 @@ impl App {
             {
                 // Desktop: synchronous file dialog
                 if let Some(path) = rfd::FileDialog::new()
+                    .set_parent(self.window.as_ref())
                     .add_filter("Fractal Flame Config", &["fflame"])
                     .pick_file()
                 {
@@ -775,6 +780,7 @@ impl App {
             {
                 // Desktop: synchronous file dialog
                 if let Some(path) = rfd::FileDialog::new()
+                    .set_parent(self.window.as_ref())
                     .add_filter("Apophysis Flame", &["flame"])
                     .pick_file()
                 {
@@ -840,6 +846,7 @@ impl App {
             {
                 // Desktop: synchronous file dialog
                 if let Some(path) = rfd::FileDialog::new()
+                    .set_parent(self.window.as_ref())
                     .add_filter("Fractal Flame Config", &["fflame"])
                     .pick_file()
                 {
@@ -864,6 +871,7 @@ impl App {
             {
                 // Desktop: synchronous file dialog
                 if let Some(path) = rfd::FileDialog::new()
+                    .set_parent(self.window.as_ref())
                     .add_filter("Audio Files", &["mp3", "wav", "flac", "ogg"])
                     .pick_file()
                 {
@@ -907,6 +915,7 @@ impl App {
             #[cfg(not(target_arch = "wasm32"))]
             {
                 if let Some(path) = rfd::FileDialog::new()
+                    .set_parent(self.window.as_ref())
                     .add_filter("Signal Files", &["signal"])
                     .pick_file()
                 {
@@ -930,6 +939,7 @@ impl App {
             {
                 let default_name = format!("{}.signal", signal_name);
                 if let Some(path) = rfd::FileDialog::new()
+                    .set_parent(self.window.as_ref())
                     .add_filter("Signal Files", &["signal"])
                     .set_file_name(&default_name)
                     .save_file()
