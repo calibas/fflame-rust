@@ -10,8 +10,11 @@
 //!   - amplitude_z (default 0.5)
 //!   - phase
 //!   - damping_z (default 0; clamped to ≥0 in cpp setter — preserved)
-//!   - color_scale, color_offset (skipped per writes_color compromise)
-//!   - direct_color (int, color writes skipped)
+//!   - color_scale, color_offset (drive the color write when
+//!     `direct_color` is on)
+//!   - direct_color (int): when on, writes `TC = clamp(acos(rnd) ·
+//!     color_scale + color_offset, 0, 1)` — uses the original signed
+//!     `rnd` (not the `acos(-rnd)` branch used for the radius).
 //!
 //! No init slots. Body factors cleanly through outer multiplier.
 //! RNG (4 calls/iter for ang, rnd, branch select, count). Full3D —
@@ -42,21 +45,24 @@ pub static WAVEBLUR_WF: VariationDef = VariationDef {
         param!("amplitude_z", "Amplitude Z", unlimited_float, 0.5, -10.0, 10.0, "Z-axis wave amplitude (3D only). 0 zeroes the Z output."),
         param!("phase", "Phase", unlimited_float, 0.0, -10.0, 10.0, "Phase offset added to the wave-radius numerator."),
         param!("damping_z", "Damping Z", unlimited_float, 0.0, 0.0, 10.0, "Exponential damping rate on Z (clamped ≥ 0 in upstream). 0 disables damping."),
-        param!("color_scale", "Color Scale", unlimited_float, 0.5, -10.0, 10.0, "Color register scale — unused since the color write is dropped. Preserved for cpp parity."),
-        param!("color_offset", "Color Offset", unlimited_float, 0.0, -10.0, 10.0, "Color register offset — unused. Preserved for cpp parity."),
-        param!("direct_color", "Direct Color", bool, false, "Enable direct-color writes. (Dropped in this port — preserved for cpp parity.)"),
+        param!("color_scale", "Color Scale", unlimited_float, 0.5, -10.0, 10.0, "Color register multiplier in `clamp(acos(rnd) · color_scale + color_offset, 0, 1)`. Active when `direct_color` is on."),
+        param!("color_offset", "Color Offset", unlimited_float, 0.0, -10.0, 10.0, "Color register offset added after the `acos(rnd) · color_scale` term."),
+        param!("direct_color", "Direct Color", bool, false, "When on, writes the color register from `acos(rnd)` scaled by `color_scale` and shifted by `color_offset`, clamped to `[0, 1]`. Visible color requires the transform's Direct Color slider > 0."),
     ],
     needs_transform: true,
-    writes_color: false,
+    writes_color: true,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
     needs_accum: false,
     wgsl_2d: r#"
-fn variation_waveblur_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
+fn variation_waveblur_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec2<f32> {
     let count_p = max(i32(get_param(xform_id, variation_id, 0u)), 1);
     let phase = get_param(xform_id, variation_id, 2u);
+    let color_scale = get_param(xform_id, variation_id, 4u);
+    let color_offset = get_param(xform_id, variation_id, 5u);
+    let direct_color = i32(get_param(xform_id, variation_id, 6u));
     let w = transforms[xform_id].variations[variation_id];
     let inv_w = 1.0 / select(w, 1e-30, abs(w) < 1e-30);
     let pi = 3.14159265358979;
@@ -73,15 +79,23 @@ fn variation_waveblur_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: pt
     }
     let scale = 1.0 / (f32(count_p) * pi);
     r = r * scale;
+
+    if (direct_color != 0) {
+        *vc = clamp(acos(rnd) * color_scale + color_offset, 0.0, 1.0);
+    }
+
     return vec2<f32>(r * cos(ang), r * sin(ang));
 }
 "#,
     wgsl_3d: Some(r#"
-fn variation_waveblur_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
+fn variation_waveblur_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec3<f32> {
     let count_p = max(i32(get_param(xform_id, variation_id, 0u)), 1);
     let amplitude_z = get_param(xform_id, variation_id, 1u);
     let phase = get_param(xform_id, variation_id, 2u);
     let damping_z = get_param(xform_id, variation_id, 3u);
+    let color_scale = get_param(xform_id, variation_id, 4u);
+    let color_offset = get_param(xform_id, variation_id, 5u);
+    let direct_color = i32(get_param(xform_id, variation_id, 6u));
     let w = transforms[xform_id].variations[variation_id];
     let inv_w = 1.0 / select(w, 1e-30, abs(w) < 1e-30);
     let pi = 3.14159265358979;
@@ -98,6 +112,10 @@ fn variation_waveblur_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: pt
     }
     let scale = 1.0 / (f32(count_p) * pi);
     r = r * scale;
+
+    if (direct_color != 0) {
+        *vc = clamp(acos(rnd) * color_scale + color_offset, 0.0, 1.0);
+    }
 
     var nz = 0.0;
     if (abs(amplitude_z) > 1e-30) {

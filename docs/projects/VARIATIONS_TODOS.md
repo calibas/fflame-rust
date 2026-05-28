@@ -464,12 +464,12 @@ ports.
   (false) belief that #5/#11 were architectural.
   - `dc_carpet3D` — *done 2026-05-29* (proof-of-concept for the
     infrastructure being complete).
-  - `dc_cube` — flip + color body.
-  - `dc_cylinder` — flip + color body.
-  - `dc_cylinder2` — flip + color body.
-  - `dc_triangle` — flip + color body.
-  - `truchet`, `truchet2`, `waveblur_wf` — wire their existing
-    `direct_color` toggle parameters through to actual `*vc` writes.
+  - `dc_cube`, `dc_cylinder`, `dc_cylinder2`, `dc_triangle` —
+    *done 2026-05-29*.
+  - `truchet`, `waveblur_wf` — *done 2026-05-29*. (truchet2 was
+    listed here in the original TODO but turned out to have no
+    color logic at all in the cpp source — not actually a DC
+    compromise.)
 - **TC-read variations** (previously blocker #5):
   - `dc_ztransl` — reads `*vc` to compute Z displacement.
   - `pre_dcztransl` — pre-phase variant.

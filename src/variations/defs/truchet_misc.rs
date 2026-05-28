@@ -14,8 +14,10 @@
 //!   - rotation (radians)
 //!   - size (clamped [0.001, 10])
 //!   - seed
-//!   - direct_color (int 0/1) — TC color writes skipped per
-//!     writes_color compromise
+//!   - direct_color (int 0/1) — when on, writes `TC = clamp(r0, 0, 1)`
+//!     on the r0 arc and `TC = clamp(1 − r1, 0, 1)` on the r1 arc;
+//!     if both arcs fire in the same iteration the r1 write wins
+//!     (matches cpp's sequential branches).
 //!
 //! No init slots. Body has `scale = (cos(r) - sin(r)) / VVAR` plus
 //! unweighted `+= size · (x + floor(FTx))` output lines — uses
@@ -55,23 +57,24 @@ pub static TRUCHET: VariationDef = VariationDef {
         param!("rotation", "Rotation", unlimited_float, 0.0, -10.0, 10.0, "Pre-rotation angle applied to the input, in radians."),
         param!("size", "Size", unlimited_float, 1.0, 0.001, 10.0, "Output scale factor for each cell (clamped to [0.001, 10])."),
         param!("seed", "Seed", unlimited_float, 50.0, -1000.0, 1000.0, "Hash seed for the per-cell tile-type selection."),
-        param!("direct_color", "Direct Color", bool, false, "Enable direct-color writes. (The color write is dropped in this port — preserved for cpp parity.)"),
+        param!("direct_color", "Direct Color", bool, false, "When on, writes `clamp(r0, 0, 1)` to the color register on the r0 arc and `clamp(1 − r1, 0, 1)` on the r1 arc. Visible color requires the transform's Direct Color slider > 0."),
     ],
     needs_transform: true,
-    writes_color: false,
+    writes_color: true,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
     needs_accum: false,
     wgsl_2d: r#"
-fn variation_truchet(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
+fn variation_truchet(p: vec2<f32>, xform_id: u32, variation_id: u32, vc: ptr<function, f32>) -> vec2<f32> {
     let extended = i32(get_param(xform_id, variation_id, 0u));
     let n = clamp(get_param(xform_id, variation_id, 1u), 0.001, 2.0);
     let width = clamp(get_param(xform_id, variation_id, 2u), 0.001, 1.0);
     let tdeg = get_param(xform_id, variation_id, 3u);
     let size = clamp(get_param(xform_id, variation_id, 4u), 0.001, 10.0);
     let seed_p = get_param(xform_id, variation_id, 5u);
+    let direct_color = i32(get_param(xform_id, variation_id, 6u));
     let w = transforms[xform_id].variations[variation_id];
     let inv_w = 1.0 / select(w, 1e-30, abs(w) < 1e-30);
 
@@ -148,22 +151,29 @@ fn variation_truchet(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32
     if (abs(r0 - 0.5) / safe_rmax < 1.0) {
         ox = ox + size * cell_x;
         oy = oy + size * cell_y;
+        if (direct_color != 0) {
+            *vc = clamp(r0, 0.0, 1.0);
+        }
     }
     if (abs(r1 - 0.5) / safe_rmax < 1.0) {
         ox = ox + size * cell_x;
         oy = oy + size * cell_y;
+        if (direct_color != 0) {
+            *vc = clamp(1.0 - r1, 0.0, 1.0);
+        }
     }
     return vec2<f32>(ox * inv_w, oy * inv_w);
 }
 "#,
     wgsl_3d: Some(r#"
-fn variation_truchet(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
+fn variation_truchet(p: vec3<f32>, xform_id: u32, variation_id: u32, vc: ptr<function, f32>) -> vec3<f32> {
     let extended = i32(get_param(xform_id, variation_id, 0u));
     let n = clamp(get_param(xform_id, variation_id, 1u), 0.001, 2.0);
     let width = clamp(get_param(xform_id, variation_id, 2u), 0.001, 1.0);
     let tdeg = get_param(xform_id, variation_id, 3u);
     let size = clamp(get_param(xform_id, variation_id, 4u), 0.001, 10.0);
     let seed_p = get_param(xform_id, variation_id, 5u);
+    let direct_color = i32(get_param(xform_id, variation_id, 6u));
     let w = transforms[xform_id].variations[variation_id];
     let inv_w = 1.0 / select(w, 1e-30, abs(w) < 1e-30);
 
@@ -240,10 +250,16 @@ fn variation_truchet(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
     if (abs(r0 - 0.5) / safe_rmax < 1.0) {
         ox = ox + size * cell_x;
         oy = oy + size * cell_y;
+        if (direct_color != 0) {
+            *vc = clamp(r0, 0.0, 1.0);
+        }
     }
     if (abs(r1 - 0.5) / safe_rmax < 1.0) {
         ox = ox + size * cell_x;
         oy = oy + size * cell_y;
+        if (direct_color != 0) {
+            *vc = clamp(1.0 - r1, 0.0, 1.0);
+        }
     }
     return vec3<f32>(ox * inv_w, oy * inv_w, p.z);
 }
