@@ -1175,12 +1175,20 @@ impl EguiLayer {
                         // own Background content (tab bar buttons get hidden) but
                         // below floating windows on Order::Middle — keeps panels like
                         // Help drawn on top of the cover instead of behind it.
+                        // Full inflated panel rect/size — the cover sits at the
+                        // top of the leaf, so for pan/zoom math the relevant
+                        // size is the body+cover combined (i.e. the leaf's full
+                        // rect). Using these here makes drag and scroll behave
+                        // identically whether the mouse is in the body or the
+                        // cover strip — no scale discontinuity at the seam.
+                        let leaf_rect = leaf.rect;
+                        let leaf_size = leaf_rect.size();
                         egui::Area::new(egui::Id::new("viewport_tab_cover"))
                             .fixed_pos(tab_bar_rect.min)
                             .order(egui::Order::Background)
                             .interactable(true)
                             .show(ctx, |ui| {
-                                let (rect, _) = ui.allocate_exact_size(
+                                let (rect, response) = ui.allocate_exact_size(
                                     tab_bar_rect.size(),
                                     egui::Sense::click_and_drag(),
                                 );
@@ -1195,6 +1203,32 @@ impl EguiLayer {
                                     ui.painter().image(tid, rect, uv, egui::Color32::WHITE);
                                 } else {
                                     ui.painter().rect_filled(rect, 0.0, color);
+                                }
+
+                                // Forward pan/zoom input so the cover strip is
+                                // not a "dead zone" above the body. The
+                                // FractalViewport body inside the dock handles
+                                // input the same way; here we use the leaf's
+                                // full rect/size so scaling matches between the
+                                // two regions.
+                                if response.dragged_by(egui::PointerButton::Primary) {
+                                    panel_viewer::pan_fractal_view(
+                                        config_manager,
+                                        response.drag_delta(),
+                                        leaf_size,
+                                    );
+                                }
+                                if response.hovered() {
+                                    let scroll_delta = ui.input(|i| i.smooth_scroll_delta.y);
+                                    if scroll_delta.abs() > 0.1 {
+                                        panel_viewer::zoom_fractal_view(
+                                            config_manager,
+                                            scroll_delta,
+                                            response.hover_pos(),
+                                            leaf_rect,
+                                            leaf_size,
+                                        );
+                                    }
                                 }
                             });
                     }
