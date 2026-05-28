@@ -1887,6 +1887,17 @@ impl App {
                 // resets total_iterations each frame in overwrite mode,
                 // so this gate only matters as a fallback.
                 use_overwrite ||
+                // Fresh accumulator (e.g., right after a resize cleared
+                // the buffers) must be allowed to populate even when
+                // max_iterations is very small. Without this, a flame
+                // with max_iterations < one frame's sample count
+                // (~32K) would stay black after every resize: the
+                // accumulator gets cleared, `total_iterations` is also
+                // reset, but the very first compute_pass overshoots
+                // max_iterations and the next frame's
+                // `should_iterate` gates compute off before the buffer
+                // ever rebuilt enough for tonemap to produce output.
+                renderer.samples_in_buffer() == 0 ||
                 max_iterations.map_or(true, |max| renderer.total_iterations() < max)
             );
 

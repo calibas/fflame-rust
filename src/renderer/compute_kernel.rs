@@ -1082,6 +1082,15 @@ impl FlameRenderer {
         self.total_iterations
     }
 
+    /// Samples currently in the accumulator. Used by the render loop
+    /// to decide whether to keep iterating past `max_iterations`: when
+    /// this is zero (e.g., right after a resize cleared the
+    /// accumulator), iteration has to run at least once to populate
+    /// the buffer, even on flames with a very low max_iterations.
+    pub fn samples_in_buffer(&self) -> u64 {
+        self.samples_in_buffer
+    }
+
     /// Get effective iterations for brightness calculation
     /// This only counts iterations done in normal (non-overwrite) mode
     pub fn effective_iterations(&self) -> u64 {
