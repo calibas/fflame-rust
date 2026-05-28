@@ -242,7 +242,7 @@ fn variation_eMotion(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 // =============================================================================
 // flower_db (CozyG, original dark-beam)
 //   r = w · sqrt(x² + y²)
-//   t = atan2(x, y)   (cpp swap from Java's atan2(y, x); preserved)
+//   t = atan2(y, x)
 //   r *= |spread + sin(petals · t)| · cos(petal_split · petals · t)
 //   fx = sin(t) · r
 //   fy = cos(t) · r
@@ -253,6 +253,13 @@ fn variation_eMotion(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 //   if stem_length != 0 && fz <= -stem_length:
 //       fz = -stem_length
 // 7 user params; Full3D; needs_transform divide-out.
+//
+// Matches JWildfire `FlowerDbFunc.java` (`t = pAffineTP.getPrecalcAtanYX()`,
+// i.e. standard `atan2(y, x)`) and its GPU code (`t = __theta`, also
+// standard). The cpp port had `atan2(x, y)` — converter-introduced swap,
+// fixed here. Note: Fractorium has a separately-evolved simpler
+// `flowerdb` (3 params, no stem/fold, `(r·cos t, r·sin t)` output) that
+// is a different variation despite sharing dark-beam's attribution.
 // =============================================================================
 /// Flower with stem — emits a flower-shaped XY pattern (radius modulated by
 /// `|spread + sin(petals·t)| · cos(petal_split·petals·t)`) plus a stem Z
@@ -294,7 +301,7 @@ fn variation_flower_db(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f
     let inv_w = 1.0 / select(w, 1e-30, abs(w) < 1e-30);
 
     var r = w * sqrt(p.x * p.x + p.y * p.y);
-    let t = atan2(p.x, p.y);  // cpp swap from Java atan2(y, x)
+    let t = atan2(p.y, p.x);
     r = r * abs((petal_spread + sin(petals * t)) * cos(petal_split * petals * t));
     let fx = sin(t) * r;
     let fy = cos(t) * r;
@@ -314,7 +321,7 @@ fn variation_flower_db(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
     let inv_w = 1.0 / select(w, 1e-30, abs(w) < 1e-30);
 
     var r = w * sqrt(p.x * p.x + p.y * p.y);
-    let t = atan2(p.x, p.y);  // cpp swap from Java atan2(y, x)
+    let t = atan2(p.y, p.x);
     r = r * abs((petal_spread + sin(petals * t)) * cos(petal_split * petals * t));
     let safe_r = select(r, 1e-30, abs(r) < 1e-30);
     let fx = sin(t) * r;

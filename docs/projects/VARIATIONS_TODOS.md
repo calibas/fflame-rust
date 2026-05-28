@@ -582,6 +582,14 @@ canon. For non-`_wf` variants (Apo-side, mostly), Apo 7X is canon.
   output. No swap relative to upstream — the "swap" is just the
   canonical math of this variation. Author Scott Draves added to
   the file.
+- **`pre_disc3d`** ([spin_phase.rs](../../src/variations/defs/spin_phase.rs))
+  — JWildfire-only (no Apo 7X analog). Java's `PreDisc3DFunc`
+  calls `atan2(pAffineTP.x, pAffineTP.y)` directly — i.e. `y_arg
+  = x`, `x_arg = y`, giving the swapped-angle convention. Our cpp
+  port uses the same `atan2(p.x, p.y)`; identical. The
+  doc-comment previously claimed Java used `atan2(y, x)`, which
+  was wrong. Z output `vv · r · cos(z)` also matches. Author
+  gossamer light was already in the file.
 
 #### Fixed — converter bug, matches Java now
 
@@ -601,25 +609,27 @@ canon. For non-`_wf` variants (Apo-side, mostly), Apo 7X is canon.
   which algebraically equals `(sin(θ - log·shift), cos(θ - log·shift))`
   — the form the TODO previously described. **Fixed**: body uses
   `atan2(p.y, p.x)`; added Zy0rg to authors block.
+- **`flower_db`** ([apo_misc9.rs](../../src/variations/defs/apo_misc9.rs))
+  — JWildfire `FlowerDbFunc.java` uses `getPrecalcAtanYX()` (standard
+  `atan2(y, x)`) per the source embedded in our cpp file; JWildfire's
+  GPU code uses `t = __theta` (also standard); our cpp port had the
+  swap. **Fixed**: body uses `atan2(p.y, p.x)`. Fractorium has a
+  separately-evolved simpler `flowerdb` (3 params, no stem/fold)
+  which is functionally a different variation; documented in the
+  module comment.
 
-#### Pending research
-
-The remaining two aren't standard Apo 7X plugins, so they need
-non-Apo-7X canonical sources:
-
-- **`flower_db`** ([apo_misc9.rs:273](../../src/variations/defs/apo_misc9.rs#L273))
-  — DarkBeam plugin (`_db` suffix). Not in Apo 7X repo. Canon = DarkBeam's
-  original deviantart post (hard to locate) or use JWildfire as
-  canon-by-proxy.
-- **`pre_disc3d`** ([spin_phase.rs](../../src/variations/defs/spin_phase.rs))
-  — JWildfire-only (Apo has `pre_disc` 2D, no 3D version). Canon =
-  JWildfire `PreDisc3DFunc.java`.
+**Resolved.** All originally-flagged variations are now classified
+— see the *Verified* and *Fixed* sections above. Net result: 4
+converter-bug fixes (`swirl3D_wf`, `cpow3_wf`, `swirl3`,
+`flower_db`); the remaining flags were canonical-by-design (either
+upstream deliberately uses the swap, or the precalc helpers
+already bake it in).
 
 **For variations where Apo 7X and JWildfire genuinely differ** (if
-any), the recommended approach is to **add a sibling variation**
-(e.g. `power_jw`) rather than runtime convention flags. They're
-functionally different math; modeling them as separate variations
-keeps the internal convention singular.
+any are discovered in future work), the recommended approach is to
+**add a sibling variation** (e.g. `power_jw`) rather than runtime
+convention flags. They're functionally different math; modeling
+them as separate variations keeps the internal convention singular.
 
 ### ~~Zero-weight variations should still count as "present"~~ — RESOLVED
 
