@@ -226,6 +226,11 @@ pub struct PanelContext<'a> {
     // Performance metrics
     pub metrics: &'a crate::util::PerformanceMetrics,
     pub window_size: winit::dpi::PhysicalSize<u32>,
+    /// Reference to the main window. Used as the parent for any
+    /// native file dialogs opened from inside a panel so they stay
+    /// on top of the app — without this, the OS may place the
+    /// dialog behind the main window and lock the UI.
+    pub window: &'a winit::window::Window,
 
     // Fractal texture for display
     pub fractal_texture_id: Option<egui::TextureId>,
@@ -688,6 +693,8 @@ impl<'a> PanelViewer<'a> {
             self.context.animation_controller,
             &mut response,
             Some(&api_context),
+            #[cfg(not(target_arch = "wasm32"))]
+            self.context.window,
         );
 
         // Open Save Online dialog from animation panel
@@ -757,6 +764,7 @@ impl<'a> PanelViewer<'a> {
                 animation_with_config.set_base_config(self.context.config_manager.active_config().clone());
 
                 if let Some(path) = rfd::FileDialog::new()
+                    .set_parent(self.context.window)
                     .add_filter("Animation", &["anim", "json"])
                     .set_file_name(&format!("{}.anim", animation_with_config.name))
                     .save_file()

@@ -313,6 +313,8 @@ pub fn render_file_controls(
     controller: &mut AnimationController,
     response: &mut AnimationPanelResponse,
     api_context: Option<&AnimationApiContext>,
+    #[cfg(not(target_arch = "wasm32"))]
+    window: &winit::window::Window,
 ) {
     let has_animation = controller.animation.is_some();
 
@@ -344,6 +346,7 @@ pub fn render_file_controls(
             #[cfg(not(target_arch = "wasm32"))]
             {
                 if let Some(path) = rfd::FileDialog::new()
+                    .set_parent(window)
                     .add_filter("Animation", &["anim", "json"])
                     .pick_file()
                 {
@@ -548,6 +551,8 @@ pub fn render_export_panel(
     settings: &mut AnimationExportSettings,
     progress: &ExportProgress,
     export_panel_state: &mut ExportPanelState,
+    #[cfg(not(target_arch = "wasm32"))]
+    window: &winit::window::Window,
 ) -> Option<AnimationExportSettings> {
     let mut export_request = None;
     let has_animation = controller.animation.is_some();
@@ -598,7 +603,7 @@ pub fn render_export_panel(
                 }
 
                 ui.add_enabled_ui(has_animation && !progress.is_exporting && ffmpeg_available, |ui| {
-                    render_export_settings(ui, controller, settings, &mut export_request);
+                    render_export_settings(ui, controller, settings, &mut export_request, window);
                 });
             }
 
@@ -618,6 +623,7 @@ fn render_export_settings(
     controller: &AnimationController,
     settings: &mut AnimationExportSettings,
     export_request: &mut Option<AnimationExportSettings>,
+    window: &winit::window::Window,
 ) {
     // Output file path
     ui.horizontal(|ui| {
@@ -632,7 +638,9 @@ fn render_export_settings(
 
         if ui.button(t!("animation_panel.browse")).clicked() {
             let extension = settings.video_codec.extension();
+            #[cfg(not(target_arch = "wasm32"))]
             if let Some(path) = rfd::FileDialog::new()
+                .set_parent(window)
                 .set_title(t!("animation_panel.save_video_as").as_ref())
                 .add_filter("Video", &[extension])
                 .set_file_name(&format!("animation.{}", extension))
@@ -882,7 +890,9 @@ fn render_export_settings(
             });
             ui.horizontal(|ui| {
                 if ui.button(t!("animation_panel.audio_browse")).clicked() {
+                    #[cfg(not(target_arch = "wasm32"))]
                     if let Some(path) = rfd::FileDialog::new()
+                        .set_parent(window)
                         .add_filter("Audio Files", &["mp3", "wav", "flac", "ogg"])
                         .pick_file()
                     {

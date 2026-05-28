@@ -964,6 +964,8 @@ impl EguiLayer {
                     &mut menu_actions,
                     &menu_state,
                     &mut self.save_online_dialog_state,
+                    #[cfg(not(target_arch = "wasm32"))]
+                    window,
                 );
             }
 
@@ -1029,6 +1031,7 @@ impl EguiLayer {
                         // Performance metrics
                         metrics,
                         window_size,
+                        window,
 
                         // Fractal texture for display
                         fractal_texture_id,
@@ -1249,6 +1252,8 @@ impl EguiLayer {
                 &mut self.animation_export_settings,
                 animation_export_progress,
                 &mut self.export_panel_state,
+                #[cfg(not(target_arch = "wasm32"))]
+                window,
             ) {
                 animation_export_requested = Some(export_settings);
             }
