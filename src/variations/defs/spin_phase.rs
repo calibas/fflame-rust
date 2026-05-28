@@ -10,8 +10,11 @@
 //!                                          z output `vv · r · cos(z)`,
 //!                                          1 user param `pi`
 //!                                          (configurable, default π).
-//!                                          Preserves cpp's `atan2(x, y)`
-//!                                          swap (vs Java's atan2(y, x))
+//!                                          Uses `atan2(x, y)` to match
+//!                                          JWildfire's `PreDisc3DFunc`
+//!                                          which passes args in that
+//!                                          order (i.e. `atan2(y_arg=x,
+//!                                          x_arg=y)`).
 //!
 //! All four use `needs_transform: true` to read the per-variation weight
 //! and apply it directly inside the body (pre/post phases have no outer
@@ -159,9 +162,14 @@ fn variation_post_spherical(p: vec3<f32>, xform_id: u32, variation_id: u32) -> v
 //   r = sqrt(x² + y² + ε)
 //   a = pi · r
 //   sr = sin(a);  cr = cos(a)
-//   vv = w · atan2(x, y) / (pi + ε)   (cpp swap from Java atan2(y, x))
+//   vv = w · atan2(x, y) / (pi + ε)
 //   out = (vv · sr, vv · cr, vv · r · cos(z))
 // 1 user param `pi` (default π — yes, weirdly user-configurable).
+//
+// Matches JWildfire `PreDisc3DFunc.java` exactly: Java calls
+// `atan2(pAffineTP.x, pAffineTP.y)` (i.e. y-arg = x, x-arg = y, giving
+// the swapped-angle convention), and we do the same. The doc-comment
+// previously claimed Java used `atan2(y, x)`; that was wrong.
 // =============================================================================
 /// Pre-phase 3D disc warp — applies a disc-style warp with an explicit Z
 /// output `vv · r · cos(z)`. The `pi` parameter is user-configurable
