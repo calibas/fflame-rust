@@ -391,10 +391,13 @@ round-trip cleanly:
   faithful to upstream — not a port omission. See
   [macmillan_misc.rs:36-42](../../src/variations/defs/macmillan_misc.rs#L36-L42).
 
-(For DC variations whose params are kept-for-parity because the
-color-write side is dropped — `dc_carpet3D.color_a..color_f`,
-`scale_z`, `reset_z`, `origin` — see the *Direct-color (DC) port
-decisions* section below rather than duplicating here.)
+(`dc_carpet3D`'s previously-parity-only `color_a..color_f`,
+`scale_z`, `reset_z`, and `origin` are now all live as of the
+2026-05-29 full port — they drive the color mix and color-coupled
+Z output. The remaining `writes_color: false` compromises in
+`dc_cube`, `dc_cylinder`, `dc_cylinder2`, `dc_triangle`,
+`truchet`, `truchet2`, `waveblur_wf` follow the same pattern;
+see the *Direct-color (DC) infrastructure* section below.)
 
 ---
 
@@ -432,50 +435,58 @@ justifies the phase-system plumbing. If yes, add the
 `VariationPhase::PrePost` variant and port them properly. If no,
 document the family as permanently skipped and move on.
 
-### Direct-color (DC) port roadmap — what "fully ported" requires
+### Direct-color (DC) infrastructure — complete; remaining work is per-variation
 
-The DC story is split across several docs and per-file headers. This
-section is the index — points at where the open work lives and
-distinguishes infrastructure that exists-but-isn't-used from infra
-that's actually missing.
+**Status as of 2026-05-29:** the DC infrastructure is feature-complete.
+Blockers #5 (TC reads driving spatial output) and #11 (color-write
+coupled to spatial output) — previously framed as architectural —
+turned out to be resolved when the `vc` parameter landed: the
+`vc: ptr<function, f32>` passed to every `writes_color: true`
+variation is a true read/write pointer, and the same pointer is
+threaded through every variation call in an iteration (normal phase
+and linked-chain). A variation can both write to `*vc` and read
+from `*vc` in the same body, and a later variation in the chain
+sees the writes from earlier ones. See the [`dc_carpet3D`
+promotion](../../src/variations/defs/dc_carpet3d_misc.rs) for the
+canonical pattern.
 
-**What works today:**
+Blocker #8 (`DC_BaseFunc` + 34 derivatives) was listed as
+contingent on #11 — the derivatives' spatial output reduces to
+linear/blur without color-coupled spatial. Now that #11 isn't a
+blocker, the derivatives are just standard `writes_color: true`
+ports.
 
-- `writes_color: true` variations get a `vc` color-register pointer
-  passed by the shader builder (see
-  [shader_builder_v2.rs:1272-1340](../../src/shader_builder_v2.rs#L1272-L1340)).
-  The *write* side is fully wired up. `dc_linear`, `dc_bubble`,
-  `macmillan` and others use this today.
-- `needs_accum` + per-thread state (resolved 2026-05-04) cover the
-  common pattern of computing TC from `FPx + FPy` after the
-  variation's own contribution. See blocker #5 in
-  [variation-port-blockers.md](variation-port-blockers.md).
+**Per-variation work remaining:**
 
-**What's missing — needs architectural work** (each is a blocker in
-[variation-port-blockers.md](variation-port-blockers.md)):
-
-- **#5 — TC reads in the spatial path.** Variations that read the
-  current point's color value to drive *spatial* output (e.g.
-  `dc_ztransl` reads TC for Z displacement). Distinct from computing
-  TC from an accumulator, which works.
-- **#11 — Color-write coupled to spatial output.** Variations where
-  color *is* the spatial differentiator (e.g. `dc_carpet3D`'s
-  `dz = color · scale_z + offset_z`). Without a write-then-read color
-  pipeline the spatial output collapses to a constant or to linear/blur.
-- **#8 — `DC_BaseFunc` + 31 derivatives.** Unlocked once #11 lands;
-  without DC writes the derivatives don't gain spatial distinctiveness
-  over plain linear/blur.
-
-**What's missing — per-variation grunt work:**
-
-- Variations ported with `writes_color: false` as a deliberate
-  compromise: the geometry was ported but the color write was dropped
-  even though the infrastructure would support it. Examples include
-  `dc_carpet3D` and the `direct_color` toggle cases in `truchet`,
-  `truchet2`, and `waveblur_wf`. Most of these would just need the
-  flag flipped + the color body added once they get attention. The
-  carpet-style cases (spatial output also depends on reading the color
-  back) are gated by #11 above, not the write itself.
+- **Existing compromises to promote** — variations already in the
+  registry with `writes_color: false` as a deliberate compromise.
+  The geometry was ported but color writes were dropped pending the
+  (false) belief that #5/#11 were architectural.
+  - `dc_carpet3D` — *done 2026-05-29* (proof-of-concept for the
+    infrastructure being complete).
+  - `dc_cube` — flip + color body.
+  - `dc_cylinder` — flip + color body.
+  - `dc_cylinder2` — flip + color body.
+  - `dc_triangle` — flip + color body.
+  - `truchet`, `truchet2`, `waveblur_wf` — wire their existing
+    `direct_color` toggle parameters through to actual `*vc` writes.
+- **TC-read variations** (previously blocker #5):
+  - `dc_ztransl` — reads `*vc` to compute Z displacement.
+  - `pre_dcztransl` — pre-phase variant.
+  - `colorscale_wf` — reads `*vc` for Z scaling.
+  - `post_colorscale_wf` — post-phase variant.
+- **`DC_BaseFunc` derivatives** (previously blocker #8 + #11) —
+  34 variations all extending the same base, distinct only in
+  their color formulas. Can be ported in batches. See the
+  [`DC_BaseFunc derivatives` section](variation-port-blockers.md)
+  for the list.
+- **Other unported `dc_*`** (still gated by *other* blockers):
+  - `dc_crackle_wf`, `dc_cracklep_wf` — Crackle algorithm state (#7).
+  - `dc_dmodulus` — `_oldColor` accumulator (#3-style, possibly already supported).
+  - `dc_code` — JIT-compiled user expressions (#1, impossible).
+  - `dc_hexes_wf` — Voronoi primitive (#7).
+  - `dc_ducks`, `dc_apollonian`, etc. — when classified as
+    `DC_BaseFunc` derivatives above, otherwise audit per-case.
 
 Per-variation interface-parity decisions (color-from-position
 approximations, Java-vs-C++ porter-bug choices, parity-only param
@@ -507,17 +518,14 @@ warrant later review, especially as the broader DC corpus gets ported:
   Apophysis renders visibly different from the same flame in
   JWildfire.
 
-- **`dc_carpet3D`: color-coupled Z dropped, ancillary params kept for
-  parity.** Upstream couples Z output to color (`dz = color · scale_z +
-  offset_z`, then `z = dz` or `z += dz`); a `reset_z` flag optionally
-  re-randomizes Z from the same color-driven term. With color writes
-  dropped, the entire color→Z pipeline collapses, so the Rust port
-  emits just `z + w · offset_z` (constant Z bump) and the
-  `color_a..color_f`, `scale_z`, `reset_z`, and `origin` params are
-  retained only for interface parity (they're declared but ignored in
-  the body). If/when DC writes get a proper port, this needs to be
-  revisited — the color-coupled Z is presumably the variation's
-  defining 3D feature. See
+- **~~`dc_carpet3D`: color-coupled Z dropped~~** — RESOLVED 2026-05-29.
+  Promoted to a full port: `writes_color: true`, the color mix uses
+  `color_a..color_f` + `origin` (via `H = 0.1 · origin`) + the
+  `x0^y0` corner parity, and Z is driven by the freshly-written
+  color value (`dz = new_vc · scale_z + offset_z`, with `reset_z`
+  controlling override vs accumulate). Empirical proof of #11
+  unblock — changing `color_a..color_f` with `direct_color = 0`
+  shifts the 3D structure without changing the rendered color. See
   [dc_carpet3d_misc.rs](../../src/variations/defs/dc_carpet3d_misc.rs).
 
 When more `dc_*` variations land, apply the same logic and add to
