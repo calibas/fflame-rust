@@ -435,58 +435,68 @@ justifies the phase-system plumbing. If yes, add the
 `VariationPhase::PrePost` variant and port them properly. If no,
 document the family as permanently skipped and move on.
 
-### Direct-color (DC) infrastructure — complete; remaining work is per-variation
+### Direct-color (DC) infrastructure — complete
 
-**Status as of 2026-05-29:** the DC infrastructure is feature-complete.
-Blockers #5 (TC reads driving spatial output) and #11 (color-write
-coupled to spatial output) — previously framed as architectural —
-turned out to be resolved when the `vc` parameter landed: the
-`vc: ptr<function, f32>` passed to every `writes_color: true`
-variation is a true read/write pointer, and the same pointer is
-threaded through every variation call in an iteration (normal phase
-and linked-chain). A variation can both write to `*vc` and read
-from `*vc` in the same body, and a later variation in the chain
-sees the writes from earlier ones. See the [`dc_carpet3D`
-promotion](../../src/variations/defs/dc_carpet3d_misc.rs) for the
-canonical pattern.
+**Status as of 2026-05-29:** the DC infrastructure is feature-complete
+for the palette-index color path. The `vc: ptr<function, f32>` parameter
+passed to every `writes_color: true` variation is a true read/write
+pointer; the same pointer is threaded through every variation call in
+an iteration (normal phase and linked-chain). A variation can both
+write to `*vc` and read from `*vc` in the same body, and a later
+variation in the chain sees the writes from earlier ones. Blockers #5
+(TC reads driving spatial output) and #11 (color-write coupled to
+spatial output) — previously framed as architectural — turned out to
+have been resolved when the `vc` parameter landed; the docs and TODOs
+just hadn't caught up. See the [`dc_carpet3D` promotion](../../src/variations/defs/dc_carpet3d_misc.rs)
+and [`dc_tc_read`](../../src/variations/defs/dc_tc_read.rs) for
+canonical write-then-read and pure-read patterns respectively.
 
-Blocker #8 (`DC_BaseFunc` + 34 derivatives) was listed as
-contingent on #11 — the derivatives' spatial output reduces to
-linear/blur without color-coupled spatial. Now that #11 isn't a
-blocker, the derivatives are just standard `writes_color: true`
-ports.
+**Completed on the `variations-dc-port` branch (2026-05-29):**
 
-**Per-variation work remaining:**
+- **Existing compromises promoted to full ports** (geometry was
+  ported, color writes had been dropped pending the false belief that
+  #5/#11 were architectural):
+  - `dc_carpet3D` — proof of #11 (write-then-read in a single body).
+  - `dc_cube`, `dc_cylinder`, `dc_cylinder2`, `dc_triangle`.
+  - `truchet`, `waveblur_wf` — `direct_color` toggle now wires
+    through to actual `*vc` writes.
+  - (`truchet2` was originally in this list, but turned out to have
+    no color logic in cpp/Java at all — a docs error.)
+- **TC-read variations** — previously listed under blocker #5:
+  - `dc_ztransl`, `pre_dcztransl`, `colorscale_wf`, `post_colorscale_wf`.
 
-- **Existing compromises to promote** — variations already in the
-  registry with `writes_color: false` as a deliberate compromise.
-  The geometry was ported but color writes were dropped pending the
-  (false) belief that #5/#11 were architectural.
-  - `dc_carpet3D` — *done 2026-05-29* (proof-of-concept for the
-    infrastructure being complete).
-  - `dc_cube`, `dc_cylinder`, `dc_cylinder2`, `dc_triangle` —
-    *done 2026-05-29*.
-  - `truchet`, `waveblur_wf` — *done 2026-05-29*. (truchet2 was
-    listed here in the original TODO but turned out to have no
-    color logic at all in the cpp source — not actually a DC
-    compromise.)
-- **TC-read variations** (previously blocker #5):
-  - `dc_ztransl` — reads `*vc` to compute Z displacement.
-  - `pre_dcztransl` — pre-phase variant.
-  - `colorscale_wf` — reads `*vc` for Z scaling.
-  - `post_colorscale_wf` — post-phase variant.
-- **`DC_BaseFunc` derivatives** (previously blocker #8 + #11) —
-  34 variations all extending the same base, distinct only in
-  their color formulas. Can be ported in batches. See the
-  [`DC_BaseFunc derivatives` section](variation-port-blockers.md)
-  for the list.
-- **Other unported `dc_*`** (still gated by *other* blockers):
+**Remaining DC work — not on this branch:**
+
+- **`DC_BaseFunc` derivatives (~34 variations).** Previously the
+  blockers doc framed these as "linear/blur spatial + color body"
+  trivial ports gated only on #11. **They aren't trivial.** Each
+  derivative is a GLSL-style procedural pattern generator (typically
+  100–200 lines of Java + internal helpers, references to
+  JWildfire's `js.glsl.G` namespace, time-based animation params,
+  occasional infrastructure dependencies — Perlin permutation
+  tables for `dc_perlin`, Apollonian-circle recursion for
+  `dc_apollonian` (most of that math already lives in
+  `shaders/core/complex.wgsl` thanks to Klein group), etc.).
+  Realistic per-variation cost: 2–4 hours for simpler ones, more for
+  those needing new shader-side primitives.
+
+  There's also a **shader-side RGB-direct path** still missing — the
+  base class's `gradient=0` and `gradient=1` modes inject RGB
+  directly into `pVarTP.{red,green,blue}Color` and bypass the
+  palette. Our color register is `f32` (palette index) only, so
+  these modes can't be reproduced without widening the accumulator
+  to carry RGB. `gradient=2` (greyscale luminance → palette index)
+  is fully supportable today via `*vc`.
+
+  Per-batch porting of the derivatives is genuine separate work,
+  not the finishing touch implied by the original blockers framing.
+
+- **Other unported `dc_*` gated by separate blockers:**
   - `dc_crackle_wf`, `dc_cracklep_wf` — Crackle algorithm state (#7).
-  - `dc_dmodulus` — `_oldColor` accumulator (#3-style, possibly already supported).
+  - `dc_dmodulus` — `_oldColor` accumulator (#3-style; may already
+    be expressible via `needs_accum`, worth a re-audit).
   - `dc_code` — JIT-compiled user expressions (#1, impossible).
   - `dc_hexes_wf` — Voronoi primitive (#7).
-  - `dc_ducks`, `dc_apollonian`, etc. — when classified as
-    `DC_BaseFunc` derivatives above, otherwise audit per-case.
 
 Per-variation interface-parity decisions (color-from-position
 approximations, Java-vs-C++ porter-bug choices, parity-only param
@@ -527,6 +537,25 @@ warrant later review, especially as the broader DC corpus gets ported:
   unblock — changing `color_a..color_f` with `direct_color = 0`
   shifts the 3D structure without changing the rendered color. See
   [dc_carpet3d_misc.rs](../../src/variations/defs/dc_carpet3d_misc.rs).
+
+- **`colorscale_wf` reset_z limitation.** Cpp's `reset_z > 0` case
+  sets `pVarTP.z = dz` outright, discarding any prior Z
+  contribution from other normal-phase variations in the same
+  transform. Our `needs_transform` outer-multiplier model can only
+  add (`result.z += w · nz`), not override. The port emits `nz =
+  dz/w` regardless of `reset_z`, which matches upstream when the
+  variation is the only normal-phase Z contributor (the typical
+  use). Mixed cases differ from cpp; revisit with `needs_accum` if
+  a real flame needs it. `post_colorscale_wf` is unaffected (post
+  phase has direct `p.z` access). See
+  [dc_tc_read.rs](../../src/variations/defs/dc_tc_read.rs).
+
+- **`colorscale_wf` Java vs cpp TC source.** Java reads
+  `pAffineTP.color` (the input color); cpp reads `pVarTP.color`
+  (the running color register). These differ only when a prior DC
+  variation in the same chain has written to the color register.
+  Our `*vc` follows the cpp semantics. Flag if this produces a
+  visible diff in a real flame.
 
 When more `dc_*` variations land, apply the same logic and add to
 this entry rather than spawning new ones.

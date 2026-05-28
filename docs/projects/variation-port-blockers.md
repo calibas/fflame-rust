@@ -241,16 +241,44 @@ features once you read the cpp body carefully):
 | `glsl_squares` | GLSL fragment + `DC_BaseFunc` |
 | `glsl_starsfield` | GLSL fragment + `DC_BaseFunc` |
 
-### `DC_BaseFunc` derivatives — unblocked 2026-05-29 (was #8 + #11)
+### `DC_BaseFunc` derivatives — infrastructure unblocked, per-variation porting remains
 
-These extend `DC_BaseFunc` and override `getRGBColor(uV)`. The spatial
-transform is `linear` (when `colorOnly=1`) or `uniform blur in
-[-0.5, 0.5]` (when `colorOnly=0`, the default). The distinctive content
-is in the color and Z output. Previously listed as gated on blockers
-#11 and #8; with the 2026-05-29 #5/#11 resolution these become
-straightforward `writes_color: true` ports — write the color formula
-via `*vc` and (when present) drive Z from it the same way
-`dc_carpet3D` does. Listed here until ported.
+These extend `DC_BaseFunc` and override `getRGBColor(uV)`. The base's
+spatial transform is `linear` (when `colorOnly=1`) or `uniform blur in
+[-0.5, 0.5]` (when `colorOnly=0`, the default) — that part is trivial.
+The distinctive content is in the color output, computed by each
+derivative's `getRGBColor()`.
+
+**Status:** With the 2026-05-29 #5/#11 resolution, the *color-pipeline*
+gate is gone — these can write `*vc` and the spatial output can read it
+back, same as `dc_carpet3D`. **But the original blockers framing
+("trivial color body ports") was misleading.** Each derivative is a
+real port:
+
+- `getRGBColor()` is typically 100–200 lines of GLSL-style procedural
+  pattern math (modulo, trig, multi-octave iteration, distance fields,
+  noise hashing) referencing JWildfire's `js.glsl.G` namespace.
+- Several need infrastructure we don't have yet: Perlin permutation
+  tables (`dc_perlin`), Worley/Voronoi cell sampling (`dc_voronoise`),
+  more transcendental complex functions on top of the Klein-group
+  baseline in [`shaders/core/complex.wgsl`](../../shaders/core/complex.wgsl)
+  (`dc_apollonian`, `dc_mandbrot`, `dc_mandelbox2d`, `dc_kaliset`,
+  `dc_kaliset2`, etc.).
+- Several use time-based animation params (`time`, elapsed-ms walls)
+  that we don't track per-iteration today.
+- The base class's `gradient=0` and `gradient=1` modes inject
+  `pVarTP.{red,green,blue}Color` directly, bypassing the palette.
+  Our `vc: f32` register only carries a palette index; the
+  `gradient=2` mode (greyscale luminance → palette index) maps to
+  `*vc` cleanly, but mode-0 and mode-1 would need widening the
+  accumulator to carry RGB — a separate shader-side feature.
+
+Realistic per-variation cost: 2–4 hours for simpler derivatives like
+`dc_squares` or `dc_rotations`; longer for those needing new primitives.
+Total for the set: tens of hours minimum.
+
+Listed below until ported. Pick individually or in thematic batches as
+useful flames need them.
 
 `dc_acrilic`, `dc_apollonian`, `dc_base`, `dc_circlesblue`,
 `dc_circuits`, `dc_ducks`, `dc_escher`, `dc_fractaldots`, `dc_gnarly`,
