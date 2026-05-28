@@ -411,6 +411,132 @@ impl<'a> TabViewer for PanelViewer<'a> {
 
 }
 
+/// Pan the fractal view by a screen-pixel drag delta.
+///
+/// Free function so it can be called from outside `PanelViewer` —
+/// the tab-bar cover Area in `ui::mod` forwards its drag input here,
+/// using the leaf's full rect as `panel_size` so the drag scale stays
+/// consistent whether the user is dragging in the body or in the
+/// cover.
+pub fn pan_fractal_view(
+    config_manager: &mut crate::config::ConfigManager,
+    drag_delta: egui::Vec2,
+    panel_size: egui::Vec2,
+) {
+    let config = config_manager.active_config();
+
+    // Convert screen pixel delta to fractal space.
+    // Use the smaller dimension for both axes so drag speed is consistent
+    // regardless of landscape vs portrait orientation.
+    let ref_size = panel_size.x.min(panel_size.y);
+    let scale = 4.0 / (config.zoom * ref_size);
+    let dx = -drag_delta.x * scale;
+    let dy = -drag_delta.y * scale;
+
+    // Apply rotation (negate to convert screen to fractal space)
+    let cos_r = (-config.rotation).cos();
+    let sin_r = (-config.rotation).sin();
+
+    let fractal_dx = dx * cos_r - dy * sin_r;
+    let fractal_dy = dx * sin_r + dy * cos_r;
+
+    let new_pan_x = config.pan_x + fractal_dx;
+    let new_pan_y = config.pan_y + fractal_dy;
+
+    let _ = config_manager.update_param(
+        crate::config::ConfigPath::Pan,
+        (new_pan_x, new_pan_y).into(),
+    );
+}
+
+/// Zoom the fractal view via mouse-wheel scroll.
+///
+/// Free function so the tab-bar cover Area can forward its scroll
+/// input here, passing the leaf's full rect/size so zoom-toward-cursor
+/// stays anchored correctly whether the cursor is in the body or the
+/// cover.
+pub fn zoom_fractal_view(
+    config_manager: &mut crate::config::ConfigManager,
+    scroll_delta: f32,
+    mouse_pos: Option<egui::Pos2>,
+    panel_rect: egui::Rect,
+    panel_size: egui::Vec2,
+) {
+    let config = config_manager.active_config();
+
+    // Use power-based zoom for smooth scrolling (matches original code)
+    let zoom_factor = if scroll_delta.abs() > 0.1 {
+        1.1f32.powf(scroll_delta * 0.03)
+    } else {
+        1.0
+    };
+
+    if zoom_factor != 1.0 {
+        // Zoom in toward cursor, zoom out from center
+        if zoom_factor > 1.0 {
+            // Zooming in - zoom toward mouse cursor position
+            if let Some(mouse_pos) = mouse_pos {
+                // Convert mouse position from panel space to fractal space
+                // Panel center
+                let center_x = panel_rect.center().x;
+                let center_y = panel_rect.center().y;
+
+                // Mouse offset from center in panel pixels
+                let mouse_offset_x = mouse_pos.x - center_x;
+                let mouse_offset_y = mouse_pos.y - center_y;
+
+                // Convert to fractal space (account for current zoom, scale, and rotation)
+                let scale = f32::min(panel_size.x, panel_size.y) * 0.25;
+
+                // Apply rotation to convert screen space to fractal space
+                let cos_r = (-config.rotation).cos();
+                let sin_r = (-config.rotation).sin();
+                let rotated_offset_x = mouse_offset_x * cos_r - mouse_offset_y * sin_r;
+                let rotated_offset_y = mouse_offset_x * sin_r + mouse_offset_y * cos_r;
+
+                let fractal_offset_x = rotated_offset_x / (scale * config.zoom);
+                let fractal_offset_y = rotated_offset_y / (scale * config.zoom);
+
+                // Calculate the point in fractal space that the mouse is pointing at
+                let point_x = config.pan_x + fractal_offset_x;
+                let point_y = config.pan_y + fractal_offset_y;
+
+                // Apply zoom and adjust pan (also need rotation for new zoom level)
+                let new_zoom = (config.zoom * zoom_factor).clamp(0.01, 1000.0);
+                let new_rotated_offset_x = mouse_offset_x * cos_r - mouse_offset_y * sin_r;
+                let new_rotated_offset_y = mouse_offset_x * sin_r + mouse_offset_y * cos_r;
+                let new_fractal_offset_x = new_rotated_offset_x / (scale * new_zoom);
+                let new_fractal_offset_y = new_rotated_offset_y / (scale * new_zoom);
+                let new_pan_x = point_x - new_fractal_offset_x;
+                let new_pan_y = point_y - new_fractal_offset_y;
+
+                // Update zoom and pan atomically
+                let _ = config_manager.update_batch(
+                    vec![
+                        (crate::config::ConfigPath::Zoom, new_zoom.into()),
+                        (crate::config::ConfigPath::Pan, (new_pan_x, new_pan_y).into()),
+                    ],
+                    "history.action.wheel_zoom".to_string(),
+                );
+            } else {
+                // No mouse position, zoom to center
+                let new_zoom = (config.zoom * zoom_factor).clamp(0.01, 1000.0);
+                let _ = config_manager.update_param(
+                    crate::config::ConfigPath::Zoom,
+                    new_zoom.into(),
+                );
+            }
+        } else {
+            // Zooming out - always zoom from center
+            let new_zoom = (config.zoom * zoom_factor).clamp(0.01, 1000.0);
+            let _ = config_manager.update_param(
+                crate::config::ConfigPath::Zoom,
+                new_zoom.into(),
+            );
+        }
+    }
+}
+
 impl<'a> PanelViewer<'a> {
     fn render_panel(&mut self, ui: &mut egui::Ui, tab: &mut PanelType) {
         match tab {
@@ -967,30 +1093,7 @@ impl<'a> PanelViewer<'a> {
 
     /// Handle fractal panning via mouse drag
     fn handle_fractal_drag(&mut self, drag_delta: egui::Vec2, panel_size: egui::Vec2) {
-        let config = self.context.config_manager.active_config();
-
-        // Convert screen pixel delta to fractal space.
-        // Use the smaller dimension for both axes so drag speed is consistent
-        // regardless of landscape vs portrait orientation.
-        let ref_size = panel_size.x.min(panel_size.y);
-        let scale = 4.0 / (config.zoom * ref_size);
-        let dx = -drag_delta.x * scale;
-        let dy = -drag_delta.y * scale;
-
-        // Apply rotation (negate to convert screen to fractal space)
-        let cos_r = (-config.rotation).cos();
-        let sin_r = (-config.rotation).sin();
-
-        let fractal_dx = dx * cos_r - dy * sin_r;
-        let fractal_dy = dx * sin_r + dy * cos_r;
-
-        let new_pan_x = config.pan_x + fractal_dx;
-        let new_pan_y = config.pan_y + fractal_dy;
-
-        let _ = self.context.config_manager.update_param(
-            crate::config::ConfigPath::Pan,
-            (new_pan_x, new_pan_y).into()
-        );
+        pan_fractal_view(self.context.config_manager, drag_delta, panel_size);
     }
 
     /// Handle fractal zooming via mouse wheel
@@ -1001,79 +1104,13 @@ impl<'a> PanelViewer<'a> {
         panel_rect: egui::Rect,
         panel_size: egui::Vec2,
     ) {
-        let config = self.context.config_manager.active_config();
-
-        // Use power-based zoom for smooth scrolling (matches original code)
-        let zoom_factor = if scroll_delta.abs() > 0.1 {
-            1.1f32.powf(scroll_delta * 0.03)
-        } else {
-            1.0
-        };
-
-        if zoom_factor != 1.0 {
-            // Zoom in toward cursor, zoom out from center
-            if zoom_factor > 1.0 {
-                // Zooming in - zoom toward mouse cursor position
-                if let Some(mouse_pos) = mouse_pos {
-                    // Convert mouse position from panel space to fractal space
-                    // Panel center
-                    let center_x = panel_rect.center().x;
-                    let center_y = panel_rect.center().y;
-
-                    // Mouse offset from center in panel pixels
-                    let mouse_offset_x = mouse_pos.x - center_x;
-                    let mouse_offset_y = mouse_pos.y - center_y;
-
-                    // Convert to fractal space (account for current zoom, scale, and rotation)
-                    let scale = f32::min(panel_size.x, panel_size.y) * 0.25;
-
-                    // Apply rotation to convert screen space to fractal space
-                    let cos_r = (-config.rotation).cos();
-                    let sin_r = (-config.rotation).sin();
-                    let rotated_offset_x = mouse_offset_x * cos_r - mouse_offset_y * sin_r;
-                    let rotated_offset_y = mouse_offset_x * sin_r + mouse_offset_y * cos_r;
-
-                    let fractal_offset_x = rotated_offset_x / (scale * config.zoom);
-                    let fractal_offset_y = rotated_offset_y / (scale * config.zoom);
-
-                    // Calculate the point in fractal space that the mouse is pointing at
-                    let point_x = config.pan_x + fractal_offset_x;
-                    let point_y = config.pan_y + fractal_offset_y;
-
-                    // Apply zoom and adjust pan (also need rotation for new zoom level)
-                    let new_zoom = (config.zoom * zoom_factor).clamp(0.01, 1000.0);
-                    let new_rotated_offset_x = mouse_offset_x * cos_r - mouse_offset_y * sin_r;
-                    let new_rotated_offset_y = mouse_offset_x * sin_r + mouse_offset_y * cos_r;
-                    let new_fractal_offset_x = new_rotated_offset_x / (scale * new_zoom);
-                    let new_fractal_offset_y = new_rotated_offset_y / (scale * new_zoom);
-                    let new_pan_x = point_x - new_fractal_offset_x;
-                    let new_pan_y = point_y - new_fractal_offset_y;
-
-                    // Update zoom and pan atomically
-                    let _ = self.context.config_manager.update_batch(
-                        vec![
-                            (crate::config::ConfigPath::Zoom, new_zoom.into()),
-                            (crate::config::ConfigPath::Pan, (new_pan_x, new_pan_y).into()),
-                        ],
-                        "history.action.wheel_zoom".to_string()
-                    );
-                } else {
-                    // No mouse position, zoom to center
-                    let new_zoom = (config.zoom * zoom_factor).clamp(0.01, 1000.0);
-                    let _ = self.context.config_manager.update_param(
-                        crate::config::ConfigPath::Zoom,
-                        new_zoom.into()
-                    );
-                }
-            } else {
-                // Zooming out - always zoom from center
-                let new_zoom = (config.zoom * zoom_factor).clamp(0.01, 1000.0);
-                let _ = self.context.config_manager.update_param(
-                    crate::config::ConfigPath::Zoom,
-                    new_zoom.into()
-                );
-            }
-        }
+        zoom_fractal_view(
+            self.context.config_manager,
+            scroll_delta,
+            mouse_pos,
+            panel_rect,
+            panel_size,
+        );
     }
 
     fn handle_fractal_pinch_zoom(
