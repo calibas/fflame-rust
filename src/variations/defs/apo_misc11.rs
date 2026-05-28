@@ -37,16 +37,22 @@ use crate::variations::{
 use crate::param;
 
 // =============================================================================
-// swirl3
+// swirl3 (Zy0rg)
 //   rad = sqrt(x² + y²) + ε
-//   ang = atan2(x, y) + log(rad) · shift  (cpp swap from Java atan2(y, x))
+//   ang = atan2(y, x) + log(rad) · shift
 //   out = rad · (cos ang, sin ang)
 // 1 user param (shift); clean factor through outer.
+// Matches Fractorium (Ember) and JWildfire — both use standard
+// atan2(y, x). Our cpp port had atan2(x, y), introduced by the
+// chaotica-apophysis-plugins-from-jwildfire converter; fixed.
 // =============================================================================
 /// Log-spiral swirl — emits `(rad · cos(ang), rad · sin(ang))` where `rad =
-/// sqrt(x²+y²) + ε` and `ang = atan2(x, y) + log(rad) · shift`. The
+/// sqrt(x²+y²) + ε` and `ang = atan2(y, x) + log(rad) · shift`. The
 /// `log(rad)` term makes the angular offset grow linearly with the log of
 /// radius, producing a logarithmic-spiral swirl.
+///
+/// # Authors
+/// - Zy0rg
 pub static SWIRL3: VariationDef = VariationDef {
     name: "swirl3",
     display_name: "Swirl 3",
@@ -67,7 +73,7 @@ pub static SWIRL3: VariationDef = VariationDef {
 fn variation_swirl3(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let shift = get_param(xform_id, variation_id, 0u);
     let rad = sqrt(p.x * p.x + p.y * p.y) + 1e-30;
-    let ang = atan2(p.x, p.y) + log(rad) * shift;
+    let ang = atan2(p.y, p.x) + log(rad) * shift;
     return vec2<f32>(rad * cos(ang), rad * sin(ang));
 }
 "#,
@@ -75,7 +81,7 @@ fn variation_swirl3(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32>
 fn variation_swirl3(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let shift = get_param(xform_id, variation_id, 0u);
     let rad = sqrt(p.x * p.x + p.y * p.y) + 1e-30;
-    let ang = atan2(p.x, p.y) + log(rad) * shift;
+    let ang = atan2(p.y, p.x) + log(rad) * shift;
     return vec3<f32>(rad * cos(ang), rad * sin(ang), p.z);
 }
 "#),
