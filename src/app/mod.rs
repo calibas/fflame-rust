@@ -1877,6 +1877,16 @@ impl App {
             let max_iterations = Some(final_config.max_iterations);
             let should_iterate = !self.paused && !is_video_exporting && !is_png_exporting && (
                 is_controller_playing ||
+                // Overwrite mode bypasses the max_iterations gate. With
+                // it gated, a cheap flame that hits max during a long
+                // drag would freeze: total_iterations stays at max,
+                // should_iterate stays false, no compute runs, the
+                // accumulator can't pick up new param state, and the
+                // user is stuck looking at the pre-stop render. Always
+                // iterate while overwriting; the compute_pass also
+                // resets total_iterations each frame in overwrite mode,
+                // so this gate only matters as a fallback.
+                use_overwrite ||
                 max_iterations.map_or(true, |max| renderer.total_iterations() < max)
             );
 

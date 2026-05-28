@@ -494,7 +494,16 @@ impl FlameRenderer {
         let threads_per_workgroup = 64u64;
         let plotted_per_thread = iterations_per_thread.saturating_sub(burn_in) as u64;
         let samples_this_frame = num_workgroups as u64 * threads_per_workgroup * plotted_per_thread;
-        self.total_iterations += samples_this_frame;
+        // In overwrite mode, total_iterations reflects only this frame's
+        // samples — matches how the accumulator works (prev cleared
+        // each frame in the overwrite branch of accumulate.wgsl). Keeps
+        // `has_stopped` from tripping during a long drag and triggering
+        // the max_iterations-stop code path mid-interaction.
+        if self.overwrite_mode {
+            self.total_iterations = samples_this_frame;
+        } else {
+            self.total_iterations += samples_this_frame;
+        }
 
         // Clear histogram buffer before each batch (needed for proper accumulation math)
         if clear_histogram {

@@ -362,18 +362,22 @@ impl App {
     /// Overwrite mode is used when:
     /// - Active parameter changes are happening (drag, scroll)
     /// - Animation is playing (keeps accumulation stable)
-    /// - Fractal has reached max_iterations (allows live updates)
+    ///
+    /// We deliberately do NOT use overwrite mode just because the
+    /// fractal has reached `max_iterations`. The compute_pass now
+    /// resets `total_iterations` each frame when overwrite mode is on,
+    /// so forcing overwrite at stop would create a loop: total hits
+    /// max → has_stopped flips overwrite on → next compute resets
+    /// total → has_stopped flips off → cumulative blends sparse data
+    /// onto the existing buffer → total grows again → repeat. The
+    /// "live updates after stop" behavior is already covered by
+    /// `use_overwrite_next_frame` flipping true on the first user
+    /// input via `update_overwrite_mode`.
     pub(super) fn should_use_overwrite(&self) -> bool {
         use crate::animation::PlaybackState;
 
-        let has_stopped = self
-            .flame_renderer
-            .as_ref()
-            .map(|r| r.total_iterations() >= self.config_manager.active_config().max_iterations)
-            .unwrap_or(false);
-
         let is_animation_playing = self.animation_controller.state == PlaybackState::Playing;
 
-        self.use_overwrite_next_frame || is_animation_playing || has_stopped
+        self.use_overwrite_next_frame || is_animation_playing
     }
 }
