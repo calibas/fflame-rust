@@ -117,6 +117,7 @@ mod gamma_misc;
 mod bubblet3d_misc;
 mod waves2b_misc;
 mod dc_carpet3d_misc;
+mod dc_tc_read;
 mod vibration2_misc;
 mod gridout3d_misc;
 mod jubiq_misc;
@@ -249,6 +250,7 @@ pub use gamma_misc::*;
 pub use bubblet3d_misc::*;
 pub use waves2b_misc::*;
 pub use dc_carpet3d_misc::*;
+pub use dc_tc_read::*;
 pub use vibration2_misc::*;
 pub use gridout3d_misc::*;
 pub use jubiq_misc::*;
@@ -862,8 +864,13 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &BUBBLE_T3D,
     // waves2b_misc: waves2b
     &WAVES2B,
-    // dc_carpet3d_misc: dc_carpet3D (color-z coupling dropped)
+    // dc_carpet3d_misc: dc_carpet3D
     &DC_CARPET3D,
+    // dc_tc_read: TC-read variations (read *vc to drive spatial Z)
+    &DC_ZTRANSL,
+    &PRE_DCZTRANSL,
+    &COLORSCALE_WF,
+    &POST_COLORSCALE_WF,
     // vibration2_misc: vibration2 (26 user — first port unblocked by packed buffer)
     &VIBRATION2,
     // gridout3d_misc: gridout3D (26 user)

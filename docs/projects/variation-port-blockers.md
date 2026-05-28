@@ -49,18 +49,20 @@ haven't built it yet" and could be added with focused work.
    output `p`. Would require widening the post-phase calling
    convention.
 
-5. **Color-register reads in non-color path** — variations that use
-   the current point's color value to drive *spatial* output (e.g.
-   `dc_ztransl` reads `TC` to compute z displacement). Our color
-   pipeline is write-only from the variation perspective; reading it
-   back into spatial computation would require restructuring the
-   color-as-output model.
-   *Partially mitigated by the 2026-05-04 needs_accum work*: the
-   common pattern of computing TC from `FPx + FPy` after the
-   variation's own contribution is now expressible as
-   `accum + weight·own_contribution` (see macmillan port). True TC
-   *reads* (where TC drives spatial output, not just where TC is
-   computed from accum) still require this work.
+5. **~~Color-register reads in non-color path~~** — RESOLVED. The
+   `vc: ptr<function, f32>` parameter passed to `writes_color`
+   variations is a true read/write pointer; WGSL has no write-only
+   pointer type, and the codegen passes the same pointer through
+   every variation call in an iteration. A variation can read `*vc`
+   for any spatial purpose — drive Z from TC, scale by color, etc. —
+   the same way a variation reads any other input. The "write-only
+   from the variation perspective" framing was incorrect after the
+   `vc` parameter landed; this row predated that work. Confirmed
+   empirically by the `dc_carpet3D` full port (2026-05-29): changing
+   `color_a..color_f` with the transform's `direct_color` slider at
+   0 changes the 3D structure (proves read+spatial path) without
+   changing the rendered color (proves direct_color gating still
+   works). See blocker #11 below — same mechanism, same resolution.
 
 ### Soft blocks (could be implemented)
 
@@ -85,12 +87,17 @@ haven't built it yet" and could be added with focused work.
 8. **Abstract base classes** — `DC_BaseFunc`, `AbstractColorMapWFFunc`,
    `AbstractDisplacementMapWFFunc`, `AbstractFalloff3Func`. Each is a
    shared spatial/color skeleton with virtual-method overrides per
-   derived variation. Could in principle port the base once, then each
-   derivative becomes trivial — but in practice the spatial transform
-   of `DC_BaseFunc` reduces to `linear` or `uniform blur` once color
-   writes are dropped, so the 31 derivatives gain no spatial
-   distinctiveness. Color-write infrastructure would be the real
-   unlock here (see #5 / #11).
+   derived variation. `DC_BaseFunc` was previously listed as gated
+   on #11 (the spatial transform reduces to `linear` or `uniform
+   blur` once color writes are dropped, so the 34 derivatives would
+   gain no spatial distinctiveness). **`DC_BaseFunc` is now
+   unblocked** as of the 2026-05-29 #5/#11 resolution: the
+   derivatives can be ported as `writes_color: true` with a color
+   body, and they recover their distinctiveness through the color
+   register the same way the `dc_carpet3D` port does. The other three
+   bases (`AbstractColorMapWF`, `AbstractDisplacementMapWF`,
+   `AbstractFalloff3`) remain gated on texture/displacement sampling
+   (#2) or on the falloff coefficient table.
 
 9. **Subflames** — `subflame_wf` and friends invoke an entire other
    flame as a substep. Requires nested-flame execution infrastructure
@@ -106,13 +113,19 @@ haven't built it yet" and could be added with focused work.
     are blocked only by additional features (#11, #12, etc.), not by
     slot count.
 
-11. **Color-write affecting spatial output** — variations like
-    `dc_carpet3D` compute `dz = pVarTP.color * scale_z + offset_z`
-    where the color *is* the spatial differentiator. Without a
-    write-then-read color pipeline, the spatial output collapses to a
-    constant or to linear/blur. Different from #5 (read in non-color
-    path) — this is more about coupling the color-write pipeline to
-    spatial state.
+11. **~~Color-write affecting spatial output~~** — RESOLVED 2026-05-29
+    by the `dc_carpet3D` full port. Same `vc: ptr<function, f32>`
+    mechanism as #5: a variation can `let cur = *vc; *vc = next;`
+    then use `next` (or `cur`) in its spatial output, all in the
+    same body. The 2026-05-29 dc_carpet3D port writes the color and
+    then re-reads it to compute `dz = vc · scale_z + offset_z`
+    exactly as the JWildfire Java source does. Empirical
+    confirmation: with the transform's `direct_color = 0`,
+    color-param changes shift the 3D structure while leaving the
+    rendered color unchanged — proving the spatial output reads vc
+    and uses it independently of color rendering. The 34
+    `DC_BaseFunc` derivatives (#8 below) are now portable as
+    standard `writes_color: true` variations.
 
 12. **Prepost (priority-2) execution** — variations like
     `prepost_circlize` and `prepost_mobius` run *both* a pre-variation
@@ -228,14 +241,44 @@ features once you read the cpp body carefully):
 | `glsl_squares` | GLSL fragment + `DC_BaseFunc` |
 | `glsl_starsfield` | GLSL fragment + `DC_BaseFunc` |
 
-### `DC_BaseFunc` derivatives (#8 + #11) — 31 variations
+### `DC_BaseFunc` derivatives — infrastructure unblocked, per-variation porting remains
 
-All of these extend `DC_BaseFunc` and override `getRGBColor(uV)`. The
-spatial transform reduces to either `linear` (when `colorOnly=1`) or
-`uniform blur in [-0.5, 0.5]` (when `colorOnly=0`, the default). The
-distinctive content is entirely in the color/z output, which our
-write-only color model drops. Either color-coupled spatial output (#11)
-or porting all 31 as no-op blurs would address them.
+These extend `DC_BaseFunc` and override `getRGBColor(uV)`. The base's
+spatial transform is `linear` (when `colorOnly=1`) or `uniform blur in
+[-0.5, 0.5]` (when `colorOnly=0`, the default) — that part is trivial.
+The distinctive content is in the color output, computed by each
+derivative's `getRGBColor()`.
+
+**Status:** With the 2026-05-29 #5/#11 resolution, the *color-pipeline*
+gate is gone — these can write `*vc` and the spatial output can read it
+back, same as `dc_carpet3D`. **But the original blockers framing
+("trivial color body ports") was misleading.** Each derivative is a
+real port:
+
+- `getRGBColor()` is typically 100–200 lines of GLSL-style procedural
+  pattern math (modulo, trig, multi-octave iteration, distance fields,
+  noise hashing) referencing JWildfire's `js.glsl.G` namespace.
+- Several need infrastructure we don't have yet: Perlin permutation
+  tables (`dc_perlin`), Worley/Voronoi cell sampling (`dc_voronoise`),
+  more transcendental complex functions on top of the Klein-group
+  baseline in [`shaders/core/complex.wgsl`](../../shaders/core/complex.wgsl)
+  (`dc_apollonian`, `dc_mandbrot`, `dc_mandelbox2d`, `dc_kaliset`,
+  `dc_kaliset2`, etc.).
+- Several use time-based animation params (`time`, elapsed-ms walls)
+  that we don't track per-iteration today.
+- The base class's `gradient=0` and `gradient=1` modes inject
+  `pVarTP.{red,green,blue}Color` directly, bypassing the palette.
+  Our `vc: f32` register only carries a palette index; the
+  `gradient=2` mode (greyscale luminance → palette index) maps to
+  `*vc` cleanly, but mode-0 and mode-1 would need widening the
+  accumulator to carry RGB — a separate shader-side feature.
+
+Realistic per-variation cost: 2–4 hours for simpler derivatives like
+`dc_squares` or `dc_rotations`; longer for those needing new primitives.
+Total for the set: tens of hours minimum.
+
+Listed below until ported. Pick individually or in thematic batches as
+useful flames need them.
 
 `dc_acrilic`, `dc_apollonian`, `dc_base`, `dc_circlesblue`,
 `dc_circuits`, `dc_ducks`, `dc_escher`, `dc_fractaldots`, `dc_gnarly`,
@@ -298,7 +341,11 @@ or porting all 31 as no-op blurs would address them.
 | `displacemap_wf` | Displacement map texture (also #8) |
 | `post_displacemap_wf` | Same |
 
-### Color-register read (#5) — 4 variations
+### Color-register read — unblocked 2026-05-29 (was #5) — 4 variations
+
+Previously gated on blocker #5, now portable with the standard
+`writes_color: true` + `*vc` read pattern (see `dc_carpet3D` for the
+template). Listed here until ported.
 
 | Variation | Notes |
 |---|---|
