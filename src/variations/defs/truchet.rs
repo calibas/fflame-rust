@@ -51,6 +51,7 @@ use crate::param;
 /// - Tatyana Zabanova
 pub static TRUCHET_FILL: VariationDef = VariationDef {
     name: "truchet_fill",
+    aliases: &[],
     display_name: "Truchet Fill",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

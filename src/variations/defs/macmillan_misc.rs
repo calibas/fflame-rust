@@ -38,6 +38,7 @@ use crate::param;
 /// (`needs_accum + needs_transform + writes_color + wgsl_state_init`).
 pub static MACMILLAN: VariationDef = VariationDef {
     name: "macmillan",
+    aliases: &[],
     display_name: "MacMillan",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

@@ -42,6 +42,7 @@ use crate::param;
 /// - Larry Berlin
 pub static POPCORN2_3D: VariationDef = VariationDef {
     name: "popcorn2_3D",
+    aliases: &[],
     display_name: "Popcorn2 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,

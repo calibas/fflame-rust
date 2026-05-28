@@ -50,6 +50,7 @@ use crate::param;
 /// - Will Evans
 pub static KALEIDOSCOPE: VariationDef = VariationDef {
     name: "kaleidoscope",
+    aliases: &[],
     display_name: "Kaleidoscope",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -129,6 +130,7 @@ fn variation_kaleidoscope(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec
 /// - gossamer light
 pub static TAURUS: VariationDef = VariationDef {
     name: "taurus",
+    aliases: &[],
     display_name: "Taurus",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
@@ -205,6 +207,7 @@ fn variation_taurus(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 /// - Rick Sidwell
 pub static HOLE2: VariationDef = VariationDef {
     name: "hole2",
+    aliases: &[],
     display_name: "Hole 2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

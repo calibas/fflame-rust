@@ -72,6 +72,7 @@ use crate::param;
 /// - DarkBeam
 pub static XERF: VariationDef = VariationDef {
     name: "xerf",
+    aliases: &[],
     display_name: "X Erf",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
@@ -154,6 +155,7 @@ fn variation_xerf(p: vec3<f32>) -> vec3<f32> {
 /// - Whittaker Courtney
 pub static INVERTED_JULIA: VariationDef = VariationDef {
     name: "inverted_julia",
+    aliases: &[],
     display_name: "Inverted Julia",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -251,6 +253,7 @@ fn variation_inverted_julia(p: vec3<f32>, xform_id: u32, variation_id: u32, rng:
 /// - Michael Faber
 pub static IDISC: VariationDef = VariationDef {
     name: "idisc",
+    aliases: &[],
     display_name: "I-Disc",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -306,6 +309,7 @@ fn variation_idisc(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 /// - cyberxaos
 pub static CONIC: VariationDef = VariationDef {
     name: "conic",
+    aliases: &[],
     display_name: "Conic",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -368,6 +372,7 @@ fn variation_conic(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<func
 /// swap quirk, preserved).
 pub static POWER: VariationDef = VariationDef {
     name: "power",
+    aliases: &[],
     display_name: "Power",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -415,6 +420,7 @@ fn variation_power(p: vec3<f32>) -> vec3<f32> {
 /// - Raykoid666
 pub static ROUNDSPHER: VariationDef = VariationDef {
     name: "roundspher",
+    aliases: &[],
     display_name: "Round Spher",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -479,6 +485,7 @@ fn variation_roundspher(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<
 /// - Xyrus02
 pub static CHECKS: VariationDef = VariationDef {
     name: "checks",
+    aliases: &[],
     display_name: "Checks",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -568,6 +575,7 @@ fn variation_checks(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
 /// - Brad Stefanov
 pub static CONE: VariationDef = VariationDef {
     name: "cone",
+    aliases: &[],
     display_name: "Cone",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,

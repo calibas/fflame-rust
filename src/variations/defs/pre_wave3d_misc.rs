@@ -34,6 +34,7 @@ use crate::param;
 /// `|damping| ≈ 0`.
 pub static PRE_WAVE3D_WF: VariationDef = VariationDef {
     name: "pre_wave3D_wf",
+    aliases: &[],
     display_name: "Pre Wave 3D WF",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Pre,

@@ -60,6 +60,7 @@ fn gm_lgamma(x: f32) -> f32 {
 /// - DarkBeam
 pub static GAMMA: VariationDef = VariationDef {
     name: "gamma",
+    aliases: &[],
     display_name: "Gamma",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

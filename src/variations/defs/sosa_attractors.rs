@@ -51,6 +51,7 @@ use crate::param;
 /// - Jesus Sosa
 pub static CLIFFORD_JS: VariationDef = VariationDef {
     name: "clifford_js",
+    aliases: &[],
     display_name: "Clifford (JS)",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -104,6 +105,7 @@ fn variation_clifford_js(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3
 /// - Jesus Sosa
 pub static SVENSSON_JS: VariationDef = VariationDef {
     name: "svensson_js",
+    aliases: &[],
     display_name: "Svensson (JS)",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -158,6 +160,7 @@ fn variation_svensson_js(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3
 /// - Jesus Sosa
 pub static SATTRACTOR_JS: VariationDef = VariationDef {
     name: "sattractor_js",
+    aliases: &[],
     display_name: "S-Attractor (JS)",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

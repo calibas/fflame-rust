@@ -36,6 +36,7 @@ use crate::param;
 /// - Xyrus02
 pub static CURL_SP: VariationDef = VariationDef {
     name: "curl_sp",
+    aliases: &[],
     display_name: "Curl SP",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,

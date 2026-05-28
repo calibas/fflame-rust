@@ -45,6 +45,7 @@ use crate::param;
 /// - Michael Faber
 pub static BCOLLIDE: VariationDef = VariationDef {
     name: "bcollide",
+    aliases: &[],
     display_name: "BCollide",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -123,6 +124,7 @@ fn variation_bcollide(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
 /// - Michael Faber
 pub static BMOD: VariationDef = VariationDef {
     name: "bmod",
+    aliases: &[],
     display_name: "BMod",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -190,6 +192,7 @@ fn variation_bmod(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
 /// - Michael Faber
 pub static BSWIRL: VariationDef = VariationDef {
     name: "bswirl",
+    aliases: &[],
     display_name: "BSwirl",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -253,6 +256,7 @@ fn variation_bswirl(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 /// - Xyrus02
 pub static BARYCENTROID: VariationDef = VariationDef {
     name: "barycentroid",
+    aliases: &[],
     display_name: "Barycentroid",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -344,6 +348,7 @@ fn variation_barycentroid(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec
 /// - Michael Faber
 pub static ECOLLIDE: VariationDef = VariationDef {
     name: "ecollide",
+    aliases: &[],
     display_name: "ECollide",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -427,6 +432,7 @@ fn variation_ecollide(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
 /// - Michael Faber
 pub static EMOD: VariationDef = VariationDef {
     name: "emod",
+    aliases: &[],
     display_name: "EMod",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -505,6 +511,7 @@ fn variation_emod(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
 /// - Michael Faber
 pub static ESWIRL: VariationDef = VariationDef {
     name: "eswirl",
+    aliases: &[],
     display_name: "ESwirl",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -567,6 +574,7 @@ fn variation_eswirl(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 /// - Michael Faber
 pub static ESCALE: VariationDef = VariationDef {
     name: "escale",
+    aliases: &[],
     display_name: "EScale",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -646,6 +654,7 @@ fn variation_escale(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 /// - Michael Faber
 pub static EPUSH: VariationDef = VariationDef {
     name: "epush",
+    aliases: &[],
     display_name: "EPush",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -713,6 +722,7 @@ fn variation_epush(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 /// - Michael Faber
 pub static EROTATE: VariationDef = VariationDef {
     name: "erotate",
+    aliases: &[],
     display_name: "ERotate",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

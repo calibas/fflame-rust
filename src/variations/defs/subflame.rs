@@ -55,6 +55,7 @@ use crate::param;
 /// - Andreas Maschke
 pub static SUBFLAME_WF: VariationDef = VariationDef {
     name: "subflame_wf",
+    aliases: &[],
     display_name: "Subflame",
     category: VariationCategory::Plugin,
     phase: VariationPhase::Normal,

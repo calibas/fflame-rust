@@ -45,6 +45,7 @@ use crate::param;
 /// - Xyrus02
 pub static XTRB: VariationDef = VariationDef {
     name: "xtrb",
+    aliases: &[],
     display_name: "XTrB (TriBorders)",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

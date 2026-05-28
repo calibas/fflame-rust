@@ -12,6 +12,7 @@ use crate::variations::{
 /// the depth profile of an otherwise crisp 3D shape.
 pub static ZBLUR: VariationDef = VariationDef {
     name: "zblur",
+    aliases: &[],
     display_name: "Z-Blur",
     category: VariationCategory::Depth3D,
     phase: VariationPhase::Normal,
@@ -45,6 +46,7 @@ fn variation_zblur(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
 /// 3D counterpart of Gaussian Blur.
 pub static BLUR3D: VariationDef = VariationDef {
     name: "blur3d",
+    aliases: &[],
     display_name: "Blur 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
@@ -87,6 +89,7 @@ fn variation_blur3d(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
 /// iteration's starting position.
 pub static PRE_BLUR: VariationDef = VariationDef {
     name: "pre_blur",
+    aliases: &[],
     display_name: "Pre-Blur",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Pre,

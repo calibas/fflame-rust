@@ -53,6 +53,7 @@ use crate::param;
 /// - chronologicaldot
 pub static BSPLIT: VariationDef = VariationDef {
     name: "bsplit",
+    aliases: &[],
     display_name: "BSplit",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -113,6 +114,7 @@ fn variation_bsplit(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 /// toward [-1, 1] without affecting Y.
 pub static CYLINDER2: VariationDef = VariationDef {
     name: "cylinder2",
+    aliases: &[],
     display_name: "Cylinder 2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -161,6 +163,7 @@ fn variation_cylinder2(p: vec3<f32>) -> vec3<f32> {
 /// - Michael Faber
 pub static ECLIPSE: VariationDef = VariationDef {
     name: "eclipse",
+    aliases: &[],
     display_name: "Eclipse",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -228,6 +231,7 @@ fn variation_eclipse(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 /// - TyrantWave
 pub static LOZI: VariationDef = VariationDef {
     name: "lozi",
+    aliases: &[],
     display_name: "Lozi",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -271,6 +275,7 @@ fn variation_lozi(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
 /// axis. Per-axis frequency and amplitude controls.
 pub static PULSE: VariationDef = VariationDef {
     name: "pulse",
+    aliases: &[],
     display_name: "Pulse",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -335,6 +340,7 @@ fn variation_pulse(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 /// - Brad Stefanov
 pub static HYPERSHIFT: VariationDef = VariationDef {
     name: "hypershift",
+    aliases: &[],
     display_name: "Hypershift",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

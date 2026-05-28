@@ -33,6 +33,7 @@ use crate::param;
 /// - DarkBeam
 pub static PLUSRECIP: VariationDef = VariationDef {
     name: "plusrecip",
+    aliases: &[],
     display_name: "Plus Recip",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

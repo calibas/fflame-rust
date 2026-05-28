@@ -64,6 +64,7 @@ use crate::param;
 /// - DarkBeam
 pub static ASTERIA: VariationDef = VariationDef {
     name: "asteria",
+    aliases: &[],
     display_name: "Asteria",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -192,6 +193,7 @@ fn variation_asteria(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fu
 /// - zephyrtronium
 pub static ESTIQ: VariationDef = VariationDef {
     name: "estiq",
+    aliases: &[],
     display_name: "Estiq",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
@@ -248,6 +250,7 @@ fn variation_estiq(p: vec3<f32>) -> vec3<f32> {
 /// - CozyG
 pub static FDISC: VariationDef = VariationDef {
     name: "fdisc",
+    aliases: &[],
     display_name: "F-Disc",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -344,6 +347,7 @@ fn variation_fdisc(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 /// - Michael Faber
 pub static BTRANSFORM: VariationDef = VariationDef {
     name: "bTransform",
+    aliases: &[],
     display_name: "B-Transform",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -454,6 +458,7 @@ fn variation_bTransform(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
 /// selects one of `|n|` angular branches.
 pub static NPOLAR: VariationDef = VariationDef {
     name: "nPolar",
+    aliases: &[],
     display_name: "N-Polar",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

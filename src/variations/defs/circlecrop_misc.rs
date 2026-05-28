@@ -33,6 +33,7 @@ use crate::param;
 /// - Xyrus02
 pub static CIRCLECROP: VariationDef = VariationDef {
     name: "circlecrop",
+    aliases: &[],
     display_name: "Circle Crop",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

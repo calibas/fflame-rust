@@ -38,6 +38,7 @@ use crate::param;
 /// of the curve.
 pub static CANNABISCURVE_WF: VariationDef = VariationDef {
     name: "cannabiscurve_wf",
+    aliases: &[],
     display_name: "Cannabis Curve WF",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -95,6 +96,7 @@ fn variation_cannabiscurve_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, rn
 /// output.
 pub static SPHERICAL3D_WF: VariationDef = VariationDef {
     name: "spherical3D_wf",
+    aliases: &[],
     display_name: "Spherical 3D WF",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
@@ -171,6 +173,7 @@ fn variation_spherical3D_wf(p: vec3<f32>, xform_id: u32, variation_id: u32) -> v
 /// (uses `getPrecalcAtanYX()` = `atan2(y, x)`).
 pub static SWIRL3D_WF: VariationDef = VariationDef {
     name: "swirl3D_wf",
+    aliases: &[],
     display_name: "Swirl 3D WF",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,

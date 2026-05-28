@@ -47,6 +47,7 @@ use crate::param;
 /// - Zy0rg
 pub static SINEBLUR: VariationDef = VariationDef {
     name: "sineblur",
+    aliases: &[],
     display_name: "Sine Blur",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -117,6 +118,7 @@ fn variation_sineblur(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
 /// - Zy0rg
 pub static STARBLUR: VariationDef = VariationDef {
     name: "starblur",
+    aliases: &[],
     display_name: "Star Blur",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -216,6 +218,7 @@ fn variation_starblur(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
 /// - Tatyana Zabanova
 pub static R_CIRCLEBLUR: VariationDef = VariationDef {
     name: "r_circleblur",
+    aliases: &[],
     display_name: "R Circle Blur",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

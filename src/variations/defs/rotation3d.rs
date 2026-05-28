@@ -14,6 +14,7 @@ use crate::variations::{
 /// e.g. set the weight to 1.57 for a 90° rotation.
 pub static PRE_ROTATE_X: VariationDef = VariationDef {
     name: "pre_rotate_x",
+    aliases: &[],
     display_name: "Pre Rotate X",
     category: VariationCategory::Rotation3D,
     phase: VariationPhase::Pre,
@@ -50,6 +51,7 @@ fn variation_pre_rotate_x(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec
 /// The rotation angle (in radians) is the variation's own weight slider.
 pub static PRE_ROTATE_Y: VariationDef = VariationDef {
     name: "pre_rotate_y",
+    aliases: &[],
     display_name: "Pre Rotate Y",
     category: VariationCategory::Rotation3D,
     phase: VariationPhase::Pre,
@@ -87,6 +89,7 @@ fn variation_pre_rotate_y(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec
 /// slider.
 pub static POST_ROTATE_X: VariationDef = VariationDef {
     name: "post_rotate_x",
+    aliases: &[],
     display_name: "Post Rotate X",
     category: VariationCategory::Rotation3D,
     phase: VariationPhase::Post,
@@ -124,6 +127,7 @@ fn variation_post_rotate_x(p: vec3<f32>, xform_id: u32, variation_id: u32) -> ve
 /// slider.
 pub static POST_ROTATE_Y: VariationDef = VariationDef {
     name: "post_rotate_y",
+    aliases: &[],
     display_name: "Post Rotate Y",
     category: VariationCategory::Rotation3D,
     phase: VariationPhase::Post,

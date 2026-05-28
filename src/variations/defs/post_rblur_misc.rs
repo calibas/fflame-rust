@@ -28,6 +28,7 @@ use crate::param;
 /// - Xyrus02
 pub static POST_RBLUR: VariationDef = VariationDef {
     name: "post_rblur",
+    aliases: &[],
     display_name: "Post R-Blur",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Post,

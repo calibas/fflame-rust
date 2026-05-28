@@ -42,6 +42,7 @@ use crate::param;
 /// - Larry Berlin
 pub static HEXAPLAY_3D: VariationDef = VariationDef {
     name: "hexaplay3D",
+    aliases: &[],
     display_name: "Hexaplay 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,

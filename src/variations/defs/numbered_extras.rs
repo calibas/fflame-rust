@@ -47,6 +47,7 @@ use crate::param;
 /// - Brad Stefanov
 pub static BIPOLAR2: VariationDef = VariationDef {
     name: "bipolar2",
+    aliases: &[],
     display_name: "Bipolar 2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -164,6 +165,7 @@ fn variation_bipolar2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
 /// modulates with the same waves pattern.
 pub static BLOB3D: VariationDef = VariationDef {
     name: "blob3d",
+    aliases: &[],
     display_name: "Blob 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
@@ -219,6 +221,7 @@ fn variation_blob3d(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 /// - Brad Stefanov
 pub static CIRCULAR2: VariationDef = VariationDef {
     name: "circular2",
+    aliases: &[],
     display_name: "Circular 2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

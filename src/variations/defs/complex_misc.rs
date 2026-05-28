@@ -50,6 +50,7 @@ use crate::param;
 /// - Brad Stefanov
 pub static COMPLEX: VariationDef = VariationDef {
     name: "complex",
+    aliases: &[],
     display_name: "Complex",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

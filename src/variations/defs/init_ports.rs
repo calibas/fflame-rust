@@ -35,6 +35,7 @@ use crate::variations::{
 /// - Michael Faber
 pub static TARGET: VariationDef = VariationDef {
     name: "target",
+    aliases: &[],
     display_name: "Target",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -128,6 +129,7 @@ fn variation_target(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 /// - DarkBeam
 pub static YIN_YANG: VariationDef = VariationDef {
     name: "yin_yang",
+    aliases: &[],
     display_name: "Yin Yang",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

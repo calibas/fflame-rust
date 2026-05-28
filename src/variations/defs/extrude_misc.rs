@@ -30,6 +30,7 @@ use crate::param;
 /// - Xyrus02
 pub static EXTRUDE: VariationDef = VariationDef {
     name: "extrude",
+    aliases: &[],
     display_name: "Extrude",
     category: VariationCategory::Depth3D,
     phase: VariationPhase::Normal,

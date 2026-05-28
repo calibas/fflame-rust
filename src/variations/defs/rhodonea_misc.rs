@@ -47,6 +47,7 @@ use crate::param;
 /// - CozyG
 pub static RHODONEA: VariationDef = VariationDef {
     name: "rhodonea",
+    aliases: &[],
     display_name: "Rhodonea",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

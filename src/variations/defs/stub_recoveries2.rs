@@ -55,6 +55,7 @@ use crate::param;
 /// - Brad Stefanov
 pub static DISC3: VariationDef = VariationDef {
     name: "disc3",
+    aliases: &[],
     display_name: "Disc 3",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -132,6 +133,7 @@ fn variation_disc3(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 /// - eralex61
 pub static PROJECTIVE: VariationDef = VariationDef {
     name: "projective",
+    aliases: &[],
     display_name: "Projective",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -222,6 +224,7 @@ fn variation_projective(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<
 /// - Brad Stefanov
 pub static TQMIRROR: VariationDef = VariationDef {
     name: "tqmirror",
+    aliases: &[],
     display_name: "TQ Mirror",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -340,6 +343,7 @@ fn variation_tqmirror(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
 /// - Brad Stefanov
 pub static INTERSECTION: VariationDef = VariationDef {
     name: "intersection",
+    aliases: &[],
     display_name: "Intersection",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
