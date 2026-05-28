@@ -230,17 +230,25 @@ fn parse_flame_element(
         None
     };
 
-    // Determine render mode: if any camera parameters are set, use 3D mode
-    let has_camera_params = f32::abs(cam_pitch) > 0.0001
+    // Apophysis 7X and JWildfire write 3D flames exclusively (every
+    // variation in their corpus is treated as 3D-capable; the camera
+    // params are optional with zero defaults for "flat" views). We
+    // default to 3D mode on import so 3D-only variations (zcone,
+    // hemisphere, pre_rotate_x, etc.) work correctly. The render mode
+    // can still be toggled in the UI after import.
+    //
+    // Chaotica's situation is less clear — its corpus has 3D variations
+    // but no obvious 3D camera controls. Treating it as 3D-on-import
+    // for now and revisiting if a Chaotica-source-detection path lands.
+    //
+    // `has_camera_params` is kept here for the previous heuristic's
+    // information value (logging) and any future per-source overrides.
+    let _has_camera_params = f32::abs(cam_pitch) > 0.0001
         || f32::abs(cam_yaw) > 0.0001
         || f32::abs(cam_zpos) > 0.0001
         || f32::abs(cam_perspective) > 0.0001;
 
-    let render_mode = if has_camera_params {
-        RenderMode::ThreeD
-    } else {
-        RenderMode::TwoD
-    };
+    let render_mode = RenderMode::ThreeD;
 
     // Determine perspective strength from cam_perspective
     let perspective_strength = f32::abs(cam_perspective);
