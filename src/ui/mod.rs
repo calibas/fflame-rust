@@ -1171,10 +1171,13 @@ impl EguiLayer {
                         let texture_id = fractal_texture_id;
                         let full_height = leaf.rect.height();
                         // Draw fractal texture over the tab bar and block clicks on
-                        // hidden tab buttons. Order::Middle keeps this below floating windows.
+                        // hidden tab buttons. Order::Background sits above the dock's
+                        // own Background content (tab bar buttons get hidden) but
+                        // below floating windows on Order::Middle — keeps panels like
+                        // Help drawn on top of the cover instead of behind it.
                         egui::Area::new(egui::Id::new("viewport_tab_cover"))
                             .fixed_pos(tab_bar_rect.min)
-                            .order(egui::Order::Middle)
+                            .order(egui::Order::Background)
                             .interactable(true)
                             .show(ctx, |ui| {
                                 let (rect, _) = ui.allocate_exact_size(
