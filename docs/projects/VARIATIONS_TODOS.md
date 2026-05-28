@@ -103,7 +103,6 @@ the answer is known — that's the convention for "unknown" per
 - `invpolar` ([simple_classics.rs](../../src/variations/defs/simple_classics.rs))
 - `nPolar` ([apo_misc7.rs](../../src/variations/defs/apo_misc7.rs))
 - `hyperbolicellipse` ([apo_misc8.rs](../../src/variations/defs/apo_misc8.rs))
-- `swirl3` ([apo_misc11.rs](../../src/variations/defs/apo_misc11.rs))
 - `invsquircular` ([apo_misc11.rs](../../src/variations/defs/apo_misc11.rs))
 - `rings` ([apo_misc12.rs](../../src/variations/defs/apo_misc12.rs))
 - `pre_spin_z` ([spin_phase.rs](../../src/variations/defs/spin_phase.rs))
@@ -573,26 +572,33 @@ canon. For non-`_wf` variants (Apo-side, mostly), Apo 7X is canon.
   our cpp port had the swap. **Fixed**: body now uses
   `atan2(p.y, p.x)`. The `if ai < 0: n++` branch selection now
   reflects Java's iteration distribution.
+- **`swirl3`** ([apo_misc11.rs](../../src/variations/defs/apo_misc11.rs))
+  — Author Zy0rg. Both Fractorium (Ember) source and JWildfire GPU
+  code use standard `atan2(y, x)` with `+ log(r)·shift` and
+  `(cos, sin)` output. Our cpp port had `atan2(x, y)` (swapped),
+  which algebraically equals `(sin(θ - log·shift), cos(θ - log·shift))`
+  — the form the TODO previously described. **Fixed**: body uses
+  `atan2(p.y, p.x)`; added Zy0rg to authors block.
 
-#### Pending Apo 7X research
+#### Pending research
 
-The remaining six are Apo-side (no `_wf`); we need to find the Apo 7X
-source for each before deciding whether the swap is canonical (like
-`nPolar`) or a converter bug (like `swirl3D_wf`):
+The remaining four are harder — they're not standard Apo 7X plugins,
+and Apo 7X core variations like `power`/`rings` live inline in the
+Pascal renderer, not in separate `.pas` files. Need to consult
+non-Apo-7X canonical sources per variation:
 
 - **`power`** ([apo_misc.rs](../../src/variations/defs/apo_misc.rs)) —
-  exponent and output components both swapped vs JWildfire. Pure
-  diagonal mirror of input. Need Apo 7X source.
+  one of Scott Draves's original 27 from the *Fractal Flames* paper.
+  Canon = flam3 source ([scottdraves/flam3](https://github.com/scottdraves/flam3)).
+- **`rings`** ([apo_misc12.rs](../../src/variations/defs/apo_misc12.rs)) —
+  also from the original 27. Canon = flam3.
 - **`flower_db`** ([apo_misc9.rs:273](../../src/variations/defs/apo_misc9.rs#L273))
-  — radius modulator reshape on top of output swap; DarkBeam plugin.
-- **`swirl3`** ([apo_misc11.rs:66](../../src/variations/defs/apo_misc11.rs#L66))
-  — output XY swap + effective `shift` sign flip.
-- **`rings`** ([apo_misc12.rs:71](../../src/variations/defs/apo_misc12.rs#L71))
-  — simplest direct output swap.
-- **`pre_disc3d`** ([spin_phase.rs:178](../../src/variations/defs/spin_phase.rs#L178),
-  [:190](../../src/variations/defs/spin_phase.rs#L190))
-  — `vv = w · atan2(x, y) / pi` shift cascades through all 3 output
-  components.
+  — DarkBeam plugin (`_db` suffix). Not in Apo 7X repo. Canon = DarkBeam's
+  original deviantart post (hard to locate) or use JWildfire as
+  canon-by-proxy.
+- **`pre_disc3d`** ([spin_phase.rs](../../src/variations/defs/spin_phase.rs))
+  — JWildfire-only (Apo has `pre_disc` 2D, no 3D version). Canon =
+  JWildfire `PreDisc3DFunc.java`.
 
 **For variations where Apo 7X and JWildfire genuinely differ** (if
 any), the recommended approach is to **add a sibling variation**
