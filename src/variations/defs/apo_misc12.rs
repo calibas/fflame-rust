@@ -1,10 +1,13 @@
 //! Apophysis miscellany 12 — four more
 //!
-//!   - `rings`     (?)                   — 0 user; reads affine `xf.e`
+//!   - `rings`     (Scott Draves)         — 0 user; reads affine `xf.e`
 //!                                            (XFORM_COEFF_20) for `dx`;
-//!                                            preserves cpp's xy-output
-//!                                            swap (Java uses cosA for x,
-//!                                            sinA for y; cpp swaps);
+//!                                            output `(y/r0, x/r0)`
+//!                                            matches both flam3 and
+//!                                            JWildfire (their `cosA`/
+//!                                            `sinA` use swapped-angle
+//!                                            precalc, so `cosA = y/r0`
+//!                                            and `sinA = x/r0` there);
 //!                                            needs_transform divide-out
 //!                                            (cpp body lacks VVAR on
 //!                                            output)
@@ -38,11 +41,18 @@ use crate::variations::{
 use crate::param;
 
 // =============================================================================
-// rings
+// rings (Scott Draves)
 //   dx = xf.e² + ε   (XFORM_COEFF_20 of the transform's affine)
 //   r0 = sqrt(x² + y²) + ε
 //   r = r0 + dx − floor((r0 + dx)/(2·dx)) · 2·dx − dx + r0 · (1 − dx)
-//   out = r · (y/r0, x/r0)   (cpp xy-output swap; Java uses (x/r0, y/r0))
+//   out = r · (y/r0, x/r0)
+//
+// Output matches both flam3 (`var21_rings`: `nx = r·precalc_cosa`,
+// `ny = r·precalc_sina`, with `precalc_*a` derived from the swapped
+// `atan2(tx, ty)` so `cosa = ty/r0`, `sina = tx/r0`) and JWildfire
+// (`RingsFunc.java`: `x += r·getPrecalcCosA()`, `y += r·getPrecalcSinA()`,
+// same swapped-angle precalc). The "swap" relative to the input `(x, y)`
+// is canonical for this variation, not a porter introduction.
 // Body lacks VVAR on output — needs_transform divide-out.
 // =============================================================================
 /// Modular-radius ring warp — folds the input radius around `2·dx` cycles
@@ -50,6 +60,9 @@ use crate::param;
 /// concentric rings. Reads the affine `e` coefficient directly (not a
 /// normal variation parameter), so the ring spacing changes with the
 /// transform's pre-affine.
+///
+/// # Authors
+/// - Scott Draves
 pub static RINGS: VariationDef = VariationDef {
     name: "rings",
     display_name: "Rings",
