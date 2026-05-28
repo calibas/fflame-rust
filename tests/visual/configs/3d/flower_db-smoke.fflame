@@ -1,0 +1,84 @@
+{
+  "flame": {
+    "name": "Flower DB 3D Smoke",
+    "transforms": [
+      {
+        "a": 0.5, "b": 0.0, "c": 0.0,
+        "d": 0.5, "e": 0.0, "f": 0.0,
+        "g": 0.0, "weight": 1.0,
+        "variations": { "linear": 1.0 },
+        "variation_params": {},
+        "color": 0.0, "color_speed": 0.5, "opacity": 1.0
+      },
+      {
+        "a": 0.5, "b": 0.0, "c": 0.0,
+        "d": 0.5, "e": 0.5, "f": 0.0,
+        "g": 0.0, "weight": 1.0,
+        "variations": { "linear": 1.0 },
+        "variation_params": {},
+        "color": 0.5, "color_speed": 0.5, "opacity": 1.0
+      },
+      {
+        "a": 0.5, "b": 0.0, "c": 0.0,
+        "d": 0.5, "e": 0.0, "f": 0.5,
+        "g": 0.0, "weight": 1.0,
+        "variations": { "linear": 0.5, "flower_db": 0.5 },
+        "variation_params": {
+          "flower_db.petals": 6.0,
+          "flower_db.petal_split": 0.0,
+          "flower_db.petal_spread": 1.0,
+          "flower_db.stem_thickness": 0.0,
+          "flower_db.stem_length": 0.0,
+          "flower_db.petal_fold_strength": 0.0,
+          "flower_db.petal_fold_radius": 1.0
+        },
+        "color": 1.0, "color_speed": 0.5, "opacity": 1.0
+      }
+    ],
+    "render_mode": "ThreeD",
+    "projection": { "Perspective": { "strength": 2.0 } }
+  },
+  "zoom": 0.7,
+  "pan_x": 0.25,
+  "pan_y": 0.25,
+  "rotation": 0.0,
+  "camera_rotation_x": 0.0,
+  "camera_rotation_y": 0.0,
+  "camera_z": 0.0,
+  "density_scale": 1.0,
+  "speed_factor": 0.5,
+  "max_iterations": 5000000,
+  "histogram_color_scale": 100.0,
+  "low_density_smoothing": 0.5,
+  "density_compression_strength": 0.0,
+  "blend_factor": 0.1,
+  "use_dynamic_blend": true,
+  "target_iterations_per_pixel": 0,
+  "iterations_per_thread": 256,
+  "speed_multiplier": 4,
+  "color_mode": "Palette",
+  "palette_index": 0,
+  "palette": {
+    "name": "Rainbow (Custom)",
+    "stops": [
+      { "position": 0.0, "color": [1.0, 0.0, 0.0] },
+      { "position": 0.5, "color": [0.0, 1.0, 0.0] },
+      { "position": 1.0, "color": [0.0, 0.0, 1.0] }
+    ],
+    "locked": false
+  },
+  "palette_rotation": 0.0,
+  "background_color": [0.0, 0.0, 0.0],
+  "tonemap_mode": "Logarithmic",
+  "tonemap_curve": { "points": [{ "x": 0.0, "y": 0.0 }, { "x": 1.0, "y": 1.0 }] },
+  "use_curve": false,
+  "exposure": 1.0,
+  "gamma": 1.1,
+  "gamma_threshold": 0.0025,
+  "brightness": 4.0,
+  "vibrancy": 1.0,
+  "saturation": 1.0,
+  "hue_shift": 0.0,
+  "value_scale": 1.0,
+  "deterministic_rng": true
+}
