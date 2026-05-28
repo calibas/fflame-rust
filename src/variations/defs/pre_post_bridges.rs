@@ -54,6 +54,7 @@ use crate::param;
 /// - Xyrus02
 pub static PRE_CURL: VariationDef = VariationDef {
     name: "pre_curl",
+    aliases: &[],
     display_name: "Pre Curl",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Pre,
@@ -120,6 +121,7 @@ fn variation_pre_curl(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
 /// - Zueuk
 pub static POST_JULIAQ: VariationDef = VariationDef {
     name: "post_juliaq",
+    aliases: &[],
     display_name: "Post JuliaQ",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Post,
@@ -201,6 +203,7 @@ fn variation_post_juliaq(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: pt
 /// - Zueuk
 pub static POST_JULIA3DQ: VariationDef = VariationDef {
     name: "post_julia3dq",
+    aliases: &[],
     display_name: "Post Julia3DQ",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Post,

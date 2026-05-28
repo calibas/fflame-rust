@@ -50,6 +50,7 @@ use crate::param;
 /// - Scott Draves
 pub static ARCH: VariationDef = VariationDef {
     name: "arch",
+    aliases: &[],
     display_name: "Arch",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -101,6 +102,7 @@ fn variation_arch(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<funct
 /// variations.
 pub static BI_LINEAR: VariationDef = VariationDef {
     name: "bi_linear",
+    aliases: &[],
     display_name: "Bi-Linear",
     category: VariationCategory::Basic2D,
     phase: VariationPhase::Normal,
@@ -140,6 +142,7 @@ fn variation_bi_linear(p: vec3<f32>) -> vec3<f32> {
 /// - Z+
 pub static BLADE: VariationDef = VariationDef {
     name: "blade",
+    aliases: &[],
     display_name: "Blade",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -192,6 +195,7 @@ fn variation_blade(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<func
 /// - Z+
 pub static BLADE3D: VariationDef = VariationDef {
     name: "blade3D",
+    aliases: &[],
     display_name: "Blade 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
@@ -248,6 +252,7 @@ fn variation_blade3D(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fu
 /// - Michael Faber
 pub static SQUARIZE: VariationDef = VariationDef {
     name: "squarize",
+    aliases: &[],
     display_name: "Squarize",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -326,6 +331,7 @@ fn variation_squarize(p: vec3<f32>) -> vec3<f32> {
 /// - Michael Faber
 pub static SQUISH: VariationDef = VariationDef {
     name: "squish",
+    aliases: &[],
     display_name: "Squish",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -440,6 +446,7 @@ fn variation_squish(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
 /// the name.
 pub static TWOFACE: VariationDef = VariationDef {
     name: "twoface",
+    aliases: &[],
     display_name: "Two Face",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -494,6 +501,7 @@ fn variation_twoface(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 /// - Z+
 pub static TWINTRIAN: VariationDef = VariationDef {
     name: "twintrian",
+    aliases: &[],
     display_name: "Twin Trian",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -559,6 +567,7 @@ fn variation_twintrian(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
 /// coordinates back to cartesian.
 pub static UNPOLAR: VariationDef = VariationDef {
     name: "unpolar",
+    aliases: &[],
     display_name: "Unpolar",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

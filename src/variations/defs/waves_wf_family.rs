@@ -82,6 +82,7 @@ fn init_waves4_wf(user: array<f32, 8>) -> array<f32, 2> {
 /// - Joel Faber
 pub static WAVES2_WF: VariationDef = VariationDef {
     name: "waves2_wf",
+    aliases: &[],
     display_name: "Waves 2 WF",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -151,6 +152,7 @@ fn variation_waves2_wf(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
 /// - Joel Faber
 pub static WAVES3_WF: VariationDef = VariationDef {
     name: "waves3_wf",
+    aliases: &[],
     display_name: "Waves 3 WF",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -225,6 +227,7 @@ fn variation_waves3_wf(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
 /// - Joel Faber
 pub static WAVES4_WF: VariationDef = VariationDef {
     name: "waves4_wf",
+    aliases: &[],
     display_name: "Waves 4 WF",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -301,6 +304,7 @@ fn variation_waves4_wf(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
 /// com/DinisSurface](https://mathworld.wolfram.com/DinisSurface.html).
 pub static DINIS_SURFACE_WF: VariationDef = VariationDef {
     name: "dinis_surface_wf",
+    aliases: &[],
     display_name: "Dini's Surface WF",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,

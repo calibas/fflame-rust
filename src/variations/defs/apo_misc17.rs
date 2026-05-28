@@ -53,6 +53,7 @@ use crate::param;
 /// - zephyrtronium
 pub static LOQ: VariationDef = VariationDef {
     name: "loq",
+    aliases: &[],
     display_name: "Loq",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
@@ -120,6 +121,7 @@ fn variation_loq(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
 /// parameter selects one of 5 width-jitter patterns added to each axis.
 pub static SPIROGRAPH3D: VariationDef = VariationDef {
     name: "spirograph3D",
+    aliases: &[],
     display_name: "Spirograph 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,

@@ -40,6 +40,7 @@ use crate::param;
 /// - Jesus Sosa
 pub static SIERCARPET_JS: VariationDef = VariationDef {
     name: "siercarpet_js",
+    aliases: &[],
     display_name: "Siercarpet (JS)",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

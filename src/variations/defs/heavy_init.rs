@@ -53,6 +53,7 @@ use crate::variations::{
 /// - Zueuk
 pub static CPOW2: VariationDef = VariationDef {
     name: "cpow2",
+    aliases: &[],
     display_name: "CPow2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -181,6 +182,7 @@ fn variation_cpow2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<func
 /// - Zueuk
 pub static CPOW3: VariationDef = VariationDef {
     name: "cpow3",
+    aliases: &[],
     display_name: "CPow3",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -296,6 +298,7 @@ fn variation_cpow3(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<func
 /// ±2π.
 pub static DISC2: VariationDef = VariationDef {
     name: "disc2",
+    aliases: &[],
     display_name: "Disc2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

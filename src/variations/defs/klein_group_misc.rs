@@ -64,6 +64,7 @@ use crate::param;
 /// - CozyG
 pub static KLEIN_GROUP: VariationDef = VariationDef {
     name: "klein_group",
+    aliases: &[],
     display_name: "Klein Group",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

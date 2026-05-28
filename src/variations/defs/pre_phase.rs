@@ -13,6 +13,7 @@ use crate::param;
 /// halves it.
 pub static PRE_ZSCALE: VariationDef = VariationDef {
     name: "pre_zscale",
+    aliases: &[],
     display_name: "Pre-ZScale",
     category: VariationCategory::Depth3D,
     phase: VariationPhase::Pre,
@@ -44,6 +45,7 @@ fn variation_pre_zscale(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<
 /// run. The variation's weight is the offset.
 pub static PRE_ZTRANSLATE: VariationDef = VariationDef {
     name: "pre_ztranslate",
+    aliases: &[],
     display_name: "Pre-ZTranslate",
     category: VariationCategory::Depth3D,
     phase: VariationPhase::Pre,
@@ -78,6 +80,7 @@ fn variation_pre_ztranslate(p: vec3<f32>, xform_id: u32, variation_id: u32) -> v
 /// - Scott Draves
 pub static PRE_SPHERICAL: VariationDef = VariationDef {
     name: "pre_spherical",
+    aliases: &[],
     display_name: "Pre-Spherical",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Pre,
@@ -113,6 +116,7 @@ fn variation_pre_spherical(p: vec3<f32>) -> vec3<f32> {
 /// - Scott Draves
 pub static PRE_SINUSOIDAL: VariationDef = VariationDef {
     name: "pre_sinusoidal",
+    aliases: &[],
     display_name: "Pre-Sinusoidal",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Pre,
@@ -148,6 +152,7 @@ fn variation_pre_sinusoidal(p: vec3<f32>, xform_id: u32, variation_id: u32) -> v
 /// - Scott Draves
 pub static PRE_DISC: VariationDef = VariationDef {
     name: "pre_disc",
+    aliases: &[],
     display_name: "Pre-Disc",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Pre,
@@ -187,6 +192,7 @@ fn variation_pre_disc(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
 /// bubbled coordinates.
 pub static PRE_BWRAPS: VariationDef = VariationDef {
     name: "pre_bwraps",
+    aliases: &[],
     display_name: "Pre Bwraps",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Pre,
@@ -337,6 +343,7 @@ fn variation_pre_bwraps(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<
 /// - Xyrus02
 pub static PRE_CROP: VariationDef = VariationDef {
     name: "pre_crop",
+    aliases: &[],
     display_name: "Pre Crop",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Pre,
@@ -444,6 +451,7 @@ fn variation_pre_crop(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
 /// variations.
 pub static PRE_FALLOFF2: VariationDef = VariationDef {
     name: "pre_falloff2",
+    aliases: &[],
     display_name: "Pre Falloff2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Pre,

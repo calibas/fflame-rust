@@ -46,6 +46,7 @@ use crate::param;
 /// - TyrantWave
 pub static TRUCHET: VariationDef = VariationDef {
     name: "truchet",
+    aliases: &[],
     display_name: "Truchet",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

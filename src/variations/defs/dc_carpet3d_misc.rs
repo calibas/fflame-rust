@@ -50,6 +50,7 @@ use crate::param;
 /// - Brad Stefanov
 pub static DC_CARPET3D: VariationDef = VariationDef {
     name: "dc_carpet3D",
+    aliases: &[],
     display_name: "DC Carpet 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,

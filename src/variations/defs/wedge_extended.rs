@@ -42,6 +42,7 @@ use crate::param;
 /// - Apophysis Plugin Pack
 pub static WEDGE_JULIA: VariationDef = VariationDef {
     name: "wedge_julia",
+    aliases: &[],
     display_name: "Wedge Julia",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -141,6 +142,7 @@ fn variation_wedge_julia(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: pt
 /// - Apophysis Plugin Pack
 pub static WEDGE_SPH: VariationDef = VariationDef {
     name: "wedge_sph",
+    aliases: &[],
     display_name: "Wedge Sph",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

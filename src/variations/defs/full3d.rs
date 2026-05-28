@@ -12,6 +12,7 @@ use crate::variations::{
 /// origin sit high, points far away curve down toward the rim.
 pub static HEMISPHERE: VariationDef = VariationDef {
     name: "hemisphere",
+    aliases: &[],
     display_name: "Hemisphere",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,

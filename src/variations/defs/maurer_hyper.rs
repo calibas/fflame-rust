@@ -64,6 +64,7 @@ use crate::param;
 /// - CozyG
 pub static MAURER_ROSE: VariationDef = VariationDef {
     name: "maurer_rose",
+    aliases: &[],
     display_name: "Maurer Rose",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -311,6 +312,7 @@ fn variation_maurer_rose(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: pt
 /// - Brad Stefanov
 pub static HYPERCROP: VariationDef = VariationDef {
     name: "hypercrop",
+    aliases: &[],
     display_name: "Hypercrop",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

@@ -48,6 +48,7 @@ use crate::param;
 /// - FarDareisMai
 pub static LAZYJESS: VariationDef = VariationDef {
     name: "lazyjess",
+    aliases: &[],
     display_name: "Lazy Jess",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -250,6 +251,7 @@ fn variation_lazyjess(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
 /// - Michael Faber
 pub static LAZYTRAVIS: VariationDef = VariationDef {
     name: "lazytravis",
+    aliases: &[],
     display_name: "Lazy Travis",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

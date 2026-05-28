@@ -50,6 +50,7 @@ use crate::param;
 /// angular position.
 pub static EXP2: VariationDef = VariationDef {
     name: "exp2",
+    aliases: &[],
     display_name: "Exp 2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -91,6 +92,7 @@ fn variation_exp2(p: vec3<f32>) -> vec3<f32> {
 /// - Scott Draves
 pub static EXPONENTIAL: VariationDef = VariationDef {
     name: "exponential",
+    aliases: &[],
     display_name: "Exponential",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -135,6 +137,7 @@ fn variation_exponential(p: vec3<f32>) -> vec3<f32> {
 /// - Michael Faber
 pub static FLIPY: VariationDef = VariationDef {
     name: "flipy",
+    aliases: &[],
     display_name: "Flip Y",
     category: VariationCategory::Basic2D,
     phase: VariationPhase::Normal,
@@ -176,6 +179,7 @@ fn variation_flipy(p: vec3<f32>) -> vec3<f32> {
 /// - Raykoid666
 pub static FUNNEL: VariationDef = VariationDef {
     name: "funnel",
+    aliases: &[],
     display_name: "Funnel",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -229,6 +233,7 @@ fn variation_funnel(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 /// `polar` variation.
 pub static INVPOLAR: VariationDef = VariationDef {
     name: "invpolar",
+    aliases: &[],
     display_name: "Inv Polar",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -274,6 +279,7 @@ fn variation_invpolar(p: vec3<f32>) -> vec3<f32> {
 /// - Scott Draves
 pub static PERSPECTIVE: VariationDef = VariationDef {
     name: "perspective",
+    aliases: &[],
     display_name: "Perspective",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -345,6 +351,7 @@ fn variation_perspective(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3
 /// - chronologicaldot
 pub static LINE: VariationDef = VariationDef {
     name: "line",
+    aliases: &[],
     display_name: "Line",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
@@ -416,6 +423,7 @@ fn variation_line(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<funct
 /// - DarkBeam
 pub static HOLESQ: VariationDef = VariationDef {
     name: "holesq",
+    aliases: &[],
     display_name: "Hole Square",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

@@ -51,6 +51,7 @@ use crate::param;
 /// radii; `c1`/`c2` give per-axis amplitudes; `d` is the pen-arm length.
 pub static SPIROGRAPH: VariationDef = VariationDef {
     name: "spirograph",
+    aliases: &[],
     display_name: "Spirograph",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -137,6 +138,7 @@ fn variation_spirograph(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
 /// - Jed Kelsey
 pub static LISSAJOUS: VariationDef = VariationDef {
     name: "lissajous",
+    aliases: &[],
     display_name: "Lissajous",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -215,6 +217,7 @@ fn variation_lissajous(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
 /// - Victor Ganora
 pub static VOGEL: VariationDef = VariationDef {
     name: "vogel",
+    aliases: &[],
     display_name: "Vogel",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -303,6 +306,7 @@ fn variation_vogel(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<func
 /// - Xyrus02
 pub static CROP3D: VariationDef = VariationDef {
     name: "crop3d",
+    aliases: &[],
     display_name: "Crop 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,

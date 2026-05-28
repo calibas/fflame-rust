@@ -39,6 +39,7 @@ use crate::param;
 /// - Michael Faber
 pub static COLLIDEOSCOPE: VariationDef = VariationDef {
     name: "collideoscope",
+    aliases: &[],
     display_name: "Collideoscope",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -137,6 +138,7 @@ fn variation_collideoscope(p: vec3<f32>, xform_id: u32, variation_id: u32) -> ve
 /// - Apophysis Plugin Pack
 pub static BENT2: VariationDef = VariationDef {
     name: "bent2",
+    aliases: &[],
     display_name: "Bent 2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -187,6 +189,7 @@ fn variation_bent2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 /// - FracFx
 pub static MCARPET: VariationDef = VariationDef {
     name: "mcarpet",
+    aliases: &[],
     display_name: "MCarpet",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -250,6 +253,7 @@ fn variation_mcarpet(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 /// - FractalDesire
 pub static LINEART3D: VariationDef = VariationDef {
     name: "lineart3d",
+    aliases: &[],
     display_name: "Line Art 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
@@ -314,6 +318,7 @@ fn variation_lineart3d(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
 /// - Apophysis Plugin Pack
 pub static OSCILLOSCOPE: VariationDef = VariationDef {
     name: "oscilloscope",
+    aliases: &[],
     display_name: "Oscilloscope",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -399,6 +404,7 @@ fn variation_oscilloscope(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec
 /// - Larry Berlin
 pub static FIBONACCI2: VariationDef = VariationDef {
     name: "fibonacci2",
+    aliases: &[],
     display_name: "Fibonacci 2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

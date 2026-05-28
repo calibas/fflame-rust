@@ -36,6 +36,7 @@ use crate::param;
 /// 0.5) · amplitude_z`, optionally exponentially damped by `damping_z`.
 pub static WAVEBLUR_WF: VariationDef = VariationDef {
     name: "waveblur_wf",
+    aliases: &[],
     display_name: "Wave Blur WF",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,

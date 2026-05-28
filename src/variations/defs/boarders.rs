@@ -47,6 +47,7 @@ use crate::param;
 /// - Apophysis Plugin Pack
 pub static BOARDERS: VariationDef = VariationDef {
     name: "boarders",
+    aliases: &[],
     display_name: "Boarders",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -147,6 +148,7 @@ fn variation_boarders(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
 /// - Xyrus02
 pub static BOARDERS2: VariationDef = VariationDef {
     name: "boarders2",
+    aliases: &[],
     display_name: "Boarders 2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -272,6 +274,7 @@ fn variation_boarders2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
 /// - Xyrus02
 pub static PRE_BOARDERS2: VariationDef = VariationDef {
     name: "pre_boarders2",
+    aliases: &[],
     display_name: "Pre Boarders 2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Pre,
@@ -393,6 +396,7 @@ fn variation_pre_boarders2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: 
 /// - FracFx
 pub static SPLITBRDR: VariationDef = VariationDef {
     name: "splitbrdr",
+    aliases: &[],
     display_name: "Split Brdr",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

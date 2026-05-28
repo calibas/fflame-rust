@@ -29,6 +29,7 @@ use crate::variations::{
 /// points outward in all three axes.
 pub static SPHERICAL3D: VariationDef = VariationDef {
     name: "spherical3d",
+    aliases: &[],
     display_name: "Spherical 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
@@ -68,6 +69,7 @@ fn variation_spherical3d(p: vec3<f32>) -> vec3<f32> {
 /// - gossamer light
 pub static SINUSOIDAL3D: VariationDef = VariationDef {
     name: "sinusoidal3d",
+    aliases: &[],
     display_name: "Sinusoidal 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
@@ -100,6 +102,7 @@ fn variation_sinusoidal3d(p: vec3<f32>) -> vec3<f32> {
 /// random point in `[-0.5, 0.5]²`.
 pub static SQUARE: VariationDef = VariationDef {
     name: "square",
+    aliases: &[],
     display_name: "Square",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -130,6 +133,7 @@ fn variation_square(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
 /// 3D unit-cube version of Square — random point in `[-0.5, 0.5]³`.
 pub static SQUARE3D: VariationDef = VariationDef {
     name: "square3d",
+    aliases: &[],
     display_name: "Square 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
@@ -165,6 +169,7 @@ fn variation_square3d(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
 /// - Larry Berlin
 pub static DISC3D: VariationDef = VariationDef {
     name: "disc3d",
+    aliases: &[],
     display_name: "Disc 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
@@ -213,6 +218,7 @@ fn variation_disc3d(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 /// - FracFx
 pub static BUBBLE2: VariationDef = VariationDef {
     name: "bubble2",
+    aliases: &[],
     display_name: "Bubble2",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
@@ -268,6 +274,7 @@ fn variation_bubble2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 /// - Apophysis Plugin Pack
 pub static POPCORN2: VariationDef = VariationDef {
     name: "popcorn2",
+    aliases: &[],
     display_name: "Popcorn2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -316,6 +323,7 @@ fn variation_popcorn2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
 /// - TyrantWave
 pub static SPLITS3D: VariationDef = VariationDef {
     name: "splits3d",
+    aliases: &[],
     display_name: "Splits 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
@@ -371,6 +379,7 @@ fn variation_splits3d(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
 /// - Larry Berlin
 pub static WAVES2_3D: VariationDef = VariationDef {
     name: "waves2_3d",
+    aliases: &[],
     display_name: "Waves2 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
@@ -426,6 +435,7 @@ fn variation_waves2_3d(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
 /// - Zueuk
 pub static JULIAQ: VariationDef = VariationDef {
     name: "juliaq",
+    aliases: &[],
     display_name: "JuliaQ",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -499,6 +509,7 @@ fn variation_juliaq(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
 /// - Zueuk
 pub static JULIA3DQ: VariationDef = VariationDef {
     name: "julia3dq",
+    aliases: &[],
     display_name: "Julia 3D Q",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
@@ -583,6 +594,7 @@ fn variation_julia3dq(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
 /// - David Young
 pub static JULIAC: VariationDef = VariationDef {
     name: "juliac",
+    aliases: &[],
     display_name: "JuliaC",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

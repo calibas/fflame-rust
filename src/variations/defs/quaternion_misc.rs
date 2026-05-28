@@ -56,6 +56,7 @@ use crate::param;
 /// - Brad Stefanov
 pub static QUATERNION: VariationDef = VariationDef {
     name: "quaternion",
+    aliases: &[],
     display_name: "Quaternion",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,

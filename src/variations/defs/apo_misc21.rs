@@ -41,6 +41,7 @@ use crate::param;
 /// right half of the heart, each with its own radial scale.
 pub static HEART_WF: VariationDef = VariationDef {
     name: "heart_wf",
+    aliases: &[],
     display_name: "Heart WF",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -120,6 +121,7 @@ fn variation_heart_wf(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
 /// position of a transform's accumulated output.
 pub static POST_ZTRANSLATE_WF: VariationDef = VariationDef {
     name: "post_ztranslate_wf",
+    aliases: &[],
     display_name: "Post Z-Translate WF",
     category: VariationCategory::Depth3D,
     phase: VariationPhase::Post,
@@ -156,6 +158,7 @@ fn variation_post_ztranslate_wf(p: vec3<f32>, xform_id: u32, variation_id: u32) 
 /// iteration.
 pub static POST_MIRROR_WF: VariationDef = VariationDef {
     name: "post_mirror_wf",
+    aliases: &[],
     display_name: "Post Mirror WF",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Post,

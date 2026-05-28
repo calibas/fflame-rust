@@ -37,6 +37,7 @@ use crate::variations::{
 /// - Raykoid666
 pub static TANCOS: VariationDef = VariationDef {
     name: "tancos",
+    aliases: &[],
     display_name: "TanCos",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -74,6 +75,7 @@ fn variation_tancos(p: vec3<f32>) -> vec3<f32> {
 /// same as Tan from trig.rs (which is the complex tangent).
 pub static TANGENT: VariationDef = VariationDef {
     name: "tangent",
+    aliases: &[],
     display_name: "Tangent",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -109,6 +111,7 @@ fn variation_tangent(p: vec3<f32>) -> vec3<f32> {
 /// depth modulation along the X coordinate.
 pub static TANGENT3D: VariationDef = VariationDef {
     name: "tangent3d",
+    aliases: &[],
     display_name: "Tangent 3D",
     category: VariationCategory::Depth3D,
     phase: VariationPhase::Normal,
@@ -151,6 +154,7 @@ fn variation_tangent3d(p: vec3<f32>) -> vec3<f32> {
 /// Produces banded patterns with a sharp jump at the cos-sign boundary.
 pub static SECANT2: VariationDef = VariationDef {
     name: "secant2",
+    aliases: &[],
     display_name: "Secant2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -193,6 +197,7 @@ fn variation_secant2(p: vec3<f32>) -> vec3<f32> {
 /// growth.
 pub static COSINE: VariationDef = VariationDef {
     name: "cosine",
+    aliases: &[],
     display_name: "Cosine",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -234,6 +239,7 @@ fn variation_cosine(p: vec3<f32>) -> vec3<f32> {
 /// - Raykoid666
 pub static PETAL: VariationDef = VariationDef {
     name: "petal",
+    aliases: &[],
     display_name: "Petal",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -286,6 +292,7 @@ fn variation_petal(p: vec3<f32>) -> vec3<f32> {
 /// - Michael Faber
 pub static CARDIOID: VariationDef = VariationDef {
     name: "cardioid",
+    aliases: &[],
     display_name: "Cardioid",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -331,6 +338,7 @@ fn variation_cardioid(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
 /// - Zy0rg
 pub static HELIX: VariationDef = VariationDef {
     name: "helix",
+    aliases: &[],
     display_name: "Helix",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
@@ -377,6 +385,7 @@ fn variation_helix(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 /// - Zy0rg
 pub static HELICOID: VariationDef = VariationDef {
     name: "helicoid",
+    aliases: &[],
     display_name: "Helicoid",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
@@ -425,6 +434,7 @@ fn variation_helicoid(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
 /// - cyberxaos
 pub static PARABOLA: VariationDef = VariationDef {
     name: "parabola",
+    aliases: &[],
     display_name: "Parabola",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -480,6 +490,7 @@ fn variation_parabola(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
 /// - Apophysis Plugin Pack
 pub static PIE: VariationDef = VariationDef {
     name: "pie",
+    aliases: &[],
     display_name: "Pie",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -532,6 +543,7 @@ fn variation_pie(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<functi
 /// r·sin(r)` for depth modulation.
 pub static PIE3D: VariationDef = VariationDef {
     name: "pie3d",
+    aliases: &[],
     display_name: "Pie 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,

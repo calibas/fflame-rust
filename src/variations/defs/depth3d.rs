@@ -13,6 +13,7 @@ use crate::variations::{
 /// origin and whose base spreads outward.
 pub static ZCONE: VariationDef = VariationDef {
     name: "zcone",
+    aliases: &[],
     display_name: "ZCone",
     category: VariationCategory::Depth3D,
     phase: VariationPhase::Normal,
@@ -46,6 +47,7 @@ fn variation_zcone(p: vec3<f32>) -> vec3<f32> {
 /// 3D variations.
 pub static FLATTEN: VariationDef = VariationDef {
     name: "flatten",
+    aliases: &[],
     display_name: "Flatten",
     category: VariationCategory::Depth3D,
     // NOTE: Flatten is treated as POST despite being index 1 (Apophysis XForm.pas)
@@ -80,6 +82,7 @@ fn variation_flatten(p: vec3<f32>) -> vec3<f32> {
 /// contribute.
 pub static ZSCALE: VariationDef = VariationDef {
     name: "zscale",
+    aliases: &[],
     display_name: "ZScale",
     category: VariationCategory::Depth3D,
     phase: VariationPhase::Normal,

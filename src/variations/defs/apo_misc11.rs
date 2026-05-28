@@ -55,6 +55,7 @@ use crate::param;
 /// - Zy0rg
 pub static SWIRL3: VariationDef = VariationDef {
     name: "swirl3",
+    aliases: &[],
     display_name: "Swirl 3",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -103,6 +104,7 @@ fn variation_swirl3(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 /// - Michael Faber
 pub static WDISC: VariationDef = VariationDef {
     name: "wdisc",
+    aliases: &[],
     display_name: "W-Disc",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -161,6 +163,7 @@ fn variation_wdisc(p: vec3<f32>) -> vec3<f32> {
 /// - Xyrus02
 pub static SPH3D: VariationDef = VariationDef {
     name: "sph3D",
+    aliases: &[],
     display_name: "Sph 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
@@ -216,6 +219,7 @@ fn variation_sph3D(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 /// (w²·r₀ − 4u²v²) / w)`, so the shape changes qualitatively with weight.
 pub static INVSQUIRCULAR: VariationDef = VariationDef {
     name: "invsquircular",
+    aliases: &[],
     display_name: "Inv Squircular",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -287,6 +291,7 @@ fn variation_invsquircular(p: vec3<f32>, xform_id: u32, variation_id: u32) -> ve
 /// - chronologicaldot
 pub static SPHERE_NJA: VariationDef = VariationDef {
     name: "sphere_nja",
+    aliases: &[],
     display_name: "Sphere NJA",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,

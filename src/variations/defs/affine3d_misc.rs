@@ -36,6 +36,7 @@ use crate::param;
 /// - Framelet
 pub static AFFINE3D: VariationDef = VariationDef {
     name: "affine3D",
+    aliases: &[],
     display_name: "Affine 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,

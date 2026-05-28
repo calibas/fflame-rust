@@ -51,6 +51,7 @@ use crate::param;
 /// - FractalDesire
 pub static BUBBLE_T3D: VariationDef = VariationDef {
     name: "bubbleT3D",
+    aliases: &[],
     display_name: "Bubble T3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,

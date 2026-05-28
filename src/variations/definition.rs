@@ -37,6 +37,20 @@ pub struct VariationDef {
     /// Unique identifier (lowercase, snake_case)
     pub name: &'static str,
 
+    /// Additional names this variation is known by in other apps
+    /// (Apophysis 7X, JWildfire, Chaotica). Used during `.flame` XML
+    /// import to map foreign names to our canonical `name`.
+    ///
+    /// Example: `linear` lists `&["linear3D"]` because Apo 7X / JWildfire
+    /// have a separate `linear3D` variation while ours handles both 2D
+    /// and 3D modes from the same definition. Without the alias the
+    /// `linear3D="…"` attribute gets silently dropped on import.
+    ///
+    /// Default `&[]` for variations with no foreign-app aliases. Add as
+    /// the import path encounters drops; no exhaustive research needed
+    /// upfront.
+    pub aliases: &'static [&'static str],
+
     /// Display name for UI
     pub display_name: &'static str,
 

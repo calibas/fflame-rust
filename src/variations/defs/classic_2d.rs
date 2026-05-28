@@ -52,6 +52,7 @@ use crate::param;
 /// - Scott Draves
 pub static FAN: VariationDef = VariationDef {
     name: "fan",
+    aliases: &[],
     display_name: "Fan",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -114,6 +115,7 @@ fn variation_fan(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
 /// - Scott Draves
 pub static FISHEYE: VariationDef = VariationDef {
     name: "fisheye",
+    aliases: &[],
     display_name: "Fisheye",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -157,6 +159,7 @@ fn variation_fisheye(p: vec3<f32>) -> vec3<f32> {
 /// - DarkBeam
 pub static GRIDOUT: VariationDef = VariationDef {
     name: "gridout",
+    aliases: &[],
     display_name: "Gridout",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -230,6 +233,7 @@ fn variation_gridout(p: vec3<f32>) -> vec3<f32> {
 /// - Tatyana Zabanova
 pub static CIRCULAR: VariationDef = VariationDef {
     name: "circular",
+    aliases: &[],
     display_name: "Circular",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -288,6 +292,7 @@ fn variation_circular(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
 /// - DarkBeam
 pub static PANORAMA1: VariationDef = VariationDef {
     name: "panorama1",
+    aliases: &[],
     display_name: "Panorama 1",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -332,6 +337,7 @@ fn variation_panorama1(p: vec3<f32>) -> vec3<f32> {
 /// - DarkBeam
 pub static PANORAMA2: VariationDef = VariationDef {
     name: "panorama2",
+    aliases: &[],
     display_name: "Panorama 2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

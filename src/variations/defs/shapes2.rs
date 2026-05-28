@@ -37,6 +37,7 @@ use crate::variations::{
 /// - Apophysis Plugin Pack
 pub static BUTTERFLY: VariationDef = VariationDef {
     name: "butterfly",
+    aliases: &[],
     display_name: "Butterfly",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -74,6 +75,7 @@ fn variation_butterfly(p: vec3<f32>) -> vec3<f32> {
 /// that scales with the radial distance times `|2y|`.
 pub static BUTTERFLY3D: VariationDef = VariationDef {
     name: "butterfly3d",
+    aliases: &[],
     display_name: "Butterfly 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
@@ -118,6 +120,7 @@ fn variation_butterfly3d(p: vec3<f32>) -> vec3<f32> {
 /// - Raykoid666
 pub static ENNEPERS: VariationDef = VariationDef {
     name: "ennepers",
+    aliases: &[],
     display_name: "Ennepers",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -159,6 +162,7 @@ fn variation_ennepers(p: vec3<f32>) -> vec3<f32> {
 /// - Zueuk
 pub static PYRAMID: VariationDef = VariationDef {
     name: "pyramid",
+    aliases: &[],
     display_name: "Pyramid",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
@@ -202,6 +206,7 @@ fn variation_pyramid(p: vec3<f32>) -> vec3<f32> {
 /// - Raykoid666
 pub static RAYS2: VariationDef = VariationDef {
     name: "rays2",
+    aliases: &[],
     display_name: "Rays2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -246,6 +251,7 @@ fn variation_rays2(p: vec3<f32>) -> vec3<f32> {
 /// - Raykoid666
 pub static RAYS3: VariationDef = VariationDef {
     name: "rays3",
+    aliases: &[],
     display_name: "Rays3",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -298,6 +304,7 @@ fn variation_rays3(p: vec3<f32>) -> vec3<f32> {
 /// - Raykoid666
 pub static SPIRALWING: VariationDef = VariationDef {
     name: "spiralwing",
+    aliases: &[],
     display_name: "Spiral Wing",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -343,6 +350,7 @@ fn variation_spiralwing(p: vec3<f32>) -> vec3<f32> {
 /// - Don Town
 pub static WHITNEY_UMBRELLA: VariationDef = VariationDef {
     name: "whitney_umbrella",
+    aliases: &[],
     display_name: "Whitney Umbrella",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
@@ -381,6 +389,7 @@ fn variation_whitney_umbrella(p: vec3<f32>) -> vec3<f32> {
 /// - Jesus Sosa
 pub static CHRYSANTHEMUM: VariationDef = VariationDef {
     name: "chrysanthemum",
+    aliases: &[],
     display_name: "Chrysanthemum",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -434,6 +443,7 @@ fn variation_chrysanthemum(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f
 /// - Apophysis Plugin Pack
 pub static CELL: VariationDef = VariationDef {
     name: "cell",
+    aliases: &[],
     display_name: "Cell",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -506,6 +516,7 @@ fn variation_cell(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
 /// - DarkBeam
 pub static ENNEPERS2: VariationDef = VariationDef {
     name: "ennepers2",
+    aliases: &[],
     display_name: "Ennepers2",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
@@ -571,6 +582,7 @@ fn variation_ennepers2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
 /// - cyberxaos
 pub static FLOWER: VariationDef = VariationDef {
     name: "flower",
+    aliases: &[],
     display_name: "Flower",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

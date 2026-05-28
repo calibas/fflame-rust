@@ -50,6 +50,7 @@ use crate::param;
 /// - Larry Berlin
 pub static INFLATEZ_1: VariationDef = VariationDef {
     name: "inflateZ_1",
+    aliases: &[],
     display_name: "Inflate Z 1",
     category: VariationCategory::Depth3D,
     phase: VariationPhase::Normal,
@@ -86,6 +87,7 @@ fn variation_inflateZ_1(p: vec3<f32>) -> vec3<f32> {
 /// - Larry Berlin
 pub static INFLATEZ_2: VariationDef = VariationDef {
     name: "inflateZ_2",
+    aliases: &[],
     display_name: "Inflate Z 2",
     category: VariationCategory::Depth3D,
     phase: VariationPhase::Normal,
@@ -124,6 +126,7 @@ fn variation_inflateZ_2(p: vec3<f32>) -> vec3<f32> {
 /// - Larry Berlin
 pub static INFLATEZ_3: VariationDef = VariationDef {
     name: "inflateZ_3",
+    aliases: &[],
     display_name: "Inflate Z 3",
     category: VariationCategory::Depth3D,
     phase: VariationPhase::Normal,
@@ -162,6 +165,7 @@ fn variation_inflateZ_3(p: vec3<f32>) -> vec3<f32> {
 /// - Larry Berlin
 pub static INFLATEZ_4: VariationDef = VariationDef {
     name: "inflateZ_4",
+    aliases: &[],
     display_name: "Inflate Z 4",
     category: VariationCategory::Depth3D,
     phase: VariationPhase::Normal,
@@ -204,6 +208,7 @@ fn variation_inflateZ_4(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32>
 /// - Larry Berlin
 pub static INFLATEZ_5: VariationDef = VariationDef {
     name: "inflateZ_5",
+    aliases: &[],
     display_name: "Inflate Z 5",
     category: VariationCategory::Depth3D,
     phase: VariationPhase::Normal,
@@ -242,6 +247,7 @@ fn variation_inflateZ_5(p: vec3<f32>) -> vec3<f32> {
 /// - Larry Berlin
 pub static INFLATEZ_6: VariationDef = VariationDef {
     name: "inflateZ_6",
+    aliases: &[],
     display_name: "Inflate Z 6",
     category: VariationCategory::Depth3D,
     phase: VariationPhase::Normal,
@@ -287,6 +293,7 @@ fn variation_inflateZ_6(p: vec3<f32>) -> vec3<f32> {
 /// - Ffey
 pub static SINTRANGE: VariationDef = VariationDef {
     name: "sintrange",
+    aliases: &[],
     display_name: "Sin T Range",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -340,6 +347,7 @@ fn variation_sintrange(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
 /// - Larry Berlin
 pub static FOCI_3D: VariationDef = VariationDef {
     name: "foci_3D",
+    aliases: &[],
     display_name: "Foci 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,

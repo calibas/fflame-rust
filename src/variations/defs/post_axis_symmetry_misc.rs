@@ -36,6 +36,7 @@ use crate::param;
 /// shift.
 pub static POST_AXIS_SYMMETRY_WF: VariationDef = VariationDef {
     name: "post_axis_symmetry_wf",
+    aliases: &[],
     display_name: "Post Axis Symmetry WF",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Post,

@@ -54,6 +54,7 @@ use crate::param;
 /// - Zueuk
 pub static HYPERTILE: VariationDef = VariationDef {
     name: "hypertile",
+    aliases: &[],
     display_name: "Hypertile",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -147,6 +148,7 @@ fn variation_hypertile(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
 /// - Zueuk
 pub static HYPERTILE1: VariationDef = VariationDef {
     name: "hypertile1",
+    aliases: &[],
     display_name: "Hypertile 1",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -253,6 +255,7 @@ fn variation_hypertile1(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
 /// - Zueuk
 pub static HYPERTILE2: VariationDef = VariationDef {
     name: "hypertile2",
+    aliases: &[],
     display_name: "Hypertile 2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -353,6 +356,7 @@ fn variation_hypertile2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
 /// - Zueuk
 pub static HYPERTILE3D: VariationDef = VariationDef {
     name: "hypertile3d",
+    aliases: &[],
     display_name: "Hypertile 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
@@ -471,6 +475,7 @@ fn variation_hypertile3d(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3
 /// - Zueuk
 pub static HYPERTILE3D1: VariationDef = VariationDef {
     name: "hypertile3d1",
+    aliases: &[],
     display_name: "Hypertile 3D 1",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
@@ -587,6 +592,7 @@ fn variation_hypertile3d1(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: p
 /// - Zueuk
 pub static HYPERTILE3D2: VariationDef = VariationDef {
     name: "hypertile3d2",
+    aliases: &[],
     display_name: "Hypertile 3D 2",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,

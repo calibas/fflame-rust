@@ -45,6 +45,7 @@ use crate::param;
 /// - Jesus Sosa
 pub static ICONATTRACTOR_JS: VariationDef = VariationDef {
     name: "iconattractor_js",
+    aliases: &[],
     display_name: "Icon Attractor (JS)",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

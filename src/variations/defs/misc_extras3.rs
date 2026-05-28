@@ -55,6 +55,7 @@ use crate::param;
 /// - DarkBeam
 pub static OSCILLOSCOPE2: VariationDef = VariationDef {
     name: "oscilloscope2",
+    aliases: &[],
     display_name: "Oscilloscope 2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -147,6 +148,7 @@ fn variation_oscilloscope2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> ve
 /// - FractalDesire
 pub static LINEART: VariationDef = VariationDef {
     name: "lineart",
+    aliases: &[],
     display_name: "Line Art",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -206,6 +208,7 @@ fn variation_lineart(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 /// - TyrantWave
 pub static PHOENIX_JULIA: VariationDef = VariationDef {
     name: "phoenix_julia",
+    aliases: &[],
     display_name: "Phoenix Julia",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -295,6 +298,7 @@ fn variation_phoenix_julia(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: 
 /// - DarkBeam
 pub static POW_BLOCK: VariationDef = VariationDef {
     name: "pow_block",
+    aliases: &[],
     display_name: "Pow Block",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

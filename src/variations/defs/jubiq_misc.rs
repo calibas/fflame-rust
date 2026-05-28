@@ -45,6 +45,7 @@ use crate::param;
 /// - Brad Stefanov
 pub static JUBIQ: VariationDef = VariationDef {
     name: "jubiq",
+    aliases: &[],
     display_name: "Jubiq",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,

@@ -45,6 +45,7 @@ use crate::param;
 /// - Jesus Sosa
 pub static THREEPOINT_JS: VariationDef = VariationDef {
     name: "threepoint_js",
+    aliases: &[],
     display_name: "Three Point IFS (JS)",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -114,6 +115,7 @@ fn variation_threepoint_js(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f
 /// - Jesus Sosa
 pub static LORENZ_JS: VariationDef = VariationDef {
     name: "lorenz_js",
+    aliases: &[],
     display_name: "Lorenz (JS)",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
@@ -180,6 +182,7 @@ fn variation_lorenz_js(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
 /// - Jesus Sosa
 pub static WOGGLE_JS: VariationDef = VariationDef {
     name: "woggle_js",
+    aliases: &[],
     display_name: "Woggle (JS)",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

@@ -39,6 +39,7 @@ use crate::param;
 /// - bezo97
 pub static LAZYSENSEN: VariationDef = VariationDef {
     name: "lazysensen",
+    aliases: &[],
     display_name: "Lazy Sensen",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
@@ -128,6 +129,7 @@ fn variation_lazysensen(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<
 /// - Xyrus02
 pub static SPHERECROP: VariationDef = VariationDef {
     name: "spherecrop",
+    aliases: &[],
     display_name: "Sphere Crop",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
@@ -237,6 +239,7 @@ fn variation_spherecrop(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
 /// position.
 pub static XHEART_BLUR_WF: VariationDef = VariationDef {
     name: "xheart_blur_wf",
+    aliases: &[],
     display_name: "X-Heart Blur WF",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

@@ -37,6 +37,7 @@ use crate::param;
 /// - DarkBeam
 pub static MINKOWSKOPE: VariationDef = VariationDef {
     name: "minkowskope",
+    aliases: &[],
     display_name: "Minkowskope",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

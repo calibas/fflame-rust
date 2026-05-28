@@ -51,6 +51,7 @@ use crate::param;
 /// - CozyG
 pub static MASK: VariationDef = VariationDef {
     name: "mask",
+    aliases: &[],
     display_name: "Mask",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -124,6 +125,7 @@ fn variation_mask(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
 /// - Larry Berlin
 pub static OVOID3D: VariationDef = VariationDef {
     name: "ovoid3d",
+    aliases: &[],
     display_name: "Ovoid 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
@@ -185,6 +187,7 @@ fn variation_ovoid3d(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 /// - Zueuk
 pub static MURL2: VariationDef = VariationDef {
     name: "murl2",
+    aliases: &[],
     display_name: "Murl 2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -296,6 +299,7 @@ fn variation_murl2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 /// - Brad Stefanov
 pub static MINKQM: VariationDef = VariationDef {
     name: "minkQM",
+    aliases: &[],
     display_name: "Mink QM",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

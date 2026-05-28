@@ -40,6 +40,7 @@ use crate::param;
 /// - Zy0rg
 pub static CIRCLEBLUR: VariationDef = VariationDef {
     name: "circleblur",
+    aliases: &[],
     display_name: "Circle Blur",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -89,6 +90,7 @@ fn variation_circleblur(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32>
 /// - Brad Stefanov
 pub static CIRCLESPLIT: VariationDef = VariationDef {
     name: "circlesplit",
+    aliases: &[],
     display_name: "Circle Split",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -149,6 +151,7 @@ fn variation_circlesplit(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3
 /// - Michael Faber
 pub static FLIPCIRCLE: VariationDef = VariationDef {
     name: "flipcircle",
+    aliases: &[],
     display_name: "Flip Circle",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -200,6 +203,7 @@ fn variation_flipcircle(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<
 /// - DarkBeam
 pub static BLUR_LINEAR: VariationDef = VariationDef {
     name: "blur_linear",
+    aliases: &[],
     display_name: "Blur Linear",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
