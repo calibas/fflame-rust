@@ -413,6 +413,19 @@ pub struct App {
     pub(super) clear_paths_next_frame: bool,  // Clear path buffer on next compute pass (full reset)
     pub(super) ui_needs_repaint: bool,  // Track if UI is requesting repaints (for frame rate boost)
     pub(super) last_input_time: Option<web_time::Instant>,  // Time of last user input (for idle detection)
+    // Tracks whether the fractal was actively rendering on the previous
+    // AboutToWait. When it transitions from true to false (e.g.,
+    // max_iterations just reached), we need one more redraw to flush
+    // the final tonemap output to the screen — PHASE 1 paints from the
+    // *previous* frame's fractal_texture, so without an extra cycle
+    // the final compute pass never makes it visible.
+    pub(super) was_rendering_prev_frame: bool,
+    // Set true whenever the egui layout reports a fractal-viewport
+    // size different from what the renderer is configured for. Cleared
+    // when the renderer resize actually fires. Keeps the event loop
+    // awake while a resize is in flight, so the post-resize render
+    // doesn't stall on `ControlFlow::Wait` before completing.
+    pub(super) viewport_resize_pending: bool,
 
     // Fractal viewport size (updated from UI each frame)
     pub(super) fractal_viewport_size: (u32, u32),
@@ -600,6 +613,8 @@ impl App {
             clear_paths_next_frame: true,  // Clear paths on first frame
             ui_needs_repaint: false,
             last_input_time: None,
+            was_rendering_prev_frame: false,
+            viewport_resize_pending: false,
             fractal_viewport_size: initial_viewport_size, // Initialize to window size
             #[cfg(target_arch = "wasm32")]
             last_viewport_resize_time: None,
@@ -927,10 +942,23 @@ impl App {
                         return;
                     }
 
+                    // Detect the rendering→stopped transition. When the
+                    // last frame finished compute that brought
+                    // total_iterations to max_iterations, the new
+                    // tonemap output is in fractal_texture but hasn't
+                    // been displayed yet — PHASE 1 paints from the
+                    // *previous* frame's fractal_texture, so without an
+                    // extra redraw cycle the user is stuck looking at
+                    // the second-to-last frame (e.g., "983M / 1B"
+                    // counter freezes). Request one more redraw on the
+                    // transition so PHASE 1 picks up the final state.
+                    let just_finished_rendering = app.was_rendering_prev_frame && !is_rendering;
+                    app.was_rendering_prev_frame = is_rendering;
+
                     // EVENT-DRIVEN RENDERING:
                     // Only render when something actually changes
                     // During export, audio playback, or live capture, keep redrawing to update UI
-                    if is_rendering || animation_playing || audio_playing || audio_capturing || ui_active || is_exporting {
+                    if is_rendering || animation_playing || audio_playing || audio_capturing || ui_active || is_exporting || app.viewport_resize_pending || just_finished_rendering {
                         // Actively rendering fractals OR UI is active (for tooltips, hover effects)
                         if app.config_manager.system_settings().vsync_enabled {
                             // VSync enabled: render continuously, let VSync cap frame rate
@@ -1174,6 +1202,15 @@ impl App {
                 );
                 return Ok(());
             }
+
+            // Track resize-pending state so AboutToWait knows to keep
+            // the event loop awake until the renderer has caught up.
+            // Without this, a rapid resize on a flame that's already
+            // hit max_iterations can leave the UI sleeping mid-resize
+            // (browser stops firing winit events for a beat, ui_active
+            // times out, and the post-resize compute frame never runs).
+            self.viewport_resize_pending = viewport_size != self.fractal_viewport_size;
+
             #[cfg(target_arch = "wasm32")]
             let should_resize = {
                 let now = web_time::Instant::now();
@@ -1181,11 +1218,11 @@ impl App {
                 let debounce_ok = self.last_viewport_resize_time
                     .map(|t| now.duration_since(t).as_millis() > 100)
                     .unwrap_or(true);
-                viewport_size != self.fractal_viewport_size && debounce_ok
+                self.viewport_resize_pending && debounce_ok
             };
 
             #[cfg(not(target_arch = "wasm32"))]
-            let should_resize = viewport_size != self.fractal_viewport_size;
+            let should_resize = self.viewport_resize_pending;
 
             if should_resize {
                 log::info!("Fractal viewport resize: {:?} → {:?}", self.fractal_viewport_size, viewport_size);
