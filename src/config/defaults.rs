@@ -49,7 +49,7 @@ pub const DEFAULT_ITERATIONS_PER_THREAD: u32 = 256;
 pub const DEFAULT_TARGET_ITERATIONS_PER_PIXEL: u64 = 0; // Disabled
 
 // Depth of Field
-pub const DEFAULT_DOF_FOCUS_DISTANCE: f32 = 1.0; // Distance from origin where image is sharpest
+pub const DEFAULT_DOF_FOCUS_DISTANCE: f32 = 0.0; // Apophysis hardcodes 0.0 (focal plane at origin)
 pub const DEFAULT_DOF_BLUR_STRENGTH: f32 = 0.0; // 0.0 = disabled, up to ~10.0 for strong blur
 
 // Depth Fog (atmospheric perspective)
