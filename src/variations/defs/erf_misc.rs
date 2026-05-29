@@ -55,6 +55,7 @@ use crate::param;
 /// - DarkBeam
 pub static ERF: VariationDef = VariationDef {
     name: "erf",
+    aliases: &[],
     display_name: "Erf",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -125,6 +126,7 @@ fn variation_erf(p: vec3<f32>) -> vec3<f32> {
 /// - DarkBeam
 pub static ERF3D: VariationDef = VariationDef {
     name: "erf3D",
+    aliases: &[],
     display_name: "Erf 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
@@ -201,6 +203,7 @@ fn variation_erf3D(p: vec3<f32>) -> vec3<f32> {
 /// - Tatyana Zabanova
 pub static D_SPHERICAL: VariationDef = VariationDef {
     name: "d_spherical",
+    aliases: &[],
     display_name: "D-Spherical",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -257,6 +260,7 @@ fn variation_d_spherical(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: pt
 /// - Jesus Sosa
 pub static DUSTPOINT: VariationDef = VariationDef {
     name: "dustpoint",
+    aliases: &[],
     display_name: "Dust Point",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -313,6 +317,7 @@ fn variation_dustpoint(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> 
 /// - Michael Faber
 pub static DELTAA: VariationDef = VariationDef {
     name: "deltaA",
+    aliases: &[],
     display_name: "Delta A",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -374,6 +379,7 @@ fn variation_deltaA(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 /// - Apophysis Plugin Pack
 pub static EDISC: VariationDef = VariationDef {
     name: "edisc",
+    aliases: &[],
     display_name: "E-Disc",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -454,6 +460,7 @@ fn variation_edisc(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 /// - Apophysis Plugin Pack
 pub static CURVE: VariationDef = VariationDef {
     name: "curve",
+    aliases: &[],
     display_name: "Curve",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -531,6 +538,7 @@ fn variation_curve(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 /// - Brad Stefanov
 pub static ELLIPTIC2: VariationDef = VariationDef {
     name: "elliptic2",
+    aliases: &[],
     display_name: "Elliptic 2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

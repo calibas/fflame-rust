@@ -51,6 +51,7 @@ use crate::param;
 /// radii; `c1`/`c2` give per-axis amplitudes; `d` is the pen-arm length.
 pub static SPIROGRAPH: VariationDef = VariationDef {
     name: "spirograph",
+    aliases: &[],
     display_name: "Spirograph",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -137,6 +138,7 @@ fn variation_spirograph(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
 /// - Jed Kelsey
 pub static LISSAJOUS: VariationDef = VariationDef {
     name: "lissajous",
+    aliases: &[],
     display_name: "Lissajous",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -215,6 +217,7 @@ fn variation_lissajous(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
 /// - Victor Ganora
 pub static VOGEL: VariationDef = VariationDef {
     name: "vogel",
+    aliases: &[],
     display_name: "Vogel",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -302,7 +305,8 @@ fn variation_vogel(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<func
 /// # Authors
 /// - Xyrus02
 pub static CROP3D: VariationDef = VariationDef {
-    name: "crop3d",
+    name: "crop3D",
+    aliases: &[],
     display_name: "Crop 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
@@ -341,7 +345,7 @@ fn init_crop3d(user: array<f32, 8>) -> array<f32, 6> {
     wgsl_state_init: None,
     needs_accum: false,
     wgsl_2d: r#"
-fn variation_crop3d(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
+fn variation_crop3D(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let scatter = get_param(xform_id, variation_id, 6u);
     let zero = get_param(xform_id, variation_id, 7u);
     let xmin = get_param(xform_id, variation_id, 8u);
@@ -365,7 +369,7 @@ fn variation_crop3d(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
 }
 "#,
     wgsl_3d: Some(r#"
-fn variation_crop3d(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
+fn variation_crop3D(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let scatter = get_param(xform_id, variation_id, 6u);
     let zero = get_param(xform_id, variation_id, 7u);
     let xmin = get_param(xform_id, variation_id, 8u);

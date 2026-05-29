@@ -65,6 +65,7 @@ use crate::param;
 /// - Scott Draves
 pub static RINGS: VariationDef = VariationDef {
     name: "rings",
+    aliases: &[],
     display_name: "Rings",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -118,6 +119,7 @@ fn variation_rings(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 /// - Raykoid666
 pub static RIPPLED: VariationDef = VariationDef {
     name: "rippled",
+    aliases: &[],
     display_name: "Rippled",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -165,6 +167,7 @@ fn variation_rippled(p: vec3<f32>) -> vec3<f32> {
 /// - Jed Kelsey
 pub static WAFFLE: VariationDef = VariationDef {
     name: "waffle",
+    aliases: &[],
     display_name: "Waffle",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -279,6 +282,7 @@ fn variation_waffle(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
 /// - DarkBeam
 pub static STRIPFIT: VariationDef = VariationDef {
     name: "stripfit",
+    aliases: &[],
     display_name: "Stripfit",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

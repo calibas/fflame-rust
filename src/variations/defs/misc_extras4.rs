@@ -51,6 +51,7 @@ use crate::param;
 /// - Jesus Sosa
 pub static ANAMORPHCYL: VariationDef = VariationDef {
     name: "anamorphcyl",
+    aliases: &[],
     display_name: "Anamorph Cyl",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -102,6 +103,7 @@ fn variation_anamorphcyl(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3
 /// - gossamer light
 pub static SVF: VariationDef = VariationDef {
     name: "svf",
+    aliases: &[],
     display_name: "SVF",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
@@ -152,6 +154,7 @@ fn variation_svf(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
 /// - Zy0rg
 pub static SHREDLIN: VariationDef = VariationDef {
     name: "shredlin",
+    aliases: &[],
     display_name: "Shred Lin",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -228,6 +231,7 @@ fn variation_shredlin(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
 /// - Zy0rg
 pub static SHREDRAD: VariationDef = VariationDef {
     name: "shredrad",
+    aliases: &[],
     display_name: "Shred Rad",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -307,6 +311,7 @@ fn variation_shredrad(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
 /// - Xyrus02
 pub static XHEART: VariationDef = VariationDef {
     name: "xheart",
+    aliases: &[],
     display_name: "X Heart",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -395,6 +400,7 @@ fn variation_xheart(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 /// - Xyrus02
 pub static STWIN: VariationDef = VariationDef {
     name: "stwin",
+    aliases: &[],
     display_name: "STwin",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -475,6 +481,7 @@ fn variation_stwin(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 /// - Apophysis Plugin Pack
 pub static WHORL: VariationDef = VariationDef {
     name: "whorl",
+    aliases: &[],
     display_name: "Whorl",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -542,6 +549,7 @@ fn variation_whorl(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 /// - DarkBeam
 pub static DEVIL_WARP: VariationDef = VariationDef {
     name: "devil_warp",
+    aliases: &[],
     display_name: "Devil Warp",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

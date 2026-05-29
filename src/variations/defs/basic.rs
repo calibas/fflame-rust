@@ -15,6 +15,11 @@ use crate::variations::{
 /// - Scott Draves
 pub static LINEAR: VariationDef = VariationDef {
     name: "linear",
+    // Apophysis 7X and JWildfire have a separate `linear3D` variation;
+    // our `linear` handles both 2D and 3D from the same definition.
+    // Without this alias, `linear3D="…"` attributes get silently dropped
+    // on .flame XML import.
+    aliases: &["linear3D"],
     display_name: "Linear",
     category: VariationCategory::Basic2D,
     phase: VariationPhase::Normal,
@@ -47,6 +52,7 @@ fn variation_linear(p: vec3<f32>) -> vec3<f32> {
 /// - Scott Draves
 pub static SINUSOIDAL: VariationDef = VariationDef {
     name: "sinusoidal",
+    aliases: &[],
     display_name: "Sinusoidal",
     category: VariationCategory::Basic2D,
     phase: VariationPhase::Normal,
@@ -79,6 +85,7 @@ fn variation_sinusoidal(p: vec3<f32>) -> vec3<f32> {
 /// - Scott Draves
 pub static SPHERICAL: VariationDef = VariationDef {
     name: "spherical",
+    aliases: &[],
     display_name: "Spherical",
     category: VariationCategory::Basic2D,
     phase: VariationPhase::Normal,
@@ -113,6 +120,7 @@ fn variation_spherical(p: vec3<f32>) -> vec3<f32> {
 /// - Scott Draves
 pub static SWIRL: VariationDef = VariationDef {
     name: "swirl",
+    aliases: &[],
     display_name: "Swirl",
     category: VariationCategory::Basic2D,
     phase: VariationPhase::Normal,
@@ -151,6 +159,7 @@ fn variation_swirl(p: vec3<f32>) -> vec3<f32> {
 /// - Scott Draves
 pub static HORSESHOE: VariationDef = VariationDef {
     name: "horseshoe",
+    aliases: &[],
     display_name: "Horseshoe",
     category: VariationCategory::Basic2D,
     phase: VariationPhase::Normal,

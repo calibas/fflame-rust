@@ -127,6 +127,7 @@ fn w2b_jac_sn(uu: f32, emmc_in: f32) -> f32 {
 /// - DarkBeam
 pub static WAVES2B: VariationDef = VariationDef {
     name: "waves2b",
+    aliases: &[],
     display_name: "Waves2 B",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

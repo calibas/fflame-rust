@@ -27,6 +27,7 @@ use crate::variations::{
 /// - Whittaker Courtney
 pub static ACOTH: VariationDef = VariationDef {
     name: "acoth",
+    aliases: &[],
     display_name: "ACoth",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -78,6 +79,7 @@ fn variation_acoth(p: vec3<f32>) -> vec3<f32> {
 /// - Whittaker Courtney
 pub static ACOSH: VariationDef = VariationDef {
     name: "acosh",
+    aliases: &[],
     display_name: "ACosh",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -139,6 +141,7 @@ fn variation_acosh(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
 /// iteration produces symmetric two-branch patterns.
 pub static ACOSECH: VariationDef = VariationDef {
     name: "acosech",
+    aliases: &[],
     display_name: "ACosecH",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -209,6 +212,7 @@ fn variation_acosech(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
 /// Singular at the origin and outflows along the real axis.
 pub static ARCSECH: VariationDef = VariationDef {
     name: "arcsech",
+    aliases: &[],
     display_name: "ArcSech",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -287,6 +291,7 @@ fn variation_arcsech(p: vec3<f32>) -> vec3<f32> {
 /// sign — produces two parallel arcs instead of one.
 pub static ARCSECH2: VariationDef = VariationDef {
     name: "arcsech2",
+    aliases: &[],
     display_name: "ArcSech2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -372,6 +377,7 @@ fn variation_arcsech2(p: vec3<f32>) -> vec3<f32> {
 /// a horizontal strip — acts as a `spreading` transform.
 pub static ARCSINH: VariationDef = VariationDef {
     name: "arcsinh",
+    aliases: &[],
     display_name: "ArcSinh",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -430,6 +436,7 @@ fn variation_arcsinh(p: vec3<f32>) -> vec3<f32> {
 /// outside compresses inward.
 pub static ARCTANH: VariationDef = VariationDef {
     name: "arctanh",
+    aliases: &[],
     display_name: "ArcTanh",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

@@ -50,6 +50,7 @@ use crate::param;
 /// - FracFx
 pub static DC_CYLINDER: VariationDef = VariationDef {
     name: "dc_cylinder",
+    aliases: &[],
     display_name: "DC Cylinder",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
@@ -171,6 +172,7 @@ fn variation_dc_cylinder(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: pt
 /// - FracFx
 pub static DC_CYLINDER2: VariationDef = VariationDef {
     name: "dc_cylinder2",
+    aliases: &[],
     display_name: "DC Cylinder 2",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
@@ -286,6 +288,7 @@ fn variation_dc_cylinder2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: p
 /// fmod(fabs(u+v), 1.0)`).
 pub static DC_TRIANGLE: VariationDef = VariationDef {
     name: "dc_triangle",
+    aliases: &[],
     display_name: "DC Triangle",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

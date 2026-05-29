@@ -34,6 +34,7 @@ use crate::variations::{
 /// - zephyrtronium
 pub static SINQ: VariationDef = VariationDef {
     name: "sinq",
+    aliases: &[],
     display_name: "Sinq",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -76,6 +77,7 @@ fn variation_sinq(p: vec3<f32>) -> vec3<f32> {
 /// - zephyrtronium
 pub static COSQ: VariationDef = VariationDef {
     name: "cosq",
+    aliases: &[],
     display_name: "Cosq",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -117,6 +119,7 @@ fn variation_cosq(p: vec3<f32>) -> vec3<f32> {
 /// - zephyrtronium
 pub static SINHQ: VariationDef = VariationDef {
     name: "sinhq",
+    aliases: &[],
     display_name: "Sinhq",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -158,6 +161,7 @@ fn variation_sinhq(p: vec3<f32>) -> vec3<f32> {
 /// - zephyrtronium
 pub static COSHQ: VariationDef = VariationDef {
     name: "coshq",
+    aliases: &[],
     display_name: "Coshq",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -202,6 +206,7 @@ fn variation_coshq(p: vec3<f32>) -> vec3<f32> {
 /// - zephyrtronium
 pub static SECQ: VariationDef = VariationDef {
     name: "secq",
+    aliases: &[],
     display_name: "Secq",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -247,6 +252,7 @@ fn variation_secq(p: vec3<f32>) -> vec3<f32> {
 /// - zephyrtronium
 pub static CSCQ: VariationDef = VariationDef {
     name: "cscq",
+    aliases: &[],
     display_name: "Cscq",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -292,6 +298,7 @@ fn variation_cscq(p: vec3<f32>) -> vec3<f32> {
 /// - zephyrtronium
 pub static SECHQ: VariationDef = VariationDef {
     name: "sechq",
+    aliases: &[],
     display_name: "Sechq",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -337,6 +344,7 @@ fn variation_sechq(p: vec3<f32>) -> vec3<f32> {
 /// - zephyrtronium
 pub static CSCHQ: VariationDef = VariationDef {
     name: "cschq",
+    aliases: &[],
     display_name: "Cschq",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -387,6 +395,7 @@ fn variation_cschq(p: vec3<f32>) -> vec3<f32> {
 /// - zephyrtronium
 pub static TANQ: VariationDef = VariationDef {
     name: "tanq",
+    aliases: &[],
     display_name: "Tanq",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -443,6 +452,7 @@ fn variation_tanq(p: vec3<f32>) -> vec3<f32> {
 /// - zephyrtronium
 pub static COTQ: VariationDef = VariationDef {
     name: "cotq",
+    aliases: &[],
     display_name: "Cotq",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -501,6 +511,7 @@ fn variation_cotq(p: vec3<f32>) -> vec3<f32> {
 /// - zephyrtronium
 pub static TANHQ: VariationDef = VariationDef {
     name: "tanhq",
+    aliases: &[],
     display_name: "Tanhq",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -558,6 +569,7 @@ fn variation_tanhq(p: vec3<f32>) -> vec3<f32> {
 /// - zephyrtronium
 pub static COTHQ: VariationDef = VariationDef {
     name: "cothq",
+    aliases: &[],
     display_name: "Cothq",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

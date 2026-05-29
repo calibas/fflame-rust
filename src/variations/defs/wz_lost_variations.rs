@@ -52,6 +52,7 @@ use crate::param;
 /// - Michael Faber
 pub static Z_VARIATION: VariationDef = VariationDef {
     name: "z",
+    aliases: &[],
     display_name: "Z (Faber)",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -255,6 +256,7 @@ fn variation_z(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
 /// - Michael Faber
 pub static W_VARIATION: VariationDef = VariationDef {
     name: "w",
+    aliases: &[],
     display_name: "W (Faber)",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

@@ -47,6 +47,7 @@ use crate::param;
 /// - Brad Stefanov
 pub static BIPOLAR2: VariationDef = VariationDef {
     name: "bipolar2",
+    aliases: &[],
     display_name: "Bipolar 2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -163,7 +164,8 @@ fn variation_bipolar2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
 /// 3D version of Blob — same wavy boundary as Blob, plus a Z component that
 /// modulates with the same waves pattern.
 pub static BLOB3D: VariationDef = VariationDef {
-    name: "blob3d",
+    name: "blob3D",
+    aliases: &[],
     display_name: "Blob 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
@@ -181,7 +183,7 @@ pub static BLOB3D: VariationDef = VariationDef {
     wgsl_state_init: None,
     needs_accum: false,
     wgsl_2d: r#"
-fn variation_blob3d(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
+fn variation_blob3D(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let low = get_param(xform_id, variation_id, 0u);
     let high = get_param(xform_id, variation_id, 1u);
     let waves = get_param(xform_id, variation_id, 2u);
@@ -193,7 +195,7 @@ fn variation_blob3d(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32>
 }
 "#,
     wgsl_3d: Some(r#"
-fn variation_blob3d(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
+fn variation_blob3D(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let low = get_param(xform_id, variation_id, 0u);
     let high = get_param(xform_id, variation_id, 1u);
     let waves = get_param(xform_id, variation_id, 2u);
@@ -219,6 +221,7 @@ fn variation_blob3d(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 /// - Brad Stefanov
 pub static CIRCULAR2: VariationDef = VariationDef {
     name: "circular2",
+    aliases: &[],
     display_name: "Circular 2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

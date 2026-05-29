@@ -46,6 +46,7 @@ use crate::param;
 /// scatter pattern when combined with self-similar transforms.
 pub static DC_CARPET: VariationDef = VariationDef {
     name: "dc_carpet",
+    aliases: &[],
     display_name: "DC Carpet",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -117,6 +118,7 @@ fn variation_dc_carpet(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
 /// symmetry around a configurable center.
 pub static POST_POINT_SYMMETRY_WF: VariationDef = VariationDef {
     name: "post_point_symmetry_wf",
+    aliases: &[],
     display_name: "Post Point Symmetry WF",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Post,
@@ -188,6 +190,7 @@ fn variation_post_point_symmetry_wf(p: vec3<f32>, xform_id: u32, variation_id: u
 /// - CozyG
 pub static CPOW3_WF: VariationDef = VariationDef {
     name: "cpow3_wf",
+    aliases: &[],
     display_name: "CPow3 WF",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

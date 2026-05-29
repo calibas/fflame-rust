@@ -27,6 +27,7 @@ use crate::variations::{
 /// - cothe
 pub static EXP: VariationDef = VariationDef {
     name: "exp",
+    aliases: &[],
     display_name: "Exp",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -78,6 +79,7 @@ fn variation_exp(p: vec3<f32>) -> vec3<f32> {
 /// - DarkBeam
 pub static LOG_DB: VariationDef = VariationDef {
     name: "log_db",
+    aliases: &[],
     display_name: "Log DB",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -163,6 +165,7 @@ fn variation_log_db(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
 /// - Zy0rg
 pub static LOG_TILE2: VariationDef = VariationDef {
     name: "log_tile2",
+    aliases: &[],
     display_name: "Log Tile2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -221,6 +224,7 @@ fn variation_log_tile2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
 /// - Zy0rg
 pub static TILE_LOG: VariationDef = VariationDef {
     name: "tile_log",
+    aliases: &[],
     display_name: "Tile Log",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

@@ -35,6 +35,7 @@ use crate::param;
 /// - DarkBeam
 pub static ROSONI: VariationDef = VariationDef {
     name: "rosoni",
+    aliases: &[],
     display_name: "Rosoni",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

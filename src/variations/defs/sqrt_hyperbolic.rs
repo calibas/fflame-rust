@@ -26,6 +26,7 @@ use crate::variations::{
 /// ACoth's two-singularity pattern. Random ±sign each iteration.
 pub static SQRT_ACOTH: VariationDef = VariationDef {
     name: "sqrt_acoth",
+    aliases: &[],
     display_name: "Sqrt ACoth",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -82,6 +83,7 @@ fn variation_sqrt_acoth(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32>
 /// Like ACosh but on sqrt(z). Random ±sign each iteration.
 pub static SQRT_ACOSH: VariationDef = VariationDef {
     name: "sqrt_acosh",
+    aliases: &[],
     display_name: "Sqrt ACosh",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -150,6 +152,7 @@ fn variation_sqrt_acosh(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32>
 /// pattern. Random ±sign each iteration.
 pub static SQRT_ACOSECH: VariationDef = VariationDef {
     name: "sqrt_acosech",
+    aliases: &[],
     display_name: "Sqrt ACosecH",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -226,6 +229,7 @@ fn variation_sqrt_acosech(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f3
 /// flames render the same.
 pub static SQRT_ASECH: VariationDef = VariationDef {
     name: "sqrt_asech",
+    aliases: &[],
     display_name: "Sqrt ASech",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -289,6 +293,7 @@ fn variation_sqrt_asech(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32>
 /// Like ArcSinh but on sqrt(z). Random ±sign each iteration.
 pub static SQRT_ASINH: VariationDef = VariationDef {
     name: "sqrt_asinh",
+    aliases: &[],
     display_name: "Sqrt ASinh",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -353,6 +358,7 @@ fn variation_sqrt_asinh(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32>
 /// unit-disc-to-plane mapping. Random ±sign each iteration.
 pub static SQRT_ATANH: VariationDef = VariationDef {
     name: "sqrt_atanh",
+    aliases: &[],
     display_name: "Sqrt ATanh",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

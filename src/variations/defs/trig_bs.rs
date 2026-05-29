@@ -36,6 +36,7 @@ use crate::variations::{
 /// - Brad Stefanov
 pub static SIN2_BS: VariationDef = VariationDef {
     name: "sin2_bs",
+    aliases: &[],
     display_name: "Sin2 BS",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -91,6 +92,7 @@ fn variation_sin2_bs(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 /// - Brad Stefanov
 pub static COS2_BS: VariationDef = VariationDef {
     name: "cos2_bs",
+    aliases: &[],
     display_name: "Cos2 BS",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -149,6 +151,7 @@ fn variation_cos2_bs(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 /// - Brad Stefanov
 pub static TAN2_BS: VariationDef = VariationDef {
     name: "tan2_bs",
+    aliases: &[],
     display_name: "Tan2 BS",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -208,6 +211,7 @@ fn variation_tan2_bs(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 /// - Brad Stefanov
 pub static SEC2_BS: VariationDef = VariationDef {
     name: "sec2_bs",
+    aliases: &[],
     display_name: "Sec2 BS",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -267,6 +271,7 @@ fn variation_sec2_bs(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 /// - Brad Stefanov
 pub static CSC2_BS: VariationDef = VariationDef {
     name: "csc2_bs",
+    aliases: &[],
     display_name: "Csc2 BS",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -328,6 +333,7 @@ fn variation_csc2_bs(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 /// - Brad Stefanov
 pub static COT2_BS: VariationDef = VariationDef {
     name: "cot2_bs",
+    aliases: &[],
     display_name: "Cot2 BS",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -390,6 +396,7 @@ fn variation_cot2_bs(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 /// - Brad Stefanov
 pub static SINH2_BS: VariationDef = VariationDef {
     name: "sinh2_bs",
+    aliases: &[],
     display_name: "Sinh2 BS",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -445,6 +452,7 @@ fn variation_sinh2_bs(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
 /// - Brad Stefanov
 pub static COSH2_BS: VariationDef = VariationDef {
     name: "cosh2_bs",
+    aliases: &[],
     display_name: "Cosh2 BS",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -502,6 +510,7 @@ fn variation_cosh2_bs(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
 /// - Brad Stefanov
 pub static TANH2_BS: VariationDef = VariationDef {
     name: "tanh2_bs",
+    aliases: &[],
     display_name: "Tanh2 BS",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -563,6 +572,7 @@ fn variation_tanh2_bs(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
 /// - Brad Stefanov
 pub static COTH2_BS: VariationDef = VariationDef {
     name: "coth2_bs",
+    aliases: &[],
     display_name: "Coth2 BS",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -627,6 +637,7 @@ fn variation_coth2_bs(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
 /// - Brad Stefanov
 pub static SECH2_BS: VariationDef = VariationDef {
     name: "sech2_bs",
+    aliases: &[],
     display_name: "Sech2 BS",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -686,6 +697,7 @@ fn variation_sech2_bs(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
 /// - Brad Stefanov
 pub static CSCH2_BS: VariationDef = VariationDef {
     name: "csch2_bs",
+    aliases: &[],
     display_name: "Csch2 BS",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -749,6 +761,7 @@ fn variation_csch2_bs(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
 /// - Brad Stefanov
 pub static EXP2_BS: VariationDef = VariationDef {
     name: "exp2_bs",
+    aliases: &[],
     display_name: "Exp2 BS",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

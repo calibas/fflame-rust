@@ -43,6 +43,7 @@ use crate::param;
 /// - Brad Stefanov
 pub static VIBRATION2: VariationDef = VariationDef {
     name: "vibration2",
+    aliases: &[],
     display_name: "Vibration 2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

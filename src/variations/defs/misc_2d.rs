@@ -40,6 +40,7 @@ use crate::param;
 /// - Apophysis Plugin Pack
 pub static SPLIT: VariationDef = VariationDef {
     name: "split",
+    aliases: &[],
     display_name: "Split",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -99,6 +100,7 @@ fn variation_split(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 /// - Raykoid666
 pub static SQUIRREL: VariationDef = VariationDef {
     name: "squirrel",
+    aliases: &[],
     display_name: "Squirrel",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -151,6 +153,7 @@ fn variation_squirrel(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
 /// - Apophysis Plugin Pack
 pub static STRIPES: VariationDef = VariationDef {
     name: "stripes",
+    aliases: &[],
     display_name: "Stripes",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -209,6 +212,7 @@ fn variation_stripes(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 /// - Brad Stefanov
 pub static SHIFT: VariationDef = VariationDef {
     name: "shift",
+    aliases: &[],
     display_name: "Shift",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -284,6 +288,7 @@ fn variation_shift(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 /// - DarkBeam
 pub static PRESSURE_WAVE: VariationDef = VariationDef {
     name: "pressure_wave",
+    aliases: &[],
     display_name: "Pressure Wave",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -360,7 +365,8 @@ fn variation_pressure_wave(p: vec3<f32>, xform_id: u32, variation_id: u32) -> ve
 /// # Authors
 /// - eralex61
 pub static SPHERICALN: VariationDef = VariationDef {
-    name: "sphericaln",
+    name: "sphericalN",
+    aliases: &[],
     display_name: "Spherical N",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -377,7 +383,7 @@ pub static SPHERICALN: VariationDef = VariationDef {
     wgsl_state_init: None,
     needs_accum: false,
     wgsl_2d: r#"
-fn variation_sphericaln(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
+fn variation_sphericalN(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let power = get_param(xform_id, variation_id, 0u);
     let dist = get_param(xform_id, variation_id, 1u);
     let two_pi = 6.28318530717959;
@@ -390,7 +396,7 @@ fn variation_sphericaln(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr
 }
 "#,
     wgsl_3d: Some(r#"
-fn variation_sphericaln(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
+fn variation_sphericalN(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let power = get_param(xform_id, variation_id, 0u);
     let dist = get_param(xform_id, variation_id, 1u);
     let two_pi = 6.28318530717959;
@@ -421,6 +427,7 @@ fn variation_sphericaln(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
 /// - DarkBeam
 pub static SPLIGON: VariationDef = VariationDef {
     name: "spligon",
+    aliases: &[],
     display_name: "Spligon",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -502,6 +509,7 @@ fn variation_spligon(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 /// - Brad Stefanov
 pub static TILE_HLP: VariationDef = VariationDef {
     name: "tile_hlp",
+    aliases: &[],
     display_name: "Tile HLP",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

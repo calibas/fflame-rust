@@ -31,6 +31,7 @@ use crate::variations::{
 /// - cothe
 pub static SIN: VariationDef = VariationDef {
     name: "sin",
+    aliases: &[],
     display_name: "Sin",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -69,6 +70,7 @@ fn variation_sin(p: vec3<f32>) -> vec3<f32> {
 /// - cothe
 pub static COS: VariationDef = VariationDef {
     name: "cos",
+    aliases: &[],
     display_name: "Cos",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -107,6 +109,7 @@ fn variation_cos(p: vec3<f32>) -> vec3<f32> {
 /// - cothe
 pub static TAN: VariationDef = VariationDef {
     name: "tan",
+    aliases: &[],
     display_name: "Tan",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -153,6 +156,7 @@ fn variation_tan(p: vec3<f32>) -> vec3<f32> {
 /// - cothe
 pub static SEC: VariationDef = VariationDef {
     name: "sec",
+    aliases: &[],
     display_name: "Sec",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -194,6 +198,7 @@ fn variation_sec(p: vec3<f32>) -> vec3<f32> {
 /// - cothe
 pub static CSC: VariationDef = VariationDef {
     name: "csc",
+    aliases: &[],
     display_name: "Csc",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -235,6 +240,7 @@ fn variation_csc(p: vec3<f32>) -> vec3<f32> {
 /// - cothe
 pub static COT: VariationDef = VariationDef {
     name: "cot",
+    aliases: &[],
     display_name: "Cot",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -283,6 +289,7 @@ fn variation_cot(p: vec3<f32>) -> vec3<f32> {
 /// - cothe
 pub static SINH: VariationDef = VariationDef {
     name: "sinh",
+    aliases: &[],
     display_name: "Sinh",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -324,6 +331,7 @@ fn variation_sinh(p: vec3<f32>) -> vec3<f32> {
 /// - cothe
 pub static COSH: VariationDef = VariationDef {
     name: "cosh",
+    aliases: &[],
     display_name: "Cosh",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -364,6 +372,7 @@ fn variation_cosh(p: vec3<f32>) -> vec3<f32> {
 /// - cothe
 pub static TANH: VariationDef = VariationDef {
     name: "tanh",
+    aliases: &[],
     display_name: "Tanh",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -411,6 +420,7 @@ fn variation_tanh(p: vec3<f32>) -> vec3<f32> {
 /// - cothe
 pub static COTH: VariationDef = VariationDef {
     name: "coth",
+    aliases: &[],
     display_name: "Coth",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -461,6 +471,7 @@ fn variation_coth(p: vec3<f32>) -> vec3<f32> {
 /// - cothe
 pub static SECH: VariationDef = VariationDef {
     name: "sech",
+    aliases: &[],
     display_name: "Sech",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -508,6 +519,7 @@ fn variation_sech(p: vec3<f32>) -> vec3<f32> {
 /// - cothe
 pub static CSCH: VariationDef = VariationDef {
     name: "csch",
+    aliases: &[],
     display_name: "Csch",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

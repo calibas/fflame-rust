@@ -35,6 +35,7 @@ use crate::param;
 /// from `[0, 1000)`.
 pub static GLYNNSPIRO: VariationDef = VariationDef {
     name: "glynnspiro",
+    aliases: &[],
     display_name: "Glynn Spiro",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

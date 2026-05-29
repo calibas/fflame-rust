@@ -41,6 +41,7 @@ use crate::param;
 /// - Larry Berlin
 pub static HO: VariationDef = VariationDef {
     name: "ho",
+    aliases: &[],
     display_name: "HO",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
@@ -127,6 +128,7 @@ fn sign_or_one_3d(v: f32) -> f32 {
 /// - zephyrtronium
 pub static CHUNK: VariationDef = VariationDef {
     name: "chunk",
+    aliases: &[],
     display_name: "Chunk",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -217,7 +219,8 @@ fn variation_chunk(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 /// `use_log` enabled this becomes a true log-polar transform; disabled,
 /// it's a simple radius rescaling.
 pub static PTRANSFORM: VariationDef = VariationDef {
-    name: "ptransform",
+    name: "pTransform",
+    aliases: &[],
     display_name: "P Transform",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -237,7 +240,7 @@ pub static PTRANSFORM: VariationDef = VariationDef {
     wgsl_state_init: None,
     needs_accum: false,
     wgsl_2d: r#"
-fn variation_ptransform(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
+fn variation_pTransform(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let rotate = get_param(xform_id, variation_id, 0u);
     let power = get_param(xform_id, variation_id, 1u);
     let move_p = get_param(xform_id, variation_id, 2u);
@@ -254,7 +257,7 @@ fn variation_ptransform(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<
 }
 "#,
     wgsl_3d: Some(r#"
-fn variation_ptransform(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
+fn variation_pTransform(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let rotate = get_param(xform_id, variation_id, 0u);
     let power = get_param(xform_id, variation_id, 1u);
     let move_p = get_param(xform_id, variation_id, 2u);
@@ -288,6 +291,7 @@ fn variation_ptransform(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<
 /// - CozyG
 pub static RATIONAL3: VariationDef = VariationDef {
     name: "rational3",
+    aliases: &[],
     display_name: "Rational 3",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -393,6 +397,7 @@ fn variation_rational3(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
 /// - Whittaker Courtney
 pub static TILE_REVERSE: VariationDef = VariationDef {
     name: "tile_reverse",
+    aliases: &[],
     display_name: "Tile Reverse",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -464,6 +469,7 @@ fn variation_tile_reverse(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: p
 /// - Michael Faber
 pub static ORTHO: VariationDef = VariationDef {
     name: "ortho",
+    aliases: &[],
     display_name: "Ortho",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

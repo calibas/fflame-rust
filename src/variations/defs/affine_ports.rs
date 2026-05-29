@@ -31,6 +31,7 @@ use crate::variations::{
 /// - Scott Draves
 pub static POPCORN: VariationDef = VariationDef {
     name: "popcorn",
+    aliases: &[],
     display_name: "Popcorn",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

@@ -63,6 +63,7 @@ use crate::param;
 /// - Michael Faber
 pub static EJULIA: VariationDef = VariationDef {
     name: "eJulia",
+    aliases: &[],
     display_name: "E-Julia",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -166,6 +167,7 @@ fn variation_eJulia(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
 /// - Michael Faber
 pub static EMOTION: VariationDef = VariationDef {
     name: "eMotion",
+    aliases: &[],
     display_name: "E-Motion",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -272,6 +274,7 @@ fn variation_eMotion(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 /// - DarkBeam
 pub static FLOWER_DB: VariationDef = VariationDef {
     name: "flower_db",
+    aliases: &[],
     display_name: "Flower DB",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
@@ -359,6 +362,7 @@ fn variation_flower_db(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
 /// - Xyrus02
 pub static JULIAN2: VariationDef = VariationDef {
     name: "julian2",
+    aliases: &[],
     display_name: "JuliaN 2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

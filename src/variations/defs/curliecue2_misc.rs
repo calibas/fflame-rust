@@ -41,6 +41,7 @@ use crate::param;
 /// - Jesus Sosa
 pub static CURLIECUE2: VariationDef = VariationDef {
     name: "curliecue2",
+    aliases: &[],
     display_name: "Curliecue 2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

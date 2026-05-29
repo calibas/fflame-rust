@@ -48,6 +48,7 @@ use crate::param;
 /// - CozyG
 pub static MOBIUS_STRIP: VariationDef = VariationDef {
     name: "mobius_strip",
+    aliases: &[],
     display_name: "Mobius Strip",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
@@ -257,6 +258,7 @@ fn variation_mobius_strip(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec
 /// map.
 pub static CIRCLE_LINEAR: VariationDef = VariationDef {
     name: "circleLinear",
+    aliases: &[],
     display_name: "Circle Linear",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

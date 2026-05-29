@@ -44,6 +44,7 @@ use crate::param;
 /// control-flow issues; the last sample is returned if none accept.
 pub static CIRCLE_RAND: VariationDef = VariationDef {
     name: "circleRand",
+    aliases: &[],
     display_name: "Circle Rand",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -154,6 +155,7 @@ fn variation_circleRand(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
 /// rejection attempts).
 pub static CIRCLE_TRANS1: VariationDef = VariationDef {
     name: "CircleTrans1",
+    aliases: &[],
     display_name: "Circle Trans 1",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

@@ -46,6 +46,7 @@ use crate::param;
 /// - Larry Berlin
 pub static HEXNIX_3D: VariationDef = VariationDef {
     name: "hexnix3D",
+    aliases: &[],
     display_name: "Hexnix 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,

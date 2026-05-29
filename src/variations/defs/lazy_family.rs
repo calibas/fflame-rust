@@ -48,6 +48,7 @@ use crate::param;
 /// - FarDareisMai
 pub static LAZYJESS: VariationDef = VariationDef {
     name: "lazyjess",
+    aliases: &[],
     display_name: "Lazy Jess",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -249,7 +250,8 @@ fn variation_lazyjess(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
 /// # Authors
 /// - Michael Faber
 pub static LAZYTRAVIS: VariationDef = VariationDef {
-    name: "lazytravis",
+    name: "lazyTravis",
+    aliases: &[],
     display_name: "Lazy Travis",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -277,7 +279,7 @@ fn init_lazytravis(user: array<f32, 3>) -> array<f32, 2> {
     wgsl_state_init: None,
     needs_accum: false,
     wgsl_2d: r#"
-fn variation_lazytravis(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
+fn variation_lazyTravis(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let space = get_param(xform_id, variation_id, 2u);
     let spin_in_4 = get_param(xform_id, variation_id, 3u);
     let spin_out_4 = get_param(xform_id, variation_id, 4u);
@@ -371,7 +373,7 @@ fn variation_lazytravis(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<
 }
 "#,
     wgsl_3d: Some(r#"
-fn variation_lazytravis(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
+fn variation_lazyTravis(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let space = get_param(xform_id, variation_id, 2u);
     let spin_in_4 = get_param(xform_id, variation_id, 3u);
     let spin_out_4 = get_param(xform_id, variation_id, 4u);

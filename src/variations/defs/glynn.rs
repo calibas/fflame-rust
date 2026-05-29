@@ -55,6 +55,7 @@ use crate::param;
 /// - Michael Faber
 pub static GLYNNIA: VariationDef = VariationDef {
     name: "glynnia",
+    aliases: &[],
     display_name: "Glynnia",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -141,6 +142,7 @@ fn variation_glynnia(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
 /// - CozyG
 pub static GLYNNIA3: VariationDef = VariationDef {
     name: "glynnia3",
+    aliases: &[],
     display_name: "Glynnia 3",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -252,6 +254,7 @@ fn variation_glynnia3(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
 /// - eralex61
 pub static GLYNN_SIM1: VariationDef = VariationDef {
     name: "glynnSim1",
+    aliases: &[],
     display_name: "Glynn Sim 1",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -394,6 +397,7 @@ fn variation_glynnSim1(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
 /// - eralex61
 pub static GLYNN_SIM2: VariationDef = VariationDef {
     name: "glynnSim2",
+    aliases: &[],
     display_name: "Glynn Sim 2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -506,6 +510,7 @@ fn variation_glynnSim2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
 /// - eralex61
 pub static GLYNN_SIM3: VariationDef = VariationDef {
     name: "glynnSim3",
+    aliases: &[],
     display_name: "Glynn Sim 3",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

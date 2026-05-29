@@ -13,6 +13,7 @@ use crate::param;
 /// moves up or down.
 pub static ZTRANSLATE: VariationDef = VariationDef {
     name: "ztranslate",
+    aliases: &[],
     display_name: "ZTranslate",
     category: VariationCategory::Depth3D,
     phase: VariationPhase::Normal,
@@ -47,7 +48,8 @@ fn variation_ztranslate(p: vec3<f32>) -> vec3<f32> {
 /// # Authors
 /// - Joel Faber
 pub static JULIA3D: VariationDef = VariationDef {
-    name: "julia3d",
+    name: "julia3D",
+    aliases: &[],
     display_name: "Julia3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
@@ -63,7 +65,7 @@ pub static JULIA3D: VariationDef = VariationDef {
     wgsl_state_init: None,
     needs_accum: false,
     wgsl_2d: r#"
-fn variation_julia3d(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
+fn variation_julia3D(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     // Apophysis Julia3D in 2D mode (Z = 0)
     let power_f = get_param(xform_id, variation_id, 0u);
     let N = i32(power_f);
@@ -109,7 +111,7 @@ fn variation_julia3d(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<fu
 }
 "#,
     wgsl_3d: Some(r#"
-fn variation_julia3d(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
+fn variation_julia3D(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     // Apophysis Julia3D: Full 3D Julia set implementation by Joel Faber
     let power_f = get_param(xform_id, variation_id, 0u);
     let N = i32(power_f);
@@ -166,6 +168,7 @@ fn variation_julia3d(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fu
 /// random distribution shape is selectable.
 pub static FALLOFF2: VariationDef = VariationDef {
     name: "falloff2",
+    aliases: &[],
     display_name: "Falloff2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -312,6 +315,7 @@ fn variation_falloff2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
 /// - Apophysis Plugin Pack
 pub static WEDGE: VariationDef = VariationDef {
     name: "wedge",
+    aliases: &[],
     display_name: "Wedge",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -392,6 +396,7 @@ fn variation_wedge(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 /// - cyberxaos
 pub static EPISPIRAL: VariationDef = VariationDef {
     name: "epispiral",
+    aliases: &[],
     display_name: "Epispiral",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -449,6 +454,7 @@ fn variation_epispiral(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
 /// normal weighted-sum phase.
 pub static BWRAPS: VariationDef = VariationDef {
     name: "bwraps",
+    aliases: &[],
     display_name: "BWraps",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -582,6 +588,7 @@ fn variation_bwraps(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 /// - Scott Draves
 pub static JULIASCOPE: VariationDef = VariationDef {
     name: "juliascope",
+    aliases: &[],
     display_name: "JuliaScope",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -670,7 +677,8 @@ fn variation_juliascope(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
 /// 3D variant of Julia where the Z coordinate gets folded along with the
 /// XY. Produces 3D fractals stretched along the depth axis.
 pub static JULIA3DZ: VariationDef = VariationDef {
-    name: "julia3dz",
+    name: "julia3Dz",
+    aliases: &[],
     display_name: "Julia3Dz",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
@@ -686,13 +694,13 @@ pub static JULIA3DZ: VariationDef = VariationDef {
     wgsl_state_init: None,
     needs_accum: false,
     wgsl_2d: r#"
-fn variation_julia3dz(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
+fn variation_julia3Dz(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     // Julia3Dz is a 3D variation, pass through in 2D
     return p;
 }
 "#,
     wgsl_3d: Some(r#"
-fn variation_julia3dz(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
+fn variation_julia3Dz(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     // Apophysis Julia3Dz - Full 3D Julia set with Z modification
     const PI: f32 = 3.14159265359;
 
@@ -741,7 +749,8 @@ fn variation_julia3dz(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
 /// 3D version of Curl — applies a complex polynomial twist along all three
 /// axes. Each axis has its own twist coefficient.
 pub static CURL3D: VariationDef = VariationDef {
-    name: "curl3d",
+    name: "curl3D",
+    aliases: &[],
     display_name: "Curl3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
@@ -759,7 +768,7 @@ pub static CURL3D: VariationDef = VariationDef {
     wgsl_state_init: None,
     needs_accum: false,
     wgsl_2d: r#"
-fn variation_curl3d(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
+fn variation_curl3D(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     // Curl3D is a 3D variation, apply XY curl in 2D
     let cx = get_param(xform_id, variation_id, 0u);
     let cy = get_param(xform_id, variation_id, 1u);
@@ -776,7 +785,7 @@ fn variation_curl3d(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32>
 }
 "#,
     wgsl_3d: Some(r#"
-fn variation_curl3d(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
+fn variation_curl3D(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     // Apophysis Curl3D - Full 3D curl transformation
     let cx = get_param(xform_id, variation_id, 0u);
     let cy = get_param(xform_id, variation_id, 1u);
@@ -804,6 +813,7 @@ fn variation_curl3d(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 /// - Scott Draves
 pub static RADIAL_BLUR: VariationDef = VariationDef {
     name: "radial_blur",
+    aliases: &[],
     display_name: "Radial Blur",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -871,6 +881,7 @@ fn variation_radial_blur(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: pt
 /// gradient.
 pub static BLUR_CIRCLE: VariationDef = VariationDef {
     name: "blur_circle",
+    aliases: &[],
     display_name: "Blur Circle",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -963,6 +974,7 @@ fn variation_blur_circle(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32
 /// slider controls how far points get pushed; `x` and `y` set the center.
 pub static BLUR_ZOOM: VariationDef = VariationDef {
     name: "blur_zoom",
+    aliases: &[],
     display_name: "Blur Zoom",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -1016,6 +1028,7 @@ fn variation_blur_zoom(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
 /// within each cell. Produces a mosaic effect.
 pub static BLUR_PIXELIZE: VariationDef = VariationDef {
     name: "blur_pixelize",
+    aliases: &[],
     display_name: "Blur Pixelize",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -1075,6 +1088,7 @@ fn variation_blur_pixelize(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: 
 /// - Apophysis Plugin Pack
 pub static SEPARATION: VariationDef = VariationDef {
     name: "separation",
+    aliases: &[],
     display_name: "Separation",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -1148,6 +1162,7 @@ fn variation_separation(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<
 /// - eralex61
 pub static MOBIUS: VariationDef = VariationDef {
     name: "mobius",
+    aliases: &[],
     display_name: "Mobius",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -1231,6 +1246,7 @@ fn variation_mobius(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 /// - Xyrus02
 pub static CROP: VariationDef = VariationDef {
     name: "crop",
+    aliases: &[],
     display_name: "Crop",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

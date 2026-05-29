@@ -48,6 +48,7 @@ use crate::param;
 /// - Xyrus02
 pub static PRE_BWRAPS2: VariationDef = VariationDef {
     name: "pre_bwraps2",
+    aliases: &[],
     display_name: "Pre BWraps 2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Pre,
@@ -171,6 +172,7 @@ fn variation_pre_bwraps2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3
 /// - Xyrus02
 pub static POST_BWRAPS2: VariationDef = VariationDef {
     name: "post_bwraps2",
+    aliases: &[],
     display_name: "Post BWraps 2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Post,

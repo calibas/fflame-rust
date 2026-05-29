@@ -38,6 +38,7 @@ use crate::param;
 /// - Jesus Sosa
 pub static LACE_JS: VariationDef = VariationDef {
     name: "lace_js",
+    aliases: &[],
     display_name: "Lace (JS)",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -125,6 +126,7 @@ fn variation_lace_js(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
 /// - Jesus Sosa
 pub static WALLPAPER_JS: VariationDef = VariationDef {
     name: "wallpaper_js",
+    aliases: &[],
     display_name: "Wallpaper (JS)",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

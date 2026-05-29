@@ -47,6 +47,7 @@ use crate::param;
 /// - Jesus Sosa
 pub static SEASHELL3D: VariationDef = VariationDef {
     name: "seashell3D",
+    aliases: &[],
     display_name: "Seashell 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
@@ -136,6 +137,7 @@ fn variation_seashell3D(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
 /// - Brad Stefanov
 pub static HYPERSHIFT2: VariationDef = VariationDef {
     name: "hypershift2",
+    aliases: &[],
     display_name: "Hyper Shift 2",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,

@@ -43,6 +43,7 @@ use crate::param;
 /// origin. Returns `(0, 0)` at the cos-zero singularities.
 pub static EPISPIRAL_WF: VariationDef = VariationDef {
     name: "epispiral_wf",
+    aliases: &[],
     display_name: "Epispiral WF",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -92,6 +93,7 @@ fn variation_epispiral_wf(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec
 /// to fill the interior.
 pub static CLOVERLEAF_WF: VariationDef = VariationDef {
     name: "cloverleaf_wf",
+    aliases: &[],
     display_name: "Cloverleaf WF",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -139,6 +141,7 @@ fn variation_cloverleaf_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: 
 /// `filled = 1`, randomizes the radius to fill the interior.
 pub static ROSE_WF: VariationDef = VariationDef {
     name: "rose_wf",
+    aliases: &[],
     display_name: "Rose WF",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -194,6 +197,7 @@ fn variation_rose_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fu
 /// bubble.
 pub static BUBBLE_WF: VariationDef = VariationDef {
     name: "bubble_wf",
+    aliases: &[],
     display_name: "Bubble WF",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,

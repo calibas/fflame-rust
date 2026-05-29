@@ -41,6 +41,7 @@ use crate::param;
 /// - Jesus Sosa
 pub static HADAMARD_JS: VariationDef = VariationDef {
     name: "hadamard_js",
+    aliases: &[],
     display_name: "Hadamard (JS)",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -110,6 +111,7 @@ fn variation_hadamard_js(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32
 /// - Jesus Sosa
 pub static INVTREE_JS: VariationDef = VariationDef {
     name: "invtree_js",
+    aliases: &[],
     display_name: "Inv-Tree (JS)",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -184,6 +186,7 @@ fn variation_invtree_js(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32>
 /// - Jesus Sosa
 pub static CROWN_JS: VariationDef = VariationDef {
     name: "crown_js",
+    aliases: &[],
     display_name: "Crown (JS)",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,

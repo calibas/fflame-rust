@@ -42,6 +42,7 @@ use crate::param;
 /// - Jesus Sosa
 pub static HARMONOGRAPH_JS: VariationDef = VariationDef {
     name: "harmonograph_js",
+    aliases: &[],
     display_name: "Harmonograph (Sosa)",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

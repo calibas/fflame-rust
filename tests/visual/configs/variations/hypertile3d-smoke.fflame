@@ -13,7 +13,7 @@
         "weight": 1.0,
         "variations": {
           "linear": 0.2,
-          "hypertile3d": 0.8
+          "hypertile3D": 0.8
         },
         "variation_params": {
           "hypertile3d.p": 3.0,
@@ -35,7 +35,7 @@
         "weight": 1.0,
         "variations": {
           "linear": 0.2,
-          "hypertile3d1": 0.8
+          "hypertile3D1": 0.8
         },
         "variation_params": {
           "hypertile3d1.p": 5.0,
@@ -56,7 +56,7 @@
         "weight": 1.0,
         "variations": {
           "linear": 0.2,
-          "hypertile3d2": 0.8
+          "hypertile3D2": 0.8
         },
         "variation_params": {
           "hypertile3d2.p": 7.0,

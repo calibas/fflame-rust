@@ -44,6 +44,7 @@ use crate::param;
 /// - zephyrtronium
 pub static FARBLUR: VariationDef = VariationDef {
     name: "farblur",
+    aliases: &[],
     display_name: "Far Blur",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,

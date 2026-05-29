@@ -42,6 +42,7 @@ use crate::param;
 /// curve controlled by 5 shape parameters. Produces flower-like patterns.
 pub static SUPER_SHAPE: VariationDef = VariationDef {
     name: "super_shape",
+    aliases: &[],
     display_name: "Super Shape",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -116,6 +117,7 @@ fn variation_super_shape(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: pt
 /// - TyrantWave
 pub static HENON: VariationDef = VariationDef {
     name: "henon",
+    aliases: &[],
     display_name: "Henon",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -170,6 +172,7 @@ fn variation_henon(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 /// - Paul Bourke
 pub static APOLLONY: VariationDef = VariationDef {
     name: "apollony",
+    aliases: &[],
     display_name: "Apollony",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

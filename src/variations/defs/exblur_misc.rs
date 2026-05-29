@@ -35,6 +35,7 @@ use crate::param;
 /// - DarkBeam
 pub static EXBLUR: VariationDef = VariationDef {
     name: "exblur",
+    aliases: &[],
     display_name: "Ex Blur",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,

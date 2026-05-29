@@ -62,6 +62,7 @@ use crate::param;
 /// - Brad Stefanov
 pub static GRIDOUT_3D: VariationDef = VariationDef {
     name: "gridout3D",
+    aliases: &[],
     display_name: "Gridout 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,

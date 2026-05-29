@@ -33,6 +33,7 @@ use crate::param;
 /// disc.
 pub static GLYNNLISSA: VariationDef = VariationDef {
     name: "glynnlissa",
+    aliases: &[],
     display_name: "Glynn Lissa",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

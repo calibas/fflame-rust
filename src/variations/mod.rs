@@ -325,6 +325,13 @@ pub struct VariationRegistry {
     /// Map of variation name -> info
     variations: HashMap<String, VariationInfo>,
 
+    /// Map of foreign-app alias name -> our canonical variation name.
+    /// Populated from each `VariationDef::aliases` slice at register
+    /// time. Consulted by `get()` and `has()` so XML imports that use
+    /// other apps' names (e.g. `linear3D` from Apo 7X / JWildfire when
+    /// we only have `linear`) resolve to the right variation.
+    aliases: HashMap<String, String>,
+
     /// Ordered list of variation names (for consistent ID assignment)
     ordered_names: Vec<String>,
 
@@ -342,6 +349,7 @@ impl VariationRegistry {
     pub fn new() -> Self {
         let mut registry = Self {
             variations: HashMap::new(),
+            aliases: HashMap::new(),
             ordered_names: Vec::new(),
             version: 0,
         };
@@ -371,6 +379,26 @@ impl VariationRegistry {
     fn register_from_def(&mut self, def: &VariationDef) {
         let info = VariationInfo::from_def(def);
         self.ordered_names.push(info.name.clone());
+        // Index foreign-app aliases pointing to this variation's canonical
+        // name so XML import lookups by alias resolve correctly.
+        for alias in def.aliases {
+            let alias = (*alias).to_string();
+            if let Some(existing) = self.aliases.get(&alias) {
+                log::warn!(
+                    "Alias '{}' already maps to '{}'; ignoring duplicate from '{}'",
+                    alias, existing, info.name
+                );
+                continue;
+            }
+            if self.variations.contains_key(&alias) {
+                log::warn!(
+                    "Alias '{}' for '{}' conflicts with an existing variation name; ignoring",
+                    alias, info.name
+                );
+                continue;
+            }
+            self.aliases.insert(alias, info.name.clone());
+        }
         self.variations.insert(info.name.clone(), info);
     }
 
@@ -421,13 +449,42 @@ impl VariationRegistry {
     }
 
     /// Check if a variation is registered (built-in or API).
+    /// Resolves foreign-app aliases to the canonical name.
     pub fn has(&self, name: &str) -> bool {
-        self.variations.contains_key(name)
+        if self.variations.contains_key(name) {
+            return true;
+        }
+        if let Some(canonical) = self.aliases.get(name) {
+            return self.variations.contains_key(canonical);
+        }
+        false
     }
 
-    /// Get variation info by name
+    /// Get variation info by name. If the lookup misses, also tries the
+    /// alias table so foreign-app names (e.g. `linear3D` from Apo 7X /
+    /// JWildfire) resolve to our canonical variation.
     pub fn get(&self, name: &str) -> Option<&VariationInfo> {
-        self.variations.get(name)
+        if let Some(info) = self.variations.get(name) {
+            return Some(info);
+        }
+        if let Some(canonical) = self.aliases.get(name) {
+            return self.variations.get(canonical);
+        }
+        None
+    }
+
+    /// Resolve a name through the alias table without doing the
+    /// VariationInfo lookup. Useful at XML import time when the caller
+    /// wants to record the canonical name on the Transform (so the rest
+    /// of the pipeline never sees the alias).
+    pub fn resolve_alias<'a>(&'a self, name: &'a str) -> &'a str {
+        if self.variations.contains_key(name) {
+            return name;
+        }
+        if let Some(canonical) = self.aliases.get(name) {
+            return canonical.as_str();
+        }
+        name
     }
 
     /// Get all variation names in order

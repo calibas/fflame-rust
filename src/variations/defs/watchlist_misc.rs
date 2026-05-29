@@ -47,6 +47,7 @@ use crate::param;
 /// - Michael Faber
 pub static TRADE: VariationDef = VariationDef {
     name: "trade",
+    aliases: &[],
     display_name: "Trade",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -146,6 +147,7 @@ fn variation_trade(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 /// - eralex61
 pub static VORON: VariationDef = VariationDef {
     name: "voron",
+    aliases: &[],
     display_name: "Voron",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -268,6 +270,7 @@ fn variation_voron(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 /// changes qualitatively with weight rather than just scaling.
 pub static SQUIRCULAR: VariationDef = VariationDef {
     name: "squircular",
+    aliases: &[],
     display_name: "Squircular",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -342,6 +345,7 @@ fn variation_squircular(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<
 /// - meckie
 pub static FLUX: VariationDef = VariationDef {
     name: "flux",
+    aliases: &[],
     display_name: "Flux",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -405,6 +409,7 @@ fn variation_flux(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
 /// - Z+
 pub static RAYS: VariationDef = VariationDef {
     name: "rays",
+    aliases: &[],
     display_name: "Rays",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -456,6 +461,7 @@ fn variation_rays(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<funct
 /// - Raykoid666
 pub static RAYS1: VariationDef = VariationDef {
     name: "rays1",
+    aliases: &[],
     display_name: "Rays 1",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -526,6 +532,7 @@ fn variation_rays1(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 /// - DarkBeam
 pub static LOONIE2: VariationDef = VariationDef {
     name: "loonie2",
+    aliases: &[],
     display_name: "Loonie 2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -681,6 +688,7 @@ fn variation_loonie2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 /// - guagapunyaimel
 pub static FOURTH: VariationDef = VariationDef {
     name: "fourth",
+    aliases: &[],
     display_name: "Fourth",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

@@ -59,6 +59,7 @@ use crate::param;
 /// - DarkBeam
 pub static LOONIE3: VariationDef = VariationDef {
     name: "loonie3",
+    aliases: &[],
     display_name: "Loonie 3",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -124,7 +125,8 @@ fn variation_loonie3(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 /// # Authors
 /// - Larry Berlin
 pub static LOONIE_3D: VariationDef = VariationDef {
-    name: "loonie_3d",
+    name: "loonie_3D",
+    aliases: &[],
     display_name: "Loonie 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
@@ -140,7 +142,7 @@ pub static LOONIE_3D: VariationDef = VariationDef {
     wgsl_state_init: None,
     needs_accum: false,
     wgsl_2d: r#"
-fn variation_loonie_3d(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
+fn variation_loonie_3D(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let w = transforms[xform_id].variations[variation_id];
     let sqrvvar = w * w;
     let ef_z = atan2(p.y, p.x);
@@ -153,7 +155,7 @@ fn variation_loonie_3d(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f
 }
 "#,
     wgsl_3d: Some(r#"
-fn variation_loonie_3d(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
+fn variation_loonie_3D(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let w = transforms[xform_id].variations[variation_id];
     let sqrvvar = w * w;
     var ef_z = p.z;
@@ -191,6 +193,7 @@ fn variation_loonie_3d(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
 /// - Brad Stefanov
 pub static SIGMOID: VariationDef = VariationDef {
     name: "sigmoid",
+    aliases: &[],
     display_name: "Sigmoid",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -305,6 +308,7 @@ fn variation_sigmoid(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 /// - Brad Stefanov
 pub static BLOCKY: VariationDef = VariationDef {
     name: "blocky",
+    aliases: &[],
     display_name: "Blocky",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
