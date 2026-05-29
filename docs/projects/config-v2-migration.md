@@ -69,6 +69,25 @@ risk and the user is tracking those manually.
 **v2 migration**: same "do nothing" pattern as section 1 — let
 serde's default-on-missing apply the new value.
 
+### 4. DOF Blur Strength rescale (×10 weaker)
+
+The shader now multiplies `dof_blur_strength` by `0.1` internally so
+the field carries the same magnitude as Apophysis's `cam_dof`
+attribute — copying Apo settings across now works directly, and the
+0..=1 UI slider isn't 10× too sensitive.
+
+| Field | Old meaning | New meaning |
+|---|---|---|
+| `dof_blur_strength` | 0.019 ≈ Apo 0.19 | x = Apo's `cam_dof` directly |
+
+Visible only for v1 .fflame files that explicitly set
+`dof_blur_strength > 0`. No repo assets do; user-personal flames
+again at risk and tracked manually.
+
+**v2 migration**: multiply explicit `dof_blur_strength` values by 10
+to preserve the same rendered blur. Skip if absent (default is 0.0,
+disabled, unaffected).
+
 ### 4. (Pending feature) — placeholder
 
 A separate in-flight feature will land before v2 ships. Add notes here

@@ -76,6 +76,7 @@ fn parse_flame_element(
     let mut cam_yaw = 0.0;    // Camera rotation Y (radians)
     let mut cam_zpos = 0.0;   // Camera Z position (height)
     let mut cam_perspective = 0.0;  // Perspective strength
+    let mut cam_dof = 0.0;    // Depth-of-field blur strength (Apo's `cam_dof`)
     let mut curves: Option<Vec<f32>> = None;  // Tone curve data (48 floats)
     let mut solo_xform: Option<usize> = None;  // Solo transform index (0-indexed)
 
@@ -120,6 +121,7 @@ fn parse_flame_element(
             "cam_yaw" => cam_yaw = value.parse().unwrap_or(0.0),
             "cam_zpos" => cam_zpos = value.parse().unwrap_or(0.0),
             "cam_perspective" => cam_perspective = value.parse().unwrap_or(0.0),
+            "cam_dof" => cam_dof = value.parse().unwrap_or(0.0),
             "curves" => {
                 // Parse space-separated floats (48 values: 4 curves × 12 points)
                 let parsed: Vec<f32> = value.split_whitespace()
@@ -312,7 +314,10 @@ fn parse_flame_element(
         camera_rotation_y: cam_yaw,
         camera_z: cam_zpos,
         dof_focus_distance: crate::config::defaults::DEFAULT_DOF_FOCUS_DISTANCE,
-        dof_blur_strength: crate::config::defaults::DEFAULT_DOF_BLUR_STRENGTH,
+        // Direct copy of Apo's `cam_dof` after the step-3 strength rescale —
+        // shader divides by 10 internally, so the stored value carries the
+        // same magnitude as Apo's attribute.
+        dof_blur_strength: cam_dof,
         fog_strength: crate::config::defaults::DEFAULT_FOG_STRENGTH,
         fog_start: crate::config::defaults::DEFAULT_FOG_START,
         density_scale: 1.0,  // Use default, brightness is handled by Apophysis brightness parameter
