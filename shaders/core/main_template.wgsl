@@ -288,8 +288,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 // even when COLOR_MODE is a compile-time constant.
                 var final_color: vec3<f32> = vec3<f32>(1.0, 1.0, 1.0);
                 if (COLOR_MODE == 0u) {
-                    // Palette mode: sample from palette texture using color_index
-                    final_color = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(color_index, 0.5), 0.0).rgb;
+                    // Palette mode: sample from palette texture using color_index.
+                    // Palette is sRGB-encoded; decode to linear for accumulation.
+                    let palette_srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(color_index, 0.5), 0.0).rgb;
+                    final_color = srgb_to_linear(palette_srgb);
                 } else if (COLOR_MODE == 1u) {
                     // Speed mode: uses accumulated RGB color
                     final_color = color;

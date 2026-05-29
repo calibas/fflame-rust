@@ -85,6 +85,15 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
     return output;
 }
 
+// sRGB → linear decoding. Palette colors (.flame XML hex, .palette JSON)
+// and the background color in `TonemapParams` are authored against an sRGB
+// monitor; the pipeline math is linear. Use the gamma-2.2 approximation
+// so it's symmetric with the pow(1/2.2) encoder at the fragment-shader
+// tail (encode∘decode = identity on round-tripped values).
+fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
+    return pow(max(c, vec3<f32>(0.0)), vec3<f32>(2.2));
+}
+
 // Hash function for scrambling - spreads similar values across color space
 fn scramble_hash(x: u32) -> u32 {
     var h = x;
@@ -665,11 +674,13 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
                     t = clamp((path.initial_y + 1.0) * 0.5, 0.0, 1.0);
                 }
 
-                // Load palette texture at position t
-                // Palette is Nx1 texture (N = palette_size) - use textureLoad to avoid uniform control flow requirement
+                // Load palette texture at position t.
+                // Palette is sRGB-encoded; decode to linear so it composites
+                // correctly through the linear-space background blend below.
                 let max_idx = f32(tonemap_params.palette_size - 1u);
                 let palette_idx = u32(clamp(t * max_idx, 0.0, max_idx));
-                fractal_color = textureLoad(palette_texture, vec2<i32>(i32(palette_idx), 0), 0).rgb;
+                let palette_srgb = textureLoad(palette_texture, vec2<i32>(i32(palette_idx), 0), 0).rgb;
+                fractal_color = srgb_to_linear(palette_srgb);
             }
         }
     }
@@ -719,8 +730,11 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         final_color = fractal_color;
         final_alpha = fractal_alpha;
     } else {
-        // Normal display: composite with background, opaque output
-        final_color = tonemap_params.background_color * (1.0 - fractal_alpha) + fractal_color * fractal_alpha;
+        // Normal display: composite with background, opaque output.
+        // Background color is supplied as sRGB (matches what the user picks
+        // in the UI); decode to linear before blending in linear space.
+        let bg_linear = srgb_to_linear(tonemap_params.background_color);
+        final_color = bg_linear * (1.0 - fractal_alpha) + fractal_color * fractal_alpha;
         final_alpha = 1.0;
     }
 
