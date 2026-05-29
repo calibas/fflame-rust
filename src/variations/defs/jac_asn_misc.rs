@@ -48,6 +48,7 @@ use crate::param;
 /// - DarkBeam
 pub static JAC_ASN: VariationDef = VariationDef {
     name: "jac_asn",
+    aliases: &[],
     display_name: "Jac asn",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

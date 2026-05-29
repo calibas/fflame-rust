@@ -12,6 +12,7 @@ use crate::variations::{
 /// the depth profile of an otherwise crisp 3D shape.
 pub static ZBLUR: VariationDef = VariationDef {
     name: "zblur",
+    aliases: &[],
     display_name: "Z-Blur",
     category: VariationCategory::Depth3D,
     phase: VariationPhase::Normal,
@@ -44,7 +45,8 @@ fn variation_zblur(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
 /// with a random sample from a spherical cloud around the origin. The
 /// 3D counterpart of Gaussian Blur.
 pub static BLUR3D: VariationDef = VariationDef {
-    name: "blur3d",
+    name: "blur3D",
+    aliases: &[],
     display_name: "Blur 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
@@ -58,7 +60,7 @@ pub static BLUR3D: VariationDef = VariationDef {
     wgsl_state_init: None,
     needs_accum: false,
     wgsl_2d: r#"
-fn variation_blur3d(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
+fn variation_blur3D(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     // Apophysis: 3D Gaussian spherical blur
     // In 2D mode, apply XY components only
     let theta = rng_nextf(rng) * 6.28318530718;  // 2π
@@ -68,7 +70,7 @@ fn variation_blur3d(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
 }
 "#,
     wgsl_3d: Some(r#"
-fn variation_blur3d(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
+fn variation_blur3D(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
     // Apophysis: 3D Gaussian spherical blur
     // θ = random × 2π (azimuth)
     // φ = random × π (polar angle)
@@ -87,6 +89,7 @@ fn variation_blur3d(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
 /// iteration's starting position.
 pub static PRE_BLUR: VariationDef = VariationDef {
     name: "pre_blur",
+    aliases: &[],
     display_name: "Pre-Blur",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Pre,

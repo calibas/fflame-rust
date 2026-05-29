@@ -36,6 +36,7 @@ use crate::param;
 /// - zephyrtronium
 pub static POST_HEAT: VariationDef = VariationDef {
     name: "post_heat",
+    aliases: &[],
     display_name: "Post Heat",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Post,

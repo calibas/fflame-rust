@@ -58,6 +58,7 @@ use crate::param;
 /// - gossamer light
 pub static PRE_SINUSOIDAL3D: VariationDef = VariationDef {
     name: "pre_sinusoidal3d",
+    aliases: &[],
     display_name: "Pre Sinusoidal 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Pre,
@@ -105,6 +106,7 @@ fn variation_pre_sinusoidal3d(p: vec3<f32>, xform_id: u32, variation_id: u32) ->
 /// the input.
 pub static PRE_BLUR3D: VariationDef = VariationDef {
     name: "pre_blur3D",
+    aliases: &[],
     display_name: "Pre Blur 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Pre,
@@ -173,6 +175,7 @@ fn variation_pre_blur3D(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
 /// - Xyrus02
 pub static JULIAN3DX: VariationDef = VariationDef {
     name: "julian3Dx",
+    aliases: &[],
     display_name: "JuliaN 3D X",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,

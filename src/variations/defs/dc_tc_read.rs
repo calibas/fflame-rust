@@ -56,6 +56,7 @@ use crate::param;
 /// - Xyrus02
 pub static DC_ZTRANSL: VariationDef = VariationDef {
     name: "dc_ztransl",
+    aliases: &[],
     display_name: "DC Z Translation",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
@@ -131,6 +132,7 @@ fn variation_dc_ztransl(p: vec3<f32>, xform_id: u32, variation_id: u32, vc: ptr<
 /// - Xyrus02
 pub static PRE_DCZTRANSL: VariationDef = VariationDef {
     name: "pre_dcztransl",
+    aliases: &[],
     display_name: "Pre DC Z Translation",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Pre,
@@ -205,6 +207,7 @@ fn variation_pre_dcztransl(p: vec3<f32>, xform_id: u32, variation_id: u32, vc: p
 /// - Andreas Maschke
 pub static COLORSCALE_WF: VariationDef = VariationDef {
     name: "colorscale_wf",
+    aliases: &[],
     display_name: "Color Scale WF",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
@@ -267,6 +270,7 @@ fn variation_colorscale_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, vc: p
 /// - Andreas Maschke
 pub static POST_COLORSCALE_WF: VariationDef = VariationDef {
     name: "post_colorscale_wf",
+    aliases: &[],
     display_name: "Post Color Scale WF",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Post,

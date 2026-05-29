@@ -62,6 +62,7 @@ use crate::param;
 /// - Whittaker Courtney
 pub static CORNERS: VariationDef = VariationDef {
     name: "corners",
+    aliases: &[],
     display_name: "Corners",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -166,6 +167,7 @@ fn variation_corners(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 /// - Apophysis Plugin Pack
 pub static MODULUS: VariationDef = VariationDef {
     name: "modulus",
+    aliases: &[],
     display_name: "Modulus",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -277,6 +279,7 @@ fn variation_modulus(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 /// - FracFx
 pub static OCTAGON: VariationDef = VariationDef {
     name: "octagon",
+    aliases: &[],
     display_name: "Octagon",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
@@ -377,6 +380,7 @@ fn variation_octagon(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 /// - Michael Faber
 pub static CIRCUS: VariationDef = VariationDef {
     name: "circus",
+    aliases: &[],
     display_name: "Circus",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -439,6 +443,7 @@ fn variation_circus(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 /// - Apophysis Plugin Pack
 pub static CIRCLIZE: VariationDef = VariationDef {
     name: "circlize",
+    aliases: &[],
     display_name: "Circlize",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -522,6 +527,7 @@ fn variation_circlize(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
 /// - Michael Faber
 pub static CIRCLIZE2: VariationDef = VariationDef {
     name: "circlize2",
+    aliases: &[],
     display_name: "Circlize 2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -599,6 +605,7 @@ fn variation_circlize2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
 /// - Brad Stefanov
 pub static ATAN_VAR: VariationDef = VariationDef {
     name: "atan",
+    aliases: &[],
     display_name: "Atan",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -672,6 +679,7 @@ fn variation_atan(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
 /// - Zueuk
 pub static MURL: VariationDef = VariationDef {
     name: "murl",
+    aliases: &[],
     display_name: "Murl",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

@@ -56,6 +56,7 @@ use crate::param;
 /// - eralex61
 pub static MOBIUSN: VariationDef = VariationDef {
     name: "mobiusN",
+    aliases: &[],
     display_name: "MobiusN",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -187,6 +188,7 @@ fn variation_mobiusN(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fu
 /// - zephyrtronium
 pub static MOBIQ: VariationDef = VariationDef {
     name: "mobiq",
+    aliases: &[],
     display_name: "Mobiq",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,

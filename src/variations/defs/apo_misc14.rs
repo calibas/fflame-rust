@@ -60,6 +60,7 @@ use crate::param;
 /// - Brad Stefanov
 pub static WAVES2_RADIAL: VariationDef = VariationDef {
     name: "waves2_radial",
+    aliases: &[],
     display_name: "Waves2 Radial",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -145,6 +146,7 @@ fn variation_waves2_radial(p: vec3<f32>, xform_id: u32, variation_id: u32) -> ve
 /// - Brad Stefanov
 pub static SPLIPTIC_BS: VariationDef = VariationDef {
     name: "spliptic_bs",
+    aliases: &[],
     display_name: "Spliptic BS",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -265,6 +267,7 @@ fn variation_spliptic_bs(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: pt
 /// - Zueuk
 pub static POINCARE3D: VariationDef = VariationDef {
     name: "poincare3D",
+    aliases: &[],
     display_name: "Poincare 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,

@@ -15,6 +15,7 @@ use crate::variations::{
 /// - Scott Draves
 pub static POLAR: VariationDef = VariationDef {
     name: "polar",
+    aliases: &[],
     display_name: "Polar",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -50,6 +51,7 @@ fn variation_polar(p: vec3<f32>) -> vec3<f32> {
 /// - Scott Draves
 pub static HANDKERCHIEF: VariationDef = VariationDef {
     name: "handkerchief",
+    aliases: &[],
     display_name: "Handkerchief",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -85,6 +87,7 @@ fn variation_handkerchief(p: vec3<f32>) -> vec3<f32> {
 /// - Scott Draves
 pub static HEART: VariationDef = VariationDef {
     name: "heart",
+    aliases: &[],
     display_name: "Heart",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -123,6 +126,7 @@ fn variation_heart(p: vec3<f32>) -> vec3<f32> {
 /// - Scott Draves
 pub static DISC: VariationDef = VariationDef {
     name: "disc",
+    aliases: &[],
     display_name: "Disc",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -162,6 +166,7 @@ fn variation_disc(p: vec3<f32>) -> vec3<f32> {
 /// - Scott Draves
 pub static SPIRAL: VariationDef = VariationDef {
     name: "spiral",
+    aliases: &[],
     display_name: "Spiral",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -206,6 +211,7 @@ fn variation_spiral(p: vec3<f32>) -> vec3<f32> {
 /// - Scott Draves
 pub static HYPERBOLIC: VariationDef = VariationDef {
     name: "hyperbolic",
+    aliases: &[],
     display_name: "Hyperbolic",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -239,6 +245,7 @@ fn variation_hyperbolic(p: vec3<f32>) -> vec3<f32> {
 /// - Scott Draves
 pub static DIAMOND: VariationDef = VariationDef {
     name: "diamond",
+    aliases: &[],
     display_name: "Diamond",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -274,6 +281,7 @@ fn variation_diamond(p: vec3<f32>) -> vec3<f32> {
 /// - Scott Draves
 pub static EX: VariationDef = VariationDef {
     name: "ex",
+    aliases: &[],
     display_name: "Ex",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -318,6 +326,7 @@ fn variation_ex(p: vec3<f32>) -> vec3<f32> {
 /// - Scott Draves
 pub static JULIA: VariationDef = VariationDef {
     name: "julia",
+    aliases: &[],
     display_name: "Julia",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -359,6 +368,7 @@ fn julia(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
 /// - Scott Draves
 pub static BENT: VariationDef = VariationDef {
     name: "bent",
+    aliases: &[],
     display_name: "Bent",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -407,6 +417,7 @@ fn variation_bent(p: vec3<f32>) -> vec3<f32> {
 /// - Scott Draves
 pub static WAVES: VariationDef = VariationDef {
     name: "waves",
+    aliases: &[],
     display_name: "Waves",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -450,6 +461,7 @@ fn variation_waves(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 /// - Scott Draves
 pub static JULIAN: VariationDef = VariationDef {
     name: "julian",
+    aliases: &[],
     display_name: "JuliaN",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -531,6 +543,7 @@ fn variation_julian(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
 /// - Scott Draves
 pub static BLOB: VariationDef = VariationDef {
     name: "blob",
+    aliases: &[],
     display_name: "Blob",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -608,6 +621,7 @@ fn variation_blob(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
 /// - Scott Draves
 pub static EYEFISH: VariationDef = VariationDef {
     name: "eyefish",
+    aliases: &[],
     display_name: "Eyefish",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -643,6 +657,7 @@ fn variation_eyefish(p: vec3<f32>) -> vec3<f32> {
 /// - Scott Draves
 pub static BUBBLE: VariationDef = VariationDef {
     name: "bubble",
+    aliases: &[],
     display_name: "Bubble",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -684,6 +699,7 @@ fn variation_bubble(p: vec3<f32>) -> vec3<f32> {
 /// - Scott Draves
 pub static CYLINDER: VariationDef = VariationDef {
     name: "cylinder",
+    aliases: &[],
     display_name: "Cylinder",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -716,6 +732,7 @@ fn variation_cylinder(p: vec3<f32>) -> vec3<f32> {
 /// - Scott Draves
 pub static NOISE: VariationDef = VariationDef {
     name: "noise",
+    aliases: &[],
     display_name: "Noise",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -751,6 +768,7 @@ fn variation_noise(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
 /// - Scott Draves
 pub static BLUR: VariationDef = VariationDef {
     name: "blur",
+    aliases: &[],
     display_name: "Blur",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -786,6 +804,7 @@ fn variation_blur(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
 /// - Scott Draves
 pub static GAUSSIAN_BLUR: VariationDef = VariationDef {
     name: "gaussian_blur",
+    aliases: &[],
     display_name: "Gaussian Blur",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -823,6 +842,7 @@ fn variation_gaussian_blur(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f
 /// - Apophysis Plugin Pack
 pub static POLAR2: VariationDef = VariationDef {
     name: "polar2",
+    aliases: &[],
     display_name: "Polar2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -862,6 +882,7 @@ fn variation_polar2(p: vec3<f32>) -> vec3<f32> {
 /// - Scott Draves
 pub static CROSS: VariationDef = VariationDef {
     name: "cross",
+    aliases: &[],
     display_name: "Cross",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -899,6 +920,7 @@ fn variation_cross(p: vec3<f32>) -> vec3<f32> {
 /// - Apophysis Plugin Pack
 pub static LOONIE: VariationDef = VariationDef {
     name: "loonie",
+    aliases: &[],
     display_name: "Loonie",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -942,6 +964,7 @@ fn variation_loonie(p: vec3<f32>) -> vec3<f32> {
 /// - Apophysis Plugin Pack
 pub static SCRY: VariationDef = VariationDef {
     name: "scry",
+    aliases: &[],
     display_name: "Scry",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -977,6 +1000,7 @@ fn variation_scry(p: vec3<f32>) -> vec3<f32> {
 /// - Apophysis Plugin Pack
 pub static FOCI: VariationDef = VariationDef {
     name: "foci",
+    aliases: &[],
     display_name: "Foci",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -1022,6 +1046,7 @@ fn variation_foci(p: vec3<f32>) -> vec3<f32> {
 /// - Apophysis Plugin Pack
 pub static ELLIPTIC: VariationDef = VariationDef {
     name: "elliptic",
+    aliases: &[],
     display_name: "Elliptic",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -1076,6 +1101,7 @@ fn variation_elliptic(p: vec3<f32>) -> vec3<f32> {
 /// - Joel Faber
 pub static WAVES2: VariationDef = VariationDef {
     name: "waves2",
+    aliases: &[],
     display_name: "Waves2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -1177,6 +1203,7 @@ fn variation_waves2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 ///
 pub static LOG: VariationDef = VariationDef {
     name: "log",
+    aliases: &[],
     display_name: "Log",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -1230,6 +1257,7 @@ fn variation_log(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
 /// - Apophysis Plugin Pack
 pub static ESCHER: VariationDef = VariationDef {
     name: "escher",
+    aliases: &[],
     display_name: "Escher",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -1294,6 +1322,7 @@ fn variation_escher(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 /// - Apophysis Plugin Pack
 pub static BIPOLAR: VariationDef = VariationDef {
     name: "bipolar",
+    aliases: &[],
     display_name: "Bipolar",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -1373,6 +1402,7 @@ fn variation_bipolar(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 /// - Apophysis Plugin Pack
 pub static LAZYSUSAN: VariationDef = VariationDef {
     name: "lazysusan",
+    aliases: &[],
     display_name: "LazySusan",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -1478,6 +1508,7 @@ fn variation_lazysusan(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
 ///
 pub static RINGS2: VariationDef = VariationDef {
     name: "rings2",
+    aliases: &[],
     display_name: "Rings2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -1528,6 +1559,7 @@ fn variation_rings2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 /// - Scott Draves
 pub static FAN2: VariationDef = VariationDef {
     name: "fan2",
+    aliases: &[],
     display_name: "Fan2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -1604,6 +1636,7 @@ fn variation_fan2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
 /// - Scott Draves
 pub static PDJ: VariationDef = VariationDef {
     name: "pdj",
+    aliases: &[],
     display_name: "PDJ",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -1687,6 +1720,7 @@ fn variation_pdj(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
 /// - Scott Draves
 pub static CURL: VariationDef = VariationDef {
     name: "curl",
+    aliases: &[],
     display_name: "Curl",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -1754,6 +1788,7 @@ fn variation_curl(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
 /// - Scott Draves
 pub static RECTANGLES: VariationDef = VariationDef {
     name: "rectangles",
+    aliases: &[],
     display_name: "Rectangles",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -1815,6 +1850,7 @@ fn variation_rectangles(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<
 /// - Apophysis Plugin Pack
 pub static SPLITS: VariationDef = VariationDef {
     name: "splits",
+    aliases: &[],
     display_name: "Splits",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -1876,6 +1912,7 @@ fn variation_splits(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 /// - Scott Draves
 pub static NGON: VariationDef = VariationDef {
     name: "ngon",
+    aliases: &[],
     display_name: "Ngon",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -1971,6 +2008,7 @@ fn variation_ngon(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
 /// - Xyrus02
 pub static AUGER: VariationDef = VariationDef {
     name: "auger",
+    aliases: &[],
     display_name: "Auger",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -2063,6 +2101,7 @@ fn variation_auger(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 /// - Apophysis Plugin Pack
 pub static CPOW: VariationDef = VariationDef {
     name: "cpow",
+    aliases: &[],
     display_name: "CPow",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

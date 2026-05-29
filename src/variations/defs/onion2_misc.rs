@@ -35,6 +35,7 @@ use crate::param;
 /// - chronologicaldot
 pub static ONION2: VariationDef = VariationDef {
     name: "onion2",
+    aliases: &[],
     display_name: "Onion 2",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,

@@ -39,6 +39,7 @@ use crate::param;
 /// - chronologicaldot
 pub static ONION: VariationDef = VariationDef {
     name: "onion",
+    aliases: &[],
     display_name: "Onion",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
@@ -145,6 +146,7 @@ fn variation_onion(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 /// - DarkBeam
 pub static TARGET_SP: VariationDef = VariationDef {
     name: "target_sp",
+    aliases: &[],
     display_name: "Target Sp",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

@@ -69,6 +69,7 @@ use crate::param;
 /// - Whittaker Courtney
 pub static CSC_SQUARED: VariationDef = VariationDef {
     name: "csc_squared",
+    aliases: &[],
     display_name: "Csc Squared",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -151,6 +152,7 @@ fn variation_csc_squared(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3
 /// hyperbolic radial scaling along X.
 pub static HYPERBOLICELLIPSE: VariationDef = VariationDef {
     name: "hyperbolicellipse",
+    aliases: &[],
     display_name: "Hyperbolic Ellipse",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -198,6 +200,7 @@ fn variation_hyperbolicellipse(p: vec3<f32>, xform_id: u32, variation_id: u32) -
 /// - Will Evans
 pub static LAYERED_SPIRAL: VariationDef = VariationDef {
     name: "layered_spiral",
+    aliases: &[],
     display_name: "Layered Spiral",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -252,6 +255,7 @@ fn variation_layered_spiral(p: vec3<f32>, xform_id: u32, variation_id: u32) -> v
 /// - Whittaker Courtney
 pub static ATAN2_SPIRALS: VariationDef = VariationDef {
     name: "atan2_spirals",
+    aliases: &[],
     display_name: "Atan2 Spirals",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -361,6 +365,7 @@ fn variation_atan2_spirals(p: vec3<f32>, xform_id: u32, variation_id: u32) -> ve
 /// - DarkBeam
 pub static GRIDOUT2: VariationDef = VariationDef {
     name: "gridout2",
+    aliases: &[],
     display_name: "Grid Out 2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

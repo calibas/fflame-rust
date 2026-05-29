@@ -55,7 +55,7 @@
         "weight": 1.0,
         "variations": {
           "linear": 1.0,
-          "post_julia3dq": 1.0
+          "post_julia3Dq": 1.0
         },
         "variation_params": {
           "post_julia3dq.power": 3.0,

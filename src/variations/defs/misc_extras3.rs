@@ -55,6 +55,7 @@ use crate::param;
 /// - DarkBeam
 pub static OSCILLOSCOPE2: VariationDef = VariationDef {
     name: "oscilloscope2",
+    aliases: &[],
     display_name: "Oscilloscope 2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -146,7 +147,8 @@ fn variation_oscilloscope2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> ve
 /// # Authors
 /// - FractalDesire
 pub static LINEART: VariationDef = VariationDef {
-    name: "lineart",
+    name: "linearT",
+    aliases: &[],
     display_name: "Line Art",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -163,7 +165,7 @@ pub static LINEART: VariationDef = VariationDef {
     wgsl_state_init: None,
     needs_accum: false,
     wgsl_2d: r#"
-fn variation_lineart(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
+fn variation_linearT(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let powx = get_param(xform_id, variation_id, 0u);
     let powy = get_param(xform_id, variation_id, 1u);
     let sx = select(sign(p.x), 1.0, p.x == 0.0);
@@ -175,7 +177,7 @@ fn variation_lineart(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32
 }
 "#,
     wgsl_3d: Some(r#"
-fn variation_lineart(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
+fn variation_linearT(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let powx = get_param(xform_id, variation_id, 0u);
     let powy = get_param(xform_id, variation_id, 1u);
     let sx = select(sign(p.x), 1.0, p.x == 0.0);
@@ -206,6 +208,7 @@ fn variation_lineart(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 /// - TyrantWave
 pub static PHOENIX_JULIA: VariationDef = VariationDef {
     name: "phoenix_julia",
+    aliases: &[],
     display_name: "Phoenix Julia",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -295,6 +298,7 @@ fn variation_phoenix_julia(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: 
 /// - DarkBeam
 pub static POW_BLOCK: VariationDef = VariationDef {
     name: "pow_block",
+    aliases: &[],
     display_name: "Pow Block",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

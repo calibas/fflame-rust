@@ -36,6 +36,7 @@ use crate::param;
 /// the parameters.
 pub static GLYNNSSHAPE: VariationDef = VariationDef {
     name: "glynnSShape",
+    aliases: &[],
     display_name: "Glynn S-Shape",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

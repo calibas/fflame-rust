@@ -52,6 +52,7 @@ use crate::param;
 /// - Xyrus02
 pub static DC_LINEAR: VariationDef = VariationDef {
     name: "dc_linear",
+    aliases: &[],
     display_name: "DC Linear",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -135,6 +136,7 @@ fn variation_dc_linear(p: vec3<f32>, xform_id: u32, variation_id: u32, vc: ptr<f
 /// - Xyrus02
 pub static DC_BUBBLE: VariationDef = VariationDef {
     name: "dc_bubble",
+    aliases: &[],
     display_name: "DC Bubble",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

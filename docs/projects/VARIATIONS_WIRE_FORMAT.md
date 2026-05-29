@@ -62,6 +62,10 @@ struct VariationDownload {
     id: String,
     name: String,                       // function suffix; the WGSL fn
                                         //   must be `variation_<name>`
+    aliases: Vec<String>,               // serde(default); foreign-app names
+                                        //   that resolve to this variation
+                                        //   on import (e.g. `linear3D` for
+                                        //   `linear`). See §10.
     display_name: String,
     description: Option<String>,        // serde(default)
     category: String,                   // see §5
@@ -284,6 +288,7 @@ ships per variation.
 | `description: Option<String>` | `VariationListItem` + `VariationDownload` | Free-form prose for the variation overall. Already on `VariationDownload`; planned addition to `VariationListItem` so the registry browser can show it without per-variation fetches. |
 | `authors: Vec<String>` | `VariationListItem` + `VariationDownload` | Original designer(s). Order-preserving (multiple authors are common — ports + extensions). Free-form `"Name (year)"` style; **not** a foreign key to `users` — these are historical attribution, not platform accounts. |
 | `description: Option<String>` on `ApiVariationParameter` | `VariationDownload.parameters[*]` | Per-parameter help / tooltip prose. Param names alone (`hypergon`, `super_n3`, `popcorn2_3D_c`) are extremely obtuse without explanation. |
+| `aliases: Vec<String>` | `VariationListItem` + `VariationDownload` | Foreign-app names that resolve to this variation on `.flame` XML import (e.g. `linear3D` for our `linear`). See §10. |
 
 **Versioning policy.** The whole initial corpus ships at `version =
 1`. The app and the API are released in lockstep — there's no in-flight
@@ -352,7 +357,8 @@ corpus is `version = 1` and the field rarely changes.
   during the transition window.
 - **In flight**: the description + authors additions in §7, the
   per-parameter `description` field, the int→bool / int→enum
-  parameter type corrections, and the bulk import of the `defs/`
+  parameter type corrections, the `aliases` field for foreign-app
+  name compatibility (§10), and the bulk import of the `defs/`
   corpus. All additive on the wire (serde-default) — no break for
   older clients.
 - **Effects parity (coordination note, no wire format yet)**: the
@@ -368,7 +374,71 @@ corpus is `version = 1` and the field rarely changes.
 
 ---
 
-## 10. When changing this doc
+## 10. Aliases for foreign-app name compatibility
+
+The `aliases: Vec<String>` field on `VariationDownload` (and
+`VariationListItem`) is a list of foreign-app names that resolve to
+*this* variation on `.flame` XML import. Used for the cases where
+another fractal flame app (Apophysis 7X, JWildfire, Chaotica) ships
+the same-shaped variation under a different name.
+
+**Canonical example.** Apophysis 7X and JWildfire have a separate
+`linear3D` variation; ours `linear` handles both 2D and 3D modes
+from the same definition. Without an alias, an imported flame's
+`linear3D="…"` attribute hits the registry's name lookup, misses,
+and is silently dropped. With `aliases: ["linear3D"]` on the
+`linear` payload, the lookup resolves through the alias index and
+the attribute lands on the imported transform.
+
+**When to use an alias vs. just renaming.** Aliases are for the
+case where our variation is *deliberately shaped differently* from
+the foreign-app version (different math, different scope — e.g.
+our unified `linear` vs Apo/JWildfire's split `linear` / `linear3D`).
+When our variation is the *same* shape as the foreign-app version
+and we just spelled the name wrong (casing typos like our
+`curl3d` vs upstream `curl3D`), the right answer is to rename ours
+to match upstream — not to alias.
+
+**Wire shape.**
+
+```rust
+struct VariationDownload {
+    name: String,           // canonical name (we own this)
+    aliases: Vec<String>,   // foreign-app names that resolve to `name`
+    // …
+}
+```
+
+`aliases` is **deserialized with `#[serde(default)]`** so older payloads
+(or older cache files) without the field still parse — the missing
+field becomes `Vec::new()` and the variation registers without any
+aliases. New clients/servers always include the field. No `version`
+bump needed; this is purely additive in both directions.
+
+**Client-side handling.** The registry builds a parallel
+`HashMap<String, String>` (alias → canonical name) at registration
+time. `registry.get(name)` consults the alias map on a primary miss.
+A `resolve_alias(name)` helper returns the canonical name (or the
+input unchanged if no alias matches), useful at import time so the
+in-memory `Transform` stores the canonical name and the rest of the
+pipeline never sees the alias.
+
+**Conflict rules.**
+
+- An alias that matches an existing canonical variation name is
+  rejected (logged, not fatal) — we'd be silently overriding a real
+  variation otherwise.
+- An alias that's already mapped to a different variation is
+  rejected (first registration wins, duplicate is logged).
+
+**Server-side.** The `variations` table needs an `aliases TEXT[]
+NOT NULL DEFAULT '{}'` column. Backfill is empty for existing
+rows; subsequent migrations populate where needed. See
+[api-v2-server-side.md](api-v2-server-side.md) for the SQL plan.
+
+---
+
+## 11. When changing this doc
 
 This file is the client's hand-rolled view of the contract. If you
 change the wire shape on the client (`src/api/types.rs`) without

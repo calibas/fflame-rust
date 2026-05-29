@@ -12,6 +12,7 @@ use crate::param;
 /// is applied to the final output coordinates.
 pub static POST_BWRAPS: VariationDef = VariationDef {
     name: "post_bwraps",
+    aliases: &[],
     display_name: "Post Bwraps",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Post,
@@ -157,6 +158,7 @@ fn variation_post_bwraps(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3
 /// - Xyrus02
 pub static POST_CROP: VariationDef = VariationDef {
     name: "post_crop",
+    aliases: &[],
     display_name: "Post Crop",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Post,
@@ -265,6 +267,7 @@ fn variation_post_crop(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
 /// - Xyrus02
 pub static POST_FALLOFF2: VariationDef = VariationDef {
     name: "post_falloff2",
+    aliases: &[],
     display_name: "Post Falloff2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Post,
@@ -415,6 +418,7 @@ fn variation_post_falloff2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: 
 /// - Scott Draves
 pub static POST_CURL: VariationDef = VariationDef {
     name: "post_curl",
+    aliases: &[],
     display_name: "Post Curl",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Post,
@@ -471,7 +475,8 @@ fn variation_post_curl(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
 /// three axes after all other variations have run. Each axis has its own
 /// twist coefficient.
 pub static POST_CURL3D: VariationDef = VariationDef {
-    name: "post_curl3d",
+    name: "post_curl3D",
+    aliases: &[],
     display_name: "Post Curl 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Post,
@@ -489,13 +494,13 @@ pub static POST_CURL3D: VariationDef = VariationDef {
     wgsl_state_init: None,
     needs_accum: false,
     wgsl_2d: r#"
-fn variation_post_curl3d(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
+fn variation_post_curl3D(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     // Apophysis Post_Curl3D - 2D version (placeholder)
     return p;
 }
 "#,
     wgsl_3d: Some(r#"
-fn variation_post_curl3d(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
+fn variation_post_curl3D(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     // Apophysis Post_Curl3D - Full 3D curl transformation applied after variations
     let cx = get_param(xform_id, variation_id, 0u);
     let cy = get_param(xform_id, variation_id, 1u);

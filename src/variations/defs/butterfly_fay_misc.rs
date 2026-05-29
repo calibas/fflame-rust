@@ -46,6 +46,7 @@ use crate::param;
 /// - CozyG
 pub static BUTTERFLY_FAY: VariationDef = VariationDef {
     name: "butterfly_fay",
+    aliases: &[],
     display_name: "Butterfly Fay",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

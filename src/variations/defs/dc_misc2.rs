@@ -39,6 +39,7 @@ use crate::param;
 /// slider > 0.
 pub static DC_CUBE: VariationDef = VariationDef {
     name: "dc_cube",
+    aliases: &[],
     display_name: "DC Cube",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
@@ -158,6 +159,7 @@ fn variation_dc_cube(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fu
 /// by the variation weight. Discards the input position entirely.
 pub static PRE_RECT_WF: VariationDef = VariationDef {
     name: "pre_rect_wf",
+    aliases: &[],
     display_name: "Pre Rect WF",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Pre,

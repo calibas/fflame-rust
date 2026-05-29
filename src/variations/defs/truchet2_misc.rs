@@ -40,6 +40,7 @@ use crate::param;
 /// - Jesus Sosa
 pub static TRUCHET2: VariationDef = VariationDef {
     name: "truchet2",
+    aliases: &[],
     display_name: "Truchet 2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

@@ -44,6 +44,7 @@ use crate::param;
 /// - David Young
 pub static SUPERSHAPE_3D: VariationDef = VariationDef {
     name: "superShape3d",
+    aliases: &[],
     display_name: "SuperShape 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,

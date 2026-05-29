@@ -39,6 +39,7 @@ use crate::param;
 /// per-transform pre-rotation step driven by the variation weight.
 pub static PRE_SPIN_Z: VariationDef = VariationDef {
     name: "pre_spin_z",
+    aliases: &[],
     display_name: "Pre Spin Z",
     category: VariationCategory::Rotation3D,
     phase: VariationPhase::Pre,
@@ -81,6 +82,7 @@ fn variation_pre_spin_z(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<
 /// around Z), applied after all normal-phase variations.
 pub static POST_SPIN_Z: VariationDef = VariationDef {
     name: "post_spin_z",
+    aliases: &[],
     display_name: "Post Spin Z",
     category: VariationCategory::Rotation3D,
     phase: VariationPhase::Post,
@@ -129,6 +131,7 @@ fn variation_post_spin_z(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3
 /// - Scott Draves
 pub static POST_SPHERICAL: VariationDef = VariationDef {
     name: "post_spherical",
+    aliases: &[],
     display_name: "Post Spherical",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Post,
@@ -181,6 +184,7 @@ fn variation_post_spherical(p: vec3<f32>, xform_id: u32, variation_id: u32) -> v
 /// - gossamer light
 pub static PRE_DISC3D: VariationDef = VariationDef {
     name: "pre_disc3d",
+    aliases: &[],
     display_name: "Pre Disc 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Pre,

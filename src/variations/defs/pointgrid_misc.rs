@@ -45,6 +45,7 @@ use crate::param;
 /// - Andreas Maschke
 pub static POINTGRID_WF: VariationDef = VariationDef {
     name: "pointgrid_wf",
+    aliases: &[],
     display_name: "Point Grid WF",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -151,6 +152,7 @@ fn variation_pointgrid_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: p
 /// - Andreas Maschke
 pub static POINTGRID3D_WF: VariationDef = VariationDef {
     name: "pointgrid3d_wf",
+    aliases: &[],
     display_name: "Point Grid 3D WF",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
@@ -256,6 +258,7 @@ fn variation_pointgrid3d_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, rng:
 /// - Jesus Sosa
 pub static APOCARPET_JS: VariationDef = VariationDef {
     name: "apocarpet_js",
+    aliases: &[],
     display_name: "Apocarpet (JS)",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

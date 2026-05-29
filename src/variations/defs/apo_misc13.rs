@@ -65,6 +65,7 @@ use crate::param;
 /// - DarkBeam
 pub static Q_ODE: VariationDef = VariationDef {
     name: "q_ode",
+    aliases: &[],
     display_name: "Q ODE",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -157,6 +158,7 @@ fn variation_q_ode(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 /// - Xyrus02
 pub static RIPPLE: VariationDef = VariationDef {
     name: "ripple",
+    aliases: &[],
     display_name: "Ripple",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -295,6 +297,7 @@ fn variation_ripple(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 /// - DarkBeam
 pub static SCRY2: VariationDef = VariationDef {
     name: "scry2",
+    aliases: &[],
     display_name: "Scry 2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

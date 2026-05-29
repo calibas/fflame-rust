@@ -34,6 +34,7 @@ use crate::param;
 /// - slobo777
 pub static BWRAPS7: VariationDef = VariationDef {
     name: "bwraps7",
+    aliases: &[],
     display_name: "BWraps 7",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,

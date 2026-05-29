@@ -42,6 +42,7 @@ use crate::param;
 /// - IROIRO++
 pub static JAC_SN: VariationDef = VariationDef {
     name: "jac_sn",
+    aliases: &[],
     display_name: "Jac SN",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -249,6 +250,7 @@ fn variation_jac_sn(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 /// - IROIRO++
 pub static JAC_CN: VariationDef = VariationDef {
     name: "jac_cn",
+    aliases: &[],
     display_name: "Jac CN",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
@@ -456,6 +458,7 @@ fn variation_jac_cn(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 /// - IROIRO++
 pub static JAC_DN: VariationDef = VariationDef {
     name: "jac_dn",
+    aliases: &[],
     display_name: "Jac DN",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
