@@ -86,6 +86,14 @@ fn select_transform_xaos(rand_val: f32, prev_xform: u32) -> u32 {
     return NUM_TRANSFORMS - 1u;
 }
 
+// sRGB → linear decoding. Palette colors (.flame XML hex, .palette JSON)
+// are authored against an sRGB monitor; the pipeline math is linear. Use
+// the gamma-2.2 approximation so encode (pow 1/2.2 at fragment-shader tail)
+// composed with decode is identity on round-tripped values.
+fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
+    return pow(max(c, vec3<f32>(0.0)), vec3<f32>(2.2));
+}
+
 // Convert speed to color using palette lookup
 fn speed_to_color(speed: f32) -> vec3<f32> {
     // Normalize speed to [0, 1] range
@@ -93,7 +101,8 @@ fn speed_to_color(speed: f32) -> vec3<f32> {
     let normalized_speed = clamp(log(speed * 10.0 + 1.0) / 3.0, 0.0, 1.0);
 
     // Sample from palette texture (2D texture with height=1, so y=0.5)
-    return textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(normalized_speed, 0.5), 0.0).rgb;
+    let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(normalized_speed, 0.5), 0.0).rgb;
+    return srgb_to_linear(srgb);
 }
 
 // Build Apophysis camera matrix (ZXY Euler rotation: yaw around Z, then pitch around X)
