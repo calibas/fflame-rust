@@ -48,7 +48,7 @@ fn variation_ztranslate(p: vec3<f32>) -> vec3<f32> {
 /// # Authors
 /// - Joel Faber
 pub static JULIA3D: VariationDef = VariationDef {
-    name: "julia3d",
+    name: "julia3D",
     aliases: &[],
     display_name: "Julia3D",
     category: VariationCategory::Full3D,
@@ -65,7 +65,7 @@ pub static JULIA3D: VariationDef = VariationDef {
     wgsl_state_init: None,
     needs_accum: false,
     wgsl_2d: r#"
-fn variation_julia3d(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
+fn variation_julia3D(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     // Apophysis Julia3D in 2D mode (Z = 0)
     let power_f = get_param(xform_id, variation_id, 0u);
     let N = i32(power_f);
@@ -111,7 +111,7 @@ fn variation_julia3d(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<fu
 }
 "#,
     wgsl_3d: Some(r#"
-fn variation_julia3d(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
+fn variation_julia3D(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     // Apophysis Julia3D: Full 3D Julia set implementation by Joel Faber
     let power_f = get_param(xform_id, variation_id, 0u);
     let N = i32(power_f);
@@ -677,7 +677,7 @@ fn variation_juliascope(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
 /// 3D variant of Julia where the Z coordinate gets folded along with the
 /// XY. Produces 3D fractals stretched along the depth axis.
 pub static JULIA3DZ: VariationDef = VariationDef {
-    name: "julia3dz",
+    name: "julia3Dz",
     aliases: &[],
     display_name: "Julia3Dz",
     category: VariationCategory::Full3D,
@@ -694,13 +694,13 @@ pub static JULIA3DZ: VariationDef = VariationDef {
     wgsl_state_init: None,
     needs_accum: false,
     wgsl_2d: r#"
-fn variation_julia3dz(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
+fn variation_julia3Dz(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     // Julia3Dz is a 3D variation, pass through in 2D
     return p;
 }
 "#,
     wgsl_3d: Some(r#"
-fn variation_julia3dz(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
+fn variation_julia3Dz(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     // Apophysis Julia3Dz - Full 3D Julia set with Z modification
     const PI: f32 = 3.14159265359;
 
@@ -749,7 +749,7 @@ fn variation_julia3dz(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
 /// 3D version of Curl — applies a complex polynomial twist along all three
 /// axes. Each axis has its own twist coefficient.
 pub static CURL3D: VariationDef = VariationDef {
-    name: "curl3d",
+    name: "curl3D",
     aliases: &[],
     display_name: "Curl3D",
     category: VariationCategory::Full3D,
@@ -768,7 +768,7 @@ pub static CURL3D: VariationDef = VariationDef {
     wgsl_state_init: None,
     needs_accum: false,
     wgsl_2d: r#"
-fn variation_curl3d(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
+fn variation_curl3D(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     // Curl3D is a 3D variation, apply XY curl in 2D
     let cx = get_param(xform_id, variation_id, 0u);
     let cy = get_param(xform_id, variation_id, 1u);
@@ -785,7 +785,7 @@ fn variation_curl3d(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32>
 }
 "#,
     wgsl_3d: Some(r#"
-fn variation_curl3d(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
+fn variation_curl3D(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     // Apophysis Curl3D - Full 3D curl transformation
     let cx = get_param(xform_id, variation_id, 0u);
     let cy = get_param(xform_id, variation_id, 1u);

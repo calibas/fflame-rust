@@ -125,7 +125,7 @@ fn variation_loonie3(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 /// # Authors
 /// - Larry Berlin
 pub static LOONIE_3D: VariationDef = VariationDef {
-    name: "loonie_3d",
+    name: "loonie_3D",
     aliases: &[],
     display_name: "Loonie 3D",
     category: VariationCategory::Full3D,
@@ -142,7 +142,7 @@ pub static LOONIE_3D: VariationDef = VariationDef {
     wgsl_state_init: None,
     needs_accum: false,
     wgsl_2d: r#"
-fn variation_loonie_3d(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
+fn variation_loonie_3D(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let w = transforms[xform_id].variations[variation_id];
     let sqrvvar = w * w;
     let ef_z = atan2(p.y, p.x);
@@ -155,7 +155,7 @@ fn variation_loonie_3d(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f
 }
 "#,
     wgsl_3d: Some(r#"
-fn variation_loonie_3d(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
+fn variation_loonie_3D(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let w = transforms[xform_id].variations[variation_id];
     let sqrvvar = w * w;
     var ef_z = p.z;

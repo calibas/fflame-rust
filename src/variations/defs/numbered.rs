@@ -28,7 +28,7 @@ use crate::variations::{
 /// (`1/r²`). Pulls distant points toward the origin and pushes nearby
 /// points outward in all three axes.
 pub static SPHERICAL3D: VariationDef = VariationDef {
-    name: "spherical3d",
+    name: "spherical3D",
     aliases: &[],
     display_name: "Spherical 3D",
     category: VariationCategory::Full3D,
@@ -43,14 +43,14 @@ pub static SPHERICAL3D: VariationDef = VariationDef {
     wgsl_state_init: None,
     needs_accum: false,
     wgsl_2d: r#"
-fn variation_spherical3d(p: vec2<f32>) -> vec2<f32> {
+fn variation_spherical3D(p: vec2<f32>) -> vec2<f32> {
     let t = max(p.x * p.x + p.y * p.y, 1e-30);
     let r = 1.0 / t;
     return vec2<f32>(p.x * r, p.y * r);
 }
 "#,
     wgsl_3d: Some(r#"
-fn variation_spherical3d(p: vec3<f32>) -> vec3<f32> {
+fn variation_spherical3D(p: vec3<f32>) -> vec3<f32> {
     let t = max(p.x * p.x + p.y * p.y + p.z * p.z, 1e-30);
     let r = 1.0 / t;
     return vec3<f32>(p.x * r, p.y * r, p.z * r);
@@ -132,7 +132,7 @@ fn variation_square(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
 // =============================================================================
 /// 3D unit-cube version of Square — random point in `[-0.5, 0.5]³`.
 pub static SQUARE3D: VariationDef = VariationDef {
-    name: "square3d",
+    name: "square3D",
     aliases: &[],
     display_name: "Square 3D",
     category: VariationCategory::Full3D,
@@ -147,12 +147,12 @@ pub static SQUARE3D: VariationDef = VariationDef {
     wgsl_state_init: None,
     needs_accum: false,
     wgsl_2d: r#"
-fn variation_square3d(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
+fn variation_square3D(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     return vec2<f32>(rng_nextf(rng) - 0.5, rng_nextf(rng) - 0.5);
 }
 "#,
     wgsl_3d: Some(r#"
-fn variation_square3d(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
+fn variation_square3D(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
     return vec3<f32>(rng_nextf(rng) - 0.5, rng_nextf(rng) - 0.5, rng_nextf(rng) - 0.5);
 }
 "#),
@@ -322,7 +322,7 @@ fn variation_popcorn2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
 /// # Authors
 /// - TyrantWave
 pub static SPLITS3D: VariationDef = VariationDef {
-    name: "splits3d",
+    name: "splits3D",
     aliases: &[],
     display_name: "Splits 3D",
     category: VariationCategory::Full3D,
@@ -344,7 +344,7 @@ pub static SPLITS3D: VariationDef = VariationDef {
     wgsl_state_init: None,
     needs_accum: false,
     wgsl_2d: r#"
-fn variation_splits3d(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
+fn variation_splits3D(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let x_p = get_param(xform_id, variation_id, 0u);
     let y_p = get_param(xform_id, variation_id, 1u);
     let xs = select(-x_p, x_p, p.x >= 0.0);
@@ -353,7 +353,7 @@ fn variation_splits3d(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f3
 }
 "#,
     wgsl_3d: Some(r#"
-fn variation_splits3d(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
+fn variation_splits3D(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let x_p = get_param(xform_id, variation_id, 0u);
     let y_p = get_param(xform_id, variation_id, 1u);
     let z_p = get_param(xform_id, variation_id, 2u);
@@ -378,7 +378,7 @@ fn variation_splits3d(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
 /// # Authors
 /// - Larry Berlin
 pub static WAVES2_3D: VariationDef = VariationDef {
-    name: "waves2_3d",
+    name: "waves2_3D",
     aliases: &[],
     display_name: "Waves2 3D",
     category: VariationCategory::Full3D,
@@ -398,14 +398,14 @@ pub static WAVES2_3D: VariationDef = VariationDef {
     wgsl_state_init: None,
     needs_accum: false,
     wgsl_2d: r#"
-fn variation_waves2_3d(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
+fn variation_waves2_3D(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let freq = get_param(xform_id, variation_id, 0u);
     let scale = get_param(xform_id, variation_id, 1u);
     return vec2<f32>(p.x + scale * sin(p.y * freq), p.y + scale * sin(p.x * freq));
 }
 "#,
     wgsl_3d: Some(r#"
-fn variation_waves2_3d(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
+fn variation_waves2_3D(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let freq = get_param(xform_id, variation_id, 0u);
     let scale = get_param(xform_id, variation_id, 1u);
     let avgxy = (p.x + p.y) / 2.0;
@@ -508,7 +508,7 @@ fn variation_juliaq(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
 /// # Authors
 /// - Zueuk
 pub static JULIA3DQ: VariationDef = VariationDef {
-    name: "julia3dq",
+    name: "julia3Dq",
     aliases: &[],
     display_name: "Julia 3D Q",
     category: VariationCategory::Full3D,
@@ -545,7 +545,7 @@ fn init_julia3dq(user: array<f32, 2>) -> array<f32, 4> {
     wgsl_state_init: None,
     needs_accum: false,
     wgsl_2d: r#"
-fn variation_julia3dq(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
+fn variation_julia3Dq(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let inv_power = get_param(xform_id, variation_id, 2u);
     let inv_power_2pi = get_param(xform_id, variation_id, 3u);
     let half_inv_power = get_param(xform_id, variation_id, 4u);
@@ -558,7 +558,7 @@ fn variation_julia3dq(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
 }
 "#,
     wgsl_3d: Some(r#"
-fn variation_julia3dq(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
+fn variation_julia3Dq(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let inv_power = get_param(xform_id, variation_id, 2u);
     let inv_power_2pi = get_param(xform_id, variation_id, 3u);
     let half_inv_power = get_param(xform_id, variation_id, 4u);
