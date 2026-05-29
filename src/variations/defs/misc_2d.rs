@@ -365,7 +365,7 @@ fn variation_pressure_wave(p: vec3<f32>, xform_id: u32, variation_id: u32) -> ve
 /// # Authors
 /// - eralex61
 pub static SPHERICALN: VariationDef = VariationDef {
-    name: "sphericaln",
+    name: "sphericalN",
     aliases: &[],
     display_name: "Spherical N",
     category: VariationCategory::Advanced2D,
@@ -383,7 +383,7 @@ pub static SPHERICALN: VariationDef = VariationDef {
     wgsl_state_init: None,
     needs_accum: false,
     wgsl_2d: r#"
-fn variation_sphericaln(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
+fn variation_sphericalN(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let power = get_param(xform_id, variation_id, 0u);
     let dist = get_param(xform_id, variation_id, 1u);
     let two_pi = 6.28318530717959;
@@ -396,7 +396,7 @@ fn variation_sphericaln(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr
 }
 "#,
     wgsl_3d: Some(r#"
-fn variation_sphericaln(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
+fn variation_sphericalN(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let power = get_param(xform_id, variation_id, 0u);
     let dist = get_param(xform_id, variation_id, 1u);
     let two_pi = 6.28318530717959;

@@ -110,7 +110,7 @@ fn variation_tangent(p: vec3<f32>) -> vec3<f32> {
 /// 3D extension of Tangent. Adds `z' = tan(x)` so the variation contributes
 /// depth modulation along the X coordinate.
 pub static TANGENT3D: VariationDef = VariationDef {
-    name: "tangent3d",
+    name: "tangent3D",
     aliases: &[],
     display_name: "Tangent 3D",
     category: VariationCategory::Depth3D,
@@ -125,14 +125,14 @@ pub static TANGENT3D: VariationDef = VariationDef {
     wgsl_state_init: None,
     needs_accum: false,
     wgsl_2d: r#"
-fn variation_tangent3d(p: vec2<f32>) -> vec2<f32> {
+fn variation_tangent3D(p: vec2<f32>) -> vec2<f32> {
     let d = cos(p.y);
     let inv = 1.0 / select(d, 1e-20, d == 0.0);
     return vec2<f32>(sin(p.x) * inv, tan(p.y));
 }
 "#,
     wgsl_3d: Some(r#"
-fn variation_tangent3d(p: vec3<f32>) -> vec3<f32> {
+fn variation_tangent3D(p: vec3<f32>) -> vec3<f32> {
     let d = cos(p.y);
     let inv = 1.0 / select(d, 1e-20, d == 0.0);
     return vec3<f32>(sin(p.x) * inv, tan(p.y), tan(p.x));
@@ -542,7 +542,7 @@ fn variation_pie(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<functi
 /// 3D version of Pie — same pie-slice splatter as Pie but adds `z' =
 /// r·sin(r)` for depth modulation.
 pub static PIE3D: VariationDef = VariationDef {
-    name: "pie3d",
+    name: "pie3D",
     aliases: &[],
     display_name: "Pie 3D",
     category: VariationCategory::Full3D,
@@ -564,7 +564,7 @@ pub static PIE3D: VariationDef = VariationDef {
     wgsl_state_init: None,
     needs_accum: false,
     wgsl_2d: r#"
-fn variation_pie3d(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
+fn variation_pie3D(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let two_pi = 6.28318530717959;
     let slices = max(get_param(xform_id, variation_id, 0u), 1.0);
     let rotation = get_param(xform_id, variation_id, 1u);
@@ -576,7 +576,7 @@ fn variation_pie3d(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<func
 }
 "#,
     wgsl_3d: Some(r#"
-fn variation_pie3d(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
+fn variation_pie3D(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let two_pi = 6.28318530717959;
     let slices = max(get_param(xform_id, variation_id, 0u), 1.0);
     let rotation = get_param(xform_id, variation_id, 1u);

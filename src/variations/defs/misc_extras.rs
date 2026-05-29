@@ -219,7 +219,7 @@ fn variation_chunk(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 /// `use_log` enabled this becomes a true log-polar transform; disabled,
 /// it's a simple radius rescaling.
 pub static PTRANSFORM: VariationDef = VariationDef {
-    name: "ptransform",
+    name: "pTransform",
     aliases: &[],
     display_name: "P Transform",
     category: VariationCategory::Advanced2D,
@@ -240,7 +240,7 @@ pub static PTRANSFORM: VariationDef = VariationDef {
     wgsl_state_init: None,
     needs_accum: false,
     wgsl_2d: r#"
-fn variation_ptransform(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
+fn variation_pTransform(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let rotate = get_param(xform_id, variation_id, 0u);
     let power = get_param(xform_id, variation_id, 1u);
     let move_p = get_param(xform_id, variation_id, 2u);
@@ -257,7 +257,7 @@ fn variation_ptransform(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<
 }
 "#,
     wgsl_3d: Some(r#"
-fn variation_ptransform(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
+fn variation_pTransform(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let rotate = get_param(xform_id, variation_id, 0u);
     let power = get_param(xform_id, variation_id, 1u);
     let move_p = get_param(xform_id, variation_id, 2u);

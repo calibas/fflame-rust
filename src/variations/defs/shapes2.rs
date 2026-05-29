@@ -74,7 +74,7 @@ fn variation_butterfly(p: vec3<f32>) -> vec3<f32> {
 /// 3D version of Butterfly — same XY butterfly curve plus a Z component
 /// that scales with the radial distance times `|2y|`.
 pub static BUTTERFLY3D: VariationDef = VariationDef {
-    name: "butterfly3d",
+    name: "butterfly3D",
     aliases: &[],
     display_name: "Butterfly 3D",
     category: VariationCategory::Full3D,
@@ -89,7 +89,7 @@ pub static BUTTERFLY3D: VariationDef = VariationDef {
     wgsl_state_init: None,
     needs_accum: false,
     wgsl_2d: r#"
-fn variation_butterfly3d(p: vec2<f32>) -> vec2<f32> {
+fn variation_butterfly3D(p: vec2<f32>) -> vec2<f32> {
     let k = 1.302940031741119;
     let y2 = p.y * 2.0;
     let r = k * sqrt(abs(p.y * p.x) / (1e-30 + p.x * p.x + y2 * y2));
@@ -97,7 +97,7 @@ fn variation_butterfly3d(p: vec2<f32>) -> vec2<f32> {
 }
 "#,
     wgsl_3d: Some(r#"
-fn variation_butterfly3d(p: vec3<f32>) -> vec3<f32> {
+fn variation_butterfly3D(p: vec3<f32>) -> vec3<f32> {
     let k = 1.302940031741119;
     let y2 = p.y * 2.0;
     let r = k * sqrt(abs(p.y * p.x) / (1e-30 + p.x * p.x + y2 * y2));

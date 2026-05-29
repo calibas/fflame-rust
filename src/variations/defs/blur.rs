@@ -45,7 +45,7 @@ fn variation_zblur(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
 /// with a random sample from a spherical cloud around the origin. The
 /// 3D counterpart of Gaussian Blur.
 pub static BLUR3D: VariationDef = VariationDef {
-    name: "blur3d",
+    name: "blur3D",
     aliases: &[],
     display_name: "Blur 3D",
     category: VariationCategory::Full3D,
@@ -60,7 +60,7 @@ pub static BLUR3D: VariationDef = VariationDef {
     wgsl_state_init: None,
     needs_accum: false,
     wgsl_2d: r#"
-fn variation_blur3d(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
+fn variation_blur3D(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     // Apophysis: 3D Gaussian spherical blur
     // In 2D mode, apply XY components only
     let theta = rng_nextf(rng) * 6.28318530718;  // 2π
@@ -70,7 +70,7 @@ fn variation_blur3d(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
 }
 "#,
     wgsl_3d: Some(r#"
-fn variation_blur3d(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
+fn variation_blur3D(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
     // Apophysis: 3D Gaussian spherical blur
     // θ = random × 2π (azimuth)
     // φ = random × π (polar angle)

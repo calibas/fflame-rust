@@ -457,7 +457,7 @@ fn variation_bTransform(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
 /// power; odd-parity stays in cartesian. A random `floor(rand · |n|)`
 /// selects one of `|n|` angular branches.
 pub static NPOLAR: VariationDef = VariationDef {
-    name: "nPolar",
+    name: "npolar",
     aliases: &[],
     display_name: "N-Polar",
     category: VariationCategory::Advanced2D,
@@ -494,7 +494,7 @@ fn init_nPolar(user: array<f32, 2>) -> array<f32, 4> {
     wgsl_state_init: None,
     needs_accum: false,
     wgsl_2d: r#"
-fn variation_nPolar(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
+fn variation_npolar(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let parity = get_param(xform_id, variation_id, 0u);
     let nnz = get_param(xform_id, variation_id, 2u);
     let isodd = get_param(xform_id, variation_id, 3u);
@@ -535,7 +535,7 @@ fn variation_nPolar(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
 }
 "#,
     wgsl_3d: Some(r#"
-fn variation_nPolar(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
+fn variation_npolar(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let parity = get_param(xform_id, variation_id, 0u);
     let nnz = get_param(xform_id, variation_id, 2u);
     let isodd = get_param(xform_id, variation_id, 3u);

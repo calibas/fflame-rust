@@ -44,7 +44,7 @@ use crate::param;
 /// # Authors
 /// - Brad Stefanov
 pub static JUBIQ: VariationDef = VariationDef {
-    name: "jubiq",
+    name: "jubiQ",
     aliases: &[],
     display_name: "Jubiq",
     category: VariationCategory::Full3D,
@@ -94,7 +94,7 @@ fn init_jubiq(user: array<f32, 24>) -> array<f32, 2> {
     wgsl_state_init: None,
     needs_accum: false,
     wgsl_2d: r#"
-fn variation_jubiq(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
+fn variation_jubiQ(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let power = i32(get_param(xform_id, variation_id, 0u));
     if (power == 0) {
         return vec2<f32>(0.0, 0.0);
@@ -150,7 +150,7 @@ fn variation_jubiq(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<func
 }
 "#,
     wgsl_3d: Some(r#"
-fn variation_jubiq(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
+fn variation_jubiQ(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let power = i32(get_param(xform_id, variation_id, 0u));
     if (power == 0) {
         return vec3<f32>(0.0, 0.0, p.z);

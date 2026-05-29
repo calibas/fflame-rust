@@ -202,7 +202,7 @@ fn variation_post_juliaq(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: pt
 /// # Authors
 /// - Zueuk
 pub static POST_JULIA3DQ: VariationDef = VariationDef {
-    name: "post_julia3dq",
+    name: "post_julia3Dq",
     aliases: &[],
     display_name: "Post Julia3DQ",
     category: VariationCategory::Full3D,
@@ -239,7 +239,7 @@ fn init_post_julia3dq(user: array<f32, 2>) -> array<f32, 4> {
     wgsl_state_init: None,
     needs_accum: false,
     wgsl_2d: r#"
-fn variation_post_julia3dq(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
+fn variation_post_julia3Dq(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let power = get_param(xform_id, variation_id, 0u);
     let inv_power = get_param(xform_id, variation_id, 2u);
     let half_inv_power = get_param(xform_id, variation_id, 4u);
@@ -256,7 +256,7 @@ fn variation_post_julia3dq(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: 
 }
 "#,
     wgsl_3d: Some(r#"
-fn variation_post_julia3dq(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
+fn variation_post_julia3Dq(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let power = get_param(xform_id, variation_id, 0u);
     let inv_power = get_param(xform_id, variation_id, 2u);
     let abs_inv_power = get_param(xform_id, variation_id, 3u);
