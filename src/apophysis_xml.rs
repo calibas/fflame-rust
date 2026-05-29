@@ -336,7 +336,11 @@ fn parse_flame_element(
         // TODO: parse Apophysis `white_level` XML attribute (default 200)
         white_level: crate::config::defaults::DEFAULT_WHITE_LEVEL,
         highlight_mode: crate::scene::tonemap::HighlightMode::Clip,  // Apophysis-compatible
-        saturation: 1.5,  // Default saturation
+        // saturation 1.0 — Apo has no saturation control. Previously 1.5
+        // to compensate for sRGB-as-linear palette washout; that became
+        // wrong once the palette-decode fix landed (oversaturates past
+        // Apo's reference).
+        saturation: crate::config::defaults::DEFAULT_SATURATION,
         hue_shift: 0.0,  // Default hue shift
         gamma_threshold,  // Use parsed Apophysis gamma_threshold
         deterministic_rng: false,
