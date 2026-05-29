@@ -54,7 +54,22 @@ separates old units (typically 100s–100,000s) from new units (typically
 User decision: divide by 1000 specifically, with the threshold as the
 guard against double-applying.
 
-### 3. (Pending feature) — placeholder
+### 3. DOF Focus Distance default shift
+
+| Constant | Old default | New default | Notes |
+|---|---|---|---|
+| `DEFAULT_DOF_FOCUS_DISTANCE` | `1.0` | `0.0` | Apophysis hardcodes `0.0`; v1 default mismatched. |
+
+Invisible when DOF is off (`DEFAULT_DOF_BLUR_STRENGTH = 0.0`), so v1
+files that omit the field stay visually identical on load. When blur
+is enabled the change is visible, but no v1 files in the repo enable
+blur by default — the user-personal `output/*.fflame` set is the only
+risk and the user is tracking those manually.
+
+**v2 migration**: same "do nothing" pattern as section 1 — let
+serde's default-on-missing apply the new value.
+
+### 4. (Pending feature) — placeholder
 
 A separate in-flight feature will land before v2 ships. Add notes here
 once it's clearer what fields/semantics change.
