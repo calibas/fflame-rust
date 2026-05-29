@@ -256,8 +256,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 let camera_space = camera_transform(final_pos, camera_matrix, params.camera_z);
                 let depth = camera_space.z;  // Z in camera space = depth from camera
 
-                // Calculate blur amount based on distance from focus plane (in world units)
-                let blur_world = (depth - params.dof_focus_distance) * params.dof_blur_strength;
+                // Calculate blur amount based on distance from focus plane (in world units).
+                // Multiplied by 0.1 so `dof_blur_strength` carries the same magnitude
+                // as Apophysis's `cam_dof` attribute — user-facing values copy across
+                // directly (Apo 0.19 → ours 0.19), and the slider stops feeling 10×
+                // too touchy.
+                let blur_world = (depth - params.dof_focus_distance) * params.dof_blur_strength * 0.1;
 
                 // Convert world-space blur to pixel-space blur
                 // Same scale factor as world_to_pixel_3d: min(width, height) * 0.25 * zoom
