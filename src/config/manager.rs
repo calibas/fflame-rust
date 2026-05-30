@@ -1472,6 +1472,7 @@ impl ConfigManager {
             ConfigPath::FogStrength => Ok(config.fog_strength.into()),
             ConfigPath::FogStart => Ok(config.fog_start.into()),
             ConfigPath::FilterRadius => Ok(config.filter_radius.into()),
+            ConfigPath::FilterBlurEdges => Ok(config.filter_blur_edges.into()),
 
             // Tone mapping
             ConfigPath::Exposure => Ok(config.exposure.into()),
@@ -1993,6 +1994,9 @@ impl ConfigManager {
             }
             ConfigPath::FilterRadius => {
                 self.current.filter_radius = value.try_into()?;
+            }
+            ConfigPath::FilterBlurEdges => {
+                self.current.filter_blur_edges = value.try_into()?;
             }
 
             // Tone mapping

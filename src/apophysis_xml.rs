@@ -325,6 +325,9 @@ fn parse_flame_element(
         // Apo's `filter` is the sample-time Gaussian sigma in pixels; we
         // apply it on the per-batch histogram before accumulation.
         filter_radius,
+        // Edge preservation defaults to 0 (strict) for fresh imports;
+        // user can dial up if they want uniform Gaussian behavior.
+        filter_blur_edges: 0.0,
         density_scale: 1.0,  // Use default, brightness is handled by Apophysis brightness parameter
         speed_factor: 1.0,
         max_iterations: 1_000_000_000,

@@ -335,6 +335,13 @@ pub fn render_colors_content(
                     if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::FilterRadius, 0.0..=5.0, "Spatial Filter", Some("Gaussian sigma (pixels) applied to the histogram before accumulation. Apophysis-style per-sample smoothing.")) {
                         max_update = max_update.max(result.update_type);
                     }
+                    // Bilateral edge handling for the spatial filter.
+                    // 0 = preserve edges (hot pixels stay sharp), 1 =
+                    // uniform Gaussian (current pre-bilateral behavior,
+                    // muddies highlights).
+                    if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::FilterBlurEdges, 0.0..=1.0, "Blur Edges", Some("0 preserves edges and highlights; 1 blurs uniformly across the spatial filter kernel (muddies highlights).")) {
+                        max_update = max_update.max(result.update_type);
+                    }
                 });
         });
 

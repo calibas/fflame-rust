@@ -30,6 +30,7 @@ pub enum ConfigPath {
     FogStrength,
     FogStart,
     FilterRadius,
+    FilterBlurEdges,
 
     // ===== Tone mapping (no iteration reset needed) =====
     Exposure,
@@ -369,6 +370,7 @@ impl Display for ConfigPath {
             ConfigPath::FogStrength => write!(f, "Fog Strength"),
             ConfigPath::FogStart => write!(f, "Fog Start"),
             ConfigPath::FilterRadius => write!(f, "Spatial Filter"),
+            ConfigPath::FilterBlurEdges => write!(f, "Blur Edges"),
 
             // Tone mapping
             ConfigPath::Exposure => write!(f, "Exposure"),
@@ -674,6 +676,7 @@ impl ConfigPath {
             ConfigPath::FogStrength => I18nKey::simple("history.param.fog_strength"),
             ConfigPath::FogStart => I18nKey::simple("history.param.fog_start"),
             ConfigPath::FilterRadius => I18nKey::simple("history.param.filter_radius"),
+            ConfigPath::FilterBlurEdges => I18nKey::simple("history.param.filter_blur_edges"),
 
             // Tone mapping
             ConfigPath::Exposure => I18nKey::simple("history.param.exposure"),
@@ -1715,7 +1718,8 @@ impl ConfigPath {
             | ConfigPath::DofBlurStrength
             | ConfigPath::FogStrength
             | ConfigPath::FogStart
-            | ConfigPath::FilterRadius => UpdateType::IterationReset,
+            | ConfigPath::FilterRadius
+            | ConfigPath::FilterBlurEdges => UpdateType::IterationReset,
 
             // Tone mapping - re-run tonemap shader
             ConfigPath::Exposure
@@ -1859,6 +1863,7 @@ impl ConfigPath {
             ConfigPath::FogStrength => "FogStrength".to_string(),
             ConfigPath::FogStart => "FogStart".to_string(),
             ConfigPath::FilterRadius => "FilterRadius".to_string(),
+            ConfigPath::FilterBlurEdges => "FilterBlurEdges".to_string(),
 
             // Tone mapping
             ConfigPath::Exposure => "Exposure".to_string(),
@@ -2038,6 +2043,7 @@ impl ConfigPath {
             "FogStrength" => return Some(ConfigPath::FogStrength),
             "FogStart" => return Some(ConfigPath::FogStart),
             "FilterRadius" => return Some(ConfigPath::FilterRadius),
+            "FilterBlurEdges" => return Some(ConfigPath::FilterBlurEdges),
 
             // Tone mapping
             "Exposure" => return Some(ConfigPath::Exposure),
@@ -2380,6 +2386,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::FogStrength
         | ConfigPath::FogStart
         | ConfigPath::FilterRadius
+        | ConfigPath::FilterBlurEdges
         | ConfigPath::Exposure
         | ConfigPath::Gamma
         | ConfigPath::GammaThreshold
@@ -2872,6 +2879,7 @@ mod tests {
             ConfigPath::FogStrength,
             ConfigPath::FogStart,
             ConfigPath::FilterRadius,
+            ConfigPath::FilterBlurEdges,
 
             // Tone mapping
             ConfigPath::Exposure,

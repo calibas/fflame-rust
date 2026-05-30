@@ -53,6 +53,19 @@ pub struct FractalConfig {
     #[serde(default, skip_serializing_if = "is_default_filter_radius")]
     pub filter_radius: f32,
 
+    /// Spatial-filter edge handling. Slider `0.0..=1.0`:
+    /// - `0.0`: strict edge preservation (bilateral weighting tight) —
+    ///   highlights stay sharp, only similar-density neighbors blur
+    ///   together
+    /// - `1.0`: uniform Gaussian (no density similarity check) —
+    ///   highlights muddy into neighbors, same as raw box blur
+    /// Default `0.0` so the filter does what users typically want
+    /// (clean dim-area grain without blurring highlight detail).
+    /// Mapped exponentially to a density-sigma value at shader time:
+    /// `σ_d = mean_density × 1000^blur_edges`.
+    #[serde(default, skip_serializing_if = "is_default_filter_blur_edges")]
+    pub filter_blur_edges: f32,
+
     /// Rendering settings
     #[serde(default = "default_density_scale")]
     pub density_scale: f32,
@@ -354,6 +367,10 @@ fn is_default_filter_radius(v: &f32) -> bool {
     v.abs() < FLOAT_EPSILON  // Default is 0.0 (filter off)
 }
 
+fn is_default_filter_blur_edges(v: &f32) -> bool {
+    v.abs() < FLOAT_EPSILON  // Default is 0.0 (strict edge preservation)
+}
+
 fn is_default_levels_low(v: &f32) -> bool {
     v.abs() < FLOAT_EPSILON  // Default is 0.0
 }
@@ -393,6 +410,7 @@ impl Default for FractalConfig {
             fog_strength: 0.0,
             fog_start: 0.0,
             filter_radius: 0.0,
+            filter_blur_edges: 0.0,
             density_scale: 1.0,
             speed_factor: 0.5,
             max_iterations: default_max_iterations(),
