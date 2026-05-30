@@ -47,6 +47,7 @@ pub enum ConfigPath {
     TonemapCurve,
     UseCurve,
     // Levels controls (density-to-opacity mapping)
+    LevelsEnabled,
     LevelsLow,
     LevelsHigh,
     LevelsGamma,
@@ -383,6 +384,7 @@ impl Display for ConfigPath {
             ConfigPath::HighlightMode => write!(f, "Highlight Mode"),
             ConfigPath::TonemapCurve => write!(f, "Tone Curve"),
             ConfigPath::UseCurve => write!(f, "Use Tone Curve"),
+            ConfigPath::LevelsEnabled => write!(f, "Levels Enabled"),
             ConfigPath::LevelsLow => write!(f, "Levels Low"),
             ConfigPath::LevelsHigh => write!(f, "Levels High"),
             ConfigPath::LevelsGamma => write!(f, "Levels Midtones"),
@@ -686,6 +688,7 @@ impl ConfigPath {
             ConfigPath::HighlightMode => I18nKey::simple("history.param.highlight_mode"),
             ConfigPath::TonemapCurve => I18nKey::simple("history.param.tone_curve"),
             ConfigPath::UseCurve => I18nKey::simple("history.param.use_tone_curve"),
+            ConfigPath::LevelsEnabled => I18nKey::simple("history.param.levels_enabled"),
             ConfigPath::LevelsLow => I18nKey::simple("history.param.levels_low"),
             ConfigPath::LevelsHigh => I18nKey::simple("history.param.levels_high"),
             ConfigPath::LevelsGamma => I18nKey::simple("history.param.levels_midtones"),
@@ -1727,6 +1730,7 @@ impl ConfigPath {
             | ConfigPath::BackgroundColorR
             | ConfigPath::BackgroundColorG
             | ConfigPath::BackgroundColorB
+            | ConfigPath::LevelsEnabled
             | ConfigPath::LevelsLow
             | ConfigPath::LevelsHigh
             | ConfigPath::LevelsGamma => UpdateType::ToneMappingOnly,
@@ -1864,6 +1868,7 @@ impl ConfigPath {
             ConfigPath::HighlightMode => "HighlightMode".to_string(),
             ConfigPath::TonemapCurve => "TonemapCurve".to_string(),
             ConfigPath::UseCurve => "UseCurve".to_string(),
+            ConfigPath::LevelsEnabled => "LevelsEnabled".to_string(),
             ConfigPath::LevelsLow => "LevelsLow".to_string(),
             ConfigPath::LevelsHigh => "LevelsHigh".to_string(),
             ConfigPath::LevelsGamma => "LevelsGamma".to_string(),
@@ -2041,6 +2046,7 @@ impl ConfigPath {
             "HighlightMode" => return Some(ConfigPath::HighlightMode),
             "TonemapCurve" => return Some(ConfigPath::TonemapCurve),
             "UseCurve" => return Some(ConfigPath::UseCurve),
+            "LevelsEnabled" => return Some(ConfigPath::LevelsEnabled),
             "LevelsLow" => return Some(ConfigPath::LevelsLow),
             "LevelsHigh" => return Some(ConfigPath::LevelsHigh),
             "LevelsGamma" => return Some(ConfigPath::LevelsGamma),
@@ -2462,6 +2468,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
 
         // Boolean parameters
         ConfigPath::UseCurve
+        | ConfigPath::LevelsEnabled
         | ConfigPath::UseDynamicBlend
         | ConfigPath::DeterministicRng
         | ConfigPath::PaletteReverse
@@ -2871,6 +2878,7 @@ mod tests {
             ConfigPath::HighlightMode,
             ConfigPath::TonemapCurve,
             ConfigPath::UseCurve,
+            ConfigPath::LevelsEnabled,
             ConfigPath::LevelsLow,
             ConfigPath::LevelsHigh,
             ConfigPath::LevelsGamma,

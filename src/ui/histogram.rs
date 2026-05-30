@@ -393,6 +393,7 @@ pub fn render_levels_controls_managed(
     let config = config_manager.active_config();
 
     // Read current values from config
+    let mut levels_enabled = config.levels_enabled;
     let levels_low = config.levels_low;
     let levels_high = config.levels_high;
     let levels_gamma = config.levels_gamma;
@@ -409,10 +410,20 @@ pub fn render_levels_controls_managed(
     let slider_max = (histogram.max_density / mean).max(10.0);
 
     ui.horizontal(|ui| {
-        ui.label(t!("levels.title"));
+        // Levels enable toggle. Off by default (Apo-matching); when off
+        // the shader bypasses the per-pixel opacity remap entirely and
+        // the rest of the controls have no effect.
+        if ui.checkbox(&mut levels_enabled, t!("levels.title")).changed() {
+            if let Ok(update) = config_manager.update_param(
+                ConfigPath::LevelsEnabled,
+                levels_enabled.into(),
+            ) {
+                max_update = max_update.max(update);
+            }
+        }
 
         // Auto button - one-shot apply histogram percentiles (× mean)
-        ui.add_enabled_ui(histogram.valid, |ui| {
+        ui.add_enabled_ui(histogram.valid && levels_enabled, |ui| {
             if ui.button(t!("levels.auto")).clicked() {
                 if let Ok(update) = config_manager.update_param(
                     ConfigPath::LevelsLow,
@@ -430,41 +441,45 @@ pub fn render_levels_controls_managed(
         });
     });
 
-    // Low threshold slider (× mean density)
-    ui.horizontal(|ui| {
-        ui.label(t!("levels.low"));
-        let range = 0.0..=slider_max;
-        let mut temp_low = levels_low;
-        if ui.add(super::VkbSlider::new(&mut temp_low, range).logarithmic(true)
-            .clamping(egui::SliderClamping::Never)).changed() {
-            if let Ok(update) = config_manager.update_param(ConfigPath::LevelsLow, temp_low.into()) {
-                max_update = max_update.max(update);
+    // Sliders are grayed out when Levels is off — clarifies that the
+    // controls are no-op until the toggle is enabled.
+    ui.add_enabled_ui(levels_enabled, |ui| {
+        // Low threshold slider (× mean density)
+        ui.horizontal(|ui| {
+            ui.label(t!("levels.low"));
+            let range = 0.0..=slider_max;
+            let mut temp_low = levels_low;
+            if ui.add(super::VkbSlider::new(&mut temp_low, range).logarithmic(true)
+                .clamping(egui::SliderClamping::Never)).changed() {
+                if let Ok(update) = config_manager.update_param(ConfigPath::LevelsLow, temp_low.into()) {
+                    max_update = max_update.max(update);
+                }
             }
-        }
-    });
+        });
 
-    // High threshold slider (× mean density)
-    ui.horizontal(|ui| {
-        ui.label(t!("levels.high"));
-        let range = 0.0..=slider_max;
-        let mut temp_high = levels_high;
-        if ui.add(super::VkbSlider::new(&mut temp_high, range).logarithmic(true)
-            .clamping(egui::SliderClamping::Never)).changed() {
-            if let Ok(update) = config_manager.update_param(ConfigPath::LevelsHigh, temp_high.into()) {
-                max_update = max_update.max(update);
+        // High threshold slider (× mean density)
+        ui.horizontal(|ui| {
+            ui.label(t!("levels.high"));
+            let range = 0.0..=slider_max;
+            let mut temp_high = levels_high;
+            if ui.add(super::VkbSlider::new(&mut temp_high, range).logarithmic(true)
+                .clamping(egui::SliderClamping::Never)).changed() {
+                if let Ok(update) = config_manager.update_param(ConfigPath::LevelsHigh, temp_high.into()) {
+                    max_update = max_update.max(update);
+                }
             }
-        }
-    });
+        });
 
-    // Midtones slider - controls the density-to-opacity curve
-    ui.horizontal(|ui| {
-        ui.label(t!("levels.midtones"));
-        let mut temp_gamma = levels_gamma;
-        if ui.add(super::VkbSlider::new(&mut temp_gamma, 0.001..=10.0).logarithmic(true)).changed() {
-            if let Ok(update) = config_manager.update_param(ConfigPath::LevelsGamma, temp_gamma.into()) {
-                max_update = max_update.max(update);
+        // Midtones slider - controls the density-to-opacity curve
+        ui.horizontal(|ui| {
+            ui.label(t!("levels.midtones"));
+            let mut temp_gamma = levels_gamma;
+            if ui.add(super::VkbSlider::new(&mut temp_gamma, 0.001..=10.0).logarithmic(true)).changed() {
+                if let Ok(update) = config_manager.update_param(ConfigPath::LevelsGamma, temp_gamma.into()) {
+                    max_update = max_update.max(update);
+                }
             }
-        }
+        });
     });
 
     max_update

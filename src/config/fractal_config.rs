@@ -166,6 +166,14 @@ pub struct FractalConfig {
     #[serde(default = "default_alpha_blend_high", skip_serializing_if = "is_default_alpha_blend_high")]
     pub alpha_blend_high: f32,
 
+    /// Levels: opt-in density opacity remap. Apophysis has no Levels
+    /// system; when off, the gamma/vibrancy pipeline's alpha runs
+    /// straight through unmodified — Apo-matching default behavior.
+    /// When on, the `levels_low`/`levels_high`/`levels_gamma` triplet
+    /// gates per-pixel opacity by relative density.
+    #[serde(default, skip_serializing_if = "is_default_levels_enabled")]
+    pub levels_enabled: bool,
+
     /// Levels: density threshold for background/transparency
     /// Pixels with density below this become fully transparent (show background)
     #[serde(default, skip_serializing_if = "is_default_levels_low")]
@@ -331,6 +339,10 @@ fn is_default_alpha_blend_high(v: &f32) -> bool {
     (*v - super::defaults::DEFAULT_ALPHA_BLEND_HIGH).abs() < FLOAT_EPSILON
 }
 
+fn is_default_levels_enabled(v: &bool) -> bool {
+    !*v  // Default is false (Apo-matching: Levels off)
+}
+
 fn is_default_levels_low(v: &f32) -> bool {
     v.abs() < FLOAT_EPSILON  // Default is 0.0
 }
@@ -401,6 +413,7 @@ impl Default for FractalConfig {
             hue_shift: default_hue_shift(),
             alpha_blend_low: default_alpha_blend_low(),
             alpha_blend_high: default_alpha_blend_high(),
+            levels_enabled: false,
             levels_low: 0.0,
             levels_high: default_levels_high(),
             levels_gamma: default_levels_gamma(),

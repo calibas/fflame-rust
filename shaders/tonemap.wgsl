@@ -40,12 +40,11 @@ struct TonemapParams {
     levels_high: f32,  // Density above this becomes fully opaque
     levels_gamma: f32,  // Gamma for density curve (1.0 = linear)
     highlight_mode: u32,  // 0 = Clip (per-channel clamp, Apophysis), 1 = MaxNorm (hue-preserving)
-    // Three scalar u32s rather than `vec3<u32>`: vec3 has 16-byte alignment
-    // *and* a 16-byte slot in std140/std430, which would push the struct to
-    // 160 bytes vs. the [u32; 3] in Rust packing to 144. Match Rust packing.
-    _pad_highlight_0: u32,
-    _pad_highlight_1: u32,
-    _pad_highlight_2: u32,
+    levels_enabled: u32,  // 0 = Levels off (Apo-matching, alpha bypasses opacity remap), 1 = on
+    // Two trailing scalar u32s rather than `vec2<u32>`: keep std140/std430
+    // layout aligned to the Rust packing — see comment on the Rust side.
+    _pad_levels_0: u32,
+    _pad_levels_1: u32,
 }
 
 // Path storage entry (matches compute shader PathEntry)
@@ -713,11 +712,13 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let blend_t = smoothstep(tonemap_params.alpha_blend_low, tonemap_params.alpha_blend_high, gamma_alpha);
     let base_alpha = mix(gamma_alpha, linear_alpha, blend_t);
 
-    // Combine levels with the original alpha calculation
-    // When levels are at defaults, leveled_opacity ≈ 1.0 for any non-zero density,
-    // so the original alpha is preserved. When levels are adjusted, they provide
-    // direct control over which density ranges appear transparent vs opaque.
-    let fractal_alpha = min(base_alpha, leveled_opacity);
+    // Combine levels with the original alpha calculation. When
+    // `levels_enabled == 0` (Apo-matching default), bypass the Levels
+    // remap entirely — the docstring used to claim the defaults were
+    // a no-op, but `levels_high = 10` caps mid-density opacity at 10%
+    // via this `min()`. Apo has no Levels system at all; off should
+    // mean off, not "no-op-ish."
+    let fractal_alpha = select(base_alpha, min(base_alpha, leveled_opacity), tonemap_params.levels_enabled != 0u);
 
     // Transparent mode: output fractal color with alpha for PNG export
     // Normal mode: composite with background color for display

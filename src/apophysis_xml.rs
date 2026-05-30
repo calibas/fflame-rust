@@ -359,7 +359,8 @@ fn parse_flame_element(
         palette_squeeze_falloff: 0.5,
         palette_log_strength: 0.0,
         palette_reverse: false,
-        // Levels controls - use defaults (× mean density units)
+        // Apo has no Levels system — off on import.
+        levels_enabled: false,
         levels_low: 0.0,
         levels_high: crate::config::defaults::DEFAULT_LEVELS_HIGH,
         levels_gamma: crate::config::defaults::DEFAULT_LEVELS_GAMMA,

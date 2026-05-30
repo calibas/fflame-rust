@@ -88,7 +88,27 @@ again at risk and tracked manually.
 to preserve the same rendered blur. Skip if absent (default is 0.0,
 disabled, unaffected).
 
-### 4. (Pending feature) — placeholder
+### 5. Levels system off by default
+
+| Field | Old default | New default | Notes |
+|---|---|---|---|
+| `levels_enabled` | (didn't exist) | `false` | Apo has no Levels system — when off, the gamma/vibrancy alpha passes through unmodified. |
+
+Why: with `levels_low=0, levels_high=10, levels_gamma=1` the shader's
+`min(base_alpha, leveled_opacity)` capped mid-density pixels at 10%
+opacity. The "no-op at defaults" claim was structurally false (for
+any non-zero density, `density/mean × 10 < 1`, so the cap always
+bit). Every Apo-imported flame rendered darker than its reference.
+
+**v1 migration**: v1 files that don't carry the field will pick up
+`levels_enabled = false` via serde's default. v1 files that
+*explicitly turned Levels on by setting `levels_low/high/gamma`* will
+silently lose that effect — those flames have to be re-opened and
+the toggle flipped on. Repo assets don't use Levels (verified: no
+`assets/presets/*.fflame` sets the field), so risk is bounded to
+user-personal files where it was tuned in.
+
+### 6. (Pending feature) — placeholder
 
 A separate in-flight feature will land before v2 ships. Add notes here
 once it's clearer what fields/semantics change.

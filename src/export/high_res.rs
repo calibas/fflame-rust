@@ -1751,7 +1751,8 @@ impl HighResExporter {
                 crate::scene::tonemap::HighlightMode::Reinhard => 2,
                 crate::scene::tonemap::HighlightMode::Filmic => 3,
             },
-            _pad_highlight: [0; 3],
+            levels_enabled: if config.levels_enabled { 1 } else { 0 },
+            _pad_levels: [0; 2],
         };
 
         self.queue.write_buffer(
