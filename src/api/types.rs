@@ -469,6 +469,8 @@ pub struct CreateFlameRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub alpha_blend_high: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub levels_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub levels_low: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub levels_high: Option<f32>,
@@ -549,6 +551,8 @@ pub struct FlameResponse {
     pub hue_shift: f32,
     pub alpha_blend_low: f32,
     pub alpha_blend_high: f32,
+    #[serde(default)]
+    pub levels_enabled: bool,
     pub levels_low: f32,
     pub levels_high: f32,
     pub levels_gamma: f32,
