@@ -7,6 +7,8 @@ pub struct FlamePipelines {
     pub compute_bind_group_layout: BindGroupLayout,
     pub accumulate_pipeline: ComputePipeline,
     pub accumulate_bind_group_layout: BindGroupLayout,
+    pub histogram_blur_pipeline: ComputePipeline,
+    pub histogram_blur_bind_group_layout: BindGroupLayout,
     pub tonemap_pipeline: RenderPipeline,
     pub tonemap_bind_group_layout: BindGroupLayout,
 }
@@ -17,6 +19,11 @@ impl FlamePipelines {
         let accumulate_shader = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("Accumulate Shader"),
             source: ShaderSource::Wgsl(include_str!("../../shaders/accumulate.wgsl").into()),
+        });
+
+        let histogram_blur_shader = device.create_shader_module(ShaderModuleDescriptor {
+            label: Some("Histogram Blur Shader"),
+            source: ShaderSource::Wgsl(include_str!("../../shaders/histogram_blur.wgsl").into()),
         });
 
         let tonemap_shader = device.create_shader_module(ShaderModuleDescriptor {
@@ -326,6 +333,61 @@ impl FlamePipelines {
             cache: None,
         });
 
+        // Histogram-blur bind group layout (matches histogram_blur.wgsl):
+        //   0 — histogram_in   (storage, read-only)
+        //   1 — histogram_out  (storage, read+write)
+        //   2 — BlurParams     (uniform)
+        let histogram_blur_bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("Histogram Blur Bind Group Layout"),
+            entries: &[
+                BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+        let histogram_blur_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("Histogram Blur Pipeline Layout"),
+            bind_group_layouts: &[Some(&histogram_blur_bind_group_layout)],
+            immediate_size: 0,
+        });
+
+        let histogram_blur_pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
+            label: Some("Histogram Blur Compute Pipeline"),
+            layout: Some(&histogram_blur_pipeline_layout),
+            module: &histogram_blur_shader,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
         // Create tonemap render pipeline
         let tonemap_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("Tonemap Pipeline Layout"),
@@ -376,6 +438,8 @@ impl FlamePipelines {
             compute_bind_group_layout,
             accumulate_pipeline,
             accumulate_bind_group_layout,
+            histogram_blur_pipeline,
+            histogram_blur_bind_group_layout,
             tonemap_pipeline,
             tonemap_bind_group_layout,
         }
@@ -534,6 +598,40 @@ impl FlamePipelines {
                 binding: 0,
                 resource: buffers.variation_params_buffer.as_entire_binding(),
             }],
+        })
+    }
+
+    /// Bind group for histogram-blur horizontal pass: in = primary, out = scratch.
+    pub fn create_histogram_blur_h_bind_group(
+        &self,
+        device: &Device,
+        buffers: &super::buffers::FlameBuffers,
+    ) -> BindGroup {
+        device.create_bind_group(&BindGroupDescriptor {
+            label: Some("Histogram Blur Bind Group (H)"),
+            layout: &self.histogram_blur_bind_group_layout,
+            entries: &[
+                BindGroupEntry { binding: 0, resource: buffers.histogram_buffer.as_entire_binding() },
+                BindGroupEntry { binding: 1, resource: buffers.histogram_buffer_scratch.as_entire_binding() },
+                BindGroupEntry { binding: 2, resource: buffers.histogram_blur_params_buffer_h.as_entire_binding() },
+            ],
+        })
+    }
+
+    /// Bind group for histogram-blur vertical pass: in = scratch, out = primary.
+    pub fn create_histogram_blur_v_bind_group(
+        &self,
+        device: &Device,
+        buffers: &super::buffers::FlameBuffers,
+    ) -> BindGroup {
+        device.create_bind_group(&BindGroupDescriptor {
+            label: Some("Histogram Blur Bind Group (V)"),
+            layout: &self.histogram_blur_bind_group_layout,
+            entries: &[
+                BindGroupEntry { binding: 0, resource: buffers.histogram_buffer_scratch.as_entire_binding() },
+                BindGroupEntry { binding: 1, resource: buffers.histogram_buffer.as_entire_binding() },
+                BindGroupEntry { binding: 2, resource: buffers.histogram_blur_params_buffer_v.as_entire_binding() },
+            ],
         })
     }
 

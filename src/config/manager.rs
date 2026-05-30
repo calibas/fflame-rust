@@ -1471,6 +1471,7 @@ impl ConfigManager {
             ConfigPath::DofBlurStrength => Ok(config.dof_blur_strength.into()),
             ConfigPath::FogStrength => Ok(config.fog_strength.into()),
             ConfigPath::FogStart => Ok(config.fog_start.into()),
+            ConfigPath::FilterRadius => Ok(config.filter_radius.into()),
 
             // Tone mapping
             ConfigPath::Exposure => Ok(config.exposure.into()),
@@ -1989,6 +1990,9 @@ impl ConfigManager {
             }
             ConfigPath::FogStart => {
                 self.current.fog_start = value.try_into()?;
+            }
+            ConfigPath::FilterRadius => {
+                self.current.filter_radius = value.try_into()?;
             }
 
             // Tone mapping

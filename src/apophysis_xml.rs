@@ -72,6 +72,7 @@ fn parse_flame_element(
     let mut gamma = 2.2;
     let mut vibrancy = 1.0;
     let mut gamma_threshold = 0.0025;
+    let mut filter_radius = 0.0_f32;  // Apo's `filter` attribute
     let mut cam_pitch = 0.0;  // Camera rotation X (radians)
     let mut cam_yaw = 0.0;    // Camera rotation Y (radians)
     let mut cam_zpos = 0.0;   // Camera Z position (height)
@@ -117,6 +118,7 @@ fn parse_flame_element(
             }
             "vibrancy" => vibrancy = value.parse().unwrap_or(1.0),
             "gamma_threshold" => gamma_threshold = value.parse().unwrap_or(0.0025),
+            "filter" => filter_radius = value.parse().unwrap_or(0.0),
             "cam_pitch" => cam_pitch = value.parse().unwrap_or(0.0),
             "cam_yaw" => cam_yaw = value.parse().unwrap_or(0.0),
             "cam_zpos" => cam_zpos = value.parse().unwrap_or(0.0),
@@ -320,6 +322,9 @@ fn parse_flame_element(
         dof_blur_strength: cam_dof,
         fog_strength: crate::config::defaults::DEFAULT_FOG_STRENGTH,
         fog_start: crate::config::defaults::DEFAULT_FOG_START,
+        // Apo's `filter` is the sample-time Gaussian sigma in pixels; we
+        // apply it on the per-batch histogram before accumulation.
+        filter_radius,
         density_scale: 1.0,  // Use default, brightness is handled by Apophysis brightness parameter
         speed_factor: 1.0,
         max_iterations: 1_000_000_000,
