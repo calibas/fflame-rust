@@ -116,6 +116,8 @@ pub struct FlameRenderer {
     buffers: FlameBuffers,
     compute_bind_group: BindGroup,
     accumulate_bind_group: BindGroup,
+    histogram_blur_h_bind_group: BindGroup,
+    histogram_blur_v_bind_group: BindGroup,
     // adjust_scale_bind_group removed - pipeline unused
     tonemap_bind_group: BindGroup,
 
@@ -165,6 +167,7 @@ pub struct FlameRenderer {
     dof_blur_strength: f32, // DOF: Blur amount (0.0 = disabled)
     fog_strength: f32, // Depth fog: exponential fog density (0.0 = disabled)
     fog_start: f32, // Depth fog: distance where fog begins
+    filter_radius: f32, // Spatial filter (Apo's `filter`): Gaussian sigma in pixels on histogram, 0 = off
     background_r: f32, // Background color R (for depth fog)
     background_g: f32, // Background color G (for depth fog)
     background_b: f32, // Background color B (for depth fog)
@@ -205,6 +208,8 @@ impl FlameRenderer {
 
         let compute_bind_group = pipelines.create_compute_bind_group(device, &buffers);
         let accumulate_bind_group = pipelines.create_accumulate_bind_group(device, &buffers);
+        let histogram_blur_h_bind_group = pipelines.create_histogram_blur_h_bind_group(device, &buffers);
+        let histogram_blur_v_bind_group = pipelines.create_histogram_blur_v_bind_group(device, &buffers);
         // adjust_scale_bind_group removed - pipeline unused
         let tonemap_bind_group = pipelines.create_tonemap_bind_group(device, &buffers);
         let init_bind_group = pipelines.create_init_bind_group(device, &buffers);
@@ -241,6 +246,8 @@ impl FlameRenderer {
             buffers,
             compute_bind_group,
             accumulate_bind_group,
+            histogram_blur_h_bind_group,
+            histogram_blur_v_bind_group,
             // adjust_scale_bind_group removed
             tonemap_bind_group,
             init_bind_group,
@@ -269,6 +276,7 @@ impl FlameRenderer {
             dof_blur_strength: crate::config::DEFAULT_DOF_BLUR_STRENGTH,
             fog_strength: crate::config::DEFAULT_FOG_STRENGTH,
             fog_start: crate::config::DEFAULT_FOG_START,
+            filter_radius: 0.0,
             background_r: 0.0,
             background_g: 0.0,
             background_b: 0.0,
@@ -308,6 +316,8 @@ impl FlameRenderer {
         self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
         self.init_bind_group = self.pipelines.create_init_bind_group(device, &self.buffers);
         self.accumulate_bind_group = self.pipelines.create_accumulate_bind_group(device, &self.buffers);
+        self.histogram_blur_h_bind_group = self.pipelines.create_histogram_blur_h_bind_group(device, &self.buffers);
+        self.histogram_blur_v_bind_group = self.pipelines.create_histogram_blur_v_bind_group(device, &self.buffers);
         self.tonemap_bind_group = self.pipelines.create_tonemap_bind_group(device, &self.buffers);
 
         // Recreate fractal output texture with new size
@@ -616,6 +626,35 @@ impl FlameRenderer {
 
         self.buffers.update_accumulate_params(queue, &params);
 
+        // Spatial filter — Gaussian blur on the per-batch histogram (Apo's
+        // `filter` attribute). Two separable passes (H then V) immediately
+        // before the accumulate dispatch, so accumulate reads the filtered
+        // histogram unchanged. Skipped entirely when radius is 0.
+        if self.filter_radius > 0.0 {
+            self.buffers.update_histogram_blur_params(queue, self.width, self.height, self.filter_radius);
+
+            let workgroups_x = (self.width + 7) / 8;
+            let workgroups_y = (self.height + 7) / 8;
+
+            let mut h_pass = encoder.begin_compute_pass(&ComputePassDescriptor {
+                label: Some("Histogram Blur Pass (H)"),
+                timestamp_writes: None,
+            });
+            h_pass.set_pipeline(&self.pipelines.histogram_blur_pipeline);
+            h_pass.set_bind_group(0, &self.histogram_blur_h_bind_group, &[]);
+            h_pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
+            drop(h_pass);
+
+            let mut v_pass = encoder.begin_compute_pass(&ComputePassDescriptor {
+                label: Some("Histogram Blur Pass (V)"),
+                timestamp_writes: None,
+            });
+            v_pass.set_pipeline(&self.pipelines.histogram_blur_pipeline);
+            v_pass.set_bind_group(0, &self.histogram_blur_v_bind_group, &[]);
+            v_pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
+            drop(v_pass);
+        }
+
         let mut compute_pass = encoder.begin_compute_pass(&ComputePassDescriptor {
             label: Some("Accumulation Pass"),
             timestamp_writes: None,
@@ -844,6 +883,7 @@ impl FlameRenderer {
         self.dof_blur_strength = config.dof_blur_strength;
         self.fog_strength = config.fog_strength;
         self.fog_start = config.fog_start;
+        self.filter_radius = config.filter_radius;
         self.burn_in = burn_in;
 
         // 5. Update palette size (recreates texture + bind groups if changed)
@@ -937,7 +977,7 @@ impl FlameRenderer {
     }
 
     /// Update the flame being rendered
-    pub fn update_flame(&mut self, device: &Device, queue: &Queue, flame: &Flame, iterations_per_thread: u32, burn_in: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_z: f32, speed_factor: f32, dof_focus_distance: f32, dof_blur_strength: f32, fog_strength: f32, fog_start: f32, background_color: [f32; 3]) {
+    pub fn update_flame(&mut self, device: &Device, queue: &Queue, flame: &Flame, iterations_per_thread: u32, burn_in: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_z: f32, speed_factor: f32, dof_focus_distance: f32, dof_blur_strength: f32, fog_strength: f32, fog_start: f32, background_color: [f32; 3], filter_radius: f32) {
         // Check if shaders need to be recompiled (variations or constants changed)
         let constants = self.build_shader_constants(flame);
         let path_features_enabled = self.color_mode == ColorMode::PathMap
@@ -981,6 +1021,7 @@ impl FlameRenderer {
         self.dof_focus_distance = dof_focus_distance;
         self.dof_blur_strength = dof_blur_strength;
         self.fog_strength = fog_strength;
+        self.filter_radius = filter_radius;
         self.fog_start = fog_start;
         self.background_r = background_color[0];
         self.background_g = background_color[1];

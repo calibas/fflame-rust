@@ -46,6 +46,13 @@ pub struct FractalConfig {
     #[serde(default)]
     pub fog_start: f32,  // Depth where fog begins
 
+    /// Spatial filter — Gaussian blur applied to the per-batch histogram
+    /// before accumulation. Mirrors Apophysis's `filter` attribute: a
+    /// small per-sample-spread Gaussian that smooths per-iteration grain.
+    /// Default 0.0 (off). Apo XML import picks up `filter="..."`.
+    #[serde(default, skip_serializing_if = "is_default_filter_radius")]
+    pub filter_radius: f32,
+
     /// Rendering settings
     #[serde(default = "default_density_scale")]
     pub density_scale: f32,
@@ -343,6 +350,10 @@ fn is_default_levels_enabled(v: &bool) -> bool {
     !*v  // Default is false (Apo-matching: Levels off)
 }
 
+fn is_default_filter_radius(v: &f32) -> bool {
+    v.abs() < FLOAT_EPSILON  // Default is 0.0 (filter off)
+}
+
 fn is_default_levels_low(v: &f32) -> bool {
     v.abs() < FLOAT_EPSILON  // Default is 0.0
 }
@@ -381,6 +392,7 @@ impl Default for FractalConfig {
             dof_blur_strength: 0.0,
             fog_strength: 0.0,
             fog_start: 0.0,
+            filter_radius: 0.0,
             density_scale: 1.0,
             speed_factor: 0.5,
             max_iterations: default_max_iterations(),

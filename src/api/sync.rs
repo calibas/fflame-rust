@@ -471,6 +471,7 @@ pub fn config_to_create_request(config: &FractalConfig, name: Option<&str>) -> C
         dof_blur_strength: Some(config.dof_blur_strength),
         fog_strength: Some(config.fog_strength),
         fog_start: Some(config.fog_start),
+        filter_radius: Some(config.filter_radius),
 
         density_scale: Some(config.density_scale),
         speed_factor: Some(config.speed_factor),
@@ -674,6 +675,7 @@ pub fn flame_response_to_config(resp: &FlameResponse) -> FractalConfig {
         dof_blur_strength: resp.dof_blur_strength,
         fog_strength: resp.fog_strength,
         fog_start: resp.fog_start,
+        filter_radius: resp.filter_radius.unwrap_or(0.0),
         density_scale: resp.density_scale,
         speed_factor: resp.speed_factor,
         max_iterations: resp.max_iterations,

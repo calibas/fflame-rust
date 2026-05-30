@@ -326,6 +326,15 @@ pub fn render_colors_content(
                     if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::DensityScale, 0.01..=10.0, t!("tonemap.density_scale").as_ref(), Some(t!("tonemap.tooltip_density_scale").as_ref())) {
                         max_update = max_update.max(result.update_type);
                     }
+
+                    // Spatial filter — Apo's per-sample Gaussian (filter
+                    // attribute in .flame XML). Applied to the per-batch
+                    // histogram before accumulate, so it smooths
+                    // per-iteration grain in linear color+density space.
+                    // 0 disables. Typical Apo values: 0.3–1.5.
+                    if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::FilterRadius, 0.0..=5.0, "Spatial Filter", Some("Gaussian sigma (pixels) applied to the histogram before accumulation. Apophysis-style per-sample smoothing.")) {
+                        max_update = max_update.max(result.update_type);
+                    }
                 });
         });
 

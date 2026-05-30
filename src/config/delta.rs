@@ -29,6 +29,7 @@ pub enum ConfigPath {
     DofBlurStrength,
     FogStrength,
     FogStart,
+    FilterRadius,
 
     // ===== Tone mapping (no iteration reset needed) =====
     Exposure,
@@ -367,6 +368,7 @@ impl Display for ConfigPath {
             ConfigPath::DofBlurStrength => write!(f, "DOF Blur Strength"),
             ConfigPath::FogStrength => write!(f, "Fog Strength"),
             ConfigPath::FogStart => write!(f, "Fog Start"),
+            ConfigPath::FilterRadius => write!(f, "Spatial Filter"),
 
             // Tone mapping
             ConfigPath::Exposure => write!(f, "Exposure"),
@@ -671,6 +673,7 @@ impl ConfigPath {
             ConfigPath::DofBlurStrength => I18nKey::simple("history.param.dof_blur_strength"),
             ConfigPath::FogStrength => I18nKey::simple("history.param.fog_strength"),
             ConfigPath::FogStart => I18nKey::simple("history.param.fog_start"),
+            ConfigPath::FilterRadius => I18nKey::simple("history.param.filter_radius"),
 
             // Tone mapping
             ConfigPath::Exposure => I18nKey::simple("history.param.exposure"),
@@ -1704,11 +1707,15 @@ impl ConfigPath {
             | ConfigPath::CameraRotationY
             | ConfigPath::CameraZ => UpdateType::ViewOnly,
 
-            // DOF and fog changes affect pixel colors at write time, need iteration reset
+            // DOF, fog, and spatial filter change the per-sample
+            // contribution shape — old accumulation is "stale" relative
+            // to the new dynamics. Reset so the user sees the new look
+            // cleanly rather than seeing it average in over many frames.
             ConfigPath::DofFocusDistance
             | ConfigPath::DofBlurStrength
             | ConfigPath::FogStrength
-            | ConfigPath::FogStart => UpdateType::IterationReset,
+            | ConfigPath::FogStart
+            | ConfigPath::FilterRadius => UpdateType::IterationReset,
 
             // Tone mapping - re-run tonemap shader
             ConfigPath::Exposure
@@ -1851,6 +1858,7 @@ impl ConfigPath {
             ConfigPath::DofBlurStrength => "DofBlurStrength".to_string(),
             ConfigPath::FogStrength => "FogStrength".to_string(),
             ConfigPath::FogStart => "FogStart".to_string(),
+            ConfigPath::FilterRadius => "FilterRadius".to_string(),
 
             // Tone mapping
             ConfigPath::Exposure => "Exposure".to_string(),
@@ -2029,6 +2037,7 @@ impl ConfigPath {
             "DofBlurStrength" => return Some(ConfigPath::DofBlurStrength),
             "FogStrength" => return Some(ConfigPath::FogStrength),
             "FogStart" => return Some(ConfigPath::FogStart),
+            "FilterRadius" => return Some(ConfigPath::FilterRadius),
 
             // Tone mapping
             "Exposure" => return Some(ConfigPath::Exposure),
@@ -2370,6 +2379,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::DofBlurStrength
         | ConfigPath::FogStrength
         | ConfigPath::FogStart
+        | ConfigPath::FilterRadius
         | ConfigPath::Exposure
         | ConfigPath::Gamma
         | ConfigPath::GammaThreshold
@@ -2861,6 +2871,7 @@ mod tests {
             ConfigPath::DofBlurStrength,
             ConfigPath::FogStrength,
             ConfigPath::FogStart,
+            ConfigPath::FilterRadius,
 
             // Tone mapping
             ConfigPath::Exposure,
