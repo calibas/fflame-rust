@@ -52,13 +52,22 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let kernel_half = min(i32(ceil(3.0 * sigma)), KERNEL_HALF_MAX);
     let inv_2sigma2 = 1.0 / (2.0 * sigma * sigma);
 
-    // Bilateral density-similarity. The standard separable-bilateral
-    // approximation: each pass compares each tap to the input buffer's
-    // center value. On the H pass this is the original density; on the V
-    // pass it's the H-blurred density. Slightly less correct than a true
-    // 2D bilateral but visually indistinguishable at small radii.
+    // Bilateral density-similarity. Standard joint-bilateral fix for
+    // separable filters: always reference the original primary buffer
+    // for the center density, regardless of pass direction.
+    //   H pass: histogram_in == primary, so the center is original. ✓
+    //   V pass: histogram_in == scratch (H-blurred). Read center from
+    //           histogram_out (== primary, not yet written this pass).
+    // Without this, the V pass would test against H-blurred densities
+    // and under-detect edges along horizontal features — producing
+    // visible vertical smearing of horizontally-coherent bright pixels.
     let center_idx = (u32(y) * params.width + u32(x)) * 4u;
-    let center_density = f32(histogram_in[center_idx + 3u]);
+    var center_density: f32;
+    if (params.direction == 0u) {
+        center_density = f32(histogram_in[center_idx + 3u]);
+    } else {
+        center_density = f32(histogram_out[center_idx + 3u]);
+    }
     let sigma_d = max(params.density_sigma, 1.0);
     let inv_2sigma_d2 = 1.0 / (2.0 * sigma_d * sigma_d);
 
