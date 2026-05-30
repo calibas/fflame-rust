@@ -396,6 +396,8 @@ pub struct CreateFlameRequest {
     pub fog_start: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub filter_radius: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filter_blur_edges: Option<f32>,
 
     // Rendering
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -513,6 +515,8 @@ pub struct FlameResponse {
     pub fog_start: f32,
     #[serde(default)]
     pub filter_radius: Option<f32>,
+    #[serde(default)]
+    pub filter_blur_edges: Option<f32>,
     pub density_scale: f32,
     pub speed_factor: f32,
     pub max_iterations: u64,

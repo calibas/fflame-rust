@@ -777,6 +777,11 @@ pub struct HistogramBlurParams {
     pub height: u32,
     pub radius_pixels: f32,
     pub direction: u32,  // 0 = horizontal, 1 = vertical
+    /// Bilateral weighting `σ_d` in u32-histogram density units. Taps
+    /// whose density differs from the center by ≳ `density_sigma` get
+    /// weight ≈ 0, preserving edges. Large value → uniform Gaussian.
+    pub density_sigma: f32,
+    pub _pad: [u32; 3],  // pad to 32 bytes for std140 alignment
 }
 
 /// Accumulation parameters
@@ -1027,12 +1032,12 @@ impl FlameBuffers {
         // rewritten between batches via `update_histogram_blur_params`.
         let histogram_blur_params_buffer_h = device.create_buffer_init(&util::BufferInitDescriptor {
             label: Some("Histogram Blur Params Buffer (H)"),
-            contents: bytemuck::cast_slice(&[HistogramBlurParams { width, height, radius_pixels: 0.0, direction: 0 }]),
+            contents: bytemuck::cast_slice(&[HistogramBlurParams { width, height, radius_pixels: 0.0, direction: 0, density_sigma: f32::INFINITY, _pad: [0; 3] }]),
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
         });
         let histogram_blur_params_buffer_v = device.create_buffer_init(&util::BufferInitDescriptor {
             label: Some("Histogram Blur Params Buffer (V)"),
-            contents: bytemuck::cast_slice(&[HistogramBlurParams { width, height, radius_pixels: 0.0, direction: 1 }]),
+            contents: bytemuck::cast_slice(&[HistogramBlurParams { width, height, radius_pixels: 0.0, direction: 1, density_sigma: f32::INFINITY, _pad: [0; 3] }]),
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
         });
 
@@ -1483,12 +1488,13 @@ impl FlameBuffers {
         queue.write_buffer(&self.accumulate_params_buffer, 0, bytemuck::cast_slice(&[*params]));
     }
 
-    /// Update width/height/radius for both blur-params buffers in one shot.
-    /// `direction` is fixed at construction (H=0, V=1) and not overwritten —
-    /// each buffer keeps its own direction so the two passes are race-free.
-    pub fn update_histogram_blur_params(&self, queue: &Queue, width: u32, height: u32, radius_pixels: f32) {
-        let h = HistogramBlurParams { width, height, radius_pixels, direction: 0 };
-        let v = HistogramBlurParams { width, height, radius_pixels, direction: 1 };
+    /// Update width/height/radius/density_sigma for both blur-params buffers
+    /// in one shot. `direction` is fixed at construction (H=0, V=1) and not
+    /// overwritten — each buffer keeps its own direction so the two passes
+    /// are race-free.
+    pub fn update_histogram_blur_params(&self, queue: &Queue, width: u32, height: u32, radius_pixels: f32, density_sigma: f32) {
+        let h = HistogramBlurParams { width, height, radius_pixels, direction: 0, density_sigma, _pad: [0; 3] };
+        let v = HistogramBlurParams { width, height, radius_pixels, direction: 1, density_sigma, _pad: [0; 3] };
         queue.write_buffer(&self.histogram_blur_params_buffer_h, 0, bytemuck::cast_slice(&[h]));
         queue.write_buffer(&self.histogram_blur_params_buffer_v, 0, bytemuck::cast_slice(&[v]));
     }

@@ -17,8 +17,15 @@
 struct BlurParams {
     width: u32,
     height: u32,
-    radius_pixels: f32,     // Gaussian sigma in pixels (Apo's `filter` attribute)
+    radius_pixels: f32,     // spatial Gaussian sigma in pixels (Apo's `filter`)
     direction: u32,         // 0 = horizontal, 1 = vertical
+    // Bilateral density-similarity sigma (u32 histogram density units).
+    // Per-tap weight = spatial_gaussian * exp(-Δdensity² / 2σ_d²).
+    // Large value → uniform Gaussian; small value → tight edge preservation.
+    density_sigma: f32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 @group(0) @binding(0) var<storage, read> histogram_in: array<u32>;
@@ -45,6 +52,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let kernel_half = min(i32(ceil(3.0 * sigma)), KERNEL_HALF_MAX);
     let inv_2sigma2 = 1.0 / (2.0 * sigma * sigma);
 
+    // Bilateral density-similarity. The standard separable-bilateral
+    // approximation: each pass compares each tap to the input buffer's
+    // center value. On the H pass this is the original density; on the V
+    // pass it's the H-blurred density. Slightly less correct than a true
+    // 2D bilateral but visually indistinguishable at small radii.
+    let center_idx = (u32(y) * params.width + u32(x)) * 4u;
+    let center_density = f32(histogram_in[center_idx + 3u]);
+    let sigma_d = max(params.density_sigma, 1.0);
+    let inv_2sigma_d2 = 1.0 / (2.0 * sigma_d * sigma_d);
+
     // Accumulate weighted sums (f32) and total weight, then convert back to u32.
     var sum_r: f32 = 0.0;
     var sum_g: f32 = 0.0;
@@ -66,13 +83,21 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
         let neighbor_idx = (u32(ny) * params.width + u32(nx)) * 4u;
 
-        let fk = f32(k);
-        let w_tap = exp(-fk * fk * inv_2sigma2);
+        let tap_r = f32(histogram_in[neighbor_idx + 0u]);
+        let tap_g = f32(histogram_in[neighbor_idx + 1u]);
+        let tap_b = f32(histogram_in[neighbor_idx + 2u]);
+        let tap_d = f32(histogram_in[neighbor_idx + 3u]);
 
-        sum_r = sum_r + f32(histogram_in[neighbor_idx + 0u]) * w_tap;
-        sum_g = sum_g + f32(histogram_in[neighbor_idx + 1u]) * w_tap;
-        sum_b = sum_b + f32(histogram_in[neighbor_idx + 2u]) * w_tap;
-        sum_d = sum_d + f32(histogram_in[neighbor_idx + 3u]) * w_tap;
+        let fk = f32(k);
+        let w_spatial = exp(-fk * fk * inv_2sigma2);
+        let delta = tap_d - center_density;
+        let w_density = exp(-delta * delta * inv_2sigma_d2);
+        let w_tap = w_spatial * w_density;
+
+        sum_r = sum_r + tap_r * w_tap;
+        sum_g = sum_g + tap_g * w_tap;
+        sum_b = sum_b + tap_b * w_tap;
+        sum_d = sum_d + tap_d * w_tap;
         weight_total = weight_total + w_tap;
     }
 

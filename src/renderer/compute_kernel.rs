@@ -168,6 +168,7 @@ pub struct FlameRenderer {
     fog_strength: f32, // Depth fog: exponential fog density (0.0 = disabled)
     fog_start: f32, // Depth fog: distance where fog begins
     filter_radius: f32, // Spatial filter (Apo's `filter`): Gaussian sigma in pixels on histogram, 0 = off
+    filter_blur_edges: f32, // Bilateral edge-handling [0..1]: 0 = preserve edges (default), 1 = uniform Gaussian
     background_r: f32, // Background color R (for depth fog)
     background_g: f32, // Background color G (for depth fog)
     background_b: f32, // Background color B (for depth fog)
@@ -277,6 +278,7 @@ impl FlameRenderer {
             fog_strength: crate::config::DEFAULT_FOG_STRENGTH,
             fog_start: crate::config::DEFAULT_FOG_START,
             filter_radius: 0.0,
+            filter_blur_edges: 0.0,
             background_r: 0.0,
             background_g: 0.0,
             background_b: 0.0,
@@ -631,7 +633,28 @@ impl FlameRenderer {
         // before the accumulate dispatch, so accumulate reads the filtered
         // histogram unchanged. Skipped entirely when radius is 0.
         if self.filter_radius > 0.0 {
-            self.buffers.update_histogram_blur_params(queue, self.width, self.height, self.filter_radius);
+            // Bilateral `σ_d` scales with the per-batch typical histogram
+            // density value. Histogram density stores `count × 100`
+            // (HISTOGRAM_COLOR_SCALE), so the typical value at a
+            // mean-density pixel is `samples_per_pixel × 100`. Symmetric
+            // exponential mapping centered at slider 0.5 = "σ_d at mean
+            // density":
+            //   blur_edges = 0   → σ_d = mean / 100   (tight — preserves
+            //                                          most non-uniform
+            //                                          pixels including
+            //                                          midtones)
+            //   blur_edges = 0.5 → σ_d = mean         (moderate — only
+            //                                          well-above-mean
+            //                                          pixels preserved)
+            //   blur_edges = 1   → σ_d = mean × 100   (loose — only
+            //                                          extreme outliers
+            //                                          preserved, close
+            //                                          to uniform blur)
+            const HISTOGRAM_COLOR_SCALE: f32 = 100.0;
+            let pixel_count = (self.width as f32) * (self.height as f32);
+            let mean_density_scaled = (samples_this_frame as f32 / pixel_count) * HISTOGRAM_COLOR_SCALE;
+            let density_sigma = mean_density_scaled * 100.0_f32.powf(2.0 * self.filter_blur_edges - 1.0);
+            self.buffers.update_histogram_blur_params(queue, self.width, self.height, self.filter_radius, density_sigma);
 
             let workgroups_x = (self.width + 7) / 8;
             let workgroups_y = (self.height + 7) / 8;
@@ -884,6 +907,7 @@ impl FlameRenderer {
         self.fog_strength = config.fog_strength;
         self.fog_start = config.fog_start;
         self.filter_radius = config.filter_radius;
+        self.filter_blur_edges = config.filter_blur_edges;
         self.burn_in = burn_in;
 
         // 5. Update palette size (recreates texture + bind groups if changed)
@@ -977,7 +1001,7 @@ impl FlameRenderer {
     }
 
     /// Update the flame being rendered
-    pub fn update_flame(&mut self, device: &Device, queue: &Queue, flame: &Flame, iterations_per_thread: u32, burn_in: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_z: f32, speed_factor: f32, dof_focus_distance: f32, dof_blur_strength: f32, fog_strength: f32, fog_start: f32, background_color: [f32; 3], filter_radius: f32) {
+    pub fn update_flame(&mut self, device: &Device, queue: &Queue, flame: &Flame, iterations_per_thread: u32, burn_in: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_z: f32, speed_factor: f32, dof_focus_distance: f32, dof_blur_strength: f32, fog_strength: f32, fog_start: f32, background_color: [f32; 3], filter_radius: f32, filter_blur_edges: f32) {
         // Check if shaders need to be recompiled (variations or constants changed)
         let constants = self.build_shader_constants(flame);
         let path_features_enabled = self.color_mode == ColorMode::PathMap
@@ -1022,6 +1046,7 @@ impl FlameRenderer {
         self.dof_blur_strength = dof_blur_strength;
         self.fog_strength = fog_strength;
         self.filter_radius = filter_radius;
+        self.filter_blur_edges = filter_blur_edges;
         self.fog_start = fog_start;
         self.background_r = background_color[0];
         self.background_g = background_color[1];

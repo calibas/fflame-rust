@@ -102,6 +102,7 @@ impl App {
                         update_config.fog_start,
                         update_config.background_color,
                         update_config.filter_radius,
+                        update_config.filter_blur_edges,
                     );
                 }
 
