@@ -80,7 +80,7 @@ pub static JUBIQ: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 2,
     wgsl_init: Some(r#"
-fn init_jubiq(user: array<f32, 24>) -> array<f32, 2> {
+fn init_jubiQ(user: array<f32, 24>) -> array<f32, 2> {
     let power = user[0];
     let dist = user[1];
     let safe_power = select(power, 1e-30, abs(power) < 1e-30);

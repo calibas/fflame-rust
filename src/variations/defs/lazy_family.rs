@@ -268,7 +268,7 @@ pub static LAZYTRAVIS: VariationDef = VariationDef {
     //   4: spin_out_4  (4 · spin_out)
     init_param_count: 2,
     wgsl_init: Some(r#"
-fn init_lazytravis(user: array<f32, 3>) -> array<f32, 2> {
+fn init_lazyTravis(user: array<f32, 3>) -> array<f32, 2> {
     var out: array<f32, 2>;
     out[0] = 4.0 * user[0];
     out[1] = 4.0 * user[1];

@@ -293,7 +293,7 @@ fn default_levels_high() -> f32 {
 }
 
 fn default_levels_gamma() -> f32 {
-    1.0  // Linear (no gamma adjustment)
+    super::defaults::DEFAULT_LEVELS_GAMMA  // Linear (no gamma adjustment)
 }
 
 fn default_palette_rotation() -> f32 {

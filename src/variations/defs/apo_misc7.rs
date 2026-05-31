@@ -476,7 +476,7 @@ pub static NPOLAR: VariationDef = VariationDef {
     //   5: cn    (1 / (2·nnz))
     init_param_count: 4,
     wgsl_init: Some(r#"
-fn init_nPolar(user: array<f32, 2>) -> array<f32, 4> {
+fn init_npolar(user: array<f32, 2>) -> array<f32, 4> {
     let parity_i = i32(user[0]);
     let n_i = i32(user[1]);
     let nnz_i = select(n_i, 1, n_i == 0);
