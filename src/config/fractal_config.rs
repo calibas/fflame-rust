@@ -191,7 +191,7 @@ pub struct FractalConfig {
     /// straight through unmodified — Apo-matching default behavior.
     /// When on, the `levels_low`/`levels_high`/`levels_gamma` triplet
     /// gates per-pixel opacity by relative density.
-    #[serde(default, skip_serializing_if = "is_default_levels_enabled")]
+    #[serde(default = "default_levels_enabled", skip_serializing_if = "is_default_levels_enabled")]
     pub levels_enabled: bool,
 
     /// Levels: density threshold for background/transparency
@@ -279,6 +279,10 @@ fn default_dof_focus_distance() -> f32 {
     super::defaults::DEFAULT_DOF_FOCUS_DISTANCE
 }
 
+fn default_levels_enabled() -> bool {
+    super::defaults::DEFAULT_LEVELS_ENABLED
+}
+
 fn default_levels_high() -> f32 {
     // Clip at `× mean density` units after the scale-invariance change,
     // independent of total iteration count. The 10× default was
@@ -360,7 +364,7 @@ fn is_default_alpha_blend_high(v: &f32) -> bool {
 }
 
 fn is_default_levels_enabled(v: &bool) -> bool {
-    !*v  // Default is false (Apo-matching: Levels off)
+    *v == super::defaults::DEFAULT_LEVELS_ENABLED
 }
 
 fn is_default_filter_radius(v: &f32) -> bool {
@@ -443,7 +447,7 @@ impl Default for FractalConfig {
             hue_shift: default_hue_shift(),
             alpha_blend_low: default_alpha_blend_low(),
             alpha_blend_high: default_alpha_blend_high(),
-            levels_enabled: false,
+            levels_enabled: default_levels_enabled(),
             levels_low: 0.0,
             levels_high: default_levels_high(),
             levels_gamma: default_levels_gamma(),

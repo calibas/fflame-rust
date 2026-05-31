@@ -23,8 +23,9 @@ fields rely on the (now-different) deserialize-time default.
 
 | Constant | Old default | New default | Notes |
 |---|---|---|---|
-| `DEFAULT_EXPOSURE` | `1.0` | `0.5` | Recalibrated against scale-invariant Levels |
-| `DEFAULT_GAMMA` | `1.0` (`2.2` via function) | `1.5` | `default_gamma()` was hardcoded `2.2` pre-bump, now reads the constant |
+| `DEFAULT_EXPOSURE` | `1.0` | `1.0` | Was briefly at `0.5` mid-branch; reverted to `1.0` alongside the Apo-matching default sweep. |
+| `DEFAULT_GAMMA` | `1.0` (`2.2` via function) | `4.0` | `default_gamma()` was hardcoded `2.2` pre-bump, now reads the constant. Apo's typical XML default. |
+| `DEFAULT_BRIGHTNESS` | `1.0` | `4.0` | Apo's typical XML default; closer match on imports without manual tuning. |
 | `DEFAULT_GAMMA_THRESHOLD` | `0.0025` | `5.0` | Recalibration |
 | `DEFAULT_LEVELS_HIGH` | `1000.0` (raw density) → `1.0` (× mean, post-P1) → `10.0` | `10.0` | Two unit changes already happened; see "Levels units" below |
 
@@ -88,25 +89,32 @@ again at risk and tracked manually.
 to preserve the same rendered blur. Skip if absent (default is 0.0,
 disabled, unaffected).
 
-### 5. Levels system off by default
+### 5. Levels system: introduced, then re-tuned to on-by-default
 
 | Field | Old default | New default | Notes |
 |---|---|---|---|
-| `levels_enabled` | (didn't exist) | `false` | Apo has no Levels system — when off, the gamma/vibrancy alpha passes through unmodified. |
+| `levels_enabled` | (didn't exist) | `true` | Empirically the closest match to Apo's brightness response. |
+| `levels_gamma`   | `1.0`          | `0.5` | At gamma=1 the mid-density opacity cap was structurally too aggressive (10% for a mean-density pixel). At gamma=0.5 the curve is `sqrt(opacity)` which keeps midtones perceptually present. |
 
-Why: with `levels_low=0, levels_high=10, levels_gamma=1` the shader's
-`min(base_alpha, leveled_opacity)` capped mid-density pixels at 10%
-opacity. The "no-op at defaults" claim was structurally false (for
-any non-zero density, `density/mean × 10 < 1`, so the cap always
-bit). Every Apo-imported flame rendered darker than its reference.
+Why on by default (re-tuned, supersedes an earlier "off by default"
+decision in commit 5f267d2): the on-with-gamma-0.5 combination is
+empirically the closest match to Apo's brightness response in the
+test flames examined. Apo doesn't have Levels, but the Levels math
+at this tuning happens to compensate for the brightness-curve shape
+mismatch we have in the rest of the pipeline. Until we do a
+structural fix (remove the `bucket_count × 100` calibration and
+re-tune everything, see brightness discussion in the branch
+history), this default lands closer to Apo.
 
 **v1 migration**: v1 files that don't carry the field will pick up
-`levels_enabled = false` via serde's default. v1 files that
-*explicitly turned Levels on by setting `levels_low/high/gamma`* will
-silently lose that effect — those flames have to be re-opened and
-the toggle flipped on. Repo assets don't use Levels (verified: no
-`assets/presets/*.fflame` sets the field), so risk is bounded to
-user-personal files where it was tuned in.
+`levels_enabled = true` via serde's default. v1 files that
+*explicitly turned Levels off* — there's no separate "off" toggle
+in v1, the field didn't exist — fall under the same default-pickup,
+so the migration is "do nothing". Built-in presets will render
+slightly differently than they did pre-flip; user-personal files
+unchanged unless re-opened. Other knob changes in this section:
+  - `levels_gamma` default 1.0 → 0.5 (most v1 files don't set this
+    explicitly; affects anyone whose v1 file is at default).
 
 ### 6. (Pending feature) — placeholder
 
