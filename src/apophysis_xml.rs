@@ -367,8 +367,11 @@ fn parse_flame_element(
         palette_squeeze_falloff: 0.5,
         palette_log_strength: 0.0,
         palette_reverse: false,
-        // Apo has no Levels system — off on import.
-        levels_enabled: false,
+        // Apo has no Levels system, but enabling our Levels with the
+        // tuned defaults (gamma 0.5) empirically lands closer to Apo's
+        // brightness response on the flames tested. Treating Levels as
+        // a calibration layer rather than a strict Apo-feature mapping.
+        levels_enabled: crate::config::defaults::DEFAULT_LEVELS_ENABLED,
         levels_low: 0.0,
         levels_high: crate::config::defaults::DEFAULT_LEVELS_HIGH,
         levels_gamma: crate::config::defaults::DEFAULT_LEVELS_GAMMA,
