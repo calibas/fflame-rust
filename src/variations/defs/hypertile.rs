@@ -379,7 +379,7 @@ pub static HYPERTILE3D: VariationDef = VariationDef {
     //  10: s2z    1 - cx² - cy²
     init_param_count: 8,
     wgsl_init: Some(r#"
-fn init_hypertile3d(user: array<f32, 3>) -> array<f32, 8> {
+fn init_hypertile3D(user: array<f32, 3>) -> array<f32, 8> {
     let pi = 3.14159265358979;
     let p = user[0];
     let q = user[1];
@@ -493,7 +493,7 @@ pub static HYPERTILE3D1: VariationDef = VariationDef {
     //   5: s2z   1 - r²
     init_param_count: 4,
     wgsl_init: Some(r#"
-fn init_hypertile3d1(user: array<f32, 2>) -> array<f32, 4> {
+fn init_hypertile3D1(user: array<f32, 2>) -> array<f32, 4> {
     let pi = 3.14159265358979;
     let p = user[0];
     let q = user[1];
@@ -613,7 +613,7 @@ pub static HYPERTILE3D2: VariationDef = VariationDef {
     //   8: s2z   1 - cx²
     init_param_count: 7,
     wgsl_init: Some(r#"
-fn init_hypertile3d2(user: array<f32, 2>) -> array<f32, 7> {
+fn init_hypertile3D2(user: array<f32, 2>) -> array<f32, 7> {
     let pi = 3.14159265358979;
     let p = user[0];
     let q = user[1];
