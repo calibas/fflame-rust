@@ -89,7 +89,7 @@ fn variation_collideoscope(p: vec2<f32>, xform_id: u32, variation_id: u32) -> ve
     return vec2<f32>(r * cos(a), r * sin(a));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_collideoscope(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let a_p = get_param(xform_id, variation_id, 0u);
     let num = max(get_param(xform_id, variation_id, 1u), 1.0);
@@ -122,7 +122,7 @@ fn variation_collideoscope(p: vec3<f32>, xform_id: u32, variation_id: u32) -> ve
     }
     return vec3<f32>(r * cos(a), r * sin(a), p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -163,7 +163,7 @@ fn variation_bent2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> 
     return vec2<f32>(nx, ny);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_bent2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let xs = get_param(xform_id, variation_id, 0u);
     let ys = get_param(xform_id, variation_id, 1u);
@@ -171,7 +171,7 @@ fn variation_bent2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
     let ny = select(p.y, p.y * ys, p.y < 0.0);
     return vec3<f32>(nx, ny, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -221,7 +221,7 @@ fn variation_mcarpet(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32
     );
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_mcarpet(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let xs = get_param(xform_id, variation_id, 0u);
     let ys = get_param(xform_id, variation_id, 1u);
@@ -235,7 +235,7 @@ fn variation_mcarpet(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
         p.z,
     );
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -282,7 +282,7 @@ fn variation_linearT3D(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f
     );
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_linearT3D(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let powx = get_param(xform_id, variation_id, 0u);
     let powy = get_param(xform_id, variation_id, 1u);
@@ -296,7 +296,7 @@ fn variation_linearT3D(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
         sz * pow(max(abs(p.z), 1e-30), powz),
     );
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -363,7 +363,7 @@ fn variation_oscilloscope(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec
     return p;
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_oscilloscope(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let separation = get_param(xform_id, variation_id, 0u);
     let amplitude = get_param(xform_id, variation_id, 2u);
@@ -381,7 +381,7 @@ fn variation_oscilloscope(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec
     }
     return p;
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -443,7 +443,7 @@ fn variation_fibonacci2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<
     );
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_fibonacci2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let sc = get_param(xform_id, variation_id, 0u);
     let sc2 = get_param(xform_id, variation_id, 1u);
@@ -466,5 +466,5 @@ fn variation_fibonacci2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<
         p.z,
     );
 }
-"#),
+"#,
 };

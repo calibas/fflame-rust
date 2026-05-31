@@ -138,7 +138,7 @@ fn variation_iconattractor_js(p: vec2<f32>, xform_id: u32, variation_id: u32) ->
     return vec2<f32>(nx, ny);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn ic_preset(id: i32) -> array<f32, 6> {
     // Returns [degree, a, b, g, o, l] for preset id in [0, 16].
     var out: array<f32, 6>;
@@ -204,5 +204,5 @@ fn variation_iconattractor_js(p: vec3<f32>, xform_id: u32, variation_id: u32) ->
     let ny = pp * p.y - g * zimag + o * p.x;
     return vec3<f32>(nx, ny, p.z);
 }
-"#),
+"#,
 };

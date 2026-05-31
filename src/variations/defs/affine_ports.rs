@@ -57,7 +57,7 @@ fn variation_popcorn(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32
     );
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_popcorn(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let xf = transforms[xform_id];
     var dx = tan(3.0 * p.y);
@@ -70,5 +70,5 @@ fn variation_popcorn(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
         p.z,
     );
 }
-"#),
+"#,
 };

@@ -35,13 +35,13 @@ fn variation_polar(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(theta / 3.14159265359, r - 1.0);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_polar(p: vec3<f32>) -> vec3<f32> {
     let theta = atan2(p.x, p.y);
     let r = length(p.xy);
     return vec3<f32>(theta / 3.14159265359, r - 1.0, p.z);
 }
-"#),
+"#,
 };
 
 /// Twists radial waves so the pattern looks like a knotted handkerchief -
@@ -71,13 +71,13 @@ fn variation_handkerchief(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(r * sin(theta + r), r * cos(theta - r));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_handkerchief(p: vec3<f32>) -> vec3<f32> {
     let r = length(p.xy);
     let theta = atan2(p.y, p.x);
     return vec3<f32>(r * sin(theta + r), r * cos(theta - r), p.z);
 }
-"#),
+"#,
 };
 
 /// Folds the plane along a heart-shaped curve. The output silhouette traces
@@ -108,14 +108,14 @@ fn variation_heart(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(r * sin(r_theta), -r * cos(r_theta));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_heart(p: vec3<f32>) -> vec3<f32> {
     let r = length(p.xy);
     let theta = atan2(p.x, p.y);
     let r_theta = r * theta;
     return vec3<f32>(r * sin(r_theta), -r * cos(r_theta), p.z);
 }
-"#),
+"#,
 };
 
 /// Wraps the plane onto a disc, with the angle controlling the radial
@@ -148,7 +148,7 @@ fn variation_disc(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(theta_pi * sin(pi_r), theta_pi * cos(pi_r));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_disc(p: vec3<f32>) -> vec3<f32> {
     let theta = atan2(p.x, p.y);
     let r = length(p.xy);
@@ -156,7 +156,7 @@ fn variation_disc(p: vec3<f32>) -> vec3<f32> {
     let pi_r = 3.14159265359 * r;
     return vec3<f32>(theta_pi * sin(pi_r), theta_pi * cos(pi_r), p.z);
 }
-"#),
+"#,
 };
 
 /// Combines an inverse-radius scaling with sine/cosine of both angle and
@@ -190,7 +190,7 @@ fn variation_spiral(p: vec2<f32>) -> vec2<f32> {
     );
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_spiral(p: vec3<f32>) -> vec3<f32> {
     let r = length(p.xy) + 1e-6;
     let theta = atan2(p.x, p.y);
@@ -201,7 +201,7 @@ fn variation_spiral(p: vec3<f32>) -> vec3<f32> {
         p.z
     );
 }
-"#),
+"#,
 };
 
 /// Inverts X by the squared radius while leaving Y alone. Stretches things
@@ -230,12 +230,12 @@ fn variation_hyperbolic(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(p.x / r2, p.y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_hyperbolic(p: vec3<f32>) -> vec3<f32> {
     let r2 = dot(p.xy, p.xy) + 1e-6;
     return vec3<f32>(p.x / r2, p.y, p.z);
 }
-"#),
+"#,
 };
 
 /// Maps the plane into a rotated diamond shape using sine and cosine of the
@@ -265,13 +265,13 @@ fn variation_diamond(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(sin(theta) * cos(r), cos(theta) * sin(r));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_diamond(p: vec3<f32>) -> vec3<f32> {
     let r = length(p.xy);
     let theta = atan2(p.x, p.y);
     return vec3<f32>(sin(theta) * cos(r), cos(theta) * sin(r), p.z);
 }
-"#),
+"#,
 };
 
 /// Cubes two sinusoidal functions of angle and radius and blends them.
@@ -305,7 +305,7 @@ fn variation_ex(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(r * (m0 + m1), r * (m0 - m1));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_ex(p: vec3<f32>) -> vec3<f32> {
     let r = length(p.xy);
     let theta = atan2(p.y, p.x);
@@ -315,7 +315,7 @@ fn variation_ex(p: vec3<f32>) -> vec3<f32> {
     let m1 = n1 * n1 * n1;
     return vec3<f32>(r * (m0 + m1), r * (m0 - m1), p.z);
 }
-"#),
+"#,
 };
 
 /// Randomly picks one of the two branches of the complex square root, then
@@ -349,7 +349,7 @@ fn julia(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     return vec2<f32>(sqrt_r * cos(half_theta), sqrt_r * sin(half_theta));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn julia(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
     let r = length(p.xy);
     let theta = atan2(p.y, p.x);
@@ -358,7 +358,7 @@ fn julia(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
     let half_theta = theta / 2.0 + omega;
     return vec3<f32>(sqrt_r * cos(half_theta), sqrt_r * sin(half_theta), p.z);
 }
-"#),
+"#,
 };
 
 /// Doubles the X coordinate when X is negative, halves the Y coordinate
@@ -388,13 +388,13 @@ fn variation_bent(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(nx, ny);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_bent(p: vec3<f32>) -> vec3<f32> {
     let nx = select(2.0 * p.x, p.x, p.x >= 0.0);
     let ny = select(p.y / 2.0, p.y, p.y >= 0.0);
     return vec3<f32>(nx, ny, p.z);
 }
-"#),
+"#,
 };
 
 // waves: Scott Draves's classic waves variation, using affine matrix fields.
@@ -439,7 +439,7 @@ fn variation_waves(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> 
     );
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_waves(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let xf = transforms[xform_id];
     return vec3<f32>(
@@ -448,7 +448,7 @@ fn variation_waves(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
         p.z
     );
 }
-"#),
+"#,
 };
 
 // Parameterized variations
@@ -518,7 +518,7 @@ fn variation_julian(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
     return vec2<f32>(r * cos(t), r * sin(t));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_julian(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let power = get_param(xform_id, variation_id, 0u);
     let cpower = get_param(xform_id, variation_id, 2u);
@@ -532,7 +532,7 @@ fn variation_julian(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
 
     return vec3<f32>(r * cos(t), r * sin(t), p.z);
 }
-"#),
+"#,
 };
 
 /// Wraps the plane around the origin, with the radius pulsing between a
@@ -598,7 +598,7 @@ fn variation_blob(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     return vec2<f32>(scale * cos(theta), scale * sin(theta));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_blob(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let p1 = get_param(xform_id, variation_id, 0u);
     let p2 = get_param(xform_id, variation_id, 1u);
@@ -611,7 +611,7 @@ fn variation_blob(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
 
     return vec3<f32>(scale * cos(theta), scale * sin(theta), p.z);
 }
-"#),
+"#,
 };
 
 /// An anti-fisheye that pulls everything toward the unit circle. Inverse of
@@ -641,13 +641,13 @@ fn variation_eyefish(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(scale * p.x, scale * p.y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_eyefish(p: vec3<f32>) -> vec3<f32> {
     let r_xy = length(p.xy) + 1.0;
     let scale = 2.0 / r_xy;
     return vec3<f32>(scale * p.x, scale * p.y, p.z);
 }
-"#),
+"#,
 };
 
 /// Maps the plane onto a sphere - far points shrink toward the equator,
@@ -678,7 +678,7 @@ fn variation_bubble(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(scale * p.x, scale * p.y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_bubble(p: vec3<f32>) -> vec3<f32> {
     // Apophysis: r = (x² + y²)/4 + 1
     // z' = 2/r - 1, scale = 1/r
@@ -688,7 +688,7 @@ fn variation_bubble(p: vec3<f32>) -> vec3<f32> {
     let new_z = 2.0 / r - 1.0;
     return vec3<f32>(scale * p.x, scale * p.y, new_z);
 }
-"#),
+"#,
 };
 
 /// Wraps the X coordinate around a cylinder (sine), passes Y through
@@ -717,12 +717,12 @@ fn variation_cylinder(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(sin(p.x), p.y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_cylinder(p: vec3<f32>) -> vec3<f32> {
     // Apophysis: result = (sin(x), y, cos(x))
     return vec3<f32>(sin(p.x), p.y, cos(p.x));
 }
-"#),
+"#,
 };
 
 /// Multiplies the point by a random radius in a random direction. Adds a
@@ -752,13 +752,13 @@ fn variation_noise(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     return vec2<f32>(p.x * r * cos(theta), p.y * r * sin(theta));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_noise(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
     let theta = rng_nextf(rng) * 6.28318530718;
     let r = rng_nextf(rng);
     return vec3<f32>(p.x * r * cos(theta), p.y * r * sin(theta), p.z);
 }
-"#),
+"#,
 };
 
 /// Replaces the input with a uniformly random point inside the unit disc -
@@ -788,13 +788,13 @@ fn variation_blur(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     return vec2<f32>(r * cos(theta), r * sin(theta));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_blur(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
     let theta = rng_nextf(rng) * 6.28318530718;
     let r = rng_nextf(rng);
     return vec3<f32>(r * cos(theta), r * sin(theta), p.z);
 }
-"#),
+"#,
 };
 
 /// Like Blur but the random radius follows a bell curve (sum of four
@@ -824,13 +824,13 @@ fn variation_gaussian_blur(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f
     return vec2<f32>(r * cos(theta), r * sin(theta));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_gaussian_blur(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
     let theta = rng_nextf(rng) * 6.28318530718;
     let r = rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) - 2.0;
     return vec3<f32>(r * cos(theta), r * sin(theta), p.z);
 }
-"#),
+"#,
 };
 
 // Extended variations
@@ -864,7 +864,7 @@ fn variation_polar2(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(new_x, new_y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_polar2(p: vec3<f32>) -> vec3<f32> {
     const PI: f32 = 3.14159265359;
     let r2 = dot(p.xy, p.xy);
@@ -872,7 +872,7 @@ fn variation_polar2(p: vec3<f32>) -> vec3<f32> {
     let new_y = 0.5 * log(r2) / PI;
     return vec3<f32>(new_x, new_y, p.z);
 }
-"#),
+"#,
 };
 
 /// Divides each coordinate by the absolute difference of squared
@@ -903,14 +903,14 @@ fn variation_cross(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(p.x * r, p.y * r);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_cross(p: vec3<f32>) -> vec3<f32> {
     var r = abs((p.x - p.y) * (p.x + p.y) + 1e-6);
     if (r < 0.0) { r = r * -1.0; }
     r = 1.0 / r;
     return vec3<f32>(p.x * r, p.y * r, p.z);
 }
-"#),
+"#,
 };
 
 /// Inside the unit circle, inflates points outward; outside, leaves them
@@ -944,7 +944,7 @@ fn variation_loonie(p: vec2<f32>) -> vec2<f32> {
     }
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_loonie(p: vec3<f32>) -> vec3<f32> {
     let r2 = dot(p.xy, p.xy);
     if (r2 < 1.0 && r2 != 0.0) {
@@ -954,7 +954,7 @@ fn variation_loonie(p: vec3<f32>) -> vec3<f32> {
         return p;
     }
 }
-"#),
+"#,
 };
 
 /// Pulls every point toward the origin with a strength that drops off with
@@ -984,13 +984,13 @@ fn variation_scry(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(p.x * r, p.y * r);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_scry(p: vec3<f32>) -> vec3<f32> {
     let t = dot(p.xy, p.xy);
     var r = 1.0 / (sqrt(t) * (t + 1.0));
     return vec3<f32>(p.x * r, p.y * r, p.z);
 }
-"#),
+"#,
 };
 
 /// Maps the plane through a hyperbolic curve based on exponentials.
@@ -1025,7 +1025,7 @@ fn variation_foci(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(new_x, new_y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_foci(p: vec3<f32>) -> vec3<f32> {
     let expx = exp(p.x) * 0.5;
     let expnx = 0.5 * exp(-p.x);
@@ -1036,7 +1036,7 @@ fn variation_foci(p: vec3<f32>) -> vec3<f32> {
     let new_y = sin(p.y) * tmp;
     return vec3<f32>(new_x, new_y, p.z);
 }
-"#),
+"#,
 };
 
 /// Conformal map onto an elliptic-coordinate grid. Useful for mathematical-
@@ -1074,7 +1074,7 @@ fn variation_elliptic(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(new_x, new_y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_elliptic(p: vec3<f32>) -> vec3<f32> {
     const PI: f32 = 3.14159265359;
     let v = 2.0 / PI;
@@ -1088,7 +1088,7 @@ fn variation_elliptic(p: vec3<f32>) -> vec3<f32> {
     if (p.y < 0.0) { new_y = -new_y; }
     return vec3<f32>(new_x, new_y, p.z);
 }
-"#),
+"#,
 };
 
 // Parameterized extended variations
@@ -1180,7 +1180,7 @@ fn variation_waves2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32>
     return vec2<f32>(new_x, new_y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_waves2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     // Apophysis Waves2: Sine wave distortion with 6 parameters (3D version)
     let freqx = get_param(xform_id, variation_id, 0u);
@@ -1195,7 +1195,7 @@ fn variation_waves2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
     let new_z = p.z + scalez * sin(r_xy * freqz);
     return vec3<f32>(new_x, new_y, new_z);
 }
-"#),
+"#,
 };
 
 /// Polar log transform - the output X is the logarithm of the squared
@@ -1241,13 +1241,13 @@ fn variation_log(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     return vec2<f32>(log(r2) * denom, atan2(p.y, p.x));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_log(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let denom = get_param(xform_id, variation_id, 1u);
     let r2 = dot(p.xy, p.xy);
     return vec3<f32>(log(r2) * denom, atan2(p.y, p.x), p.z);
 }
-"#),
+"#,
 };
 
 /// Conformal log-spiral mapping inspired by M. C. Escher's prints. Tunes
@@ -1302,7 +1302,7 @@ fn variation_escher(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32>
     return vec2<f32>(m * cos(angle), m * sin(angle));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_escher(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let c = get_param(xform_id, variation_id, 1u);
     let d = get_param(xform_id, variation_id, 2u);
@@ -1312,7 +1312,7 @@ fn variation_escher(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
     let angle = c * a + d * lnr;
     return vec3<f32>(m * cos(angle), m * sin(angle), p.z);
 }
-"#),
+"#,
 };
 
 /// Maps to bipolar coordinates (a pair of orthogonal coordinate systems
@@ -1369,7 +1369,7 @@ fn variation_bipolar(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32
     return vec2<f32>(new_x, new_y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_bipolar(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     const PI: f32 = 3.14159265359;
     const HALF_PI: f32 = 1.57079632679;
@@ -1392,7 +1392,7 @@ fn variation_bipolar(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
     let new_y = (2.0 / PI) * y;
     return vec3<f32>(new_x, new_y, p.z);
 }
-"#),
+"#,
 };
 
 /// Inside a unit disc the points rotate and twist; outside the disc they're
@@ -1481,7 +1481,7 @@ fn variation_lazysusan(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f
     }
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_lazysusan(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     const PI: f32 = 3.14159265359;
     let spin = get_param(xform_id, variation_id, 0u) * PI / 180.0;
@@ -1500,7 +1500,7 @@ fn variation_lazysusan(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
         return vec3<f32>(r_scale * x + x_offset, r_scale * y - y_offset, p.z);
     }
 }
-"#),
+"#,
 };
 
 /// Carves the plane into concentric ring bands at the chosen spacing. Each
@@ -1540,7 +1540,7 @@ fn variation_rings2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32>
     return vec2<f32>(p.x * r, p.y * r);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_rings2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let val = get_param(xform_id, variation_id, 0u);
     let dx = val * val + 1e-10;
@@ -1548,7 +1548,7 @@ fn variation_rings2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
     let r = 2.0 - dx * (floor((length / dx + 1.0) / 2.0) * 2.0 / length + 1.0);
     return vec3<f32>(p.x * r, p.y * r, p.z);
 }
-"#),
+"#,
 };
 
 /// Slices the plane into pie wedges and offsets each wedge alternately -
@@ -1609,7 +1609,7 @@ fn variation_fan2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     return vec2<f32>(r * cos(a), r * sin(a));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_fan2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     const PI: f32 = 3.14159265359;
     let x_param = get_param(xform_id, variation_id, 0u);
@@ -1626,7 +1626,7 @@ fn variation_fan2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let r = sqrt(dot(p.xy, p.xy));
     return vec3<f32>(r * cos(a), r * sin(a), p.z);
 }
-"#),
+"#,
 };
 
 /// Peter de Jong attractor - four sine/cosine coefficients drive the
@@ -1698,7 +1698,7 @@ fn variation_pdj(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     );
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_pdj(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let a = get_param(xform_id, variation_id, 0u);
     let b = get_param(xform_id, variation_id, 1u);
@@ -1710,7 +1710,7 @@ fn variation_pdj(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
         p.z
     );
 }
-"#),
+"#,
 };
 
 /// Multiplies the input by a complex polynomial (1 + c1*z + c2*z^2) and
@@ -1765,7 +1765,7 @@ fn variation_curl(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     );
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_curl(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let c1 = get_param(xform_id, variation_id, 0u);
     let c2 = get_param(xform_id, variation_id, 1u);
@@ -1778,7 +1778,7 @@ fn variation_curl(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
         p.z
     );
 }
-"#),
+"#,
 };
 
 /// Tiles the plane into rectangles, mirroring the coordinates within each
@@ -1830,7 +1830,7 @@ fn variation_rectangles(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<
     );
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_rectangles(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let rect_x = get_param(xform_id, variation_id, 0u);
     let rect_y = get_param(xform_id, variation_id, 1u);
@@ -1840,7 +1840,7 @@ fn variation_rectangles(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<
         p.z
     );
 }
-"#),
+"#,
 };
 
 /// Pushes positive-X points and negative-X points apart by `x`, and same
@@ -1892,7 +1892,7 @@ fn variation_splits(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32>
     );
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_splits(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let splits_x = get_param(xform_id, variation_id, 0u);
     let splits_y = get_param(xform_id, variation_id, 1u);
@@ -1902,7 +1902,7 @@ fn variation_splits(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
         p.z
     );
 }
-"#),
+"#,
 };
 
 /// Bends the plane into an N-sided polygon outline. Configurable side
@@ -1980,7 +1980,7 @@ fn variation_ngon(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     );
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_ngon(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     const PI: f32 = 3.14159265359;
     let sides = get_param(xform_id, variation_id, 0u);
@@ -1998,7 +1998,7 @@ fn variation_ngon(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
         p.z
     );
 }
-"#),
+"#,
 };
 
 /// Drills a corkscrew distortion into the plane - sine waves on both axes
@@ -2074,7 +2074,7 @@ fn variation_auger(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> 
     );
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_auger(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let freq = get_param(xform_id, variation_id, 0u);
     let weight = get_param(xform_id, variation_id, 1u);
@@ -2090,7 +2090,7 @@ fn variation_auger(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
         p.z
     );
 }
-"#),
+"#,
 };
 
 /// Raises the complex point to a complex power (real + imaginary parts of
@@ -2174,7 +2174,7 @@ fn variation_cpow(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<funct
     return vec2<f32>(m * cos(ang), m * sin(ang));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_cpow(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let power = get_param(xform_id, variation_id, 2u);
     let va = get_param(xform_id, variation_id, 3u);
@@ -2189,5 +2189,5 @@ fn variation_cpow(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<funct
 
     return vec3<f32>(m * cos(ang), m * sin(ang), p.z);
 }
-"#),
+"#,
 };

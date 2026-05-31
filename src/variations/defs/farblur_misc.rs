@@ -96,7 +96,7 @@ fn variation_farblur(p: vec2<f32>, accum: vec2<f32>, xform_id: u32, variation_id
     return vec2<f32>(x_param * r * sv * cos(u), y_param * r * sv * sin(u));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_farblur(p: vec3<f32>, accum: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let two_pi = 6.28318530717959;
     let x_param = get_param(xform_id, variation_id, 0u);
@@ -128,5 +128,5 @@ fn variation_farblur(p: vec3<f32>, accum: vec3<f32>, xform_id: u32, variation_id
     let cv = cos(v);
     return vec3<f32>(x_param * r * sv * cos(u), y_param * r * sv * sin(u), z_param * r * cv);
 }
-"#),
+"#,
 };

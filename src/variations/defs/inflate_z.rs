@@ -68,13 +68,13 @@ fn variation_inflateZ_1(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(0.0, 0.0);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_inflateZ_1(p: vec3<f32>) -> vec3<f32> {
     let ang = atan2(p.y, p.x);
     let val1 = p.y * 2.0;
     return vec3<f32>(0.0, 0.0, sin(ang) - val1);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -105,14 +105,14 @@ fn variation_inflateZ_2(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(0.0, 0.0);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_inflateZ_2(p: vec3<f32>) -> vec3<f32> {
     let val1 = p.y * 2.0;
     let val2 = p.x * 2.0;
     let aval = (val1 + val2) * 0.3333333333333333;
     return vec3<f32>(0.0, 0.0, 0.25 - aval);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -144,14 +144,14 @@ fn variation_inflateZ_3(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(0.0, 0.0);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_inflateZ_3(p: vec3<f32>) -> vec3<f32> {
     let pi = 3.14159265358979;
     let ang = atan2(p.y, p.x);
     let val1 = 0.2 * (pi - ang) * cos(3.0 * ang + (p.y - p.x));
     return vec3<f32>(0.0, 0.0, val1);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -184,7 +184,7 @@ fn variation_inflateZ_4(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32>
     return vec2<f32>(0.0, 0.0);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_inflateZ_4(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
     let pi_2 = 1.5707963267948966;
     let ang1 = atan2(p.y, p.x);
@@ -194,7 +194,7 @@ fn variation_inflateZ_4(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32>
     }
     return vec3<f32>(0.0, 0.0, val1 * 0.25);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -226,14 +226,14 @@ fn variation_inflateZ_5(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(0.0, 0.0);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_inflateZ_5(p: vec3<f32>) -> vec3<f32> {
     let pi_2 = 1.5707963267948966;
     let ang1 = atan2(p.y, p.x);
     let val1 = cos(pi_2 - ang1) * 0.5;
     return vec3<f32>(0.0, 0.0, val1);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -265,7 +265,7 @@ fn variation_inflateZ_6(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(0.0, 0.0);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_inflateZ_6(p: vec3<f32>) -> vec3<f32> {
     let ang = atan2(p.y, p.x);
     let adf = p.y - p.x;
@@ -273,7 +273,7 @@ fn variation_inflateZ_6(p: vec3<f32>) -> vec3<f32> {
     let arg = clamp(sin(ang) * kik * 0.5, -1.0, 1.0);
     return vec3<f32>(0.0, 0.0, 1.5 - acos(arg));
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -317,7 +317,7 @@ fn variation_sintrange(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f
     return vec2<f32>(fx, fy);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_sintrange(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let w = get_param(xform_id, variation_id, 0u);
     let v = (p.x * p.x + p.y * p.y) * w;
@@ -325,7 +325,7 @@ fn variation_sintrange(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
     let fy = sin(p.y) * (p.y * p.y + w - v);
     return vec3<f32>(fx, fy, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -375,7 +375,7 @@ fn variation_foci_3D(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(fx, fy);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_foci_3D(p: vec3<f32>) -> vec3<f32> {
     let expx = exp(p.x) * 0.5;
     let expnx = 0.25 / max(expx, 1e-30);
@@ -393,5 +393,5 @@ fn variation_foci_3D(p: vec3<f32>) -> vec3<f32> {
     let fz = sin(boot) * tmp;
     return vec3<f32>(fx, fy, fz);
 }
-"#),
+"#,
 };

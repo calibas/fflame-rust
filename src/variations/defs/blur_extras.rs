@@ -79,7 +79,7 @@ fn variation_sineblur(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
     return vec2<f32>(r * cos(ang), r * sin(ang));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_sineblur(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let power_in = get_param(xform_id, variation_id, 0u);
     let power = max(power_in, 0.0);
@@ -95,7 +95,7 @@ fn variation_sineblur(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
     }
     return vec3<f32>(r * cos(ang), r * sin(ang), p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -175,7 +175,7 @@ fn variation_starblur(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
     return vec2<f32>(z * cos(ang), z * sin(ang));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_starblur(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let power = get_param(xform_id, variation_id, 0u);
     let alpha = get_param(xform_id, variation_id, 2u);
@@ -201,7 +201,7 @@ fn variation_starblur(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
     let ang = ang_pt - half_pi;
     return vec3<f32>(z * cos(ang), z * sin(ang), p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -270,7 +270,7 @@ fn variation_r_circleblur(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: p
     return vec2<f32>(bx, by);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_r_circleblur(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let n = get_param(xform_id, variation_id, 0u);
     let seed = get_param(xform_id, variation_id, 1u);
@@ -302,5 +302,5 @@ fn variation_r_circleblur(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: p
 
     return vec3<f32>(bx, by, p.z);
 }
-"#),
+"#,
 };

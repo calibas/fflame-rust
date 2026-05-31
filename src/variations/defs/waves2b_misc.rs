@@ -275,7 +275,7 @@ fn variation_waves2b(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32
     return vec2<f32>(nx, ny);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn w2b_bessel_j1(x: f32) -> f32 {
     let ax = abs(x);
     let s = sign(x);
@@ -391,7 +391,7 @@ fn variation_waves2b(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
     let ny = p.y + w2b_axis_term(p.y, p.x, freqy, pwy, jacok, csy);
     return vec3<f32>(nx, ny, p.z);
 }
-"#),
+"#,
 };
 
 #[allow(dead_code)]

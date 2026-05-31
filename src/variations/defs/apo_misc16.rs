@@ -84,7 +84,7 @@ fn variation_seashell3D(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr
     return vec2<f32>(x, y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_seashell3D(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let a = get_param(xform_id, variation_id, 0u);
     let b = get_param(xform_id, variation_id, 1u);
@@ -104,7 +104,7 @@ fn variation_seashell3D(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
     let z = b * t * inv_2pi + a * one_minus_t * sin(s);
     return vec3<f32>(x, y, z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -206,7 +206,7 @@ fn variation_hypershift2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: pt
     return vec2<f32>(cosa * X - sina * Y, sina * X + cosa * Y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_hypershift2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let p_u = max(get_param(xform_id, variation_id, 0u), 2.0);
     let shift = get_param(xform_id, variation_id, 2u);
@@ -229,5 +229,5 @@ fn variation_hypershift2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: pt
     let sina = sin(angle);
     return vec3<f32>(cosa * X - sina * Y, sina * X + cosa * Y, p.z * rad);
 }
-"#),
+"#,
 };

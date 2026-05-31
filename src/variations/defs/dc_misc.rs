@@ -123,7 +123,7 @@ fn variation_dc_cylinder(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: pt
     return vec2<f32>(nx, ny);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_dc_cylinder(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec3<f32> {
     let offset = get_param(xform_id, variation_id, 0u);
     let xp = get_param(xform_id, variation_id, 3u);
@@ -157,7 +157,7 @@ fn variation_dc_cylinder(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: pt
 
     return vec3<f32>(nx, ny, nz);
 }
-"#),
+"#,
 };
 
 // ---------------------------------------------------------------------------
@@ -237,7 +237,7 @@ fn variation_dc_cylinder2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: p
     return vec2<f32>(nx, ny);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_dc_cylinder2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec3<f32> {
     let offset = get_param(xform_id, variation_id, 0u);
     let xp = get_param(xform_id, variation_id, 3u);
@@ -271,7 +271,7 @@ fn variation_dc_cylinder2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: p
 
     return vec3<f32>(nx, ny, nz);
 }
-"#),
+"#,
 };
 
 // ---------------------------------------------------------------------------
@@ -379,7 +379,7 @@ fn variation_dc_triangle(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: pt
     return vec2<f32>(ox + u * xx + v * yx, oy + u * xy + v * yy);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_dc_triangle(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec3<f32> {
     let zero_edges = i32(get_param(xform_id, variation_id, 1u));
     let a_param = get_param(xform_id, variation_id, 2u);
@@ -446,5 +446,5 @@ fn variation_dc_triangle(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: pt
 
     return vec3<f32>(ox + u * xx + v * yx, oy + u * xy + v * yy, p.z);
 }
-"#),
+"#,
 };

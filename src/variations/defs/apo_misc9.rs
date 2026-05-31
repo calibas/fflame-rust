@@ -115,7 +115,7 @@ fn variation_eJulia(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
     return vec2<f32>(cosh(mu) * cos(nu), sinh(mu) * sin(nu));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_eJulia(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let power = get_param(xform_id, variation_id, 0u);
     let sign = get_param(xform_id, variation_id, 1u);
@@ -144,7 +144,7 @@ fn variation_eJulia(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
     nu = nu / safe_power + two_pi / safe_power * floor(rng_nextf(rng) * abs_power);
     return vec3<f32>(cosh(mu) * cos(nu), sinh(mu) * sin(nu), p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -211,7 +211,7 @@ fn variation_eMotion(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32
     return vec2<f32>(cosh(mu) * cos(nu), sinh(mu) * sin(nu));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_eMotion(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let move_p = get_param(xform_id, variation_id, 0u);
     let rotate = get_param(xform_id, variation_id, 1u);
@@ -238,7 +238,7 @@ fn variation_eMotion(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
     nu = nu + rotate;
     return vec3<f32>(cosh(mu) * cos(nu), sinh(mu) * sin(nu), p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -311,7 +311,7 @@ fn variation_flower_db(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f
     return vec2<f32>(fx * inv_w, fy * inv_w);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_flower_db(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let petals = get_param(xform_id, variation_id, 0u);
     let petal_split = get_param(xform_id, variation_id, 1u);
@@ -339,7 +339,7 @@ fn variation_flower_db(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
     }
     return vec3<f32>(fx * inv_w, fy * inv_w, fz * inv_w);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -418,7 +418,7 @@ fn variation_julian2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<fu
     return vec2<f32>(r * cos(angle), r * sin(angle));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_julian2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let power = get_param(xform_id, variation_id, 0u);
     let a = get_param(xform_id, variation_id, 2u);
@@ -440,5 +440,5 @@ fn variation_julian2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fu
     let r = pow(max(x * x + y * y, 1e-30), cN);
     return vec3<f32>(r * cos(angle), r * sin(angle), p.z);
 }
-"#),
+"#,
 };

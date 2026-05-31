@@ -128,7 +128,7 @@ fn variation_dc_carpet3D(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: pt
     // 3D body: spatial carpet + color write + color-driven Z.
     // The Z formula re-reads `*vc` after the write so it sees the newly
     // mixed color — that's the #11 test (write-then-read in spatial).
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_dc_carpet3D(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec3<f32> {
     let color_a = get_param(xform_id, variation_id, 1u);
     let color_b = get_param(xform_id, variation_id, 2u);
@@ -175,5 +175,5 @@ fn variation_dc_carpet3D(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: pt
     let ny = (xf.c * x + xf.d * y + xf.f) * scale_y;
     return vec3<f32>(nx, ny, nz);
 }
-"#),
+"#,
 };

@@ -147,7 +147,7 @@ fn variation_jac_sn(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32>
     return vec2<f32>(denom * num_x, denom * num_y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn jac_sn_je(uu: f32, emmc: f32) -> vec3<f32> {
     let CA = 0.0003;
     var emc = emmc;
@@ -236,7 +236,7 @@ fn variation_jac_sn(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
     let denom = 1.0 / (1e-9 + denom_inner);
     return vec3<f32>(denom * num_x, denom * num_y, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -355,7 +355,7 @@ fn variation_jac_cn(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32>
     return vec2<f32>(denom * num_x, denom * num_y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn jac_cn_je(uu: f32, emmc: f32) -> vec3<f32> {
     let CA = 0.0003;
     var emc = emmc;
@@ -444,7 +444,7 @@ fn variation_jac_cn(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
     let denom = 1.0 / (1e-9 + denom_inner);
     return vec3<f32>(denom * num_x, denom * num_y, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -563,7 +563,7 @@ fn variation_jac_dn(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32>
     return vec2<f32>(denom * num_x, denom * num_y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn jac_dn_je(uu: f32, emmc: f32) -> vec3<f32> {
     let CA = 0.0003;
     var emc = emmc;
@@ -652,5 +652,5 @@ fn variation_jac_dn(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
     let denom = 1.0 / (1e-9 + denom_inner);
     return vec3<f32>(denom * num_x, denom * num_y, p.z);
 }
-"#),
+"#,
 };

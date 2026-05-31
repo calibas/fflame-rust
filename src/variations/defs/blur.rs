@@ -34,7 +34,7 @@ fn variation_zblur(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     return vec2<f32>(0.0, 0.0);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_zblur(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
     // Apophysis `TXForm.ZBlur` and JWildfire's port both touch FPz
     // only: `FPz += weight × (rand₁ + rand₂ + rand₃ + rand₄ − 2)`.
@@ -43,7 +43,7 @@ fn variation_zblur(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
     let z_offset = rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) - 2.0;
     return vec3<f32>(0.0, 0.0, z_offset);
 }
-"#),
+"#,
 };
 
 /// Random gaussian scatter across all three axes — replaces the point
@@ -74,7 +74,7 @@ fn variation_blur3D(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     return vec2<f32>(r * sin(phi) * cos(theta), r * sin(phi) * sin(theta));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_blur3D(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
     // Apophysis: 3D Gaussian spherical blur
     // θ = random × 2π (azimuth)
@@ -86,7 +86,7 @@ fn variation_blur3D(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
     let r = rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) - 2.0;
     return vec3<f32>(r * sin(phi) * cos(theta), r * sin(phi) * sin(theta), r * cos(phi));
 }
-"#),
+"#,
 };
 
 /// Adds gaussian random offset to the input point before the rest of
@@ -116,7 +116,7 @@ fn variation_pre_blur(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     return vec2<f32>(p.x + r * cos(theta), p.y + r * sin(theta));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_pre_blur(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
     // Apophysis: Pre-phase Gaussian blur applied before variations
     // FTx += r * cos(θ), FTy += r * sin(θ), FTz unchanged
@@ -124,5 +124,5 @@ fn variation_pre_blur(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
     let r = rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) - 2.0;
     return vec3<f32>(p.x + r * cos(theta), p.y + r * sin(theta), p.z);
 }
-"#),
+"#,
 };

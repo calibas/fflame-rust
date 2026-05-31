@@ -107,7 +107,7 @@ fn variation_harmonograph_js(p: vec2<f32>, xform_id: u32, variation_id: u32, rng
     return vec2<f32>(x, y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn mo_harmonograph(t: f32, a1: f32, f1: f32, p1deg: f32, d1: f32, a2: f32, f2: f32, p2deg: f32, d2: f32) -> f32 {
     let pi = 3.14159265358979;
     let p1 = p1deg * pi / 180.0;
@@ -139,5 +139,5 @@ fn variation_harmonograph_js(p: vec3<f32>, xform_id: u32, variation_id: u32, rng
     let y = mo_harmonograph(t, a3, f3, p3 + 90.0, d3, a4, f4, p4 + 90.0, d4) / 180.0;
     return vec3<f32>(x, y, p.z);
 }
-"#),
+"#,
 };

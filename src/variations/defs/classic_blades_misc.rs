@@ -77,7 +77,7 @@ fn variation_arch(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<funct
     return vec2<f32>(fx * inv_w, fy * inv_w);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_arch(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let w = transforms[xform_id].variations[variation_id];
     let inv_w = 1.0 / select(w, 1e-30, abs(w) < 1e-30);
@@ -90,7 +90,7 @@ fn variation_arch(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<funct
     let fy = w * sinr * sinr / safe_cosr;
     return vec3<f32>(fx * inv_w, fy * inv_w, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -120,11 +120,11 @@ fn variation_bi_linear(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(p.y, p.x);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_bi_linear(p: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(p.y, p.x, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -167,7 +167,7 @@ fn variation_blade(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<func
     return vec2<f32>(fx * inv_w, fy * inv_w);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_blade(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let w = transforms[xform_id].variations[variation_id];
     let inv_w = 1.0 / select(w, 1e-30, abs(w) < 1e-30);
@@ -178,7 +178,7 @@ fn variation_blade(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<func
     let fy = w * p.x * (cosr - sinr);
     return vec3<f32>(fx * inv_w, fy * inv_w, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -220,7 +220,7 @@ fn variation_blade3D(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<fu
     return vec2<f32>(fx * inv_w, fy * inv_w);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_blade3D(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let w = transforms[xform_id].variations[variation_id];
     let inv_w = 1.0 / select(w, 1e-30, abs(w) < 1e-30);
@@ -232,7 +232,7 @@ fn variation_blade3D(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fu
     let fz = w * p.y * (sinr - cosr);
     return vec3<f32>(fx * inv_w, fy * inv_w, fz * inv_w);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -288,7 +288,7 @@ fn variation_squarize(p: vec2<f32>) -> vec2<f32> {
     }
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_squarize(p: vec3<f32>) -> vec3<f32> {
     let two_pi = 6.28318530717959;
     let inv_pi = 0.31830988618379;
@@ -310,7 +310,7 @@ fn variation_squarize(p: vec3<f32>) -> vec3<f32> {
         return vec3<f32>(s, -(8.0 * s - q), p.z);
     }
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -393,7 +393,7 @@ fn variation_squish(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
     }
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_squish(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let power = max(get_param(xform_id, variation_id, 0u), 2.0);
     let inv_power = get_param(xform_id, variation_id, 1u);
@@ -431,7 +431,7 @@ fn variation_squish(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
         return vec3<f32>(s, -(8.0 * s - q), p.z);
     }
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -471,7 +471,7 @@ fn variation_twoface(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32
     return vec2<f32>(r * p.x * inv_w, r * p.y * inv_w);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_twoface(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let w = transforms[xform_id].variations[variation_id];
     let inv_w = 1.0 / select(w, 1e-30, abs(w) < 1e-30);
@@ -482,7 +482,7 @@ fn variation_twoface(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
     }
     return vec3<f32>(r * p.x * inv_w, r * p.y * inv_w, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -533,7 +533,7 @@ fn variation_twintrian(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<
     return vec2<f32>(fx * inv_w, fy * inv_w);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_twintrian(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let w = transforms[xform_id].variations[variation_id];
     let inv_w = 1.0 / select(w, 1e-30, abs(w) < 1e-30);
@@ -551,7 +551,7 @@ fn variation_twintrian(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
     let fy = w * p.x * (diff - sinr * pi);
     return vec3<f32>(fx * inv_w, fy * inv_w, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -595,7 +595,7 @@ fn variation_unpolar(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32
     return vec2<f32>(fx * inv_w, fy * inv_w);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_unpolar(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let w = transforms[xform_id].variations[variation_id];
     let inv_w = 1.0 / select(w, 1e-30, abs(w) < 1e-30);
@@ -609,5 +609,5 @@ fn variation_unpolar(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
     let fy = vvar_2 * r * c;
     return vec3<f32>(fx * inv_w, fy * inv_w, p.z);
 }
-"#),
+"#,
 };

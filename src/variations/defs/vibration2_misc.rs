@@ -146,7 +146,7 @@ fn variation_vibration2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<
     return p + w1 + w2;
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn v2_modulate(amp: f32, freq: f32, x: f32) -> f32 {
     let two_pi = 6.28318530717959;
     return amp * cos(x * freq * two_pi);
@@ -208,5 +208,5 @@ fn variation_vibration2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<
     let w2 = v2_wave(p.xy, dir2, angle2, freq2, amp2, phase2, d2m, d2mfreq, t2m, t2mfreq, f2m, f2mfreq, a2m, a2mfreq);
     return vec3<f32>(p.x + w1.x + w2.x, p.y + w1.y + w2.y, p.z);
 }
-"#),
+"#,
 };

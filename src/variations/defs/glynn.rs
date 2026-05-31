@@ -96,7 +96,7 @@ fn variation_glynnia(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     return vec2<f32>(-d / dx, p.y / dx);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_glynnia(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
     let half_sqrt2 = 0.7071067811865476;
     let r = sqrt(p.x * p.x + p.y * p.y);
@@ -123,7 +123,7 @@ fn variation_glynnia(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
     if (dx == 0.0) { return vec3<f32>(0.0, 0.0, p.z); }
     return vec3<f32>(-d / dx, p.y / dx, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -193,7 +193,7 @@ fn variation_glynnia3(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
     return vec2<f32>(-d / dx, p.y / dx);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_glynnia3(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let rscale = get_param(xform_id, variation_id, 0u);
     let dscale = get_param(xform_id, variation_id, 1u);
@@ -225,7 +225,7 @@ fn variation_glynnia3(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
     if (dx == 0.0) { return vec3<f32>(0.0, 0.0, p.z); }
     return vec3<f32>(-d / dx, p.y / dx, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -330,7 +330,7 @@ fn variation_glynnSim1(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<
     return vec2<f32>(tx, ty);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_glynnSim1(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let radius = get_param(xform_id, variation_id, 0u);
     let radius1 = get_param(xform_id, variation_id, 1u);
@@ -369,7 +369,7 @@ fn variation_glynnSim1(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
     }
     return vec3<f32>(tx, ty, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -465,7 +465,7 @@ fn variation_glynnSim2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<
     return vec2<f32>(alpha * alpha * p.x, alpha * alpha * p.y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_glynnSim2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let radius = get_param(xform_id, variation_id, 0u);
     let contrast = get_param(xform_id, variation_id, 2u);
@@ -488,7 +488,7 @@ fn variation_glynnSim2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
     }
     return vec3<f32>(alpha * alpha * p.x, alpha * alpha * p.y, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -574,7 +574,7 @@ fn variation_glynnSim3(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<
     return vec2<f32>(alpha * alpha * p.x, alpha * alpha * p.y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_glynnSim3(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let radius = get_param(xform_id, variation_id, 0u);
     let contrast = get_param(xform_id, variation_id, 2u);
@@ -599,5 +599,5 @@ fn variation_glynnSim3(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
     }
     return vec3<f32>(alpha * alpha * p.x, alpha * alpha * p.y, p.z);
 }
-"#),
+"#,
 };

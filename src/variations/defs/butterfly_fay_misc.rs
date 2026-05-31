@@ -151,7 +151,7 @@ fn variation_butterfly_fay(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: 
     return vec2<f32>(fx, fy);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_butterfly_fay(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let offset = get_param(xform_id, variation_id, 1u);
     let unified = i32(get_param(xform_id, variation_id, 2u));
@@ -217,5 +217,5 @@ fn variation_butterfly_fay(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: 
     }
     return vec3<f32>(fx, fy, p.z);
 }
-"#),
+"#,
 };

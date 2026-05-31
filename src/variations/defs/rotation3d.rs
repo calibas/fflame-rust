@@ -33,7 +33,7 @@ fn variation_pre_rotate_x(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec
     return p;
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_pre_rotate_x(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let weight = transforms[xform_id].variations[variation_id];
     let c = cos(weight);
@@ -44,7 +44,7 @@ fn variation_pre_rotate_x(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec
         c * p.z - s * p.y
     );
 }
-"#),
+"#,
 };
 
 /// Rotates the point around the Y axis before any other variations run.
@@ -70,7 +70,7 @@ fn variation_pre_rotate_y(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec
     return p;
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_pre_rotate_y(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let weight = transforms[xform_id].variations[variation_id];
     let c = cos(weight);
@@ -81,7 +81,7 @@ fn variation_pre_rotate_y(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec
         s * p.x + c * p.z
     );
 }
-"#),
+"#,
 };
 
 /// Rotates the output point around the X axis after all other variations
@@ -108,7 +108,7 @@ fn variation_post_rotate_x(p: vec2<f32>, xform_id: u32, variation_id: u32) -> ve
     return p;
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_post_rotate_x(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let weight = transforms[xform_id].variations[variation_id];
     let c = cos(weight);
@@ -119,7 +119,7 @@ fn variation_post_rotate_x(p: vec3<f32>, xform_id: u32, variation_id: u32) -> ve
         c * p.z - s * p.y
     );
 }
-"#),
+"#,
 };
 
 /// Rotates the output point around the Y axis after all other variations
@@ -146,7 +146,7 @@ fn variation_post_rotate_y(p: vec2<f32>, xform_id: u32, variation_id: u32) -> ve
     return p;
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_post_rotate_y(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let weight = transforms[xform_id].variations[variation_id];
     let c = cos(weight);
@@ -157,5 +157,5 @@ fn variation_post_rotate_y(p: vec3<f32>, xform_id: u32, variation_id: u32) -> ve
         s * p.x + c * p.z
     );
 }
-"#),
+"#,
 };

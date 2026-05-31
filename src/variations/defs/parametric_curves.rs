@@ -98,7 +98,7 @@ fn variation_spirograph(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr
     );
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_spirograph(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let a = get_param(xform_id, variation_id, 0u);
     let b = get_param(xform_id, variation_id, 1u);
@@ -122,7 +122,7 @@ fn variation_spirograph(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
         p.z,
     );
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -179,7 +179,7 @@ fn variation_lissajous(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<
     );
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_lissajous(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let tmin = get_param(xform_id, variation_id, 0u);
     let tmax = get_param(xform_id, variation_id, 1u);
@@ -199,7 +199,7 @@ fn variation_lissajous(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
         p.z,
     );
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -259,7 +259,7 @@ fn variation_vogel(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<func
     );
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_vogel(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let n = get_param(xform_id, variation_id, 0u);
     let scale = get_param(xform_id, variation_id, 1u);
@@ -275,7 +275,7 @@ fn variation_vogel(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<func
         p.z,
     );
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -368,7 +368,7 @@ fn variation_crop3D(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
     return vec2<f32>(x, y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_crop3D(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let scatter = get_param(xform_id, variation_id, 6u);
     let zero = get_param(xform_id, variation_id, 7u);
@@ -397,5 +397,5 @@ fn variation_crop3D(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
     else if (z > zmax) { z = zmax - rng_nextf(rng) * l_range; }
     return vec3<f32>(x, y, z);
 }
-"#),
+"#,
 };

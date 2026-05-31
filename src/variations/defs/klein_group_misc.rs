@@ -316,7 +316,7 @@ fn variation_klein_group(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: pt
     return out;
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_klein_group(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let r2 = variation_klein_group_2d(p.xy, xform_id, variation_id, rng);
     return vec3<f32>(r2.x, r2.y, p.z);
@@ -375,5 +375,5 @@ fn variation_klein_group_2d(p: vec2<f32>, xform_id: u32, variation_id: u32, rng:
     let z = vec2<f32>(p.x / safe_w, p.y / safe_w);
     return cmat2_apply(m, z);
 }
-"#),
+"#,
 };

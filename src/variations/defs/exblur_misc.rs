@@ -81,7 +81,7 @@ fn variation_exblur(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
     return vec2<f32>(rr * (sv * cu + rsrv * cru), rr * (sv * su + rsrv * sru));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_exblur(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let dist = get_param(xform_id, variation_id, 0u);
     let r_p = get_param(xform_id, variation_id, 1u);
@@ -113,5 +113,5 @@ fn variation_exblur(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
                      rr * (sv * su + rsrv * sru),
                      rr * (cv + r_p * crv));
 }
-"#),
+"#,
 };

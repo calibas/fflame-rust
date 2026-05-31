@@ -110,7 +110,7 @@ fn variation_dc_cube(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<fu
     return vec2<f32>(x * xs, y * ys);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_dc_cube(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec3<f32> {
     let xs = get_param(xform_id, variation_id, 0u);
     let ys = get_param(xform_id, variation_id, 1u);
@@ -147,7 +147,7 @@ fn variation_dc_cube(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fu
     }
     return vec3<f32>(x * xs, y * ys, z * zs);
 }
-"#),
+"#,
 };
 
 // ---------------------------------------------------------------------------
@@ -194,7 +194,7 @@ fn variation_pre_rect_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: pt
     return vec2<f32>(w * (x0 + dx * rng_nextf(rng)), w * (y0 + dy * rng_nextf(rng)));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_pre_rect_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let x0 = get_param(xform_id, variation_id, 0u);
     let y0 = get_param(xform_id, variation_id, 2u);
@@ -203,5 +203,5 @@ fn variation_pre_rect_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: pt
     let w = transforms[xform_id].variations[variation_id];
     return vec3<f32>(w * (x0 + dx * rng_nextf(rng)), w * (y0 + dy * rng_nextf(rng)), p.z);
 }
-"#),
+"#,
 };

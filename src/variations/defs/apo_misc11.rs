@@ -78,14 +78,14 @@ fn variation_swirl3(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32>
     return vec2<f32>(rad * cos(ang), rad * sin(ang));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_swirl3(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let shift = get_param(xform_id, variation_id, 0u);
     let rad = sqrt(p.x * p.x + p.y * p.y) + 1e-30;
     let ang = atan2(p.y, p.x) + log(rad) * shift;
     return vec3<f32>(rad * cos(ang), rad * sin(ang), p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -129,7 +129,7 @@ fn variation_wdisc(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(r * cos(a), r * sin(a));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_wdisc(p: vec3<f32>) -> vec3<f32> {
     let pi = 3.14159265358979;
     let inv_pi = 0.31830988618379;
@@ -140,7 +140,7 @@ fn variation_wdisc(p: vec3<f32>) -> vec3<f32> {
     }
     return vec3<f32>(r * cos(a), r * sin(a), p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -191,7 +191,7 @@ fn variation_sph3D(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> 
     return vec2<f32>(p.x * r, p.y * r);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_sph3D(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let x_scale = get_param(xform_id, variation_id, 0u);
     let y_scale = get_param(xform_id, variation_id, 1u);
@@ -202,7 +202,7 @@ fn variation_sph3D(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
     let r = 1.0 / denom;
     return vec3<f32>(p.x * r, p.y * r, p.z * r);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -249,7 +249,7 @@ fn variation_invsquircular(p: vec2<f32>, xform_id: u32, variation_id: u32) -> ve
     return vec2<f32>(r / safe_u * inv_w, r / safe_v * inv_w);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_invsquircular(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let w = transforms[xform_id].variations[variation_id];
     let inv_w = 1.0 / select(w, 1e-30, abs(w) < 1e-30);
@@ -265,7 +265,7 @@ fn variation_invsquircular(p: vec3<f32>, xform_id: u32, variation_id: u32) -> ve
     let safe_v = select(v, 1e-30, abs(v) < 1e-30);
     return vec3<f32>(r / safe_u * inv_w, r / safe_v * inv_w, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -331,7 +331,7 @@ fn variation_sphere_nja(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<
     return vec2<f32>(fx * inv_w, fy * inv_w);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_sphere_nja(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let shift_x = get_param(xform_id, variation_id, 2u);
     let shift_y = get_param(xform_id, variation_id, 3u);
@@ -359,5 +359,5 @@ fn variation_sphere_nja(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<
     fy = fy + shift_y;
     return vec3<f32>(fx * inv_w, fy * inv_w, fz * inv_w);
 }
-"#),
+"#,
 };

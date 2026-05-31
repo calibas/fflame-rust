@@ -108,7 +108,7 @@ fn variation_bwraps7(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32
     return vec2<f32>(cx + ct * lx + st * ly, cy - st * lx + ct * ly);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_bwraps7(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let cellsize = get_param(xform_id, variation_id, 0u);
     let inner_twist = get_param(xform_id, variation_id, 3u);
@@ -138,5 +138,5 @@ fn variation_bwraps7(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
     let ct = cos(theta);
     return vec3<f32>(cx + ct * lx + st * ly, cy - st * lx + ct * ly, p.z);
 }
-"#),
+"#,
 };
