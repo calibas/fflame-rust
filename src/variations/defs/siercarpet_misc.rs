@@ -82,7 +82,7 @@ fn variation_siercarpet_js(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: 
     return vec2<f32>(x, y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_siercarpet_js(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let m = clamp(i32(get_param(xform_id, variation_id, 0u)), 3, 12);
     let m_f = f32(m);
@@ -108,5 +108,5 @@ fn variation_siercarpet_js(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: 
     let y = p.y / 3.0 + (a_l + b_l) * inv_sqrt2;
     return vec3<f32>(x, y, p.z);
 }
-"#),
+"#,
 };

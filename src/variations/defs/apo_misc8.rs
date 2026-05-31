@@ -113,7 +113,7 @@ fn variation_csc_squared(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2
     return vec2<f32>(p.x * fx_factor, p.y * fx_factor * scaley);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_csc_squared(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let csc_div = get_param(xform_id, variation_id, 0u);
     let cos_div = get_param(xform_id, variation_id, 1u);
@@ -135,7 +135,7 @@ fn variation_csc_squared(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3
     let fx_factor = pow(base, csc_pow) + csc_add;
     return vec3<f32>(p.x * fx_factor, p.y * fx_factor * scaley, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -175,14 +175,14 @@ fn variation_hyperbolicellipse(p: vec2<f32>, xform_id: u32, variation_id: u32) -
     return vec2<f32>(xt, yt);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_hyperbolicellipse(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let a = get_param(xform_id, variation_id, 0u);
     let xt = sinh(p.x) * cos(a * p.y);
     let yt = cosh(p.x) * sin(a * p.y);
     return vec3<f32>(xt, yt, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -223,14 +223,14 @@ fn variation_layered_spiral(p: vec2<f32>, xform_id: u32, variation_id: u32) -> v
     return vec2<f32>(a * cos(t), a * sin(t));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_layered_spiral(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let radius = get_param(xform_id, variation_id, 0u);
     let a = p.x * radius;
     let t = p.x * p.x + p.y * p.y + 1e-9;
     return vec3<f32>(a * cos(t), a * sin(t), p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -312,7 +312,7 @@ fn variation_atan2_spirals(p: vec2<f32>, xform_id: u32, variation_id: u32) -> ve
     return vec2<f32>(out_x, fy);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_atan2_spirals(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let r_mult = get_param(xform_id, variation_id, 0u);
     let r_add = get_param(xform_id, variation_id, 1u);
@@ -340,7 +340,7 @@ fn variation_atan2_spirals(p: vec3<f32>, xform_id: u32, variation_id: u32) -> ve
     let out_x = select(fx - pi, -fx + pi, p.x >= 0.0);
     return vec3<f32>(out_x, fy, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -427,7 +427,7 @@ fn variation_gridout2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f3
     return vec2<f32>(fx, fy);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_gridout2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let a = get_param(xform_id, variation_id, 0u);
     let b = get_param(xform_id, variation_id, 1u);
@@ -470,5 +470,5 @@ fn variation_gridout2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
     }
     return vec3<f32>(fx, fy, p.z);
 }
-"#),
+"#,
 };

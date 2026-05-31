@@ -82,7 +82,7 @@ fn variation_fan(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     return vec2<f32>(r * cos(a), r * sin(a));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_fan(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let xf = transforms[xform_id];
     let dx = 3.14159265358979 * xf.e * xf.e + 1e-6;
@@ -98,7 +98,7 @@ fn variation_fan(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let r = sqrt(p.x * p.x + p.y * p.y);
     return vec3<f32>(r * cos(a), r * sin(a), p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -136,14 +136,14 @@ fn variation_fisheye(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(r * p.y / denom, r * p.x / denom);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_fisheye(p: vec3<f32>) -> vec3<f32> {
     let r0 = sqrt(p.x * p.x + p.y * p.y);
     let r = 2.0 * r0 / (r0 + 1.0);
     let denom = r0 + 1e-6;
     return vec3<f32>(r * p.y / denom, r * p.x / denom, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -194,7 +194,7 @@ fn variation_gridout(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(ox, oy);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_gridout(p: vec3<f32>) -> vec3<f32> {
     let x = round(p.x);
     let y = round(p.y);
@@ -215,7 +215,7 @@ fn variation_gridout(p: vec3<f32>) -> vec3<f32> {
     }
     return vec3<f32>(ox, oy, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -262,7 +262,7 @@ fn variation_circular(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
     return vec2<f32>(cos(ang + rnd) * rad, sin(ang + rnd) * rad);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_circular(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let angle_deg = get_param(xform_id, variation_id, 0u);
     let seed = get_param(xform_id, variation_id, 1u);
@@ -274,7 +274,7 @@ fn variation_circular(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
     let ang = atan2(p.y, p.x);
     return vec3<f32>(cos(ang + rnd) * rad, sin(ang + rnd) * rad, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -314,7 +314,7 @@ fn variation_panorama1(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(atan2(x1, y1) * 0.31830988618379, r1 - 0.5);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_panorama1(p: vec3<f32>) -> vec3<f32> {
     let aux = 1.0 / sqrt(p.x * p.x + p.y * p.y + 1.0);
     let x1 = p.x * aux;
@@ -322,7 +322,7 @@ fn variation_panorama1(p: vec3<f32>) -> vec3<f32> {
     let r1 = sqrt(x1 * x1 + y1 * y1);
     return vec3<f32>(atan2(x1, y1) * 0.31830988618379, r1 - 0.5, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -359,7 +359,7 @@ fn variation_panorama2(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(atan2(x1, y1) * 0.31830988618379, r1 - 0.5);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_panorama2(p: vec3<f32>) -> vec3<f32> {
     let aux = 1.0 / (sqrt(p.x * p.x + p.y * p.y) + 1.0);
     let x1 = p.x * aux;
@@ -367,5 +367,5 @@ fn variation_panorama2(p: vec3<f32>) -> vec3<f32> {
     let r1 = sqrt(x1 * x1 + y1 * y1);
     return vec3<f32>(atan2(x1, y1) * 0.31830988618379, r1 - 0.5, p.z);
 }
-"#),
+"#,
 };

@@ -433,7 +433,7 @@ fn variation_quaternion(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<
     return vec2<f32>(ox, oy);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_quaternion(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let x_in = p.x;
     let y_in = p.y;
@@ -696,5 +696,5 @@ fn variation_quaternion(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<
 
     return vec3<f32>(ox, oy, oz);
 }
-"#),
+"#,
 };

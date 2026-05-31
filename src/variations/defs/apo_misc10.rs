@@ -89,7 +89,7 @@ fn variation_mask(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     return vec2<f32>(sx * body, cos(xfactor) * body);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_mask(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let xshift = get_param(xform_id, variation_id, 0u);
     let yshift = get_param(xform_id, variation_id, 1u);
@@ -107,7 +107,7 @@ fn variation_mask(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let body = (cosh(yfactor) + ushift) * sx * sx / sumsq;
     return vec3<f32>(sx * body, cos(xfactor) * body, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -151,7 +151,7 @@ fn variation_ovoid3d(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32
     return vec2<f32>(p.x * r * x_scale, p.y * r * y_scale);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_ovoid3d(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let x_scale = get_param(xform_id, variation_id, 0u);
     let y_scale = get_param(xform_id, variation_id, 1u);
@@ -160,7 +160,7 @@ fn variation_ovoid3d(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
     let r = 1.0 / t;
     return vec3<f32>(p.x * r * x_scale, p.y * r * y_scale, p.z * r * z_scale);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -240,7 +240,7 @@ fn variation_murl2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> 
     return vec2<f32>(fx * inv_w, fy * inv_w);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_murl2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let c = get_param(xform_id, variation_id, 0u);
     let power = get_param(xform_id, variation_id, 1u);
@@ -276,7 +276,7 @@ fn variation_murl2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
     let fy = rl * (p.y * re - p.x * im);
     return vec3<f32>(fx * inv_w, fy * inv_w, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -377,7 +377,7 @@ fn variation_minkQM(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32>
     return vec2<f32>(mnkX, mnkY);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn minkqm_minkowski(xv: f32, a: f32, b: f32, c: f32, dd: f32, e: f32, iters: i32) -> f32 {
     var p: f32 = 0.0;
     var q = a;
@@ -434,5 +434,5 @@ fn variation_minkQM(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 
     return vec3<f32>(mnkX, mnkY, p.z);
 }
-"#),
+"#,
 };

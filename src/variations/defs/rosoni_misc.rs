@@ -134,7 +134,7 @@ fn variation_rosoni(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32>
     return p;
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_rosoni(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let maxiter_f = max(get_param(xform_id, variation_id, 0u), 1.0);
     let sweetiter = i32(get_param(xform_id, variation_id, 1u));
@@ -201,5 +201,5 @@ fn variation_rosoni(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
     }
     return p;
 }
-"#),
+"#,
 };

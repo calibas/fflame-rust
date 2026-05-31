@@ -90,7 +90,7 @@ fn variation_rings(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> 
     return vec2<f32>(r * p.y / r0 * inv_w, r * p.x / r0 * inv_w);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_rings(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let xf = transforms[xform_id];
     let w = transforms[xform_id].variations[variation_id];
@@ -101,7 +101,7 @@ fn variation_rings(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
     let r = r0 + dx - floor((r0 + dx) / (2.0 * dx)) * 2.0 * dx - dx + r0 * (1.0 - dx);
     return vec3<f32>(r * p.y / r0 * inv_w, r * p.x / r0 * inv_w, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -138,12 +138,12 @@ fn variation_rippled(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(tanh(d) * p.x, cos(d) * p.y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_rippled(p: vec3<f32>) -> vec3<f32> {
     let d = p.x * p.x + p.y * p.y + 1e-30;
     return vec3<f32>(tanh(d) * p.x, cos(d) * p.y, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -226,7 +226,7 @@ fn variation_waffle(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
     return vec2<f32>(cos_rot * a + sin_rot * r, -sin_rot * a + cos_rot * r);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_waffle(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let slices = max(get_param(xform_id, variation_id, 0u), 1.0);
     let xth = get_param(xform_id, variation_id, 1u);
@@ -256,7 +256,7 @@ fn variation_waffle(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
     }
     return vec3<f32>(cos_rot * a + sin_rot * r, -sin_rot * a + cos_rot * r, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -320,7 +320,7 @@ fn variation_stripfit(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f3
     return vec2<f32>(p.x + fx_extra * inv_w, fy);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_stripfit(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let dx = get_param(xform_id, variation_id, 0u);
     let w = transforms[xform_id].variations[variation_id];
@@ -342,5 +342,5 @@ fn variation_stripfit(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
     }
     return vec3<f32>(p.x + fx_extra * inv_w, fy, p.z);
 }
-"#),
+"#,
 };

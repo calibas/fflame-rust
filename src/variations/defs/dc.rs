@@ -102,7 +102,7 @@ fn variation_dc_linear(p: vec2<f32>, xform_id: u32, variation_id: u32, vc: ptr<f
     return p;
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_dc_linear(p: vec3<f32>, xform_id: u32, variation_id: u32, vc: ptr<function, f32>) -> vec3<f32> {
     let offset = get_param(xform_id, variation_id, 0u);
     let ldcs = get_param(xform_id, variation_id, 3u);
@@ -117,7 +117,7 @@ fn variation_dc_linear(p: vec3<f32>, xform_id: u32, variation_id: u32, vc: ptr<f
 
     return p;
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -182,7 +182,7 @@ fn variation_dc_bubble(p: vec2<f32>, xform_id: u32, variation_id: u32, vc: ptr<f
     return vec2<f32>(new_x, new_y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_dc_bubble(p: vec3<f32>, xform_id: u32, variation_id: u32, vc: ptr<function, f32>) -> vec3<f32> {
     let cx = get_param(xform_id, variation_id, 0u);
     let cy = get_param(xform_id, variation_id, 1u);
@@ -200,5 +200,5 @@ fn variation_dc_bubble(p: vec3<f32>, xform_id: u32, variation_id: u32, vc: ptr<f
 
     return vec3<f32>(new_x, new_y, p.z);
 }
-"#),
+"#,
 };

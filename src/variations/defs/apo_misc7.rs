@@ -131,7 +131,7 @@ fn variation_asteria(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<fu
     return vec2<f32>(fx * inv_w, fy * inv_w);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_asteria(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let sina = get_param(xform_id, variation_id, 1u);
     let cosa = get_param(xform_id, variation_id, 2u);
@@ -171,7 +171,7 @@ fn variation_asteria(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fu
     }
     return vec3<f32>(fx * inv_w, fy * inv_w, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -216,7 +216,7 @@ fn variation_estiq(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(e * c, a * p.y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_estiq(p: vec3<f32>) -> vec3<f32> {
     let e = exp(p.x);
     let abs_v = max(sqrt(p.y * p.y + p.z * p.z), 1e-30);
@@ -225,7 +225,7 @@ fn variation_estiq(p: vec3<f32>) -> vec3<f32> {
     let a = e * s / abs_v;
     return vec3<f32>(e * c, a * p.y, a * p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -298,7 +298,7 @@ fn variation_fdisc(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> 
     return vec2<f32>(fx, fy);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_fdisc(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let ashift = get_param(xform_id, variation_id, 0u);
     let rshift = get_param(xform_id, variation_id, 1u);
@@ -323,7 +323,7 @@ fn variation_fdisc(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
     let fy = term1 * pry + term2 * p.y * pry + term3 * p.y * pr + term4 * p.y;
     return vec3<f32>(fx, fy, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -397,7 +397,7 @@ fn variation_bTransform(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr
     return vec2<f32>(sinht / safe_temp, sins / safe_temp);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_bTransform(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let rotate = get_param(xform_id, variation_id, 0u);
     let power = max(get_param(xform_id, variation_id, 1u), 1.0);
@@ -428,7 +428,7 @@ fn variation_bTransform(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
     let safe_temp = select(temp, 1e-30, abs(temp) < 1e-30);
     return vec3<f32>(sinht / safe_temp, sins / safe_temp, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -534,7 +534,7 @@ fn variation_npolar(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
     return vec2<f32>(fx * inv_w, fy * inv_w);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_npolar(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let parity = get_param(xform_id, variation_id, 0u);
     let nnz = get_param(xform_id, variation_id, 2u);
@@ -574,5 +574,5 @@ fn variation_npolar(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
     }
     return vec3<f32>(fx * inv_w, fy * inv_w, p.z);
 }
-"#),
+"#,
 };

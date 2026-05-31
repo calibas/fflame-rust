@@ -166,7 +166,7 @@ fn variation_truchet(p: vec2<f32>, xform_id: u32, variation_id: u32, vc: ptr<fun
     return vec2<f32>(ox * inv_w, oy * inv_w);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_truchet(p: vec3<f32>, xform_id: u32, variation_id: u32, vc: ptr<function, f32>) -> vec3<f32> {
     let extended = i32(get_param(xform_id, variation_id, 0u));
     let n = clamp(get_param(xform_id, variation_id, 1u), 0.001, 2.0);
@@ -264,5 +264,5 @@ fn variation_truchet(p: vec3<f32>, xform_id: u32, variation_id: u32, vc: ptr<fun
     }
     return vec3<f32>(ox * inv_w, oy * inv_w, p.z);
 }
-"#),
+"#,
 };

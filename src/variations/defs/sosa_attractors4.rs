@@ -75,7 +75,7 @@ fn variation_hadamard_js(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32
     return vec2<f32>(x, y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_hadamard_js(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
     let r1 = rng_nextf(rng);
     var x: f32;
@@ -95,7 +95,7 @@ fn variation_hadamard_js(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32
     }
     return vec3<f32>(x, y, p.z);
 }
-"#),
+"#,
 };
 
 // ---------------------------------------------------------------------------
@@ -147,7 +147,7 @@ fn variation_invtree_js(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32>
     return vec2<f32>(x, y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_invtree_js(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
     let r1 = rng_nextf(rng);
     var x: f32;
@@ -169,7 +169,7 @@ fn variation_invtree_js(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32>
     }
     return vec3<f32>(x, y, p.z);
 }
-"#),
+"#,
 };
 
 // ---------------------------------------------------------------------------
@@ -226,7 +226,7 @@ fn variation_crown_js(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
     return vec2<f32>(wt_re, wt_im);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_crown_js(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let a = get_param(xform_id, variation_id, 0u);
     let b = get_param(xform_id, variation_id, 1u);
@@ -251,5 +251,5 @@ fn variation_crown_js(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
     let z = mag2 * mag2;
     return vec3<f32>(wt_re, wt_im, z);
 }
-"#),
+"#,
 };

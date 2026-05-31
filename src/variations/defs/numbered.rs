@@ -49,13 +49,13 @@ fn variation_spherical3D(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(p.x * r, p.y * r);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_spherical3D(p: vec3<f32>) -> vec3<f32> {
     let t = max(p.x * p.x + p.y * p.y + p.z * p.z, 1e-30);
     let r = 1.0 / t;
     return vec3<f32>(p.x * r, p.y * r, p.z * r);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -87,11 +87,11 @@ fn variation_sinusoidal3d(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(sin(p.x), sin(p.y));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_sinusoidal3d(p: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(sin(p.x), sin(p.y), atan2(p.x * p.x, p.y * p.y) * cos(p.z));
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -120,11 +120,11 @@ fn variation_square(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     return vec2<f32>(rng_nextf(rng) - 0.5, rng_nextf(rng) - 0.5);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_square(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
     return vec3<f32>(rng_nextf(rng) - 0.5, rng_nextf(rng) - 0.5, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -151,11 +151,11 @@ fn variation_square3D(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     return vec2<f32>(rng_nextf(rng) - 0.5, rng_nextf(rng) - 0.5);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_square3D(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
     return vec3<f32>(rng_nextf(rng) - 0.5, rng_nextf(rng) - 0.5, rng_nextf(rng) - 0.5);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -193,14 +193,14 @@ fn variation_disc3d(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32>
     return vec2<f32>(vv * sin(pi_p * r), vv * cos(pi_p * r));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_disc3d(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let pi_p = get_param(xform_id, variation_id, 0u);
     let r = sqrt(p.x * p.x + p.y * p.y + 1e-30);
     let vv = atan2(p.x, p.y) / (pi_p + 1e-30);
     return vec3<f32>(vv * sin(pi_p * r), vv * cos(pi_p * r), vv * (r * cos(p.z)));
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -247,7 +247,7 @@ fn variation_bubble2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32
     return vec2<f32>(p.x * r * x_p, p.y * r * y_p);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_bubble2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let x_p = get_param(xform_id, variation_id, 0u);
     let y_p = get_param(xform_id, variation_id, 1u);
@@ -258,7 +258,7 @@ fn variation_bubble2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
     let z_out = (p.z + z_sign * z_p) + p.z * r * z_p;
     return vec3<f32>(p.x * r * x_p, p.y * r * y_p, z_out);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -302,14 +302,14 @@ fn variation_popcorn2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f3
     return vec2<f32>(p.x + x_p * sin(tan(p.y * c)), p.y + y_p * sin(tan(p.x * c)));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_popcorn2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let x_p = get_param(xform_id, variation_id, 0u);
     let y_p = get_param(xform_id, variation_id, 1u);
     let c = get_param(xform_id, variation_id, 2u);
     return vec3<f32>(p.x + x_p * sin(tan(p.y * c)), p.y + y_p * sin(tan(p.x * c)), p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -352,7 +352,7 @@ fn variation_splits3D(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f3
     return vec2<f32>(p.x + xs, p.y + ys);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_splits3D(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let x_p = get_param(xform_id, variation_id, 0u);
     let y_p = get_param(xform_id, variation_id, 1u);
@@ -362,7 +362,7 @@ fn variation_splits3D(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
     let zs = select(-z_p, z_p, p.z >= 0.0);
     return vec3<f32>(p.x + xs, p.y + ys, p.z + zs);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -404,7 +404,7 @@ fn variation_waves2_3D(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f
     return vec2<f32>(p.x + scale * sin(p.y * freq), p.y + scale * sin(p.x * freq));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_waves2_3D(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let freq = get_param(xform_id, variation_id, 0u);
     let scale = get_param(xform_id, variation_id, 1u);
@@ -415,7 +415,7 @@ fn variation_waves2_3D(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
         p.z + scale * sin(avgxy * freq),
     );
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -479,7 +479,7 @@ fn variation_juliaq(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
     return vec2<f32>(r * cos(a), r * sin(a));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_juliaq(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let inv_power = get_param(xform_id, variation_id, 2u);
     let inv_power_2pi = get_param(xform_id, variation_id, 3u);
@@ -489,7 +489,7 @@ fn variation_juliaq(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
     let r = pow(max(p.x * p.x + p.y * p.y, 1e-30), half_inv_power);
     return vec3<f32>(r * cos(a), r * sin(a), p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -557,7 +557,7 @@ fn variation_julia3Dq(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
     return vec2<f32>(r * cos(a), r * sin(a));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_julia3Dq(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let inv_power = get_param(xform_id, variation_id, 2u);
     let inv_power_2pi = get_param(xform_id, variation_id, 3u);
@@ -571,7 +571,7 @@ fn variation_julia3Dq(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
     let r = r_pow * sqrt(r2d);
     return vec3<f32>(r * cos(a), r * sin(a), r_pow * z_arg);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -641,7 +641,7 @@ fn variation_juliac(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
     return vec2<f32>(mod2 * cos(a), mod2 * sin(a));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_juliac(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let two_pi = 6.28318530717959;
     let dist = get_param(xform_id, variation_id, 2u);
@@ -654,5 +654,5 @@ fn variation_juliac(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
     let mod2 = exp(lnmod * re_recip - arg * im_scaled);
     return vec3<f32>(mod2 * cos(a), mod2 * sin(a), p.z);
 }
-"#),
+"#,
 };

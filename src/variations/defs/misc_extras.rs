@@ -80,7 +80,7 @@ fn sign_or_one(v: f32) -> f32 {
     return select(sign(v), 1.0, v == 0.0);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_ho(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let xpow = get_param(xform_id, variation_id, 0u);
     let ypow = get_param(xform_id, variation_id, 1u);
@@ -101,7 +101,7 @@ fn variation_ho(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
 fn sign_or_one_3d(v: f32) -> f32 {
     return select(sign(v), 1.0, v == 0.0);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -174,7 +174,7 @@ fn variation_chunk(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> 
     return vec2<f32>(0.0, 0.0);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_chunk(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let a = get_param(xform_id, variation_id, 0u);
     let b = get_param(xform_id, variation_id, 1u);
@@ -200,7 +200,7 @@ fn variation_chunk(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
     }
     return vec3<f32>(0.0, 0.0, 0.0);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -256,7 +256,7 @@ fn variation_pTransform(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<
     return vec2<f32>(rho * cos(theta), rho * sin(theta));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_pTransform(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let rotate = get_param(xform_id, variation_id, 0u);
     let power = get_param(xform_id, variation_id, 1u);
@@ -272,7 +272,7 @@ fn variation_pTransform(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<
     if (use_log != 0.0) { rho = exp(rho); }
     return vec3<f32>(rho * cos(theta), rho * sin(theta), p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -344,7 +344,7 @@ fn variation_rational3(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f
     );
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_rational3(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let a = get_param(xform_id, variation_id, 0u);
     let b = get_param(xform_id, variation_id, 1u);
@@ -375,7 +375,7 @@ fn variation_rational3(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
         p.z,
     );
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -429,7 +429,7 @@ fn variation_tile_reverse(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: p
     return vec2<f32>(rev * p.x + sign_v * space, p.y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_tile_reverse(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let space = get_param(xform_id, variation_id, 0u);
     let reversal = get_param(xform_id, variation_id, 1u);
@@ -443,7 +443,7 @@ fn variation_tile_reverse(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: p
     }
     return vec3<f32>(rev * p.x + sign_v * space, p.y, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -547,7 +547,7 @@ fn variation_ortho(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> 
     return vec2<f32>(fpx, fpy);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_ortho(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let in_p = get_param(xform_id, variation_id, 0u);
     let out_p = get_param(xform_id, variation_id, 1u);
@@ -608,5 +608,5 @@ fn variation_ortho(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
     }
     return vec3<f32>(fpx, fpy, p.z);
 }
-"#),
+"#,
 };

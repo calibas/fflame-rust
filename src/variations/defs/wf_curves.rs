@@ -70,7 +70,7 @@ fn variation_epispiral_wf(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec
     return vec2<f32>(sin(a) * r, cos(a) * r);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_epispiral_wf(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let waves = get_param(xform_id, variation_id, 0u);
     let a = atan2(p.x, p.y);
@@ -81,7 +81,7 @@ fn variation_epispiral_wf(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec
     let r = 0.5 / d;
     return vec3<f32>(sin(a) * r, cos(a) * r, p.z);
 }
-"#),
+"#,
 };
 
 // ---------------------------------------------------------------------------
@@ -119,7 +119,7 @@ fn variation_cloverleaf_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: 
     return vec2<f32>(sin(a) * r, cos(a) * r);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_cloverleaf_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let filled = i32(get_param(xform_id, variation_id, 0u));
     let a = atan2(p.x, p.y);
@@ -129,7 +129,7 @@ fn variation_cloverleaf_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: 
     }
     return vec3<f32>(sin(a) * r, cos(a) * r, p.z);
 }
-"#),
+"#,
 };
 
 // ---------------------------------------------------------------------------
@@ -171,7 +171,7 @@ fn variation_rose_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<fu
     return vec2<f32>(sin(a) * r, cos(a) * r);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_rose_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let amp = get_param(xform_id, variation_id, 0u);
     let waves = get_param(xform_id, variation_id, 1u);
@@ -183,7 +183,7 @@ fn variation_rose_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fu
     }
     return vec3<f32>(sin(a) * r, cos(a) * r, p.z);
 }
-"#),
+"#,
 };
 
 // ---------------------------------------------------------------------------
@@ -218,7 +218,7 @@ fn variation_bubble_wf(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> 
     return vec2<f32>(t * p.x, t * p.y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_bubble_wf(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
     let r = (p.x * p.x + p.y * p.y) * 0.25 + 1.0;
     let safe_r = select(r, 1e-30, abs(r) < 1e-30);
@@ -227,5 +227,5 @@ fn variation_bubble_wf(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> 
     let z = select(z_bump, -z_bump, rng_nextf(rng) < 0.5);
     return vec3<f32>(t * p.x, t * p.y, z);
 }
-"#),
+"#,
 };

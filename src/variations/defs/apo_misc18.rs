@@ -82,7 +82,7 @@ fn variation_lazysensen(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<
     return vec2<f32>(lazysensen_flip(p.x, sx), lazysensen_flip(p.y, sy));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn lazysensen_flip(c: f32, scale: f32) -> f32 {
     if (abs(scale) < 1e-30) {
         return c;
@@ -112,7 +112,7 @@ fn variation_lazysensen(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<
         lazysensen_flip(p.z, sz),
     );
 }
-"#),
+"#,
 };
 
 // ---------------------------------------------------------------------------
@@ -182,7 +182,7 @@ fn variation_spherecrop(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr
     return vec2<f32>((w * dx + x0) * inv_w, (w * dy + y0) * inv_w);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_spherecrop(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let cr = get_param(xform_id, variation_id, 0u);
     let x0 = get_param(xform_id, variation_id, 1u);
@@ -225,7 +225,7 @@ fn variation_spherecrop(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
         (w * dz + z0) * inv_w,
     );
 }
-"#),
+"#,
 };
 
 // ---------------------------------------------------------------------------
@@ -288,7 +288,7 @@ fn variation_xheart_blur_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, rng:
     return vec2<f32>(x, -y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_xheart_blur_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let sina = get_param(xform_id, variation_id, 2u);
     let cosa = get_param(xform_id, variation_id, 3u);
@@ -310,5 +310,5 @@ fn variation_xheart_blur_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, rng:
     }
     return vec3<f32>(x, -y, p.z);
 }
-"#),
+"#,
 };

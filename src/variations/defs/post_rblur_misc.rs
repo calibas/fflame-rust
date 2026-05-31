@@ -72,7 +72,7 @@ fn variation_post_rblur(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr
                      w * (p.y + (rng_nextf(rng) - 0.5) * r));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_post_rblur(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let offset = get_param(xform_id, variation_id, 1u);
     let cx = get_param(xform_id, variation_id, 2u);
@@ -91,5 +91,5 @@ fn variation_post_rblur(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
                      w * (p.y + (rng_nextf(rng) - 0.5) * r),
                      p.z);
 }
-"#),
+"#,
 };

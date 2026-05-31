@@ -149,7 +149,7 @@ fn variation_jubiQ(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<func
     return vec2<f32>(r * cos(angle), r * sin(angle));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_jubiQ(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let power = i32(get_param(xform_id, variation_id, 0u));
     if (power == 0) {
@@ -214,5 +214,5 @@ fn variation_jubiQ(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<func
 
     return vec3<f32>(r * cos(angle), r * sin(angle), nz_term + r2_inv * z_half);
 }
-"#),
+"#,
 };

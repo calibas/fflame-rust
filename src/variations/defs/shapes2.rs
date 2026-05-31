@@ -58,14 +58,14 @@ fn variation_butterfly(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(r * p.x, r * y2);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_butterfly(p: vec3<f32>) -> vec3<f32> {
     let k = 1.302940031741119;
     let y2 = p.y * 2.0;
     let r = k * sqrt(abs(p.y * p.x) / (1e-30 + p.x * p.x + y2 * y2));
     return vec3<f32>(r * p.x, r * y2, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -96,7 +96,7 @@ fn variation_butterfly3D(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(r * p.x, r * y2);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_butterfly3D(p: vec3<f32>) -> vec3<f32> {
     let k = 1.302940031741119;
     let y2 = p.y * 2.0;
@@ -104,7 +104,7 @@ fn variation_butterfly3D(p: vec3<f32>) -> vec3<f32> {
     let z_out = r * abs(y2) * sqrt(p.x * p.x + p.y * p.y) / 4.0;
     return vec3<f32>(r * p.x, r * y2, z_out);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -140,13 +140,13 @@ fn variation_ennepers(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(p.x * (1.0 - x2 / 3.0 + y2), p.y * (1.0 - y2 / 3.0 + x2));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_ennepers(p: vec3<f32>) -> vec3<f32> {
     let x2 = p.x * p.x;
     let y2 = p.y * p.y;
     return vec3<f32>(p.x * (1.0 - x2 / 3.0 + y2), p.y * (1.0 - y2 / 3.0 + x2), p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -183,7 +183,7 @@ fn variation_pyramid(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(x3 * r, y3 * r);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_pyramid(p: vec3<f32>) -> vec3<f32> {
     let x3 = p.x * p.x * p.x;
     let y3 = p.y * p.y * p.y;
@@ -191,7 +191,7 @@ fn variation_pyramid(p: vec3<f32>) -> vec3<f32> {
     let r = 1.0 / (abs(x3) + abs(y3) + z3 + 1e-9);
     return vec3<f32>(x3 * r, y3 * r, z3 * r);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -228,7 +228,7 @@ fn variation_rays2(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(scale / select(p.x, eps, p.x == 0.0), scale / select(p.y, eps, p.y == 0.0));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_rays2(p: vec3<f32>) -> vec3<f32> {
     let eps = 1e-30;
     let t = p.x * p.x + p.y * p.y + eps;
@@ -236,7 +236,7 @@ fn variation_rays2(p: vec3<f32>) -> vec3<f32> {
     let scale = u * t / 10.0;
     return vec3<f32>(scale / select(p.x, eps, p.x == 0.0), scale / select(p.y, eps, p.y == 0.0), p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -276,7 +276,7 @@ fn variation_rays3(p: vec2<f32>) -> vec2<f32> {
     );
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_rays3(p: vec3<f32>) -> vec3<f32> {
     let eps = 1e-30;
     let t = p.x * p.x + p.y * p.y + eps;
@@ -288,7 +288,7 @@ fn variation_rays3(p: vec3<f32>) -> vec3<f32> {
         p.z,
     );
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -326,7 +326,7 @@ fn variation_spiralwing(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(d * cos(c1) * s2, d * sin(c1) * s2);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_spiralwing(p: vec3<f32>) -> vec3<f32> {
     let c1 = p.x * p.x;
     let c2 = p.y * p.y;
@@ -334,7 +334,7 @@ fn variation_spiralwing(p: vec3<f32>) -> vec3<f32> {
     let s2 = sin(c2);
     return vec3<f32>(d * cos(c1) * s2, d * sin(c1) * s2, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -368,11 +368,11 @@ fn variation_whitney_umbrella(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(p.x * p.y, p.x);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_whitney_umbrella(p: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(p.x * p.y, p.x, p.y * p.y);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -416,7 +416,7 @@ fn variation_chrysanthemum(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f
     return vec2<f32>(r * cos(u), r * sin(u));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_chrysanthemum(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
     let pi = 3.14159265358979;
     let u = 21.0 * pi * rng_nextf(rng);
@@ -429,7 +429,7 @@ fn variation_chrysanthemum(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f
     let r = 5.0 * (1.0 + sin(11.0 * u / 5.0)) - 4.0 * p4 * p8;
     return vec3<f32>(r * cos(u), r * sin(u), p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -479,7 +479,7 @@ fn variation_cell(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     return vec2<f32>(dx + ix * size, -(dy + iy * size));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_cell(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let size = max(get_param(xform_id, variation_id, 0u), 1e-6);
     let inv_cell_size = 1.0 / size;
@@ -498,7 +498,7 @@ fn variation_cell(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     }
     return vec3<f32>(dx + ix * size, -(dy + iy * size), p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -550,7 +550,7 @@ fn variation_ennepers2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f
     );
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_ennepers2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let a = get_param(xform_id, variation_id, 0u);
     let b = get_param(xform_id, variation_id, 1u);
@@ -564,7 +564,7 @@ fn variation_ennepers2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
         dxy * 0.5 * sqrt(r2),
     );
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -610,7 +610,7 @@ fn variation_flower(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
     return vec2<f32>(r * p.x, r * p.y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_flower(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let holes = get_param(xform_id, variation_id, 0u);
     let petals = get_param(xform_id, variation_id, 1u);
@@ -619,5 +619,5 @@ fn variation_flower(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
     let r = (rng_nextf(rng) - holes) * cos(petals * theta) / d;
     return vec3<f32>(r * p.x, r * p.y, p.z);
 }
-"#),
+"#,
 };

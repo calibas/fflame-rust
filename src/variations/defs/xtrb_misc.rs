@@ -315,7 +315,7 @@ fn variation_xtrb(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<funct
     return vec2<f32>(r * cos(angle), r * sin(angle));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_xtrb(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let pi = 3.14159265358979;
     let two_pi = 6.28318530717959;
@@ -462,5 +462,5 @@ fn variation_xtrb(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<funct
     let r = pow(max(inx * inx + iny * iny, 1e-30), c_n);
     return vec3<f32>(r * cos(angle), r * sin(angle), p.z);
 }
-"#),
+"#,
 };

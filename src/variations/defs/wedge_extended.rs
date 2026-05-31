@@ -100,7 +100,7 @@ fn variation_wedge_julia(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: pt
     return vec2<f32>(r * ca, r * sa);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_wedge_julia(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let power = get_param(xform_id, variation_id, 0u);
     let count = get_param(xform_id, variation_id, 2u);
@@ -121,7 +121,7 @@ fn variation_wedge_julia(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: pt
     let ca = cos(sa);
     return vec3<f32>(r * ca, r * sa, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -188,7 +188,7 @@ fn variation_wedge_sph(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f
     return vec2<f32>(r * cos(a), r * sin(a));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_wedge_sph(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let angle = get_param(xform_id, variation_id, 0u);
     let hole = get_param(xform_id, variation_id, 1u);
@@ -204,5 +204,5 @@ fn variation_wedge_sph(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
     let r = r0 + hole;
     return vec3<f32>(r * cos(a), r * sin(a), p.z);
 }
-"#),
+"#,
 };

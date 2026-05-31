@@ -1045,13 +1045,16 @@ impl ShaderBuilder {
         for (name, _idx) in active_variations {
             if let Some(info) = self.registry.get(name) {
                 if render_3d {
-                    // For 3D mode, prefer wgsl_source_3d, fall back to wgsl_source
+                    // For 3D mode, emit `wgsl_source_3d`. Local variations
+                    // (from `VariationDef`) always populate this since the
+                    // field is required at the type level. API-downloaded
+                    // plugins may have None here — in which case we skip
+                    // the variation rather than fall back to the 2D body
+                    // (the silent fallback historically masked a class of
+                    // shader-validation crashes where a vec2-returning
+                    // function got called from a vec3 accumulator).
                     if let Some(source_3d) = &info.wgsl_source_3d {
                         code.push_str(source_3d);
-                        code.push('\n');
-                    } else if let Some(source) = &info.wgsl_source {
-                        // 2D source as fallback
-                        code.push_str(source);
                         code.push('\n');
                     }
                 } else {

@@ -113,7 +113,7 @@ fn variation_q_ode(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> 
     return vec2<f32>(fx_cpp * inv_w, fy_cpp * inv_w);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_q_ode(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let q01 = get_param(xform_id, variation_id, 0u);
     let q02 = get_param(xform_id, variation_id, 1u);
@@ -134,7 +134,7 @@ fn variation_q_ode(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
     let fy_cpp = q07 + q08 * p.x + q09 * p.x * p.x + q10 * p.x * p.y + w * q11 * p.y + q12 * p.y * p.y;
     return vec3<f32>(fx_cpp * inv_w, fy_cpp * inv_w, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -238,7 +238,7 @@ fn variation_ripple(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32>
     return vec2<f32>(lx * _is, ly * _is);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_ripple(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let centerx = get_param(xform_id, variation_id, 3u);
     let centery = get_param(xform_id, variation_id, 4u);
@@ -273,7 +273,7 @@ fn variation_ripple(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
     let ly = v1 + (v2 - v1) * _p;
     return vec3<f32>(lx * _is, ly * _is, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -373,7 +373,7 @@ fn variation_scry2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> 
     return vec2<f32>(p.x * r * inv_w, p.y * r * inv_w);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_scry2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let sides_in = max(get_param(xform_id, variation_id, 0u), 1.0);
     let sina = get_param(xform_id, variation_id, 3u);
@@ -410,5 +410,5 @@ fn variation_scry2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
     let r = 1.0 / safe_d;
     return vec3<f32>(p.x * r * inv_w, p.y * r * inv_w, p.z);
 }
-"#),
+"#,
 };

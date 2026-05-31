@@ -85,7 +85,7 @@ fn variation_target(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32>
     return vec2<f32>(r * cos(a), r * sin(a));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_target(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let even_p = get_param(xform_id, variation_id, 0u);
     let odd_p = get_param(xform_id, variation_id, 1u);
@@ -106,7 +106,7 @@ fn variation_target(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
     }
     return vec3<f32>(r * cos(a), r * sin(a), p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -218,7 +218,7 @@ fn variation_yin_yang(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
     return vec2<f32>(0.0, 0.0);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_yin_yang(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let radius = get_param(xform_id, variation_id, 0u);
     let dual_t = get_param(xform_id, variation_id, 3u);
@@ -267,5 +267,5 @@ fn variation_yin_yang(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
     }
     return vec3<f32>(0.0, 0.0, p.z);
 }
-"#),
+"#,
 };

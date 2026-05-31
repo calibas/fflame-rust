@@ -304,7 +304,7 @@ fn variation_complex(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32
     return vec2<f32>(ox, oy);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_complex(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     // Mirrors the 2D body verbatim — `complex` is a 2D-shaped variation
     // (14 sub-flavors, all on x/y). The 3D form passes z through unchanged
@@ -484,5 +484,5 @@ fn variation_complex(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 
     return vec3<f32>(ox, oy, p.z);
 }
-"#),
+"#,
 };

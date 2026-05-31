@@ -128,7 +128,7 @@ fn variation_cpow2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<func
     return vec2<f32>(r_out * cos(th), r_out * sin(th));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_cpow2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let two_pi = 6.28318530717959;
     let divisor = get_param(xform_id, variation_id, 2u);
@@ -153,7 +153,7 @@ fn variation_cpow2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<func
     let th = c * a + half_d * lnr2 + ang * floor(divisor * rng_nextf(rng));
     return vec3<f32>(r_out * cos(th), r_out * sin(th), p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -255,7 +255,7 @@ fn variation_cpow3(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<func
     return vec2<f32>(r_out * cos(th), r_out * sin(th));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_cpow3(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let two_pi = 6.28318530717959;
     let divisor = get_param(xform_id, variation_id, 2u);
@@ -277,7 +277,7 @@ fn variation_cpow3(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<func
     let th = c * a + half_d * lnr2 + ang * floor(divisor * rng_nextf(rng));
     return vec3<f32>(r_out * cos(th), r_out * sin(th), p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -355,7 +355,7 @@ fn variation_disc2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> 
     return vec2<f32>((sin(t) + cosadd) * r, (cos(t) + sinadd) * r);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_disc2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let pi = 3.14159265358979;
     let timespi = get_param(xform_id, variation_id, 2u);
@@ -365,5 +365,5 @@ fn variation_disc2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
     let r = atan2(p.x, p.y) / pi;
     return vec3<f32>((sin(t) + cosadd) * r, (cos(t) + sinadd) * r, p.z);
 }
-"#),
+"#,
 };

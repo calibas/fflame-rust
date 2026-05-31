@@ -77,7 +77,7 @@ fn variation_pre_sinusoidal3d(p: vec2<f32>, xform_id: u32, variation_id: u32) ->
     return vec2<f32>(w * sin(p.x), w * sin(p.y));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_pre_sinusoidal3d(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let w = transforms[xform_id].variations[variation_id];
     let nx = w * sin(p.x);
@@ -85,7 +85,7 @@ fn variation_pre_sinusoidal3d(p: vec3<f32>, xform_id: u32, variation_id: u32) ->
     let nz = w * atan2(nx * nx, ny * ny) * cos(p.z);
     return vec3<f32>(nx, ny, nz);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -133,7 +133,7 @@ fn variation_pre_blur3D(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr
     return vec2<f32>(p.x + r * sb * cos(a), p.y + r * sb * sin(a));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_pre_blur3D(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let two_pi = 6.28318530717959;
     let pi = 3.14159265358979;
@@ -148,7 +148,7 @@ fn variation_pre_blur3D(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
                      p.y + r * sb * sin(a),
                      p.z + r * cos(b));
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -237,7 +237,7 @@ fn variation_julian3Dx(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<
     return vec2<f32>(gamma * cos(alpha) * inv_w, gamma * sin(alpha) * inv_w);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_julian3Dx(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let power = get_param(xform_id, variation_id, 0u);
     let a = get_param(xform_id, variation_id, 2u);
@@ -266,5 +266,5 @@ fn variation_julian3Dx(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
     let gamma = radius_out * sqrt(max(radius_square, 0.0));
     return vec3<f32>(gamma * cos(alpha) * inv_w, gamma * sin(alpha) * inv_w, fz * inv_w);
 }
-"#),
+"#,
 };

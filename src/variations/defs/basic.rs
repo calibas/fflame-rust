@@ -37,11 +37,11 @@ fn variation_linear(p: vec2<f32>) -> vec2<f32> {
     return p;
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_linear(p: vec3<f32>) -> vec3<f32> {
     return p;
 }
-"#),
+"#,
 };
 
 /// Maps each coordinate through `sin`, folding the plane into a
@@ -70,11 +70,11 @@ fn variation_sinusoidal(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(sin(p.x), sin(p.y));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_sinusoidal(p: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(sin(p.x), sin(p.y), p.z);
 }
-"#),
+"#,
 };
 
 /// Inverts every point through the unit circle — a point at distance
@@ -104,12 +104,12 @@ fn variation_spherical(p: vec2<f32>) -> vec2<f32> {
     return p / r2;
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_spherical(p: vec3<f32>) -> vec3<f32> {
     let r2 = dot(p.xy, p.xy) + 1e-6;
     return vec3(p.xy / r2, p.z);
 }
-"#),
+"#,
 };
 
 /// Rotates each point around the origin by an angle proportional to
@@ -141,14 +141,14 @@ fn variation_swirl(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(p.x * s - p.y * c, p.x * c + p.y * s);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_swirl(p: vec3<f32>) -> vec3<f32> {
     let r2 = dot(p.xy, p.xy);
     let s = sin(r2);
     let c = cos(r2);
     return vec3<f32>(p.x * s - p.y * c, p.x * c + p.y * s, p.z);
 }
-"#),
+"#,
 };
 
 /// Bends the plane into a horseshoe — opposite quadrants get folded
@@ -182,7 +182,7 @@ fn variation_horseshoe(p: vec2<f32>) -> vec2<f32> {
     );
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_horseshoe(p: vec3<f32>) -> vec3<f32> {
     let r = length(p.xy) + 1e-6;
     let r_inv = 1.0 / r;
@@ -192,5 +192,5 @@ fn variation_horseshoe(p: vec3<f32>) -> vec3<f32> {
         p.z
     );
 }
-"#),
+"#,
 };

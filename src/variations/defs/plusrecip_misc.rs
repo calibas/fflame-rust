@@ -87,7 +87,7 @@ fn variation_plusrecip(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f
     return k;
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn pr_cabs(z: vec2<f32>) -> f32 {
     return sqrt(z.x * z.x + z.y * z.y);
 }
@@ -124,5 +124,5 @@ fn variation_plusrecip(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
     }
     return vec3<f32>(k.x, k.y, p.z);
 }
-"#),
+"#,
 };

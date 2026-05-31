@@ -162,7 +162,7 @@ fn variation_bubbleT3D(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f
     return vec2<f32>(x / safe_rad, y / safe_rad);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_bubbleT3D(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let stripes_raw = get_param(xform_id, variation_id, 0u);
     let abs_stripes = abs(stripes_raw);
@@ -293,5 +293,5 @@ fn variation_bubbleT3D(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
 
     return vec3<f32>(x, y, z);
 }
-"#),
+"#,
 };

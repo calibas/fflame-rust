@@ -121,7 +121,7 @@ fn variation_waves2_wf(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f
     return vec2<f32>(nx, ny);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_waves2_wf(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let scalex = get_param(xform_id, variation_id, 0u);
     let scaley = get_param(xform_id, variation_id, 1u);
@@ -137,7 +137,7 @@ fn variation_waves2_wf(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
     let ny = (p.y + dy * scaley * ty) * dy;
     return vec3<f32>(nx, ny, p.z);
 }
-"#),
+"#,
 };
 
 // ---------------------------------------------------------------------------
@@ -193,7 +193,7 @@ fn variation_waves3_wf(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f
     return vec2<f32>(nx, ny);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_waves3_wf(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let scalex = get_param(xform_id, variation_id, 0u);
     let scaley = get_param(xform_id, variation_id, 1u);
@@ -211,7 +211,7 @@ fn variation_waves3_wf(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
     let ny = (p.y + dy * scaley * ty) * dy;
     return vec3<f32>(nx, ny, p.z);
 }
-"#),
+"#,
 };
 
 // ---------------------------------------------------------------------------
@@ -270,7 +270,7 @@ fn variation_waves4_wf(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f
     return vec2<f32>(nx, ny);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_waves4_wf(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let scalex = get_param(xform_id, variation_id, 0u);
     let scaley = get_param(xform_id, variation_id, 1u);
@@ -290,7 +290,7 @@ fn variation_waves4_wf(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
     let ny = (p.y + dy * scaley * ty) * dy;
     return vec3<f32>(nx, ny, p.z);
 }
-"#),
+"#,
 };
 
 // ---------------------------------------------------------------------------
@@ -329,7 +329,7 @@ fn variation_dinis_surface_wf(p: vec2<f32>, xform_id: u32, variation_id: u32) ->
     return vec2<f32>(a * cos(u) * sinv, a * sin(u) * sinv);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_dinis_surface_wf(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let a = get_param(xform_id, variation_id, 0u);
     let b = get_param(xform_id, variation_id, 1u);
@@ -344,5 +344,5 @@ fn variation_dinis_surface_wf(p: vec3<f32>, xform_id: u32, variation_id: u32) ->
         -(a * (cos(v) + log_tan) + b * u),
     );
 }
-"#),
+"#,
 };

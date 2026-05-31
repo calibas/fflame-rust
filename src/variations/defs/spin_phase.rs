@@ -62,7 +62,7 @@ fn variation_pre_spin_z(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<
     return vec2<f32>(sina * p.y + cosa * p.x, cosa * p.y - sina * p.x);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_pre_spin_z(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let pi_2 = 1.5707963267948966;
     let w = transforms[xform_id].variations[variation_id];
@@ -71,7 +71,7 @@ fn variation_pre_spin_z(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<
     let cosa = cos(angle);
     return vec3<f32>(sina * p.y + cosa * p.x, cosa * p.y - sina * p.x, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -105,7 +105,7 @@ fn variation_post_spin_z(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2
     return vec2<f32>(sina * p.y + cosa * p.x, cosa * p.y - sina * p.x);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_post_spin_z(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let pi_2 = 1.5707963267948966;
     let w = transforms[xform_id].variations[variation_id];
@@ -114,7 +114,7 @@ fn variation_post_spin_z(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3
     let cosa = cos(angle);
     return vec3<f32>(sina * p.y + cosa * p.x, cosa * p.y - sina * p.x, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -151,13 +151,13 @@ fn variation_post_spherical(p: vec2<f32>, xform_id: u32, variation_id: u32) -> v
     return vec2<f32>(p.x * r, p.y * r);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_post_spherical(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let w = transforms[xform_id].variations[variation_id];
     let r = w / (p.x * p.x + p.y * p.y + 1e-30);
     return vec3<f32>(p.x * r, p.y * r, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -211,7 +211,7 @@ fn variation_pre_disc3d(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<
     return vec2<f32>(vv * sr, vv * cr);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_pre_disc3d(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let pi_p = get_param(xform_id, variation_id, 0u);
     let w = transforms[xform_id].variations[variation_id];
@@ -222,5 +222,5 @@ fn variation_pre_disc3d(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<
     let vv = w * atan2(p.x, p.y) / (pi_p + 1e-30);
     return vec3<f32>(vv * sr, vv * cr, vv * r * cos(p.z));
 }
-"#),
+"#,
 };

@@ -265,7 +265,7 @@ fn variation_rhodonea(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
     return vec2<f32>(ox, oy);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_rhodonea(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let r2 = variation_rhodonea_2d(p.xy, xform_id, variation_id, rng);
     return vec3<f32>(r2.x, r2.y, p.z);
@@ -362,5 +362,5 @@ fn variation_rhodonea_2d(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: pt
 
     return vec2<f32>(ox, oy);
 }
-"#),
+"#,
 };

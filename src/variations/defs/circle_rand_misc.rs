@@ -102,7 +102,7 @@ fn variation_circleRand(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr
     return vec2<f32>(ox, oy);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn cr_disc_noise(x: i32, y: i32) -> f32 {
     var n = x + y * 57;
     n = (n << 13u) ^ n;
@@ -140,7 +140,7 @@ fn variation_circleRand(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
     }
     return vec3<f32>(ox, oy, p.z);
 }
-"#),
+"#,
 };
 
 // ---------------------------------------------------------------------------
@@ -230,7 +230,7 @@ fn variation_CircleTrans1(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: p
     return vec2<f32>(ox, oy);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn cr_disc_noise(x: i32, y: i32) -> f32 {
     var n = x + y * 57;
     n = (n << 13u) ^ n;
@@ -285,5 +285,5 @@ fn variation_CircleTrans1(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: p
     }
     return vec3<f32>(ox, oy, p.z);
 }
-"#),
+"#,
 };
