@@ -152,7 +152,7 @@ fn variation_superShape3d(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: p
     return vec2<f32>(r1 * cosr * r2 * cosp, r1 * sinr * r2 * cosp);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_superShape3d(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let n2_1 = get_param(xform_id, variation_id, 10u);
     let n2_2 = get_param(xform_id, variation_id, 11u);
@@ -199,5 +199,5 @@ fn variation_superShape3d(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: p
     }
     return vec3<f32>(r1 * cosr * r2 * cosp, r1 * sinr * r2 * cosp, r2 * sinp);
 }
-"#),
+"#,
 };

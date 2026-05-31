@@ -1037,30 +1037,54 @@ impl ShaderBuilder {
     ///
     /// Only includes variation functions that are actually used in the current flame.
     /// This reduces shader size and compilation time significantly.
+    ///
+    /// Helper-function dedup: a variation body is generally `[helpers...] +
+    /// fn variation_NAME(...)`. The `variation_NAME` symbol is unique by
+    /// construction, but a helper like `pg_disc_noise` is often shared
+    /// across sibling variations (e.g. `pointgrid_wf` and
+    /// `pointgrid3d_wf`). Naively concatenating bodies produces a duplicate
+    /// module-scope `fn pg_disc_noise` and the WGSL parser rejects the
+    /// shader. We dedup by splitting each body into top-level `fn` blocks
+    /// and emitting each unique name once. Byte-identical second-occurrence
+    /// is skipped silently; a conflicting body panics with a clear message
+    /// instead of the opaque parser error.
     fn generate_variation_code(&self, active_variations: &[(String, u32)], render_3d: bool) -> String {
         let mut code = String::new();
+        // fn_name -> (block bytes, variation that first emitted it).
+        // Tracks emitted top-level functions for cross-variation dedup.
+        let mut emitted: HashMap<String, (String, String)> = HashMap::new();
 
-        // Generate code ONLY for active variations (not all variations in registry)
-        // This is the key optimization - typical flames use 3-5 variations, not 80+
         for (name, _idx) in active_variations {
-            if let Some(info) = self.registry.get(name) {
-                if render_3d {
-                    // For 3D mode, prefer wgsl_source_3d, fall back to wgsl_source
-                    if let Some(source_3d) = &info.wgsl_source_3d {
-                        code.push_str(source_3d);
-                        code.push('\n');
-                    } else if let Some(source) = &info.wgsl_source {
-                        // 2D source as fallback
-                        code.push_str(source);
-                        code.push('\n');
+            let Some(info) = self.registry.get(name) else { continue };
+            let source = if render_3d {
+                // For 3D mode, emit `wgsl_source_3d`. Local variations
+                // (from `VariationDef`) always populate this since the
+                // field is required at the type level. API-downloaded
+                // plugins may have None here — in which case we skip
+                // the variation rather than fall back to the 2D body
+                // (the silent fallback historically masked a class of
+                // shader-validation crashes where a vec2-returning
+                // function got called from a vec3 accumulator).
+                info.wgsl_source_3d.as_deref()
+            } else {
+                info.wgsl_source.as_deref()
+            };
+            let Some(source) = source else { continue };
+
+            for (fn_name, block) in split_wgsl_top_level_fns(source) {
+                if let Some((prev_block, prev_var)) = emitted.get(&fn_name) {
+                    if prev_block == &block {
+                        // Same helper, byte-identical body. Skip the dup.
+                        continue;
                     }
-                } else {
-                    // For 2D mode, use wgsl_source only
-                    if let Some(source) = &info.wgsl_source {
-                        code.push_str(source);
-                        code.push('\n');
-                    }
+                    panic!(
+                        "Shader build: two active variations define `fn {fn_name}` with conflicting bodies — `{prev_var}` and `{name}`. \
+                         Rename the helper in one of them, or move it to a shared module."
+                    );
                 }
+                emitted.insert(fn_name, (block.clone(), name.clone()));
+                code.push_str(&block);
+                code.push('\n');
             }
         }
 
@@ -1793,4 +1817,147 @@ mod tests {
             assert!(!shader.contains("{{/if}}"), "unprocessed {{{{/if}} in shader (render_3d={})", render_3d);
         }
     }
+
+    /// Activating both `pointgrid_wf` and `pointgrid3d_wf` together used
+    /// to crash the WGSL parser because their bodies each declared
+    /// `fn pg_disc_noise(...)` at module scope — duplicate symbol. After
+    /// the dedup pass, the helper appears exactly once in the emitted
+    /// code, and `variation_pointgrid_wf` / `variation_pointgrid3d_wf`
+    /// each appear once.
+    #[test]
+    fn pointgrid_pair_dedups_pg_disc_noise() {
+        let registry = crate::variations::global_registry().clone();
+        let builder = ShaderBuilder::new(registry);
+        for render_3d in [false, true] {
+            let active = vec![
+                ("pointgrid_wf".to_string(), 0u32),
+                ("pointgrid3d_wf".to_string(), 1u32),
+            ];
+            let code = builder.generate_variation_code(&active, render_3d);
+            let n_helper = code.matches("fn pg_disc_noise(").count();
+            let n_var_2d = code.matches("fn variation_pointgrid_wf(").count();
+            let n_var_3d = code.matches("fn variation_pointgrid3d_wf(").count();
+            assert_eq!(
+                n_helper, 1,
+                "pg_disc_noise should appear exactly once (render_3d={render_3d}), got {n_helper}"
+            );
+            assert_eq!(n_var_2d, 1, "variation_pointgrid_wf count (render_3d={render_3d})");
+            assert_eq!(n_var_3d, 1, "variation_pointgrid3d_wf count (render_3d={render_3d})");
+        }
+    }
+
+    #[test]
+    fn split_dedups_shared_helper() {
+        // Two variations declaring identical `fn pg_disc_noise` — the
+        // helper should appear exactly once in the concatenated output.
+        let a = r#"
+fn pg_disc_noise(x: i32) -> f32 { return f32(x); }
+
+fn variation_a(p: vec2<f32>) -> vec2<f32> { return p; }
+"#;
+        let b = r#"
+fn pg_disc_noise(x: i32) -> f32 { return f32(x); }
+
+fn variation_b(p: vec2<f32>) -> vec2<f32> { return p; }
+"#;
+        let fns_a = super::split_wgsl_top_level_fns(a);
+        let fns_b = super::split_wgsl_top_level_fns(b);
+        assert_eq!(fns_a.len(), 2);
+        assert_eq!(fns_b.len(), 2);
+        assert_eq!(fns_a[0].0, "pg_disc_noise");
+        assert_eq!(fns_a[1].0, "variation_a");
+        assert_eq!(fns_b[0].0, "pg_disc_noise");
+        assert_eq!(fns_b[1].0, "variation_b");
+        // Same-name helper has byte-identical block, so dedup is safe.
+        assert_eq!(fns_a[0].1, fns_b[0].1);
+    }
+
+    #[test]
+    fn split_handles_brace_in_line_comment() {
+        // A `{` inside a `//` comment must not confuse the brace counter.
+        let src = r#"
+fn helper(x: i32) -> i32 {
+    // open: { not a real brace
+    return x;
+}
+"#;
+        let fns = super::split_wgsl_top_level_fns(src);
+        assert_eq!(fns.len(), 1);
+        assert_eq!(fns[0].0, "helper");
+        assert!(fns[0].1.contains("return x;"));
+        assert!(fns[0].1.trim_end().ends_with("}"));
+    }
+}
+
+/// Split a WGSL source fragment into its top-level `fn name(...) { ... }`
+/// blocks. Returns `(fn_name, full_block_with_preceding_blank_lines)`
+/// in the order they appear.
+///
+/// "Top-level" = `fn ` at column 0 of a line. Variation bodies don't have
+/// module-level `const`/`struct`/`var` declarations, so this is sufficient
+/// — any later module-scope construct would need a parallel branch here.
+///
+/// Brace counting skips `//` line comments to avoid miscounting braces
+/// that appear inside comments. WGSL block comments (`/* */`) are not
+/// supported because no current variation uses them; add if needed.
+fn split_wgsl_top_level_fns(source: &str) -> Vec<(String, String)> {
+    let bytes = source.as_bytes();
+    let mut blocks = Vec::new();
+    let mut i = 0;
+
+    while i < bytes.len() {
+        // Find the next `fn ` at column 0 (start of source or after `\n`).
+        let fn_start = if (i == 0 && source.starts_with("fn ")) || source[i..].starts_with("fn ") {
+            i
+        } else {
+            match source[i..].find("\nfn ") {
+                Some(off) => i + off + 1,
+                None => break,
+            }
+        };
+
+        // Extract function name: from after `fn ` to the next `(` (trim
+        // any whitespace before the open paren).
+        let name_start = fn_start + 3;
+        let Some(paren_rel) = source[name_start..].find('(') else { break };
+        let name = source[name_start..name_start + paren_rel].trim().to_string();
+
+        // Find the opening `{` of the body.
+        let Some(open_rel) = source[name_start + paren_rel..].find('{') else { break };
+        let body_open = name_start + paren_rel + open_rel;
+
+        // Walk to the matching `}` via brace counting, skipping `//`
+        // line comments.
+        let mut depth: i32 = 0;
+        let mut j = body_open;
+        let mut block_end = bytes.len();
+        while j < bytes.len() {
+            let b = bytes[j];
+            // Skip line comments — they may contain `{` or `}` that
+            // would otherwise confuse the counter.
+            if b == b'/' && j + 1 < bytes.len() && bytes[j + 1] == b'/' {
+                while j < bytes.len() && bytes[j] != b'\n' {
+                    j += 1;
+                }
+                continue;
+            }
+            if b == b'{' {
+                depth += 1;
+            } else if b == b'}' {
+                depth -= 1;
+                if depth == 0 {
+                    block_end = j + 1;
+                    j += 1;
+                    break;
+                }
+            }
+            j += 1;
+        }
+
+        let block = source[fn_start..block_end].to_string();
+        blocks.push((name, block));
+        i = block_end;
+    }
+
+    blocks
 }

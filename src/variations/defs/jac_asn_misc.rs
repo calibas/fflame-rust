@@ -184,7 +184,7 @@ fn variation_jac_asn(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32
     return jac_asn_inner(p, kr, ki, jtype);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn jac_cmul(a: vec2<f32>, b: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);
 }
@@ -305,5 +305,5 @@ fn variation_jac_asn(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
     let r = jac_asn_inner(vec2<f32>(p.x, p.y), kr, ki, jtype);
     return vec3<f32>(r.x, r.y, p.z * inv_w);
 }
-"#),
+"#,
 };

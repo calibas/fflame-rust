@@ -144,7 +144,7 @@ fn variation_subflame_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: pt
     );
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_subflame_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec3<f32> {
     let subflame_id = u32(get_param(xform_id, variation_id, 0u));
     let scale = get_param(xform_id, variation_id, 1u);
@@ -173,5 +173,5 @@ fn variation_subflame_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: pt
         scale * q.z + offset_z + colorscale_z * q.w,
     );
 }
-"#),
+"#,
 };

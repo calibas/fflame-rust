@@ -160,7 +160,7 @@ fn variation_lazyjess(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f3
     return vec2<f32>(fx * inv_w, fy * inv_w);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_lazyjess(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let n = max(get_param(xform_id, variation_id, 0u), 2.0);
     let spin = get_param(xform_id, variation_id, 1u);
@@ -229,7 +229,7 @@ fn variation_lazyjess(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
     let inv_w = 1.0 / select(w, 1e-30, abs(w) < 1e-30);
     return vec3<f32>(fx * inv_w, fy * inv_w, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -268,7 +268,7 @@ pub static LAZYTRAVIS: VariationDef = VariationDef {
     //   4: spin_out_4  (4 · spin_out)
     init_param_count: 2,
     wgsl_init: Some(r#"
-fn init_lazytravis(user: array<f32, 3>) -> array<f32, 2> {
+fn init_lazyTravis(user: array<f32, 3>) -> array<f32, 2> {
     var out: array<f32, 2>;
     out[0] = 4.0 * user[0];
     out[1] = 4.0 * user[1];
@@ -372,7 +372,7 @@ fn variation_lazyTravis(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<
     return vec2<f32>(fx * inv_w, fy * inv_w);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_lazyTravis(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let space = get_param(xform_id, variation_id, 2u);
     let spin_in_4 = get_param(xform_id, variation_id, 3u);
@@ -463,5 +463,5 @@ fn variation_lazyTravis(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<
     }
     return vec3<f32>(fx * inv_w, fy * inv_w, p.z);
 }
-"#),
+"#,
 };

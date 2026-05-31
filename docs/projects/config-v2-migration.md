@@ -23,8 +23,9 @@ fields rely on the (now-different) deserialize-time default.
 
 | Constant | Old default | New default | Notes |
 |---|---|---|---|
-| `DEFAULT_EXPOSURE` | `1.0` | `0.5` | Recalibrated against scale-invariant Levels |
-| `DEFAULT_GAMMA` | `1.0` (`2.2` via function) | `1.5` | `default_gamma()` was hardcoded `2.2` pre-bump, now reads the constant |
+| `DEFAULT_EXPOSURE` | `1.0` | `1.0` | Was briefly at `0.5` mid-branch; reverted to `1.0` alongside the Apo-matching default sweep. |
+| `DEFAULT_GAMMA` | `1.0` (`2.2` via function) | `4.0` | `default_gamma()` was hardcoded `2.2` pre-bump, now reads the constant. Apo's typical XML default. |
+| `DEFAULT_BRIGHTNESS` | `1.0` | `4.0` | Apo's typical XML default; closer match on imports without manual tuning. |
 | `DEFAULT_GAMMA_THRESHOLD` | `0.0025` | `5.0` | Recalibration |
 | `DEFAULT_LEVELS_HIGH` | `1000.0` (raw density) → `1.0` (× mean, post-P1) → `10.0` | `10.0` | Two unit changes already happened; see "Levels units" below |
 
@@ -54,7 +55,68 @@ separates old units (typically 100s–100,000s) from new units (typically
 User decision: divide by 1000 specifically, with the threshold as the
 guard against double-applying.
 
-### 3. (Pending feature) — placeholder
+### 3. DOF Focus Distance default shift
+
+| Constant | Old default | New default | Notes |
+|---|---|---|---|
+| `DEFAULT_DOF_FOCUS_DISTANCE` | `1.0` | `0.0` | Apophysis hardcodes `0.0`; v1 default mismatched. |
+
+Invisible when DOF is off (`DEFAULT_DOF_BLUR_STRENGTH = 0.0`), so v1
+files that omit the field stay visually identical on load. When blur
+is enabled the change is visible, but no v1 files in the repo enable
+blur by default — the user-personal `output/*.fflame` set is the only
+risk and the user is tracking those manually.
+
+**v2 migration**: same "do nothing" pattern as section 1 — let
+serde's default-on-missing apply the new value.
+
+### 4. DOF Blur Strength rescale (×10 weaker)
+
+The shader now multiplies `dof_blur_strength` by `0.1` internally so
+the field carries the same magnitude as Apophysis's `cam_dof`
+attribute — copying Apo settings across now works directly, and the
+0..=1 UI slider isn't 10× too sensitive.
+
+| Field | Old meaning | New meaning |
+|---|---|---|
+| `dof_blur_strength` | 0.019 ≈ Apo 0.19 | x = Apo's `cam_dof` directly |
+
+Visible only for v1 .fflame files that explicitly set
+`dof_blur_strength > 0`. No repo assets do; user-personal flames
+again at risk and tracked manually.
+
+**v2 migration**: multiply explicit `dof_blur_strength` values by 10
+to preserve the same rendered blur. Skip if absent (default is 0.0,
+disabled, unaffected).
+
+### 5. Levels system: introduced, then re-tuned to on-by-default
+
+| Field | Old default | New default | Notes |
+|---|---|---|---|
+| `levels_enabled` | (didn't exist) | `true` | Empirically the closest match to Apo's brightness response. |
+| `levels_gamma`   | `1.0`          | `0.5` | At gamma=1 the mid-density opacity cap was structurally too aggressive (10% for a mean-density pixel). At gamma=0.5 the curve is `sqrt(opacity)` which keeps midtones perceptually present. |
+
+Why on by default (re-tuned, supersedes an earlier "off by default"
+decision in commit 5f267d2): the on-with-gamma-0.5 combination is
+empirically the closest match to Apo's brightness response in the
+test flames examined. Apo doesn't have Levels, but the Levels math
+at this tuning happens to compensate for the brightness-curve shape
+mismatch we have in the rest of the pipeline. Until we do a
+structural fix (remove the `bucket_count × 100` calibration and
+re-tune everything, see brightness discussion in the branch
+history), this default lands closer to Apo.
+
+**v1 migration**: v1 files that don't carry the field will pick up
+`levels_enabled = true` via serde's default. v1 files that
+*explicitly turned Levels off* — there's no separate "off" toggle
+in v1, the field didn't exist — fall under the same default-pickup,
+so the migration is "do nothing". Built-in presets will render
+slightly differently than they did pre-flip; user-personal files
+unchanged unless re-opened. Other knob changes in this section:
+  - `levels_gamma` default 1.0 → 0.5 (most v1 files don't set this
+    explicitly; affects anyone whose v1 file is at default).
+
+### 6. (Pending feature) — placeholder
 
 A separate in-flight feature will land before v2 ships. Add notes here
 once it's clearer what fields/semantics change.

@@ -86,7 +86,7 @@ fn variation_bsplit(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32>
     );
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_bsplit(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let x_shift = get_param(xform_id, variation_id, 0u);
     let y_shift = get_param(xform_id, variation_id, 1u);
@@ -103,7 +103,7 @@ fn variation_bsplit(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
         p.z,
     );
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -132,11 +132,11 @@ fn variation_cylinder2(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(p.x / sqrt(p.x * p.x + 1.0), p.y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_cylinder2(p: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(p.x / sqrt(p.x * p.x + 1.0), p.y, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -198,7 +198,7 @@ fn variation_eclipse(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32
     return vec2<f32>(ox, p.y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_eclipse(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let shift = get_param(xform_id, variation_id, 0u);
     let w = transforms[xform_id].variations[variation_id];
@@ -217,7 +217,7 @@ fn variation_eclipse(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
     }
     return vec3<f32>(ox, p.y, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -256,14 +256,14 @@ fn variation_lozi(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     return vec2<f32>(c - a * abs(p.x) + p.y, b * p.x);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_lozi(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let a = get_param(xform_id, variation_id, 0u);
     let b = get_param(xform_id, variation_id, 1u);
     let c = get_param(xform_id, variation_id, 2u);
     return vec3<f32>(c - a * abs(p.x) + p.y, b * p.x, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -305,7 +305,7 @@ fn variation_pulse(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> 
     );
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_pulse(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let freqx = get_param(xform_id, variation_id, 0u);
     let freqy = get_param(xform_id, variation_id, 1u);
@@ -317,7 +317,7 @@ fn variation_pulse(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
         p.z,
     );
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -373,7 +373,7 @@ fn variation_hypershift(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<
     return vec2<f32>(fx * inv_w, fy * inv_w);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_hypershift(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let shift = get_param(xform_id, variation_id, 0u);
     let stretch = get_param(xform_id, variation_id, 1u);
@@ -389,5 +389,5 @@ fn variation_hypershift(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<
     let fy = rad2 * y1 * stretch;
     return vec3<f32>(fx * inv_w, fy * inv_w, p.z);
 }
-"#),
+"#,
 };

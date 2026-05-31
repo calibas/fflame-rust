@@ -105,7 +105,7 @@ fn variation_post_bwraps(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2
     return p;
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_post_bwraps(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let cellsize = get_param(xform_id, variation_id, 0u);
     let g2 = get_param(xform_id, variation_id, 5u);
@@ -148,7 +148,7 @@ fn variation_post_bwraps(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3
 
     return p;
 }
-"#),
+"#,
 };
 
 /// Same as Pre Crop but runs after all other variations — the rectangle
@@ -218,7 +218,7 @@ fn variation_post_crop(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<
     return vec2<f32>(x, y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_post_crop(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     // Apophysis Post_Crop - 3D (Z passes through)
     let x0 = get_param(xform_id, variation_id, 0u);
@@ -257,7 +257,7 @@ fn variation_post_crop(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
 
     return vec3<f32>(x, y, p.z);
 }
-"#),
+"#,
 };
 
 /// Same as Pre Falloff2 but runs after all other variations — the distance-
@@ -346,7 +346,7 @@ fn variation_post_falloff2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: 
     return vec2<f32>(p.x + sx * mul_x, p.y + sy * mul_y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_post_falloff2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     // Apophysis Post_Falloff2 - Same as pre_falloff2 but applied after variations (3D)
     const PI: f32 = 3.14159265359;
@@ -408,7 +408,7 @@ fn variation_post_falloff2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: 
 
     return vec3<f32>(p.x + sx * mul_x, p.y + sy * mul_y, p.z + sz * mul_z);
 }
-"#),
+"#,
 };
 
 /// Same math as Curl (complex polynomial twist) but runs after all other
@@ -451,7 +451,7 @@ fn variation_post_curl(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f
     );
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_post_curl(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     // Apophysis Post_Curl - 3D version (Z passes through)
     let c1 = get_param(xform_id, variation_id, 0u);
@@ -468,7 +468,7 @@ fn variation_post_curl(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
         p.z
     );
 }
-"#),
+"#,
 };
 
 /// 3D version of Post Curl — applies a complex polynomial twist along all
@@ -499,7 +499,7 @@ fn variation_post_curl3D(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2
     return p;
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_post_curl3D(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     // Apophysis Post_Curl3D - Full 3D curl transformation applied after variations
     let cx = get_param(xform_id, variation_id, 0u);
@@ -521,5 +521,5 @@ fn variation_post_curl3D(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3
         r * (z + cz * r2)
     );
 }
-"#),
+"#,
 };

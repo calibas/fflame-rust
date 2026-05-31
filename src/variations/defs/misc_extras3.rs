@@ -108,7 +108,7 @@ fn variation_oscilloscope2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> ve
     return p;
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_oscilloscope2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let separation = get_param(xform_id, variation_id, 0u);
     let amplitude = get_param(xform_id, variation_id, 3u);
@@ -129,7 +129,7 @@ fn variation_oscilloscope2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> ve
     }
     return p;
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -176,7 +176,7 @@ fn variation_linearT(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32
     );
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_linearT(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let powx = get_param(xform_id, variation_id, 0u);
     let powy = get_param(xform_id, variation_id, 1u);
@@ -188,7 +188,7 @@ fn variation_linearT(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
         p.z,
     );
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -259,7 +259,7 @@ fn variation_phoenix_julia(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: 
     return vec2<f32>(r * cos(a), r * sin(a));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_phoenix_julia(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let power = get_param(xform_id, variation_id, 0u);
     let x_distort = get_param(xform_id, variation_id, 2u);
@@ -275,7 +275,7 @@ fn variation_phoenix_julia(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: 
     let r = pow(max(p.x * p.x + p.y * p.y, 1e-30), cn);
     return vec3<f32>(r * cos(a), r * sin(a), p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -353,7 +353,7 @@ fn variation_pow_block(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<
     return vec2<f32>(r2 * cos(ran), r2 * sin(ran));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_pow_block(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let numerator = get_param(xform_id, variation_id, 0u);
     let denominator = get_param(xform_id, variation_id, 1u);
@@ -367,5 +367,5 @@ fn variation_pow_block(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
     let ran = (theta * deneps + root * two_pi * floor(rng_nextf(rng) * denominator) * deneps) * numerator;
     return vec3<f32>(r2 * cos(ran), r2 * sin(ran), p.z);
 }
-"#),
+"#,
 };

@@ -33,7 +33,7 @@ fn variation_hemisphere(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(p.x * t, p.y * t);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_hemisphere(p: vec3<f32>) -> vec3<f32> {
     // Apophysis: t = 1 / sqrt(x² + y² + 1)
     // result = (x*t, y*t, t)
@@ -41,5 +41,5 @@ fn variation_hemisphere(p: vec3<f32>) -> vec3<f32> {
     let t = 1.0 / sqrt(r2_xy + 1.0);
     return vec3<f32>(p.x * t, p.y * t, t);
 }
-"#),
+"#,
 };

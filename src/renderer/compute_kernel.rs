@@ -116,6 +116,8 @@ pub struct FlameRenderer {
     buffers: FlameBuffers,
     compute_bind_group: BindGroup,
     accumulate_bind_group: BindGroup,
+    histogram_blur_h_bind_group: BindGroup,
+    histogram_blur_v_bind_group: BindGroup,
     // adjust_scale_bind_group removed - pipeline unused
     tonemap_bind_group: BindGroup,
 
@@ -165,6 +167,8 @@ pub struct FlameRenderer {
     dof_blur_strength: f32, // DOF: Blur amount (0.0 = disabled)
     fog_strength: f32, // Depth fog: exponential fog density (0.0 = disabled)
     fog_start: f32, // Depth fog: distance where fog begins
+    filter_radius: f32, // Spatial filter (Apo's `filter`): Gaussian sigma in pixels on histogram, 0 = off
+    filter_blur_edges: f32, // Bilateral edge-handling [0..1]: 0 = preserve edges (default), 1 = uniform Gaussian
     background_r: f32, // Background color R (for depth fog)
     background_g: f32, // Background color G (for depth fog)
     background_b: f32, // Background color B (for depth fog)
@@ -205,6 +209,8 @@ impl FlameRenderer {
 
         let compute_bind_group = pipelines.create_compute_bind_group(device, &buffers);
         let accumulate_bind_group = pipelines.create_accumulate_bind_group(device, &buffers);
+        let histogram_blur_h_bind_group = pipelines.create_histogram_blur_h_bind_group(device, &buffers);
+        let histogram_blur_v_bind_group = pipelines.create_histogram_blur_v_bind_group(device, &buffers);
         // adjust_scale_bind_group removed - pipeline unused
         let tonemap_bind_group = pipelines.create_tonemap_bind_group(device, &buffers);
         let init_bind_group = pipelines.create_init_bind_group(device, &buffers);
@@ -241,6 +247,8 @@ impl FlameRenderer {
             buffers,
             compute_bind_group,
             accumulate_bind_group,
+            histogram_blur_h_bind_group,
+            histogram_blur_v_bind_group,
             // adjust_scale_bind_group removed
             tonemap_bind_group,
             init_bind_group,
@@ -269,6 +277,8 @@ impl FlameRenderer {
             dof_blur_strength: crate::config::DEFAULT_DOF_BLUR_STRENGTH,
             fog_strength: crate::config::DEFAULT_FOG_STRENGTH,
             fog_start: crate::config::DEFAULT_FOG_START,
+            filter_radius: 0.0,
+            filter_blur_edges: 0.0,
             background_r: 0.0,
             background_g: 0.0,
             background_b: 0.0,
@@ -308,6 +318,8 @@ impl FlameRenderer {
         self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
         self.init_bind_group = self.pipelines.create_init_bind_group(device, &self.buffers);
         self.accumulate_bind_group = self.pipelines.create_accumulate_bind_group(device, &self.buffers);
+        self.histogram_blur_h_bind_group = self.pipelines.create_histogram_blur_h_bind_group(device, &self.buffers);
+        self.histogram_blur_v_bind_group = self.pipelines.create_histogram_blur_v_bind_group(device, &self.buffers);
         self.tonemap_bind_group = self.pipelines.create_tonemap_bind_group(device, &self.buffers);
 
         // Recreate fractal output texture with new size
@@ -616,6 +628,56 @@ impl FlameRenderer {
 
         self.buffers.update_accumulate_params(queue, &params);
 
+        // Spatial filter — Gaussian blur on the per-batch histogram (Apo's
+        // `filter` attribute). Two separable passes (H then V) immediately
+        // before the accumulate dispatch, so accumulate reads the filtered
+        // histogram unchanged. Skipped entirely when radius is 0.
+        if self.filter_radius > 0.0 {
+            // Bilateral `σ_d` scales with the per-batch typical histogram
+            // density value. Histogram density stores `count × 100`
+            // (HISTOGRAM_COLOR_SCALE), so the typical value at a
+            // mean-density pixel is `samples_per_pixel × 100`. Symmetric
+            // exponential mapping centered at slider 0.5 = "σ_d at mean
+            // density":
+            //   blur_edges = 0   → σ_d = mean / 100   (tight — preserves
+            //                                          most non-uniform
+            //                                          pixels including
+            //                                          midtones)
+            //   blur_edges = 0.5 → σ_d = mean         (moderate — only
+            //                                          well-above-mean
+            //                                          pixels preserved)
+            //   blur_edges = 1   → σ_d = mean × 100   (loose — only
+            //                                          extreme outliers
+            //                                          preserved, close
+            //                                          to uniform blur)
+            const HISTOGRAM_COLOR_SCALE: f32 = 100.0;
+            let pixel_count = (self.width as f32) * (self.height as f32);
+            let mean_density_scaled = (samples_this_frame as f32 / pixel_count) * HISTOGRAM_COLOR_SCALE;
+            let density_sigma = mean_density_scaled * 100.0_f32.powf(2.0 * self.filter_blur_edges - 1.0);
+            self.buffers.update_histogram_blur_params(queue, self.width, self.height, self.filter_radius, density_sigma);
+
+            let workgroups_x = (self.width + 7) / 8;
+            let workgroups_y = (self.height + 7) / 8;
+
+            let mut h_pass = encoder.begin_compute_pass(&ComputePassDescriptor {
+                label: Some("Histogram Blur Pass (H)"),
+                timestamp_writes: None,
+            });
+            h_pass.set_pipeline(&self.pipelines.histogram_blur_pipeline);
+            h_pass.set_bind_group(0, &self.histogram_blur_h_bind_group, &[]);
+            h_pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
+            drop(h_pass);
+
+            let mut v_pass = encoder.begin_compute_pass(&ComputePassDescriptor {
+                label: Some("Histogram Blur Pass (V)"),
+                timestamp_writes: None,
+            });
+            v_pass.set_pipeline(&self.pipelines.histogram_blur_pipeline);
+            v_pass.set_bind_group(0, &self.histogram_blur_v_bind_group, &[]);
+            v_pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
+            drop(v_pass);
+        }
+
         let mut compute_pass = encoder.begin_compute_pass(&ComputePassDescriptor {
             label: Some("Accumulation Pass"),
             timestamp_writes: None,
@@ -844,6 +906,8 @@ impl FlameRenderer {
         self.dof_blur_strength = config.dof_blur_strength;
         self.fog_strength = config.fog_strength;
         self.fog_start = config.fog_start;
+        self.filter_radius = config.filter_radius;
+        self.filter_blur_edges = config.filter_blur_edges;
         self.burn_in = burn_in;
 
         // 5. Update palette size (recreates texture + bind groups if changed)
@@ -919,7 +983,7 @@ impl FlameRenderer {
         // would otherwise render the same flame with different Levels
         // settings.
         self.update_tonemap(queue, config.tonemap_mode, config.highlight_mode, config.use_curve, config.exposure, config.gamma, config.gamma_threshold, config.brightness, config.vibrancy, config.white_level, config.saturation, config.hue_shift, config.alpha_blend_low, config.alpha_blend_high, self.width, self.height, self.total_iterations, config.max_iterations, config.zoom, iterations_per_thread, 1, false,
-            config.levels_low, config.levels_high, config.levels_gamma);
+            config.levels_enabled, config.levels_low, config.levels_high, config.levels_gamma);
         self.update_curve_lut(queue, &config.tonemap_curve);
 
         // 9. Clear accumulation buffers + reset ALL iteration counters
@@ -937,7 +1001,7 @@ impl FlameRenderer {
     }
 
     /// Update the flame being rendered
-    pub fn update_flame(&mut self, device: &Device, queue: &Queue, flame: &Flame, iterations_per_thread: u32, burn_in: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_z: f32, speed_factor: f32, dof_focus_distance: f32, dof_blur_strength: f32, fog_strength: f32, fog_start: f32, background_color: [f32; 3]) {
+    pub fn update_flame(&mut self, device: &Device, queue: &Queue, flame: &Flame, iterations_per_thread: u32, burn_in: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_z: f32, speed_factor: f32, dof_focus_distance: f32, dof_blur_strength: f32, fog_strength: f32, fog_start: f32, background_color: [f32; 3], filter_radius: f32, filter_blur_edges: f32) {
         // Check if shaders need to be recompiled (variations or constants changed)
         let constants = self.build_shader_constants(flame);
         let path_features_enabled = self.color_mode == ColorMode::PathMap
@@ -981,6 +1045,8 @@ impl FlameRenderer {
         self.dof_focus_distance = dof_focus_distance;
         self.dof_blur_strength = dof_blur_strength;
         self.fog_strength = fog_strength;
+        self.filter_radius = filter_radius;
+        self.filter_blur_edges = filter_blur_edges;
         self.fog_start = fog_start;
         self.background_r = background_color[0];
         self.background_g = background_color[1];
@@ -1069,7 +1135,8 @@ impl FlameRenderer {
             levels_high: crate::config::defaults::DEFAULT_LEVELS_HIGH,
             levels_gamma: 1.0,
             highlight_mode: self.highlight_mode,
-            _pad_highlight: [0; 3],
+            levels_enabled: 0,
+            _pad_levels: [0; 2],
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -1275,7 +1342,8 @@ impl FlameRenderer {
             levels_high: crate::config::defaults::DEFAULT_LEVELS_HIGH,
             levels_gamma: 1.0,
             highlight_mode: self.highlight_mode,
-            _pad_highlight: [0; 3],
+            levels_enabled: 0,
+            _pad_levels: [0; 2],
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -1360,13 +1428,14 @@ impl FlameRenderer {
             levels_high: crate::config::defaults::DEFAULT_LEVELS_HIGH,
             levels_gamma: 1.0,
             highlight_mode: self.highlight_mode,
-            _pad_highlight: [0; 3],
+            levels_enabled: 0,
+            _pad_levels: [0; 2],
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
 
     /// Update tone mapping mode, curve usage, exposure, gamma, gamma_threshold, brightness, vibrancy, saturation, hue shift, and alpha blend
-    pub fn update_tonemap(&mut self, queue: &Queue, tonemap_mode: crate::scene::tonemap::ToneMapMode, highlight_mode: crate::scene::tonemap::HighlightMode, use_curve: bool, exposure: f32, gamma: f32, gamma_threshold: f32, brightness: f32, vibrancy: f32, white_level: f32, saturation: f32, hue_shift: f32, alpha_blend_low: f32, alpha_blend_high: f32, width: u32, height: u32, _total_iterations: u64, _max_iterations: u64, zoom: f32, iterations_per_thread: u32, _batch_size: u32, is_live_preview: bool, levels_low: f32, levels_high: f32, levels_gamma: f32) {
+    pub fn update_tonemap(&mut self, queue: &Queue, tonemap_mode: crate::scene::tonemap::ToneMapMode, highlight_mode: crate::scene::tonemap::HighlightMode, use_curve: bool, exposure: f32, gamma: f32, gamma_threshold: f32, brightness: f32, vibrancy: f32, white_level: f32, saturation: f32, hue_shift: f32, alpha_blend_low: f32, alpha_blend_high: f32, width: u32, height: u32, _total_iterations: u64, _max_iterations: u64, zoom: f32, iterations_per_thread: u32, _batch_size: u32, is_live_preview: bool, levels_enabled: bool, levels_low: f32, levels_high: f32, levels_gamma: f32) {
         use crate::config::defaults::*;
         // Cache on self so internal helpers (update_density_scale,
         // update_background_color → update_tonemap_state) don't reset
@@ -1465,7 +1534,8 @@ impl FlameRenderer {
             levels_high,
             levels_gamma,
             highlight_mode: self.highlight_mode,
-            _pad_highlight: [0; 3],
+            levels_enabled: if levels_enabled { 1 } else { 0 },
+            _pad_levels: [0; 2],
         };
         self.buffers.update_tonemap_params(queue, &params);
     }

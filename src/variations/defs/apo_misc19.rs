@@ -161,7 +161,7 @@ fn variation_mobius_strip(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec
     return vec2<f32>(mx_out, my_out);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_mobius_strip(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let radius = get_param(xform_id, variation_id, 0u);
     let width = get_param(xform_id, variation_id, 1u);
@@ -243,7 +243,7 @@ fn variation_mobius_strip(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec
     let z_factor = select(modify_z, 0.0, abs(modify_z) < 1e-30);
     return vec3<f32>(mx_out, my_out, mz_out * z_factor);
 }
-"#),
+"#,
 };
 
 // ---------------------------------------------------------------------------
@@ -335,7 +335,7 @@ fn variation_circleLinear(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec
     return vec2<f32>(x + (m * 2.0 + 1.0) * sc, y + (n * 2.0 + 1.0) * sc);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn cl_disc_noise(x: i32, y: i32) -> f32 {
     var n = x + y * 57;
     n = (n << 13u) ^ n;
@@ -389,6 +389,6 @@ fn variation_circleLinear(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec
 
     return vec3<f32>(x + (m * 2.0 + 1.0) * sc, y + (n * 2.0 + 1.0) * sc, p.z);
 }
-"#),
+"#,
 };
 

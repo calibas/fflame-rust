@@ -1471,6 +1471,8 @@ impl ConfigManager {
             ConfigPath::DofBlurStrength => Ok(config.dof_blur_strength.into()),
             ConfigPath::FogStrength => Ok(config.fog_strength.into()),
             ConfigPath::FogStart => Ok(config.fog_start.into()),
+            ConfigPath::FilterRadius => Ok(config.filter_radius.into()),
+            ConfigPath::FilterBlurEdges => Ok(config.filter_blur_edges.into()),
 
             // Tone mapping
             ConfigPath::Exposure => Ok(config.exposure.into()),
@@ -1489,6 +1491,7 @@ impl ConfigManager {
             ConfigPath::TonemapCurve => Ok(config.tonemap_curve.clone().into()),
             ConfigPath::UseCurve => Ok(config.use_curve.into()),
             // Levels controls
+            ConfigPath::LevelsEnabled => Ok(config.levels_enabled.into()),
             ConfigPath::LevelsLow => Ok(config.levels_low.into()),
             ConfigPath::LevelsHigh => Ok(config.levels_high.into()),
             ConfigPath::LevelsGamma => Ok(config.levels_gamma.into()),
@@ -1989,6 +1992,12 @@ impl ConfigManager {
             ConfigPath::FogStart => {
                 self.current.fog_start = value.try_into()?;
             }
+            ConfigPath::FilterRadius => {
+                self.current.filter_radius = value.try_into()?;
+            }
+            ConfigPath::FilterBlurEdges => {
+                self.current.filter_blur_edges = value.try_into()?;
+            }
 
             // Tone mapping
             ConfigPath::Exposure => {
@@ -2037,6 +2046,9 @@ impl ConfigManager {
                 self.current.use_curve = value.try_into()?;
             }
             // Levels controls
+            ConfigPath::LevelsEnabled => {
+                self.current.levels_enabled = value.try_into()?;
+            }
             ConfigPath::LevelsLow => {
                 self.current.levels_low = value.try_into()?;
             }

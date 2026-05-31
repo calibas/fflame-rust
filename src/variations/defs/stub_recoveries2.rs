@@ -97,7 +97,7 @@ fn variation_disc3(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> 
     return vec2<f32>(sinr * h * r, cosr * h * r);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_disc3(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let a = get_param(xform_id, variation_id, 0u);
     let b = get_param(xform_id, variation_id, 1u);
@@ -116,7 +116,7 @@ fn variation_disc3(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
     let r = atan2(p.y, p.x) * inv_pi * c;
     return vec3<f32>(sinr * h * r, cosr * h * r, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -176,7 +176,7 @@ fn variation_projective(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<
     );
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_projective(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let a = get_param(xform_id, variation_id, 0u);
     let b = get_param(xform_id, variation_id, 1u);
@@ -196,7 +196,7 @@ fn variation_projective(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<
         p.z,
     );
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -284,7 +284,7 @@ fn variation_tqmirror(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f3
     return vec2<f32>(fx * inv_w, fy * inv_w);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_tqmirror(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let a = get_param(xform_id, variation_id, 0u);
     let b = get_param(xform_id, variation_id, 1u);
@@ -320,7 +320,7 @@ fn variation_tqmirror(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
     }
     return vec3<f32>(fx * inv_w, fy * inv_w, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -427,7 +427,7 @@ fn variation_intersection(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: p
     return vec2<f32>(fx * inv_w, fy * inv_w);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_intersection(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let xwidth = get_param(xform_id, variation_id, 0u);
     let xtilesize = get_param(xform_id, variation_id, 1u);
@@ -476,5 +476,5 @@ fn variation_intersection(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: p
     }
     return vec3<f32>(fx * inv_w, fy * inv_w, p.z);
 }
-"#),
+"#,
 };

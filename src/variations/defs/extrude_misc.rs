@@ -51,7 +51,7 @@ fn variation_extrude(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<fu
     return vec2<f32>(0.0, 0.0);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_extrude(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let root_face = get_param(xform_id, variation_id, 0u);
     let w = transforms[xform_id].variations[variation_id];
@@ -65,5 +65,5 @@ fn variation_extrude(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fu
     }
     return vec3<f32>(0.0, 0.0, fz_cpp * inv_w);
 }
-"#),
+"#,
 };

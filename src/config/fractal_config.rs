@@ -46,6 +46,26 @@ pub struct FractalConfig {
     #[serde(default)]
     pub fog_start: f32,  // Depth where fog begins
 
+    /// Spatial filter — Gaussian blur applied to the per-batch histogram
+    /// before accumulation. Mirrors Apophysis's `filter` attribute: a
+    /// small per-sample-spread Gaussian that smooths per-iteration grain.
+    /// Default 0.0 (off). Apo XML import picks up `filter="..."`.
+    #[serde(default, skip_serializing_if = "is_default_filter_radius")]
+    pub filter_radius: f32,
+
+    /// Spatial-filter edge handling. Slider `0.0..=1.0`:
+    /// - `0.0`: strict edge preservation (bilateral weighting tight) —
+    ///   highlights stay sharp, only similar-density neighbors blur
+    ///   together
+    /// - `1.0`: uniform Gaussian (no density similarity check) —
+    ///   highlights muddy into neighbors, same as raw box blur
+    /// Default `0.0` so the filter does what users typically want
+    /// (clean dim-area grain without blurring highlight detail).
+    /// Mapped exponentially to a density-sigma value at shader time:
+    /// `σ_d = mean_density × 1000^blur_edges`.
+    #[serde(default, skip_serializing_if = "is_default_filter_blur_edges")]
+    pub filter_blur_edges: f32,
+
     /// Rendering settings
     #[serde(default = "default_density_scale")]
     pub density_scale: f32,
@@ -166,6 +186,14 @@ pub struct FractalConfig {
     #[serde(default = "default_alpha_blend_high", skip_serializing_if = "is_default_alpha_blend_high")]
     pub alpha_blend_high: f32,
 
+    /// Levels: opt-in density opacity remap. Apophysis has no Levels
+    /// system; when off, the gamma/vibrancy pipeline's alpha runs
+    /// straight through unmodified — Apo-matching default behavior.
+    /// When on, the `levels_low`/`levels_high`/`levels_gamma` triplet
+    /// gates per-pixel opacity by relative density.
+    #[serde(default = "default_levels_enabled", skip_serializing_if = "is_default_levels_enabled")]
+    pub levels_enabled: bool,
+
     /// Levels: density threshold for background/transparency
     /// Pixels with density below this become fully transparent (show background)
     #[serde(default, skip_serializing_if = "is_default_levels_low")]
@@ -251,6 +279,10 @@ fn default_dof_focus_distance() -> f32 {
     super::defaults::DEFAULT_DOF_FOCUS_DISTANCE
 }
 
+fn default_levels_enabled() -> bool {
+    super::defaults::DEFAULT_LEVELS_ENABLED
+}
+
 fn default_levels_high() -> f32 {
     // Clip at `× mean density` units after the scale-invariance change,
     // independent of total iteration count. The 10× default was
@@ -261,7 +293,7 @@ fn default_levels_high() -> f32 {
 }
 
 fn default_levels_gamma() -> f32 {
-    1.0  // Linear (no gamma adjustment)
+    super::defaults::DEFAULT_LEVELS_GAMMA  // Linear (no gamma adjustment)
 }
 
 fn default_palette_rotation() -> f32 {
@@ -331,6 +363,18 @@ fn is_default_alpha_blend_high(v: &f32) -> bool {
     (*v - super::defaults::DEFAULT_ALPHA_BLEND_HIGH).abs() < FLOAT_EPSILON
 }
 
+fn is_default_levels_enabled(v: &bool) -> bool {
+    *v == super::defaults::DEFAULT_LEVELS_ENABLED
+}
+
+fn is_default_filter_radius(v: &f32) -> bool {
+    v.abs() < FLOAT_EPSILON  // Default is 0.0 (filter off)
+}
+
+fn is_default_filter_blur_edges(v: &f32) -> bool {
+    v.abs() < FLOAT_EPSILON  // Default is 0.0 (strict edge preservation)
+}
+
 fn is_default_levels_low(v: &f32) -> bool {
     v.abs() < FLOAT_EPSILON  // Default is 0.0
 }
@@ -369,6 +413,8 @@ impl Default for FractalConfig {
             dof_blur_strength: 0.0,
             fog_strength: 0.0,
             fog_start: 0.0,
+            filter_radius: 0.0,
+            filter_blur_edges: 0.0,
             density_scale: 1.0,
             speed_factor: 0.5,
             max_iterations: default_max_iterations(),
@@ -401,6 +447,7 @@ impl Default for FractalConfig {
             hue_shift: default_hue_shift(),
             alpha_blend_low: default_alpha_blend_low(),
             alpha_blend_high: default_alpha_blend_high(),
+            levels_enabled: default_levels_enabled(),
             levels_low: 0.0,
             levels_high: default_levels_high(),
             levels_gamma: default_levels_gamma(),

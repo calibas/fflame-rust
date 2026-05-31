@@ -86,7 +86,7 @@ fn variation_post_heat(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f
     return vec2<f32>(r * cos(sint_arg), r * sin(sint_arg));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_post_heat(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let theta_period = get_param(xform_id, variation_id, 0u);
     let theta_phase = get_param(xform_id, variation_id, 1u);
@@ -129,5 +129,5 @@ fn variation_post_heat(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
 
     return vec3<f32>(r * cost * sinp, r * sint * sinp, r * cosp);
 }
-"#),
+"#,
 };

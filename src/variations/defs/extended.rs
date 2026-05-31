@@ -28,18 +28,20 @@ pub static ZTRANSLATE: VariationDef = VariationDef {
     needs_accum: false,
     wgsl_2d: r#"
 fn variation_ztranslate(p: vec2<f32>) -> vec2<f32> {
-    // ZTranslate only affects Z (3D mode), pass through in 2D
-    return p;
+    // 2D stub: ztranslate only writes Z. Returning `p` here would
+    // inject `weight × p.xy` into the variation accumulator (additive
+    // normal-phase dispatch) — same phantom-linear bug as zblur had.
+    return vec2<f32>(0.0, 0.0);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_ztranslate(p: vec3<f32>) -> vec3<f32> {
     // Apophysis: Normal-phase Z translation
     // FPz += vars[variation_id] (added during weighted sum)
     // Return (0, 0, 1) so weighted sum adds weight to Z: result.z += weight * 1
     return vec3<f32>(0.0, 0.0, 1.0);
 }
-"#),
+"#,
 };
 
 /// 3D version of Julia — splits the output into `power` randomly-chosen
@@ -82,7 +84,7 @@ fn variation_julia3D(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<fu
     return vec2<f32>(tmp * cos(angle), tmp * sin(angle));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_julia3D(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     // Apophysis Julia3D — Joel Faber, ported from julia3D.cpp transformFunction.
     // The cpp file has special branches for power = ±1, ±2 but they are
@@ -103,7 +105,7 @@ fn variation_julia3D(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fu
     let tmp = r * sqrt(r2d);
     return vec3<f32>(tmp * cos(angle), tmp * sin(angle), r * z);
 }
-"#),
+"#,
 };
 
 /// Adds random scatter that varies with distance from a chosen center
@@ -187,7 +189,7 @@ fn variation_falloff2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
     }
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_falloff2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     // Apophysis Falloff2: Distance-based blur effect with 3 modes (3D)
     const PI: f32 = 3.14159265359;
@@ -247,7 +249,7 @@ fn variation_falloff2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
         );
     }
 }
-"#),
+"#,
 };
 
 /// Slices the plane into N pie wedges, each compressed and offset by the
@@ -309,7 +311,7 @@ fn variation_wedge(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> 
     return vec2<f32>(r_out * cos(a), r_out * sin(a));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_wedge(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     const PI: f32 = 3.14159265359;
     const C1_2PI: f32 = 0.15915494309189534;
@@ -328,7 +330,7 @@ fn variation_wedge(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
     let r_out = r + hole;
     return vec3<f32>(r_out * cos(a), r_out * sin(a), p.z);
 }
-"#),
+"#,
 };
 
 /// Maps the plane onto an epicycloid spiral pattern. `n` controls how many
@@ -373,7 +375,7 @@ fn variation_epispiral(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<
     return vec2<f32>(t * cos(theta), t * sin(theta));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_epispiral(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     // Apophysis Epispiral: 3D (Z passes through)
     let n = get_param(xform_id, variation_id, 0u);
@@ -389,7 +391,7 @@ fn variation_epispiral(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
 
     return vec3<f32>(t * cos(theta), t * sin(theta), p.z);
 }
-"#),
+"#,
 };
 
 /// Wraps the plane into a grid of soft bubbles, each with its own internal
@@ -483,7 +485,7 @@ fn variation_bwraps(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32>
     return vec2<f32>(vx, vy);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_bwraps(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let cellsize = get_param(xform_id, variation_id, 0u);
     let inner_twist = get_param(xform_id, variation_id, 3u);
@@ -521,7 +523,7 @@ fn variation_bwraps(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 
     return vec3<f32>(vx, vy, p.z);
 }
-"#),
+"#,
 };
 
 /// Kaleidoscope variant of Julia — splits the angle into `power` branches
@@ -581,7 +583,7 @@ fn variation_juliascope(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr
     }
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_juliascope(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     // Apophysis JuliaScope: 3D (Z passes through)
     const PI: f32 = 3.14159265359;
@@ -614,7 +616,7 @@ fn variation_juliascope(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
         return vec3<f32>(r_out * cos(t) * sign, r_out * sin(t) * sign, p.z);
     }
 }
-"#),
+"#,
 };
 
 /// 3D variant of Julia where the Z coordinate gets folded along with the
@@ -638,11 +640,15 @@ pub static JULIA3DZ: VariationDef = VariationDef {
     needs_accum: false,
     wgsl_2d: r#"
 fn variation_julia3Dz(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
-    // Julia3Dz is a 3D variation, pass through in 2D
-    return p;
+    // 2D stub: julia3Dz's XY contribution depends on z-derived
+    // coefficients, so it doesn't have a meaningful 2D fallback.
+    // Returning `p` would inject `weight × p.xy` (phantom-linear bug
+    // class). Better to no-op; for a 2D Julia effect, use `julia` or
+    // `julian` directly.
+    return vec2<f32>(0.0, 0.0);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_julia3Dz(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     // Apophysis Julia3Dz - Full 3D Julia set with Z modification
     const PI: f32 = 3.14159265359;
@@ -686,7 +692,7 @@ fn variation_julia3Dz(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
 
     return vec3<f32>(r * cos(angle), r * sin(angle), z_out);
 }
-"#),
+"#,
 };
 
 /// 3D version of Curl — applies a complex polynomial twist along all three
@@ -727,7 +733,7 @@ fn variation_curl3D(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32>
     );
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_curl3D(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     // Apophysis Curl3D - Full 3D curl transformation
     let cx = get_param(xform_id, variation_id, 0u);
@@ -745,7 +751,7 @@ fn variation_curl3D(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
         r * (p.z + cz * r2)
     );
 }
-"#),
+"#,
 };
 
 /// Adds randomness in both rotation (spin) and scale (zoom) around the
@@ -799,7 +805,7 @@ fn variation_radial_blur(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: pt
     );
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_radial_blur(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let spin_var = get_param(xform_id, variation_id, 1u);
     let zoom_var = get_param(xform_id, variation_id, 2u);
@@ -816,7 +822,7 @@ fn variation_radial_blur(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: pt
         p.z
     );
 }
-"#),
+"#,
 };
 
 /// Replaces the input with a uniformly random point inside the unit circle.
@@ -874,7 +880,7 @@ fn variation_blur_circle(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32
     return vec2<f32>(r * cos(angle), r * sin(angle));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_blur_circle(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
     // Apophysis Blur Circle - 3D (Z passes through)
     const PI: f32 = 3.14159265359;
@@ -910,7 +916,7 @@ fn variation_blur_circle(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32
 
     return vec3<f32>(r * cos(angle), r * sin(angle), p.z);
 }
-"#),
+"#,
 };
 
 /// Random zoom blur radiating from a chosen center point. The `length`
@@ -949,7 +955,7 @@ fn variation_blur_zoom(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<
     );
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_blur_zoom(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     // Apophysis Blur Zoom - 3D (Z passes through)
     let length = get_param(xform_id, variation_id, 0u);
@@ -964,7 +970,7 @@ fn variation_blur_zoom(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
         p.z
     );
 }
-"#),
+"#,
 };
 
 /// Snaps points to a grid of pixel-sized cells, then adds random offset
@@ -1004,7 +1010,7 @@ fn variation_blur_pixelize(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: 
     );
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_blur_pixelize(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     // Apophysis Blur Pixelize - 3D (Z passes through)
     let size = get_param(xform_id, variation_id, 0u);
@@ -1021,7 +1027,7 @@ fn variation_blur_pixelize(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: 
         p.z
     );
 }
-"#),
+"#,
 };
 
 /// Pushes points away from the X and Y axes by configurable amounts, with
@@ -1072,7 +1078,7 @@ fn variation_separation(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<
     return vec2<f32>(x_out, y_out);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_separation(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     // Apophysis Separation - 3D (Z passes through)
     let sep_x = get_param(xform_id, variation_id, 0u);
@@ -1094,7 +1100,7 @@ fn variation_separation(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<
 
     return vec3<f32>(x_out, y_out, p.z);
 }
-"#),
+"#,
 };
 
 /// Möbius transformation in the complex plane — `(Az + B) / (Cz + D)`. The
@@ -1153,7 +1159,7 @@ fn variation_mobius(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32>
     );
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_mobius(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     // Apophysis Mobius - 3D (Z passes through)
     let re_a = get_param(xform_id, variation_id, 0u);
@@ -1179,7 +1185,7 @@ fn variation_mobius(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
         p.z
     );
 }
-"#),
+"#,
 };
 
 /// Constrains points to a rectangle. Points outside either collapse to zero
@@ -1249,7 +1255,7 @@ fn variation_crop(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<funct
     return vec2<f32>(x, y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_crop(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     // Apophysis Crop - 3D (Z passes through)
     let x0 = get_param(xform_id, variation_id, 0u);
@@ -1288,5 +1294,5 @@ fn variation_crop(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<funct
 
     return vec3<f32>(x, y, p.z);
 }
-"#),
+"#,
 };

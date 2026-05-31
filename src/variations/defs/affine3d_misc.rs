@@ -126,7 +126,7 @@ fn variation_affine3D(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f3
     return vec2<f32>(nx, ny);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_affine3D(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let tx = get_param(xform_id, variation_id, 0u);
     let ty = get_param(xform_id, variation_id, 1u);
@@ -166,5 +166,5 @@ fn variation_affine3D(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
     let nz = -siny * sx_p * x + cosy * (cosx * sz_p * z + sinx * sy_p * y) + tz;
     return vec3<f32>(nx, ny, nz);
 }
-"#),
+"#,
 };

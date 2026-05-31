@@ -668,6 +668,47 @@ any are discovered in future work), the recommended approach is to
 convention flags. They're functionally different math; modeling
 them as separate variations keeps the internal convention singular.
 
+### Apo-only artifacts we deliberately don't reproduce
+
+Some flames render with extra visible structure in Apophysis 7X that
+neither flam3-derived implementation (ours nor JWildfire) produces.
+The math is identical — the divergence is an Apo-specific bug.
+
+Pattern recognized so far:
+
+- **Blur/noise `Randomize`-per-call**. Apo's `TXForm.Blur` /
+  `TXForm.Noise` (and the other blur-class procedures) each begin
+  with `Randomize`, which reseeds Pascal's PRNG from `GetTickCount`
+  on every call. The Pascal authors annotated this with
+  `// HACK! Fix me...` and never did. Effect: within a 1ms window
+  (~1000 IFS iterations) every blur/noise call returns the same
+  `(theta, r)`. The orbit gets pushed by a constant vector for
+  ~1000 iterations, then flips. Over many ms-ticks, the per-tick
+  drift directions accumulate into structured patterns (visible
+  rings, ghost copies of the attractor).
+
+  flam3 ported these without the `Randomize` call. JWildfire
+  inherited the fixed version. We did too. So our output and
+  JWildfire's agree; Apo is the outlier.
+
+  **Reproducibility test for `Plastic-colortest.flame`** (the flame
+  this came up on): the `dense ring inside the blur disc` structure
+  the user saw in Apo is absent in JWildfire's render of the same
+  flame. Confirmed Apo-bug.
+
+  **Tells that a flame may be relying on this**: blur and/or noise
+  with a non-trivial weight, especially combined with multiplicative
+  variations (spherical, julia, julian) whose iteration dynamics
+  amplify small per-call perturbations. The visible artifact tends
+  to be a high-contrast inner ring, repeated ghost copies, or
+  starburst patterns through a uniform-fill region.
+
+  **What we do**: nothing. Document the divergence and move on.
+  Faithful emulation on GPU is expensive (would need ms-resolution
+  seed sharing across threads) and would copy a known bug into our
+  pipeline. If a user reports a specific Apo flame that doesn't
+  match, point them at this section.
+
 ### ~~Zero-weight variations should still count as "present"~~ — RESOLVED
 
 Resolved on the `variations-param-type-cleanup` branch. Both

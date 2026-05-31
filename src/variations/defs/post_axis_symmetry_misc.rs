@@ -119,7 +119,7 @@ fn variation_post_axis_symmetry_wf(p: vec2<f32>, xform_id: u32, variation_id: u3
     return vec2<f32>(x, y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_post_axis_symmetry_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let axis = i32(get_param(xform_id, variation_id, 0u));
     let cx = get_param(xform_id, variation_id, 1u);
@@ -194,5 +194,5 @@ fn variation_post_axis_symmetry_wf(p: vec3<f32>, xform_id: u32, variation_id: u3
     }
     return vec3<f32>(x, y, z);
 }
-"#),
+"#,
 };

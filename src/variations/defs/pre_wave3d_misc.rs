@@ -101,7 +101,7 @@ fn variation_pre_wave3D_wf(p: vec2<f32>, xform_id: u32, variation_id: u32) -> ve
     return vec2<f32>(p.x, p.y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_pre_wave3D_wf(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let axis = i32(get_param(xform_id, variation_id, 0u));
     let wavelen = get_param(xform_id, variation_id, 1u);
@@ -146,5 +146,5 @@ fn variation_pre_wave3D_wf(p: vec3<f32>, xform_id: u32, variation_id: u32) -> ve
     }
     return vec3<f32>(p.x, p.y, p.z + amp);
 }
-"#),
+"#,
 };

@@ -27,19 +27,22 @@ pub static ZCONE: VariationDef = VariationDef {
     wgsl_state_init: None,
     needs_accum: false,
     wgsl_2d: r#"
-// 2D stub - not used in 2D mode
+// 2D stub: zcone only writes Z. Return (0, 0) so the additive
+// dispatch `result += weight * var(p)` contributes nothing in 2D
+// mode. Returning `p` would inject `weight × p.xy` as a phantom
+// linear (same bug class as the zblur fix).
 fn variation_zcone(p: vec2<f32>) -> vec2<f32> {
-    return p;
+    return vec2<f32>(0.0, 0.0);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_zcone(p: vec3<f32>) -> vec3<f32> {
     // Normal-phase Z-only contribution. Standard dispatch is
     // `result += weight * variation_zcone(p)`, so returning
     // `(0, 0, length(p.xy))` accumulates `weight * length(p.xy)` into Z.
     return vec3<f32>(0.0, 0.0, length(p.xy));
 }
-"#),
+"#,
 };
 
 /// Cancels the Z coordinate, projecting everything back onto the XY
@@ -67,14 +70,14 @@ fn variation_flatten(p: vec2<f32>) -> vec2<f32> {
     return p;
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_flatten(p: vec3<f32>) -> vec3<f32> {
     // Post-phase Z-zeroing. Standard post dispatch is
     // `result = variation_flatten(result)` (gated on weight != 0), so
     // returning `(p.x, p.y, 0)` matches Apophysis's `FPz := 0`.
     return vec3<f32>(p.x, p.y, 0.0);
 }
-"#),
+"#,
 };
 
 /// Multiplies the Z coordinate by the variation's weight slider. Combine
@@ -96,17 +99,17 @@ pub static ZSCALE: VariationDef = VariationDef {
     wgsl_state_init: None,
     needs_accum: false,
     wgsl_2d: r#"
-// 2D stub - not used in 2D mode
+// 2D stub: zscale only writes Z. See zcone above for the rationale.
 fn variation_zscale(p: vec2<f32>) -> vec2<f32> {
-    return p;
+    return vec2<f32>(0.0, 0.0);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_zscale(p: vec3<f32>) -> vec3<f32> {
     // Normal-phase Z-only contribution. Standard dispatch is
     // `result += weight * variation_zscale(p)`, so returning
     // `(0, 0, p.z)` accumulates `weight * p.z` into Z.
     return vec3<f32>(0.0, 0.0, p.z);
 }
-"#),
+"#,
 };

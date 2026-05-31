@@ -141,7 +141,7 @@ fn variation_gridout3D(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f
     return vec2<f32>(p.x + xh, p.y - yh);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_gridout3D(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let xx = get_param(xform_id, variation_id, 0u);
     let yy = get_param(xform_id, variation_id, 1u);
@@ -187,5 +187,5 @@ fn variation_gridout3D(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
     if (y >= -x) { return vec3<f32>(p.x - xg, p.y + yg, p.z * zg); }
     return vec3<f32>(p.x + xh, p.y - yh, p.z * zh);
 }
-"#),
+"#,
 };

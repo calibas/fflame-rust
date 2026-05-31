@@ -60,13 +60,13 @@ fn variation_circleblur(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32>
     return vec2<f32>(cos(ang) * rad, sin(ang) * rad);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_circleblur(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
     let rad = sqrt(rng_nextf(rng));
     let ang = rng_nextf(rng) * 6.28318530717959;
     return vec3<f32>(cos(ang) * rad, sin(ang) * rad, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -119,7 +119,7 @@ fn variation_circlesplit(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2
     return vec2<f32>(cos(a) * len, sin(a) * len);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_circlesplit(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let radius = get_param(xform_id, variation_id, 0u);
     let split = get_param(xform_id, variation_id, 1u);
@@ -131,7 +131,7 @@ fn variation_circlesplit(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3
     let len = r + split;
     return vec3<f32>(cos(a) * len, sin(a) * len, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -175,7 +175,7 @@ fn variation_flipcircle(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<
     return vec2<f32>(p.x, y_out);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_flipcircle(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let w = transforms[xform_id].variations[variation_id];
     let inside = (p.x * p.x + p.y * p.y) <= w * w;
@@ -185,7 +185,7 @@ fn variation_flipcircle(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<
     }
     return vec3<f32>(p.x, y_out, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -239,7 +239,7 @@ fn variation_blur_linear(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: pt
     return vec2<f32>(p.x + r * cos_a, p.y + r * sin_a);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_blur_linear(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let length_p = get_param(xform_id, variation_id, 0u);
     let cos_a = get_param(xform_id, variation_id, 2u);
@@ -247,5 +247,5 @@ fn variation_blur_linear(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: pt
     let r = length_p * rng_nextf(rng);
     return vec3<f32>(p.x + r * cos_a, p.y + r * sin_a, p.z);
 }
-"#),
+"#,
 };

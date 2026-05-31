@@ -88,7 +88,7 @@ fn variation_waveblur_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: pt
     return vec2<f32>(r * cos(ang), r * sin(ang));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_waveblur_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec3<f32> {
     let count_p = max(i32(get_param(xform_id, variation_id, 0u)), 1);
     let amplitude_z = get_param(xform_id, variation_id, 1u);
@@ -129,5 +129,5 @@ fn variation_waveblur_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: pt
     }
     return vec3<f32>(r * cos(ang), r * sin(ang), nz);
 }
-"#),
+"#,
 };

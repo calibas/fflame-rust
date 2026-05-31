@@ -80,7 +80,7 @@ fn variation_clifford_js(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2
     return vec2<f32>(x, y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_clifford_js(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let a = get_param(xform_id, variation_id, 0u);
     let b = get_param(xform_id, variation_id, 1u);
@@ -90,7 +90,7 @@ fn variation_clifford_js(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3
     let y = sin(b * p.x) + d * cos(b * p.y);
     return vec3<f32>(x, y, p.z);
 }
-"#),
+"#,
 };
 
 // ---------------------------------------------------------------------------
@@ -134,7 +134,7 @@ fn variation_svensson_js(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2
     return vec2<f32>(x, y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_svensson_js(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let a = get_param(xform_id, variation_id, 0u);
     let b = get_param(xform_id, variation_id, 1u);
@@ -144,7 +144,7 @@ fn variation_svensson_js(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3
     let y = c * cos(a * p.x) + cos(b * p.y);
     return vec3<f32>(x, y, p.z);
 }
-"#),
+"#,
 };
 
 // ---------------------------------------------------------------------------
@@ -198,7 +198,7 @@ fn variation_sattractor_js(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: 
     return vec2<f32>(x * 0.5, y * 0.5);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_sattractor_js(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let m = max(i32(get_param(xform_id, variation_id, 0u)), 1);
     let mf = f32(m);
@@ -220,5 +220,5 @@ fn variation_sattractor_js(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: 
     }
     return vec3<f32>(x * 0.5, y * 0.5, p.z);
 }
-"#),
+"#,
 };

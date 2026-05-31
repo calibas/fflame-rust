@@ -72,10 +72,12 @@ fn parse_flame_element(
     let mut gamma = 2.2;
     let mut vibrancy = 1.0;
     let mut gamma_threshold = 0.0025;
+    let mut filter_radius = 0.0_f32;  // Apo's `filter` attribute
     let mut cam_pitch = 0.0;  // Camera rotation X (radians)
     let mut cam_yaw = 0.0;    // Camera rotation Y (radians)
     let mut cam_zpos = 0.0;   // Camera Z position (height)
     let mut cam_perspective = 0.0;  // Perspective strength
+    let mut cam_dof = 0.0;    // Depth-of-field blur strength (Apo's `cam_dof`)
     let mut curves: Option<Vec<f32>> = None;  // Tone curve data (48 floats)
     let mut solo_xform: Option<usize> = None;  // Solo transform index (0-indexed)
 
@@ -116,10 +118,12 @@ fn parse_flame_element(
             }
             "vibrancy" => vibrancy = value.parse().unwrap_or(1.0),
             "gamma_threshold" => gamma_threshold = value.parse().unwrap_or(0.0025),
+            "filter" => filter_radius = value.parse().unwrap_or(0.0),
             "cam_pitch" => cam_pitch = value.parse().unwrap_or(0.0),
             "cam_yaw" => cam_yaw = value.parse().unwrap_or(0.0),
             "cam_zpos" => cam_zpos = value.parse().unwrap_or(0.0),
             "cam_perspective" => cam_perspective = value.parse().unwrap_or(0.0),
+            "cam_dof" => cam_dof = value.parse().unwrap_or(0.0),
             "curves" => {
                 // Parse space-separated floats (48 values: 4 curves × 12 points)
                 let parsed: Vec<f32> = value.split_whitespace()
@@ -312,9 +316,18 @@ fn parse_flame_element(
         camera_rotation_y: cam_yaw,
         camera_z: cam_zpos,
         dof_focus_distance: crate::config::defaults::DEFAULT_DOF_FOCUS_DISTANCE,
-        dof_blur_strength: crate::config::defaults::DEFAULT_DOF_BLUR_STRENGTH,
+        // Direct copy of Apo's `cam_dof` after the step-3 strength rescale —
+        // shader divides by 10 internally, so the stored value carries the
+        // same magnitude as Apo's attribute.
+        dof_blur_strength: cam_dof,
         fog_strength: crate::config::defaults::DEFAULT_FOG_STRENGTH,
         fog_start: crate::config::defaults::DEFAULT_FOG_START,
+        // Apo's `filter` is the sample-time Gaussian sigma in pixels; we
+        // apply it on the per-batch histogram before accumulation.
+        filter_radius,
+        // Edge preservation defaults to 0 (strict) for fresh imports;
+        // user can dial up if they want uniform Gaussian behavior.
+        filter_blur_edges: 0.0,
         density_scale: 1.0,  // Use default, brightness is handled by Apophysis brightness parameter
         speed_factor: 1.0,
         max_iterations: 1_000_000_000,
@@ -336,7 +349,11 @@ fn parse_flame_element(
         // TODO: parse Apophysis `white_level` XML attribute (default 200)
         white_level: crate::config::defaults::DEFAULT_WHITE_LEVEL,
         highlight_mode: crate::scene::tonemap::HighlightMode::Clip,  // Apophysis-compatible
-        saturation: 1.5,  // Default saturation
+        // saturation 1.0 — Apo has no saturation control. Previously 1.5
+        // to compensate for sRGB-as-linear palette washout; that became
+        // wrong once the palette-decode fix landed (oversaturates past
+        // Apo's reference).
+        saturation: crate::config::defaults::DEFAULT_SATURATION,
         hue_shift: 0.0,  // Default hue shift
         gamma_threshold,  // Use parsed Apophysis gamma_threshold
         deterministic_rng: false,
@@ -350,7 +367,11 @@ fn parse_flame_element(
         palette_squeeze_falloff: 0.5,
         palette_log_strength: 0.0,
         palette_reverse: false,
-        // Levels controls - use defaults (× mean density units)
+        // Apo has no Levels system, but enabling our Levels with the
+        // tuned defaults (gamma 0.5) empirically lands closer to Apo's
+        // brightness response on the flames tested. Treating Levels as
+        // a calibration layer rather than a strict Apo-feature mapping.
+        levels_enabled: crate::config::defaults::DEFAULT_LEVELS_ENABLED,
         levels_low: 0.0,
         levels_high: crate::config::defaults::DEFAULT_LEVELS_HIGH,
         levels_gamma: crate::config::defaults::DEFAULT_LEVELS_GAMMA,

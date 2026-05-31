@@ -86,7 +86,7 @@ fn variation_pre_curl(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f3
     );
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_pre_curl(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let c1 = get_param(xform_id, variation_id, 0u);
     let c2 = get_param(xform_id, variation_id, 1u);
@@ -102,7 +102,7 @@ fn variation_pre_curl(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
         p.z,
     );
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -167,7 +167,7 @@ fn variation_post_juliaq(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: pt
     return vec2<f32>(r * cos(a), r * sin(a));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_post_juliaq(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let power = get_param(xform_id, variation_id, 0u);
     let half_inv_power = get_param(xform_id, variation_id, 2u);
@@ -180,7 +180,7 @@ fn variation_post_juliaq(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: pt
     let r = w * pow(max(p.x * p.x + p.y * p.y, 1e-30), half_inv_power);
     return vec3<f32>(r * cos(a), r * sin(a), p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -221,7 +221,7 @@ pub static POST_JULIA3DQ: VariationDef = VariationDef {
     //   5: inv_power_2pi    (2π / power)
     init_param_count: 4,
     wgsl_init: Some(r#"
-fn init_post_julia3dq(user: array<f32, 2>) -> array<f32, 4> {
+fn init_post_julia3Dq(user: array<f32, 2>) -> array<f32, 4> {
     let power = user[0];
     let divisor = user[1];
     let safe_power = select(power, 1e-30, power == 0.0);
@@ -255,7 +255,7 @@ fn variation_post_julia3Dq(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: 
     return vec2<f32>(r * cos(a), r * sin(a));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_post_julia3Dq(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let power = get_param(xform_id, variation_id, 0u);
     let inv_power = get_param(xform_id, variation_id, 2u);
@@ -273,5 +273,5 @@ fn variation_post_julia3Dq(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: 
     r = r * sqrt(r2d);
     return vec3<f32>(r * cos(a), r * sin(a), out_z);
 }
-"#),
+"#,
 };

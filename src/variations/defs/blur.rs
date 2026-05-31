@@ -27,18 +27,23 @@ pub static ZBLUR: VariationDef = VariationDef {
     needs_accum: false,
     wgsl_2d: r#"
 fn variation_zblur(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
-    // ZBlur only affects Z (3D mode), pass through in 2D
-    return p;
+    // ZBlur only affects Z — pure no-op in 2D. Returning `p` here used
+    // to leak a `weight × p_xy` contribution into the variation
+    // accumulator (since external dispatch is `result += w · var(p)`),
+    // effectively planting a hidden linear with the zblur weight.
+    return vec2<f32>(0.0, 0.0);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_zblur(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
-    // Apophysis: Gaussian blur on Z axis only
-    // result = (x, y, (rand₁ + rand₂ + rand₃ + rand₄ - 2))
+    // Apophysis `TXForm.ZBlur` and JWildfire's port both touch FPz
+    // only: `FPz += weight × (rand₁ + rand₂ + rand₃ + rand₄ − 2)`.
+    // XY contribution must be zero — returning (p.x, p.y, z_offset)
+    // would inject `weight · p.xy` as a phantom linear every iteration.
     let z_offset = rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) - 2.0;
-    return vec3<f32>(p.x, p.y, z_offset);
+    return vec3<f32>(0.0, 0.0, z_offset);
 }
-"#),
+"#,
 };
 
 /// Random gaussian scatter across all three axes — replaces the point
@@ -69,7 +74,7 @@ fn variation_blur3D(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     return vec2<f32>(r * sin(phi) * cos(theta), r * sin(phi) * sin(theta));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_blur3D(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
     // Apophysis: 3D Gaussian spherical blur
     // θ = random × 2π (azimuth)
@@ -81,7 +86,7 @@ fn variation_blur3D(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
     let r = rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) - 2.0;
     return vec3<f32>(r * sin(phi) * cos(theta), r * sin(phi) * sin(theta), r * cos(phi));
 }
-"#),
+"#,
 };
 
 /// Adds gaussian random offset to the input point before the rest of
@@ -111,7 +116,7 @@ fn variation_pre_blur(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     return vec2<f32>(p.x + r * cos(theta), p.y + r * sin(theta));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_pre_blur(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
     // Apophysis: Pre-phase Gaussian blur applied before variations
     // FTx += r * cos(θ), FTy += r * sin(θ), FTz unchanged
@@ -119,5 +124,5 @@ fn variation_pre_blur(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
     let r = rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) - 2.0;
     return vec3<f32>(p.x + r * cos(theta), p.y + r * sin(theta), p.z);
 }
-"#),
+"#,
 };

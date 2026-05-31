@@ -107,7 +107,7 @@ fn variation_pointgrid_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: p
     return vec2<f32>(x, y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn pg_disc_noise(x: i32, y: i32) -> f32 {
     var n = x + y * 57;
     n = (n << 13u) ^ n;
@@ -137,7 +137,7 @@ fn variation_pointgrid_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: p
     }
     return vec3<f32>(x, y, p.z);
 }
-"#),
+"#,
 };
 
 // ---------------------------------------------------------------------------
@@ -189,6 +189,13 @@ fn init_pointgrid3d_wf(user: array<f32, 11>) -> array<f32, 3> {
     wgsl_state_init: None,
     needs_accum: false,
     wgsl_2d: r#"
+fn pg_disc_noise(x: i32, y: i32) -> f32 {
+    var n = x + y * 57;
+    n = (n << 13u) ^ n;
+    let h = (n * (n * n * 15731 + 789221) + 1376312589) & 0x7fffffff;
+    return f32(h) * (1.0 / 2147483647.0);
+}
+
 fn variation_pointgrid3d_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let xmin = get_param(xform_id, variation_id, 0u);
     let xcount = max(i32(get_param(xform_id, variation_id, 2u)), 1);
@@ -212,7 +219,14 @@ fn variation_pointgrid3d_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, rng:
     return vec2<f32>(x, y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
+fn pg_disc_noise(x: i32, y: i32) -> f32 {
+    var n = x + y * 57;
+    n = (n << 13u) ^ n;
+    let h = (n * (n * n * 15731 + 789221) + 1376312589) & 0x7fffffff;
+    return f32(h) * (1.0 / 2147483647.0);
+}
+
 fn variation_pointgrid3d_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let xmin = get_param(xform_id, variation_id, 0u);
     let xcount = max(i32(get_param(xform_id, variation_id, 2u)), 1);
@@ -242,7 +256,7 @@ fn variation_pointgrid3d_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, rng:
     }
     return vec3<f32>(x, y, z);
 }
-"#),
+"#,
 };
 
 // ---------------------------------------------------------------------------
@@ -301,7 +315,7 @@ fn variation_apocarpet_js(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f3
     return vec2<f32>(x, y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_apocarpet_js(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
     let r = 1.0 / (1.0 + sqrt(2.0));
     let denom = p.x * p.x + p.y * p.y;
@@ -330,5 +344,5 @@ fn variation_apocarpet_js(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f3
     }
     return vec3<f32>(x, y, p.z);
 }
-"#),
+"#,
 };
