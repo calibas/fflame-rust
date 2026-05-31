@@ -27,9 +27,12 @@ pub static ZCONE: VariationDef = VariationDef {
     wgsl_state_init: None,
     needs_accum: false,
     wgsl_2d: r#"
-// 2D stub - not used in 2D mode
+// 2D stub: zcone only writes Z. Return (0, 0) so the additive
+// dispatch `result += weight * var(p)` contributes nothing in 2D
+// mode. Returning `p` would inject `weight × p.xy` as a phantom
+// linear (same bug class as the zblur fix).
 fn variation_zcone(p: vec2<f32>) -> vec2<f32> {
-    return p;
+    return vec2<f32>(0.0, 0.0);
 }
 "#,
     wgsl_3d: Some(r#"
@@ -96,9 +99,9 @@ pub static ZSCALE: VariationDef = VariationDef {
     wgsl_state_init: None,
     needs_accum: false,
     wgsl_2d: r#"
-// 2D stub - not used in 2D mode
+// 2D stub: zscale only writes Z. See zcone above for the rationale.
 fn variation_zscale(p: vec2<f32>) -> vec2<f32> {
-    return p;
+    return vec2<f32>(0.0, 0.0);
 }
 "#,
     wgsl_3d: Some(r#"
