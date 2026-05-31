@@ -529,7 +529,7 @@ pub static JULIA3DQ: VariationDef = VariationDef {
     writes_color: false,
     init_param_count: 4,
     wgsl_init: Some(r#"
-fn init_julia3dq(user: array<f32, 2>) -> array<f32, 4> {
+fn init_julia3Dq(user: array<f32, 2>) -> array<f32, 4> {
     let power = max(user[0], 1.0);
     let divisor = user[1];
     let inv_power = divisor / power;

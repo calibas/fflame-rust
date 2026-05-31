@@ -189,6 +189,13 @@ fn init_pointgrid3d_wf(user: array<f32, 11>) -> array<f32, 3> {
     wgsl_state_init: None,
     needs_accum: false,
     wgsl_2d: r#"
+fn pg_disc_noise(x: i32, y: i32) -> f32 {
+    var n = x + y * 57;
+    n = (n << 13u) ^ n;
+    let h = (n * (n * n * 15731 + 789221) + 1376312589) & 0x7fffffff;
+    return f32(h) * (1.0 / 2147483647.0);
+}
+
 fn variation_pointgrid3d_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let xmin = get_param(xform_id, variation_id, 0u);
     let xcount = max(i32(get_param(xform_id, variation_id, 2u)), 1);
@@ -213,6 +220,13 @@ fn variation_pointgrid3d_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, rng:
 }
 "#,
     wgsl_3d: Some(r#"
+fn pg_disc_noise(x: i32, y: i32) -> f32 {
+    var n = x + y * 57;
+    n = (n << 13u) ^ n;
+    let h = (n * (n * n * 15731 + 789221) + 1376312589) & 0x7fffffff;
+    return f32(h) * (1.0 / 2147483647.0);
+}
+
 fn variation_pointgrid3d_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let xmin = get_param(xform_id, variation_id, 0u);
     let xcount = max(i32(get_param(xform_id, variation_id, 2u)), 1);

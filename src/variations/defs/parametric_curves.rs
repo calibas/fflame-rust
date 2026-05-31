@@ -328,7 +328,7 @@ pub static CROP3D: VariationDef = VariationDef {
     //   9: _xmax  11: _ymax  13: _zmax
     init_param_count: 6,
     wgsl_init: Some(r#"
-fn init_crop3d(user: array<f32, 8>) -> array<f32, 6> {
+fn init_crop3D(user: array<f32, 8>) -> array<f32, 6> {
     let left = user[0]; let top = user[1]; let floor = user[2];
     let right = user[3]; let bottom = user[4]; let ceiling = user[5];
     var out: array<f32, 6>;

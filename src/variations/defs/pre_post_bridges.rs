@@ -221,7 +221,7 @@ pub static POST_JULIA3DQ: VariationDef = VariationDef {
     //   5: inv_power_2pi    (2π / power)
     init_param_count: 4,
     wgsl_init: Some(r#"
-fn init_post_julia3dq(user: array<f32, 2>) -> array<f32, 4> {
+fn init_post_julia3Dq(user: array<f32, 2>) -> array<f32, 4> {
     let power = user[0];
     let divisor = user[1];
     let safe_power = select(power, 1e-30, power == 0.0);
