@@ -28,8 +28,10 @@ pub static ZTRANSLATE: VariationDef = VariationDef {
     needs_accum: false,
     wgsl_2d: r#"
 fn variation_ztranslate(p: vec2<f32>) -> vec2<f32> {
-    // ZTranslate only affects Z (3D mode), pass through in 2D
-    return p;
+    // 2D stub: ztranslate only writes Z. Returning `p` here would
+    // inject `weight × p.xy` into the variation accumulator (additive
+    // normal-phase dispatch) — same phantom-linear bug as zblur had.
+    return vec2<f32>(0.0, 0.0);
 }
 "#,
     wgsl_3d: Some(r#"
@@ -638,8 +640,12 @@ pub static JULIA3DZ: VariationDef = VariationDef {
     needs_accum: false,
     wgsl_2d: r#"
 fn variation_julia3Dz(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
-    // Julia3Dz is a 3D variation, pass through in 2D
-    return p;
+    // 2D stub: julia3Dz's XY contribution depends on z-derived
+    // coefficients, so it doesn't have a meaningful 2D fallback.
+    // Returning `p` would inject `weight × p.xy` (phantom-linear bug
+    // class). Better to no-op; for a 2D Julia effect, use `julia` or
+    // `julian` directly.
+    return vec2<f32>(0.0, 0.0);
 }
 "#,
     wgsl_3d: Some(r#"
