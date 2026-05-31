@@ -27,16 +27,21 @@ pub static ZBLUR: VariationDef = VariationDef {
     needs_accum: false,
     wgsl_2d: r#"
 fn variation_zblur(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
-    // ZBlur only affects Z (3D mode), pass through in 2D
-    return p;
+    // ZBlur only affects Z — pure no-op in 2D. Returning `p` here used
+    // to leak a `weight × p_xy` contribution into the variation
+    // accumulator (since external dispatch is `result += w · var(p)`),
+    // effectively planting a hidden linear with the zblur weight.
+    return vec2<f32>(0.0, 0.0);
 }
 "#,
     wgsl_3d: Some(r#"
 fn variation_zblur(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
-    // Apophysis: Gaussian blur on Z axis only
-    // result = (x, y, (rand₁ + rand₂ + rand₃ + rand₄ - 2))
+    // Apophysis `TXForm.ZBlur` and JWildfire's port both touch FPz
+    // only: `FPz += weight × (rand₁ + rand₂ + rand₃ + rand₄ − 2)`.
+    // XY contribution must be zero — returning (p.x, p.y, z_offset)
+    // would inject `weight · p.xy` as a phantom linear every iteration.
     let z_offset = rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) - 2.0;
-    return vec3<f32>(p.x, p.y, z_offset);
+    return vec3<f32>(0.0, 0.0, z_offset);
 }
 "#),
 };
