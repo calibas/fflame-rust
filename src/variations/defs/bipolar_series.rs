@@ -85,7 +85,7 @@ fn variation_bCollide(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f3
     return vec2<f32>(sinh(tau) * inv_t, sin(sigma) * inv_t);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_bCollide(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let num = max(get_param(xform_id, variation_id, 0u), 1.0);
     let a = get_param(xform_id, variation_id, 1u);
@@ -108,7 +108,7 @@ fn variation_bCollide(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
     let inv_t = 1.0 / select(temp, 1e-30, abs(temp) < 1e-30);
     return vec3<f32>(sinh(tau) * inv_t, sin(sigma) * inv_t, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -159,7 +159,7 @@ fn variation_bMod(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     return vec2<f32>(sinh(tau) / temp, sin(sigma) / temp);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_bMod(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let radius = get_param(xform_id, variation_id, 0u);
     let distance = get_param(xform_id, variation_id, 1u);
@@ -177,7 +177,7 @@ fn variation_bMod(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     if (temp == 0.0) { return vec3<f32>(0.0, 0.0, p.z); }
     return vec3<f32>(sinh(tau) / temp, sin(sigma) / temp, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -223,7 +223,7 @@ fn variation_bSwirl(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32>
     return vec2<f32>(sinh(tau) / temp, sin(sigma) / temp);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_bSwirl(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let in_p = get_param(xform_id, variation_id, 0u);
     let out_p = get_param(xform_id, variation_id, 1u);
@@ -237,7 +237,7 @@ fn variation_bSwirl(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
     if (temp == 0.0) { return vec3<f32>(0.0, 0.0, p.z); }
     return vec3<f32>(sinh(tau) / temp, sin(sigma) / temp, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -298,7 +298,7 @@ fn variation_barycentroid(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec
     );
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_barycentroid(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let a = get_param(xform_id, variation_id, 0u);
     let b = get_param(xform_id, variation_id, 1u);
@@ -322,7 +322,7 @@ fn variation_barycentroid(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec
         p.z,
     );
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -391,7 +391,7 @@ fn variation_eCollide(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f3
     );
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_eCollide(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let num = max(get_param(xform_id, variation_id, 0u), 1.0);
     let a = get_param(xform_id, variation_id, 1u);
@@ -418,7 +418,7 @@ fn variation_eCollide(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
         p.z,
     );
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -473,7 +473,7 @@ fn variation_eMod(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     return vec2<f32>(cosh(mu) * cos(nu), sinh(mu) * sin(nu));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_eMod(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let radius = get_param(xform_id, variation_id, 0u);
     let distance = get_param(xform_id, variation_id, 1u);
@@ -497,7 +497,7 @@ fn variation_eMod(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     }
     return vec3<f32>(cosh(mu) * cos(nu), sinh(mu) * sin(nu), p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -543,7 +543,7 @@ fn variation_eSwirl(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32>
     return vec2<f32>(cosh(mu) * cos(nu), sinh(mu) * sin(nu));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_eSwirl(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let in_p = get_param(xform_id, variation_id, 0u);
     let out_p = get_param(xform_id, variation_id, 1u);
@@ -558,7 +558,7 @@ fn variation_eSwirl(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
     nu = nu + mu * out_p + in_p / safe_mu;
     return vec3<f32>(cosh(mu) * cos(nu), sinh(mu) * sin(nu), p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -615,7 +615,7 @@ fn variation_eScale(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32>
     return vec2<f32>(cosh(mu) * cos(nu), sinh(mu) * sin(nu));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_eScale(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let scale = get_param(xform_id, variation_id, 0u);
     let angle_deg = get_param(xform_id, variation_id, 1u);
@@ -639,7 +639,7 @@ fn variation_eScale(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
     if (nu < -pi) { nu = nu + two_pi; }
     return vec3<f32>(cosh(mu) * cos(nu), sinh(mu) * sin(nu), p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -688,7 +688,7 @@ fn variation_ePush(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> 
     return vec2<f32>(cosh(mu) * cos(nu), sinh(mu) * sin(nu));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_ePush(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let push = get_param(xform_id, variation_id, 0u);
     let dist = get_param(xform_id, variation_id, 1u);
@@ -704,7 +704,7 @@ fn variation_ePush(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
     mu = mu * dist + push;
     return vec3<f32>(cosh(mu) * cos(nu), sinh(mu) * sin(nu), p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -756,7 +756,7 @@ fn variation_eRotate(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32
     );
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_eRotate(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let rotate = get_param(xform_id, variation_id, 0u);
     let pi = 3.14159265358979;
@@ -775,5 +775,5 @@ fn variation_eRotate(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
         p.z,
     );
 }
-"#),
+"#,
 };

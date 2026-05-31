@@ -84,7 +84,7 @@ fn variation_dc_carpet(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<
     return vec2<f32>(xf.a * x + xf.b * y + xf.e, xf.c * x + xf.d * y + xf.f);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn dc_carpet_signum(v: f32) -> f32 {
     if (v < 0.0) { return -1.0; }
     return 1.0;
@@ -105,7 +105,7 @@ fn variation_dc_carpet(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
     let y = dc_carpet_signum(p.y) * fy + y0;
     return vec3<f32>(xf.a * x + xf.b * y + xf.e, xf.c * x + xf.d * y + xf.f, p.z);
 }
-"#),
+"#,
 };
 
 // ---------------------------------------------------------------------------
@@ -154,7 +154,7 @@ fn variation_post_point_symmetry_wf(p: vec2<f32>, xform_id: u32, variation_id: u
     return vec2<f32>(cx + dx * cosa + dy * sina, cy + dy * cosa - dx * sina);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_post_point_symmetry_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let cx = get_param(xform_id, variation_id, 0u);
     let cy = get_param(xform_id, variation_id, 1u);
@@ -172,7 +172,7 @@ fn variation_post_point_symmetry_wf(p: vec3<f32>, xform_id: u32, variation_id: u
     let sina = sin(angle);
     return vec3<f32>(cx + dx * cosa + dy * sina, cy + dy * cosa - dx * sina, p.z);
 }
-"#),
+"#,
 };
 
 // ---------------------------------------------------------------------------
@@ -267,7 +267,7 @@ fn variation_cpow3_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
     return vec2<f32>(ri * cos(ang2), ri * sin(ang2));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_cpow3_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let spread = get_param(xform_id, variation_id, 3u);
     let discrete_spread = get_param(xform_id, variation_id, 4u);
@@ -300,5 +300,5 @@ fn variation_cpow3_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
     let ang2 = c * ai * half_d * lnr2 * ang * (rng_nextf(rng) * spread2 + offset2);
     return vec3<f32>(ri * cos(ang2), ri * sin(ang2), p.z);
 }
-"#),
+"#,
 };

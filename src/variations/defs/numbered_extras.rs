@@ -109,7 +109,7 @@ fn variation_bipolar2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f3
     );
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_bipolar2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let shift = get_param(xform_id, variation_id, 0u);
     let a = get_param(xform_id, variation_id, 1u);
@@ -148,7 +148,7 @@ fn variation_bipolar2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
         p.z,
     );
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -194,7 +194,7 @@ fn variation_blob3D(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32>
     return vec2<f32>(sin(a) * r, cos(a) * r);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_blob3D(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let low = get_param(xform_id, variation_id, 0u);
     let high = get_param(xform_id, variation_id, 1u);
@@ -205,7 +205,7 @@ fn variation_blob3D(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
     let r = r0 * (low + (high - low) * (0.5 + 0.5 * sin(waves * a)));
     return vec3<f32>(sin(a) * r, cos(a) * r, sin(waves * a) * r);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -254,7 +254,7 @@ fn variation_circular2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<
     return vec2<f32>(cos(ang + rnd) * rad, sin(ang + rnd) * rad);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_circular2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let angle_deg = get_param(xform_id, variation_id, 0u);
     let seed = get_param(xform_id, variation_id, 1u);
@@ -268,5 +268,5 @@ fn variation_circular2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
     let ang = atan2(p.y, p.x);
     return vec3<f32>(cos(ang + rnd) * rad, sin(ang + rnd) * rad, p.z);
 }
-"#),
+"#,
 };

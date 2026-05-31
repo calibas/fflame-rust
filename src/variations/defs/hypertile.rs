@@ -113,7 +113,7 @@ fn variation_hypertile(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f
     );
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_hypertile(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let re = get_param(xform_id, variation_id, 3u);
     let im = get_param(xform_id, variation_id, 4u);
@@ -131,7 +131,7 @@ fn variation_hypertile(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
         p.z,
     );
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -210,7 +210,7 @@ fn variation_hypertile1(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr
     );
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_hypertile1(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let pa = get_param(xform_id, variation_id, 2u);
     let r = get_param(xform_id, variation_id, 3u);
@@ -234,7 +234,7 @@ fn variation_hypertile1(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
         p.z,
     );
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -315,7 +315,7 @@ fn variation_hypertile2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr
     );
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_hypertile2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let pa = get_param(xform_id, variation_id, 2u);
     let r = get_param(xform_id, variation_id, 3u);
@@ -339,7 +339,7 @@ fn variation_hypertile2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
         p.z,
     );
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -379,7 +379,7 @@ pub static HYPERTILE3D: VariationDef = VariationDef {
     //  10: s2z    1 - cx² - cy²
     init_param_count: 8,
     wgsl_init: Some(r#"
-fn init_hypertile3d(user: array<f32, 3>) -> array<f32, 8> {
+fn init_hypertile3D(user: array<f32, 3>) -> array<f32, 8> {
     let pi = 3.14159265358979;
     let p = user[0];
     let q = user[1];
@@ -436,7 +436,7 @@ fn variation_hypertile3D(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2
     );
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_hypertile3D(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let cx = get_param(xform_id, variation_id, 3u);
     let cy = get_param(xform_id, variation_id, 4u);
@@ -459,7 +459,7 @@ fn variation_hypertile3D(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3
         d * (p.z * s2z),
     );
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -493,7 +493,7 @@ pub static HYPERTILE3D1: VariationDef = VariationDef {
     //   5: s2z   1 - r²
     init_param_count: 4,
     wgsl_init: Some(r#"
-fn init_hypertile3d1(user: array<f32, 2>) -> array<f32, 4> {
+fn init_hypertile3D1(user: array<f32, 2>) -> array<f32, 4> {
     let pi = 3.14159265358979;
     let p = user[0];
     let q = user[1];
@@ -546,7 +546,7 @@ fn variation_hypertile3D1(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: p
     );
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_hypertile3D1(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let pa = get_param(xform_id, variation_id, 2u);
     let r = get_param(xform_id, variation_id, 3u);
@@ -575,7 +575,7 @@ fn variation_hypertile3D1(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: p
         d * (p.z * s2z),
     );
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -613,7 +613,7 @@ pub static HYPERTILE3D2: VariationDef = VariationDef {
     //   8: s2z   1 - cx²
     init_param_count: 7,
     wgsl_init: Some(r#"
-fn init_hypertile3d2(user: array<f32, 2>) -> array<f32, 7> {
+fn init_hypertile3D2(user: array<f32, 2>) -> array<f32, 7> {
     let pi = 3.14159265358979;
     let p = user[0];
     let q = user[1];
@@ -668,7 +668,7 @@ fn variation_hypertile3D2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: p
     );
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_hypertile3D2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let pa = get_param(xform_id, variation_id, 2u);
     let cx = get_param(xform_id, variation_id, 3u);
@@ -695,5 +695,5 @@ fn variation_hypertile3D2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: p
         inv * (p.z * s2z),
     );
 }
-"#),
+"#,
 };

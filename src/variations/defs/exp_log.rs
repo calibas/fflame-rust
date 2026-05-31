@@ -46,12 +46,12 @@ fn variation_exp(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(e * cos(p.y), e * sin(p.y));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_exp(p: vec3<f32>) -> vec3<f32> {
     let e = exp(p.x);
     return vec3<f32>(e * cos(p.y), e * sin(p.y), p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -128,7 +128,7 @@ fn variation_log_db(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
     return vec2<f32>(denom * log(r2), atan2(p.x, p.y) + fix_atan_period);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_log_db(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let denom = get_param(xform_id, variation_id, 2u);
     let fixpe = get_param(xform_id, variation_id, 3u);
@@ -146,7 +146,7 @@ fn variation_log_db(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
     let r2 = max(p.x * p.x + p.y * p.y, 1e-40);
     return vec3<f32>(denom * log(r2), atan2(p.x, p.y) + fix_atan_period, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -196,7 +196,7 @@ fn variation_log_tile2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<
     return vec2<f32>(p.x + spreadx * lx, p.y + spready * ly);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_log_tile2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let sx = get_param(xform_id, variation_id, 0u);
     let sy = get_param(xform_id, variation_id, 1u);
@@ -209,7 +209,7 @@ fn variation_log_tile2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
     let lz = round(log(max(rng_nextf(rng), 1e-30)));
     return vec3<f32>(p.x + spreadx * lx, p.y + spready * ly, p.z + spreadz * lz);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -247,11 +247,11 @@ fn variation_tile_log(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
     return vec2<f32>(p.x + round(x * log(max(rng_nextf(rng), 1e-30))), p.y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_tile_log(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let sp = get_param(xform_id, variation_id, 0u);
     let x = select(-sp, sp, rng_nextf(rng) < 0.5);
     return vec3<f32>(p.x + round(x * log(max(rng_nextf(rng), 1e-30))), p.y, p.z);
 }
-"#),
+"#,
 };

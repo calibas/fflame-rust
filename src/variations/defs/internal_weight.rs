@@ -88,7 +88,7 @@ fn variation_loonie3(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32
     return p;
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_loonie3(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let w = transforms[xform_id].variations[variation_id];
     let sqrvvar = w * w;
@@ -103,7 +103,7 @@ fn variation_loonie3(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
     }
     return p;
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -154,7 +154,7 @@ fn variation_loonie_3D(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f
     return p;
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_loonie_3D(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let w = transforms[xform_id].variations[variation_id];
     let sqrvvar = w * w;
@@ -169,7 +169,7 @@ fn variation_loonie_3D(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
     }
     return vec3<f32>(p.x, p.y, ef_z * 0.5);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -246,7 +246,7 @@ fn variation_sigmoid(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32
 "#,
     // Upstream has no FPz line — return 0 for z so outer × weight = 0
     // contribution to the z accumulator.
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_sigmoid(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let shiftx_in = get_param(xform_id, variation_id, 0u);
     let shifty_in = get_param(xform_id, variation_id, 1u);
@@ -280,7 +280,7 @@ fn variation_sigmoid(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
     let c1 = ay / (1.0 + exp(sy * p.y));
     return vec3<f32>(sgn * 2.0 * (c0 - 0.5), sgn * 2.0 * (c1 - 0.5), 0.0);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -357,7 +357,7 @@ fn variation_blocky(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32>
     return vec2<f32>(out_x * inv_w, out_y * inv_w);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_blocky(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let px = get_param(xform_id, variation_id, 0u);
     let py = get_param(xform_id, variation_id, 1u);
@@ -390,5 +390,5 @@ fn variation_blocky(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
     // the outer multiplier produces VVAR · p.z.
     return vec3<f32>(out_x * inv_w, out_y * inv_w, p.z);
 }
-"#),
+"#,
 };

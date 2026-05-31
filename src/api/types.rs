@@ -394,6 +394,10 @@ pub struct CreateFlameRequest {
     pub fog_strength: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fog_start: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filter_radius: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filter_blur_edges: Option<f32>,
 
     // Rendering
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -469,6 +473,8 @@ pub struct CreateFlameRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub alpha_blend_high: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub levels_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub levels_low: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub levels_high: Option<f32>,
@@ -507,6 +513,10 @@ pub struct FlameResponse {
     pub dof_blur_strength: f32,
     pub fog_strength: f32,
     pub fog_start: f32,
+    #[serde(default)]
+    pub filter_radius: Option<f32>,
+    #[serde(default)]
+    pub filter_blur_edges: Option<f32>,
     pub density_scale: f32,
     pub speed_factor: f32,
     pub max_iterations: u64,
@@ -549,6 +559,8 @@ pub struct FlameResponse {
     pub hue_shift: f32,
     pub alpha_blend_low: f32,
     pub alpha_blend_high: f32,
+    #[serde(default)]
+    pub levels_enabled: bool,
     pub levels_low: f32,
     pub levels_high: f32,
     pub levels_gamma: f32,

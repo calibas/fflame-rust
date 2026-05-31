@@ -724,7 +724,8 @@ pub struct TonemapParams {
     pub levels_high: f32,  // Density (× mean) above this → fully opaque
     pub levels_gamma: f32,  // Gamma/midpoint for density curve (1.0 = linear)
     pub highlight_mode: u32,  // 0 = Clip (per-channel clamp, Apophysis), 1 = MaxNorm (hue-preserving)
-    pub _pad_highlight: [u32; 3],  // Pad trailing chunk to 16 bytes for std140 alignment
+    pub levels_enabled: u32,  // 0 = Levels off (Apo-matching), 1 = on
+    pub _pad_levels: [u32; 2],  // Pad trailing chunk to 16 bytes for std140 alignment
 }
 
 impl Default for TonemapParams {
@@ -762,9 +763,25 @@ impl Default for TonemapParams {
             levels_high: crate::config::defaults::DEFAULT_LEVELS_HIGH,
             levels_gamma: crate::config::defaults::DEFAULT_LEVELS_GAMMA,
             highlight_mode: 0,  // Clip (Apophysis-compatible)
-            _pad_highlight: [0; 3],
+            levels_enabled: 0,  // Levels off — Apo-matching default
+            _pad_levels: [0; 2],
         }
     }
+}
+
+/// Histogram-blur parameters (matches `BlurParams` in histogram_blur.wgsl).
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct HistogramBlurParams {
+    pub width: u32,
+    pub height: u32,
+    pub radius_pixels: f32,
+    pub direction: u32,  // 0 = horizontal, 1 = vertical
+    /// Bilateral weighting `σ_d` in u32-histogram density units. Taps
+    /// whose density differs from the center by ≳ `density_sigma` get
+    /// weight ≈ 0, preserving edges. Large value → uniform Gaussian.
+    pub density_sigma: f32,
+    pub _pad: [u32; 3],  // pad to 32 bytes for std140 alignment
 }
 
 /// Accumulation parameters
@@ -810,6 +827,12 @@ pub struct FlameBuffers {
     pub params_buffer: Buffer,
     pub tonemap_params_buffer: Buffer,
     pub accumulate_params_buffer: Buffer,
+    // Two uniform buffers, one per direction. `queue.write_buffer` orders
+    // are flattened before any encoded dispatch executes, so a single
+    // buffer with rewrites between dispatches would race — both passes
+    // would see the latest value.
+    pub histogram_blur_params_buffer_h: Buffer,
+    pub histogram_blur_params_buffer_v: Buffer,
 
     // Dual textures for ping-pong accumulation
     pub accumulation_texture_a: Texture,
@@ -824,6 +847,11 @@ pub struct FlameBuffers {
     // Histogram storage buffer for atomic color accumulation (within-frame)
     // Layout: [r, g, b, density] × (width × height) as u32 array
     pub histogram_buffer: Buffer,
+    // Second histogram buffer used as the spatial-filter scratch — when
+    // `filter_radius > 0`, the histogram-blur pass writes the horizontal
+    // Gaussian pass here and the vertical pass writes back to the primary
+    // buffer that accumulate.wgsl reads. Same layout/size as the primary.
+    pub histogram_buffer_scratch: Buffer,
 
     // Per-pixel iteration count buffer for convergence tracking
     // Per-pixel path buffer for PathMap color mode (OPTIONAL)
@@ -999,6 +1027,20 @@ impl FlameBuffers {
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
         });
 
+        // Histogram-blur params, one per direction. `direction` is set
+        // once at construction; only width/height/radius_pixels get
+        // rewritten between batches via `update_histogram_blur_params`.
+        let histogram_blur_params_buffer_h = device.create_buffer_init(&util::BufferInitDescriptor {
+            label: Some("Histogram Blur Params Buffer (H)"),
+            contents: bytemuck::cast_slice(&[HistogramBlurParams { width, height, radius_pixels: 0.0, direction: 0, density_sigma: f32::INFINITY, _pad: [0; 3] }]),
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+        });
+        let histogram_blur_params_buffer_v = device.create_buffer_init(&util::BufferInitDescriptor {
+            label: Some("Histogram Blur Params Buffer (V)"),
+            contents: bytemuck::cast_slice(&[HistogramBlurParams { width, height, radius_pixels: 0.0, direction: 1, density_sigma: f32::INFINITY, _pad: [0; 3] }]),
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+        });
+
         // Helper function to create accumulation texture
         let create_accum_texture = |label: &str| {
             // WASM needs RENDER_ATTACHMENT for clear_texture_wasm() to work
@@ -1056,6 +1098,12 @@ impl FlameBuffers {
         let histogram_buffer_size = (width * height * 4 * std::mem::size_of::<u32>() as u32) as u64;
         let histogram_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Histogram Buffer"),
+            size: histogram_buffer_size,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let histogram_buffer_scratch = device.create_buffer(&BufferDescriptor {
+            label: Some("Histogram Buffer (scratch for spatial filter)"),
             size: histogram_buffer_size,
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
             mapped_at_creation: false,
@@ -1238,6 +1286,8 @@ impl FlameBuffers {
             params_buffer,
             tonemap_params_buffer,
             accumulate_params_buffer,
+            histogram_blur_params_buffer_h,
+            histogram_blur_params_buffer_v,
             accumulation_texture_a,
             accumulation_texture_b,
             accumulation_view_a,
@@ -1245,6 +1295,7 @@ impl FlameBuffers {
             temp_samples_texture,
             temp_samples_view,
             histogram_buffer,
+            histogram_buffer_scratch,
             path_buffer,
             path_filter_buffer,
             dummy_path_buffer,
@@ -1435,6 +1486,17 @@ impl FlameBuffers {
     /// Update accumulate parameters
     pub fn update_accumulate_params(&self, queue: &Queue, params: &AccumulateParams) {
         queue.write_buffer(&self.accumulate_params_buffer, 0, bytemuck::cast_slice(&[*params]));
+    }
+
+    /// Update width/height/radius/density_sigma for both blur-params buffers
+    /// in one shot. `direction` is fixed at construction (H=0, V=1) and not
+    /// overwritten — each buffer keeps its own direction so the two passes
+    /// are race-free.
+    pub fn update_histogram_blur_params(&self, queue: &Queue, width: u32, height: u32, radius_pixels: f32, density_sigma: f32) {
+        let h = HistogramBlurParams { width, height, radius_pixels, direction: 0, density_sigma, _pad: [0; 3] };
+        let v = HistogramBlurParams { width, height, radius_pixels, direction: 1, density_sigma, _pad: [0; 3] };
+        queue.write_buffer(&self.histogram_blur_params_buffer_h, 0, bytemuck::cast_slice(&[h]));
+        queue.write_buffer(&self.histogram_blur_params_buffer_v, 0, bytemuck::cast_slice(&[v]));
     }
 
     /// Update transforms.

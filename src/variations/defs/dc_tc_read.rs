@@ -92,7 +92,7 @@ fn variation_dc_ztransl(p: vec2<f32>, xform_id: u32, variation_id: u32, vc: ptr<
     return p;
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_dc_ztransl(p: vec3<f32>, xform_id: u32, variation_id: u32, vc: ptr<function, f32>) -> vec3<f32> {
     let x0_u = get_param(xform_id, variation_id, 0u);
     let x1_u = get_param(xform_id, variation_id, 1u);
@@ -114,7 +114,7 @@ fn variation_dc_ztransl(p: vec3<f32>, xform_id: u32, variation_id: u32, vc: ptr<
     let nz = select(zf, p.z * zf, overwrite == 0);
     return vec3<f32>(p.x, p.y, nz);
 }
-"#),
+"#,
 };
 
 // ---------------------------------------------------------------------------
@@ -167,7 +167,7 @@ fn variation_pre_dcztransl(p: vec2<f32>, xform_id: u32, variation_id: u32, vc: p
     return vec2<f32>(w * p.x, w * p.y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_pre_dcztransl(p: vec3<f32>, xform_id: u32, variation_id: u32, vc: ptr<function, f32>) -> vec3<f32> {
     let x0_u = get_param(xform_id, variation_id, 0u);
     let x1_u = get_param(xform_id, variation_id, 1u);
@@ -190,7 +190,7 @@ fn variation_pre_dcztransl(p: vec3<f32>, xform_id: u32, variation_id: u32, vc: p
     let nz = select(w * zf, w * p.z * zf, overwrite == 0);
     return vec3<f32>(w * p.x, w * p.y, nz);
 }
-"#),
+"#,
 };
 
 // ---------------------------------------------------------------------------
@@ -233,7 +233,7 @@ fn variation_colorscale_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, vc: p
     return vec2<f32>(scale_x * p.x, scale_y * p.y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_colorscale_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, vc: ptr<function, f32>) -> vec3<f32> {
     let scale_x = get_param(xform_id, variation_id, 0u);
     let scale_y = get_param(xform_id, variation_id, 1u);
@@ -249,7 +249,7 @@ fn variation_colorscale_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, vc: p
     let nz = dz * inv_w;
     return vec3<f32>(scale_x * p.x, scale_y * p.y, nz);
 }
-"#),
+"#,
 };
 
 // ---------------------------------------------------------------------------
@@ -297,7 +297,7 @@ fn variation_post_colorscale_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, 
     return vec2<f32>(p.x * (1.0 + w * scale_x), p.y * (1.0 + w * scale_y));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_post_colorscale_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, vc: ptr<function, f32>) -> vec3<f32> {
     let scale_x = get_param(xform_id, variation_id, 0u);
     let scale_y = get_param(xform_id, variation_id, 1u);
@@ -311,5 +311,5 @@ fn variation_post_colorscale_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, 
     let nz = select(p.z + dz, dz, reset_z > 0.0);
     return vec3<f32>(p.x * (1.0 + w * scale_x), p.y * (1.0 + w * scale_y), nz);
 }
-"#),
+"#,
 };

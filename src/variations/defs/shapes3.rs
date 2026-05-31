@@ -82,7 +82,7 @@ fn variation_super_shape(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: pt
     return vec2<f32>(r * p.x, r * p.y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_super_shape(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let rnd = get_param(xform_id, variation_id, 0u);
     let m = get_param(xform_id, variation_id, 1u);
@@ -101,7 +101,7 @@ fn variation_super_shape(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: pt
             * pow(max(t1 + t2, 1e-30), -1.0 / safe_n1) / len;
     return vec3<f32>(r * p.x, r * p.y, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -142,14 +142,14 @@ fn variation_henon(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> 
     return vec2<f32>(c - a * p.x * p.x + p.y, b * p.x);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_henon(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let a = get_param(xform_id, variation_id, 0u);
     let b = get_param(xform_id, variation_id, 1u);
     let c = get_param(xform_id, variation_id, 2u);
     return vec3<f32>(c - a * p.x * p.x + p.y, b * p.x, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -204,7 +204,7 @@ fn variation_apollony(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     return vec2<f32>(-f1x * 0.5 + f1y * r * 0.5, -f1x * r * 0.5 - f1y * 0.5);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_apollony(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
     let r = 1.7320508075688772;
     let denom = (1.0 + r - p.x) * (1.0 + r - p.x) + p.y * p.y + 1e-30;
@@ -222,5 +222,5 @@ fn variation_apollony(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
     }
     return vec3<f32>(-f1x * 0.5 + f1y * r * 0.5, -f1x * r * 0.5 - f1y * 0.5, p.z);
 }
-"#),
+"#,
 };

@@ -81,7 +81,7 @@ fn variation_loq(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     return vec2<f32>(fx, fy);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_loq(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let base = max(get_param(xform_id, variation_id, 0u), 1.000001);
     let abs_v = max(sqrt(p.y * p.y + p.z * p.z), 1e-30);
@@ -93,7 +93,7 @@ fn variation_loq(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let fz = c_val * p.z;
     return vec3<f32>(fx, fy, fz);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -182,7 +182,7 @@ fn variation_spirograph3D(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: p
     return vec2<f32>(x1 + w1, y1 + w2);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_spirograph3D(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let a = get_param(xform_id, variation_id, 0u);
     let b = get_param(xform_id, variation_id, 1u);
@@ -226,5 +226,5 @@ fn variation_spirograph3D(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: p
     let z1 = c_p * sin(abdb * t);
     return vec3<f32>(x1 + w1, y1 + w2, z1 + w3);
 }
-"#),
+"#,
 };

@@ -70,13 +70,13 @@ fn variation_exp2(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(a * cos(p.y * pi), a * sin(p.y * pi));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_exp2(p: vec3<f32>) -> vec3<f32> {
     let pi = 3.14159265358979;
     let a = exp(p.x * pi);
     return vec3<f32>(a * cos(p.y * pi), a * sin(p.y * pi), p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -113,14 +113,14 @@ fn variation_exponential(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(cos(r) * d, sin(r) * d);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_exponential(p: vec3<f32>) -> vec3<f32> {
     let pi = 3.14159265358979;
     let r = pi * p.y;
     let d = exp(p.x - 1.0);
     return vec3<f32>(cos(r) * d, sin(r) * d, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -156,12 +156,12 @@ fn variation_flipy(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(p.x, sy * p.y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_flipy(p: vec3<f32>) -> vec3<f32> {
     let sy = select(1.0, -1.0, p.x > 0.0);
     return vec3<f32>(p.x, sy * p.y, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -207,7 +207,7 @@ fn variation_funnel(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32>
     return vec2<f32>(fx, fy);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_funnel(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let effect = get_param(xform_id, variation_id, 0u);
     let pi = 3.14159265358979;
@@ -219,7 +219,7 @@ fn variation_funnel(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
     let fy = tanh(p.y) * (1.0 / safe_cy + effect * pi);
     return vec3<f32>(fx, fy, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -253,13 +253,13 @@ fn variation_invpolar(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(ny * sin(p.x * pi), ny * cos(p.x * pi));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_invpolar(p: vec3<f32>) -> vec3<f32> {
     let pi = 3.14159265358979;
     let ny = 1.0 + p.y;
     return vec3<f32>(ny * sin(p.x * pi), ny * cos(p.x * pi), p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -319,7 +319,7 @@ fn variation_perspective(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2
     return vec2<f32>(dist * p.x * t, vfcos * p.y * t);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_perspective(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let dist = get_param(xform_id, variation_id, 1u);
     let vsin = get_param(xform_id, variation_id, 2u);
@@ -330,7 +330,7 @@ fn variation_perspective(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3
     let t = 1.0 / safe_d;
     return vec3<f32>(dist * p.x * t, vfcos * p.y * t, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -382,7 +382,7 @@ fn variation_line(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<funct
     return vec2<f32>(ux * r * inv_w, uy * r * inv_w);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_line(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let delta = get_param(xform_id, variation_id, 0u);
     let phi = get_param(xform_id, variation_id, 1u);
@@ -397,7 +397,7 @@ fn variation_line(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<funct
     let r = rng_nextf(rng) * w;
     return vec3<f32>(ux * r * inv_w, uy * r * inv_w, uz * r * inv_w);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -473,7 +473,7 @@ fn variation_holesq(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32>
     return vec2<f32>(fx * inv_w, fy * inv_w);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_holesq(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let w = transforms[xform_id].variations[variation_id];
     let inv_w = 1.0 / select(w, 1e-30, abs(w) < 1e-30);
@@ -509,5 +509,5 @@ fn variation_holesq(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
     }
     return vec3<f32>(fx * inv_w, fy * inv_w, p.z);
 }
-"#),
+"#,
 };

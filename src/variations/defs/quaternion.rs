@@ -56,7 +56,7 @@ fn variation_sinq(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(s * ch, coef * p.y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_sinq(p: vec3<f32>) -> vec3<f32> {
     let v = max(sqrt(p.y * p.y + p.z * p.z), 1e-20);
     let s = sin(p.x); let c = cos(p.x);
@@ -64,7 +64,7 @@ fn variation_sinq(p: vec3<f32>) -> vec3<f32> {
     let coef = c * sh / v;
     return vec3<f32>(s * ch, coef * p.y, coef * p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -99,7 +99,7 @@ fn variation_cosq(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(c * ch, coef * p.y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_cosq(p: vec3<f32>) -> vec3<f32> {
     let v = max(sqrt(p.y * p.y + p.z * p.z), 1e-20);
     let s = sin(p.x); let c = cos(p.x);
@@ -107,7 +107,7 @@ fn variation_cosq(p: vec3<f32>) -> vec3<f32> {
     let coef = -s * sh / v;
     return vec3<f32>(c * ch, coef * p.y, coef * p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -141,7 +141,7 @@ fn variation_sinhq(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(sh * c, coef * p.y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_sinhq(p: vec3<f32>) -> vec3<f32> {
     let v = max(sqrt(p.y * p.y + p.z * p.z), 1e-20);
     let s = sin(v); let c = cos(v);
@@ -149,7 +149,7 @@ fn variation_sinhq(p: vec3<f32>) -> vec3<f32> {
     let coef = ch * s / v;
     return vec3<f32>(sh * c, coef * p.y, coef * p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -183,7 +183,7 @@ fn variation_coshq(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(ch * c, coef * p.y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_coshq(p: vec3<f32>) -> vec3<f32> {
     let v = max(sqrt(p.y * p.y + p.z * p.z), 1e-20);
     let s = sin(v); let c = cos(v);
@@ -191,7 +191,7 @@ fn variation_coshq(p: vec3<f32>) -> vec3<f32> {
     let coef = sh * s / v;
     return vec3<f32>(ch * c, coef * p.y, coef * p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -230,7 +230,7 @@ fn variation_secq(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(c * ch * ni, -coef * p.y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_secq(p: vec3<f32>) -> vec3<f32> {
     let v = max(sqrt(p.y * p.y + p.z * p.z), 1e-20);
     let norm2 = max(p.x * p.x + p.y * p.y + p.z * p.z, 1e-20);
@@ -240,7 +240,7 @@ fn variation_secq(p: vec3<f32>) -> vec3<f32> {
     let coef = ni * s * sh / v;
     return vec3<f32>(c * ch * ni, -coef * p.y, -coef * p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -276,7 +276,7 @@ fn variation_cscq(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(s * ch * ni, -coef * p.y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_cscq(p: vec3<f32>) -> vec3<f32> {
     let v = max(sqrt(p.y * p.y + p.z * p.z), 1e-20);
     let norm2 = max(p.x * p.x + p.y * p.y + p.z * p.z, 1e-20);
@@ -286,7 +286,7 @@ fn variation_cscq(p: vec3<f32>) -> vec3<f32> {
     let coef = ni * c * sh / v;
     return vec3<f32>(s * ch * ni, -coef * p.y, -coef * p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -322,7 +322,7 @@ fn variation_sechq(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(ch * c * ni, -coef * p.y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_sechq(p: vec3<f32>) -> vec3<f32> {
     let v = max(sqrt(p.y * p.y + p.z * p.z), 1e-20);
     let norm2 = max(p.x * p.x + p.y * p.y + p.z * p.z, 1e-20);
@@ -332,7 +332,7 @@ fn variation_sechq(p: vec3<f32>) -> vec3<f32> {
     let coef = ni * sh * s / v;
     return vec3<f32>(ch * c * ni, -coef * p.y, -coef * p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -368,7 +368,7 @@ fn variation_cschq(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(sh * c * ni, -coef * p.y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_cschq(p: vec3<f32>) -> vec3<f32> {
     let v = max(sqrt(p.y * p.y + p.z * p.z), 1e-20);
     let norm2 = max(p.x * p.x + p.y * p.y + p.z * p.z, 1e-20);
@@ -378,7 +378,7 @@ fn variation_cschq(p: vec3<f32>) -> vec3<f32> {
     let coef = ni * ch * s / v;
     return vec3<f32>(sh * c * ni, -coef * p.y, -coef * p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -424,7 +424,7 @@ fn variation_tanq(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(rx, ry);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_tanq(p: vec3<f32>) -> vec3<f32> {
     let v = max(sqrt(p.y * p.y + p.z * p.z), 1e-20);
     let sysz = p.y * p.y + p.z * p.z;
@@ -440,7 +440,7 @@ fn variation_tanq(p: vec3<f32>) -> vec3<f32> {
     let rz = (-stcv * bb * p.z + cc * p.z * ctcv) * ni;
     return vec3<f32>(rx, ry, rz);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -481,7 +481,7 @@ fn variation_cotq(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(rx, ry);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_cotq(p: vec3<f32>) -> vec3<f32> {
     let v = max(sqrt(p.y * p.y + p.z * p.z), 1e-20);
     let sysz = p.y * p.y + p.z * p.z;
@@ -497,7 +497,7 @@ fn variation_cotq(p: vec3<f32>) -> vec3<f32> {
     let rz = -(-stcv * bb * p.z + cc * p.z * ctcv) * ni;
     return vec3<f32>(rx, ry, rz);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -540,7 +540,7 @@ fn variation_tanhq(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(rx, ry);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_tanhq(p: vec3<f32>) -> vec3<f32> {
     let v = max(sqrt(p.y * p.y + p.z * p.z), 1e-20);
     let sysz = p.y * p.y + p.z * p.z;
@@ -556,7 +556,7 @@ fn variation_tanhq(p: vec3<f32>) -> vec3<f32> {
     let rz = (-stcv * bb * p.z + cc * p.z * ctcv) * ni;
     return vec3<f32>(rx, ry, rz);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -598,7 +598,7 @@ fn variation_cothq(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(rx, ry);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_cothq(p: vec3<f32>) -> vec3<f32> {
     let v = max(sqrt(p.y * p.y + p.z * p.z), 1e-20);
     let sysz = p.y * p.y + p.z * p.z;
@@ -614,5 +614,5 @@ fn variation_cothq(p: vec3<f32>) -> vec3<f32> {
     let rz = (-stcv * bb * p.z + cc * p.z * ctcv) * ni;
     return vec3<f32>(rx, ry, rz);
 }
-"#),
+"#,
 };

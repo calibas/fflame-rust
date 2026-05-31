@@ -90,7 +90,7 @@ fn variation_erf(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(fx, fy);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_erf(p: vec3<f32>) -> vec3<f32> {
     let pp = 0.3275911;
     let a1 = 0.254829592;
@@ -110,7 +110,7 @@ fn variation_erf(p: vec3<f32>) -> vec3<f32> {
     let fy = sy * (1.0 - polyy * exp(-ay * ay));
     return vec3<f32>(fx, fy, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -160,7 +160,7 @@ fn variation_erf3D(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(fx, fy);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_erf3D(p: vec3<f32>) -> vec3<f32> {
     let pp = 0.3275911;
     let a1 = 0.254829592;
@@ -185,7 +185,7 @@ fn variation_erf3D(p: vec3<f32>) -> vec3<f32> {
     let fz = sz * (1.0 - polyz * exp(-az * az));
     return vec3<f32>(fx, fy, fz);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -228,7 +228,7 @@ fn variation_d_spherical(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: pt
     return p;
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_d_spherical(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let d_spher_weight = get_param(xform_id, variation_id, 0u);
     if (rng_nextf(rng) < d_spher_weight) {
@@ -237,7 +237,7 @@ fn variation_d_spherical(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: pt
     }
     return p;
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -286,7 +286,7 @@ fn variation_dustpoint(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> 
     return vec2<f32>(p.x / 3.0 + 2.0 / 3.0, p.y / 3.0);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_dustpoint(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
     let p_sign = select(-1.0, 1.0, rng_nextf(rng) < 0.5);
     let r = sqrt(max(p.x * p.x + p.y * p.y, 1e-30));
@@ -298,7 +298,7 @@ fn variation_dustpoint(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> 
     }
     return vec3<f32>(p.x / 3.0 + 2.0 / 3.0, p.y / 3.0, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -342,7 +342,7 @@ fn variation_deltaA(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32>
     return vec2<f32>(avgr * cos(avga) * inv_w, avgr * sin(avga) * inv_w);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_deltaA(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let w = transforms[xform_id].variations[variation_id];
     let inv_w = 1.0 / select(w, 1e-30, abs(w) < 1e-30);
@@ -353,7 +353,7 @@ fn variation_deltaA(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
     let avga = (atan2(p.y, p.x - 1.0) - atan2(p.y, p.x + 1.0)) * 0.5;
     return vec3<f32>(avgr * cos(avga) * inv_w, avgr * sin(avga) * inv_w, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -417,7 +417,7 @@ fn variation_edisc(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> 
     return vec2<f32>(wlocal * csh * cs * inv_w, wlocal * snh * sn * inv_w);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_edisc(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let w = transforms[xform_id].variations[variation_id];
     let inv_w = 1.0 / select(w, 1e-30, abs(w) < 1e-30);
@@ -441,7 +441,7 @@ fn variation_edisc(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
     }
     return vec3<f32>(wlocal * csh * cs * inv_w, wlocal * snh * sn * inv_w, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -500,7 +500,7 @@ fn variation_curve(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> 
     return vec2<f32>(fx, fy);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_curve(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let xamp = get_param(xform_id, variation_id, 0u);
     let yamp = get_param(xform_id, variation_id, 1u);
@@ -511,7 +511,7 @@ fn variation_curve(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
     let fy = p.y + yamp * exp(-p.x * p.x / pc_ylen);
     return vec3<f32>(fx, fy, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -611,7 +611,7 @@ fn variation_elliptic2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<
     return vec2<f32>(fx * inv_w, fy * inv_w);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_elliptic2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let a1 = get_param(xform_id, variation_id, 0u);
     let a2 = get_param(xform_id, variation_id, 1u);
@@ -649,5 +649,5 @@ fn variation_elliptic2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
     }
     return vec3<f32>(fx * inv_w, fy * inv_w, p.z);
 }
-"#),
+"#,
 };

@@ -102,7 +102,7 @@ fn variation_circleRand(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr
     return vec2<f32>(ox, oy);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn cr_disc_noise(x: i32, y: i32) -> f32 {
     var n = x + y * 57;
     n = (n << 13u) ^ n;
@@ -140,7 +140,7 @@ fn variation_circleRand(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
     }
     return vec3<f32>(ox, oy, p.z);
 }
-"#),
+"#,
 };
 
 // ---------------------------------------------------------------------------
@@ -175,6 +175,13 @@ pub static CIRCLE_TRANS1: VariationDef = VariationDef {
     wgsl_state_init: None,
     needs_accum: false,
     wgsl_2d: r#"
+fn cr_disc_noise(x: i32, y: i32) -> f32 {
+    var n = x + y * 57;
+    n = (n << 13u) ^ n;
+    let h = (n * (n * n * 15731 + 789221) + 1376312589) & 0x7fffffff;
+    return f32(h) * (1.0 / 2147483647.0);
+}
+
 fn variation_CircleTrans1(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let sc = get_param(xform_id, variation_id, 0u);
     let dens = get_param(xform_id, variation_id, 1u);
@@ -223,7 +230,14 @@ fn variation_CircleTrans1(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: p
     return vec2<f32>(ox, oy);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
+fn cr_disc_noise(x: i32, y: i32) -> f32 {
+    var n = x + y * 57;
+    n = (n << 13u) ^ n;
+    let h = (n * (n * n * 15731 + 789221) + 1376312589) & 0x7fffffff;
+    return f32(h) * (1.0 / 2147483647.0);
+}
+
 fn variation_CircleTrans1(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let sc = get_param(xform_id, variation_id, 0u);
     let dens = get_param(xform_id, variation_id, 1u);
@@ -271,5 +285,5 @@ fn variation_CircleTrans1(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: p
     }
     return vec3<f32>(ox, oy, p.z);
 }
-"#),
+"#,
 };

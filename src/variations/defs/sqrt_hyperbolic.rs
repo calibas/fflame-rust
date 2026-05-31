@@ -58,7 +58,7 @@ fn variation_sqrt_acoth(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32>
     return vec2<f32>(sign_flip * two_over_pi * log_re, sign_flip * two_over_pi * log_im);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_sqrt_acoth(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
     let two_over_pi = 0.6366197723675814;
     let r = sqrt(p.x * p.x + p.y * p.y);
@@ -73,7 +73,7 @@ fn variation_sqrt_acoth(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32>
     let sign_flip = select(1.0, -1.0, rng_nextf(rng) < 0.5);
     return vec3<f32>(sign_flip * two_over_pi * log_re, sign_flip * two_over_pi * log_im, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -121,7 +121,7 @@ fn variation_sqrt_acosh(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32>
     return vec2<f32>(sign_flip * two_over_pi * log_re, sign_flip * two_over_pi * log_im);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_sqrt_acosh(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
     let two_over_pi = 0.6366197723675814;
     let r0 = sqrt(p.x * p.x + p.y * p.y);
@@ -141,7 +141,7 @@ fn variation_sqrt_acosh(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32>
     let sign_flip = select(1.0, -1.0, rng_nextf(rng) < 0.5);
     return vec3<f32>(sign_flip * two_over_pi * log_re, sign_flip * two_over_pi * log_im, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -194,7 +194,7 @@ fn variation_sqrt_acosech(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f3
     return vec2<f32>(sign_flip * two_over_pi * log_re, sign_flip * two_over_pi * log_im);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_sqrt_acosech(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
     let two_over_pi = 0.6366197723675814;
     let r0 = sqrt(p.x * p.x + p.y * p.y);
@@ -217,7 +217,7 @@ fn variation_sqrt_acosech(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f3
     let sign_flip = select(1.0, -1.0, rng_nextf(rng) < 0.5);
     return vec3<f32>(sign_flip * two_over_pi * log_re, sign_flip * two_over_pi * log_im, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -263,7 +263,7 @@ fn variation_sqrt_asech(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32>
     return vec2<f32>(sign_flip * two_over_pi * log_re, sign_flip * two_over_pi * log_im);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_sqrt_asech(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
     let two_over_pi = 0.6366197723675814;
     let r0 = sqrt(p.x * p.x + p.y * p.y);
@@ -283,7 +283,7 @@ fn variation_sqrt_asech(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32>
     let sign_flip = select(1.0, -1.0, rng_nextf(rng) < 0.5);
     return vec3<f32>(sign_flip * two_over_pi * log_re, sign_flip * two_over_pi * log_im, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -327,7 +327,7 @@ fn variation_sqrt_asinh(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32>
     return vec2<f32>(sign_flip * two_over_pi * log_re, sign_flip * two_over_pi * log_im);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_sqrt_asinh(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
     let two_over_pi = 0.6366197723675814;
     let r0 = sqrt(p.x * p.x + p.y * p.y);
@@ -347,7 +347,7 @@ fn variation_sqrt_asinh(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32>
     let sign_flip = select(1.0, -1.0, rng_nextf(rng) < 0.5);
     return vec3<f32>(sign_flip * two_over_pi * log_re, sign_flip * two_over_pi * log_im, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -391,7 +391,7 @@ fn variation_sqrt_atanh(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32>
     return vec2<f32>(sign_flip * one_over_pi * 0.5 * log_re, sign_flip * one_over_pi * 0.5 * log_im);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_sqrt_atanh(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
     let one_over_pi = 0.3183098861837907;
     let r0 = sqrt(p.x * p.x + p.y * p.y);
@@ -406,5 +406,5 @@ fn variation_sqrt_atanh(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32>
     let sign_flip = select(1.0, -1.0, rng_nextf(rng) < 0.5);
     return vec3<f32>(sign_flip * one_over_pi * 0.5 * log_re, sign_flip * one_over_pi * 0.5 * log_im, p.z);
 }
-"#),
+"#,
 };

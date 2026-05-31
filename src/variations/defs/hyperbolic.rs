@@ -54,7 +54,7 @@ fn variation_acoth(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(two_over_pi * log_im, two_over_pi * log_re);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_acoth(p: vec3<f32>) -> vec3<f32> {
     let two_over_pi = 0.6366197723675814;
     let denom_mag2 = max((p.x - 1.0) * (p.x - 1.0) + p.y * p.y, 1e-20);
@@ -64,7 +64,7 @@ fn variation_acoth(p: vec3<f32>) -> vec3<f32> {
     let log_im = 0.5 * atan2(ratio_im, ratio_re);
     return vec3<f32>(two_over_pi * log_im, two_over_pi * log_re, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -113,7 +113,7 @@ fn variation_acosh(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     return vec2<f32>(sign_flip * two_over_pi * log_re, sign_flip * two_over_pi * log_im);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_acosh(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
     let two_over_pi = 0.6366197723675814;
     let z2_re = p.x * p.x - p.y * p.y - 1.0;
@@ -129,7 +129,7 @@ fn variation_acosh(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
     let sign_flip = select(1.0, -1.0, rng_nextf(rng) < 0.5);
     return vec3<f32>(sign_flip * two_over_pi * log_re, sign_flip * two_over_pi * log_im, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -180,7 +180,7 @@ fn variation_acosech(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     return vec2<f32>(sign_flip * two_over_pi * log_im, sign_flip * two_over_pi * log_re);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_acosech(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
     let two_over_pi = 0.6366197723675814;
     let p_mag2 = max(p.x * p.x + p.y * p.y, 1e-20);
@@ -199,7 +199,7 @@ fn variation_acosech(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
     let sign_flip = select(1.0, -1.0, rng_nextf(rng) < 0.5);
     return vec3<f32>(sign_flip * two_over_pi * log_im, sign_flip * two_over_pi * log_re, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -257,7 +257,7 @@ fn variation_arcsech(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(two_over_pi * log_re, two_over_pi * log_im);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_arcsech(p: vec3<f32>) -> vec3<f32> {
     let two_over_pi = 0.6366197723675814;
     let p_mag2 = max(p.x * p.x + p.y * p.y, 1e-20);
@@ -281,7 +281,7 @@ fn variation_arcsech(p: vec3<f32>) -> vec3<f32> {
     let log_im = atan2(arg_im, arg_re);
     return vec3<f32>(two_over_pi * log_re, two_over_pi * log_im, 0.0);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -336,7 +336,7 @@ fn variation_arcsech2(p: vec2<f32>) -> vec2<f32> {
     );
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_arcsech2(p: vec3<f32>) -> vec3<f32> {
     let scale = 2.0 * 0.6366197723675814;
     let p_mag2 = max(p.x * p.x + p.y * p.y, 1e-20);
@@ -367,7 +367,7 @@ fn variation_arcsech2(p: vec3<f32>) -> vec3<f32> {
     );
     return vec3<f32>(xy.x, xy.y, 0.0);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -410,7 +410,7 @@ fn variation_arcsinh(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(two_over_pi * log_re, two_over_pi * log_im);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_arcsinh(p: vec3<f32>) -> vec3<f32> {
     let two_over_pi = 0.6366197723675814;
     let z2_re = p.x * p.x - p.y * p.y + 1.0;
@@ -425,7 +425,7 @@ fn variation_arcsinh(p: vec3<f32>) -> vec3<f32> {
     let log_im = atan2(arg_im, arg_re);
     return vec3<f32>(two_over_pi * log_re, two_over_pi * log_im, 0.0);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -462,7 +462,7 @@ fn variation_arctanh(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(one_over_pi * 0.5 * log_re, one_over_pi * 0.5 * log_im);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_arctanh(p: vec3<f32>) -> vec3<f32> {
     let one_over_pi = 0.3183098861837907;
     let denom_mag2 = max((1.0 - p.x) * (1.0 - p.x) + p.y * p.y, 1e-20);
@@ -472,5 +472,5 @@ fn variation_arctanh(p: vec3<f32>) -> vec3<f32> {
     let log_im = atan2(ratio_im, ratio_re);
     return vec3<f32>(one_over_pi * 0.5 * log_re, one_over_pi * 0.5 * log_im, 0.0);
 }
-"#),
+"#,
 };

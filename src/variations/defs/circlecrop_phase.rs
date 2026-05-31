@@ -94,7 +94,7 @@ fn variation_pre_circlecrop(p: vec2<f32>, xform_id: u32, variation_id: u32, rng:
     return vec2<f32>(w * dx + x0, w * dy + y0);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_pre_circlecrop(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let cr = get_param(xform_id, variation_id, 0u);
     let x0 = get_param(xform_id, variation_id, 1u);
@@ -119,7 +119,7 @@ fn variation_pre_circlecrop(p: vec3<f32>, xform_id: u32, variation_id: u32, rng:
     }
     return vec3<f32>(w * dx + x0, w * dy + y0, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -187,7 +187,7 @@ fn variation_post_circlecrop(p: vec2<f32>, xform_id: u32, variation_id: u32, rng
     return vec2<f32>(w * dx + x0, w * dy + y0);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_post_circlecrop(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let cr = get_param(xform_id, variation_id, 0u);
     let x0 = get_param(xform_id, variation_id, 1u);
@@ -212,5 +212,5 @@ fn variation_post_circlecrop(p: vec3<f32>, xform_id: u32, variation_id: u32, rng
     }
     return vec3<f32>(w * dx + x0, w * dy + y0, p.z);
 }
-"#),
+"#,
 };

@@ -129,7 +129,7 @@ fn variation_hexaplay3D(p: vec2<f32>, accum: vec2<f32>, xform_id: u32, variation
     return vec2<f32>(ox, oy);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn hex_seg60_3d(loc: u32) -> vec2<f32> {
     let hlift = 0.86602540378443864;
     switch (loc) {
@@ -206,5 +206,5 @@ fn variation_hexaplay3D(p: vec3<f32>, accum: vec3<f32>, xform_id: u32, variation
     set_state(xform_id, variation_id, 2u, bcycle);
     return vec3<f32>(ox, oy, oz);
 }
-"#),
+"#,
 };

@@ -233,7 +233,7 @@ impl VariationInfo {
             writes_color: def.writes_color,
             is_core: true, // All VariationDef are core variations
             wgsl_source: Some(def.wgsl_2d.to_string()),
-            wgsl_source_3d: def.wgsl_3d.map(|s| s.to_string()),
+            wgsl_source_3d: Some(def.wgsl_3d.to_string()),
             wgsl_source_init: def.wgsl_init.map(|s| s.to_string()),
             init_param_count: def.init_param_count,
             state_count: def.state_count,

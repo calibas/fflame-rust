@@ -132,7 +132,7 @@ fn variation_glynnSShape(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: pt
     return vec2<f32>(xi, yi);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn glynnSShape_super(m: f32, n1: f32, n2: f32, n3: f32, phi: f32) -> vec2<f32> {
     let half_phi = m * phi * 0.25;
     let t1 = pow(max(abs(cos(half_phi)), 1e-30), n2);
@@ -192,5 +192,5 @@ fn variation_glynnSShape(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: pt
     }
     return vec3<f32>(xi, yi, p.z);
 }
-"#),
+"#,
 };

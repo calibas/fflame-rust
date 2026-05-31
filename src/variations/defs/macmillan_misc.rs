@@ -95,7 +95,7 @@ fn variation_macmillan(p: vec2<f32>, accum: vec2<f32>, xform_id: u32, variation_
     return vec2<f32>(x, y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_macmillan(p: vec3<f32>, accum: vec3<f32>, xform_id: u32, variation_id: u32, vc: ptr<function, f32>) -> vec3<f32> {
     let a = get_param(xform_id, variation_id, 0u);
     let b = get_param(xform_id, variation_id, 1u);
@@ -122,5 +122,5 @@ fn variation_macmillan(p: vec3<f32>, accum: vec3<f32>, xform_id: u32, variation_
 
     return vec3<f32>(x, y, p.z);
 }
-"#),
+"#,
 };

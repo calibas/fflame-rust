@@ -68,7 +68,7 @@ fn variation_split(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> 
     return vec2<f32>(ox, oy);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_split(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let xsize = get_param(xform_id, variation_id, 0u);
     let ysize = get_param(xform_id, variation_id, 1u);
@@ -79,7 +79,7 @@ fn variation_split(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
     if (cos(p.y * ysize * pi) < 0.0) { ox = -p.x; }
     return vec3<f32>(ox, oy, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -126,7 +126,7 @@ fn variation_squirrel(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f3
     return vec2<f32>(cos(s) * tan(p.x), sin(s) * tan(p.y));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_squirrel(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let a = get_param(xform_id, variation_id, 0u);
     let b = get_param(xform_id, variation_id, 1u);
@@ -135,7 +135,7 @@ fn variation_squirrel(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
     let s = sqrt(max(u, 0.0));
     return vec3<f32>(cos(s) * tan(p.x), sin(s) * tan(p.y), p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -181,7 +181,7 @@ fn variation_stripes(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32
     );
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_stripes(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let space = get_param(xform_id, variation_id, 0u);
     let warp = get_param(xform_id, variation_id, 1u);
@@ -193,7 +193,7 @@ fn variation_stripes(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
         p.z,
     );
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -252,7 +252,7 @@ fn variation_shift(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> 
     );
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_shift(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let sx = get_param(xform_id, variation_id, 0u);
     let sy = get_param(xform_id, variation_id, 1u);
@@ -264,7 +264,7 @@ fn variation_shift(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
         p.z,
     );
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -335,7 +335,7 @@ fn variation_pressure_wave(p: vec2<f32>, xform_id: u32, variation_id: u32) -> ve
     );
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_pressure_wave(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let pwx = get_param(xform_id, variation_id, 2u);
     let pwy = get_param(xform_id, variation_id, 3u);
@@ -347,7 +347,7 @@ fn variation_pressure_wave(p: vec3<f32>, xform_id: u32, variation_id: u32) -> ve
         p.z,
     );
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -395,7 +395,7 @@ fn variation_sphericalN(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr
     return vec2<f32>(cos(alpha) / max(R, 1e-30), sin(alpha) / max(R, 1e-30));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_sphericalN(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let power = get_param(xform_id, variation_id, 0u);
     let dist = get_param(xform_id, variation_id, 1u);
@@ -407,7 +407,7 @@ fn variation_sphericalN(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
     let alpha = atan2(p.y, p.x) + n * two_pi / safe_power_floor;
     return vec3<f32>(cos(alpha) / max(R, 1e-30), sin(alpha) / max(R, 1e-30), p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -470,7 +470,7 @@ fn variation_spligon(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32
     return vec2<f32>(p.x + cos(t), p.y + sin(t));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_spligon(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let th = get_param(xform_id, variation_id, 2u);
     let thi = get_param(xform_id, variation_id, 3u);
@@ -478,7 +478,7 @@ fn variation_spligon(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
     let t = thi * floor(atan2(p.x, p.y) * th) + j;
     return vec3<f32>(p.x + cos(t), p.y + sin(t), p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -550,7 +550,7 @@ fn variation_tile_hlp(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
     return vec2<f32>(fpx * inv_w, fpy * inv_w);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_tile_hlp(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let width = get_param(xform_id, variation_id, 0u);
     let w = transforms[xform_id].variations[variation_id];
@@ -575,5 +575,5 @@ fn variation_tile_hlp(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
     let fpy = w * p.y;
     return vec3<f32>(fpx * inv_w, fpy * inv_w, p.z);
 }
-"#),
+"#,
 };

@@ -81,7 +81,7 @@ fn variation_lace_js(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     return vec2<f32>(x, y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_lace_js(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
     let r = 2.0;
     let inv_r = 0.5;
@@ -110,7 +110,7 @@ fn variation_lace_js(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
     }
     return vec3<f32>(x, y, p.z);
 }
-"#),
+"#,
 };
 
 // ---------------------------------------------------------------------------
@@ -167,7 +167,7 @@ fn variation_wallpaper_js(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: p
     return vec2<f32>(p.x * inv_w, p.y * inv_w);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn wallpaper_signum(v: f32) -> f32 {
     if (v < 0.0) { return -1.0; }
     if (v > 0.0) { return 1.0; }
@@ -190,5 +190,5 @@ fn variation_wallpaper_js(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: p
     }
     return vec3<f32>(p.x * inv_w, p.y * inv_w, p.z);
 }
-"#),
+"#,
 };

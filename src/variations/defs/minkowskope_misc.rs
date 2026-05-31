@@ -133,7 +133,7 @@ fn variation_minkowskope(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2
     return vec2<f32>(s * p.x, s * p.y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn minkowskope_mink(xv: f32) -> f32 {
     var p: f32 = 0.0;
     var q: f32 = 1.0;
@@ -200,5 +200,5 @@ fn variation_minkowskope(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3
     let s = select(1.0, -1.0, inside);
     return vec3<f32>(s * p.x, s * p.y, p.z);
 }
-"#),
+"#,
 };

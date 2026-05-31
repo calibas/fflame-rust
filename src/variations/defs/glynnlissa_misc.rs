@@ -122,7 +122,7 @@ fn variation_glynnlissa(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr
     return vec2<f32>(xi, yi);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_glynnlissa(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let radius = get_param(xform_id, variation_id, 0u);
     let radius1 = get_param(xform_id, variation_id, 1u);
@@ -175,5 +175,5 @@ fn variation_glynnlissa(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
     }
     return vec3<f32>(xi, yi, p.z);
 }
-"#),
+"#,
 };

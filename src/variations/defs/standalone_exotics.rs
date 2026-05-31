@@ -92,7 +92,7 @@ fn variation_kaleidoscope(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec
     return vec2<f32>(fx * inv_w, fy * inv_w);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_kaleidoscope(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let pull = get_param(xform_id, variation_id, 0u);
     let rotate = get_param(xform_id, variation_id, 1u);
@@ -113,7 +113,7 @@ fn variation_kaleidoscope(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec
     }
     return vec3<f32>(fx * inv_w, fy * inv_w, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -163,7 +163,7 @@ fn variation_taurus(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32>
     return vec2<f32>(cx * (ir + sy), sx * (ir + sy));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_taurus(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let r_p = get_param(xform_id, variation_id, 0u);
     let n_p = get_param(xform_id, variation_id, 1u);
@@ -184,7 +184,7 @@ fn variation_taurus(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
     let fz_full = w * sor_p * cy + (1.0 - sor_p) * p.y;
     return vec3<f32>(fx_unweighted, fy_unweighted, fz_full * inv_w);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -273,7 +273,7 @@ fn variation_hole2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> 
     return vec2<f32>(r1 * cos(theta), r1 * sin(theta));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_hole2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let a = get_param(xform_id, variation_id, 0u);
     let b = get_param(xform_id, variation_id, 1u);
@@ -318,5 +318,5 @@ fn variation_hole2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
     }
     return vec3<f32>(r1 * cos(theta), r1 * sin(theta), p.z);
 }
-"#),
+"#,
 };

@@ -122,7 +122,7 @@ fn variation_pre_bwraps2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2
     return vec2<f32>(w * (cx + ct * lx + st * ly), w * (cy - st * lx + ct * ly));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_pre_bwraps2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let cellsize = get_param(xform_id, variation_id, 0u);
     let inner_twist = get_param(xform_id, variation_id, 3u);
@@ -153,7 +153,7 @@ fn variation_pre_bwraps2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3
     let ct = cos(theta);
     return vec3<f32>(w * (cx + ct * lx + st * ly), w * (cy - st * lx + ct * ly), p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -246,7 +246,7 @@ fn variation_post_bwraps2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec
     return vec2<f32>(w * (cx + ct * lx + st * ly), w * (cy - st * lx + ct * ly));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_post_bwraps2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let cellsize = get_param(xform_id, variation_id, 0u);
     let inner_twist = get_param(xform_id, variation_id, 3u);
@@ -277,5 +277,5 @@ fn variation_post_bwraps2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec
     let ct = cos(theta);
     return vec3<f32>(w * (cx + ct * lx + st * ly), w * (cy - st * lx + ct * ly), p.z);
 }
-"#),
+"#,
 };

@@ -29,6 +29,8 @@ pub enum ConfigPath {
     DofBlurStrength,
     FogStrength,
     FogStart,
+    FilterRadius,
+    FilterBlurEdges,
 
     // ===== Tone mapping (no iteration reset needed) =====
     Exposure,
@@ -47,6 +49,7 @@ pub enum ConfigPath {
     TonemapCurve,
     UseCurve,
     // Levels controls (density-to-opacity mapping)
+    LevelsEnabled,
     LevelsLow,
     LevelsHigh,
     LevelsGamma,
@@ -366,6 +369,8 @@ impl Display for ConfigPath {
             ConfigPath::DofBlurStrength => write!(f, "DOF Blur Strength"),
             ConfigPath::FogStrength => write!(f, "Fog Strength"),
             ConfigPath::FogStart => write!(f, "Fog Start"),
+            ConfigPath::FilterRadius => write!(f, "Spatial Filter"),
+            ConfigPath::FilterBlurEdges => write!(f, "Blur Edges"),
 
             // Tone mapping
             ConfigPath::Exposure => write!(f, "Exposure"),
@@ -383,6 +388,7 @@ impl Display for ConfigPath {
             ConfigPath::HighlightMode => write!(f, "Highlight Mode"),
             ConfigPath::TonemapCurve => write!(f, "Tone Curve"),
             ConfigPath::UseCurve => write!(f, "Use Tone Curve"),
+            ConfigPath::LevelsEnabled => write!(f, "Levels Enabled"),
             ConfigPath::LevelsLow => write!(f, "Levels Low"),
             ConfigPath::LevelsHigh => write!(f, "Levels High"),
             ConfigPath::LevelsGamma => write!(f, "Levels Midtones"),
@@ -669,6 +675,8 @@ impl ConfigPath {
             ConfigPath::DofBlurStrength => I18nKey::simple("history.param.dof_blur_strength"),
             ConfigPath::FogStrength => I18nKey::simple("history.param.fog_strength"),
             ConfigPath::FogStart => I18nKey::simple("history.param.fog_start"),
+            ConfigPath::FilterRadius => I18nKey::simple("history.param.filter_radius"),
+            ConfigPath::FilterBlurEdges => I18nKey::simple("history.param.filter_blur_edges"),
 
             // Tone mapping
             ConfigPath::Exposure => I18nKey::simple("history.param.exposure"),
@@ -686,6 +694,7 @@ impl ConfigPath {
             ConfigPath::HighlightMode => I18nKey::simple("history.param.highlight_mode"),
             ConfigPath::TonemapCurve => I18nKey::simple("history.param.tone_curve"),
             ConfigPath::UseCurve => I18nKey::simple("history.param.use_tone_curve"),
+            ConfigPath::LevelsEnabled => I18nKey::simple("history.param.levels_enabled"),
             ConfigPath::LevelsLow => I18nKey::simple("history.param.levels_low"),
             ConfigPath::LevelsHigh => I18nKey::simple("history.param.levels_high"),
             ConfigPath::LevelsGamma => I18nKey::simple("history.param.levels_midtones"),
@@ -1701,11 +1710,16 @@ impl ConfigPath {
             | ConfigPath::CameraRotationY
             | ConfigPath::CameraZ => UpdateType::ViewOnly,
 
-            // DOF and fog changes affect pixel colors at write time, need iteration reset
+            // DOF, fog, and spatial filter change the per-sample
+            // contribution shape — old accumulation is "stale" relative
+            // to the new dynamics. Reset so the user sees the new look
+            // cleanly rather than seeing it average in over many frames.
             ConfigPath::DofFocusDistance
             | ConfigPath::DofBlurStrength
             | ConfigPath::FogStrength
-            | ConfigPath::FogStart => UpdateType::IterationReset,
+            | ConfigPath::FogStart
+            | ConfigPath::FilterRadius
+            | ConfigPath::FilterBlurEdges => UpdateType::IterationReset,
 
             // Tone mapping - re-run tonemap shader
             ConfigPath::Exposure
@@ -1727,6 +1741,7 @@ impl ConfigPath {
             | ConfigPath::BackgroundColorR
             | ConfigPath::BackgroundColorG
             | ConfigPath::BackgroundColorB
+            | ConfigPath::LevelsEnabled
             | ConfigPath::LevelsLow
             | ConfigPath::LevelsHigh
             | ConfigPath::LevelsGamma => UpdateType::ToneMappingOnly,
@@ -1847,6 +1862,8 @@ impl ConfigPath {
             ConfigPath::DofBlurStrength => "DofBlurStrength".to_string(),
             ConfigPath::FogStrength => "FogStrength".to_string(),
             ConfigPath::FogStart => "FogStart".to_string(),
+            ConfigPath::FilterRadius => "FilterRadius".to_string(),
+            ConfigPath::FilterBlurEdges => "FilterBlurEdges".to_string(),
 
             // Tone mapping
             ConfigPath::Exposure => "Exposure".to_string(),
@@ -1864,6 +1881,7 @@ impl ConfigPath {
             ConfigPath::HighlightMode => "HighlightMode".to_string(),
             ConfigPath::TonemapCurve => "TonemapCurve".to_string(),
             ConfigPath::UseCurve => "UseCurve".to_string(),
+            ConfigPath::LevelsEnabled => "LevelsEnabled".to_string(),
             ConfigPath::LevelsLow => "LevelsLow".to_string(),
             ConfigPath::LevelsHigh => "LevelsHigh".to_string(),
             ConfigPath::LevelsGamma => "LevelsGamma".to_string(),
@@ -2024,6 +2042,8 @@ impl ConfigPath {
             "DofBlurStrength" => return Some(ConfigPath::DofBlurStrength),
             "FogStrength" => return Some(ConfigPath::FogStrength),
             "FogStart" => return Some(ConfigPath::FogStart),
+            "FilterRadius" => return Some(ConfigPath::FilterRadius),
+            "FilterBlurEdges" => return Some(ConfigPath::FilterBlurEdges),
 
             // Tone mapping
             "Exposure" => return Some(ConfigPath::Exposure),
@@ -2041,6 +2061,7 @@ impl ConfigPath {
             "HighlightMode" => return Some(ConfigPath::HighlightMode),
             "TonemapCurve" => return Some(ConfigPath::TonemapCurve),
             "UseCurve" => return Some(ConfigPath::UseCurve),
+            "LevelsEnabled" => return Some(ConfigPath::LevelsEnabled),
             "LevelsLow" => return Some(ConfigPath::LevelsLow),
             "LevelsHigh" => return Some(ConfigPath::LevelsHigh),
             "LevelsGamma" => return Some(ConfigPath::LevelsGamma),
@@ -2364,6 +2385,8 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::DofBlurStrength
         | ConfigPath::FogStrength
         | ConfigPath::FogStart
+        | ConfigPath::FilterRadius
+        | ConfigPath::FilterBlurEdges
         | ConfigPath::Exposure
         | ConfigPath::Gamma
         | ConfigPath::GammaThreshold
@@ -2462,6 +2485,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
 
         // Boolean parameters
         ConfigPath::UseCurve
+        | ConfigPath::LevelsEnabled
         | ConfigPath::UseDynamicBlend
         | ConfigPath::DeterministicRng
         | ConfigPath::PaletteReverse
@@ -2854,6 +2878,8 @@ mod tests {
             ConfigPath::DofBlurStrength,
             ConfigPath::FogStrength,
             ConfigPath::FogStart,
+            ConfigPath::FilterRadius,
+            ConfigPath::FilterBlurEdges,
 
             // Tone mapping
             ConfigPath::Exposure,
@@ -2871,6 +2897,7 @@ mod tests {
             ConfigPath::HighlightMode,
             ConfigPath::TonemapCurve,
             ConfigPath::UseCurve,
+            ConfigPath::LevelsEnabled,
             ConfigPath::LevelsLow,
             ConfigPath::LevelsHigh,
             ConfigPath::LevelsGamma,

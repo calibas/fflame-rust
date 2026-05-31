@@ -81,7 +81,7 @@ fn variation_curliecue2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<
     return vec2<f32>(x0, y0);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_curliecue2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let two_pi = 6.28318530717959;
     let speed = get_param(xform_id, variation_id, 0u);
@@ -105,5 +105,5 @@ fn variation_curliecue2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<
 
     return vec3<f32>(x0, y0, p.z);
 }
-"#),
+"#,
 };

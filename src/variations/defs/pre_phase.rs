@@ -32,13 +32,13 @@ fn variation_pre_zscale(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<
     return p;
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_pre_zscale(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     // Apophysis: Pre-phase Z scaling. Variation weight is the scale factor.
     let weight = transforms[xform_id].variations[variation_id];
     return vec3<f32>(p.x, p.y, p.z * weight);
 }
-"#),
+"#,
 };
 
 /// Shifts the Z coordinate up or down before the rest of the variations
@@ -64,13 +64,13 @@ fn variation_pre_ztranslate(p: vec2<f32>, xform_id: u32, variation_id: u32) -> v
     return p;
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_pre_ztranslate(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     // Apophysis: Pre-phase Z translation. Variation weight is the offset.
     let weight = transforms[xform_id].variations[variation_id];
     return vec3<f32>(p.x, p.y, p.z + weight);
 }
-"#),
+"#,
 };
 
 /// Same math as Spherical (inverts through the unit circle) but runs before
@@ -100,13 +100,13 @@ fn variation_pre_spherical(p: vec2<f32>) -> vec2<f32> {
     return p * r;
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_pre_spherical(p: vec3<f32>) -> vec3<f32> {
     // Apophysis Pre-Spherical: Pre-phase spherical distortion (3D)
     let r = 1.0 / (dot(p.xy, p.xy) + 1e-5);
     return vec3<f32>(p.x * r, p.y * r, p.z);
 }
-"#),
+"#,
 };
 
 /// Same math as Sinusoidal (sine on each axis) but runs before the rest of
@@ -136,13 +136,13 @@ fn variation_pre_sinusoidal(p: vec2<f32>, xform_id: u32, variation_id: u32) -> v
     return vec2<f32>(weight * sin(p.x), weight * sin(p.y));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_pre_sinusoidal(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     // Apophysis Pre-Sinusoidal: Pre-phase sinusoidal wave (3D)
     let weight = transforms[xform_id].variations[variation_id];
     return vec3<f32>(weight * sin(p.x), weight * sin(p.y), weight * p.z);
 }
-"#),
+"#,
 };
 
 /// Same math as Disc (wraps the plane onto a disc) but runs before the rest
@@ -175,7 +175,7 @@ fn variation_pre_disc(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f3
     return vec2<f32>(sin(PI * rad) * r, cos(PI * rad) * r);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_pre_disc(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     // Apophysis Pre-Disc: Pre-phase disc transformation (3D)
     const PI: f32 = 3.14159265359;
@@ -184,7 +184,7 @@ fn variation_pre_disc(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
     let r = (weight / PI) * atan2(p.x, p.y);
     return vec3<f32>(sin(PI * rad) * r, cos(PI * rad) * r, weight * p.z);
 }
-"#),
+"#,
 };
 
 /// Wraps the plane into a grid of soft bubbles, each with its own internal
@@ -289,7 +289,7 @@ fn variation_pre_bwraps(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<
     return p;
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_pre_bwraps(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let cellsize = get_param(xform_id, variation_id, 0u);
     let g2 = get_param(xform_id, variation_id, 5u);
@@ -332,7 +332,7 @@ fn variation_pre_bwraps(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<
 
     return p;
 }
-"#),
+"#,
 };
 
 /// Constrains points to a rectangle before the rest of the variations run.
@@ -403,7 +403,7 @@ fn variation_pre_crop(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
     return vec2<f32>(x, y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_pre_crop(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     // Apophysis Pre_Crop - 3D (Z passes through)
     let x0 = get_param(xform_id, variation_id, 0u);
@@ -442,7 +442,7 @@ fn variation_pre_crop(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
 
     return vec3<f32>(x, y, p.z);
 }
-"#),
+"#,
 };
 
 /// Adds random scatter that varies with distance from a chosen center
@@ -530,7 +530,7 @@ fn variation_pre_falloff2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: p
     return vec2<f32>(p.x + sx * mul_x, p.y + sy * mul_y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_pre_falloff2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     // Apophysis Pre_Falloff2 - Distance-based scatter with multiple blur modes (3D)
     const PI: f32 = 3.14159265359;
@@ -592,5 +592,5 @@ fn variation_pre_falloff2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: p
 
     return vec3<f32>(p.x + sx * mul_x, p.y + sy * mul_y, p.z + sz * mul_z);
 }
-"#),
+"#,
 };

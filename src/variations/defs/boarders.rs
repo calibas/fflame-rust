@@ -94,7 +94,7 @@ fn variation_boarders(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     );
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_boarders(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
     let round_x = round(p.x);
     let round_y = round(p.y);
@@ -131,7 +131,7 @@ fn variation_boarders(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
         p.z,
     );
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -218,7 +218,7 @@ fn variation_boarders2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<
     );
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_boarders2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let c = get_param(xform_id, variation_id, 3u);
     let cl = get_param(xform_id, variation_id, 4u);
@@ -259,7 +259,7 @@ fn variation_boarders2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
         p.z,
     );
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -339,7 +339,7 @@ fn variation_pre_boarders2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: 
     return vec2<f32>(w * ox, w * oy);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_pre_boarders2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let c = get_param(xform_id, variation_id, 3u);
     let cl = get_param(xform_id, variation_id, 4u);
@@ -375,7 +375,7 @@ fn variation_pre_boarders2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: 
     }
     return vec3<f32>(w * ox, w * oy, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -467,7 +467,7 @@ fn variation_splitbrdr(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<
     return vec2<f32>(fpx * inv_w, fpy * inv_w);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_splitbrdr(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let xp = get_param(xform_id, variation_id, 0u);
     let yp = get_param(xform_id, variation_id, 1u);
@@ -516,5 +516,5 @@ fn variation_splitbrdr(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
     // p.z so the outer multiplier produces VVAR · p.z.
     return vec3<f32>(fpx * inv_w, fpy * inv_w, p.z);
 }
-"#),
+"#,
 };

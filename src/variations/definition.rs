@@ -25,12 +25,12 @@ use super::{ParamType, VariationCategory, VariationParameter, VariationPhase};
 ///     return p / r2;
 /// }
 /// "#,
-///     wgsl_3d: Some(r#"
+///     wgsl_3d: r#"
 /// fn variation_spherical(p: vec3<f32>) -> vec3<f32> {
 ///     let r2 = dot(p.xy, p.xy) + 1e-6;
 ///     return vec3(p.xy / r2, p.z);
 /// }
-/// "#),
+/// "#,
 /// };
 /// ```
 pub struct VariationDef {
@@ -125,11 +125,14 @@ pub struct VariationDef {
     /// - Full signature with both rng and params
     pub wgsl_2d: &'static str,
 
-    /// 3D WGSL implementation (optional - uses 2D with Z pass-through if None)
-    /// For 2D variations, this should typically be:
-    /// `return vec3(variation_NAME_2d(p.xy), p.z);`
-    /// or a full 3D implementation for variations that modify Z
-    pub wgsl_3d: Option<&'static str>,
+    /// 3D WGSL implementation. Required for every variation — the shader
+    /// builder cannot synthesize a sensible 3D body from the 2D one
+    /// because the function-return type would mismatch (`vec2<f32>` vs
+    /// `vec3<f32>`) and trigger a WGSL validation error.
+    /// For variations whose math is 2D-shaped, the 3D body typically
+    /// just mirrors the 2D math with `vec3<f32>` in/out and passes
+    /// `p.z` through unchanged on the return.
+    pub wgsl_3d: &'static str,
 }
 
 /// Static parameter definition for variations
@@ -205,57 +208,10 @@ impl VariationDef {
         self.wgsl_2d
     }
 
-    /// Get the 3D WGSL source (or 2D with Z pass-through wrapper)
-    pub fn wgsl_source_3d(&self) -> String {
-        if let Some(wgsl_3d) = self.wgsl_3d {
-            wgsl_3d.to_string()
-        } else {
-            // Generate a wrapper that passes Z through unchanged
-            // This is for pure 2D variations
-            self.generate_3d_wrapper()
-        }
-    }
-
-    /// Generate a 3D wrapper for a 2D-only variation
-    fn generate_3d_wrapper(&self) -> String {
-        let func_name = self.wgsl_function_name();
-
-        // Build the wrapper signature dynamically to handle the full
-        // dimension matrix (needs_rng × has_params × needs_transform ×
-        // writes_color × needs_accum). The forwarded call drops the Z
-        // component of `p` and `accum` since the 2D body takes vec2.
-        let mut wrapper_params: Vec<&str> = vec!["p: vec3<f32>"];
-        let mut call_args: Vec<String> = vec!["p.xy".to_string()];
-        if self.needs_accum {
-            wrapper_params.push("accum: vec3<f32>");
-            call_args.push("accum.xy".to_string());
-        }
-        if !self.parameters.is_empty() || self.needs_transform {
-            wrapper_params.push("xform_id: u32");
-            wrapper_params.push("variation_id: u32");
-            call_args.push("xform_id".to_string());
-            call_args.push("variation_id".to_string());
-        }
-        if self.needs_rng {
-            wrapper_params.push("rng: ptr<function, RngState>");
-            call_args.push("rng".to_string());
-        }
-        if self.writes_color {
-            wrapper_params.push("vc: ptr<function, f32>");
-            call_args.push("vc".to_string());
-        }
-
-        format!(
-            r#"
-fn {func_name}({params}) -> vec3<f32> {{
-    let result_2d = {func_name}_2d({call_args});
-    return vec3(result_2d, p.z);
-}}
-"#,
-            func_name = func_name,
-            params = wrapper_params.join(", "),
-            call_args = call_args.join(", ")
-        )
+    /// Get the 3D WGSL source verbatim. The field is required at type
+    /// level — every variation provides its own 3D body.
+    pub fn wgsl_source_3d(&self) -> &'static str {
+        self.wgsl_3d
     }
 }
 

@@ -68,7 +68,7 @@ fn variation_cannabiscurve_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, rn
     return vec2<f32>(sin(a) * r, cos(a) * r);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_cannabiscurve_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let filled = i32(get_param(xform_id, variation_id, 0u));
     var a = atan2(p.x, p.y);
@@ -82,7 +82,7 @@ fn variation_cannabiscurve_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, rn
     }
     return vec3<f32>(sin(a) * r, cos(a) * r, p.z);
 }
-"#),
+"#,
 };
 
 // ---------------------------------------------------------------------------
@@ -141,7 +141,7 @@ fn variation_spherical3D_wf(p: vec2<f32>, xform_id: u32, variation_id: u32) -> v
     return vec2<f32>(p.x * r, p.y * r);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_spherical3D_wf(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let invert = i32(get_param(xform_id, variation_id, 0u));
     let exponent = get_param(xform_id, variation_id, 1u);
@@ -159,7 +159,7 @@ fn variation_spherical3D_wf(p: vec3<f32>, xform_id: u32, variation_id: u32) -> v
     }
     return vec3<f32>(p.x * r, p.y * r, p.z * r);
 }
-"#),
+"#,
 };
 
 // ---------------------------------------------------------------------------
@@ -196,7 +196,7 @@ fn variation_swirl3D_wf(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<
     return vec2<f32>(rad * cos(ang), rad * sin(ang));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_swirl3D_wf(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let n = get_param(xform_id, variation_id, 0u);
     let small = 1e-30;
@@ -208,5 +208,5 @@ fn variation_swirl3D_wf(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<
         sin(6.0 * cos(rad) - n * ang),
     );
 }
-"#),
+"#,
 };

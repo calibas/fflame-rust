@@ -70,7 +70,7 @@ fn variation_popcorn2_3D(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2
     return vec2<f32>(nx, ny);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_popcorn2_3D(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let xp = get_param(xform_id, variation_id, 0u);
     let yp = get_param(xform_id, variation_id, 1u);
@@ -88,5 +88,5 @@ fn variation_popcorn2_3D(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3
     let nz = temp_pz_over_w + ratio * zp * sin_tan_c * temp_tz;
     return vec3<f32>(nx, ny, nz);
 }
-"#),
+"#,
 };

@@ -122,7 +122,7 @@ fn variation_mobiusN(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<fu
     return vec2<f32>(r2 * cos(alpha2), r2 * sin(alpha2));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_mobiusN(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let re_a = get_param(xform_id, variation_id, 0u);
     let re_b = get_param(xform_id, variation_id, 1u);
@@ -163,7 +163,7 @@ fn variation_mobiusN(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fu
 
     return vec3<f32>(r2 * cos(alpha2), r2 * sin(alpha2), p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -261,7 +261,7 @@ fn variation_mobiq(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> 
     );
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_mobiq(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let qat = get_param(xform_id, variation_id, 0u);
     let qax = get_param(xform_id, variation_id, 1u);
@@ -301,5 +301,5 @@ fn variation_mobiq(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
         (ny * dt - nt * dy - nz * dx + nx * dz) * ni,
     );
 }
-"#),
+"#,
 };

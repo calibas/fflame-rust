@@ -86,7 +86,7 @@ fn variation_onion(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> 
     return vec2<f32>((x1 + cx) * inv_w, (y1 + cy) * inv_w);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_onion(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let cx = get_param(xform_id, variation_id, 0u);
     let cy = get_param(xform_id, variation_id, 1u);
@@ -123,7 +123,7 @@ fn variation_onion(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 
     return vec3<f32>((x1 + cx) * inv_w, (y1 + cy) * inv_w, (z1 + p.z) * inv_w);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -209,7 +209,7 @@ fn variation_target_sp(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f
     return vec2<f32>(r * cos(a) * inv_w, r * sin(a) * inv_w);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_target_sp(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let n_of_sp = get_param(xform_id, variation_id, 1u);
     let size = max(get_param(xform_id, variation_id, 2u), 1e-6);
@@ -239,5 +239,5 @@ fn variation_target_sp(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
     // p.z untouched here so the outer multiplier produces VVAR · p.z.
     return vec3<f32>(r * cos(a) * inv_w, r * sin(a) * inv_w, p.z);
 }
-"#),
+"#,
 };

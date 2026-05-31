@@ -85,7 +85,7 @@ fn variation_heart_wf(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f3
     return vec2<f32>(nx * scale_x, ny);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_heart_wf(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let scale_x = get_param(xform_id, variation_id, 0u);
     let shift_t = get_param(xform_id, variation_id, 2u);
@@ -109,7 +109,7 @@ fn variation_heart_wf(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
     let ny = -0.001 * (-t * t + 40.0 * t + 400.0) * cos(pi * t / 180.0) * r;
     return vec3<f32>(nx * scale_x, ny, p.z);
 }
-"#),
+"#,
 };
 
 // ---------------------------------------------------------------------------
@@ -139,12 +139,12 @@ fn variation_post_ztranslate_wf(p: vec2<f32>, xform_id: u32, variation_id: u32) 
     return p;
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_post_ztranslate_wf(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let w = transforms[xform_id].variations[variation_id];
     return vec3<f32>(p.x, p.y, p.z + w);
 }
-"#),
+"#,
 };
 
 // ---------------------------------------------------------------------------
@@ -202,7 +202,7 @@ fn variation_post_mirror_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, rng:
     return vec2<f32>(x, y);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_post_mirror_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let xaxis = i32(get_param(xform_id, variation_id, 0u));
     let yaxis = i32(get_param(xform_id, variation_id, 1u));
@@ -229,5 +229,5 @@ fn variation_post_mirror_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, rng:
     }
     return vec3<f32>(x, y, z);
 }
-"#),
+"#,
 };

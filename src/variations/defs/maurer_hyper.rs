@@ -204,7 +204,7 @@ fn variation_maurer_rose(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: pt
     return vec2<f32>(xout, yout);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_maurer_rose(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let c = get_param(xform_id, variation_id, 2u);
     let k = get_param(xform_id, variation_id, 11u);
@@ -282,7 +282,7 @@ fn variation_maurer_rose(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: pt
     }
     return vec3<f32>(xout, yout, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -372,7 +372,7 @@ fn variation_hypercrop(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f
     return p;
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_hypercrop(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let zero = get_param(xform_id, variation_id, 2u);
     let coef = get_param(xform_id, variation_id, 3u);
@@ -399,5 +399,5 @@ fn variation_hypercrop(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
     }
     return p;
 }
-"#),
+"#,
 };

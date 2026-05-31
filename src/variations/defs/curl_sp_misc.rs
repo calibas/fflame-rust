@@ -110,7 +110,7 @@ fn variation_curl_sp(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32
     return vec2<f32>(fx * inv_w, fy * inv_w);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn curl_sp_powq4c(x: f32, e: f32) -> f32 {
     if (abs(e - 1.0) < 1e-30) {
         return x;
@@ -148,5 +148,5 @@ fn variation_curl_sp(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
     let fz = z * w / safe_c;
     return vec3<f32>(fx * inv_w, fy * inv_w, fz * inv_w);
 }
-"#),
+"#,
 };

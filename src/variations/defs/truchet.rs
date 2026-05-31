@@ -162,7 +162,7 @@ fn variation_truchet_fill(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec
     return vec2<f32>(fpx_inc * inv_w, fpy_inc * inv_w);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_truchet_fill(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let seed = get_param(xform_id, variation_id, 2u);
     let exponent = get_param(xform_id, variation_id, 3u);
@@ -235,5 +235,5 @@ fn variation_truchet_fill(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec
     // p.z so the outer multiplier produces VVAR · p.z.
     return vec3<f32>(fpx_inc * inv_w, fpy_inc * inv_w, p.z);
 }
-"#),
+"#,
 };

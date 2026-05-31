@@ -105,7 +105,7 @@ fn variation_gamma(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(gm_lgamma(r), atan2(p.y, p.x));
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn gm_lgamma_iter(x: f32) -> f32 {
     let log_2pi_half = 0.9189385332046727;
     let xx = x - 1.0;
@@ -136,7 +136,7 @@ fn variation_gamma(p: vec3<f32>) -> vec3<f32> {
     let r = sqrt(p.x * p.x + p.y * p.y);
     return vec3<f32>(gm_lgamma(r), atan2(p.y, p.x), p.z);
 }
-"#),
+"#,
 };
 
 #[allow(dead_code)]

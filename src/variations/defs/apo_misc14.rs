@@ -99,7 +99,7 @@ fn variation_waves2_radial(p: vec2<f32>, xform_id: u32, variation_id: u32) -> ve
                      p.y + factor * sin(p.x * freqy) * scaley);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_waves2_radial(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let scalex = get_param(xform_id, variation_id, 0u);
     let scaley = get_param(xform_id, variation_id, 1u);
@@ -118,7 +118,7 @@ fn variation_waves2_radial(p: vec3<f32>, xform_id: u32, variation_id: u32) -> ve
                      p.y + factor * sin(p.x * freqy) * scaley,
                      p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -202,7 +202,7 @@ fn variation_spliptic_bs(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: pt
     return vec2<f32>(fx * inv_w, fy * inv_w);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_spliptic_bs(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let x_p = get_param(xform_id, variation_id, 0u);
     let y_p = get_param(xform_id, variation_id, 1u);
@@ -234,7 +234,7 @@ fn variation_spliptic_bs(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: pt
     }
     return vec3<f32>(fx * inv_w, fy * inv_w, p.z);
 }
-"#),
+"#,
 };
 
 // =============================================================================
@@ -331,7 +331,7 @@ fn variation_poincare3D(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<
     return vec2<f32>(fx, fy);
 }
 "#,
-    wgsl_3d: Some(r#"
+    wgsl_3d: r#"
 fn variation_poincare3D(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let cx = get_param(xform_id, variation_id, 3u);
     let cy = get_param(xform_id, variation_id, 4u);
@@ -355,5 +355,5 @@ fn variation_poincare3D(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<
     let fz = d * (p.z * s2z + cz * (y2cy + x2cx - r2 - 1.0));
     return vec3<f32>(fx, fy, fz);
 }
-"#),
+"#,
 };
