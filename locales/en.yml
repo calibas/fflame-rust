@@ -967,6 +967,7 @@ config_dialog:
   load_fflame: "📁 Load .fflame"
   import_apophysis_heading: "Import from Apophysis:"
   load_apophysis: "🔥 Load Apophysis .flame"
+  save_apophysis: "💾 Save Apophysis .flame"
   apophysis_format_hint: "(XML format from Apophysis 7X)"
 
 # Fractal Gallery Widget (used by Preset Library and File Browser)

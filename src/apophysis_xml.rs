@@ -744,6 +744,319 @@ fn eval_rational_bezier(t: f32, control_points: &[(f32, f32, f32); 4]) -> Option
     Some((nom_x / denom, nom_y / denom))
 }
 
+// ---------------------------------------------------------------------------
+// Writer
+// ---------------------------------------------------------------------------
+
+/// Serialize a `FractalConfig` to an Apophysis 7X `.flame` XML document.
+///
+/// The output is the inverse of `parse_flame_xml`. Round-tripping the
+/// fields the parser reads is the design target — anything we read on
+/// import gets written back. Fields we don't read are written with
+/// Apo-reasonable defaults (`quality`, `oversample`, `enable_de`, etc.)
+/// so the file looks complete to other tools.
+///
+/// Things this does NOT preserve, by design:
+///   - Our extended UI state (palette squeeze, levels, effects, etc.) —
+///     those live in `.fflame`, not `.flame`. Use `.fflame` for lossless
+///     round-trip with ourselves.
+///   - Tone curves — `curves` is always written as the 48-value Apo
+///     identity. Re-importing one of our exports loses any non-linear
+///     tonemap_curve. Could be reversed by inverting the Bezier sampler
+///     in `parse_apophysis_curves`, but that's non-trivial and not
+///     needed for the export → Apo workflow.
+///   - Subflames and linked transforms — `subflame_wf` references are
+///     written as the variation attribute, but child flames are not
+///     emitted in this XML.
+///   - Variation **init params** (`_dx`, `_dy`, etc.) — these are
+///     derived values our GPU recomputes on load, not user-facing, and
+///     Apo doesn't have the concept.
+pub fn write_flame_xml(config: &FractalConfig) -> String {
+    let mut out = String::with_capacity(8192);
+    let version = format!(
+        "Fractal Flame WGPU {}",
+        env!("CARGO_PKG_VERSION")
+    );
+
+    // Inverse of importer's conversions:
+    //   - importer: zoom = scale / 200.0           → apo_scale = zoom × 200
+    //   - importer: rotation = rotate × π / 180    → rotate_deg = rotation × 180 / π
+    //   - importer: ui_gt = apo_gt × 2000 + 50     → apo_gt = (ui_gt − 50) / 2000
+    let apo_scale = config.zoom * 200.0;
+    let rotate_deg = config.rotation * 180.0 / std::f32::consts::PI;
+    let apo_gamma_threshold = ((config.gamma_threshold - 50.0) / 2000.0).max(0.0);
+
+    // 1920×1080 default — FractalConfig doesn't carry a render size.
+    // Apo just uses this for the preview canvas; doesn't affect math.
+    let size = (1920, 1080);
+
+    let bg = config.background_color;
+    let bg_str = format!(
+        "{} {} {}",
+        (bg[0].clamp(0.0, 1.0) * 255.0).round() as u8,
+        (bg[1].clamp(0.0, 1.0) * 255.0).round() as u8,
+        (bg[2].clamp(0.0, 1.0) * 255.0).round() as u8,
+    );
+
+    // `plugins` — Apo wants the union of variation names across all
+    // xforms (and the finalxform if any). Sorted for determinism.
+    let plugins = collect_plugin_names(&config.flame);
+
+    out.push_str("<flames name=\"");
+    out.push_str(&xml_escape_attr(&config.flame.name));
+    out.push_str("\">\n");
+
+    out.push_str("<flame name=\"");
+    out.push_str(&xml_escape_attr(&config.flame.name));
+    out.push_str(&format!("\" version=\"{}\"", xml_escape_attr(&version)));
+    out.push_str(&format!(" size=\"{} {}\"", size.0, size.1));
+    out.push_str(&format!(" center=\"{} {}\"", fmt_f32(config.pan_x), fmt_f32(config.pan_y)));
+    out.push_str(&format!(" scale=\"{}\"", fmt_f32(apo_scale)));
+    if rotate_deg.abs() > 1e-6 {
+        out.push_str(&format!(" rotate=\"{}\"", fmt_f32(rotate_deg)));
+    }
+    // Camera (3D). Always written when nonzero; zero defaults are dropped
+    // so 2D flames don't carry dead camera attributes.
+    if config.camera_rotation_x.abs() > 1e-6 {
+        out.push_str(&format!(" cam_pitch=\"{}\"", fmt_f32(config.camera_rotation_x)));
+    }
+    if config.camera_rotation_y.abs() > 1e-6 {
+        out.push_str(&format!(" cam_yaw=\"{}\"", fmt_f32(config.camera_rotation_y)));
+    }
+    if config.camera_z.abs() > 1e-6 {
+        out.push_str(&format!(" cam_zpos=\"{}\"", fmt_f32(config.camera_z)));
+    }
+    if config.flame.perspective_strength.abs() > 1e-6 {
+        out.push_str(&format!(" cam_perspective=\"{}\"", fmt_f32(config.flame.perspective_strength)));
+    }
+    if config.dof_blur_strength.abs() > 1e-6 {
+        out.push_str(&format!(" cam_dof=\"{}\"", fmt_f32(config.dof_blur_strength)));
+    }
+    // Standard Apo attrs that the importer reads.
+    out.push_str(" oversample=\"1\"");
+    if config.filter_radius.abs() > 1e-6 {
+        out.push_str(&format!(" filter=\"{}\"", fmt_f32(config.filter_radius)));
+    }
+    out.push_str(" quality=\"50\"");
+    out.push_str(&format!(" background=\"{}\"", bg_str));
+    out.push_str(&format!(" brightness=\"{}\"", fmt_f32(config.brightness)));
+    out.push_str(&format!(" gamma=\"{}\"", fmt_f32(config.gamma)));
+    if (config.vibrancy - 1.0).abs() > 1e-6 {
+        out.push_str(&format!(" vibrancy=\"{}\"", fmt_f32(config.vibrancy)));
+    }
+    out.push_str(&format!(" gamma_threshold=\"{}\"", fmt_f32(apo_gamma_threshold)));
+    // Apo density-estimator block — we don't use it, write its defaults
+    // so the file looks complete.
+    out.push_str(" estimator_radius=\"9\" estimator_minimum=\"0\" estimator_curve=\"0.4\" enable_de=\"0\"");
+    out.push_str(&format!(" plugins=\"{}\"", xml_escape_attr(&plugins)));
+    out.push_str(" new_linear=\"1\"");
+    // Identity tone curves — see module note above on why we don't
+    // attempt to round-trip the Bezier.
+    out.push_str(" curves=\"");
+    let identity_curve = "0 0 1 0 0 1 1 1 1 1 1 1";
+    for i in 0..4 {
+        if i > 0 { out.push(' '); }
+        out.push_str(identity_curve);
+    }
+    out.push('"');
+    if let Some(idx) = config.flame.solo_transform {
+        out.push_str(&format!(" soloxform=\"{}\"", idx));
+    }
+    out.push_str(" >\n");
+
+    // Normal transforms (`<xform>`).
+    let registry = global_registry();
+    let xaos = config.flame.xaos.as_ref();
+    for (i, xform) in config.flame.transforms.iter().enumerate() {
+        let chaos_row = xaos.and_then(|m| m.get(i));
+        write_xform(&mut out, xform, false, chaos_row, &*registry);
+    }
+
+    // Final transforms. Apo's `<finalxform>` is singular — when we have
+    // multiple, write the first and drop the rest with a log warning.
+    // (Multi-final is a per-transform feature we added on top of Apo;
+    // there's no Apo-side concept for it.)
+    if let Some(final_xform) = config.flame.final_transforms.first() {
+        write_xform(&mut out, final_xform, true, None, &*registry);
+        if config.flame.final_transforms.len() > 1 {
+            log::warn!(
+                "write_flame_xml: dropping {} extra final transform(s) — Apo XML only supports a single <finalxform>",
+                config.flame.final_transforms.len() - 1
+            );
+        }
+    }
+
+    // Palette: 256 colors, RGB hex, 8 colors per line.
+    write_palette(&mut out, &config.palette);
+
+    out.push_str("</flame>\n");
+    out.push_str("</flames>\n");
+
+    out
+}
+
+/// Format an f32 using Rust's default formatter, which produces the
+/// shortest decimal that round-trips exactly. Mirrors what serde_json
+/// does and matches Apo's mixed-precision output style.
+fn fmt_f32(v: f32) -> String {
+    if v == 0.0 {
+        "0".to_string()
+    } else {
+        format!("{}", v)
+    }
+}
+
+/// Minimal XML attribute-value escape. Variation names and numbers
+/// don't need this, but flame `name`s come from user input.
+fn xml_escape_attr(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Build the `plugins` attribute value — space-separated unique
+/// variation names across all xforms (and the final, if any). Sorted
+/// for determinism.
+fn collect_plugin_names(flame: &Flame) -> String {
+    let mut names: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+    for xform in &flame.transforms {
+        for name in xform.variations.keys() {
+            names.insert(name.as_str());
+        }
+    }
+    for xform in &flame.final_transforms {
+        for name in xform.variations.keys() {
+            names.insert(name.as_str());
+        }
+    }
+    names.into_iter().collect::<Vec<_>>().join(" ")
+}
+
+/// Write one `<xform>` or `<finalxform>` element. `is_final = true`
+/// suppresses the `weight` and `opacity` attributes (Apo's finalxform
+/// has neither). `chaos_row` is this transform's row of the xaos matrix
+/// (write only if it has any non-1.0 entry).
+fn write_xform(
+    out: &mut String,
+    xform: &Transform,
+    is_final: bool,
+    chaos_row: Option<&Vec<f32>>,
+    registry: &crate::variations::VariationRegistry,
+) {
+    out.push_str(if is_final { "   <finalxform" } else { "   <xform" });
+
+    if !is_final {
+        out.push_str(&format!(" weight=\"{}\"", fmt_f32(xform.weight)));
+    }
+    out.push_str(&format!(" color=\"{}\"", fmt_f32(xform.color)));
+    if xform.color_speed.abs() > 1e-6 {
+        out.push_str(&format!(" color_speed=\"{}\"", fmt_f32(xform.color_speed)));
+    }
+    if !is_final {
+        // Apo always writes opacity; we follow suit so a re-import sees
+        // the same value rather than the parser default.
+        out.push_str(&format!(" opacity=\"{}\"", fmt_f32(xform.opacity)));
+    }
+    if xform.direct_color.abs() > 1e-6 {
+        out.push_str(&format!(" pluginColor=\"{}\"", fmt_f32(xform.direct_color)));
+    }
+
+    // Variations — sorted for deterministic output.
+    let mut variation_names: Vec<&String> = xform.variations.keys().collect();
+    variation_names.sort();
+    for name in &variation_names {
+        let weight = xform.variations[*name];
+        out.push_str(&format!(" {}=\"{}\"", name, fmt_f32(weight)));
+    }
+
+    // Coefs: importer parses "a c b d e f" (column-major), so we
+    // serialize in that exact order.
+    out.push_str(&format!(
+        " coefs=\"{} {} {} {} {} {}\"",
+        fmt_f32(xform.a), fmt_f32(xform.c),
+        fmt_f32(xform.b), fmt_f32(xform.d),
+        fmt_f32(xform.e), fmt_f32(xform.f),
+    ));
+
+    if xform.post_affine_enabled {
+        out.push_str(&format!(
+            " post=\"{} {} {} {} {} {}\"",
+            fmt_f32(xform.post_a), fmt_f32(xform.post_c),
+            fmt_f32(xform.post_b), fmt_f32(xform.post_d),
+            fmt_f32(xform.post_e), fmt_f32(xform.post_f),
+        ));
+    }
+
+    // Variation parameters: `variation_params` keys are
+    // "varname.paramname". Only emit entries whose variation is active
+    // in this xform (orphan params from a removed variation don't get
+    // written) and whose param is registered as a user-facing parameter
+    // (skips derived/init slots, which aren't in `parameters` anyway).
+    let mut param_entries: Vec<(&String, f32)> = xform.variation_params.iter()
+        .map(|(k, v)| (k, *v))
+        .collect();
+    param_entries.sort_by_key(|(k, _)| k.as_str());
+    for (key, value) in param_entries {
+        let Some((var_name, param_name)) = key.split_once('.') else { continue };
+        if !xform.variations.contains_key(var_name) {
+            continue;
+        }
+        // Validate the param is user-facing (defensive — `variation_params`
+        // shouldn't contain non-registered entries, but check anyway).
+        let is_registered = registry.get(var_name)
+            .map(|info| info.parameters.iter().any(|p| p.name == param_name))
+            .unwrap_or(false);
+        if !is_registered {
+            continue;
+        }
+        out.push_str(&format!(" {}_{}=\"{}\"", var_name, param_name, fmt_f32(value)));
+    }
+
+    if let Some(row) = chaos_row {
+        // Only emit `chaos` if any entry differs from the default 1.0
+        // (importer fills missing rows with all-1.0).
+        if row.iter().any(|w| (w - 1.0).abs() > 1e-6) {
+            out.push_str(" chaos=\"");
+            for (i, w) in row.iter().enumerate() {
+                if i > 0 { out.push(' '); }
+                out.push_str(&fmt_f32(*w));
+            }
+            out.push('"');
+        }
+    }
+
+    out.push_str(" />\n");
+}
+
+/// Write the 256-entry palette as Apo-formatted hex: 8 colors per line,
+/// 48 hex chars each, lowercase. Apo emits uppercase but its parser is
+/// case-insensitive; we use uppercase to match the sample files.
+fn write_palette(out: &mut String, palette: &crate::scene::palette::Palette) {
+    out.push_str("   <palette count=\"256\" format=\"RGB\">\n");
+    for row in 0..32 {
+        out.push_str("      ");
+        for col in 0..8 {
+            let i = row * 8 + col;
+            let position = i as f32 / 255.0;
+            let color = palette.sample_color(position);
+            let r = (color[0].clamp(0.0, 1.0) * 255.0).round() as u8;
+            let g = (color[1].clamp(0.0, 1.0) * 255.0).round() as u8;
+            let b = (color[2].clamp(0.0, 1.0) * 255.0).round() as u8;
+            out.push_str(&format!("{:02X}{:02X}{:02X}", r, g, b));
+        }
+        out.push('\n');
+    }
+    out.push_str("   </palette>\n");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -926,5 +1239,189 @@ mod tests {
         // Invalid variation name
         let result = find_variation_and_param("invalid_param", &registry);
         assert_eq!(result, None);
+    }
+
+    /// Round-trip: write a flame to XML and re-parse it, asserting the
+    /// fields the parser reads survive byte-for-byte through
+    /// `write_flame_xml`. Anything the parser doesn't read is not
+    /// asserted here.
+    #[test]
+    fn test_roundtrip_basic() {
+        let xml_in = r#"
+<flames name="rt-test">
+<flame name="RoundTrip" version="Apophysis 7x Version 15D" size="1500 1000" center="0.123 -0.456" scale="375" cam_pitch="0.943" cam_dof="0.194" oversample="1" filter="0.5" quality="50" background="0 0 0" brightness="4" gamma="4" gamma_threshold="0.01" plugins="linear julian" new_linear="1" >
+   <xform weight="0.5" color="0" linear="1" coefs="0.125 0 0 0.125 -0.002 0.002" opacity="1" />
+   <xform weight="6" color="0.481" julian="1" coefs="0.707107 -0.707107 0.707107 0.707107 0 -0.3" julian_power="2" julian_dist="-1" opacity="0.8" />
+</flame>
+</flames>
+        "#;
+
+        let configs = parse_flame_xml(xml_in).expect("parse in");
+        assert_eq!(configs.len(), 1);
+        let original = &configs[0];
+
+        let xml_out = write_flame_xml(original);
+        let configs_back = parse_flame_xml(&xml_out).expect("parse out");
+        assert_eq!(configs_back.len(), 1);
+        let back = &configs_back[0];
+
+        assert_eq!(back.flame.name, "RoundTrip");
+        assert_eq!(back.flame.transforms.len(), 2);
+
+        // Affine: importer parses "a c b d e f"; exporter writes the
+        // same order. Spot-check the second xform's rotation matrix.
+        let x1 = &back.flame.transforms[1];
+        assert!((x1.a - 0.707107).abs() < 1e-5, "a: {}", x1.a);
+        assert!((x1.b - 0.707107).abs() < 1e-5, "b: {}", x1.b);
+        assert!((x1.c - -0.707107).abs() < 1e-5, "c: {}", x1.c);
+        assert!((x1.d - 0.707107).abs() < 1e-5, "d: {}", x1.d);
+        assert_eq!(x1.weight, 6.0);
+        assert!((x1.opacity - 0.8).abs() < 1e-6, "opacity: {}", x1.opacity);
+        assert_eq!(x1.variations["julian"], 1.0);
+        assert_eq!(
+            x1.get_variation_param_or_default("julian", "power", &global_registry()),
+            2.0
+        );
+        assert_eq!(
+            x1.get_variation_param_or_default("julian", "dist", &global_registry()),
+            -1.0
+        );
+
+        // Camera attrs survived.
+        assert!((back.camera_rotation_x - 0.943).abs() < 1e-4);
+        assert!((back.dof_blur_strength - 0.194).abs() < 1e-4);
+
+        // Scale → zoom conversion is the inverse of the importer's
+        // `zoom = scale / 200`: 375 / 200 = 1.875.
+        assert!((back.zoom - 1.875).abs() < 1e-4, "zoom: {}", back.zoom);
+
+        // Tonemap basics.
+        assert!((back.brightness - 4.0).abs() < 1e-4);
+        assert!((back.gamma - 4.0).abs() < 1e-4);
+
+        // Pan, exactly preserved.
+        assert!((back.pan_x - 0.123).abs() < 1e-4);
+        assert!((back.pan_y - -0.456).abs() < 1e-4);
+    }
+
+    /// Exporting a flame with post-affine and chaos should produce XML
+    /// that re-imports those features faithfully.
+    #[test]
+    fn test_roundtrip_post_and_chaos() {
+        let xml_in = r#"
+<flames name="pc-test">
+<flame name="PostChaos" size="800 600" center="0 0" scale="200" background="0 0 0" brightness="1" gamma="2.2">
+   <xform weight="1" color="0" linear="1" coefs="1 0 0 1 0 0" post="0.8 0.1 -0.1 0.5 0.2 0.3" opacity="1" chaos="1 0.5" />
+   <xform weight="1" color="0.5" spherical="1" coefs="0.9 0 0 0.9 0 0" opacity="1" chaos="0 1" />
+</flame>
+</flames>
+        "#;
+
+        let original = parse_flame_xml(xml_in).expect("parse").into_iter().next().unwrap();
+        let xml_out = write_flame_xml(&original);
+        let back = parse_flame_xml(&xml_out).expect("re-parse").into_iter().next().unwrap();
+
+        // Post-affine on xform 0.
+        let x0 = &back.flame.transforms[0];
+        assert!(x0.post_affine_enabled);
+        assert!((x0.post_a - 0.8).abs() < 1e-5);
+        assert!((x0.post_b - -0.1).abs() < 1e-5);
+        assert!((x0.post_c - 0.1).abs() < 1e-5);
+        assert!((x0.post_d - 0.5).abs() < 1e-5);
+        assert!((x0.post_e - 0.2).abs() < 1e-5);
+        assert!((x0.post_f - 0.3).abs() < 1e-5);
+
+        // Chaos matrix survived (2×2 with non-default off-diagonals).
+        let xaos = back.flame.xaos.as_ref().expect("xaos should be set");
+        assert_eq!(xaos.len(), 2);
+        assert!((xaos[0][0] - 1.0).abs() < 1e-6);
+        assert!((xaos[0][1] - 0.5).abs() < 1e-6);
+        assert!((xaos[1][0] - 0.0).abs() < 1e-6);
+        assert!((xaos[1][1] - 1.0).abs() < 1e-6);
+    }
+
+    /// Real-world Apo file (`output/ship-on-the-sea.flame`, exported
+    /// from Apophysis 7X v15C.9 with 3 xforms, julia3D, zscale, custom
+    /// palette, cam_pitch, cam_dof) — should round-trip through our
+    /// import/export without losing any field the parser reads.
+    #[test]
+    fn test_roundtrip_real_apo_file() {
+        let xml_in = include_str!("../output/ship-on-the-sea.flame");
+
+        let original = parse_flame_xml(xml_in).expect("parse real Apo file")
+            .into_iter().next().unwrap();
+        let xml_out = write_flame_xml(&original);
+        let back = parse_flame_xml(&xml_out).expect("re-parse our export")
+            .into_iter().next().unwrap();
+
+        // Structural parity: same xform count, same variation set,
+        // same palette length.
+        assert_eq!(original.flame.transforms.len(), back.flame.transforms.len());
+        assert_eq!(original.palette.stops.len(), back.palette.stops.len());
+
+        // View state.
+        assert!((original.zoom - back.zoom).abs() < 1e-3, "zoom: {} vs {}", original.zoom, back.zoom);
+        assert!((original.pan_x - back.pan_x).abs() < 1e-5);
+        assert!((original.pan_y - back.pan_y).abs() < 1e-5);
+        assert!((original.camera_rotation_x - back.camera_rotation_x).abs() < 1e-4);
+        assert!((original.dof_blur_strength - back.dof_blur_strength).abs() < 1e-4);
+
+        // Tonemap.
+        assert!((original.brightness - back.brightness).abs() < 1e-4);
+        assert!((original.gamma - back.gamma).abs() < 1e-4);
+
+        // Per-xform: weight, color, affine, variations preserved.
+        for (i, (orig, rt)) in original.flame.transforms.iter()
+            .zip(back.flame.transforms.iter()).enumerate()
+        {
+            assert!((orig.weight - rt.weight).abs() < 1e-5, "xform {} weight", i);
+            assert!((orig.opacity - rt.opacity).abs() < 1e-5, "xform {} opacity", i);
+            assert!((orig.a - rt.a).abs() < 1e-5, "xform {} a", i);
+            assert!((orig.b - rt.b).abs() < 1e-5, "xform {} b", i);
+            assert!((orig.c - rt.c).abs() < 1e-5, "xform {} c", i);
+            assert!((orig.d - rt.d).abs() < 1e-5, "xform {} d", i);
+            assert!((orig.e - rt.e).abs() < 1e-5, "xform {} e", i);
+            assert!((orig.f - rt.f).abs() < 1e-5, "xform {} f", i);
+            // Variation names + weights identical.
+            assert_eq!(
+                orig.variations.keys().collect::<std::collections::BTreeSet<_>>(),
+                rt.variations.keys().collect::<std::collections::BTreeSet<_>>(),
+                "xform {} variation set", i,
+            );
+            for (name, &w) in &orig.variations {
+                let rt_w = rt.variations.get(name).copied().unwrap_or(0.0);
+                assert!((w - rt_w).abs() < 1e-5, "xform {} var {}: {} vs {}", i, name, w, rt_w);
+            }
+        }
+    }
+
+    /// The palette path: write a custom palette out and read it back,
+    /// checking that the 256 RGB triplets survive the hex round-trip.
+    #[test]
+    fn test_roundtrip_palette() {
+        use crate::scene::palette::{ColorStop, Palette};
+
+        // Two-stop palette: black at 0, red at 1. Sampling yields a
+        // smooth fade with predictable midpoint.
+        let stops = vec![
+            ColorStop { position: 0.0, color: [0.0, 0.0, 0.0] },
+            ColorStop { position: 1.0, color: [1.0, 0.0, 0.0] },
+        ];
+        let palette = Palette::new_locked("rt", stops);
+
+        let mut config = FractalConfig::default();
+        config.palette = palette;
+        config.flame.name = "PaletteRT".to_string();
+
+        let xml = write_flame_xml(&config);
+        let back = parse_flame_xml(&xml).expect("parse").into_iter().next().unwrap();
+
+        // Imported palettes have 256 stops on linear positions.
+        assert_eq!(back.palette.stops.len(), 256);
+        // Endpoints survive (within 1/255 quantization).
+        let r0 = back.palette.stops[0].color[0];
+        let r255 = back.palette.stops[255].color[0];
+        assert!(r0 < 0.01, "stop 0 red: {}", r0);
+        assert!(r255 > 0.99, "stop 255 red: {}", r255);
     }
 }
