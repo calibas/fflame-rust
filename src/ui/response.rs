@@ -33,6 +33,7 @@ pub struct UiResponse {
     pub config_save_file_requested: bool,
     pub config_load_file_requested: bool,
     pub apophysis_import_file_requested: bool,
+    pub apophysis_export_file_requested: bool,
     pub new_flame_requested: bool,
     pub random_flame_requested: bool,
 
@@ -183,6 +184,7 @@ impl Default for UiResponse {
             config_save_file_requested: false,
             config_load_file_requested: false,
             apophysis_import_file_requested: false,
+            apophysis_export_file_requested: false,
             new_flame_requested: false,
             random_flame_requested: false,
             palette_export_json: None,

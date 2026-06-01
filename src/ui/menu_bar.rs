@@ -79,7 +79,9 @@ pub fn render_menu_bar(
                 if ui.button(t!("menu.import_apophysis")).clicked() {
                     menu_actions.file.import_apophysis = true;
                 }
-                // ui.add_enabled(false, egui::Button::new(t!("menu.export_apophysis")));
+                if ui.button(t!("menu.export_apophysis")).clicked() {
+                    menu_actions.file.export_apophysis = true;
+                }
 
                 ui.separator();
 
