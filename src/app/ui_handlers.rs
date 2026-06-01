@@ -840,6 +840,43 @@ impl App {
             }
         }
 
+        // Handle Apophysis .flame export
+        if ui_response.apophysis_export_file_requested {
+            let config = self.export_config();
+            let xml = crate::apophysis_xml::write_flame_xml(&config);
+            let default_name = format!(
+                "{}.flame",
+                if config.flame.name.is_empty() {
+                    "fractal".to_string()
+                } else {
+                    config.flame.name.to_lowercase().replace(' ', "_")
+                }
+            );
+
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                if let Some(path) = rfd::FileDialog::new()
+                    .set_parent(self.window.as_ref())
+                    .add_filter("Apophysis Flame", &["flame"])
+                    .set_file_name(&default_name)
+                    .save_file()
+                {
+                    if let Err(e) = std::fs::write(&path, &xml) {
+                        eprintln!("Failed to write Apophysis flame: {}", e);
+                    } else {
+                        println!("Exported Apophysis flame to: {}", path.display());
+                    }
+                }
+            }
+
+            #[cfg(target_arch = "wasm32")]
+            {
+                if let Err(e) = trigger_browser_download(xml.as_bytes(), &default_name, "application/xml") {
+                    log::error!("Failed to trigger Apophysis download: {}", e);
+                }
+            }
+        }
+
         // Handle file browser open request (loads into FractalBrowser Files tab)
         if ui_response.file_browser_open_requested {
             #[cfg(not(target_arch = "wasm32"))]

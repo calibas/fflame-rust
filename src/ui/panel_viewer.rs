@@ -245,6 +245,7 @@ pub struct PanelContext<'a> {
     pub config_save_file: &'a mut bool,
     pub config_load_file: &'a mut bool,
     pub apophysis_import_file: &'a mut bool,
+    pub apophysis_export_file: &'a mut bool,
     pub open_config_dialog: &'a mut bool,
 
     // Selected preset config (from any browser)
@@ -971,6 +972,7 @@ impl<'a> PanelViewer<'a> {
             self.context.config_save_file,
             self.context.config_load_file,
             self.context.apophysis_import_file,
+            self.context.apophysis_export_file,
         );
     }
 
