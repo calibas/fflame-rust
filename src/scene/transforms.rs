@@ -358,8 +358,12 @@ pub struct Transform {
 
     /// Direct-color blend strength (0.0 to 1.0, Apophysis `pluginColor`).
     /// 0.0 = standard color evolution; 1.0 = direct-color variations fully
-    /// override the iteration color. No effect when no direct-color
-    /// variations are active in the flame. Default 0.0.
+    /// override the iteration color. No-op when no direct-color variations
+    /// are active in the flame, so the default is **1.0** — when a user
+    /// adds a DC variation it just works without hunting for an extra
+    /// slider. Apophysis defaults this to 0.0; we deviate intentionally
+    /// because our model has no other DC-enable toggle and the cost of
+    /// being on for a non-DC transform is exactly zero.
     pub direct_color: f32,
 
     // Post-affine transformation matrix (optional, applied after variations)
@@ -417,7 +421,7 @@ impl Default for Transform {
             color: 0.5,        // Mid-palette position (neutral default)
             color_speed: 0.0,  // Apophysis default: 50/50 blend
             opacity: 1.0,      // Apophysis default: always visible
-            direct_color: 0.0, // Apophysis default: no direct-color blending
+            direct_color: 1.0, // DC on by default; no-op when no DC variation is active. See field docs.
             post_affine_enabled: false,
             post_a: 1.0,
             post_b: 0.0,
@@ -1122,7 +1126,12 @@ impl<'de> Deserialize<'de> for Transform {
                     color: color.ok_or_else(|| de::Error::missing_field("color"))?,
                     color_speed: color_speed.unwrap_or(0.0), // Default to 0.0 for backward compatibility
                     opacity: opacity.unwrap_or(1.0), // Default to 1.0 for backward compatibility
-                    direct_color: direct_color.unwrap_or(0.0), // Default 0.0 (no direct-color blending)
+                    // Deserialize fallback is 0.0 even though Transform::default() is now
+                    // 1.0 — `.fflame` files written before the default flip omit this field
+                    // when it was at the old default of 0.0 (see the `has_direct_color` skip
+                    // in serialize), and we want those files to keep their old appearance.
+                    // New flames serialize 1.0 explicitly, so they round-trip fine.
+                    direct_color: direct_color.unwrap_or(0.0),
                     // Post-affine defaults to disabled + identity (backward compatible)
                     post_affine_enabled: post_affine_enabled.unwrap_or(false),
                     post_a: post_a.unwrap_or(1.0),
