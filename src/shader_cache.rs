@@ -79,6 +79,7 @@ impl ShaderCache {
             color_mode: 0,  // Will be updated via ensure_current_full when config loads
             has_post_affine: flame.has_post_affine(),
             has_attachments: flame.has_attachments(),
+            has_post_symmetry: flame.post_symmetry.ty != crate::scene::transforms::PostSymmetryType::None,
             attachment_cap: flame.attachment_cap() as u32,
             inlined_transforms: None,
             cumulative_weights: None,
@@ -177,6 +178,7 @@ impl ShaderCache {
                 color_mode: config.color_mode as u32,
                 has_post_affine: config.flame.has_post_affine(),
                 has_attachments: config.flame.has_attachments(),
+                has_post_symmetry: config.flame.post_symmetry.ty != crate::scene::transforms::PostSymmetryType::None,
                 attachment_cap: config.flame.attachment_cap() as u32,
                 inlined_transforms: None,
                 cumulative_weights: None,

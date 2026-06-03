@@ -202,6 +202,7 @@ pub fn generate_random_flame_with_rng<R: Rng>(settings: &RandomGeneratorSettings
         xaos: None,
         solo_transform: None,
         subflames: Vec::new(),
+        post_symmetry: crate::scene::transforms::PostSymmetry::default(),
     }
 }
 

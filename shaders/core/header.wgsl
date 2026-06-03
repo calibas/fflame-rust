@@ -70,6 +70,26 @@ struct Params {
     background_r: f32,  // Background color R (for depth fog)
     background_g: f32,  // Background color G (for depth fog)
     background_b: f32,  // Background color B (for depth fog)
+    // std140 alignment pad. `post_symmetry` is a struct, which std140
+    // requires to start at a 16-byte boundary; the preceding fields
+    // end at offset 124, so 4 bytes of pad land it at 128. Mirrors
+    // `_pad_before_post_symmetry` in `src/gpu/buffers.rs`.
+    _pad_before_post_symmetry: u32,
+    post_symmetry: PostSymmetry,  // Plot-time symmetry (gated by HAS_POST_SYMMETRY)
+}
+
+// Plot-time symmetry. Matches `GpuPostSymmetry` in src/gpu/buffers.rs.
+// When `kind == 0` the shader builder strips the symmetry block via
+// HAS_POST_SYMMETRY, so these fields don't get read.
+struct PostSymmetry {
+    kind: u32,         // 0=None, 1=XAxis, 2=YAxis, 3=Point
+    order: u32,        // K for Point mode, clamped to [1, 32]
+    center_x: f32,
+    center_y: f32,
+    distance: f32,     // Pan along the symmetry axis (axis modes only)
+    rotation: f32,     // Pre-rotation, radians (axis modes only)
+    _pad_a: f32,
+    _pad_b: f32,
 }
 
 // Variation parameters for one transform

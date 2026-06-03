@@ -101,6 +101,10 @@ fn parse_flame_element(
     let mut saturation: f32 = crate::config::defaults::DEFAULT_SATURATION;
     let mut white_level: f32 = crate::config::defaults::DEFAULT_WHITE_LEVEL;
 
+    // JWildfire `post_symmetry_*` attrs. Apo files don't write these,
+    // so the defaults stay until JWF tokens overwrite them.
+    let mut post_symmetry = crate::scene::transforms::PostSymmetry::default();
+
     for attr in start_element.attributes() {
         let attr = attr?;
         let key = std::str::from_utf8(attr.key.as_ref())?;
@@ -152,6 +156,24 @@ fn parse_flame_element(
             // tonemap white point (default 220).
             "saturation" => saturation = value.parse().unwrap_or(crate::config::defaults::DEFAULT_SATURATION),
             "white_level" => white_level = value.parse().unwrap_or(crate::config::defaults::DEFAULT_WHITE_LEVEL),
+            "post_symmetry_type" => {
+                post_symmetry.ty = crate::scene::transforms::PostSymmetryType::from_xml_token(value);
+            }
+            "post_symmetry_order" => {
+                post_symmetry.order = value.parse::<u32>().unwrap_or(3);
+            }
+            "post_symmetry_centre_x" | "post_symmetry_center_x" => {
+                post_symmetry.center_x = value.parse().unwrap_or(0.0);
+            }
+            "post_symmetry_centre_y" | "post_symmetry_center_y" => {
+                post_symmetry.center_y = value.parse().unwrap_or(0.0);
+            }
+            "post_symmetry_distance" => {
+                post_symmetry.distance = value.parse().unwrap_or(1.25);
+            }
+            "post_symmetry_rotation" => {
+                post_symmetry.rotation_deg = value.parse().unwrap_or(6.0);
+            }
             "curves" => {
                 // Parse space-separated floats (48 values: 4 curves × 12 points)
                 let parsed: Vec<f32> = value.split_whitespace()
@@ -313,6 +335,7 @@ fn parse_flame_element(
         // JWF `subflame_wf_flame` payloads decoded above; empty when no
         // xform carried one (the common Apo case).
         subflames: imported_subflames,
+        post_symmetry,
     };
     flame.migrate_legacy_final(final_transform);
 
@@ -951,6 +974,17 @@ fn write_single_flame(out: &mut String, config: &FractalConfig, flame: &Flame) {
     out.push_str(&format!(" saturation=\"{}\"", fmt_f32(config.saturation)));
     out.push_str(&format!(" white_level=\"{}\"", fmt_f32(config.white_level)));
     out.push_str(&format!(" gamma_threshold=\"{}\"", fmt_f32(apo_gamma_threshold)));
+
+    // Post-symmetry — JWF reads, Apo ignores. Always emit so a JWF
+    // round-trip preserves the symmetry settings; the defaults match
+    // JWF's per-file fallbacks (NONE / 3 / 0 / 0 / 1.25 / 6.0).
+    let ps = &flame.post_symmetry;
+    out.push_str(&format!(" post_symmetry_type=\"{}\"", ps.ty.xml_token()));
+    out.push_str(&format!(" post_symmetry_order=\"{}\"", ps.order));
+    out.push_str(&format!(" post_symmetry_centre_x=\"{}\"", fmt_f32(ps.center_x)));
+    out.push_str(&format!(" post_symmetry_centre_y=\"{}\"", fmt_f32(ps.center_y)));
+    out.push_str(&format!(" post_symmetry_distance=\"{}\"", fmt_f32(ps.distance)));
+    out.push_str(&format!(" post_symmetry_rotation=\"{}\"", fmt_f32(ps.rotation_deg)));
     // Apo density-estimator block — we don't use it, write its defaults
     // so the file looks complete.
     out.push_str(" estimator_radius=\"9\" estimator_minimum=\"0\" estimator_curve=\"0.4\" enable_de=\"0\"");
@@ -1758,6 +1792,72 @@ mod tests {
         // a single-xform truchet).
         let child = &cfg.flame.subflames[0];
         assert!(!child.transforms.is_empty(), "child subflame has no xforms");
+    }
+
+    /// Post-symmetry round-trip: import → export → re-import preserves
+    /// type, order, center, distance, rotation. Also confirms the JWF
+    /// `centre_*` spelling alias works on import.
+    #[test]
+    fn test_post_symmetry_roundtrip() {
+        use crate::scene::transforms::PostSymmetryType;
+        let xml = r#"
+<flames name="ps-test">
+<flame name="PS" size="800 600" center="0 0" scale="200" background="0 0 0" brightness="4" gamma="4" post_symmetry_type="POINT" post_symmetry_order="5" post_symmetry_centre_x="0.25" post_symmetry_centre_y="-0.5" post_symmetry_distance="2.0" post_symmetry_rotation="15.0">
+   <xform weight="1" color="0" linear="1" coefs="1 0 0 1 0 0" opacity="1" />
+</flame>
+</flames>
+        "#;
+
+        let original = parse_flame_xml(xml).expect("parse").into_iter().next().unwrap();
+        assert_eq!(original.flame.post_symmetry.ty, PostSymmetryType::Point);
+        assert_eq!(original.flame.post_symmetry.order, 5);
+        assert!((original.flame.post_symmetry.center_x - 0.25).abs() < 1e-5);
+        assert!((original.flame.post_symmetry.center_y - -0.5).abs() < 1e-5);
+        assert!((original.flame.post_symmetry.distance - 2.0).abs() < 1e-5);
+        assert!((original.flame.post_symmetry.rotation_deg - 15.0).abs() < 1e-4);
+
+        let xml_out = write_flame_xml(&original);
+        let back = parse_flame_xml(&xml_out).expect("re-parse").into_iter().next().unwrap();
+
+        assert_eq!(back.flame.post_symmetry.ty, PostSymmetryType::Point);
+        assert_eq!(back.flame.post_symmetry.order, 5);
+        assert!((back.flame.post_symmetry.center_x - 0.25).abs() < 1e-5);
+        assert!((back.flame.post_symmetry.center_y - -0.5).abs() < 1e-5);
+        assert!((back.flame.post_symmetry.distance - 2.0).abs() < 1e-5);
+        assert!((back.flame.post_symmetry.rotation_deg - 15.0).abs() < 1e-4);
+    }
+
+    /// X-axis and Y-axis symmetry tokens import cleanly. The default
+    /// case (no `post_symmetry_*` attrs on the flame) leaves the field
+    /// at `None`.
+    #[test]
+    fn test_post_symmetry_axis_modes_and_default() {
+        use crate::scene::transforms::PostSymmetryType;
+
+        // Default: no attrs → None.
+        let xml_none = r#"
+<flames name="none">
+<flame name="None" size="800 600" center="0 0" scale="200" background="0 0 0" brightness="4" gamma="4">
+   <xform weight="1" color="0" linear="1" coefs="1 0 0 1 0 0" opacity="1" />
+</flame>
+</flames>
+        "#;
+        let cfg = parse_flame_xml(xml_none).expect("parse").into_iter().next().unwrap();
+        assert_eq!(cfg.flame.post_symmetry.ty, PostSymmetryType::None);
+
+        for (token, expected) in [
+            ("X_AXIS", PostSymmetryType::XAxis),
+            ("Y_AXIS", PostSymmetryType::YAxis),
+        ] {
+            let xml = format!(
+                r#"<flames name="t"><flame name="T" size="800 600" center="0 0" scale="200" background="0 0 0" brightness="4" gamma="4" post_symmetry_type="{}" post_symmetry_distance="0.5" post_symmetry_rotation="30.0"><xform weight="1" color="0" linear="1" coefs="1 0 0 1 0 0" opacity="1" /></flame></flames>"#,
+                token,
+            );
+            let cfg = parse_flame_xml(&xml).expect("parse").into_iter().next().unwrap();
+            assert_eq!(cfg.flame.post_symmetry.ty, expected, "token {}", token);
+            assert!((cfg.flame.post_symmetry.distance - 0.5).abs() < 1e-5);
+            assert!((cfg.flame.post_symmetry.rotation_deg - 30.0).abs() < 1e-4);
+        }
     }
 
     /// Diagnostic: print the rando13 subflame's structure (xform count,

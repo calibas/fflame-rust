@@ -278,6 +278,13 @@ pub struct ShaderConstants {
     /// up transitions and triggers a rebuild.
     pub has_attachments: bool,
 
+    /// Whether the flame has post-symmetry active (`type != None`).
+    /// Drives `HAS_POST_SYMMETRY` — when false, the per-plot symmetry
+    /// loop is stripped entirely. Tracked on `ShaderConstants` so
+    /// flipping the symmetry type triggers a shader rebuild via the
+    /// cache's constants-changed check.
+    pub has_post_symmetry: bool,
+
     /// Per-flame `array<u32, N>` length for the AttachmentList struct.
     /// Substituted into the shader headers via the `{{ATTACHMENT_CAP}}`
     /// placeholder; also drives the dynamic stride used when the host
@@ -301,6 +308,7 @@ impl Default for ShaderConstants {
             color_mode: 0,
             has_post_affine: false,
             has_attachments: false,
+            has_post_symmetry: false,
             attachment_cap: 1,
             inlined_transforms: None,
             cumulative_weights: None,
@@ -451,6 +459,7 @@ impl ShaderConstants {
             color_mode,
             has_post_affine: flame.has_post_affine(),
             has_attachments: flame.has_attachments(),
+            has_post_symmetry: flame.post_symmetry.ty != crate::scene::transforms::PostSymmetryType::None,
             attachment_cap: flame.attachment_cap() as u32,
             inlined_transforms: Some(inlined),
             cumulative_weights: Some(cumulative),
@@ -1134,6 +1143,11 @@ impl ShaderBuilder {
         // shader cost. Sourced from `constants` so the shader cache picks
         // up transitions and rebuilds.
         processor.set("HAS_ATTACHMENTS", constants.has_attachments);
+        // HAS_POST_SYMMETRY gates the per-plot symmetry loop in
+        // main_template — when the flame's PostSymmetry type is None,
+        // the loop and all its math compile out, so the only cost of
+        // having the feature is the 8 bytes of padding in GpuParams.
+        processor.set("HAS_POST_SYMMETRY", constants.has_post_symmetry);
         // OUTPUT_HISTOGRAM_DIRECT gates which output strategy the shader
         // uses for plot-time accumulation:
         //   true  — atomicAdd into a single full-resolution histogram
@@ -1668,6 +1682,7 @@ mod tests {
             p.set("XAOS_ENABLED", false);
             p.set("HAS_DC", false);
             p.set("HAS_ATTACHMENTS", false);
+            p.set("HAS_POST_SYMMETRY", false);
             p.set("OUTPUT_HISTOGRAM_DIRECT", output_histogram_direct);
             p
         };

@@ -228,3 +228,61 @@ fn world_to_pixel(p: vec2<f32>) -> vec2<i32> {
     let pixel = center + transformed * scale;
     return vec2<i32>(i32(pixel.x), i32(pixel.y));
 }
+
+// Apply post-symmetry to a 3D world-space sample. `k` indexes the
+// symmetry copy: 0 = original (returned as-is), 1..K-1 = mirrored or
+// rotated copies depending on `params.post_symmetry.kind`.
+//
+//   1 (XAxis): reflect across y = center_y → shift the copy by
+//              (distance, 0) → rotate it around the center by
+//              `rotation` radians. K = 2 (one mirror).
+//   2 (YAxis): reflect across x = center_x → shift by (0, distance)
+//              → rotate around center. K = 2.
+//   3 (Point): rotate around (center_x, center_y) by k × 2π / order.
+//              K = order.
+//
+// Z passes through unchanged — post-symmetry is a 2D operation
+// applied to XY before the camera transform.
+//
+// Live behind `HAS_POST_SYMMETRY`: when the flame has no symmetry
+// active, this function isn't referenced and the shader builder strips
+// it from the compiled module.
+fn post_symmetry_copy(p: vec3<f32>, k: u32) -> vec3<f32> {
+    if (k == 0u) {
+        return p;
+    }
+    let cx = params.post_symmetry.center_x;
+    let cy = params.post_symmetry.center_y;
+    let kind = params.post_symmetry.kind;
+    if (kind == 3u) {
+        // Point: rotate around center by k × 2π / order.
+        let order = max(params.post_symmetry.order, 1u);
+        let theta = f32(k) * 6.28318530717958647692 / f32(order);
+        let cs = cos(theta);
+        let sn = sin(theta);
+        let dx = p.x - cx;
+        let dy = p.y - cy;
+        return vec3<f32>(dx * cs - dy * sn + cx, dx * sn + dy * cs + cy, p.z);
+    }
+    // Axis modes (1 = XAxis, 2 = YAxis). k is always 1 here — there's
+    // only one mirror copy per sample.
+    var x: f32;
+    var y: f32;
+    if (kind == 1u) {
+        // XAxis: mirror across y = cy, then pan by (distance, 0).
+        x = p.x + params.post_symmetry.distance;
+        y = 2.0 * cy - p.y;
+    } else if (kind == 2u) {
+        // YAxis: mirror across x = cx, then pan by (0, distance).
+        x = 2.0 * cx - p.x;
+        y = p.y + params.post_symmetry.distance;
+    } else {
+        return p;
+    }
+    // Pre-rotation around the center.
+    let cs = cos(params.post_symmetry.rotation);
+    let sn = sin(params.post_symmetry.rotation);
+    let dx = x - cx;
+    let dy = y - cy;
+    return vec3<f32>(dx * cs - dy * sn + cx, dx * sn + dy * cs + cy, p.z);
+}

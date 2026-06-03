@@ -245,15 +245,47 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let final_pos = current;
 {{/if}}
 
+            // Post-symmetry — gated entirely by HAS_POST_SYMMETRY.
+            // When false, sym_count is 1u and the loop runs exactly
+            // once with sym_k=0 (passes final_pos through unchanged),
+            // letting the compiler fully strip it. When true,
+            // sym_count is 1 (None at runtime — shouldn't happen given
+            // the compile-time gate, but defensive), 2 (axis modes),
+            // or `order` (Point mode), and each iteration plots one
+            // mirrored/rotated copy of the same sample.
+{{#if HAS_POST_SYMMETRY}}
+            let sym_count = select(
+                select(2u, max(params.post_symmetry.order, 1u), params.post_symmetry.kind == 3u),
+                1u,
+                params.post_symmetry.kind == 0u
+            );
+{{else}}
+            let sym_count = 1u;
+{{/if}}
+
+            for (var sym_k: u32 = 0u; sym_k < sym_count; sym_k = sym_k + 1u) {
+{{#if HAS_POST_SYMMETRY}}
+{{#if RENDER_3D}}
+                let plot_pos = post_symmetry_copy(final_pos, sym_k);
+{{else}}
+                // 2D path: lift to vec3 with Z=0 so the symmetry helper
+                // (vec3 only) accepts it, then strip Z back off for
+                // world_to_pixel.
+                let plot_pos = post_symmetry_copy(vec3<f32>(final_pos, 0.0), sym_k).xy;
+{{/if}}
+{{else}}
+                let plot_pos = final_pos;
+{{/if}}
+
             // Convert to pixel coordinates
 {{#if RENDER_3D}}
-            var pixel = world_to_pixel_3d(final_pos);
+            var pixel = world_to_pixel_3d(plot_pos);
 
             // Apply depth of field blur (3D mode only)
             if (params.dof_blur_strength > 0.0) {
                 // Transform to camera space to get depth along view direction
                 let camera_matrix = build_camera_matrix(params.camera_rotation_x, params.camera_rotation_y);
-                let camera_space = camera_transform(final_pos, camera_matrix, params.camera_z);
+                let camera_space = camera_transform(plot_pos, camera_matrix, params.camera_z);
                 let depth = camera_space.z;  // Z in camera space = depth from camera
 
                 // Calculate blur amount based on distance from focus plane (in world units).
@@ -285,7 +317,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 );
             }
 {{else}}
-            let pixel = world_to_pixel(final_pos);
+            let pixel = world_to_pixel(plot_pos);
 {{/if}}
 
             // Check bounds and opacity (only plot if both pass)
@@ -345,7 +377,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     // In camera space, objects in front have negative Z (looking down -Z axis)
                     // Negate to get positive depth where larger = further from camera
                     let camera_matrix = build_camera_matrix(params.camera_rotation_x, params.camera_rotation_y);
-                    let camera_space = camera_transform(final_pos, camera_matrix, params.camera_z);
+                    let camera_space = camera_transform(plot_pos, camera_matrix, params.camera_z);
                     let fog_depth = -camera_space.z;  // Negate: distant objects have larger depth
 
                     // Exponential fog: fog_factor increases with distance beyond fog_start
@@ -412,6 +444,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 }
 {{/if}}
             }
+            }  // end for (sym_k = 0..sym_count) — post-symmetry loop
         }
     }
 }
