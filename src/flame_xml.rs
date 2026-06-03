@@ -1,14 +1,25 @@
-//! Apophysis .flame XML format parser and writer
+//! `.flame` XML format parser and writer — Apophysis 7X / JWildfire /
+//! Chaotica compatible.
 //!
-//! Handles import/export of Apophysis 7X .flame XML files for compatibility
-//! with the Apophysis fractal flame editor.
+//! The three flame editors share an XML core (`<flame>` with attribute
+//! camera/tonemap/palette settings, `<xform>` children with affine
+//! coefficients and variation weights, `<palette>` with 256 hex RGB
+//! triplets). Apophysis is the original; JWildfire and Chaotica added
+//! their own attributes on top. We parse the common core plus the
+//! JWF/Chaotica extras we have a home for (e.g. `cam_persp`,
+//! `saturation`, `white_level`, `subflame_wf_flame`'s hex-encoded
+//! child); unknown attributes are silently dropped.
+//!
+//! On export we write the Apophysis dialect plus JWF's subflame
+//! companion attrs when needed — that gets us files JWF (and usually
+//! Apo) can re-open.
 //!
 //! XML Structure:
 //! ```xml
 //! <flames name="collection_name">
 //!   <flame name="..." version="..." size="W H" center="X Y" scale="..."
 //!          background="R G B" brightness="..." gamma="..." ...>
-//!     <xform weight="..." color="..." coefs="a b c d e f" opacity="..."
+//!     <xform weight="..." color="..." coefs="a c b d e f" opacity="..."
 //!            linear="..." sinusoidal="..." spherical="..." ... />
 //!     <palette count="256" format="RGB">HEXDATA</palette>
 //!   </flame>
@@ -81,6 +92,15 @@ fn parse_flame_element(
     let mut curves: Option<Vec<f32>> = None;  // Tone curve data (48 floats)
     let mut solo_xform: Option<usize> = None;  // Solo transform index (0-indexed)
 
+    // JWF-specific attrs that have a home in our config.
+    // `cam_zoom` is a multiplier on top of `scale` in JWF — final
+    // visible scale is `scale × cam_zoom`. We fold it into the zoom
+    // conversion so a JWF flame opens at the same magnification it
+    // would in JWF.
+    let mut cam_zoom_factor: f32 = 1.0;
+    let mut saturation: f32 = crate::config::defaults::DEFAULT_SATURATION;
+    let mut white_level: f32 = crate::config::defaults::DEFAULT_WHITE_LEVEL;
+
     for attr in start_element.attributes() {
         let attr = attr?;
         let key = std::str::from_utf8(attr.key.as_ref())?;
@@ -122,8 +142,16 @@ fn parse_flame_element(
             "cam_pitch" => cam_pitch = value.parse().unwrap_or(0.0),
             "cam_yaw" => cam_yaw = value.parse().unwrap_or(0.0),
             "cam_zpos" => cam_zpos = value.parse().unwrap_or(0.0),
-            "cam_perspective" => cam_perspective = value.parse().unwrap_or(0.0),
+            // Apo uses `cam_perspective`; JWF uses `cam_persp`.
+            "cam_perspective" | "cam_persp" => cam_perspective = value.parse().unwrap_or(0.0),
             "cam_dof" => cam_dof = value.parse().unwrap_or(0.0),
+            // JWF post-scale multiplier; folded into our zoom below.
+            "cam_zoom" => cam_zoom_factor = value.parse().unwrap_or(1.0),
+            // JWF/Apo color knobs. Apo files usually don't set
+            // saturation; JWF always does. white_level is JWF's
+            // tonemap white point (default 220).
+            "saturation" => saturation = value.parse().unwrap_or(crate::config::defaults::DEFAULT_SATURATION),
+            "white_level" => white_level = value.parse().unwrap_or(crate::config::defaults::DEFAULT_WHITE_LEVEL),
             "curves" => {
                 // Parse space-separated floats (48 values: 4 curves × 12 points)
                 let parsed: Vec<f32> = value.split_whitespace()
@@ -180,9 +208,14 @@ fn parse_flame_element(
     // Always use Palette mode (ColorMode::Transform has been removed)
     let color_mode = ColorMode::Palette;
 
-    // Extract transforms, color indices, and chaos weights from parse results
+    // Extract transforms, color indices, chaos weights, and any
+    // hex-decoded subflames from the parse results. Subflames are
+    // pushed onto a parallel `imported_subflames` Vec and the owning
+    // transform's `subflame_wf.subflame_id` param is updated to point
+    // at the assigned index. We hand the vec to the `Flame` below.
     let mut transforms = Vec::new();
     let mut all_chaos_weights: Vec<Option<Vec<f32>>> = Vec::new();
+    let mut imported_subflames: Vec<Flame> = Vec::new();
 
     for result in xform_results {
         let mut transform = result.transform;
@@ -194,6 +227,11 @@ fn parse_flame_element(
                 transform.color = color_coord;
             }
             // Note: color_speed comes from XML parsing, don't override here
+        }
+        if let Some(child) = result.imported_subflame {
+            let assigned_id = imported_subflames.len() as f32;
+            imported_subflames.push(child);
+            transform.set_variation_param("subflame_wf", "subflame_id", assigned_id);
         }
         transforms.push(transform);
         all_chaos_weights.push(result.chaos_weights);
@@ -272,17 +310,18 @@ fn parse_flame_element(
         perspective_strength,
         xaos,
         solo_transform: solo_xform,
-        // Subflames populated by the subflame_wf importer in Phase 5;
-        // empty Vec here is the post-import default for flames that
-        // don't use subflame_wf.
-        subflames: Vec::new(),
+        // JWF `subflame_wf_flame` payloads decoded above; empty when no
+        // xform carried one (the common Apo case).
+        subflames: imported_subflames,
     };
     flame.migrate_legacy_final(final_transform);
 
     // Convert Apophysis scale/center to our zoom/pan
     // Apophysis: scale = pixels per unit, where scale 200 ≈ zoom 1.0
     // Our system: zoom and pan (pan is world offset)
-    let zoom = scale / 200.0; // Apophysis scale 200.0 = our zoom 1.0
+    // Apo: zoom = scale / 200. JWF adds a `cam_zoom` multiplier on
+    // top, defaulting to 1.0 when absent.
+    let zoom = (scale / 200.0) * cam_zoom_factor;
     let pan_x = center.0;
     let pan_y = center.1;
 
@@ -346,14 +385,9 @@ fn parse_flame_element(
         gamma,
         brightness,  // Use parsed Apophysis brightness value
         vibrancy,  // Use parsed Apophysis vibrancy
-        // TODO: parse Apophysis `white_level` XML attribute (default 200)
-        white_level: crate::config::defaults::DEFAULT_WHITE_LEVEL,
+        white_level,
         highlight_mode: crate::scene::tonemap::HighlightMode::Clip,  // Apophysis-compatible
-        // saturation 1.0 — Apo has no saturation control. Previously 1.5
-        // to compensate for sRGB-as-linear palette washout; that became
-        // wrong once the palette-decode fix landed (oversaturates past
-        // Apo's reference).
-        saturation: crate::config::defaults::DEFAULT_SATURATION,
+        saturation,
         hue_shift: 0.0,  // Default hue shift
         gamma_threshold,  // Use parsed Apophysis gamma_threshold
         deterministic_rng: false,
@@ -389,6 +423,13 @@ struct XformParseResult {
     transform: Transform,
     color_index: Option<usize>,
     chaos_weights: Option<Vec<f32>>,
+    /// JWildfire's `subflame_wf_flame` attribute — hex-encoded XML
+    /// bytes of the embedded child flame. When present (and the xform
+    /// has the `subflame_wf` variation), we decode it as a sub-`<flame>`
+    /// element and push the resulting `Flame` onto the parent's
+    /// `subflames` pool; the xform's `subflame_wf.subflame_id` param
+    /// gets pointed at the assigned index. Empty/missing on Apo files.
+    imported_subflame: Option<Flame>,
 }
 
 fn parse_xform_element(
@@ -398,6 +439,12 @@ fn parse_xform_element(
     let registry = global_registry();
     let mut color_index = None;
     let mut chaos_weights = None;
+    // JWF subflame_wf payload — hex-encoded child flame XML. Captured
+    // during attribute iteration, decoded + parsed after the loop so
+    // we can confirm the xform actually has `subflame_wf` active before
+    // doing the recursive parse work.
+    let mut subflame_wf_hex: Option<String> = None;
+    let mut imported_subflame: Option<Flame> = None;
 
     // Storage for variation parameters (applied after all attributes parsed)
     let mut pending_params: Vec<(String, String, f32)> = Vec::new(); // (var_name, param_name, value)
@@ -464,6 +511,20 @@ fn parse_xform_element(
                     chaos_weights = Some(weights);
                 }
             }
+            // JWF hex-encoded child flame. Capture the raw string; we
+            // hex-decode and recursively parse after the loop, only if
+            // the xform turned out to have `subflame_wf` active. We
+            // also intercept the companion attrs that would otherwise
+            // try (and fail) to deserialize as variation params via the
+            // generic `_` fallback.
+            "subflame_wf_flame" => {
+                subflame_wf_hex = Some(value.to_string());
+            }
+            "subflame_wf_flame_filename" | "subflame_wf_flame_is_sequence"
+            | "subflame_wf_flame_sequence_start" | "subflame_wf_flame_sequence_end"
+            | "subflame_wf_flame_sequence_repeat" | "subflame_wf_flame_sequence_digits" => {
+                // JWF book-keeping for subflame sequences — not modeled.
+            }
             _ => {
                 // Try to parse as variation or variation parameter
                 if let Ok(parsed_value) = value.parse::<f32>() {
@@ -490,10 +551,34 @@ fn parse_xform_element(
         transform.set_variation_param(&var_name, &param_name, value);
     }
 
+    // Recurse into the JWF subflame_wf_flame payload, if any. We
+    // require `subflame_wf` to be active on this xform so we don't
+    // accidentally surface a stray attribute as a child flame.
+    if let Some(hex) = subflame_wf_hex {
+        if transform.variations.contains_key("subflame_wf") {
+            match decode_hex_bytes(&hex) {
+                Ok(bytes) => match std::str::from_utf8(&bytes) {
+                    Ok(child_xml) => match parse_flame_xml(child_xml) {
+                        Ok(mut child_configs) if !child_configs.is_empty() => {
+                            imported_subflame = Some(child_configs.remove(0).flame);
+                        }
+                        Ok(_) => log::warn!("subflame_wf_flame decoded to XML with no <flame> elements"),
+                        Err(e) => log::warn!("subflame_wf_flame inner parse failed: {}", e),
+                    },
+                    Err(e) => log::warn!("subflame_wf_flame hex decoded to non-UTF8: {}", e),
+                },
+                Err(e) => log::warn!("subflame_wf_flame hex decode failed: {}", e),
+            }
+        } else {
+            log::debug!("ignoring subflame_wf_flame attr: subflame_wf variation not active on this xform");
+        }
+    }
+
     Ok(XformParseResult {
         transform,
         color_index,
         chaos_weights,
+        imported_subflame,
     })
 }
 
@@ -773,6 +858,24 @@ fn eval_rational_bezier(t: f32, control_points: &[(f32, f32, f32); 4]) -> Option
 ///     Apo doesn't have the concept.
 pub fn write_flame_xml(config: &FractalConfig) -> String {
     let mut out = String::with_capacity(8192);
+    out.push_str("<flames name=\"");
+    out.push_str(&xml_escape_attr(&config.flame.name));
+    out.push_str("\">\n");
+    write_single_flame(&mut out, config, &config.flame);
+    out.push_str("</flames>\n");
+    out
+}
+
+/// Emit one `<flame>...</flame>` element. Reused by both the top-level
+/// writer (wrapped in `<flames>`) and the subflame embed path (the
+/// returned string gets hex-encoded into a `subflame_wf_flame` attr).
+///
+/// `config` supplies the shared tonemap/palette/camera/etc. settings.
+/// `flame` is the IFS structure being emitted — usually
+/// `config.flame`, but for subflames it's the child flame from
+/// `config.flame.subflames[id]`. Children inherit the parent's
+/// tonemap/palette since our model has no per-subflame FractalConfig.
+fn write_single_flame(out: &mut String, config: &FractalConfig, flame: &Flame) {
     let version = format!(
         "Fractal Flame WGPU {}",
         env!("CARGO_PKG_VERSION")
@@ -800,14 +903,10 @@ pub fn write_flame_xml(config: &FractalConfig) -> String {
 
     // `plugins` — Apo wants the union of variation names across all
     // xforms (and the finalxform if any). Sorted for determinism.
-    let plugins = collect_plugin_names(&config.flame);
-
-    out.push_str("<flames name=\"");
-    out.push_str(&xml_escape_attr(&config.flame.name));
-    out.push_str("\">\n");
+    let plugins = collect_plugin_names(flame);
 
     out.push_str("<flame name=\"");
-    out.push_str(&xml_escape_attr(&config.flame.name));
+    out.push_str(&xml_escape_attr(&flame.name));
     out.push_str(&format!("\" version=\"{}\"", xml_escape_attr(&version)));
     out.push_str(&format!(" size=\"{} {}\"", size.0, size.1));
     out.push_str(&format!(" center=\"{} {}\"", fmt_f32(config.pan_x), fmt_f32(config.pan_y)));
@@ -826,8 +925,11 @@ pub fn write_flame_xml(config: &FractalConfig) -> String {
     if config.camera_z.abs() > 1e-6 {
         out.push_str(&format!(" cam_zpos=\"{}\"", fmt_f32(config.camera_z)));
     }
-    if config.flame.perspective_strength.abs() > 1e-6 {
-        out.push_str(&format!(" cam_perspective=\"{}\"", fmt_f32(config.flame.perspective_strength)));
+    if flame.perspective_strength.abs() > 1e-6 {
+        // Apo reads `cam_perspective`; JWF reads `cam_persp`. Emit both
+        // so re-import lands the perspective in either editor.
+        out.push_str(&format!(" cam_perspective=\"{}\"", fmt_f32(flame.perspective_strength)));
+        out.push_str(&format!(" cam_persp=\"{}\"", fmt_f32(flame.perspective_strength)));
     }
     if config.dof_blur_strength.abs() > 1e-6 {
         out.push_str(&format!(" cam_dof=\"{}\"", fmt_f32(config.dof_blur_strength)));
@@ -844,6 +946,10 @@ pub fn write_flame_xml(config: &FractalConfig) -> String {
     if (config.vibrancy - 1.0).abs() > 1e-6 {
         out.push_str(&format!(" vibrancy=\"{}\"", fmt_f32(config.vibrancy)));
     }
+    // JWF-side knobs. Apo silently ignores both. Always emit so JWF
+    // sees the right white point and saturation on re-import.
+    out.push_str(&format!(" saturation=\"{}\"", fmt_f32(config.saturation)));
+    out.push_str(&format!(" white_level=\"{}\"", fmt_f32(config.white_level)));
     out.push_str(&format!(" gamma_threshold=\"{}\"", fmt_f32(apo_gamma_threshold)));
     // Apo density-estimator block — we don't use it, write its defaults
     // so the file looks complete.
@@ -859,40 +965,37 @@ pub fn write_flame_xml(config: &FractalConfig) -> String {
         out.push_str(identity_curve);
     }
     out.push('"');
-    if let Some(idx) = config.flame.solo_transform {
+    if let Some(idx) = flame.solo_transform {
         out.push_str(&format!(" soloxform=\"{}\"", idx));
     }
     out.push_str(" >\n");
 
     // Normal transforms (`<xform>`).
     let registry = global_registry();
-    let xaos = config.flame.xaos.as_ref();
-    for (i, xform) in config.flame.transforms.iter().enumerate() {
+    let xaos = flame.xaos.as_ref();
+    for (i, xform) in flame.transforms.iter().enumerate() {
         let chaos_row = xaos.and_then(|m| m.get(i));
-        write_xform(&mut out, xform, false, chaos_row, &*registry);
+        write_xform(out, xform, false, chaos_row, &*registry, config, &flame.subflames);
     }
 
     // Final transforms. Apo's `<finalxform>` is singular — when we have
     // multiple, write the first and drop the rest with a log warning.
     // (Multi-final is a per-transform feature we added on top of Apo;
     // there's no Apo-side concept for it.)
-    if let Some(final_xform) = config.flame.final_transforms.first() {
-        write_xform(&mut out, final_xform, true, None, &*registry);
-        if config.flame.final_transforms.len() > 1 {
+    if let Some(final_xform) = flame.final_transforms.first() {
+        write_xform(out, final_xform, true, None, &*registry, config, &flame.subflames);
+        if flame.final_transforms.len() > 1 {
             log::warn!(
                 "write_flame_xml: dropping {} extra final transform(s) — Apo XML only supports a single <finalxform>",
-                config.flame.final_transforms.len() - 1
+                flame.final_transforms.len() - 1
             );
         }
     }
 
     // Palette: 256 colors, RGB hex, 8 colors per line.
-    write_palette(&mut out, &config.palette);
+    write_palette(out, &config.palette);
 
     out.push_str("</flame>\n");
-    out.push_str("</flames>\n");
-
-    out
 }
 
 /// Format an f32 using Rust's default formatter, which produces the
@@ -904,6 +1007,43 @@ fn fmt_f32(v: f32) -> String {
     } else {
         format!("{}", v)
     }
+}
+
+/// Uppercase hex encoding of arbitrary bytes — two hex chars per byte,
+/// no whitespace. Matches JWildfire's `subflame_wf_flame` format
+/// exactly (see `tests/test_configs/JWF-rando13.flame` for an example payload).
+fn hex_encode_uppercase(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for &b in bytes {
+        out.push(HEX[(b >> 4) as usize] as char);
+        out.push(HEX[(b & 0x0F) as usize] as char);
+    }
+    out
+}
+
+/// Decode a hex string (case-insensitive, whitespace tolerated). Used
+/// for JWF's `subflame_wf_flame` payload. Errors on odd length or
+/// non-hex characters — both indicate the writer didn't follow the
+/// JWF convention.
+fn decode_hex_bytes(s: &str) -> anyhow::Result<Vec<u8>> {
+    let mut digits: Vec<u8> = Vec::with_capacity(s.len());
+    for c in s.chars() {
+        if c.is_ascii_whitespace() {
+            continue;
+        }
+        let v = match c {
+            '0'..='9' => c as u8 - b'0',
+            'a'..='f' => c as u8 - b'a' + 10,
+            'A'..='F' => c as u8 - b'A' + 10,
+            _ => anyhow::bail!("non-hex char in payload: {:?}", c),
+        };
+        digits.push(v);
+    }
+    if digits.len() % 2 != 0 {
+        anyhow::bail!("odd number of hex digits ({}) — expected pairs", digits.len());
+    }
+    Ok(digits.chunks_exact(2).map(|c| (c[0] << 4) | c[1]).collect())
 }
 
 /// Minimal XML attribute-value escape. Variation names and numbers
@@ -950,6 +1090,8 @@ fn write_xform(
     is_final: bool,
     chaos_row: Option<&Vec<f32>>,
     registry: &crate::variations::VariationRegistry,
+    parent_config: &FractalConfig,
+    subflame_pool: &[Flame],
 ) {
     out.push_str(if is_final { "   <finalxform" } else { "   <xform" });
 
@@ -1030,6 +1172,30 @@ fn write_xform(
                 out.push_str(&fmt_f32(*w));
             }
             out.push('"');
+        }
+    }
+
+    // JWF subflame_wf payload. When this xform has `subflame_wf`
+    // active, recurse: write the referenced subflame as a single
+    // <flame> element, hex-encode the bytes, and emit as the
+    // `subflame_wf_flame` attribute. JWF also requires a fixed set of
+    // companion attrs (sequence flags, filename); we write the empty
+    // defaults — these are the values our import path tolerates.
+    if xform.variations.contains_key("subflame_wf") {
+        let id = xform.get_variation_param("subflame_wf", "subflame_id")
+            .unwrap_or(0.0) as usize;
+        if let Some(child_flame) = subflame_pool.get(id) {
+            let mut child_xml = String::with_capacity(4096);
+            write_single_flame(&mut child_xml, parent_config, child_flame);
+            let hex = hex_encode_uppercase(child_xml.as_bytes());
+            out.push_str(&format!(" subflame_wf_flame=\"{}\"", hex));
+            out.push_str(" subflame_wf_flame_filename=\"\"");
+            out.push_str(" subflame_wf_flame_is_sequence=\"0\"");
+        } else {
+            log::warn!(
+                "write_xform: subflame_wf references subflame_id={} but parent has only {} subflame(s)",
+                id, subflame_pool.len()
+            );
         }
     }
 
@@ -1423,5 +1589,174 @@ mod tests {
         let r255 = back.palette.stops[255].color[0];
         assert!(r0 < 0.01, "stop 0 red: {}", r0);
         assert!(r255 > 0.99, "stop 255 red: {}", r255);
+    }
+
+    // -----------------------------------------------------------------
+    // JWildfire compatibility tests
+    // -----------------------------------------------------------------
+
+    /// JWF aliases — `cam_persp` should populate perspective_strength
+    /// the same way `cam_perspective` does, and `cam_zoom` should
+    /// multiply into our `zoom` field on top of `scale`.
+    #[test]
+    fn test_jwf_camera_aliases() {
+        let xml = r#"
+<flames name="jwf-cam">
+<flame name="JWFCam" size="800 600" center="0 0" scale="200" cam_persp="1.5" cam_zoom="2.0" background="0 0 0" brightness="4" gamma="4">
+   <xform weight="1" color="0" linear="1" coefs="1 0 0 1 0 0" opacity="1" />
+</flame>
+</flames>
+        "#;
+        let cfg = parse_flame_xml(xml).expect("parse").into_iter().next().unwrap();
+
+        // cam_persp landed in perspective_strength.
+        assert!((cfg.flame.perspective_strength - 1.5).abs() < 1e-5);
+        // zoom = (scale / 200) × cam_zoom = (200/200) × 2.0 = 2.0
+        assert!((cfg.zoom - 2.0).abs() < 1e-5, "zoom: {}", cfg.zoom);
+    }
+
+    /// JWF's `saturation` and `white_level` are written directly into
+    /// the corresponding FractalConfig fields; we don't override with
+    /// defaults the way the pre-JWF importer did.
+    #[test]
+    fn test_jwf_tonemap_fields() {
+        let xml = r#"
+<flames name="jwf-tm">
+<flame name="JWFTm" size="800 600" center="0 0" scale="200" background="0 0 0" brightness="4" gamma="4" saturation="0.75" white_level="180.0">
+   <xform weight="1" color="0" linear="1" coefs="1 0 0 1 0 0" opacity="1" />
+</flame>
+</flames>
+        "#;
+        let cfg = parse_flame_xml(xml).expect("parse").into_iter().next().unwrap();
+        assert!((cfg.saturation - 0.75).abs() < 1e-5);
+        assert!((cfg.white_level - 180.0).abs() < 1e-5);
+    }
+
+    /// Hex codec — round-trip arbitrary bytes through encode/decode
+    /// without loss. Includes the JWF subflame_wf_flame leading
+    /// signature `3C666C616D65` = ASCII `<flame` to verify the case
+    /// and ordering match the format used by the editor.
+    #[test]
+    fn test_hex_codec_roundtrip() {
+        // ASCII spot-check.
+        let original = b"<flame name=\"x\" />";
+        let encoded = hex_encode_uppercase(original);
+        // Matches the JWF dump prefix.
+        assert!(encoded.starts_with("3C666C616D65"), "encoded: {}", encoded);
+        let decoded = decode_hex_bytes(&encoded).expect("decode");
+        assert_eq!(decoded, original);
+
+        // Full byte range round-trip.
+        let bytes: Vec<u8> = (0..=255u8).collect();
+        let encoded = hex_encode_uppercase(&bytes);
+        let decoded = decode_hex_bytes(&encoded).expect("decode");
+        assert_eq!(decoded, bytes);
+
+        // Whitespace and lowercase are tolerated on decode.
+        let mixed = "3c66 6c61\n6D65";
+        let decoded = decode_hex_bytes(mixed).expect("decode mixed");
+        assert_eq!(&decoded, b"<flame");
+
+        // Odd length errors out cleanly.
+        assert!(decode_hex_bytes("3C6").is_err());
+        // Non-hex char errors out cleanly.
+        assert!(decode_hex_bytes("3CZZ").is_err());
+    }
+
+    /// Full subflame round-trip: build a parent FractalConfig whose
+    /// flame has a `subflame_wf` xform pointing at one child Flame,
+    /// export to XML, re-import, assert the child survived.
+    #[test]
+    fn test_subflame_roundtrip() {
+        use crate::scene::transforms::{Flame, Transform};
+
+        let mut parent = FractalConfig::default();
+        parent.flame.name = "ParentFlame".to_string();
+        parent.flame.transforms.clear();
+
+        // Xform 0: linear, ordinary.
+        let mut x0 = Transform::new();
+        x0.variations.insert("linear".to_string(), 1.0);
+        x0.weight = 1.0;
+        parent.flame.transforms.push(x0);
+
+        // Xform 1: subflame_wf pointing at subflame index 0.
+        let mut x1 = Transform::new();
+        x1.variations.insert("subflame_wf".to_string(), 0.5);
+        x1.set_variation_param("subflame_wf", "subflame_id", 0.0);
+        x1.weight = 0.5;
+        parent.flame.transforms.push(x1);
+
+        // The child flame.
+        let mut child = Flame::new();
+        child.name = "ChildFlame".to_string();
+        child.transforms.clear();
+        let mut cx = Transform::new();
+        cx.variations.insert("spherical".to_string(), 1.0);
+        cx.weight = 1.0;
+        cx.a = 0.5;
+        cx.d = 0.5;
+        child.transforms.push(cx);
+        parent.flame.subflames.push(child);
+
+        // Export and re-import.
+        let xml = write_flame_xml(&parent);
+        // Sanity: the XML contains the hex-encoded subflame payload.
+        assert!(xml.contains("subflame_wf_flame=\""), "no subflame_wf_flame attr in: {}", xml);
+
+        let back = parse_flame_xml(&xml).expect("re-parse")
+            .into_iter().next().unwrap();
+
+        // Parent structure preserved.
+        assert_eq!(back.flame.transforms.len(), 2);
+        assert!(back.flame.transforms[0].variations.contains_key("linear"));
+        assert!(back.flame.transforms[1].variations.contains_key("subflame_wf"));
+
+        // Child survived the hex round-trip.
+        assert_eq!(back.flame.subflames.len(), 1, "subflame missing after re-parse");
+        let child_back = &back.flame.subflames[0];
+        assert_eq!(child_back.name, "ChildFlame");
+        assert_eq!(child_back.transforms.len(), 1);
+        assert!(child_back.transforms[0].variations.contains_key("spherical"));
+        assert!((child_back.transforms[0].a - 0.5).abs() < 1e-5);
+        assert!((child_back.transforms[0].d - 0.5).abs() < 1e-5);
+
+        // Xform 1's subflame_id points at the new (index 0) subflame.
+        let id = back.flame.transforms[1]
+            .get_variation_param("subflame_wf", "subflame_id")
+            .expect("subflame_id missing");
+        assert_eq!(id as usize, 0);
+    }
+
+    /// Importing the real JWF-rando13 file — has a subflame_wf xform
+    /// with a hex-encoded child flame. Verifies the importer extracts
+    /// it cleanly without crashing on JWF's many extra attributes.
+    #[test]
+    fn test_import_jwf_subflame_file() {
+        let xml = include_str!("../tests/test_configs/JWF-rando13.flame");
+        let cfg = parse_flame_xml(xml).expect("parse JWF rando13")
+            .into_iter().next().unwrap();
+
+        // Top-level structure: at least one xform, and the subflame
+        // pool got populated by the hex-encoded payload.
+        assert!(!cfg.flame.transforms.is_empty(), "no xforms in parent");
+        assert_eq!(
+            cfg.flame.subflames.len(), 1,
+            "expected exactly one decoded subflame from this file"
+        );
+
+        // The subflame_wf xform's subflame_id matches the assigned
+        // index (0, since only one was imported).
+        let subflame_wf_xform = cfg.flame.transforms.iter()
+            .find(|x| x.variations.contains_key("subflame_wf"))
+            .expect("no subflame_wf xform found");
+        let id = subflame_wf_xform.get_variation_param("subflame_wf", "subflame_id")
+            .expect("subflame_id missing");
+        assert_eq!(id as usize, 0);
+
+        // The child flame has its own xforms (rando13's subflame is
+        // a single-xform truchet).
+        let child = &cfg.flame.subflames[0];
+        assert!(!child.transforms.is_empty(), "child subflame has no xforms");
     }
 }

@@ -775,7 +775,7 @@ impl App {
         }
 
         // Handle Apophysis .flame import
-        if ui_response.apophysis_import_file_requested {
+        if ui_response.flame_xml_import_file_requested {
             #[cfg(not(target_arch = "wasm32"))]
             {
                 // Desktop: synchronous file dialog
@@ -786,14 +786,14 @@ impl App {
                 {
                     match std::fs::read_to_string(&path) {
                         Ok(xml) => {
-                            match crate::apophysis_xml::parse_flame_xml(&xml) {
+                            match crate::flame_xml::parse_flame_xml(&xml) {
                                 Ok(configs) => {
                                     if configs.is_empty() {
                                         eprintln!("No flames found in file");
                                     } else if configs.len() == 1 {
                                         // Single flame: import directly
                                         let config = configs.into_iter().next().unwrap();
-                                        if let Err(e) = self.load_config_with_undo(config, "history.action.import_apophysis".to_string(), None) {
+                                        if let Err(e) = self.load_config_with_undo(config, "history.action.import_flame_xml".to_string(), None) {
                                             eprintln!("Failed to import flame: {}", e);
                                         } else {
                                             println!("Imported Apophysis flame from: {}", path.display());
@@ -811,7 +811,7 @@ impl App {
 
                                         // Load the first config
                                         let first_config = configs.into_iter().next().unwrap();
-                                        if let Err(e) = self.load_config_with_undo(first_config, "history.action.import_apophysis".to_string(), None) {
+                                        if let Err(e) = self.load_config_with_undo(first_config, "history.action.import_flame_xml".to_string(), None) {
                                             eprintln!("Failed to import flame: {}", e);
                                         }
 
@@ -836,14 +836,14 @@ impl App {
             {
                 // WASM: native file picker - no extra dialogs
                 let ctx = self.egui_layer.ctx.clone();
-                super::trigger_browser_file_picker(".flame", ctx, "pending_apophysis_import_raw");
+                super::trigger_browser_file_picker(".flame", ctx, "pending_flame_xml_import_raw");
             }
         }
 
         // Handle Apophysis .flame export
-        if ui_response.apophysis_export_file_requested {
+        if ui_response.flame_xml_export_file_requested {
             let config = self.export_config();
-            let xml = crate::apophysis_xml::write_flame_xml(&config);
+            let xml = crate::flame_xml::write_flame_xml(&config);
             let default_name = format!(
                 "{}.flame",
                 if config.flame.name.is_empty() {
@@ -1098,12 +1098,12 @@ impl App {
 
             // Check for pending Apophysis import (raw XML text from native file picker)
             if let Some(xml) = self.egui_layer.ctx.data_mut(|data| {
-                data.remove_temp::<String>(egui::Id::new("pending_apophysis_import_raw"))
+                data.remove_temp::<String>(egui::Id::new("pending_flame_xml_import_raw"))
             }) {
-                match crate::apophysis_xml::parse_flame_xml(&xml) {
+                match crate::flame_xml::parse_flame_xml(&xml) {
                     Ok(configs) => {
                         if let Some(config) = configs.into_iter().next() {
-                            if let Err(e) = self.load_config_with_undo(config, "history.action.import_apophysis".to_string(), None) {
+                            if let Err(e) = self.load_config_with_undo(config, "history.action.import_flame_xml".to_string(), None) {
                                 log::error!("Failed to import Apophysis flame: {}", e);
                             } else {
                                 log::info!("Apophysis flame imported successfully");

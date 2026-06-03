@@ -18,9 +18,9 @@ menu:
   load_preset: "プリセット読込"
   open_config: "設定を開く..."
   save_config: "設定を保存..."
-  import_apophysis: "Apophysis XML読込..."
+  import_flame_xml: "フレームXML読込..."
   export_png: "PNG出力..."
-  export_apophysis: "Apophysis XML出力..."
+  export_flame_xml: "フレームXML出力..."
   recent_files: "最近使用したファイル"
   quit: "終了"
 
