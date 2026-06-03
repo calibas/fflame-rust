@@ -1759,4 +1759,39 @@ mod tests {
         let child = &cfg.flame.subflames[0];
         assert!(!child.transforms.is_empty(), "child subflame has no xforms");
     }
+
+    /// Diagnostic: print the rando13 subflame's structure (xform count,
+    /// variations, perspective, transform G values, render_mode-ish
+    /// signals). Run with `-- --nocapture` to see output. Helps verify
+    /// what we're actually importing when chasing through-parent
+    /// behavior differences.
+    #[test]
+    #[ignore = "diagnostic-only; run with --ignored --nocapture when needed"]
+    fn diag_dump_rando13_subflame() {
+        let xml = include_str!("../tests/test_configs/JWF-rando13.flame");
+        let cfg = parse_flame_xml(xml).unwrap().into_iter().next().unwrap();
+        let child = &cfg.flame.subflames[0];
+        println!("--- subflame ---");
+        println!("name: {}", child.name);
+        println!("transforms: {}", child.transforms.len());
+        println!("perspective_strength: {}", child.perspective_strength);
+        for (i, x) in child.transforms.iter().enumerate() {
+            let vars: Vec<_> = x.variations.iter().collect();
+            println!(
+                "  xf{}: weight={} g={} direct_color={} vars={:?} params={:?}",
+                i, x.weight, x.g, x.direct_color,
+                vars,
+                x.variation_params,
+            );
+        }
+        println!("--- parent subflame_wf ---");
+        let pxf = cfg.flame.transforms.iter()
+            .find(|x| x.variations.contains_key("subflame_wf")).unwrap();
+        println!(
+            "  weight={} direct_color={} variations={:?} params={:?}",
+            pxf.weight, pxf.direct_color,
+            pxf.variations.iter().collect::<Vec<_>>(),
+            pxf.variation_params,
+        );
+    }
 }
