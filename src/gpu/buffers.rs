@@ -619,6 +619,75 @@ pub struct GpuParams {
     pub background_r: f32, // Background color R (for depth fog)
     pub background_g: f32, // Background color G (for depth fog)
     pub background_b: f32, // Background color B (for depth fog)
+    /// std140 alignment pad. The `PostSymmetry` substruct below is a
+    /// struct type, which std140 requires to start at a 16-byte
+    /// boundary. The preceding fields end at offset 124 (31 × 4),
+    /// so 4 bytes of pad land `post_symmetry` at offset 128. Mirror
+    /// it in `header.wgsl`'s `Params`.
+    pub _pad_before_post_symmetry: u32,
+
+    // Post-symmetry — plot-time density replication. Each chaos-game
+    // sample also deposits at K−1 mirrored/rotated positions before the
+    // camera transform. Gated by the HAS_POST_SYMMETRY shader-builder
+    // flag, so when `post_symmetry.kind == 0` the symmetry block
+    // doesn't compile in and these fields aren't read.
+    pub post_symmetry: GpuPostSymmetry,
+}
+
+/// Plot-time symmetry params packed for the GPU uniform. Mirrors the
+/// WGSL `PostSymmetry` struct in `header.wgsl`. Built from a
+/// `scene::transforms::PostSymmetry` via `From` — rotation converts
+/// to radians at the boundary, order clamps to [1, 32].
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct GpuPostSymmetry {
+    /// 0 = None, 1 = XAxis, 2 = YAxis, 3 = Point.
+    pub kind: u32,
+    /// K for Point mode; ignored by axis modes.
+    pub order: u32,
+    pub center_x: f32,
+    pub center_y: f32,
+    /// Pan along the symmetry axis (axis modes only).
+    pub distance: f32,
+    /// Pre-rotation in radians (axis modes only).
+    pub rotation: f32,
+    /// std140 padding so the struct's tail aligns to 16 bytes — keeps
+    /// it embeddable inside `GpuParams` without surprising the next
+    /// field. 6 × 4 = 24 bytes → pad to 32.
+    pub _pad_a: f32,
+    pub _pad_b: f32,
+}
+
+impl From<&crate::scene::transforms::PostSymmetry> for GpuPostSymmetry {
+    fn from(s: &crate::scene::transforms::PostSymmetry) -> Self {
+        Self {
+            kind: s.ty.as_u32(),
+            order: s.order.clamp(1, 32),
+            center_x: s.center_x,
+            center_y: s.center_y,
+            distance: s.distance,
+            rotation: s.rotation_deg.to_radians(),
+            _pad_a: 0.0,
+            _pad_b: 0.0,
+        }
+    }
+}
+
+impl GpuPostSymmetry {
+    /// Identity-ish default — `kind = 0` so the shader's gate
+    /// short-circuits, all geometry fields zero.
+    pub fn none() -> Self {
+        Self {
+            kind: 0,
+            order: 1,
+            center_x: 0.0,
+            center_y: 0.0,
+            distance: 0.0,
+            rotation: 0.0,
+            _pad_a: 0.0,
+            _pad_b: 0.0,
+        }
+    }
 }
 
 /// Maximum number of path filters supported
@@ -994,6 +1063,8 @@ impl FlameBuffers {
             background_r: 0.0,
             background_g: 0.0,
             background_b: 0.0,
+            _pad_before_post_symmetry: 0,
+            post_symmetry: GpuPostSymmetry::none(),
         };
 
         let params_buffer = device.create_buffer_init(&util::BufferInitDescriptor {

@@ -607,6 +607,9 @@ fn flame_from_subflame_response(resp: &FlameResponse) -> Flame {
         xaos,
         solo_transform: resp.solo_transform.map(|i| i as usize),
         subflames: resp.subflames.iter().map(flame_from_subflame_response).collect(),
+        // API doesn't carry post_symmetry yet; default until the server
+        // schema gains the field.
+        post_symmetry: crate::scene::transforms::PostSymmetry::default(),
     }
 }
 
@@ -643,6 +646,9 @@ pub fn flame_response_to_config(resp: &FlameResponse) -> FractalConfig {
         xaos,
         solo_transform: resp.solo_transform.map(|i| i as usize),
         subflames: resp.subflames.iter().map(flame_from_subflame_response).collect(),
+        // API doesn't carry post_symmetry yet; default until the server
+        // schema gains the field.
+        post_symmetry: crate::scene::transforms::PostSymmetry::default(),
     };
 
     // Reconstruct palette from the inline payload on the flame response.

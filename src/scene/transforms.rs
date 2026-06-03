@@ -1440,6 +1440,111 @@ pub struct Flame {
     /// See `docs/projects/subflames.md`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub subflames: Vec<Flame>,
+
+    /// Post-symmetry — JWildfire's per-flame plot-time symmetry. Each
+    /// chaos-game sample is also deposited at K−1 symmetric positions
+    /// before the camera transform, multiplying density without
+    /// advancing the dynamics. K depends on `ty`:
+    ///   - `None`: K = 1 (no-op, compile-stripped from the shader)
+    ///   - `XAxis` / `YAxis`: K = 2 (original + mirror)
+    ///   - `Point`: K = `order` (one per 2π/order rotation around center)
+    ///
+    /// `distance` and `rotation_deg` are only meaningful for the axis
+    /// modes — they offset and pre-rotate the mirror copy. Point mode
+    /// ignores them.
+    #[serde(default, skip_serializing_if = "PostSymmetry::is_default")]
+    pub post_symmetry: PostSymmetry,
+}
+
+/// What kind of plot-time symmetry to apply (see `Flame.post_symmetry`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PostSymmetryType {
+    #[default]
+    None,
+    XAxis,
+    YAxis,
+    Point,
+}
+
+impl PostSymmetryType {
+    /// Single-letter shader encoding so the GPU uniform can be a plain
+    /// `u32` instead of an enum import.
+    pub fn as_u32(self) -> u32 {
+        match self {
+            PostSymmetryType::None => 0,
+            PostSymmetryType::XAxis => 1,
+            PostSymmetryType::YAxis => 2,
+            PostSymmetryType::Point => 3,
+        }
+    }
+
+    /// JWildfire `.flame` XML token (uppercase, underscore-separated).
+    pub fn xml_token(self) -> &'static str {
+        match self {
+            PostSymmetryType::None => "NONE",
+            PostSymmetryType::XAxis => "X_AXIS",
+            PostSymmetryType::YAxis => "Y_AXIS",
+            PostSymmetryType::Point => "POINT",
+        }
+    }
+
+    /// Inverse of `xml_token` — `parse` so unknown values default to None.
+    pub fn from_xml_token(s: &str) -> Self {
+        // JWildfire emits uppercase tokens. Case-insensitive matching
+        // here is defensive against hand-edited files.
+        match s.to_ascii_uppercase().as_str() {
+            "X_AXIS" => PostSymmetryType::XAxis,
+            "Y_AXIS" => PostSymmetryType::YAxis,
+            "POINT" => PostSymmetryType::Point,
+            _ => PostSymmetryType::None,
+        }
+    }
+}
+
+/// Per-flame post-symmetry settings — see `Flame.post_symmetry`.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PostSymmetry {
+    #[serde(default)]
+    pub ty: PostSymmetryType,
+    /// Number of rotational copies for `Point` mode (ignored for axis
+    /// modes). 1 = no-op, 2 = 180° pair, 3 = ternary, etc. Clamped to
+    /// [1, 32] at the shader boundary.
+    pub order: u32,
+    pub center_x: f32,
+    pub center_y: f32,
+    /// "Pan along the axis" — for `XAxis` shifts the mirror copy by
+    /// `(distance, 0)`, for `YAxis` by `(0, distance)`. Applied before
+    /// the viewport pan. Ignored in `Point` mode.
+    pub distance: f32,
+    /// Pre-rotation (degrees) of the mirror copy around `center` for
+    /// the axis modes. Ignored in `Point` mode.
+    pub rotation_deg: f32,
+}
+
+impl Default for PostSymmetry {
+    fn default() -> Self {
+        // Match JWildfire's default header: NONE, order=3 (the visible
+        // default in the UI when type flips to Point), centre=(0,0),
+        // distance=1.25, rotation=6° — the per-file defaults JWF writes
+        // even when type is NONE.
+        Self {
+            ty: PostSymmetryType::None,
+            order: 3,
+            center_x: 0.0,
+            center_y: 0.0,
+            distance: 1.25,
+            rotation_deg: 6.0,
+        }
+    }
+}
+
+impl PostSymmetry {
+    /// Serde skip-when-default predicate. Default symmetry serializes
+    /// as nothing — keeps `.fflame` files clean.
+    pub fn is_default(s: &Self) -> bool {
+        *s == Self::default()
+    }
 }
 
 fn default_flame_name() -> String {
@@ -1461,6 +1566,7 @@ impl Default for Flame {
             xaos: None,  // Default: no xaos (all weights implicitly 1.0)
             solo_transform: None,  // Default: no solo (all transforms active)
             subflames: Vec::new(),  // Default: no subflames
+            post_symmetry: PostSymmetry::default(),
         }
     }
 }
@@ -1638,6 +1744,7 @@ impl<'de> Deserialize<'de> for Flame {
             Xaos,
             SoloTransform,
             Subflames,
+            PostSymmetry,
         }
 
         struct FlameVisitor;
@@ -1663,6 +1770,7 @@ impl<'de> Deserialize<'de> for Flame {
                 let mut xaos = None;
                 let mut solo_transform = None;
                 let mut subflames: Option<Vec<Flame>> = None;
+                let mut post_symmetry: Option<PostSymmetry> = None;
 
                 while let Some(key) = map.next_key()? {
                     match key {
@@ -1722,6 +1830,9 @@ impl<'de> Deserialize<'de> for Flame {
                         Field::Subflames => {
                             subflames = Some(map.next_value()?);
                         }
+                        Field::PostSymmetry => {
+                            post_symmetry = Some(map.next_value()?);
+                        }
                     }
                 }
 
@@ -1742,6 +1853,7 @@ impl<'de> Deserialize<'de> for Flame {
                     xaos,
                     solo_transform: solo_transform.unwrap_or(None),
                     subflames: subflames.unwrap_or_default(),
+                    post_symmetry: post_symmetry.unwrap_or_default(),
                 };
                 // Migrate any legacy singular `final_transform` field
                 // (consumed locally above into `final_transform`) into the
@@ -1754,7 +1866,7 @@ impl<'de> Deserialize<'de> for Flame {
             }
         }
 
-        const FIELDS: &[&str] = &["name", "transforms", "final_transform", "linked_transforms", "final_transforms", "render_mode", "perspective_strength", "projection", "xaos", "solo_transform", "subflames"];
+        const FIELDS: &[&str] = &["name", "transforms", "final_transform", "linked_transforms", "final_transforms", "render_mode", "perspective_strength", "projection", "xaos", "solo_transform", "subflames", "post_symmetry"];
         deserializer.deserialize_struct("Flame", FIELDS, FlameVisitor)
     }
 }

@@ -172,6 +172,11 @@ pub struct FlameRenderer {
     background_r: f32, // Background color R (for depth fog)
     background_g: f32, // Background color G (for depth fog)
     background_b: f32, // Background color B (for depth fog)
+    /// Post-symmetry — see `Flame.post_symmetry`. Cached on the
+    /// renderer so the per-frame `GpuParams` write can pull from it
+    /// without re-walking the config. Driven by
+    /// `set_post_symmetry()` from the GPU-update pipeline.
+    post_symmetry: crate::scene::transforms::PostSymmetry,
     burn_in: u32, // Burn-in iterations (for Depth gradient in PathMap mode)
     blend_factor: f32, // Accumulation blend rate: 0.01 (slow/smooth) to 1.0 (fast/flickery), default: 0.1
     use_dynamic_blend: bool, // true = exponential convergence (old), false = fixed blend rate (new)
@@ -282,7 +287,8 @@ impl FlameRenderer {
             background_r: 0.0,
             background_g: 0.0,
             background_b: 0.0,
-            burn_in: 20, // Default burn-in iterations
+            post_symmetry: crate::scene::transforms::PostSymmetry::default(),
+            burn_in: 20, // Default burn-in iterations (this is a FlameRenderer field, not GpuParams)
             blend_factor: 0.1, // 10% blend rate - good balance between speed and smoothness
             use_dynamic_blend: true, // Default to clamped exponential (0.8 → 0.01)
             overwrite_mode: false, // Default to normal blending (progressive refinement)
@@ -416,6 +422,7 @@ impl FlameRenderer {
             color_mode: self.color_mode as u32,
             has_post_affine: flame.has_post_affine(),
             has_attachments: flame.has_attachments(),
+            has_post_symmetry: flame.post_symmetry.ty != crate::scene::transforms::PostSymmetryType::None,
             attachment_cap: flame.attachment_cap() as u32,
             // No inlining for incremental updates (would trigger too many shader rebuilds)
             inlined_transforms: None,
@@ -482,6 +489,8 @@ impl FlameRenderer {
             background_r: self.background_r,
             background_g: self.background_g,
             background_b: self.background_b,
+            _pad_before_post_symmetry: 0,
+            post_symmetry: (&self.post_symmetry).into(),
         };
         self.buffers.update_params(queue, &params);
 
@@ -908,6 +917,7 @@ impl FlameRenderer {
         self.fog_start = config.fog_start;
         self.filter_radius = config.filter_radius;
         self.filter_blur_edges = config.filter_blur_edges;
+        self.post_symmetry = config.flame.post_symmetry.clone();
         self.burn_in = burn_in;
 
         // 5. Update palette size (recreates texture + bind groups if changed)
@@ -969,6 +979,8 @@ impl FlameRenderer {
             background_r: config.background_color[0],
             background_g: config.background_color[1],
             background_b: config.background_color[2],
+            _pad_before_post_symmetry: 0,
+            post_symmetry: (&config.flame.post_symmetry).into(),
         };
         self.buffers.update_params(queue, &params);
 
@@ -1090,6 +1102,8 @@ impl FlameRenderer {
             background_r: self.background_r,
             background_g: self.background_g,
             background_b: self.background_b,
+            _pad_before_post_symmetry: 0,
+            post_symmetry: (&self.post_symmetry).into(),
         };
 
         self.buffers.update_params(queue, &params);
@@ -1300,6 +1314,8 @@ impl FlameRenderer {
             background_r: self.background_r,
             background_g: self.background_g,
             background_b: self.background_b,
+            _pad_before_post_symmetry: 0,
+            post_symmetry: (&self.post_symmetry).into(),
         };
         self.buffers.update_params(queue, &params);
     }
@@ -1632,6 +1648,8 @@ impl FlameRenderer {
             background_r: self.background_r,
             background_g: self.background_g,
             background_b: self.background_b,
+            _pad_before_post_symmetry: 0,
+            post_symmetry: (&self.post_symmetry).into(),
         };
         self.buffers.update_params(queue, &params);
     }
