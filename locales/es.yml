@@ -18,9 +18,9 @@ menu:
   load_preset: "Cargar Ajuste Preestablecido"
   open_config: "Abrir Configuración..."
   save_config: "Guardar Configuración Como..."
-  import_apophysis: "Importar XML de Apophysis..."
+  import_flame_xml: "Importar XML de llama..."
   export_png: "Exportar PNG..."
-  export_apophysis: "Exportar XML de Apophysis..."
+  export_flame_xml: "Exportar XML de llama..."
   recent_files: "Archivos Recientes"
   quit: "Salir"
 
