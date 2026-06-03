@@ -1480,22 +1480,32 @@ impl PostSymmetryType {
     }
 
     /// JWildfire `.flame` XML token (uppercase, underscore-separated).
+    ///
+    /// **Axis-name swap**: JWildfire's `X_AXIS` actually flips X (a
+    /// left/right mirror), and `Y_AXIS` flips Y (top/bottom). We use
+    /// the math-class convention internally — `XAxis` = reflect across
+    /// the X axis (flips Y). To bridge the two conventions without
+    /// surprising users on either side, we swap on the wire: our
+    /// `XAxis` ↔ JWF `Y_AXIS`, our `YAxis` ↔ JWF `X_AXIS`. JWF files
+    /// round-trip through this swap unchanged, and our UI shows what
+    /// most users expect from geometry class.
     pub fn xml_token(self) -> &'static str {
         match self {
             PostSymmetryType::None => "NONE",
-            PostSymmetryType::XAxis => "X_AXIS",
-            PostSymmetryType::YAxis => "Y_AXIS",
+            PostSymmetryType::XAxis => "Y_AXIS",
+            PostSymmetryType::YAxis => "X_AXIS",
             PostSymmetryType::Point => "POINT",
         }
     }
 
-    /// Inverse of `xml_token` — `parse` so unknown values default to None.
+    /// Inverse of `xml_token` — see the axis-name swap note there.
+    /// Unknown values default to None.
     pub fn from_xml_token(s: &str) -> Self {
         // JWildfire emits uppercase tokens. Case-insensitive matching
         // here is defensive against hand-edited files.
         match s.to_ascii_uppercase().as_str() {
-            "X_AXIS" => PostSymmetryType::XAxis,
-            "Y_AXIS" => PostSymmetryType::YAxis,
+            "X_AXIS" => PostSymmetryType::YAxis,
+            "Y_AXIS" => PostSymmetryType::XAxis,
             "POINT" => PostSymmetryType::Point,
             _ => PostSymmetryType::None,
         }
