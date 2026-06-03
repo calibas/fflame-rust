@@ -1,5 +1,5 @@
-use crate::scene::transforms::{Flame, RenderMode};
-use crate::config::{ConfigManager, ConfigPath};
+use crate::scene::transforms::{Flame, PostSymmetryType, RenderMode};
+use crate::config::{ConfigManager, ConfigPath, FractalConfig};
 use rust_i18n::t;
 
 /// Render view controls content (for docking panels)
@@ -296,6 +296,10 @@ pub fn render_view_content(
 
     ui.separator();
 
+    render_post_symmetry_section(ui, config_manager, &config);
+
+    ui.separator();
+
     if ui.button(t!("view.reset").as_ref()).clicked() {
         let _ = config_manager.update_batch(
             vec![
@@ -312,5 +316,93 @@ pub fn render_view_content(
             ],
             "history.action.reset_view".to_string()
         );
+    }
+}
+
+/// Post-symmetry section. Type dropdown + the per-mode controls
+/// gated by which axis-vs-Point is active. JWildfire-compat: the
+/// values round-trip through `flame.post_symmetry` and the GPU
+/// HAS_POST_SYMMETRY gate updates automatically when the type
+/// changes (forces a shader rebuild via ShaderConstants).
+fn render_post_symmetry_section(
+    ui: &mut egui::Ui,
+    config_manager: &mut ConfigManager,
+    config: &FractalConfig,
+) {
+    use crate::config::slider::LazyUndoUi;
+    let _ = config_manager;
+
+    let ps = &config.flame.post_symmetry;
+    let current_ty = ps.ty;
+
+    ui.label(t!("view.post_symmetry")).on_hover_text(t!("view.tooltip_post_symmetry"));
+
+    // Type dropdown.
+    let type_label = match current_ty {
+        PostSymmetryType::None => t!("view.post_symmetry_none"),
+        PostSymmetryType::XAxis => t!("view.post_symmetry_x_axis"),
+        PostSymmetryType::YAxis => t!("view.post_symmetry_y_axis"),
+        PostSymmetryType::Point => t!("view.post_symmetry_point"),
+    };
+    egui::ComboBox::from_label(t!("view.post_symmetry_type").as_ref())
+        .selected_text(type_label)
+        .show_ui(ui, |ui| {
+            for (ty, lbl) in [
+                (PostSymmetryType::None, t!("view.post_symmetry_none")),
+                (PostSymmetryType::XAxis, t!("view.post_symmetry_x_axis")),
+                (PostSymmetryType::YAxis, t!("view.post_symmetry_y_axis")),
+                (PostSymmetryType::Point, t!("view.post_symmetry_point")),
+            ] {
+                if ui.selectable_label(current_ty == ty, lbl).clicked() && current_ty != ty {
+                    let _ = config_manager.update_param(
+                        ConfigPath::PostSymmetryType,
+                        (ty.as_u32() as i32).into(),
+                    );
+                }
+            }
+        });
+
+    if current_ty == PostSymmetryType::None {
+        return;
+    }
+
+    // Center always shown (relevant to every non-None mode).
+    ui.horizontal(|ui| {
+        ui.label(t!("view.post_symmetry_center"));
+        let _ = ui.lazy_drag(config_manager, ConfigPath::PostSymmetryCenterX, 0.01, "X");
+        let _ = ui.lazy_drag(config_manager, ConfigPath::PostSymmetryCenterY, 0.01, "Y");
+    });
+
+    match current_ty {
+        PostSymmetryType::XAxis | PostSymmetryType::YAxis => {
+            // Axis modes: distance pans the mirror along the axis,
+            // rotation pre-rotates around the center.
+            ui.horizontal(|ui| {
+                ui.label(t!("view.post_symmetry_distance"))
+                    .on_hover_text(t!("view.tooltip_post_symmetry_distance"));
+                let _ = ui.lazy_drag(config_manager, ConfigPath::PostSymmetryDistance, 0.01, "");
+            });
+            ui.horizontal(|ui| {
+                ui.label(t!("view.post_symmetry_rotation"))
+                    .on_hover_text(t!("view.tooltip_post_symmetry_rotation"));
+                let _ = ui.lazy_drag(config_manager, ConfigPath::PostSymmetryRotation, 0.5, "°");
+            });
+        }
+        PostSymmetryType::Point => {
+            // Point mode: just order. Distance/rotation are ignored.
+            ui.horizontal(|ui| {
+                ui.label(t!("view.post_symmetry_order"))
+                    .on_hover_text(t!("view.tooltip_post_symmetry_order"));
+                let mut order = ps.order as i32;
+                let response = ui.add(egui::Slider::new(&mut order, 1..=32));
+                if response.changed() {
+                    let _ = config_manager.update_param(
+                        ConfigPath::PostSymmetryOrder,
+                        order.into(),
+                    );
+                }
+            });
+        }
+        PostSymmetryType::None => unreachable!(),
     }
 }

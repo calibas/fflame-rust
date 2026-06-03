@@ -1846,8 +1846,12 @@ mod tests {
         assert_eq!(cfg.flame.post_symmetry.ty, PostSymmetryType::None);
 
         for (token, expected) in [
-            ("X_AXIS", PostSymmetryType::XAxis),
-            ("Y_AXIS", PostSymmetryType::YAxis),
+            // Note the cross-mapping: JWildfire's `X_AXIS` flips X
+            // (left/right mirror) which is our `YAxis` under the
+            // standard math convention (axis-of-symmetry = line of
+            // reflection). See `PostSymmetryType::xml_token` for why.
+            ("X_AXIS", PostSymmetryType::YAxis),
+            ("Y_AXIS", PostSymmetryType::XAxis),
         ] {
             let xml = format!(
                 r#"<flames name="t"><flame name="T" size="800 600" center="0 0" scale="200" background="0 0 0" brightness="4" gamma="4" post_symmetry_type="{}" post_symmetry_distance="0.5" post_symmetry_rotation="30.0"><xform weight="1" color="0" linear="1" coefs="1 0 0 1 0 0" opacity="1" /></flame></flames>"#,

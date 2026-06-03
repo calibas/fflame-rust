@@ -187,6 +187,18 @@ pub enum ConfigPath {
     /// Matches Apophysis XML: soloxform="N"
     SoloTransform,
 
+    // ===== Post-symmetry (plot-time density replication) =====
+    // Flipping `PostSymmetryType` between None and a non-None value
+    // changes the `HAS_POST_SYMMETRY` shader gate and forces a shader
+    // rebuild via ShaderConstants. The geometry fields below only
+    // update the uniform (no recompile).
+    PostSymmetryType,
+    PostSymmetryOrder,
+    PostSymmetryCenterX,
+    PostSymmetryCenterY,
+    PostSymmetryDistance,
+    PostSymmetryRotation,
+
     // ===== Effects (post-processing, no iteration reset needed) =====
     /// Enable/disable a density effect
     DensityEffectEnabled { index: usize },
@@ -576,6 +588,14 @@ impl Display for ConfigPath {
             }
             ConfigPath::SoloTransform => write!(f, "Solo Transform"),
 
+            // Post-symmetry
+            ConfigPath::PostSymmetryType => write!(f, "Symmetry Type"),
+            ConfigPath::PostSymmetryOrder => write!(f, "Symmetry Order"),
+            ConfigPath::PostSymmetryCenterX => write!(f, "Symmetry Center X"),
+            ConfigPath::PostSymmetryCenterY => write!(f, "Symmetry Center Y"),
+            ConfigPath::PostSymmetryDistance => write!(f, "Symmetry Distance"),
+            ConfigPath::PostSymmetryRotation => write!(f, "Symmetry Rotation"),
+
             // Effects
             ConfigPath::DensityEffectEnabled { index } => {
                 write!(f, "Density Effect {} → Enabled", index + 1)
@@ -918,6 +938,12 @@ impl ConfigPath {
                 ],
             ),
             ConfigPath::SoloTransform => I18nKey::simple("history.param.solo_transform"),
+            ConfigPath::PostSymmetryType => I18nKey::simple("history.param.post_symmetry_type"),
+            ConfigPath::PostSymmetryOrder => I18nKey::simple("history.param.post_symmetry_order"),
+            ConfigPath::PostSymmetryCenterX => I18nKey::simple("history.param.post_symmetry_center_x"),
+            ConfigPath::PostSymmetryCenterY => I18nKey::simple("history.param.post_symmetry_center_y"),
+            ConfigPath::PostSymmetryDistance => I18nKey::simple("history.param.post_symmetry_distance"),
+            ConfigPath::PostSymmetryRotation => I18nKey::simple("history.param.post_symmetry_rotation"),
 
             // Effects
             ConfigPath::DensityEffectEnabled { index } => I18nKey::with_params(
@@ -1821,6 +1847,12 @@ impl ConfigPath {
             | ConfigPath::PerspectiveStrength
             | ConfigPath::Xaos { .. }
             | ConfigPath::SoloTransform
+            | ConfigPath::PostSymmetryType
+            | ConfigPath::PostSymmetryOrder
+            | ConfigPath::PostSymmetryCenterX
+            | ConfigPath::PostSymmetryCenterY
+            | ConfigPath::PostSymmetryDistance
+            | ConfigPath::PostSymmetryRotation
             | ConfigPath::MaxIterations
             | ConfigPath::DeterministicRng => UpdateType::IterationReset,
 
@@ -2000,6 +2032,12 @@ impl ConfigPath {
             ConfigPath::PerspectiveStrength => "PerspectiveStrength".to_string(),
             ConfigPath::Xaos { src, dst } => format!("Xaos.{}.{}", src, dst),
             ConfigPath::SoloTransform => "SoloTransform".to_string(),
+            ConfigPath::PostSymmetryType => "PostSymmetryType".to_string(),
+            ConfigPath::PostSymmetryOrder => "PostSymmetryOrder".to_string(),
+            ConfigPath::PostSymmetryCenterX => "PostSymmetryCenterX".to_string(),
+            ConfigPath::PostSymmetryCenterY => "PostSymmetryCenterY".to_string(),
+            ConfigPath::PostSymmetryDistance => "PostSymmetryDistance".to_string(),
+            ConfigPath::PostSymmetryRotation => "PostSymmetryRotation".to_string(),
 
             // Effects
             ConfigPath::DensityEffectEnabled { index } => format!("DensityEffect.{}.Enabled", index),
@@ -2097,6 +2135,12 @@ impl ConfigPath {
             "RenderMode" => return Some(ConfigPath::RenderMode),
             "PerspectiveStrength" => return Some(ConfigPath::PerspectiveStrength),
             "SoloTransform" => return Some(ConfigPath::SoloTransform),
+            "PostSymmetryType" => return Some(ConfigPath::PostSymmetryType),
+            "PostSymmetryOrder" => return Some(ConfigPath::PostSymmetryOrder),
+            "PostSymmetryCenterX" => return Some(ConfigPath::PostSymmetryCenterX),
+            "PostSymmetryCenterY" => return Some(ConfigPath::PostSymmetryCenterY),
+            "PostSymmetryDistance" => return Some(ConfigPath::PostSymmetryDistance),
+            "PostSymmetryRotation" => return Some(ConfigPath::PostSymmetryRotation),
 
             _ => {}
         }
@@ -2454,7 +2498,11 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::SystemTargetFps
         | ConfigPath::LevelsLow
         | ConfigPath::LevelsHigh
-        | ConfigPath::LevelsGamma => {
+        | ConfigPath::LevelsGamma
+        | ConfigPath::PostSymmetryCenterX
+        | ConfigPath::PostSymmetryCenterY
+        | ConfigPath::PostSymmetryDistance
+        | ConfigPath::PostSymmetryRotation => {
             json.as_f64().map(|f| ConfigValue::Float(f as f32))
         }
 
@@ -2513,7 +2561,9 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         }
 
         // Optional usize as Int (-1 = None, 0+ = Some(index))
-        ConfigPath::SoloTransform => {
+        ConfigPath::SoloTransform
+        | ConfigPath::PostSymmetryType
+        | ConfigPath::PostSymmetryOrder => {
             json.as_i64().map(|i| ConfigValue::Int(i as i32))
         }
 

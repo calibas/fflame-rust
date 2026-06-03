@@ -1063,6 +1063,12 @@ impl FlameRenderer {
         self.background_r = background_color[0];
         self.background_g = background_color[1];
         self.background_b = background_color[2];
+        // Mirror per-flame post-symmetry into the renderer cache so
+        // the GpuParams construction below picks it up. The shader
+        // rebuild for type changes is already handled by
+        // ensure_shaders_current_with_constants above (since
+        // ShaderConstants.has_post_symmetry shifts).
+        self.post_symmetry = flame.post_symmetry.clone();
 
         // Update transform tracking
         self.num_transforms = flame.transforms.len() as u32;

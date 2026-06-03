@@ -389,6 +389,22 @@ view:
   tooltip_fog_strength: "Exponential fog density (0 = disabled).\nHigher values create denser atmospheric fog."
   tooltip_fog_start: "Depth where fog begins.\nNegative values start fog in front of origin."
 
+  # Post-symmetry (plot-time density replication)
+  post_symmetry: "Symmetry"
+  post_symmetry_type: "Type"
+  post_symmetry_none: "None"
+  post_symmetry_x_axis: "X-Axis"
+  post_symmetry_y_axis: "Y-Axis"
+  post_symmetry_point: "Point"
+  post_symmetry_center: "Center:"
+  post_symmetry_distance: "Distance:"
+  post_symmetry_rotation: "Rotation:"
+  post_symmetry_order: "Order:"
+  tooltip_post_symmetry: "Replicate every plotted sample at K mirrored or rotated positions.\nDoesn't advance the chaos game — multiplies density without extra iterations."
+  tooltip_post_symmetry_distance: "Shift the mirror copy along the symmetry axis.\nAxis modes only."
+  tooltip_post_symmetry_rotation: "Pre-rotate the mirror copy around the center (degrees).\nAxis modes only."
+  tooltip_post_symmetry_order: "Number of rotational copies for Point symmetry.\n2 = pair (180°), 3 = ternary (120°), 4 = quad (90°), …"
+
 # Rendering Controls
 rendering:
   title: "Rendering"

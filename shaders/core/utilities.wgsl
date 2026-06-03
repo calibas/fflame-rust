@@ -266,14 +266,27 @@ fn post_symmetry_copy(p: vec3<f32>, k: u32) -> vec3<f32> {
     }
     // Axis modes (1 = XAxis, 2 = YAxis). k is always 1 here — there's
     // only one mirror copy per sample.
+    //
+    // We use the standard math-class convention: the named axis is
+    // the *line of reflection*. "X-axis symmetry" reflects across the
+    // X axis (the horizontal line y = center_y) and flips Y; "Y-axis
+    // symmetry" reflects across the Y axis and flips X. `distance`
+    // pans the mirror copy along the named axis (along X for X-axis,
+    // along Y for Y-axis).
+    //
+    // JWildfire's `.flame` XML uses the opposite convention (their
+    // `X_AXIS` is our YAxis and vice versa) — the import / export
+    // layer in `src/flame_xml.rs` swaps the tokens to bridge.
     var x: f32;
     var y: f32;
     if (kind == 1u) {
-        // XAxis: mirror across y = cy, then pan by (distance, 0).
+        // XAxis: reflect across the X axis (y = cy → flips Y), pan
+        // along X.
         x = p.x + params.post_symmetry.distance;
         y = 2.0 * cy - p.y;
     } else if (kind == 2u) {
-        // YAxis: mirror across x = cx, then pan by (0, distance).
+        // YAxis: reflect across the Y axis (x = cx → flips X), pan
+        // along Y.
         x = 2.0 * cx - p.x;
         y = p.y + params.post_symmetry.distance;
     } else {
