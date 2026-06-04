@@ -1261,13 +1261,16 @@ impl ShaderBuilder {
         }
         shader.push('\n');
 
-        // 7a. If subflame_wf is active, emit a parallel apply_subflame_variations
-        //     function and inject subflame.wgsl. The parallel function excludes
-        //     subflame_wf dispatch — required to break the otherwise-recursive
-        //     call graph (apply_variations → variation_subflame_wf →
-        //     subflame_iterate → apply_*). v1 disallows nested subflames anyway,
-        //     so dropping that case is the right semantics.
-        let has_subflame = active.iter().any(|(name, _)| name == "subflame_wf");
+        // 7a. If any subflame variation is active (subflame_wf in normal
+        //     phase, or pre_subflame_wf in pre phase), emit a parallel
+        //     apply_subflame_variations function and inject subflame.wgsl.
+        //     The parallel function excludes BOTH subflame names —
+        //     required to break the otherwise-recursive call graph
+        //     (apply_variations → variation_*_subflame_wf →
+        //     subflame_iterate → apply_*). v1 disallows nested subflames
+        //     anyway, so dropping both cases is the right semantics.
+        let has_subflame = active.iter().any(|(name, _)|
+            name == "subflame_wf" || name == "pre_subflame_wf");
         if has_subflame {
             if render_3d {
                 shader.push_str(&self.build_apply_variations_3d(&active, constants.inlined_transforms.as_ref(), has_dc, true));
@@ -1386,7 +1389,7 @@ impl ShaderBuilder {
         let mut post_variations = Vec::new();
 
         for (name, idx) in active_variations {
-            if is_subflame && name == "subflame_wf" {
+            if is_subflame && (name == "subflame_wf" || name == "pre_subflame_wf") {
                 continue;
             }
             if let Some(info) = self.registry.get(name) {
@@ -1568,7 +1571,7 @@ impl ShaderBuilder {
         let mut post_variations = Vec::new();
 
         for (name, idx) in active_variations {
-            if is_subflame && name == "subflame_wf" {
+            if is_subflame && (name == "subflame_wf" || name == "pre_subflame_wf") {
                 continue;
             }
             if let Some(info) = self.registry.get(name) {

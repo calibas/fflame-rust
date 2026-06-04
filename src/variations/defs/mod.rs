@@ -918,5 +918,10 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     // subflame: subflame_wf (8 user + 5 state, needs_rng + writes_color, blur class)
     // — JWildfire's nested-IFS variation. P3 registers; P4 implements.
     &SUBFLAME_WF,
+    // pre-phase variant of subflame_wf — same nested IFS, output goes to
+    // the affine point instead of the variation sum. Body intentionally
+    // ignores scale/angle/offset (JWildfire's transform() override does
+    // a raw `q` assignment).
+    &PRE_SUBFLAME_WF,
     &SYNTH,
 ];
