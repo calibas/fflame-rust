@@ -8,8 +8,8 @@ pub fn render_config_dialog_content(
     config_import_json: &mut Option<String>,
     config_save_file: &mut bool,
     config_load_file: &mut bool,
-    apophysis_import_file: &mut bool,
-    apophysis_export_file: &mut bool,
+    flame_xml_import_file: &mut bool,
+    flame_xml_export_file: &mut bool,
 ) {
     ui.heading(t!("config_dialog.heading"));
     ui.label(t!("config_dialog.description"));
@@ -49,14 +49,14 @@ pub fn render_config_dialog_content(
     });
 
     ui.separator();
-    ui.label(t!("config_dialog.import_apophysis_heading"));
+    ui.label(t!("config_dialog.import_flame_xml_heading"));
     ui.horizontal(|ui| {
-        if ui.button(t!("config_dialog.load_apophysis")).clicked() {
-            *apophysis_import_file = true;
+        if ui.button(t!("config_dialog.load_flame_xml")).clicked() {
+            *flame_xml_import_file = true;
         }
-        if ui.button(t!("config_dialog.save_apophysis")).clicked() {
-            *apophysis_export_file = true;
+        if ui.button(t!("config_dialog.save_flame_xml")).clicked() {
+            *flame_xml_export_file = true;
         }
-        ui.label(t!("config_dialog.apophysis_format_hint"));
+        ui.label(t!("config_dialog.flame_xml_format_hint"));
     });
 }

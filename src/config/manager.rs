@@ -1896,6 +1896,16 @@ impl ConfigManager {
                 Ok(value.into())
             }
 
+            // Post-symmetry — per-flame plot-time symmetry. The type
+            // round-trips through u32 (PostSymmetryType::as_u32).
+            ConfigPath::PostSymmetryType => Ok((flame.post_symmetry.ty.as_u32() as i32).into()),
+            ConfigPath::PostSymmetryOrder => Ok((flame.post_symmetry.order as i32).into()),
+            ConfigPath::PostSymmetryCenterX => Ok(flame.post_symmetry.center_x.into()),
+            ConfigPath::PostSymmetryCenterY => Ok(flame.post_symmetry.center_y.into()),
+            ConfigPath::PostSymmetryDistance => Ok(flame.post_symmetry.distance.into()),
+            ConfigPath::PostSymmetryRotation => Ok(flame.post_symmetry.rotation_deg.into()),
+            ConfigPath::PreserveZ => Ok(flame.preserve_z.into()),
+
             // System Settings - These should NOT be called via get_value (they're not in FractalConfig)
             // Use config_manager.system_settings() instead
             ConfigPath::SystemIterationsPerThread
@@ -2502,6 +2512,43 @@ impl ConfigManager {
                 } else {
                     Some(idx as usize)
                 };
+            }
+
+            // Post-symmetry — per-flame plot-time symmetry. Type
+            // round-trips through u32; unknown values clamp to None.
+            ConfigPath::PostSymmetryType => {
+                use crate::scene::transforms::PostSymmetryType;
+                let raw: i32 = value.try_into()?;
+                self.active_flame_mut()?.post_symmetry.ty = match raw {
+                    1 => PostSymmetryType::XAxis,
+                    2 => PostSymmetryType::YAxis,
+                    3 => PostSymmetryType::Point,
+                    _ => PostSymmetryType::None,
+                };
+            }
+            ConfigPath::PostSymmetryOrder => {
+                let raw: i32 = value.try_into()?;
+                self.active_flame_mut()?.post_symmetry.order = raw.max(1).min(32) as u32;
+            }
+            ConfigPath::PostSymmetryCenterX => {
+                let v: f32 = value.try_into()?;
+                self.active_flame_mut()?.post_symmetry.center_x = v;
+            }
+            ConfigPath::PostSymmetryCenterY => {
+                let v: f32 = value.try_into()?;
+                self.active_flame_mut()?.post_symmetry.center_y = v;
+            }
+            ConfigPath::PostSymmetryDistance => {
+                let v: f32 = value.try_into()?;
+                self.active_flame_mut()?.post_symmetry.distance = v;
+            }
+            ConfigPath::PostSymmetryRotation => {
+                let v: f32 = value.try_into()?;
+                self.active_flame_mut()?.post_symmetry.rotation_deg = v;
+            }
+            ConfigPath::PreserveZ => {
+                let v: bool = value.try_into()?;
+                self.active_flame_mut()?.preserve_z = v;
             }
 
             // System Settings - These should NOT be called via apply_value (they're not in FractalConfig)

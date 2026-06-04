@@ -797,8 +797,8 @@ impl EguiLayer {
         let mut config_import_json = None;
         let mut config_save_file = false;
         let mut config_load_file = false;
-        let mut apophysis_import_file = false;
-        let mut apophysis_export_file = false;
+        let mut flame_xml_import_file = false;
+        let mut flame_xml_export_file = false;
         let mut new_flame_requested = false;
         let mut random_flame_requested = false;
 
@@ -1045,8 +1045,8 @@ impl EguiLayer {
                         config_import_json: &mut config_import_json,
                         config_save_file: &mut config_save_file,
                         config_load_file: &mut config_load_file,
-                        apophysis_import_file: &mut apophysis_import_file,
-                        apophysis_export_file: &mut apophysis_export_file,
+                        flame_xml_import_file: &mut flame_xml_import_file,
+                        flame_xml_export_file: &mut flame_xml_export_file,
                         open_config_dialog: &mut open_config_dialog,
 
                         // Selected preset config (from FractalBrowser or other sources)
@@ -1493,8 +1493,8 @@ impl EguiLayer {
         // Extract menu actions into individual flags for backward compatibility
         config_load_file |= menu_actions.file.load_config;
         config_save_file |= menu_actions.file.save_config;
-        apophysis_import_file |= menu_actions.file.import_apophysis;
-        apophysis_export_file |= menu_actions.file.export_apophysis;
+        flame_xml_import_file |= menu_actions.file.import_flame_xml;
+        flame_xml_export_file |= menu_actions.file.export_flame_xml;
         new_flame_requested |= menu_actions.file.new_flame;
         random_flame_requested |= menu_actions.file.random_flame;
         open_preset_library |= menu_actions.file.open_preset_library;
@@ -1611,8 +1611,8 @@ impl EguiLayer {
             config_import_requested: config_import_json,
             config_save_file_requested: config_save_file,
             config_load_file_requested: config_load_file,
-            apophysis_import_file_requested: apophysis_import_file,
-            apophysis_export_file_requested: apophysis_export_file,
+            flame_xml_import_file_requested: flame_xml_import_file,
+            flame_xml_export_file_requested: flame_xml_export_file,
             new_flame_requested,
             random_flame_requested,
             palette_export_json,

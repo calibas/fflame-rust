@@ -76,11 +76,11 @@ pub fn render_menu_bar(
 
                 ui.separator();
 
-                if ui.button(t!("menu.import_apophysis")).clicked() {
-                    menu_actions.file.import_apophysis = true;
+                if ui.button(t!("menu.import_flame_xml")).clicked() {
+                    menu_actions.file.import_flame_xml = true;
                 }
-                if ui.button(t!("menu.export_apophysis")).clicked() {
-                    menu_actions.file.export_apophysis = true;
+                if ui.button(t!("menu.export_flame_xml")).clicked() {
+                    menu_actions.file.export_flame_xml = true;
                 }
 
                 ui.separator();

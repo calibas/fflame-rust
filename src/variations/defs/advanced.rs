@@ -699,7 +699,10 @@ fn variation_bubble(p: vec3<f32>) -> vec3<f32> {
 /// - Scott Draves
 pub static CYLINDER: VariationDef = VariationDef {
     name: "cylinder",
-    aliases: &[],
+    // JWildfire ships `cylinder_apo` with an identical body (the
+    // Apophysis-rebranded version of the same Scott Draves
+    // variation). Accept the JWF token on import.
+    aliases: &["cylinder_apo"],
     display_name: "Cylinder",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
