@@ -138,6 +138,7 @@ mod subflame;
 // `pub mod` so the shader builder can call `synth::specialize_wgsl_*`
 // directly for per-flame WGSL specialization.
 pub mod synth;
+mod fractwf;
 
 pub use basic::*;
 pub use advanced::*;
@@ -272,6 +273,7 @@ pub use hexnix3d_misc::*;
 pub use klein_group_misc::*;
 pub use subflame::*;
 pub use synth::*;
+pub use fractwf::*;
 
 use super::definition::VariationDef;
 
@@ -924,4 +926,14 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     // a raw `q` assignment).
     &PRE_SUBFLAME_WF,
     &SYNTH,
+    // fract_*_wf family — escape-time fractals (Dragon, Julia, Mandelbrot,
+    // Meteors, Pearls, Salamander). All share the iterate-mode body via
+    // shaders/core/fractwf.wgsl; per-variation difference is just the
+    // iterator-step math (selected via a `kind` enum).
+    &FRACT_DRAGON_WF,
+    &FRACT_METEORS_WF,
+    &FRACT_PEARLS_WF,
+    &FRACT_SALAMANDER_WF,
+    &FRACT_JULIA_WF,
+    &FRACT_MANDELBROT_WF,
 ];
