@@ -658,6 +658,8 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &POWER,
     &ROUNDSPHER,
     &ROUNDSPHER3D,
+    &CUBIC3D,
+    &CUBIC_LATTICE_3D,
     &CHECKS,
     &CONE,
     // Erf family + small misc
