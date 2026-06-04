@@ -5,10 +5,14 @@ need to be added to unblock them.
 
 This document is the companion to
 [`variation-bulk-port.md`](variation-bulk-port.md), which tracks what
-*has* been ported. As of the `complex-math-and-klein-group` branch
-(2026-05-05, +1 variation `klein_group` on top of the prior batches),
-the registry holds 492 variations; 148 of the 636 cpp variations in
-`output/jwildfire-vars/output/` remain unported.
+*has* been ported. As of `jwf-variations-batch2` (2026-06-04, +7
+variations: the six `fract_*_wf` family + standalone `mandelbrot`),
+the registry holds 513 variations.
+
+For the focused JWF "script vars" subset, see
+[`jwf-common-variations-port.md`](jwf-common-variations-port.md):
+184 / 190 implemented (97%); the remaining 6 are all in this
+blockers doc.
 
 ## Unsupported features
 
