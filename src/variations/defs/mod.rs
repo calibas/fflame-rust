@@ -822,6 +822,7 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &ROSE_WF,
     &BUBBLE_WF,
     &PLANE_WF,
+    &CHECKERBOARD_WF,
     // waves_wf_family: waves2_wf, waves3_wf, waves4_wf, dinis_surface_wf
     &WAVES2_WF,
     &WAVES3_WF,
