@@ -92,10 +92,18 @@ struct PostSymmetry {
     _pad_b: f32,
 }
 
-// Variation parameters for one transform
-// Indexed as: params[variation_id * 16 + param_slot]
+// Variation parameters for one transform — single flat array
+// shared by every active variation on the transform. Each variation
+// gets a contiguous run starting at the offset assigned by
+// `compute_packed_layout` (Rust side). The shader builder reads /
+// writes through `get_param(xform_id, variation_id, slot)` which
+// resolves the offset from a per-transform header — no
+// `variation_id * N + slot` constant stride anymore. Individual
+// variations can declare as many params as they need (the `complex`
+// variation already uses 64); the 1600-slot ceiling is on the
+// transform-wide total across all its active variations.
 struct VariationParams {
-    params: array<f32, 1600>,  // 100 variations × 16 params (user + init-derived)
+    params: array<f32, 1600>,
 }
 
 // Path storage for PathMap color mode
