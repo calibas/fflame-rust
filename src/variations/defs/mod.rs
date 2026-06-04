@@ -135,6 +135,7 @@ mod hexaplay3d_misc;
 mod hexnix3d_misc;
 mod klein_group_misc;
 mod subflame;
+mod synth;
 
 pub use basic::*;
 pub use advanced::*;
@@ -268,6 +269,7 @@ pub use hexaplay3d_misc::*;
 pub use hexnix3d_misc::*;
 pub use klein_group_misc::*;
 pub use subflame::*;
+pub use synth::*;
 
 use super::definition::VariationDef;
 
@@ -914,4 +916,5 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     // subflame: subflame_wf (8 user + 5 state, needs_rng + writes_color, blur class)
     // — JWildfire's nested-IFS variation. P3 registers; P4 implements.
     &SUBFLAME_WF,
+    &SYNTH,
 ];
