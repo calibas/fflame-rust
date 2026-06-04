@@ -139,6 +139,7 @@ mod subflame;
 // directly for per-flame WGSL specialization.
 pub mod synth;
 mod fractwf;
+mod mandelbrot;
 
 pub use basic::*;
 pub use advanced::*;
@@ -274,6 +275,7 @@ pub use klein_group_misc::*;
 pub use subflame::*;
 pub use synth::*;
 pub use fractwf::*;
+pub use mandelbrot::*;
 
 use super::definition::VariationDef;
 
@@ -936,4 +938,8 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &FRACT_SALAMANDER_WF,
     &FRACT_JULIA_WF,
     &FRACT_MANDELBROT_WF,
+    // Standalone `mandelbrot` — random-walk Buddhabrot, persistent state
+    // (3 slots), distinct from the fract_*_wf family. Source predates JWF
+    // (originally Jed Kelsey's Apophysis plugin, 2007).
+    &MANDELBROT,
 ];
