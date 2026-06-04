@@ -5,10 +5,14 @@ need to be added to unblock them.
 
 This document is the companion to
 [`variation-bulk-port.md`](variation-bulk-port.md), which tracks what
-*has* been ported. As of the `complex-math-and-klein-group` branch
-(2026-05-05, +1 variation `klein_group` on top of the prior batches),
-the registry holds 492 variations; 148 of the 636 cpp variations in
-`output/jwildfire-vars/output/` remain unported.
+*has* been ported. As of `jwf-variations-batch2` (2026-06-04, +7
+variations: the six `fract_*_wf` family + standalone `mandelbrot`),
+the registry holds 513 variations.
+
+For the focused JWF "script vars" subset, see
+[`jwf-common-variations-port.md`](jwf-common-variations-port.md):
+184 / 190 implemented (97%); the remaining 6 are all in this
+blockers doc.
 
 ## Unsupported features
 
@@ -397,21 +401,23 @@ Still pending — additional non-slot blockers prevent porting:
 | `pre_recip` | 15 user + complex math | #14 transcendentals (`Complex.AsinH/AcosH/AtanH/AsecH/AcosecH/AcotH`) — basic ops now available, transcendentals still needed |
 | `prepost_affine` | 15 user + 18 init | #12 prepost — needs phase compromise |
 
-### Mandelbrot / fractal-iteration family — 8 variations
+### Mandelbrot / fractal-iteration family — 2 remaining
 
-These iterate a Mandelbrot-style escape function and need either
-state (#6) or per-frame point caches.
+Originally listed as 8 — six of them turned out to be straightforward
+ports once we read JWildfire's own `getGPUCode()`, which hand-translates
+each iterator to CUDA. Those six (Dragon, Julia, Mandelbrot, Meteors,
+Pearls, Salamander) ship in `jwf-variations-batch2`.
+
+The remaining two extend `AbstractFractFormulaWFFunc` (not the simpler
+`AbstractFractWFFunc` the others use) and are marked
+`NotDesiredForGPURendering` in JWildfire itself — they take a
+user-typed math expression and walk it via a stack-based interpreter
+per iteration. That's blocker #1 (JIT-compiled user expressions).
 
 | Variation | Notes |
 |---|---|
-| `fract_dragon_wf` | Dragon-curve fractal iteration |
-| `fract_formula_julia_wf` | User-typed formula Julia (also #1) |
-| `fract_formula_mand_wf` | User-typed formula Mandelbrot (also #1) |
-| `fract_julia_wf` | Standard Julia iteration (could port without state if escape-iter cap is fixed) |
-| `fract_mandelbrot_wf` | Standard Mandelbrot iteration (same — possibly tractable) |
-| `fract_meteors_wf` | Meteors variant |
-| `fract_pearls_wf` | Pearls variant |
-| `fract_salamander_wf` | Salamander variant |
+| `fract_formula_julia_wf` | User-typed formula Julia. Blocker #1 (JIT user expressions). |
+| `fract_formula_mand_wf` | User-typed formula Mandelbrot. Blocker #1. |
 
 ### Prepost (#12) — 1 remaining
 
