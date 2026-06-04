@@ -1283,6 +1283,16 @@ impl ShaderBuilder {
             shader.push('\n');
         }
 
+        // 7b. fract_*_wf family: inject the shared escape-time helpers
+        //     (iterate loop, output mapping, per-iterator next-step
+        //     switch) when any of the family is active. Variation bodies
+        //     just call into these — see `shaders/core/fractwf.wgsl`.
+        let has_fractwf = active.iter().any(|(name, _)| name.starts_with("fract_") && name.ends_with("_wf"));
+        if has_fractwf {
+            shader.push_str(include_str!("../shaders/core/fractwf.wgsl"));
+            shader.push('\n');
+        }
+
         // 8. Per-flame packed get_param (must come before utilities, which
         //    references it in some places via inlined comments). The packed
         //    version replaces the fixed-stride version that used to live in
