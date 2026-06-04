@@ -59,6 +59,15 @@ pub struct ShaderCache {
     /// Bind group layout for the init pipeline. Single binding: the
     /// variation_params storage buffer with read_write access.
     pub init_bind_group_layout: BindGroupLayout,
+
+    /// Per-flame WGSL specialization key. Captures inputs to the variation
+    /// specializers (currently just `synth`'s active mode set) so the cache
+    /// can rebuild when they change. Without this, the cache would early-out
+    /// on `variations_changed = false` and the user would see stale dispatch
+    /// after mid-flame `synth.mode` edits. Format: each variation that
+    /// specializes contributes one `(name, key)` entry; comparing the whole
+    /// `Vec` is the change detector. See `compute_specialization_key`.
+    specialization_key: Vec<(String, String)>,
 }
 
 impl ShaderCache {
@@ -139,6 +148,7 @@ impl ShaderCache {
             &active_variations,
         );
 
+        let specialization_key = Self::compute_specialization_key(flame, &active_variations);
         Self {
             active_variations,
             path_features_enabled,
@@ -154,7 +164,32 @@ impl ShaderCache {
             init_shader_source,
             init_pair_count,
             init_bind_group_layout,
+            specialization_key,
         }
+    }
+
+    /// Build the per-flame specialization key. Each entry is `(variation_name,
+    /// opaque_key)`; comparing the whole `Vec` is the cache change detector.
+    ///
+    /// Today: synth contributes `("synth", "<sorted comma-joined modes>")` when
+    /// any transform has synth active. The mode list ends up baked into the
+    /// generated WGSL (see `synth::specialize_wgsl_*`), so any change here
+    /// must force a shader rebuild.
+    fn compute_specialization_key(
+        flame: &Flame,
+        active_variations: &HashMap<String, f32>,
+    ) -> Vec<(String, String)> {
+        let mut key: Vec<(String, String)> = Vec::new();
+        if active_variations.contains_key("synth") {
+            let modes = crate::variations::defs::synth::synth_modes_in_flame(flame);
+            let joined = modes
+                .iter()
+                .map(|m| m.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            key.push(("synth".to_string(), joined));
+        }
+        key
     }
 
     /// Extract shader constants from a FractalConfig
@@ -245,7 +280,16 @@ impl ShaderCache {
         let current_registry_version = crate::variations::global_registry().version();
         let registry_changed = current_registry_version != self.last_registry_version;
 
-        if !variations_changed && !path_features_changed && !xaos_changed && !constants_changed && !mode_changed && !registry_changed {
+        // Check if the per-flame WGSL specialization inputs changed (e.g.
+        // synth.mode flipped between transforms). The variation key set
+        // hasn't changed, but the generated WGSL has, so a rebuild is needed.
+        let new_specialization_key = Self::compute_specialization_key(flame, &needed);
+        let specialization_changed = new_specialization_key != self.specialization_key;
+
+        if !variations_changed && !path_features_changed && !xaos_changed
+            && !constants_changed && !mode_changed && !registry_changed
+            && !specialization_changed
+        {
             return false; // No rebuild needed
         }
 
@@ -288,6 +332,12 @@ impl ShaderCache {
             log::info!(
                 "Recompiling shaders: variation registry version changed from {} to {}",
                 self.last_registry_version, current_registry_version
+            );
+        }
+        if specialization_changed {
+            log::info!(
+                "Recompiling shaders: specialization key changed from {:?} to {:?}",
+                self.specialization_key, new_specialization_key
             );
         }
 
@@ -341,6 +391,7 @@ impl ShaderCache {
         self.constants = constants;
         self.current_render_mode = render_mode;
         self.last_registry_version = current_registry_version;
+        self.specialization_key = new_specialization_key;
 
         true // Rebuilt
     }
