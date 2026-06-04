@@ -358,8 +358,12 @@ pub struct Transform {
 
     /// Direct-color blend strength (0.0 to 1.0, Apophysis `pluginColor`).
     /// 0.0 = standard color evolution; 1.0 = direct-color variations fully
-    /// override the iteration color. No effect when no direct-color
-    /// variations are active in the flame. Default 0.0.
+    /// override the iteration color. No-op when no direct-color variations
+    /// are active in the flame, so the default is **1.0** — when a user
+    /// adds a DC variation it just works without hunting for an extra
+    /// slider. Apophysis defaults this to 0.0; we deviate intentionally
+    /// because our model has no other DC-enable toggle and the cost of
+    /// being on for a non-DC transform is exactly zero.
     pub direct_color: f32,
 
     // Post-affine transformation matrix (optional, applied after variations)
@@ -417,7 +421,7 @@ impl Default for Transform {
             color: 0.5,        // Mid-palette position (neutral default)
             color_speed: 0.0,  // Apophysis default: 50/50 blend
             opacity: 1.0,      // Apophysis default: always visible
-            direct_color: 0.0, // Apophysis default: no direct-color blending
+            direct_color: 1.0, // DC on by default; no-op when no DC variation is active. See field docs.
             post_affine_enabled: false,
             post_a: 1.0,
             post_b: 0.0,
@@ -1122,7 +1126,12 @@ impl<'de> Deserialize<'de> for Transform {
                     color: color.ok_or_else(|| de::Error::missing_field("color"))?,
                     color_speed: color_speed.unwrap_or(0.0), // Default to 0.0 for backward compatibility
                     opacity: opacity.unwrap_or(1.0), // Default to 1.0 for backward compatibility
-                    direct_color: direct_color.unwrap_or(0.0), // Default 0.0 (no direct-color blending)
+                    // Deserialize fallback is 0.0 even though Transform::default() is now
+                    // 1.0 — `.fflame` files written before the default flip omit this field
+                    // when it was at the old default of 0.0 (see the `has_direct_color` skip
+                    // in serialize), and we want those files to keep their old appearance.
+                    // New flames serialize 1.0 explicitly, so they round-trip fine.
+                    direct_color: direct_color.unwrap_or(0.0),
                     // Post-affine defaults to disabled + identity (backward compatible)
                     post_affine_enabled: post_affine_enabled.unwrap_or(false),
                     post_a: post_a.unwrap_or(1.0),
@@ -1431,6 +1440,156 @@ pub struct Flame {
     /// See `docs/projects/subflames.md`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub subflames: Vec<Flame>,
+
+    /// Post-symmetry — JWildfire's per-flame plot-time symmetry. Each
+    /// chaos-game sample is also deposited at K−1 symmetric positions
+    /// before the camera transform, multiplying density without
+    /// advancing the dynamics. K depends on `ty`:
+    ///   - `None`: K = 1 (no-op, compile-stripped from the shader)
+    ///   - `XAxis` / `YAxis`: K = 2 (original + mirror)
+    ///   - `Point`: K = `order` (one per 2π/order rotation around center)
+    ///
+    /// `distance` and `rotation_deg` are only meaningful for the axis
+    /// modes — they offset and pre-rotate the mirror copy. Point mode
+    /// ignores them.
+    #[serde(default, skip_serializing_if = "PostSymmetry::is_default")]
+    pub post_symmetry: PostSymmetry,
+
+    /// JWildfire's `preserve_z` flag — controls whether the chaos
+    /// game's Z carries across iterations or gets reset each step.
+    ///
+    /// - `false` (default, matches Apophysis and JWildfire's
+    ///   per-file defaults): Z is reset to 0 at the end of each
+    ///   iteration. Variations may still produce per-iteration Z
+    ///   values used in that iteration's plot, but the next iteration
+    ///   starts fresh. Prevents Z explosion from variations that
+    ///   scale Z by amounts > 1 (e.g. `spherical` at high weight),
+    ///   which can otherwise cascade to `±∞` and poison the camera
+    ///   transform (`0·∞ = NaN`).
+    /// - `true`: Z carries across iterations. Matches JWildfire's
+    ///   `preserve_z="1"` and is needed by some Z-aware flames.
+    ///
+    /// `.fflame` files saved before this field existed default to
+    /// **true** via the serde fallback (preserving their original
+    /// look). `Default::default()` returns **false** so newly
+    /// authored flames and JWF imports match Apo/JWF defaults.
+    #[serde(default = "default_serde_preserve_z", skip_serializing_if = "skip_serializing_preserve_z_if_default")]
+    pub preserve_z: bool,
+}
+
+fn default_serde_preserve_z() -> bool {
+    // Pre-field `.fflame` files had no preserve_z; treat their
+    // missing field as "preserve Z" so they keep rendering the way
+    // they did before this feature landed.
+    true
+}
+
+fn skip_serializing_preserve_z_if_default(v: &bool) -> bool {
+    // Skip writing the field when it matches the serde fallback
+    // (`true`). New flames default to `false` and write the field
+    // explicitly, so the round-trip is well-defined for both eras.
+    *v
+}
+
+/// What kind of plot-time symmetry to apply (see `Flame.post_symmetry`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PostSymmetryType {
+    #[default]
+    None,
+    XAxis,
+    YAxis,
+    Point,
+}
+
+impl PostSymmetryType {
+    /// Single-letter shader encoding so the GPU uniform can be a plain
+    /// `u32` instead of an enum import.
+    pub fn as_u32(self) -> u32 {
+        match self {
+            PostSymmetryType::None => 0,
+            PostSymmetryType::XAxis => 1,
+            PostSymmetryType::YAxis => 2,
+            PostSymmetryType::Point => 3,
+        }
+    }
+
+    /// JWildfire `.flame` XML token (uppercase, underscore-separated).
+    ///
+    /// **Axis-name swap**: JWildfire's `X_AXIS` actually flips X (a
+    /// left/right mirror), and `Y_AXIS` flips Y (top/bottom). We use
+    /// the math-class convention internally — `XAxis` = reflect across
+    /// the X axis (flips Y). To bridge the two conventions without
+    /// surprising users on either side, we swap on the wire: our
+    /// `XAxis` ↔ JWF `Y_AXIS`, our `YAxis` ↔ JWF `X_AXIS`. JWF files
+    /// round-trip through this swap unchanged, and our UI shows what
+    /// most users expect from geometry class.
+    pub fn xml_token(self) -> &'static str {
+        match self {
+            PostSymmetryType::None => "NONE",
+            PostSymmetryType::XAxis => "Y_AXIS",
+            PostSymmetryType::YAxis => "X_AXIS",
+            PostSymmetryType::Point => "POINT",
+        }
+    }
+
+    /// Inverse of `xml_token` — see the axis-name swap note there.
+    /// Unknown values default to None.
+    pub fn from_xml_token(s: &str) -> Self {
+        // JWildfire emits uppercase tokens. Case-insensitive matching
+        // here is defensive against hand-edited files.
+        match s.to_ascii_uppercase().as_str() {
+            "X_AXIS" => PostSymmetryType::YAxis,
+            "Y_AXIS" => PostSymmetryType::XAxis,
+            "POINT" => PostSymmetryType::Point,
+            _ => PostSymmetryType::None,
+        }
+    }
+}
+
+/// Per-flame post-symmetry settings — see `Flame.post_symmetry`.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PostSymmetry {
+    #[serde(default)]
+    pub ty: PostSymmetryType,
+    /// Number of rotational copies for `Point` mode (ignored for axis
+    /// modes). 1 = no-op, 2 = 180° pair, 3 = ternary, etc. Clamped to
+    /// [1, 32] at the shader boundary.
+    pub order: u32,
+    pub center_x: f32,
+    pub center_y: f32,
+    /// "Pan along the axis" — for `XAxis` shifts the mirror copy by
+    /// `(distance, 0)`, for `YAxis` by `(0, distance)`. Applied before
+    /// the viewport pan. Ignored in `Point` mode.
+    pub distance: f32,
+    /// Pre-rotation (degrees) of the mirror copy around `center` for
+    /// the axis modes. Ignored in `Point` mode.
+    pub rotation_deg: f32,
+}
+
+impl Default for PostSymmetry {
+    fn default() -> Self {
+        // Match JWildfire's default header: NONE, order=3 (the visible
+        // default in the UI when type flips to Point), centre=(0,0),
+        // distance=1.25, rotation=6° — the per-file defaults JWF writes
+        // even when type is NONE.
+        Self {
+            ty: PostSymmetryType::None,
+            order: 3,
+            center_x: 0.0,
+            center_y: 0.0,
+            distance: 1.25,
+            rotation_deg: 6.0,
+        }
+    }
+}
+
+impl PostSymmetry {
+    /// Serde skip-when-default predicate. Default symmetry serializes
+    /// as nothing — keeps `.fflame` files clean.
+    pub fn is_default(s: &Self) -> bool {
+        *s == Self::default()
+    }
 }
 
 fn default_flame_name() -> String {
@@ -1452,6 +1611,9 @@ impl Default for Flame {
             xaos: None,  // Default: no xaos (all weights implicitly 1.0)
             solo_transform: None,  // Default: no solo (all transforms active)
             subflames: Vec::new(),  // Default: no subflames
+            post_symmetry: PostSymmetry::default(),
+            // New flames match Apo/JWF default: don't preserve Z.
+            preserve_z: false,
         }
     }
 }
@@ -1629,6 +1791,8 @@ impl<'de> Deserialize<'de> for Flame {
             Xaos,
             SoloTransform,
             Subflames,
+            PostSymmetry,
+            PreserveZ,
         }
 
         struct FlameVisitor;
@@ -1654,6 +1818,8 @@ impl<'de> Deserialize<'de> for Flame {
                 let mut xaos = None;
                 let mut solo_transform = None;
                 let mut subflames: Option<Vec<Flame>> = None;
+                let mut post_symmetry: Option<PostSymmetry> = None;
+                let mut preserve_z: Option<bool> = None;
 
                 while let Some(key) = map.next_key()? {
                     match key {
@@ -1713,6 +1879,12 @@ impl<'de> Deserialize<'de> for Flame {
                         Field::Subflames => {
                             subflames = Some(map.next_value()?);
                         }
+                        Field::PostSymmetry => {
+                            post_symmetry = Some(map.next_value()?);
+                        }
+                        Field::PreserveZ => {
+                            preserve_z = Some(map.next_value()?);
+                        }
                     }
                 }
 
@@ -1733,6 +1905,10 @@ impl<'de> Deserialize<'de> for Flame {
                     xaos,
                     solo_transform: solo_transform.unwrap_or(None),
                     subflames: subflames.unwrap_or_default(),
+                    post_symmetry: post_symmetry.unwrap_or_default(),
+                    // Old `.fflame` files (pre-preserve_z) default
+                    // to `true` to keep their look unchanged.
+                    preserve_z: preserve_z.unwrap_or(true),
                 };
                 // Migrate any legacy singular `final_transform` field
                 // (consumed locally above into `final_transform`) into the
@@ -1745,7 +1921,7 @@ impl<'de> Deserialize<'de> for Flame {
             }
         }
 
-        const FIELDS: &[&str] = &["name", "transforms", "final_transform", "linked_transforms", "final_transforms", "render_mode", "perspective_strength", "projection", "xaos", "solo_transform", "subflames"];
+        const FIELDS: &[&str] = &["name", "transforms", "final_transform", "linked_transforms", "final_transforms", "render_mode", "perspective_strength", "projection", "xaos", "solo_transform", "subflames", "post_symmetry", "preserve_z"];
         deserializer.deserialize_struct("Flame", FIELDS, FlameVisitor)
     }
 }

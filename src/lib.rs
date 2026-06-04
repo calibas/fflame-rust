@@ -16,7 +16,7 @@ pub mod profiler;
 pub mod version;
 pub mod variations;
 pub mod png_metadata;
-pub mod apophysis_xml;
+pub mod flame_xml;
 pub mod i18n;
 pub mod animation;
 pub mod signal;
@@ -115,9 +115,10 @@ async fn export_async(input: &str, output: &str, width: Option<u32>, height: Opt
     let flame_files = if input_path.is_dir() {
         scene::assets::load_configs_from_dir(input_path)
     } else if input_path.extension().and_then(|s| s.to_str()) == Some("flame") {
-        // Apophysis XML format — a .flame can contain multiple <flame> elements
+        // Flame XML format (Apophysis / JWildfire / Chaotica) — a .flame
+        // can contain multiple <flame> elements.
         let xml = std::fs::read_to_string(input_path)?;
-        apophysis_xml::parse_flame_xml(&xml)?
+        flame_xml::parse_flame_xml(&xml)?
     } else {
         vec![config::FractalConfig::load_from_file(input_path)?]
     };

@@ -607,6 +607,10 @@ fn flame_from_subflame_response(resp: &FlameResponse) -> Flame {
         xaos,
         solo_transform: resp.solo_transform.map(|i| i as usize),
         subflames: resp.subflames.iter().map(flame_from_subflame_response).collect(),
+        // API doesn't carry post_symmetry yet; default until the server
+        // schema gains the field.
+        post_symmetry: crate::scene::transforms::PostSymmetry::default(),
+        preserve_z: false,
     }
 }
 
@@ -643,6 +647,10 @@ pub fn flame_response_to_config(resp: &FlameResponse) -> FractalConfig {
         xaos,
         solo_transform: resp.solo_transform.map(|i| i as usize),
         subflames: resp.subflames.iter().map(flame_from_subflame_response).collect(),
+        // API doesn't carry post_symmetry yet; default until the server
+        // schema gains the field.
+        post_symmetry: crate::scene::transforms::PostSymmetry::default(),
+        preserve_z: false,
     };
 
     // Reconstruct palette from the inline payload on the flame response.
@@ -786,6 +794,10 @@ mod tests {
             color: api.color.unwrap(),
             color_speed: api.color_speed.unwrap(),
             opacity: api.opacity.unwrap(),
+            // Fallback stays at 0.0 even though `Transform::default()` is
+            // now 1.0 — API responses for flames saved before the flip
+            // omit this field (line 207 serializes only when non-zero),
+            // and we want those server-stored flames to keep their look.
             direct_color: api.direct_color.unwrap_or(0.0),
             variations: api.variations.unwrap_or_default(),
             variation_params: api.variation_params.unwrap_or_default(),

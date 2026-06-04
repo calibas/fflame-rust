@@ -100,10 +100,12 @@ fn subflame_iterate(
         let sub_xform_id = sf_meta.xform_id_base + sf_meta.normals_offset + picked;
         let xform = transforms[sub_xform_id];
 
-        // Color blend — Apophysis-standard color_speed lerp.
+        // Color blend — Apophysis-standard color_speed lerp. Capture
+        // the post-color_speed color as `c_base` so the DC blend below
+        // can lerp from it toward whatever DC variations wrote to `vc`.
         let symmetry = xform.color_speed;
-        color = color * (1.0 + symmetry) * 0.5 + xform.color * (1.0 - symmetry) * 0.5;
-        vc = color;
+        let c_base = color * (1.0 + symmetry) * 0.5 + xform.color * (1.0 - symmetry) * 0.5;
+        vc = c_base;
 
         // Apply pre-affine, variations, post-affine.
         let affine_p = apply_affine(xform, current);
@@ -122,6 +124,15 @@ fn subflame_iterate(
                 current = apply_post_affine(f_xform, current);
             }
         }
+
+        // DC blend — matches parent main_template.wgsl: any vc writes
+        // (from DC variations in normal/finals) lerp into the chaos-game
+        // color state by the subflame xform's direct_color slider. Used
+        // to be missing entirely, which silently dropped DC writes and
+        // (because `color` then converged to a fixed point of the
+        // color_speed recurrence) collapsed colorscale_z * q.w to a
+        // single Z plane — flat-looking subflames with no DC.
+        color = c_base + xform.direct_color * (vc - c_base);
     }
 
     // Write state back for the next iteration.
@@ -185,9 +196,10 @@ fn subflame_iterate(
         let sub_xform_id = sf_meta.xform_id_base + sf_meta.normals_offset + picked;
         let xform = transforms[sub_xform_id];
 
+        // See 3D branch for the c_base / DC-blend rationale.
         let symmetry = xform.color_speed;
-        color = color * (1.0 + symmetry) * 0.5 + xform.color * (1.0 - symmetry) * 0.5;
-        vc = color;
+        let c_base = color * (1.0 + symmetry) * 0.5 + xform.color * (1.0 - symmetry) * 0.5;
+        vc = c_base;
 
         let affine_p = apply_affine(xform, current);
         current = apply_subflame_variations(xform, sub_xform_id, affine_p, rng, &vc);
@@ -204,6 +216,8 @@ fn subflame_iterate(
                 current = apply_post_affine(f_xform, current);
             }
         }
+
+        color = c_base + xform.direct_color * (vc - c_base);
     }
 
     set_state(parent_xform_id, parent_variation_id, 0u, current.x);

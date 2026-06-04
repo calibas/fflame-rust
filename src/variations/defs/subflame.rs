@@ -87,7 +87,7 @@ pub static SUBFLAME_WF: VariationDef = VariationDef {
         // scalar. 1..4 are JWildfire's CM_RED / GREEN / BLUE /
         // BRIGHTNESS modes (rarely used in practice, but supported
         // for round-trip fidelity).
-        param!("color_mode", "Color Mode", int, -1.0, -1.0, 4.0, "How the subflame's color scalar interacts with the parent's color register. -1 = Off (default; leave parent's color alone), 0 = Direct (overwrite parent's vc with subflame's color). Modes 1-4 are JWildfire's CM_RED/GREEN/BLUE/BRIGHTNESS — declared in the param range but currently silently no-op'd (treated as Off); v1 only implements Off and Direct."),
+        param!("color_mode", "Color Mode", int, -1.0, -1.0, 4.0, "How the subflame's color scalar interacts with the parent's color register. -1 = Off (leave parent's color alone). 0 = Direct (overwrite with subflame's color). 1-4 are JWildfire's CM_RED/GREEN/BLUE/BRIGHTNESS, which in JWF pick a specific channel of the subflame's RGB output. Our flat single-channel color model collapses those four to the same behavior as Direct — they still trigger the override, just with the subflame's `vc` instead of a per-channel value. Use Off to keep parent color; any other value to pull from subflame."),
     ],
     needs_transform: false,
     writes_color: true,
@@ -131,10 +131,14 @@ fn variation_subflame_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: pt
     let sx = scale * q.x;
     let sy = scale * q.y;
 
-    // color_mode == 0 (Direct) overrides parent's vc with subflame color.
-    // Other modes are listed in the spec but rarely used; v1 treats
-    // them as Off (no-op). Spec ref: jwfsanctuary.club/variation-information/subflame.
-    if (color_mode == 0) {
+    // JWildfire's setColor rule: any color_mode != CM_OFF (-1)
+    // overrides the parent's color register with the subflame's
+    // color. Modes 0..4 in JWF pick which channel of the subflame's
+    // RGB output to read (Direct / Red / Green / Blue / Brightness),
+    // but our flat color model carries a single palette-index `vc`,
+    // so the meaningful action collapses to "use subflame color" for
+    // all five non-Off values.
+    if (color_mode != -1) {
         *vc = q.w;
     }
 
@@ -163,7 +167,8 @@ fn variation_subflame_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: pt
     let sx = scale * q.x;
     let sy = scale * q.y;
 
-    if (color_mode == 0) {
+    // See 2D body for the color_mode != -1 rationale.
+    if (color_mode != -1) {
         *vc = q.w;
     }
 

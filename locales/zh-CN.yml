@@ -18,9 +18,9 @@ menu:
   load_preset: "加载预设"
   open_config: "打开配置..."
   save_config: "保存配置为..."
-  import_apophysis: "导入 Apophysis XML..."
+  import_flame_xml: "导入 Flame XML..."
   export_png: "导出 PNG..."
-  export_apophysis: "导出 Apophysis XML..."
+  export_flame_xml: "导出 Flame XML..."
   recent_files: "最近文件"
   quit: "退出"
 

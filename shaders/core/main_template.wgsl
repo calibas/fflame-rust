@@ -245,15 +245,64 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let final_pos = current;
 {{/if}}
 
+            // Post-symmetry — gated entirely by HAS_POST_SYMMETRY.
+            // When false, sym_count is 1u and the loop runs exactly
+            // once with sym_k=0 (passes final_pos through unchanged),
+            // letting the compiler fully strip it. When true,
+            // sym_count is 1 (None at runtime — shouldn't happen given
+            // the compile-time gate, but defensive), 2 (axis modes),
+            // or `order` (Point mode), and each iteration plots one
+            // mirrored/rotated copy of the same sample.
+{{#if HAS_POST_SYMMETRY}}
+            let sym_count = select(
+                select(2u, max(params.post_symmetry.order, 1u), params.post_symmetry.kind == 3u),
+                1u,
+                params.post_symmetry.kind == 0u
+            );
+{{else}}
+            let sym_count = 1u;
+{{/if}}
+
+            // Pre-compute the iteration's base color OUTSIDE the
+            // symmetry loop. It depends only on color_index / color /
+            // (none for path-map) — none of which change between the
+            // K symmetric copies. Hoisting the palette texture sample
+            // alone gives a (K-1)/K speedup for palette mode at high
+            // Point-symmetry orders. Default of white covers the
+            // path-map COLOR_MODE branch (and any unhandled mode);
+            // fog inside the loop reads from this base into a local
+            // copy so its per-copy depth modulation doesn't bleed.
+            var base_final_color: vec3<f32> = vec3<f32>(1.0, 1.0, 1.0);
+            if (COLOR_MODE == 0u) {
+                let palette_srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(color_index, 0.5), 0.0).rgb;
+                base_final_color = srgb_to_linear(palette_srgb);
+            } else if (COLOR_MODE == 1u) {
+                base_final_color = color;
+            }
+
+            for (var sym_k: u32 = 0u; sym_k < sym_count; sym_k = sym_k + 1u) {
+{{#if HAS_POST_SYMMETRY}}
+{{#if RENDER_3D}}
+                let plot_pos = post_symmetry_copy(final_pos, sym_k);
+{{else}}
+                // 2D path: lift to vec3 with Z=0 so the symmetry helper
+                // (vec3 only) accepts it, then strip Z back off for
+                // world_to_pixel.
+                let plot_pos = post_symmetry_copy(vec3<f32>(final_pos, 0.0), sym_k).xy;
+{{/if}}
+{{else}}
+                let plot_pos = final_pos;
+{{/if}}
+
             // Convert to pixel coordinates
 {{#if RENDER_3D}}
-            var pixel = world_to_pixel_3d(final_pos);
+            var pixel = world_to_pixel_3d(plot_pos);
 
             // Apply depth of field blur (3D mode only)
             if (params.dof_blur_strength > 0.0) {
                 // Transform to camera space to get depth along view direction
                 let camera_matrix = build_camera_matrix(params.camera_rotation_x, params.camera_rotation_y);
-                let camera_space = camera_transform(final_pos, camera_matrix, params.camera_z);
+                let camera_space = camera_transform(plot_pos, camera_matrix, params.camera_z);
                 let depth = camera_space.z;  // Z in camera space = depth from camera
 
                 // Calculate blur amount based on distance from focus plane (in world units).
@@ -285,7 +334,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 );
             }
 {{else}}
-            let pixel = world_to_pixel(final_pos);
+            let pixel = world_to_pixel(plot_pos);
 {{/if}}
 
             // Check bounds and opacity (only plot if both pass)
@@ -294,27 +343,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
                 let pixel_idx = u32(pixel.y) * params.width + u32(pixel.x);
 
-                // Determine final color based on mode (hard-coded COLOR_MODE).
-                // Initialized to white so the PathMap COLOR_MODE branch is
-                // always defined: when PATH_TRACKING is true the path-map
-                // body below overwrites it, when PATH_TRACKING is false
-                // (high-res export) the white default falls through. WGSL
-                // requires `var final_color` be initialized on every path
-                // even when COLOR_MODE is a compile-time constant.
-                var final_color: vec3<f32> = vec3<f32>(1.0, 1.0, 1.0);
-                if (COLOR_MODE == 0u) {
-                    // Palette mode: sample from palette texture using color_index.
-                    // Palette is sRGB-encoded; decode to linear for accumulation.
-                    let palette_srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(color_index, 0.5), 0.0).rgb;
-                    final_color = srgb_to_linear(palette_srgb);
-                } else if (COLOR_MODE == 1u) {
-                    // Speed mode: uses accumulated RGB color
-                    final_color = color;
-{{#if PATH_TRACKING}}
-                } else {
-                    // Path map mode: store path to buffer
-                    // Color will be computed in tonemap pass from path buffer
+                // Per-copy local copy of the hoisted base color. We
+                // need a `var` so fog (below) can modulate it without
+                // affecting the next symmetric copy's plot.
+                var final_color: vec3<f32> = base_final_color;
 
+{{#if PATH_TRACKING}}
+                // Path-tracking write — depends on pixel_idx so it
+                // must stay inside the symmetry loop (each symmetric
+                // copy records the same path at its own pixel).
+                if (COLOR_MODE == 2u) {
                     // Capture mode determines when to write:
                     // 0 = FirstHit: only write if no path stored yet
                     // 1 = FirstAfterBurnIn: same as FirstHit (we're already past burn-in here)
@@ -332,11 +370,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                         path_buffer[pixel_idx].initial_x = initial_x;
                         path_buffer[pixel_idx].initial_y = initial_y;
                     }
-
-                    // Use white for histogram (actual color computed in tonemap from path buffer)
-                    final_color = vec3<f32>(1.0, 1.0, 1.0);
-{{/if}}
                 }
+{{/if}}
 
 {{#if RENDER_3D}}
                 // Apply depth fog (3D mode only, blend toward background color)
@@ -345,7 +380,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     // In camera space, objects in front have negative Z (looking down -Z axis)
                     // Negate to get positive depth where larger = further from camera
                     let camera_matrix = build_camera_matrix(params.camera_rotation_x, params.camera_rotation_y);
-                    let camera_space = camera_transform(final_pos, camera_matrix, params.camera_z);
+                    let camera_space = camera_transform(plot_pos, camera_matrix, params.camera_z);
                     let fog_depth = -camera_space.z;  // Negate: distant objects have larger depth
 
                     // Exponential fog: fog_factor increases with distance beyond fog_start
@@ -412,6 +447,21 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 }
 {{/if}}
             }
+            }  // end for (sym_k = 0..sym_count) — post-symmetry loop
         }
+
+{{#if FLATTEN_Z_PER_ITER}}
+        // JWildfire `preserve_z=false` (default): flatten Z at end
+        // of each iteration so it doesn't accumulate across the
+        // chaos game. Without this, variations that scale Z by an
+        // amount > 1 (e.g. `spherical` at high weight) drive Z to
+        // ±∞ within a handful of iterations; the camera transform's
+        // `0·∞ = NaN` then poisons pixel coords and most samples
+        // get rejected at the bounds check — visible as a dim or
+        // black image. Cost is one f32 store per iteration in 3D;
+        // gate strips it from 2D shaders and from 3D shaders with
+        // preserve_z=true.
+        current.z = 0.0;
+{{/if}}
     }
 }

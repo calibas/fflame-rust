@@ -228,3 +228,103 @@ fn world_to_pixel(p: vec2<f32>) -> vec2<i32> {
     let pixel = center + transformed * scale;
     return vec2<i32>(i32(pixel.x), i32(pixel.y));
 }
+
+// Apply post-symmetry to a 3D world-space sample. `k` indexes the
+// symmetry copy: 0 = original (returned as-is), 1..K-1 = mirrored or
+// rotated copies depending on `params.post_symmetry.kind`.
+//
+//   1 (XAxis): reflect across y = center_y → shift the copy by
+//              (distance, 0) → rotate it around the center by
+//              `rotation` radians. K = 2 (one mirror).
+//   2 (YAxis): reflect across x = center_x → shift by (0, distance)
+//              → rotate around center. K = 2.
+//   3 (Point): rotate around (center_x, center_y) by k × 2π / order.
+//              K = order.
+//
+// Z passes through unchanged — post-symmetry is a 2D operation
+// applied to XY before the camera transform.
+//
+// Live behind `HAS_POST_SYMMETRY`: when the flame has no symmetry
+// active, this function isn't referenced and the shader builder strips
+// it from the compiled module.
+fn post_symmetry_copy(p: vec3<f32>, k: u32) -> vec3<f32> {
+    let cx = params.post_symmetry.center_x;
+    let cy = params.post_symmetry.center_y;
+    let kind = params.post_symmetry.kind;
+
+    if (kind == 0u) {
+        return p;
+    }
+
+    if (kind == 3u) {
+        // Point mode: k=0 returns p unchanged (no rotation); k≥1
+        // rotates around the center by k × 2π / order. Distance and
+        // rotation aren't part of Point mode — only `order` and
+        // `center` matter (matches JWildfire).
+        if (k == 0u) {
+            return p;
+        }
+        let order = max(params.post_symmetry.order, 1u);
+        let theta = f32(k) * 6.28318530717958647692 / f32(order);
+        let cs = cos(theta);
+        let sn = sin(theta);
+        let dx = p.x - cx;
+        let dy = p.y - cy;
+        return vec3<f32>(dx * cs - dy * sn + cx, dx * sn + dy * cs + cy, p.z);
+    }
+
+    // Axis modes (1 = XAxis math, 2 = YAxis math).
+    //
+    // We use the standard math-class convention: the named axis is
+    // the *line of reflection*. XAxis reflects across the X axis
+    // (horizontal line y = center_y), flipping Y; YAxis reflects
+    // across the Y axis (vertical line x = center_x), flipping X.
+    // JWildfire's `.flame` XML uses the opposite naming (their
+    // `X_AXIS` is our YAxis); the swap lives in
+    // `PostSymmetryType::xml_token`.
+    //
+    // Distance and rotation produce OPPOSITE effects on the original
+    // and the mirror — the original moves +distance / rotates +θ,
+    // the mirror moves −distance / rotates −θ. The mirror line stays
+    // in place (still y = cy for XAxis, x = cx for YAxis), so the
+    // symmetry across the named axis is preserved no matter how
+    // distance and rotation are adjusted. Matches JWildfire's
+    // "the symmetry is preserved along the axis" behavior.
+    //
+    // The trick: apply distance pan and rotation to `p` first, then
+    // for k=1 reflect at the end. Algebraically, reflecting after
+    // applying (+d, +θ) is equivalent to applying (−d, −θ) and then
+    // reflecting `p`, so the mirror sees the opposite-direction
+    // perturbation for free.
+    var x = p.x;
+    var y = p.y;
+
+    // Pan along the flip direction (perpendicular to the mirror line).
+    if (kind == 1u) {
+        // XAxis flips Y → distance pans along Y.
+        y = y + params.post_symmetry.distance;
+    } else {
+        // YAxis flips X → distance pans along X.
+        x = x + params.post_symmetry.distance;
+    }
+
+    // Rotation around the center.
+    let cs = cos(params.post_symmetry.rotation);
+    let sn = sin(params.post_symmetry.rotation);
+    let dx = x - cx;
+    let dy = y - cy;
+    x = dx * cs - dy * sn + cx;
+    y = dx * sn + dy * cs + cy;
+
+    // Reflect for k=1. This inverts the prior pan and rotation for
+    // the mirror copy in one step (see the algebra note above).
+    if (k == 1u) {
+        if (kind == 1u) {
+            y = 2.0 * cy - y;
+        } else {
+            x = 2.0 * cx - x;
+        }
+    }
+
+    return vec3<f32>(x, y, p.z);
+}
