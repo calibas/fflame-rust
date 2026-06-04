@@ -555,6 +555,250 @@ fn variation_roundspher3D(p: vec3<f32>, accum: vec3<f32>, xform_id: u32, variati
 };
 
 // =============================================================================
+// cubic3D and cubicLattice_3D: 8-corner cubic-lattice scatter (Larry Berlin)
+//   Both pick a random node from 8 corners of a unit cube each
+//   iteration (3-bit useNode ∈ 0..7; bit 0 → Y sign, bit 1 → Z sign,
+//   bit 2 → X sign), then write a node-specific offset on top of a
+//   smooth-blended core formula. Distinguished mostly by the core:
+//     cubic3D:        smoothing on weight + angular style mix
+//                     with `smoothStyle` modulation
+//     cubicLattice_3D: straight `(accum + p) × fill × angular` core
+//                      with a two-stage style switch (style ≥ 2 turns
+//                      on the angular cos/sin; else angular = 1)
+//   Both bodies REPLACE the accumulator (`FPx = …` not `+=`) — our
+//   additive dispatcher needs needs_accum (read result.x/y/z) and
+//   needs_transform (divide one weight out) to invert into a `result
+//   += w × return` shape. In 2D mode the Z bookkeeping degenerates
+//   (atan2(_, 0) = ±π/2 → cos = 0 / sin = ±1); we still emit a body
+//   so a flame saved with the 3D variation renders something in 2D
+//   rather than dropping the variation entirely.
+// =============================================================================
+
+/// 8-corner cubic lattice with smooth-blended angular mixing — a
+/// chaos-game scatter that biases each step toward one of the unit
+/// cube's vertices, then blends it back toward the original point
+/// based on a per-axis angular weight derived from the input
+/// direction. `xpand` controls how aggressively each step pulls
+/// toward the cube vertex (default 0.25, with a `sqrt(xpand)` ramp
+/// once `|xpand| > 1`). `style` warps the per-axis angular weights:
+/// 0 leaves them at 1 (pure cube), positive values introduce a
+/// `1 - cos(atan2(x, z))` warp that softens the lattice along Z,
+/// and `|style| > 1` further compresses the response.
+///
+/// # Authors
+/// - Larry Berlin
+pub static CUBIC3D: VariationDef = VariationDef {
+    name: "cubic3D",
+    aliases: &[],
+    display_name: "Cubic 3D",
+    category: VariationCategory::Full3D,
+    phase: VariationPhase::Normal,
+    needs_rng: true,
+    parameters: &[
+        param!("xpand", "Xpand", unlimited_float, 0.25, -10.0, 10.0, "How aggressively each step is pulled toward a cube vertex. Up through ±1 the response is linear (`fill = xpand × 0.5`); past that it follows `sqrt(xpand) × 0.5` so the lattice doesn't blow out at large values."),
+        param!("style", "Style", unlimited_float, 0.0, -10.0, 10.0, "Angular warp on the per-axis weights derived from `cos(atan2(x, z))` and `sin(atan2(y, z))`. 0 disables the warp (per-axis weights are exactly 1); positive values soften the lattice along Z. `|style| > 1` introduces a secondary compression on the average XY/Z response."),
+    ],
+    needs_transform: true,
+    writes_color: false,
+    init_param_count: 0,
+    wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: true,
+    wgsl_2d: r#"
+fn variation_cubic3D(p: vec2<f32>, accum: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
+    // 2D fallback: angular weights degenerate (atan2(_,0)) but stay
+    // bounded; the Z-corner bookkeeping has no visible effect.
+    let xpand = get_param(xform_id, variation_id, 0u);
+    let style = get_param(xform_id, variation_id, 1u);
+    let w = transforms[xform_id].variations[variation_id];
+    let inv_w = 1.0 / select(w, 1e-30, abs(w) < 1e-30);
+
+    let use_node = u32(rng_nextf(rng) * 8.0);
+    let sign_x = select(1.0, -1.0, (use_node & 4u) != 0u);
+    let sign_y = select(1.0, -1.0, (use_node & 1u) != 0u);
+
+    let smoothed = select(1.0, w * 2.0, abs(w) <= 0.5);
+
+    var smooth_style = style;
+    if (abs(style) > 1.0) {
+        smooth_style = select(
+            (style + 1.0) * 0.25 - 1.0,
+            1.0 + (style - 1.0) * 0.25,
+            style > 1.0,
+        );
+    }
+
+    let fill = select(sqrt(abs(xpand)) * 0.5, xpand * 0.5, abs(xpand) <= 1.0);
+    let one_minus_fill = 1.0 - fill;
+
+    // atan2(_, 0) → ±π/2: cos = 0, sin = ±1.
+    let exnze = 1.0 - smooth_style;
+    let wynze = 1.0 - smooth_style * (1.0 - sign(p.y));
+
+    let return_x = (-accum.x * smoothed * one_minus_fill * exnze + p.x * smoothed * fill * exnze) * inv_w + sign_x * 0.5;
+    let return_y = (-accum.y * smoothed * one_minus_fill * wynze + p.y * smoothed * fill * wynze) * inv_w + sign_y * 0.5;
+    return vec2<f32>(return_x, return_y);
+}
+"#,
+    wgsl_3d: r#"
+fn variation_cubic3D(p: vec3<f32>, accum: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
+    let xpand = get_param(xform_id, variation_id, 0u);
+    let style = get_param(xform_id, variation_id, 1u);
+    let w = transforms[xform_id].variations[variation_id];
+    let inv_w = 1.0 / select(w, 1e-30, abs(w) < 1e-30);
+
+    // 8 corners of the unit cube, 3 bits of the random node index
+    // pick each sign. bit 0 → Y, bit 1 → Z, bit 2 → X (matches cpp).
+    let use_node = u32(rng_nextf(rng) * 8.0);
+    let sign_x = select(1.0, -1.0, (use_node & 4u) != 0u);
+    let sign_y = select(1.0, -1.0, (use_node & 1u) != 0u);
+    let sign_z = select(1.0, -1.0, (use_node & 2u) != 0u);
+
+    // smoothed: ramps the variation strength up over the [0, 0.5]
+    // weight range and clamps to 1 past that.
+    let smoothed = select(1.0, w * 2.0, abs(w) <= 0.5);
+
+    // smooth_style: identity inside [-1, 1], then per-direction
+    // compressed past the boundary so the lattice stays bounded.
+    var smooth_style = style;
+    if (abs(style) > 1.0) {
+        smooth_style = select(
+            (style + 1.0) * 0.25 - 1.0,
+            1.0 + (style - 1.0) * 0.25,
+            style > 1.0,
+        );
+    }
+
+    // fill: linear up to ±1, sqrt past that. Uses |xpand| under the
+    // sqrt so negative values don't NaN.
+    let fill = select(sqrt(abs(xpand)) * 0.5, xpand * 0.5, abs(xpand) <= 1.0);
+    let one_minus_fill = 1.0 - fill;
+
+    // Per-axis angular weights. cpp uses cos(atan2(x, z)) and
+    // sin(atan2(y, z)) — the equivalent closed form is z / sqrt(x²+z²)
+    // and y / sqrt(y²+z²), but we keep the cpp expression for direct
+    // correspondence with the reference.
+    let exnze = 1.0 - smooth_style * (1.0 - cos(atan2(p.x, p.z)));
+    let wynze = 1.0 - smooth_style * (1.0 - sin(atan2(p.y, p.z)));
+    let znxy_inner = (exnze + wynze) * 0.5;
+    let znxy = select(
+        1.0 - smooth_style * (1.0 - znxy_inner),
+        1.0 - smooth_style * (1.0 - znxy_inner * smooth_style),
+        smooth_style > 1.0,
+    );
+
+    // cpp's core (FPx = (FPx - smoothed*(1-fill)*FPx*exnze)
+    //                  + p.x*smoothed*fill*exnze + sign_x*w*0.5)
+    // mapped into our additive dispatcher (`result += w × return`).
+    // `sign_x × 0.5` is the per-unit-weight contribution of the
+    // `sign_x × lattd = sign_x × w × 0.5` cube-vertex offset.
+    let return_x = (-accum.x * smoothed * one_minus_fill * exnze + p.x * smoothed * fill * exnze) * inv_w + sign_x * 0.5;
+    let return_y = (-accum.y * smoothed * one_minus_fill * wynze + p.y * smoothed * fill * wynze) * inv_w + sign_y * 0.5;
+    let return_z = (-accum.z * smoothed * one_minus_fill * znxy + p.z * smoothed * fill * znxy) * inv_w + sign_z * 0.5;
+    return vec3<f32>(return_x, return_y, return_z);
+}
+"#,
+};
+
+/// 8-corner cubic lattice — a simpler relative of [`CUBIC3D`]. Same
+/// 8-vertex node scheme each iteration, but the core blend is a
+/// straight `(accum + p) × fill × angular + sign × w` rather than
+/// `cubic3D`'s smoothed mix. The `style` param is a two-stage
+/// switch instead of a continuous warp: `|style| ≥ 2` turns on the
+/// angular `cos(atan2(x,z))` / `sin(atan2(y,z))` weights; anything
+/// below that pins all three weights to 1 (pure cube). `xpand`
+/// controls vertex pull (default 0.2) with the same linear / `sqrt`
+/// ramp as `cubic3D`. Lattice spacing scales with the variation
+/// weight (`lattd = w` here, vs `w × 0.5` in `cubic3D`).
+///
+/// # Authors
+/// - Larry Berlin
+pub static CUBIC_LATTICE_3D: VariationDef = VariationDef {
+    name: "cubicLattice_3D",
+    aliases: &[],
+    display_name: "Cubic Lattice 3D",
+    category: VariationCategory::Full3D,
+    phase: VariationPhase::Normal,
+    needs_rng: true,
+    parameters: &[
+        param!("xpand", "Xpand", unlimited_float, 0.2, -10.0, 10.0, "How aggressively each step is pulled toward a cube vertex. Linear (`fill = xpand × 0.5`) up through ±1, `sqrt` past that."),
+        param!("style", "Style", unlimited_float, 1.0, -10.0, 10.0, "Two-stage switch on the angular weights. `|style| ≥ 2` enables per-axis `cos(atan2(x, z))` / `sin(atan2(y, z))` warps that bias the lattice toward Z; anything below that pins the angular weights at 1 (pure cube)."),
+    ],
+    needs_transform: true,
+    writes_color: false,
+    init_param_count: 0,
+    wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: true,
+    wgsl_2d: r#"
+fn variation_cubicLattice_3D(p: vec2<f32>, accum: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
+    let xpand = get_param(xform_id, variation_id, 0u);
+    let style = get_param(xform_id, variation_id, 1u);
+    let w = transforms[xform_id].variations[variation_id];
+    let inv_w = 1.0 / select(w, 1e-30, abs(w) < 1e-30);
+
+    let use_node = u32(rng_nextf(rng) * 8.0);
+    let sign_x = select(1.0, -1.0, (use_node & 4u) != 0u);
+    let sign_y = select(1.0, -1.0, (use_node & 1u) != 0u);
+
+    let fill = select(sqrt(abs(xpand)) * 0.5, xpand * 0.5, abs(xpand) <= 1.0);
+
+    // 2D fallback: angular weights degenerate as in cubic3D's 2D
+    // body. Style 2+ → cos(±π/2) = 0 for exnze and sin(±π/2) = ±1
+    // for wynze. Style < 2 keeps them at 1.
+    var exnze = 1.0;
+    var wynze = 1.0;
+    if (abs(style) >= 2.0) {
+        exnze = 0.0;
+        wynze = sign(p.y);
+    }
+
+    let return_x = ((accum.x + p.x) * fill * exnze - accum.x) * inv_w + sign_x;
+    let return_y = ((accum.y + p.y) * fill * wynze - accum.y) * inv_w + sign_y;
+    return vec2<f32>(return_x, return_y);
+}
+"#,
+    wgsl_3d: r#"
+fn variation_cubicLattice_3D(p: vec3<f32>, accum: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
+    let xpand = get_param(xform_id, variation_id, 0u);
+    let style = get_param(xform_id, variation_id, 1u);
+    let w = transforms[xform_id].variations[variation_id];
+    let inv_w = 1.0 / select(w, 1e-30, abs(w) < 1e-30);
+
+    let use_node = u32(rng_nextf(rng) * 8.0);
+    let sign_x = select(1.0, -1.0, (use_node & 4u) != 0u);
+    let sign_y = select(1.0, -1.0, (use_node & 1u) != 0u);
+    let sign_z = select(1.0, -1.0, (use_node & 2u) != 0u);
+
+    let fill = select(sqrt(abs(xpand)) * 0.5, xpand * 0.5, abs(xpand) <= 1.0);
+
+    // Style switch: |style| >= 2 → angular cos/sin/avg weights.
+    // Below that, all three pin at 1 for pure cube scatter.
+    var exnze = 1.0;
+    var wynze = 1.0;
+    var znxy = 1.0;
+    if (abs(style) >= 2.0) {
+        exnze = cos(atan2(p.x, p.z));
+        wynze = sin(atan2(p.y, p.z));
+        znxy = (exnze + wynze) * 0.5;
+    }
+
+    // cpp's core (FPx = (FPx + FTx) × fill × exnze + sign_x × w)
+    // mapped into our additive dispatcher (`result += w × return`).
+    // sign_x × w corresponds to sign_x × lattd (= sign_x × w here,
+    // not × 0.5 like cubic3D), so the per-unit-weight contribution
+    // is just `sign_x`.
+    let return_x = ((accum.x + p.x) * fill * exnze - accum.x) * inv_w + sign_x;
+    let return_y = ((accum.y + p.y) * fill * wynze - accum.y) * inv_w + sign_y;
+    let return_z = ((accum.z + p.z) * fill * znxy - accum.z) * inv_w + sign_z;
+    return vec3<f32>(return_x, return_y, return_z);
+}
+"#,
+};
+
+// =============================================================================
 // checks: checkerboard cell-shift (Keeps / Xyrus02)
 //   4 user params: x, y, size, rnd
 //   1 init slot: cs = 1 / (size + ε)
