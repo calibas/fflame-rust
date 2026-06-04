@@ -1,8 +1,8 @@
-//! WF-suffix simple curves: epispiral_wf, cloverleaf_wf, rose_wf, bubble_wf
+//! WF-suffix simple curves: epispiral_wf, cloverleaf_wf, rose_wf, bubble_wf, plane_wf, checkerboard_wf
 //!
-//! Four polar-curve and bubble-shape variations from JWildfire's WF
-//! (Wildfire) family. All four are simple, clean ports — body factors
-//! cleanly through the outer multiplier.
+//! Six polar-curve / plane-blur / textured-grid variations from
+//! JWildfire's WF (Wildfire) family. All are simple ports — body
+//! factors cleanly through the outer multiplier.
 //!
 //!   - epispiral_wf: epispiral curve `r = 0.5 / cos(waves·a)`.
 //!     1 user param `waves` (default 4). Returns (0, 0) when the cosine
@@ -27,6 +27,8 @@
 //!   - `output/jwildfire-vars/output/cloverleaf_wf.cpp`
 //!   - `output/jwildfire-vars/output/rose_wf.cpp`
 //!   - `output/jwildfire-vars/output/bubble_wf.cpp`
+//!   - `output/jwildfire-vars/output/plane_wf.cpp`
+//!   - `output/variation-jwf-source/CheckerboardWFFunc.java`
 
 use crate::variations::{
     definition::{VariationDef, VariationParamDef},
@@ -226,6 +228,323 @@ fn variation_bubble_wf(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> 
     let z_bump = 2.0 / safe_r - 1.0;
     let z = select(z_bump, -z_bump, rng_nextf(rng) < 0.5);
     return vec3<f32>(t * p.x, t * p.y, z);
+}
+"#,
+};
+
+/// Plane scatter — blur-style variation that ignores its input `p`
+/// and draws a random point on an axis-aligned plane. Two of the
+/// three coordinates come from `(rand − 0.5) × size`; the third is
+/// fixed at `position` (which axis is the "fixed" one is controlled
+/// by the `axis` param: XY plane → fixed Z, YZ plane → fixed X, ZX
+/// plane → fixed Y, default ZX). Optionally writes a direct color
+/// scalar to the iteration's `vc` register derived from the two
+/// random coordinates (modes U / V / UV map to the first random,
+/// second random, or their product); `direct_color = 0` disables
+/// the write.
+///
+/// JWildfire's image-related modes (`CM_COLORMAP`, image
+/// displacement, `calc_color_idx`, `receive_only_shadows`) require
+/// texture sampling we don't support and are silently no-ops here —
+/// the `colormap` mode falls back to the `U` color path so a flame
+/// that requested an image colormap still renders something.
+///
+/// # Authors
+/// - Andreas Maschke
+pub static PLANE_WF: VariationDef = VariationDef {
+    name: "plane_wf",
+    aliases: &[],
+    display_name: "Plane WF",
+    category: VariationCategory::Full3D,
+    phase: VariationPhase::Normal,
+    needs_rng: true,
+    parameters: &[
+        param!("position", "Position", unlimited_float, 3.0, -100.0, 100.0, "Fixed coordinate along the axis the plane is perpendicular to. For axis=XY the plane sits at z=position; for YZ at x=position; for ZX at y=position."),
+        param!("size", "Size", unlimited_float, 10.0, -100.0, 100.0, "Plane edge length. The two free axes get `(random − 0.5) × size` so positive `size` scatters in a square of side `size` centered on the axis."),
+        param!("axis", "Axis", enum, 2, &["XY (fix Z)", "YZ (fix X)", "ZX (fix Y)"], "Which two axes form the plane. The third axis is fixed at `position`."),
+        param!("direct_color", "Direct Color", bool, true, "Write a direct color scalar to `vc` based on the two random plane coordinates. Off skips the write and lets the standard color evolution carry through."),
+        param!("color_mode", "Color Mode", enum, 3, &["Colormap (→ U fallback)", "U", "V", "UV"], "How the direct-color scalar is derived from the two random coordinates u, v ∈ [0,1). `U` and `V` write that coordinate directly, `UV` writes the product, `Colormap` would sample an image in JWildfire (no texture support here — falls back to U)."),
+    ],
+    needs_transform: false,
+    writes_color: true,
+    init_param_count: 0,
+    wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
+    wgsl_2d: r#"
+fn variation_plane_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec2<f32> {
+    // 2D mode: project the chosen plane down to (x, y) — only XY
+    // shows the full random rectangle; YZ flattens to a Y-only line
+    // (Z is invisible) and ZX flattens to X-only. We keep the same
+    // color-write logic so direct-color flames don't disappear in
+    // 2D mode just because the variation prefers 3D.
+    let position = get_param(xform_id, variation_id, 0u);
+    let size = get_param(xform_id, variation_id, 1u);
+    let axis = i32(get_param(xform_id, variation_id, 2u));
+    let direct_color = i32(get_param(xform_id, variation_id, 3u));
+    let color_mode = i32(get_param(xform_id, variation_id, 4u));
+
+    let u = 0.5 - rng_nextf(rng);
+    let v = 0.5 - rng_nextf(rng);
+
+    var x = 0.0;
+    var y = 0.0;
+    if (axis == 0) {
+        // XY plane: u→x, v→y.
+        x = u * size;
+        y = v * size;
+    } else if (axis == 1) {
+        // YZ plane: u→y, position→x.
+        x = position;
+        y = u * size;
+    } else {
+        // ZX plane (default): position→y, u→x.
+        x = u * size;
+        y = position;
+    }
+
+    if (direct_color != 0) {
+        var tc = u + 0.5;
+        if (color_mode == 2) {
+            tc = v + 0.5;
+        } else if (color_mode == 3) {
+            tc = (u + 0.5) * (v + 0.5);
+        }
+        // color_mode 0 (Colormap) and 1 (U) both write `u + 0.5`.
+        *vc = clamp(tc, 0.0, 1.0);
+    }
+
+    return vec2<f32>(x, y);
+}
+"#,
+    wgsl_3d: r#"
+fn variation_plane_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec3<f32> {
+    let position = get_param(xform_id, variation_id, 0u);
+    let size = get_param(xform_id, variation_id, 1u);
+    let axis = i32(get_param(xform_id, variation_id, 2u));
+    let direct_color = i32(get_param(xform_id, variation_id, 3u));
+    let color_mode = i32(get_param(xform_id, variation_id, 4u));
+
+    let u = 0.5 - rng_nextf(rng);
+    let v = 0.5 - rng_nextf(rng);
+
+    var x = 0.0;
+    var y = 0.0;
+    var z = 0.0;
+    if (axis == 0) {
+        // XY plane: u→x, v→y, z=position.
+        x = u * size;
+        y = v * size;
+        z = position;
+    } else if (axis == 1) {
+        // YZ plane: x=position, u→y, v→z.
+        x = position;
+        y = u * size;
+        z = v * size;
+    } else {
+        // ZX plane (default): u→x, y=position, v→z.
+        x = u * size;
+        y = position;
+        z = v * size;
+    }
+
+    if (direct_color != 0) {
+        var tc = u + 0.5;
+        if (color_mode == 2) {
+            tc = v + 0.5;
+        } else if (color_mode == 3) {
+            tc = (u + 0.5) * (v + 0.5);
+        }
+        *vc = clamp(tc, 0.0, 1.0);
+    }
+
+    return vec3<f32>(x, y, z);
+}
+"#,
+};
+
+/// Textured checker-grid blur — picks a random (u, v) on a unit
+/// square then maps it to an axis-aligned plane (like [`PLANE_WF`]),
+/// with the color and Z-displacement of the resulting point read
+/// from a checkerboard pattern of size `checker_size`. Even cells
+/// take `checker_color1` and (optionally) `displ_amount` of Z
+/// thickness; odd cells take `checker_color2` and zero Z. When
+/// `with_sides = 1` the variation occasionally snaps one coordinate
+/// to a grid line and uses `side_color` instead — these are the
+/// "side walls" of the checkerboard tiles, painting the vertical
+/// faces of each raised cell. Side-frequency scales automatically
+/// with `displ_amount` (precomputed `_side_prob = 4d / (1 + 4d)`).
+///
+/// Stubbed vs the JWildfire reference: no SupportsGPU code path
+/// (we emit our own WGSL), no displacement-map input (the
+/// `displ_amount` here is just a constant z-thickness, not a sampled
+/// map).
+///
+/// # Authors
+/// - Andreas Maschke
+pub static CHECKERBOARD_WF: VariationDef = VariationDef {
+    name: "checkerboard_wf",
+    aliases: &[],
+    display_name: "Checkerboard WF",
+    category: VariationCategory::Full3D,
+    phase: VariationPhase::Normal,
+    needs_rng: true,
+    parameters: &[
+        // Param order matches Java's `paramNames` so `.flame` files
+        // round-trip cleanly. The cpp port had them in declaration
+        // order (different from paramNames) — Java is authoritative.
+        param!("position", "Position", unlimited_float, 3.0, -100.0, 100.0, "Fixed coordinate along the axis the plane is perpendicular to. Sets the offset of the whole checkerboard along the axis it's mapped to."),
+        param!("size", "Size", unlimited_float, 10.0, -100.0, 100.0, "Plane edge length. The two free axes get `(u − 0.5) × size` / `(v − 0.5) × size` and the displaced axis is `(z × size + position)`."),
+        param!("axis", "Axis", enum, 2, &["XY (fix Z)", "YZ (fix X)", "ZX (fix Y)"], "Which two axes form the plane; the third is the displaced / fixed axis. Default ZX matches JWildfire's default."),
+        param!("checker_size", "Checker Size", unlimited_float, 0.1, 0.001, 1.0, "Side length of one checker square in (u, v) coordinates. Smaller values give finer grids; the init step computes `_max_checks = floor(1 / checker_size)` so a smaller checker_size also means more potential side-wall lines."),
+        param!("displ_amount", "Displacement Amount", unlimited_float, 0.05, -1.0, 1.0, "Z-thickness of the raised (even-cell) checkers. 0 disables the displacement entirely (and forces `with_sides` off — flat checkerboard)."),
+        param!("checker_color1", "Checker Color 1", float, 0.0, 0.0, 1.0, "Palette position written to `vc` for points landing on even checker cells."),
+        param!("checker_color2", "Checker Color 2", float, 0.5, 0.0, 1.0, "Palette position written to `vc` for points landing on odd checker cells."),
+        param!("side_color", "Side Color", float, 0.0, 0.0, 1.0, "Palette position written to `vc` for side-wall points (when `with_sides = 1` and a grid line is sampled)."),
+        param!("with_sides", "With Sides", bool, true, "When on (and `displ_amount` is non-zero), occasionally snap one coordinate to a grid line and treat it as a side wall — paints the vertical faces of raised cells. Frequency scales with `displ_amount`."),
+    ],
+    needs_transform: false,
+    writes_color: true,
+    // Two init slots: `_side_prob` and `_max_checks` — both derived
+    // from the user params at flame-load time, matching JWildfire's
+    // `init()` (`side_prob = 4d / (1 + 4d)`, `max_checks = floor(1 /
+    // checker_size)` with a step-down when the truncation overflows
+    // the unit interval).
+    init_param_count: 2,
+    wgsl_init: Some(r#"
+fn init_checkerboard_wf(user: array<f32, 9>) -> array<f32, 2> {
+    var out: array<f32, 2>;
+    let displ_amount = user[4];
+    let checker_size = user[3];
+    let side_area = 4.0 * displ_amount;
+    out[0] = side_area / (1.0 + side_area);
+    let safe_size = select(checker_size, 1e-30, abs(checker_size) < 1e-30);
+    var max_checks = floor(1.0 / safe_size);
+    if (max_checks * safe_size >= 1.0) {
+        max_checks = max_checks - 1.0;
+    }
+    out[1] = max_checks;
+    return out;
+}
+"#),
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
+    wgsl_2d: r#"
+fn variation_checkerboard_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec2<f32> {
+    // 2D mode: project the chosen plane down to (x, y). YZ and ZX
+    // both flatten because they put the displaced coordinate on the
+    // missing axis, but we still emit something so a flame loaded in
+    // 2D mode doesn't drop the variation.
+    let position = get_param(xform_id, variation_id, 0u);
+    let size = get_param(xform_id, variation_id, 1u);
+    let axis = i32(get_param(xform_id, variation_id, 2u));
+    let checker_size = get_param(xform_id, variation_id, 3u);
+    let displ_amount = get_param(xform_id, variation_id, 4u);
+    let checker_color1 = get_param(xform_id, variation_id, 5u);
+    let checker_color2 = get_param(xform_id, variation_id, 6u);
+    let side_color = get_param(xform_id, variation_id, 7u);
+    let with_sides = i32(get_param(xform_id, variation_id, 8u));
+    let side_prob = get_param(xform_id, variation_id, 9u);
+    let max_checks = get_param(xform_id, variation_id, 10u);
+
+    let safe_checker = select(checker_size, 1e-30, abs(checker_size) < 1e-30);
+
+    var x = 0.0;
+    var y = 0.0;
+    var z = 0.0;
+    var color = 0.0;
+    let use_sides = with_sides != 0 && abs(displ_amount) >= 1e-6 && max_checks > 0.0 && rng_nextf(rng) < side_prob;
+    if (use_sides) {
+        color = side_color;
+        let max_int = max_checks + 1.0;
+        if (rng_nextf(rng) < 0.5) {
+            x = floor(rng_nextf(rng) * max_int) * checker_size;
+            y = rng_nextf(rng);
+        } else {
+            x = rng_nextf(rng);
+            y = floor(rng_nextf(rng) * max_int) * checker_size;
+        }
+        z = displ_amount * rng_nextf(rng);
+    } else {
+        x = rng_nextf(rng);
+        y = rng_nextf(rng);
+        let cell = floor(x / safe_checker) + floor(y / safe_checker);
+        let is_even = (cell - 2.0 * floor(cell * 0.5)) < 1.0;
+        z = select(0.0, displ_amount, is_even);
+        color = select(checker_color2, checker_color1, is_even);
+    }
+    *vc = clamp(color, 0.0, 1.0);
+
+    x = (x - 0.5) * size;
+    y = (y - 0.5) * size;
+    z = z * size + position;
+
+    if (axis == 0) { return vec2<f32>(x, y); }
+    if (axis == 1) { return vec2<f32>(z, x); }
+    return vec2<f32>(y, z);
+}
+"#,
+    wgsl_3d: r#"
+fn variation_checkerboard_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec3<f32> {
+    let position = get_param(xform_id, variation_id, 0u);
+    let size = get_param(xform_id, variation_id, 1u);
+    let axis = i32(get_param(xform_id, variation_id, 2u));
+    let checker_size = get_param(xform_id, variation_id, 3u);
+    let displ_amount = get_param(xform_id, variation_id, 4u);
+    let checker_color1 = get_param(xform_id, variation_id, 5u);
+    let checker_color2 = get_param(xform_id, variation_id, 6u);
+    let side_color = get_param(xform_id, variation_id, 7u);
+    let with_sides = i32(get_param(xform_id, variation_id, 8u));
+    let side_prob = get_param(xform_id, variation_id, 9u);
+    let max_checks = get_param(xform_id, variation_id, 10u);
+
+    let safe_checker = select(checker_size, 1e-30, abs(checker_size) < 1e-30);
+
+    var x = 0.0;
+    var y = 0.0;
+    var z = 0.0;
+    var color = 0.0;
+    // Side-wall mode: with_sides ON, displ_amount non-zero, max_checks
+    // > 0, and the per-iteration probability roll lands under
+    // side_prob. Snaps either x or y to a grid line and uses
+    // side_color for the visible vertical face.
+    let use_sides = with_sides != 0 && abs(displ_amount) >= 1e-6 && max_checks > 0.0 && rng_nextf(rng) < side_prob;
+    if (use_sides) {
+        color = side_color;
+        let max_int = max_checks + 1.0;
+        if (rng_nextf(rng) < 0.5) {
+            x = floor(rng_nextf(rng) * max_int) * checker_size;
+            y = rng_nextf(rng);
+        } else {
+            x = rng_nextf(rng);
+            y = floor(rng_nextf(rng) * max_int) * checker_size;
+        }
+        z = displ_amount * rng_nextf(rng);
+    } else {
+        // Normal mode: random (u, v); color and displacement come
+        // from the checker cell containing the point. `cell - 2 ×
+        // floor(cell / 2)` is fmod(cell, 2) without a divide.
+        x = rng_nextf(rng);
+        y = rng_nextf(rng);
+        let cell = floor(x / safe_checker) + floor(y / safe_checker);
+        let is_even = (cell - 2.0 * floor(cell * 0.5)) < 1.0;
+        z = select(0.0, displ_amount, is_even);
+        color = select(checker_color2, checker_color1, is_even);
+    }
+    *vc = clamp(color, 0.0, 1.0);
+
+    x = (x - 0.5) * size;
+    y = (y - 0.5) * size;
+    z = z * size + position;
+
+    // Axis mapping matches the Java's switch — see the comment
+    // there. The returned vec3 components are what the dispatcher
+    // adds to (result.x, result.y, result.z).
+    if (axis == 0) { return vec3<f32>(x, y, z); }       // AXIS_XY
+    if (axis == 1) { return vec3<f32>(z, x, y); }       // AXIS_YZ
+    return vec3<f32>(y, z, x);                          // AXIS_ZX (default)
 }
 "#,
 };

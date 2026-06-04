@@ -12,11 +12,17 @@ Source list: [`output/jwildfire-script-vars.txt`](../../output/jwildfire-script-
 
 ## Status
 
-- **Total**: 191
-- **Already implemented**: 168 (88%)
-- **Missing**: 23 — see groups below.
+- **Total**: 190
+- **Already implemented**: 176 (93%)
+- **Missing**: 14 — see groups below.
 
 Re-run `python scripts/diff_jwf_list.py` after every change.
+
+Batch 1 (`jwf-variations-batch1`) landed: `checkerboard_wf`, `cubic3D`,
+`cubicLattice_3D`, `plane_wf` (math modes only), `roundspher3D`,
+`scry_3D`, `synth`, `juliascope3Db`; and removed `pdjoscilloscope`
+from the source list (turned out to be a typo of `pdj` + `oscilloscope`
+smashed together, not a real JWF variation).
 
 ## Triage
 
@@ -40,23 +46,32 @@ turned out to be genuinely different variations (3D-aware formulas
 with their own Z math), not just 3D-body additions to the 2D
 versions we have. They moved to Group B.
 
-### Group B — Standalone ports, straightforward (10)
+### Group B — Standalone ports, straightforward (8)
 
 Simple geometry / math variations with available cpp. Each is
 basically a translate-cpp-to-WGSL job; no exotic features needed.
 
-| Variation | cpp | Notes |
-|---|---|---|
-| `checkerboard_wf` | yes | Checkered grid pattern; small param set. |
-| `cubic3D` | yes | 3D cubic deformation. |
-| `cubicLattice_3D` | yes | 3D lattice grid. |
-| `mandelbrot` | yes | Escape-time Mandelbrot inside a flame variation. Modest iter loop. |
-| `plane_wf` | yes | Project to plane; small. |
-| `post_colormap_wf` | yes | Post-phase color remap; uses `vc` register. |
-| `synth` | yes | Multi-param waveform synthesizer; lots of params but math is straightforward. |
-| `szubieta` | yes | Custom curve; small. |
-| `roundspher3D` | yes | Cousin of our `roundspher`, but 3D-aware: includes `z²` in `d`, falls back to `cos(sqrt(x²+y²))` when input Z is 0, modifies output Z. Distinct variation. |
-| `scry_3D` | yes | Cousin of our `scry`, but 3D-aware: VVAR-dependent `VVAR_inv`, separate `r` and `u` factors for XY and Z, sign branching, fallback `cos(sqrt(t))` for zero Z. Distinct variation. |
+| Variation | cpp | Status | Notes |
+|---|---|---|---|
+| `checkerboard_wf` | yes | ✅ LANDED | Checkered grid pattern; small param set. |
+| `cubic3D` | yes | ✅ LANDED | 3D cubic deformation. |
+| `cubicLattice_3D` | yes | ✅ LANDED | 3D lattice grid. |
+| `mandelbrot` | yes | ⏳ pending | Escape-time Mandelbrot inside a flame variation. Modest iter loop. Closely related to Group E `fract_mandelbrot_wf` — port together. |
+| `plane_wf` | yes | ✅ LANDED | Math modes only (the texture/image-sample modes still need framework work). |
+| `synth` | yes | ✅ LANDED | 35 params, 26 modes. Has its own mode-specialization framework — see "Specialization framework" below. |
+| `roundspher3D` | yes | ✅ LANDED | Cousin of our `roundspher`, but 3D-aware: includes `z²` in `d`, falls back to `cos(sqrt(x²+y²))` when input Z is 0, modifies output Z. Distinct variation. |
+| `scry_3D` | yes | ✅ LANDED | Cousin of our `scry`, but 3D-aware: VVAR-dependent `VVAR_inv`, separate `r` and `u` factors for XY and Z, sign branching, fallback `cos(sqrt(t))` for zero Z. Distinct variation. |
+
+### Group B-blocked — re-classified as architecturally blocked
+
+These looked simple from line count but turned out to need
+framework features we don't have. Cross-referenced into
+[variation-port-blockers.md](variation-port-blockers.md).
+
+| Variation | Blocker |
+|---|---|
+| `post_colormap_wf` | Texture / image sampling (extends `AbstractColorMapWFFunc`). |
+| `szubieta` | Custom-primitive plotting framework (extends `DrawFunc`, builds `primitives` of `Ngon`s in init, samples via `plotPolygon`). Already listed in variation-port-blockers.md as a "Custom primitive". |
 
 ### Group C — Pre/post phase relatives of variations we have (1)
 
@@ -96,34 +111,71 @@ macro before porting all six.
 | `fract_pearls_wf` | yes | Pearls variant. |
 | `fract_salamander_wf` | yes | Salamander variant. |
 
-### Group F — Source missing, deferred (3)
+### Group F — Source missing, deferred (was 3, now 1)
 
 cpp not present in `output/jwildfire-vars/output/`. Need to track down
 source (JWildfire repo, flam3, or hand-translate from JWF Java) before
 we can port.
 
-| Variation | Notes |
-|---|---|
-| `juliascope3Db` | "Variant b" of juliascope3D. We have `juliascope`. Check JWF source for what `b` adds. |
-| `metaballs3d_wf` | Metaballs primitive. May overlap with our `pointgrid` family. |
-| `pdjoscilloscope` | Oscilloscope curves. Looks decorative; low priority. |
+| Variation | Status | Notes |
+|---|---|---|
+| `juliascope3Db` | ✅ LANDED | Ported from `output/variation-jwf-source/JuliaScope3DBFunc.java` (Java source appeared upstream). 11 params, 0 init slots; kaleidoscope dispatch with even/odd flip, type switch for full-3D vs 2D length, mode switch on the Z multiplier. |
+| `metaballs3d_wf` | ⏳ pending | Metaballs primitive. May overlap with our `pointgrid` family. |
+| `pdjoscilloscope` | ❌ removed | Not a real variation — typo for `pdj` + `oscilloscope` smashed together. Both already implemented. Removed from `output/jwildfire-script-vars.txt`. |
+
+## Specialization framework
+
+Added while porting `synth` (commits `5806d9a`, `6aabaa5`). Variations
+with a runtime dispatch (synth's 26-mode switch) used to pay the cost
+of compiling every case body every time the shader rebuilt — ~5s on
+Vulkan for synth, since each case calls helpers that themselves inline
+nested switches. The driver's SPIR-V → native pass grinds through all
+branches even when only one is reachable at runtime for a given flame.
+
+The framework lets a variation re-emit its WGSL per flame based on
+runtime values that are constant for that flame:
+
+1. Variation exports `specialize_wgsl_2d(flame: &Flame) -> String` and
+   `specialize_wgsl_3d(flame: &Flame) -> String` (see
+   `src/variations/defs/synth.rs`).
+2. `shader_builder_v2::generate_variation_code` dispatches by name in
+   its `variation_specialized_source` helper. Returning `None` ⇒ use
+   the static `wgsl_2d` / `wgsl_3d` as before.
+3. `ShaderCache::specialization_key: Vec<(String, String)>` captures
+   what each specializer reads. The cache's `ensure_current_full`
+   early-exit checks this alongside `variations_changed` etc., so a
+   mid-flame param change that affects the WGSL forces a rebuild.
+
+Measured wins on synth (Vulkan, interactive):
+
+| scenario | before | after |
+|---|---|---|
+| Add synth (cold) | ~5.2s | 113ms |
+| Change `synth.mode` (cold) | ~5.2s | 53ms |
+| Change `synth.mode` (driver-cached) | ~5.2s | 3ms |
+
+When porting Group E (escape-time `fract_*_wf`), evaluate whether
+their iteration loops or per-flame type selectors benefit from the
+same approach.
 
 ## Order of operations
 
-Recommended pass order, lowest-risk to highest:
+Recommended next pass, lowest-risk to highest. Groups A/B/F are mostly
+landed (synth specialization done in batch 1 above); what's left:
 
-1. **Group A** (alias / 3D body, 3 variations). Smallest diff per
-   variation; immediate user-visible win for JWF import. Estimate:
-   <1 hour total if they're true aliases.
-2. **Group C** (pre_subflame_wf). Likely shares body with subflame_wf;
+1. **Group C** (`pre_subflame_wf`). Likely shares body with `subflame_wf`;
    small focused work.
-3. **Group B** (8 standalone ports). Each is independent; can be
-   batched in 2–3 sittings.
-4. **Group E** (6 fractals). Design the shared escape-time helper
+2. **Group B residue** (`mandelbrot`). Port alongside Group E
+   `fract_mandelbrot_wf` — same escape-time skeleton.
+3. **Group E** (6 fractals). Design the shared escape-time helper
    first, then port the family.
-5. **Group D** (3 noise/Voronoi). `crackle` first (find source), then
-   `dc_crackle_wf` reuses it, then `dc_perlin` separately.
-6. **Group F** (3 deferred). Source-hunting; ad hoc.
+4. **Group D** (3 noise/Voronoi). `crackle` first (find source — not
+   in `output/jwildfire-vars/output/`), then `dc_crackle_wf` reuses it,
+   then `dc_perlin` separately.
+5. **Group F residue** (`metaballs3d_wf`). Source-hunting; ad hoc.
+6. **Group B-blocked** (`post_colormap_wf`, `szubieta`). Still waiting
+   on framework features — see
+   [variation-port-blockers.md](variation-port-blockers.md).
 
 ## Related docs
 

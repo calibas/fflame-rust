@@ -180,3 +180,61 @@ fn variation_subflame_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: pt
 }
 "#,
 };
+
+/// Pre-phase variant of subflame_wf. Steps the nested chaos game (same
+/// `subflame_iterate` helper) and writes the raw `q` to the affine
+/// point — overriding the chaos-game state going into the rest of the
+/// pre/normal/post variation chain. Inherits subflame_wf's full param
+/// list for round-trip fidelity with JWildfire `.flame` XML, but the
+/// transform body ignores scale/angle/offset/colorscale_z (JWildfire's
+/// `PreSubFlameWFFunc.transform` extends `SubFlameWFFunc` and overrides
+/// to do `pAffineTP.{x,y,z} = q.{x,y,z}` with no further math).
+/// `color_mode` still applies — non-Off pulls the subflame's color
+/// scalar into the parent's color register.
+///
+/// Source: `output/variation-jwf-source/PreSubFlameWFFunc.java`.
+///
+/// # Authors
+/// - Andreas Maschke
+pub static PRE_SUBFLAME_WF: VariationDef = VariationDef {
+    name: "pre_subflame_wf",
+    aliases: &[],
+    display_name: "Pre Subflame",
+    category: VariationCategory::Plugin,
+    phase: VariationPhase::Pre,
+    needs_rng: true,
+    // Same params as SUBFLAME_WF — JWildfire's PreSubFlameWFFunc extends
+    // SubFlameWFFunc, so file XML carries identical names. Body uses
+    // only `subflame_id` and `color_mode`; the rest are accepted for
+    // round-trip fidelity.
+    parameters: SUBFLAME_WF.parameters,
+    needs_transform: false,
+    writes_color: true,
+    init_param_count: 0,
+    wgsl_init: None,
+    state_count: 5,
+    wgsl_state_init: None,
+    needs_accum: false,
+    wgsl_2d: r#"
+fn variation_pre_subflame_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec2<f32> {
+    let subflame_id = u32(get_param(xform_id, variation_id, 0u));
+    let color_mode = i32(get_param(xform_id, variation_id, 7u));
+    let q = subflame_iterate(subflame_id, xform_id, variation_id, rng);
+    if (color_mode != -1) {
+        *vc = q.w;
+    }
+    return vec2<f32>(q.x, q.y);
+}
+"#,
+    wgsl_3d: r#"
+fn variation_pre_subflame_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec3<f32> {
+    let subflame_id = u32(get_param(xform_id, variation_id, 0u));
+    let color_mode = i32(get_param(xform_id, variation_id, 7u));
+    let q = subflame_iterate(subflame_id, xform_id, variation_id, rng);
+    if (color_mode != -1) {
+        *vc = q.w;
+    }
+    return vec3<f32>(q.x, q.y, q.z);
+}
+"#,
+};
