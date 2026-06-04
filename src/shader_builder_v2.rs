@@ -285,6 +285,16 @@ pub struct ShaderConstants {
     /// cache's constants-changed check.
     pub has_post_symmetry: bool,
 
+    /// Whether to flatten `current.z = 0.0` at the end of each chaos-
+    /// game iteration. Derived: `render_3d && !flame.preserve_z`.
+    /// Drives `FLATTEN_Z_PER_ITER` — when false (the 2D case, or 3D
+    /// with `preserve_z=true`), the assignment is compile-stripped.
+    /// Matches JWildfire's `preserve_z` semantics: false (their
+    /// default) flattens Z, preventing explosion from variations
+    /// that scale `p.z` by amounts > 1 (e.g. spherical at high
+    /// weight) which can poison the camera transform via `0·∞ = NaN`.
+    pub flatten_z_per_iter: bool,
+
     /// Per-flame `array<u32, N>` length for the AttachmentList struct.
     /// Substituted into the shader headers via the `{{ATTACHMENT_CAP}}`
     /// placeholder; also drives the dynamic stride used when the host
@@ -309,6 +319,7 @@ impl Default for ShaderConstants {
             has_post_affine: false,
             has_attachments: false,
             has_post_symmetry: false,
+            flatten_z_per_iter: false,
             attachment_cap: 1,
             inlined_transforms: None,
             cumulative_weights: None,
@@ -460,6 +471,10 @@ impl ShaderConstants {
             has_post_affine: flame.has_post_affine(),
             has_attachments: flame.has_attachments(),
             has_post_symmetry: flame.post_symmetry.ty != crate::scene::transforms::PostSymmetryType::None,
+            // Per-iteration Z flatten — only meaningful in 3D, and
+            // only when preserve_z is false (JWF/Apo default).
+            flatten_z_per_iter: matches!(flame.render_mode, crate::scene::transforms::RenderMode::ThreeD)
+                && !flame.preserve_z,
             attachment_cap: flame.attachment_cap() as u32,
             inlined_transforms: Some(inlined),
             cumulative_weights: Some(cumulative),
@@ -1148,6 +1163,10 @@ impl ShaderBuilder {
         // the loop and all its math compile out, so the only cost of
         // having the feature is the 8 bytes of padding in GpuParams.
         processor.set("HAS_POST_SYMMETRY", constants.has_post_symmetry);
+        // FLATTEN_Z_PER_ITER inserts a single `current.z = 0.0;` line
+        // at the end of each iteration's body. When false (2D mode,
+        // or 3D with preserve_z=true) the line is compile-stripped.
+        processor.set("FLATTEN_Z_PER_ITER", constants.flatten_z_per_iter);
         // OUTPUT_HISTOGRAM_DIRECT gates which output strategy the shader
         // uses for plot-time accumulation:
         //   true  — atomicAdd into a single full-resolution histogram
@@ -1683,6 +1702,7 @@ mod tests {
             p.set("HAS_DC", false);
             p.set("HAS_ATTACHMENTS", false);
             p.set("HAS_POST_SYMMETRY", false);
+            p.set("FLATTEN_Z_PER_ITER", false);
             p.set("OUTPUT_HISTOGRAM_DIRECT", output_histogram_direct);
             p
         };

@@ -1904,6 +1904,7 @@ impl ConfigManager {
             ConfigPath::PostSymmetryCenterY => Ok(flame.post_symmetry.center_y.into()),
             ConfigPath::PostSymmetryDistance => Ok(flame.post_symmetry.distance.into()),
             ConfigPath::PostSymmetryRotation => Ok(flame.post_symmetry.rotation_deg.into()),
+            ConfigPath::PreserveZ => Ok(flame.preserve_z.into()),
 
             // System Settings - These should NOT be called via get_value (they're not in FractalConfig)
             // Use config_manager.system_settings() instead
@@ -2544,6 +2545,10 @@ impl ConfigManager {
             ConfigPath::PostSymmetryRotation => {
                 let v: f32 = value.try_into()?;
                 self.active_flame_mut()?.post_symmetry.rotation_deg = v;
+            }
+            ConfigPath::PreserveZ => {
+                let v: bool = value.try_into()?;
+                self.active_flame_mut()?.preserve_z = v;
             }
 
             // System Settings - These should NOT be called via apply_value (they're not in FractalConfig)

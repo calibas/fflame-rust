@@ -231,6 +231,20 @@ pub fn render_view_content(
             let _ = ui.lazy_drag(config_manager, ConfigPath::CameraZ, 0.01, "");
         });
 
+        // Preserve Z — JWildfire's `preserve_z` flag. Defaults to
+        // off (Apo/JWF default) so flames with variations that scale
+        // Z by >1 (e.g. spherical at high weight) don't explode and
+        // poison the camera transform via `0·∞ = NaN`.
+        let mut preserve_z = config.flame.preserve_z;
+        let response = ui.checkbox(&mut preserve_z, t!("view.preserve_z").as_ref())
+            .on_hover_text(t!("view.tooltip_preserve_z"));
+        if response.changed() {
+            let _ = config_manager.update_param(
+                ConfigPath::PreserveZ,
+                preserve_z.into(),
+            );
+        }
+
         // Depth Effects (collapsible, hidden by default)
         ui.separator();
         egui::CollapsingHeader::new(t!("view.depth_effects").as_ref())

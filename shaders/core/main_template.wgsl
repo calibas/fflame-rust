@@ -446,5 +446,19 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             }
             }  // end for (sym_k = 0..sym_count) — post-symmetry loop
         }
+
+{{#if FLATTEN_Z_PER_ITER}}
+        // JWildfire `preserve_z=false` (default): flatten Z at end
+        // of each iteration so it doesn't accumulate across the
+        // chaos game. Without this, variations that scale Z by an
+        // amount > 1 (e.g. `spherical` at high weight) drive Z to
+        // ±∞ within a handful of iterations; the camera transform's
+        // `0·∞ = NaN` then poisons pixel coords and most samples
+        // get rejected at the bounds check — visible as a dim or
+        // black image. Cost is one f32 store per iteration in 3D;
+        // gate strips it from 2D shaders and from 3D shaders with
+        // preserve_z=true.
+        current.z = 0.0;
+{{/if}}
     }
 }

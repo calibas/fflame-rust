@@ -80,6 +80,8 @@ impl ShaderCache {
             has_post_affine: flame.has_post_affine(),
             has_attachments: flame.has_attachments(),
             has_post_symmetry: flame.post_symmetry.ty != crate::scene::transforms::PostSymmetryType::None,
+            flatten_z_per_iter: matches!(flame.render_mode, crate::scene::transforms::RenderMode::ThreeD)
+                && !flame.preserve_z,
             attachment_cap: flame.attachment_cap() as u32,
             inlined_transforms: None,
             cumulative_weights: None,
@@ -179,6 +181,8 @@ impl ShaderCache {
                 has_post_affine: config.flame.has_post_affine(),
                 has_attachments: config.flame.has_attachments(),
                 has_post_symmetry: config.flame.post_symmetry.ty != crate::scene::transforms::PostSymmetryType::None,
+                flatten_z_per_iter: matches!(config.flame.render_mode, crate::scene::transforms::RenderMode::ThreeD)
+                    && !config.flame.preserve_z,
                 attachment_cap: config.flame.attachment_cap() as u32,
                 inlined_transforms: None,
                 cumulative_weights: None,

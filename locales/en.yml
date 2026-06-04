@@ -405,6 +405,9 @@ view:
   tooltip_post_symmetry_rotation: "Pre-rotate the mirror copy around the center (degrees).\nAxis modes only."
   tooltip_post_symmetry_order: "Number of rotational copies for Point symmetry.\n2 = pair (180°), 3 = ternary (120°), 4 = quad (90°), …"
 
+  preserve_z: "Preserve Z"
+  tooltip_preserve_z: "When off (default, matches Apophysis and JWildfire's per-file default), Z is reset to 0 at the end of each iteration so variations that scale Z by amounts > 1 (e.g. high-weight spherical) don't cascade to ±∞.\nTurn on to preserve Z across iterations — needed by some Z-aware 3D flames; matches JWildfire's `preserve_z=\"1\"`."
+
 # Rendering Controls
 rendering:
   title: "Rendering"

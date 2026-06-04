@@ -203,6 +203,7 @@ pub fn generate_random_flame_with_rng<R: Rng>(settings: &RandomGeneratorSettings
         solo_transform: None,
         subflames: Vec::new(),
         post_symmetry: crate::scene::transforms::PostSymmetry::default(),
+        preserve_z: false, // Apo/JWF default — avoid Z-explosion trap.
     }
 }
 
