@@ -356,6 +356,7 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &EPISPIRAL,
     &BWRAPS,
     &JULIASCOPE,
+    &JULIASCOPE_3DB,
     &JULIA3DZ,
     &CURL3D,
     &RADIAL_BLUR,

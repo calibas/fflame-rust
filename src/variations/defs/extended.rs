@@ -619,6 +619,132 @@ fn variation_juliascope(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
 "#,
 };
 
+/// 3D extension of [`JULIASCOPE`] with Brad Stefanov's added Z-warp
+/// controls. Inherits the kaleidoscope's mirror-branch dispatch
+/// (random branch index ∈ [0, |power|), sign of the angle flipped
+/// on odd branches) but layers a configurable Z output on top:
+///   - `za`, `zb` rescale X² and Y² in the 2D radius term;
+///   - `warp` offsets the input Z before participating;
+///   - `zamount`, `zdist` scale the radial Z power (`pow(r2d + z²,
+///     cPower × zdist)`);
+///   - `mode = 1` multiplies the Z output by `sin(wave1) × cos(wave2)`
+///     for a per-iteration depth ripple;
+///   - `type = 1` switches the XY radial power to use the full 3D
+///     length `sqrt(x²+y²+z²)` instead of just `sqrt(x²+y²)`.
+///
+/// `power` is intentionally unconstrained; values close to 0 NaN
+/// the trig branch, so the body guards with `abs_power = max(|int
+/// power|, 1)` for the random pick and an `|power| < EPS` early-out.
+///
+/// # Authors
+/// - Brad Stefanov (3D extension)
+/// - Scott Draves (original juliascope kaleidoscope)
+pub static JULIASCOPE_3DB: VariationDef = VariationDef {
+    name: "juliascope3Db",
+    aliases: &[],
+    display_name: "JuliaScope 3Db",
+    category: VariationCategory::Full3D,
+    phase: VariationPhase::Normal,
+    needs_rng: true,
+    parameters: &[
+        param!("power", "Power", unlimited_int, 3.0, -20.0, 20.0, "Number of mirror branches. Higher = more reflections; negative values invert the rotation. `0` no-ops the variation to avoid divide-by-zero in the angle dispatch."),
+        param!("dist", "Distance", unlimited_float, 1.0, -10.0, 10.0, "Radial scaling factor. Combined with `power` into `cPower = dist / power × 0.5`, which sets the exponent on the radial term."),
+        param!("type", "Type", bool, false, "When on, the XY radial term uses the full 3D length `sqrt(x²+y²+z²)` instead of just the 2D `sqrt(x²+y²)`. Affects the XY scale only; Z output is unchanged."),
+        param!("warp", "Warp", unlimited_float, 0.0, -10.0, 10.0, "Pre-offset added to the input Z (after dividing by `abs(power)`) before it participates in the Z radial term and output multiplier."),
+        param!("za", "za", unlimited_float, 1.0, -10.0, 10.0, "X² scale in the 2D radius `r2d = x²·za + y²·zb` used by the Z radial term."),
+        param!("zb", "zb", unlimited_float, 1.0, -10.0, 10.0, "Y² scale in the 2D radius (see `za`)."),
+        param!("zamount", "Z Amount", unlimited_float, 1.0, -10.0, 10.0, "Outer multiplier on the Z output — scales `rz` directly."),
+        param!("zdist", "Z Distance", unlimited_float, 1.0, -10.0, 10.0, "Exponent multiplier on the Z radial term — `rz = zamount × pow(r2d + z², cPower × zdist)`."),
+        param!("mode", "Mode", bool, false, "When on, multiplies the Z output by `sin(wave1) × cos(wave2)`. Lets `wave1` / `wave2` modulate the depth contribution per iteration."),
+        param!("wave1", "Wave 1", unlimited_float, 1.0, -10.0, 10.0, "Argument to `sin()` in the mode-on Z multiplier. Ignored when `mode` is off."),
+        param!("wave2", "Wave 2", unlimited_float, 1.0, -10.0, 10.0, "Argument to `cos()` in the mode-on Z multiplier. Ignored when `mode` is off."),
+    ],
+    needs_transform: false,
+    writes_color: false,
+    init_param_count: 0,
+    wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: false,
+    wgsl_2d: r#"
+fn variation_juliascope3Db(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
+    // 2D mode: drop Z entirely. The `type` switch becomes a no-op
+    // (z² = 0 in either branch). Output is just the XY part of the
+    // 3D body — kaleidoscope dispatch + radial scaling.
+    const PI: f32 = 3.14159265359;
+    let power = get_param(xform_id, variation_id, 0u);
+    let dist = get_param(xform_id, variation_id, 1u);
+    if (abs(power) < 1e-6) { return vec2<f32>(0.0, 0.0); }
+
+    let c_power = dist / power * 0.5;
+    let abs_power = max(i32(abs(power)), 1);
+
+    let rnd = i32(rng_nextf(rng) * f32(abs_power));
+    let theta = atan2(p.y, p.x);
+    let a = select(
+        (2.0 * PI * f32(rnd) - theta) / power,
+        (2.0 * PI * f32(rnd) + theta) / power,
+        (rnd & 1) == 0,
+    );
+
+    let r2 = p.x * p.x + p.y * p.y;
+    let r = pow(r2, c_power);
+    return vec2<f32>(r * cos(a), r * sin(a));
+}
+"#,
+    wgsl_3d: r#"
+fn variation_juliascope3Db(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
+    const PI: f32 = 3.14159265359;
+    let power = get_param(xform_id, variation_id, 0u);
+    let dist = get_param(xform_id, variation_id, 1u);
+    let type_ = i32(get_param(xform_id, variation_id, 2u));
+    let warp = get_param(xform_id, variation_id, 3u);
+    let za = get_param(xform_id, variation_id, 4u);
+    let zb = get_param(xform_id, variation_id, 5u);
+    let zamount = get_param(xform_id, variation_id, 6u);
+    let zdist = get_param(xform_id, variation_id, 7u);
+    let mode = i32(get_param(xform_id, variation_id, 8u));
+    let wave1 = get_param(xform_id, variation_id, 9u);
+    let wave2 = get_param(xform_id, variation_id, 10u);
+
+    if (abs(power) < 1e-6) { return vec3<f32>(0.0, 0.0, 0.0); }
+
+    let c_power = dist / power * 0.5;
+    let abs_power = max(i32(abs(power)), 1);
+    let abs_power_f = f32(abs_power);
+
+    // Z pre-scale + warp offset. The /abs_power keeps z bounded
+    // across the radial pow() so it doesn't explode for high powers.
+    let z = p.z / abs_power_f + warp;
+
+    // 2D radius with per-axis scaling, then the Z radial term.
+    let r2d = p.x * p.x * za + p.y * p.y * zb;
+    let rz = zamount * pow(max(r2d + z * z, 1e-30), c_power * zdist);
+
+    // Random kaleidoscope branch: rnd ∈ [0, abs_power). Even branches
+    // add the polar angle, odd branches subtract it (mirror effect).
+    let rnd = i32(rng_nextf(rng) * abs_power_f);
+    let theta = atan2(p.y, p.x);
+    let a = select(
+        (2.0 * PI * f32(rnd) - theta) / power,
+        (2.0 * PI * f32(rnd) + theta) / power,
+        (rnd & 1) == 0,
+    );
+
+    // XY radial scale. type=1 uses the full 3D length; type=0 stays
+    // 2D. Either way the exponent is c_power.
+    let xy2 = p.x * p.x + p.y * p.y;
+    let r2 = select(xy2, xy2 + p.z * p.z, type_ != 0);
+    let r = pow(max(r2, 1e-30), c_power);
+
+    // Z output. mode=1 multiplies by sin(wave1)·cos(wave2) — lets
+    // the wave params modulate depth per iteration.
+    let z_factor = select(1.0, sin(wave1) * cos(wave2), mode != 0);
+    return vec3<f32>(r * cos(a), r * sin(a), rz * z * z_factor);
+}
+"#,
+};
+
 /// 3D variant of Julia where the Z coordinate gets folded along with the
 /// XY. Produces 3D fractals stretched along the depth axis.
 pub static JULIA3DZ: VariationDef = VariationDef {
