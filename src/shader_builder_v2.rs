@@ -1072,7 +1072,30 @@ impl ShaderBuilder {
     /// and emitting each unique name once. Byte-identical second-occurrence
     /// is skipped silently; a conflicting body panics with a clear message
     /// instead of the opaque parser error.
-    fn generate_variation_code(&self, active_variations: &[(String, u32)], render_3d: bool) -> String {
+    fn generate_variation_code(
+        &self,
+        flame: &crate::scene::transforms::Flame,
+        active_variations: &[(String, u32)],
+        render_3d: bool,
+    ) -> String {
+        // Inline helper: dispatches the per-flame WGSL specializer for
+        // variations that opt in. Returning `None` means "use the static
+        // source as-is". Adding a new specializing variation = new arm here.
+        fn variation_specialized_source(
+            name: &str,
+            flame: &crate::scene::transforms::Flame,
+            render_3d: bool,
+        ) -> Option<String> {
+            match name {
+                "synth" => Some(if render_3d {
+                    crate::variations::defs::synth::specialize_wgsl_3d(flame)
+                } else {
+                    crate::variations::defs::synth::specialize_wgsl_2d(flame)
+                }),
+                _ => None,
+            }
+        }
+
         let mut code = String::new();
         // fn_name -> (block bytes, variation that first emitted it).
         // Tracks emitted top-level functions for cross-variation dedup.
@@ -1080,18 +1103,34 @@ impl ShaderBuilder {
 
         for (name, _idx) in active_variations {
             let Some(info) = self.registry.get(name) else { continue };
-            let source = if render_3d {
-                // For 3D mode, emit `wgsl_source_3d`. Local variations
-                // (from `VariationDef`) always populate this since the
-                // field is required at the type level. API-downloaded
-                // plugins may have None here — in which case we skip
-                // the variation rather than fall back to the 2D body
-                // (the silent fallback historically masked a class of
-                // shader-validation crashes where a vec2-returning
-                // function got called from a vec3 accumulator).
-                info.wgsl_source_3d.as_deref()
-            } else {
-                info.wgsl_source.as_deref()
+
+            // Per-flame specialization hook. Variations like `synth` pack a
+            // runtime dispatch (mode switch) whose unused cases bloat driver
+            // compile time. The specializer walks the flame to learn which
+            // modes are actually used, then re-emits the body containing
+            // only those cases. See `synth::specialize_wgsl_2d`.
+            //
+            // Cache invalidation comes from `ShaderCache::specialization_key`
+            // — when the resolved key changes the cache forces a rebuild,
+            // which re-runs this function and produces fresh WGSL.
+            let specialized = variation_specialized_source(name, flame, render_3d);
+            let source = match specialized.as_deref() {
+                Some(s) => Some(s),
+                None => {
+                    if render_3d {
+                        // For 3D mode, emit `wgsl_source_3d`. Local variations
+                        // (from `VariationDef`) always populate this since the
+                        // field is required at the type level. API-downloaded
+                        // plugins may have None here — in which case we skip
+                        // the variation rather than fall back to the 2D body
+                        // (the silent fallback historically masked a class of
+                        // shader-validation crashes where a vec2-returning
+                        // function got called from a vec3 accumulator).
+                        info.wgsl_source_3d.as_deref()
+                    } else {
+                        info.wgsl_source.as_deref()
+                    }
+                }
             };
             let Some(source) = source else { continue };
 
@@ -1210,7 +1249,7 @@ impl ShaderBuilder {
         shader.push('\n');
 
         // 5. Core variations from embedded VariationDef WGSL (only active ones)
-        shader.push_str(&self.generate_variation_code(&active, render_3d));
+        shader.push_str(&self.generate_variation_code(flame, &active, render_3d));
         shader.push('\n');
 
         // 7. Generate apply_variations with fixed registry indices
@@ -1868,7 +1907,10 @@ mod tests {
                 ("pointgrid_wf".to_string(), 0u32),
                 ("pointgrid3d_wf".to_string(), 1u32),
             ];
-            let code = builder.generate_variation_code(&active, render_3d);
+            // Per-flame specializer needs a flame for context. Test
+            // doesn't use synth, so any flame works — default is fine.
+            let flame = crate::scene::transforms::Flame::default();
+            let code = builder.generate_variation_code(&flame, &active, render_3d);
             let n_helper = code.matches("fn pg_disc_noise(").count();
             let n_var_2d = code.matches("fn variation_pointgrid_wf(").count();
             let n_var_3d = code.matches("fn variation_pointgrid3d_wf(").count();

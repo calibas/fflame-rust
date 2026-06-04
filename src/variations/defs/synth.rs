@@ -911,3 +911,226 @@ fn variation_synth(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<func
 }
 "#,
 };
+
+// =============================================================================
+// Per-flame WGSL specialization
+//
+// synth's `mode` is a runtime int, so the static `wgsl_2d` body has to carry
+// all 26 cases. That's the bulk of synth's compile cost — the driver's
+// SPIR-V → native pass grinds through every case body (each calls
+// `synth_value`, which in turn inlines a 5×(9-way + 4-way) switch chain).
+// Measured ~5s for an add on Vulkan.
+//
+// At WGSL-build time we know which `synth.mode` values actually appear in
+// the flame (params are static per-transform). Emitting only those cases
+// shrinks the dispatch from 26 → ~1, dropping driver compile to ~150ms in
+// the proof. Same source of truth (the static `wgsl_2d`) — we just slice
+// out the unused case bodies.
+//
+// Cache: `synth_modes_in_flame` is the rebuild trigger. When the mode set
+// changes the WGSL changes too, which the shader_cache picks up via its
+// `specialization_key` field.
+// =============================================================================
+
+use crate::scene::transforms::Flame;
+
+/// Sorted list of distinct `synth.mode` values across all of `flame`'s
+/// transforms (normal + linked + final). Used both to drive case emission
+/// and as the per-flame cache key — when this list changes, the WGSL
+/// changes, so the shader cache must rebuild.
+///
+/// Falls back to mode 0 (MODE_SPHERICAL, the cpp default) when synth is
+/// active on a transform that doesn't override the mode param.
+pub fn synth_modes_in_flame(flame: &Flame) -> Vec<i32> {
+    use std::collections::BTreeSet;
+    let mut modes: BTreeSet<i32> = BTreeSet::new();
+    let xforms = flame
+        .transforms
+        .iter()
+        .chain(flame.linked_transforms.iter())
+        .chain(flame.final_transforms.iter());
+    for xform in xforms {
+        if !xform.variations.contains_key("synth") {
+            continue;
+        }
+        let mode = xform
+            .variation_params
+            .get("synth.mode")
+            .copied()
+            .unwrap_or(0.0) as i32;
+        modes.insert(mode);
+    }
+    modes.into_iter().collect()
+}
+
+/// 2D specialization. Emits the helpers verbatim and rebuilds
+/// `variation_synth` with only the case bodies for `modes`.
+pub fn specialize_wgsl_2d(flame: &Flame) -> String {
+    let modes = synth_modes_in_flame(flame);
+    if modes.is_empty() {
+        return SYNTH.wgsl_2d.to_string();
+    }
+    specialize_with_modes(SYNTH.wgsl_2d, &modes)
+}
+
+/// 3D specialization — same idea as `specialize_wgsl_2d`, just on the 3D body.
+pub fn specialize_wgsl_3d(flame: &Flame) -> String {
+    let modes = synth_modes_in_flame(flame);
+    if modes.is_empty() {
+        return SYNTH.wgsl_3d.to_string();
+    }
+    specialize_with_modes(SYNTH.wgsl_3d, &modes)
+}
+
+/// Reconstruct a synth body containing only the requested cases. The static
+/// source must have a `    switch (mode) {` block ending with
+/// `    default: {` — both bodies in this file follow that convention.
+fn specialize_with_modes(source: &str, modes: &[i32]) -> String {
+    let switch_start = match source.find("    switch (mode) {") {
+        Some(p) => p,
+        None => return source.to_string(),
+    };
+    let default_start = match source[switch_start..].find("    default: {") {
+        Some(p) => switch_start + p,
+        None => return source.to_string(),
+    };
+
+    let preamble_end = switch_start + "    switch (mode) {\n".len();
+    // Restrict the case search to the body of the mode switch — synth_apply_layer
+    // also uses `case N: {` patterns (for layer_type / layer_op), so a global
+    // search would pick up the first match in the wrong switch and truncate
+    // mid-statement on the closing `}`.
+    let switch_body = &source[preamble_end..default_start];
+    let mut out = String::with_capacity(source.len());
+    out.push_str(&source[..preamble_end]);
+
+    for &mode in modes {
+        if let Some(body) = extract_case_body(switch_body, mode) {
+            out.push_str(&format!("    case {mode}: {{\n"));
+            out.push_str(body);
+            out.push_str("    }\n");
+        }
+    }
+
+    out.push_str(&source[default_start..]);
+    out
+}
+
+/// Return the body text between `    case N: {` and its matching `}`,
+/// or `None` if the case isn't in `source`. The returned slice excludes
+/// the opening `{\n` and the closing `    }` — the caller wraps it.
+///
+/// Call this on a *restricted* slice — the synth file has multiple switches
+/// (`synth_apply_layer`'s layer_type / layer_op, plus `variation_synth`'s
+/// mode), several of which share the same `case 0` / `case 1` prefixes.
+/// See `specialize_with_modes`.
+fn extract_case_body(source: &str, mode: i32) -> Option<&str> {
+    let needle = format!("    case {mode}: {{");
+    let start = source.find(&needle)? + needle.len() + 1;
+    let mut depth = 1;
+    for (offset, ch) in source[start..].char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    // Trim back to the line containing the closing brace
+                    // (which is `    }\n`). The body always sits between
+                    // the opening `{\n` and the line `    }\n`, so the
+                    // closing line is 5 chars (`    }`) ending at `offset`.
+                    let body_end = start + offset - "    ".len();
+                    return Some(&source[start..body_end]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Sanity check: extracting case 1007 from the 2D body should yield the
+    /// MODE_CYLINDER block and nothing else.
+    #[test]
+    fn extracts_single_case_body() {
+        let body = extract_case_body(SYNTH.wgsl_2d, 1007).expect("case 1007 present");
+        assert!(body.contains("MODE_CYLINDER"));
+        assert!(!body.contains("MODE_SPHERICAL"));
+    }
+
+    /// Specializing to one mode should keep the helpers + signature and
+    /// drop every other case. Source shrinks roughly in proportion to the
+    /// fraction of switch body retained — the helpers (synth_apply_layer,
+    /// synth_value, synth_bezier) are constant overhead, so total
+    /// shrinkage is real but partial. Pin at "noticeably smaller" rather
+    /// than a specific ratio that would drift if helpers change.
+    #[test]
+    fn specialization_shrinks_source() {
+        let full = SYNTH.wgsl_2d;
+        let specialized = specialize_with_modes(full, &[1007]);
+        assert!(specialized.contains("MODE_CYLINDER"));
+        assert!(!specialized.contains("MODE_SPHERICAL"));
+        assert!(specialized.contains("fn synth_apply_layer"));
+        assert!(specialized.contains("fn variation_synth"));
+        // The pre-switch helpers + variation_synth preamble are unchanged,
+        // so the shrinkage ratio depends on case-body density. Empirically
+        // ~80% of `full` is the switch body, so dropping 25 of 26 cases
+        // shrinks by ~75%.
+        assert!(
+            specialized.len() < full.len() * 3 / 4,
+            "specialized {} >= 3/4 of full {}",
+            specialized.len(),
+            full.len()
+        );
+    }
+
+    /// Regression: case 0 must come from `variation_synth`'s mode switch,
+    /// not from `synth_apply_layer`'s inner `case 0: { x = sin(y * TWO_PI); }`.
+    /// The wrong match truncates mid-statement and the shader fails to parse.
+    #[test]
+    fn case_0_picks_outer_mode_switch_not_inner_helper() {
+        let body = extract_case_body(
+            &SYNTH.wgsl_2d[SYNTH.wgsl_2d.find("    switch (mode) {").unwrap()..],
+            0,
+        )
+        .expect("case 0 present in scoped slice");
+        assert!(
+            body.contains("MODE_SPHERICAL"),
+            "expected case 0 = MODE_SPHERICAL, got {body:?}"
+        );
+        // Specifically NOT the inner one.
+        assert!(
+            !body.contains("sin(y * TWO_PI"),
+            "case 0 body bled into synth_apply_layer's inner switch"
+        );
+    }
+
+    /// End-to-end: specializing to `[0]` must produce parseable WGSL with
+    /// the spherical mode body intact. Catches truncation bugs that
+    /// `extract_case_body` alone wouldn't surface.
+    #[test]
+    fn specialize_to_mode_0_keeps_spherical_body_complete() {
+        let out = specialize_with_modes(SYNTH.wgsl_2d, &[0]);
+        assert!(out.contains("MODE_SPHERICAL"));
+        assert!(out.contains("ox = radius * sin(theta);"));
+        assert!(out.contains("oy = radius * cos(theta);"));
+        // synth_apply_layer's inner switch must still be intact too.
+        assert!(out.contains("case 0: { x = sin(y * TWO_PI); }"));
+    }
+
+    /// Empty mode list produces a switch with only the default branch —
+    /// valid WGSL but with no case bodies. The public `specialize_wgsl_2d`
+    /// short-circuits to the full source instead (see its body); this test
+    /// just pins down the low-level behavior so a refactor that drops the
+    /// short-circuit doesn't silently break things.
+    #[test]
+    fn empty_modes_produces_default_only() {
+        let out = specialize_with_modes(SYNTH.wgsl_2d, &[]);
+        assert!(!out.contains("MODE_SPHERICAL"));
+        assert!(!out.contains("MODE_CYLINDER"));
+        assert!(out.contains("default: {"));
+    }
+}

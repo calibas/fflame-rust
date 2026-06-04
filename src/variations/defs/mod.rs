@@ -135,7 +135,9 @@ mod hexaplay3d_misc;
 mod hexnix3d_misc;
 mod klein_group_misc;
 mod subflame;
-mod synth;
+// `pub mod` so the shader builder can call `synth::specialize_wgsl_*`
+// directly for per-flame WGSL specialization.
+pub mod synth;
 
 pub use basic::*;
 pub use advanced::*;
