@@ -996,6 +996,97 @@ fn variation_scry(p: vec3<f32>) -> vec3<f32> {
 "#,
 };
 
+/// 3D-aware companion to [`SCRY`] (Larry Berlin, Sep 2009). Distinct
+/// variation, not an alias: the inversion radius is weight-dependent
+/// (`r = 1 / (sqrt(t) × (t + 1/w))`), signed by the variation amount;
+/// a second factor `u` handles the Z component over a different
+/// denominator (`s = sqrt(t) + z²`). Z falls back to
+/// `cos(sqrt(x²+y²))` whenever the input or accumulator Z is zero,
+/// so the variation lands on a cylinder for the first iteration
+/// rather than collapsing flat. For |weight| ≤ 1 the cpp's
+/// `smooth = 1 − w` blend collapses to pure additive on Z; for
+/// |weight| > 1 the prior accumulator is wiped and replaced by
+/// `w × (accumZ + Z·u)` — both branches are handled exactly.
+///
+/// # Authors
+/// - Apophysis Plugin Pack (original `scry`)
+/// - Larry Berlin (3D extension)
+pub static SCRY_3D: VariationDef = VariationDef {
+    name: "scry_3D",
+    aliases: &[],
+    display_name: "Scry 3D",
+    category: VariationCategory::Full3D,
+    phase: VariationPhase::Normal,
+    needs_rng: false,
+    parameters: &[],
+    needs_transform: true,
+    writes_color: false,
+    init_param_count: 0,
+    wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: true,
+    wgsl_2d: r#"
+fn variation_scry_3D(p: vec2<f32>, accum: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
+    // 2D mode: no Z register, so the cpp's Foopzee/Footzee branches
+    // are inert. Body is scry's 2D inversion with the cpp's
+    // weight-dependent `r = 1 / (sqrt(t) × (t + 1/w))` rather than
+    // scry's hard-coded `+1`. Lets a flame saved with scry_3D still
+    // render meaningfully in 2D mode.
+    let w = transforms[xform_id].variations[variation_id];
+    let vvar_inv = 1.0 / (w + select(1e-12, -1e-12, w < 0.0));
+    let abs_inv = abs(vvar_inv);
+    let sign_factor = select(1.0, -1.0, vvar_inv < 0.0);
+    let t = p.x * p.x + p.y * p.y;
+    let safe_f = max(sqrt(t), 1e-30);
+    let r = sign_factor / (safe_f * (t + abs_inv));
+    return vec2<f32>(p.x * r, p.y * r);
+}
+"#,
+    wgsl_3d: r#"
+fn variation_scry_3D(p: vec3<f32>, accum: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
+    let w = transforms[xform_id].variations[variation_id];
+    let inv_w = 1.0 / select(w, 1e-30, abs(w) < 1e-30);
+    // EPS sign-matches `w` so 1/(w + EPS) doesn't flip sign near 0.
+    let vvar_inv = 1.0 / (w + select(1e-12, -1e-12, w < 0.0));
+
+    let t = p.x * p.x + p.y * p.y;
+    let f = sqrt(t);
+    let kikr = cos(f);  // cos(sqrt(t)) — Z fallback
+
+    // Footzee = input Z, or kikr if input Z is exactly 0.
+    // Foopzee = accumulator Z, or kikr if accumulator Z is exactly 0.
+    // Exact-zero comparison matches the cpp; the typical
+    // first-variation-in-an-iteration case has accum.z == 0.0.
+    let footzee = select(p.z, kikr, p.z == 0.0);
+    let foopzee = select(accum.z, kikr, accum.z == 0.0);
+
+    let s = f + footzee * footzee;
+
+    let abs_inv = abs(vvar_inv);
+    let sign_factor = select(1.0, -1.0, vvar_inv < 0.0);
+    let safe_f = max(f, 1e-30);
+    let safe_s = max(s, 1e-30);
+    let r = sign_factor / (safe_f * (t + abs_inv));
+    let u = sign_factor / (sqrt(safe_s) * (s + abs_inv));
+
+    // The cpp's `smooth × FPz` Z blend: 1 - w when |w| <= 1, else 0.
+    // For |w| <= 1 the additive case cancels and we just contribute
+    // `w × footzee × u` to Z; for |w| > 1 the prior accumulator gets
+    // wiped (smooth = 0) and replaced with `w × (foopzee + footzee × u)`.
+    let smoothed = select(0.0, 1.0 - w, abs(w) <= 1.0);
+
+    // Map cpp's `FPz_new = FPz × smooth + w × (foopzee + footzee × u)`
+    // into our additive dispatcher `result += w × return_value`:
+    //   return_z = accum.z × (smooth − 1) / w + (foopzee + footzee × u)
+    // Verifies algebraically against both branches above.
+    let return_z = accum.z * (smoothed - 1.0) * inv_w + (foopzee + footzee * u);
+
+    return vec3<f32>(p.x * r, p.y * r, return_z);
+}
+"#,
+};
+
 /// Maps the plane through a hyperbolic curve based on exponentials.
 /// Produces two focal points that warp the surrounding space.
 ///

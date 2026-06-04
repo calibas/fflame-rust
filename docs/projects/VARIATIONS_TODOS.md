@@ -733,6 +733,41 @@ Contract is now consistent: **if a variation is in the flame, plan
 on it being used.** The user controls what's in the flame; explicit
 adds-then-zero are respected as "include this in the shader".
 
+### `plane_wf` — partial port, image features stubbed
+
+`plane_wf` shipped on the `jwf-variations-batch1` branch as a working
+port of the math-only modes (U / V / UV color writes, no image
+sampling). What's missing — and what's deliberately stubbed:
+
+- **`color_mode = Colormap` (0)** silently falls back to the `U`
+  color path. JWildfire samples an image at `(u, v)` to produce a
+  texture-sampled color; that's the
+  [variation-port-blockers.md](variation-port-blockers.md) Group 2
+  blocker (texture / image sampling). The visible difference is
+  large — flames that used Colormap mode will render with diagonal
+  banding instead of photographic color.
+- **Displacement map** (`displ_amount`, `blend_displ_map`,
+  `displ_map_filename`) — same blocker. `getDisplacement()` returns
+  0.0 unconditionally in our body, so the chosen plane stays flat.
+  Most JWF flames don't use this.
+- **`calc_color_idx`** — paired with Colormap mode (computes a
+  palette index from the sampled RGB by nearest-color search). Not
+  applicable until Colormap lands.
+- **`receive_only_shadows`** — solid-render-mode flag for JWF's
+  `sld_render_*` pipeline. We don't have solid render; no plan to.
+
+If/when texture sampling lands as a framework feature, `plane_wf`'s
+Colormap mode and the displacement-map path become small additions
+on top of the existing variation body. Until then it's "useful for
+basic flames, lossy round-trip for image-using flames".
+
+Related: the same group of features blocks `post_colormap_wf`
+(itself a full texture-sampler) and any other `*_wf` variation that
+inherits from `AbstractColorMapWFFunc` /
+`AbstractDisplacementMapWFFunc`. See
+[jwf-common-variations-port.md](jwf-common-variations-port.md) Group
+B-blocked for the running list.
+
 ### ~~Stray `weight: f32` parameter in some WGSL bodies~~ — RESOLVED
 
 Resolved on the `variations-init-slot-and-macmillan` branch. The

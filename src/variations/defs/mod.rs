@@ -135,6 +135,9 @@ mod hexaplay3d_misc;
 mod hexnix3d_misc;
 mod klein_group_misc;
 mod subflame;
+// `pub mod` so the shader builder can call `synth::specialize_wgsl_*`
+// directly for per-flame WGSL specialization.
+pub mod synth;
 
 pub use basic::*;
 pub use advanced::*;
@@ -268,6 +271,7 @@ pub use hexaplay3d_misc::*;
 pub use hexnix3d_misc::*;
 pub use klein_group_misc::*;
 pub use subflame::*;
+pub use synth::*;
 
 use super::definition::VariationDef;
 
@@ -319,6 +323,7 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &CROSS,
     &LOONIE,
     &SCRY,
+    &SCRY_3D,
     &FOCI,
     &ELLIPTIC,
     &WAVES2,
@@ -355,6 +360,7 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &EPISPIRAL,
     &BWRAPS,
     &JULIASCOPE,
+    &JULIASCOPE_3DB,
     &JULIA3DZ,
     &CURL3D,
     &RADIAL_BLUR,
@@ -656,6 +662,9 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &CONIC,
     &POWER,
     &ROUNDSPHER,
+    &ROUNDSPHER3D,
+    &CUBIC3D,
+    &CUBIC_LATTICE_3D,
     &CHECKS,
     &CONE,
     // Erf family + small misc
@@ -817,6 +826,8 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &CLOVERLEAF_WF,
     &ROSE_WF,
     &BUBBLE_WF,
+    &PLANE_WF,
+    &CHECKERBOARD_WF,
     // waves_wf_family: waves2_wf, waves3_wf, waves4_wf, dinis_surface_wf
     &WAVES2_WF,
     &WAVES3_WF,
@@ -907,4 +918,10 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     // subflame: subflame_wf (8 user + 5 state, needs_rng + writes_color, blur class)
     // — JWildfire's nested-IFS variation. P3 registers; P4 implements.
     &SUBFLAME_WF,
+    // pre-phase variant of subflame_wf — same nested IFS, output goes to
+    // the affine point instead of the variation sum. Body intentionally
+    // ignores scale/angle/offset (JWildfire's transform() override does
+    // a raw `q` assignment).
+    &PRE_SUBFLAME_WF,
+    &SYNTH,
 ];
