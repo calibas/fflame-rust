@@ -263,6 +263,23 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let sym_count = 1u;
 {{/if}}
 
+            // Pre-compute the iteration's base color OUTSIDE the
+            // symmetry loop. It depends only on color_index / color /
+            // (none for path-map) — none of which change between the
+            // K symmetric copies. Hoisting the palette texture sample
+            // alone gives a (K-1)/K speedup for palette mode at high
+            // Point-symmetry orders. Default of white covers the
+            // path-map COLOR_MODE branch (and any unhandled mode);
+            // fog inside the loop reads from this base into a local
+            // copy so its per-copy depth modulation doesn't bleed.
+            var base_final_color: vec3<f32> = vec3<f32>(1.0, 1.0, 1.0);
+            if (COLOR_MODE == 0u) {
+                let palette_srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(color_index, 0.5), 0.0).rgb;
+                base_final_color = srgb_to_linear(palette_srgb);
+            } else if (COLOR_MODE == 1u) {
+                base_final_color = color;
+            }
+
             for (var sym_k: u32 = 0u; sym_k < sym_count; sym_k = sym_k + 1u) {
 {{#if HAS_POST_SYMMETRY}}
 {{#if RENDER_3D}}
@@ -326,27 +343,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
                 let pixel_idx = u32(pixel.y) * params.width + u32(pixel.x);
 
-                // Determine final color based on mode (hard-coded COLOR_MODE).
-                // Initialized to white so the PathMap COLOR_MODE branch is
-                // always defined: when PATH_TRACKING is true the path-map
-                // body below overwrites it, when PATH_TRACKING is false
-                // (high-res export) the white default falls through. WGSL
-                // requires `var final_color` be initialized on every path
-                // even when COLOR_MODE is a compile-time constant.
-                var final_color: vec3<f32> = vec3<f32>(1.0, 1.0, 1.0);
-                if (COLOR_MODE == 0u) {
-                    // Palette mode: sample from palette texture using color_index.
-                    // Palette is sRGB-encoded; decode to linear for accumulation.
-                    let palette_srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(color_index, 0.5), 0.0).rgb;
-                    final_color = srgb_to_linear(palette_srgb);
-                } else if (COLOR_MODE == 1u) {
-                    // Speed mode: uses accumulated RGB color
-                    final_color = color;
-{{#if PATH_TRACKING}}
-                } else {
-                    // Path map mode: store path to buffer
-                    // Color will be computed in tonemap pass from path buffer
+                // Per-copy local copy of the hoisted base color. We
+                // need a `var` so fog (below) can modulate it without
+                // affecting the next symmetric copy's plot.
+                var final_color: vec3<f32> = base_final_color;
 
+{{#if PATH_TRACKING}}
+                // Path-tracking write — depends on pixel_idx so it
+                // must stay inside the symmetry loop (each symmetric
+                // copy records the same path at its own pixel).
+                if (COLOR_MODE == 2u) {
                     // Capture mode determines when to write:
                     // 0 = FirstHit: only write if no path stored yet
                     // 1 = FirstAfterBurnIn: same as FirstHit (we're already past burn-in here)
@@ -364,11 +370,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                         path_buffer[pixel_idx].initial_x = initial_x;
                         path_buffer[pixel_idx].initial_y = initial_y;
                     }
-
-                    // Use white for histogram (actual color computed in tonemap from path buffer)
-                    final_color = vec3<f32>(1.0, 1.0, 1.0);
-{{/if}}
                 }
+{{/if}}
 
 {{#if RENDER_3D}}
                 // Apply depth fog (3D mode only, blend toward background color)
