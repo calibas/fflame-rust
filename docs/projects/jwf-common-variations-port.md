@@ -40,7 +40,7 @@ turned out to be genuinely different variations (3D-aware formulas
 with their own Z math), not just 3D-body additions to the 2D
 versions we have. They moved to Group B.
 
-### Group B — Standalone ports, straightforward (10)
+### Group B — Standalone ports, straightforward (8)
 
 Simple geometry / math variations with available cpp. Each is
 basically a translate-cpp-to-WGSL job; no exotic features needed.
@@ -52,11 +52,20 @@ basically a translate-cpp-to-WGSL job; no exotic features needed.
 | `cubicLattice_3D` | yes | 3D lattice grid. |
 | `mandelbrot` | yes | Escape-time Mandelbrot inside a flame variation. Modest iter loop. |
 | `plane_wf` | yes | Project to plane; small. |
-| `post_colormap_wf` | yes | Post-phase color remap; uses `vc` register. |
 | `synth` | yes | Multi-param waveform synthesizer; lots of params but math is straightforward. |
-| `szubieta` | yes | Custom curve; small. |
 | `roundspher3D` | yes | Cousin of our `roundspher`, but 3D-aware: includes `z²` in `d`, falls back to `cos(sqrt(x²+y²))` when input Z is 0, modifies output Z. Distinct variation. |
 | `scry_3D` | yes | Cousin of our `scry`, but 3D-aware: VVAR-dependent `VVAR_inv`, separate `r` and `u` factors for XY and Z, sign branching, fallback `cos(sqrt(t))` for zero Z. Distinct variation. |
+
+### Group B-blocked — re-classified as architecturally blocked
+
+These looked simple from line count but turned out to need
+framework features we don't have. Cross-referenced into
+[variation-port-blockers.md](variation-port-blockers.md).
+
+| Variation | Blocker |
+|---|---|
+| `post_colormap_wf` | Texture / image sampling (extends `AbstractColorMapWFFunc`). |
+| `szubieta` | Custom-primitive plotting framework (extends `DrawFunc`, builds `primitives` of `Ngon`s in init, samples via `plotPolygon`). Already listed in variation-port-blockers.md as a "Custom primitive". |
 
 ### Group C — Pre/post phase relatives of variations we have (1)
 

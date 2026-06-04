@@ -466,6 +466,95 @@ fn variation_roundspher(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<
 };
 
 // =============================================================================
+// roundspher3D: 3D companion to roundspher (Larry Berlin, Sep 2009)
+//   d = x² + y² + tempTZ²  where tempTZ = z, or cos(sqrt(x²+y²)) if z == 0
+//   e = 1/d + (2/π)²
+//   out_xy = w² × (x, y) / (d × e)
+//   out_z  = tempPZ + w² × tempTZ / (d × e)
+//          where tempPZ = result.z, or cos(sqrt(x²+y²)) if result.z == 0
+// 3D-aware companion to `roundspher` — distinct variation (not an
+// alias). The zero-Z fallback to cos(f) makes the variation behave
+// reasonably the first time it runs in an iteration (when accumulator
+// Z is still 0), injecting a cylinder-of-z shape rather than
+// collapsing to flat. Body has w² → needs_transform divides one out;
+// needs_accum reads `result.z` for the `tempPZ` zero-check fallback.
+// =============================================================================
+/// JWildfire 3D-aware companion to [`ROUNDSPHER`] — Larry Berlin's
+/// extension of Raykoid666's rounded spherical inversion. Z participates
+/// in the radius denominator (`d = x² + y² + z²`), and a zero input Z
+/// is replaced with `cos(sqrt(x² + y²))` so the very first iteration
+/// (when the accumulator is still 0) lands on a cylinder rather than
+/// collapsing flat. Output Z accumulates additively when other
+/// variations already contributed, or absorbs the same cos-of-radius
+/// when this is the only Z-writer in the xform.
+///
+/// # Authors
+/// - Raykoid666 (original `roundspher`)
+/// - Larry Berlin (3D extension)
+pub static ROUNDSPHER3D: VariationDef = VariationDef {
+    name: "roundspher3D",
+    aliases: &[],
+    display_name: "Round Spher 3D",
+    category: VariationCategory::Full3D,
+    phase: VariationPhase::Normal,
+    needs_rng: false,
+    parameters: &[],
+    needs_transform: true,
+    writes_color: false,
+    init_param_count: 0,
+    wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    needs_accum: true,
+    wgsl_2d: r#"
+fn variation_roundspher3D(p: vec2<f32>, accum: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
+    // 2D mode: no Z register to fall back on, so the cpp's tempPZ
+    // branch collapses to the additive case. Body is roundspher's
+    // 2D math; the only reason this exists in 2D is so a flame
+    // saved with roundspher3D doesn't drop the variation entirely
+    // when rendered in 2D mode.
+    let w = transforms[xform_id].variations[variation_id];
+    let two_over_pi_sq = 0.40528473456935106;  // (2/π)²
+    let r2 = p.x * p.x + p.y * p.y;
+    let d = max(r2, 1e-30);
+    let e = 1.0 / d + two_over_pi_sq;
+    let safe_e = select(e, 1e-30, abs(e) < 1e-30);
+    let de = d * safe_e;
+    return vec2<f32>(w * p.x / de, w * p.y / de);
+}
+"#,
+    wgsl_3d: r#"
+fn variation_roundspher3D(p: vec3<f32>, accum: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
+    let w = transforms[xform_id].variations[variation_id];
+    let inv_w = 1.0 / select(w, 1e-30, abs(w) < 1e-30);
+    let two_over_pi_sq = 0.40528473456935106;  // (2/π)²
+
+    let r2 = p.x * p.x + p.y * p.y;
+    let f = sqrt(r2);
+
+    // Zero-Z fallback to cos(f) — mirrors Larry Berlin's cpp.
+    // `tempTZ` is the per-iteration input Z (or cos(f) if zero).
+    // `inject_z` is the constant "kick" added to result.z when the
+    // accumulator is still 0 (first Z-writer in the iteration). After
+    // the outer × w multiplier this lands as cos(f), matching the cpp.
+    let tempTZ = select(p.z, cos(f), p.z == 0.0);
+    let inject_z = select(0.0, cos(f), accum.z == 0.0) * inv_w;
+
+    let d = max(r2 + tempTZ * tempTZ, 1e-30);
+    let e = 1.0 / d + two_over_pi_sq;
+    let safe_e = select(e, 1e-30, abs(e) < 1e-30);
+    let de = d * safe_e;
+
+    return vec3<f32>(
+        w * p.x / de,
+        w * p.y / de,
+        inject_z + w * tempTZ / de,
+    );
+}
+"#,
+};
+
+// =============================================================================
 // checks: checkerboard cell-shift (Keeps / Xyrus02)
 //   4 user params: x, y, size, rnd
 //   1 init slot: cs = 1 / (size + ε)

@@ -319,6 +319,7 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &CROSS,
     &LOONIE,
     &SCRY,
+    &SCRY_3D,
     &FOCI,
     &ELLIPTIC,
     &WAVES2,
@@ -656,6 +657,7 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &CONIC,
     &POWER,
     &ROUNDSPHER,
+    &ROUNDSPHER3D,
     &CHECKS,
     &CONE,
     // Erf family + small misc
