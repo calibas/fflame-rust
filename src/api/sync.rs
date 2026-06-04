@@ -610,6 +610,7 @@ fn flame_from_subflame_response(resp: &FlameResponse) -> Flame {
         // API doesn't carry post_symmetry yet; default until the server
         // schema gains the field.
         post_symmetry: crate::scene::transforms::PostSymmetry::default(),
+        preserve_z: false,
     }
 }
 
@@ -649,6 +650,7 @@ pub fn flame_response_to_config(resp: &FlameResponse) -> FractalConfig {
         // API doesn't carry post_symmetry yet; default until the server
         // schema gains the field.
         post_symmetry: crate::scene::transforms::PostSymmetry::default(),
+        preserve_z: false,
     };
 
     // Reconstruct palette from the inline payload on the flame response.

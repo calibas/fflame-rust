@@ -105,6 +105,12 @@ fn parse_flame_element(
     // so the defaults stay until JWF tokens overwrite them.
     let mut post_symmetry = crate::scene::transforms::PostSymmetry::default();
 
+    // JWildfire `preserve_z` — matches Apo/JWF default of false (Z
+    // reset each iteration). The attr is omitted entirely when JWF
+    // wants the default, so we keep the false initial value unless
+    // we encounter the token explicitly.
+    let mut preserve_z = false;
+
     for attr in start_element.attributes() {
         let attr = attr?;
         let key = std::str::from_utf8(attr.key.as_ref())?;
@@ -173,6 +179,12 @@ fn parse_flame_element(
             }
             "post_symmetry_rotation" => {
                 post_symmetry.rotation_deg = value.parse().unwrap_or(6.0);
+            }
+            "preserve_z" => {
+                // JWildfire encodes as `"1"` / `"0"`. Treat anything
+                // non-zero as true; everything else (including the
+                // empty string) as false.
+                preserve_z = !value.trim().is_empty() && value.trim() != "0";
             }
             "curves" => {
                 // Parse space-separated floats (48 values: 4 curves × 12 points)
@@ -336,6 +348,7 @@ fn parse_flame_element(
         // xform carried one (the common Apo case).
         subflames: imported_subflames,
         post_symmetry,
+        preserve_z,
     };
     flame.migrate_legacy_final(final_transform);
 
@@ -985,6 +998,12 @@ fn write_single_flame(out: &mut String, config: &FractalConfig, flame: &Flame) {
     out.push_str(&format!(" post_symmetry_centre_y=\"{}\"", fmt_f32(ps.center_y)));
     out.push_str(&format!(" post_symmetry_distance=\"{}\"", fmt_f32(ps.distance)));
     out.push_str(&format!(" post_symmetry_rotation=\"{}\"", fmt_f32(ps.rotation_deg)));
+
+    // JWildfire convention: `preserve_z` is omitted when default
+    // (false) and emitted as `"1"` when set. Apo ignores the attr.
+    if flame.preserve_z {
+        out.push_str(" preserve_z=\"1\"");
+    }
     // Apo density-estimator block — we don't use it, write its defaults
     // so the file looks complete.
     out.push_str(" estimator_radius=\"9\" estimator_minimum=\"0\" estimator_curve=\"0.4\" enable_de=\"0\"");
@@ -1862,6 +1881,43 @@ mod tests {
             assert!((cfg.flame.post_symmetry.distance - 0.5).abs() < 1e-5);
             assert!((cfg.flame.post_symmetry.rotation_deg - 30.0).abs() < 1e-4);
         }
+    }
+
+    /// `preserve_z` XML round-trip: importer reads `"1"` as true,
+    /// missing attr stays at false (JWF default). Writer emits
+    /// `preserve_z="1"` when true and omits it when false.
+    #[test]
+    fn test_preserve_z_roundtrip() {
+        // Missing attr → false (JWF default).
+        let xml_none = r#"
+<flames name="pz">
+<flame name="None" size="800 600" center="0 0" scale="200" background="0 0 0" brightness="4" gamma="4">
+   <xform weight="1" color="0" linear="1" coefs="1 0 0 1 0 0" opacity="1" />
+</flame>
+</flames>
+        "#;
+        let cfg = parse_flame_xml(xml_none).expect("parse").into_iter().next().unwrap();
+        assert!(!cfg.flame.preserve_z, "missing attr should default to false");
+        let xml_out = write_flame_xml(&cfg);
+        assert!(!xml_out.contains("preserve_z"), "should not emit when false: {}", xml_out);
+
+        // preserve_z="1" → true. Round-trip preserves the flag and
+        // re-emits the attr on export.
+        let xml_set = r#"
+<flames name="pz">
+<flame name="Preserved" size="800 600" center="0 0" scale="200" background="0 0 0" brightness="4" gamma="4" preserve_z="1">
+   <xform weight="1" color="0" linear="1" coefs="1 0 0 1 0 0" opacity="1" />
+</flame>
+</flames>
+        "#;
+        let cfg = parse_flame_xml(xml_set).expect("parse").into_iter().next().unwrap();
+        assert!(cfg.flame.preserve_z, "preserve_z=\"1\" should map to true");
+        let xml_out = write_flame_xml(&cfg);
+        assert!(xml_out.contains("preserve_z=\"1\""), "should re-emit when true: {}", xml_out);
+
+        // Re-import after export — value survives.
+        let cfg_back = parse_flame_xml(&xml_out).expect("re-parse").into_iter().next().unwrap();
+        assert!(cfg_back.flame.preserve_z);
     }
 
     /// Diagnostic: print the rando13 subflame's structure (xform count,

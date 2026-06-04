@@ -199,6 +199,12 @@ pub enum ConfigPath {
     PostSymmetryDistance,
     PostSymmetryRotation,
 
+    /// JWildfire's `preserve_z` flag — when true, the chaos game's
+    /// Z carries across iterations; when false (default), Z is reset
+    /// each iteration. Flipping it changes the `FLATTEN_Z_PER_ITER`
+    /// shader gate and forces a shader rebuild via ShaderConstants.
+    PreserveZ,
+
     // ===== Effects (post-processing, no iteration reset needed) =====
     /// Enable/disable a density effect
     DensityEffectEnabled { index: usize },
@@ -595,6 +601,7 @@ impl Display for ConfigPath {
             ConfigPath::PostSymmetryCenterY => write!(f, "Symmetry Center Y"),
             ConfigPath::PostSymmetryDistance => write!(f, "Symmetry Distance"),
             ConfigPath::PostSymmetryRotation => write!(f, "Symmetry Rotation"),
+            ConfigPath::PreserveZ => write!(f, "Preserve Z"),
 
             // Effects
             ConfigPath::DensityEffectEnabled { index } => {
@@ -944,6 +951,7 @@ impl ConfigPath {
             ConfigPath::PostSymmetryCenterY => I18nKey::simple("history.param.post_symmetry_center_y"),
             ConfigPath::PostSymmetryDistance => I18nKey::simple("history.param.post_symmetry_distance"),
             ConfigPath::PostSymmetryRotation => I18nKey::simple("history.param.post_symmetry_rotation"),
+            ConfigPath::PreserveZ => I18nKey::simple("history.param.preserve_z"),
 
             // Effects
             ConfigPath::DensityEffectEnabled { index } => I18nKey::with_params(
@@ -1853,6 +1861,7 @@ impl ConfigPath {
             | ConfigPath::PostSymmetryCenterY
             | ConfigPath::PostSymmetryDistance
             | ConfigPath::PostSymmetryRotation
+            | ConfigPath::PreserveZ
             | ConfigPath::MaxIterations
             | ConfigPath::DeterministicRng => UpdateType::IterationReset,
 
@@ -2038,6 +2047,7 @@ impl ConfigPath {
             ConfigPath::PostSymmetryCenterY => "PostSymmetryCenterY".to_string(),
             ConfigPath::PostSymmetryDistance => "PostSymmetryDistance".to_string(),
             ConfigPath::PostSymmetryRotation => "PostSymmetryRotation".to_string(),
+            ConfigPath::PreserveZ => "PreserveZ".to_string(),
 
             // Effects
             ConfigPath::DensityEffectEnabled { index } => format!("DensityEffect.{}.Enabled", index),
@@ -2141,6 +2151,7 @@ impl ConfigPath {
             "PostSymmetryCenterY" => return Some(ConfigPath::PostSymmetryCenterY),
             "PostSymmetryDistance" => return Some(ConfigPath::PostSymmetryDistance),
             "PostSymmetryRotation" => return Some(ConfigPath::PostSymmetryRotation),
+            "PreserveZ" => return Some(ConfigPath::PreserveZ),
 
             _ => {}
         }
@@ -2541,7 +2552,8 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::LinkedTransformPostAffineEnabled { .. }
         | ConfigPath::FinalTransformPostAffineEnabled { .. }
         | ConfigPath::SystemVsyncEnabled
-        | ConfigPath::SystemShowHelpOnStartup => {
+        | ConfigPath::SystemShowHelpOnStartup
+        | ConfigPath::PreserveZ => {
             json.as_bool().map(ConfigValue::Bool)
         }
 

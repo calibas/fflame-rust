@@ -1454,6 +1454,41 @@ pub struct Flame {
     /// ignores them.
     #[serde(default, skip_serializing_if = "PostSymmetry::is_default")]
     pub post_symmetry: PostSymmetry,
+
+    /// JWildfire's `preserve_z` flag — controls whether the chaos
+    /// game's Z carries across iterations or gets reset each step.
+    ///
+    /// - `false` (default, matches Apophysis and JWildfire's
+    ///   per-file defaults): Z is reset to 0 at the end of each
+    ///   iteration. Variations may still produce per-iteration Z
+    ///   values used in that iteration's plot, but the next iteration
+    ///   starts fresh. Prevents Z explosion from variations that
+    ///   scale Z by amounts > 1 (e.g. `spherical` at high weight),
+    ///   which can otherwise cascade to `±∞` and poison the camera
+    ///   transform (`0·∞ = NaN`).
+    /// - `true`: Z carries across iterations. Matches JWildfire's
+    ///   `preserve_z="1"` and is needed by some Z-aware flames.
+    ///
+    /// `.fflame` files saved before this field existed default to
+    /// **true** via the serde fallback (preserving their original
+    /// look). `Default::default()` returns **false** so newly
+    /// authored flames and JWF imports match Apo/JWF defaults.
+    #[serde(default = "default_serde_preserve_z", skip_serializing_if = "skip_serializing_preserve_z_if_default")]
+    pub preserve_z: bool,
+}
+
+fn default_serde_preserve_z() -> bool {
+    // Pre-field `.fflame` files had no preserve_z; treat their
+    // missing field as "preserve Z" so they keep rendering the way
+    // they did before this feature landed.
+    true
+}
+
+fn skip_serializing_preserve_z_if_default(v: &bool) -> bool {
+    // Skip writing the field when it matches the serde fallback
+    // (`true`). New flames default to `false` and write the field
+    // explicitly, so the round-trip is well-defined for both eras.
+    *v
 }
 
 /// What kind of plot-time symmetry to apply (see `Flame.post_symmetry`).
@@ -1577,6 +1612,8 @@ impl Default for Flame {
             solo_transform: None,  // Default: no solo (all transforms active)
             subflames: Vec::new(),  // Default: no subflames
             post_symmetry: PostSymmetry::default(),
+            // New flames match Apo/JWF default: don't preserve Z.
+            preserve_z: false,
         }
     }
 }
@@ -1755,6 +1792,7 @@ impl<'de> Deserialize<'de> for Flame {
             SoloTransform,
             Subflames,
             PostSymmetry,
+            PreserveZ,
         }
 
         struct FlameVisitor;
@@ -1781,6 +1819,7 @@ impl<'de> Deserialize<'de> for Flame {
                 let mut solo_transform = None;
                 let mut subflames: Option<Vec<Flame>> = None;
                 let mut post_symmetry: Option<PostSymmetry> = None;
+                let mut preserve_z: Option<bool> = None;
 
                 while let Some(key) = map.next_key()? {
                     match key {
@@ -1843,6 +1882,9 @@ impl<'de> Deserialize<'de> for Flame {
                         Field::PostSymmetry => {
                             post_symmetry = Some(map.next_value()?);
                         }
+                        Field::PreserveZ => {
+                            preserve_z = Some(map.next_value()?);
+                        }
                     }
                 }
 
@@ -1864,6 +1906,9 @@ impl<'de> Deserialize<'de> for Flame {
                     solo_transform: solo_transform.unwrap_or(None),
                     subflames: subflames.unwrap_or_default(),
                     post_symmetry: post_symmetry.unwrap_or_default(),
+                    // Old `.fflame` files (pre-preserve_z) default
+                    // to `true` to keep their look unchanged.
+                    preserve_z: preserve_z.unwrap_or(true),
                 };
                 // Migrate any legacy singular `final_transform` field
                 // (consumed locally above into `final_transform`) into the
@@ -1876,7 +1921,7 @@ impl<'de> Deserialize<'de> for Flame {
             }
         }
 
-        const FIELDS: &[&str] = &["name", "transforms", "final_transform", "linked_transforms", "final_transforms", "render_mode", "perspective_strength", "projection", "xaos", "solo_transform", "subflames", "post_symmetry"];
+        const FIELDS: &[&str] = &["name", "transforms", "final_transform", "linked_transforms", "final_transforms", "render_mode", "perspective_strength", "projection", "xaos", "solo_transform", "subflames", "post_symmetry", "preserve_z"];
         deserializer.deserialize_struct("Flame", FIELDS, FlameVisitor)
     }
 }
