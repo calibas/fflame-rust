@@ -142,6 +142,7 @@ mod fractwf;
 mod mandelbrot;
 mod crackle;
 mod dc_perlin;
+mod szubieta;
 
 pub use basic::*;
 pub use advanced::*;
@@ -280,6 +281,7 @@ pub use fractwf::*;
 pub use mandelbrot::*;
 pub use crackle::*;
 pub use dc_perlin::*;
+pub use szubieta::*;
 
 use super::definition::VariationDef;
 
@@ -954,4 +956,8 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     // dc_perlin — Perlin-noise base shape with direct color.
     // Requires noise.wgsl only (no Voronoi).
     &DC_PERLIN,
+    // szubieta — grid-of-polygons base shape (Jesus Sosa, 2018).
+    // JWildfire builds a primitive list in init(); we compute the
+    // same thing in pure per-call math.
+    &SZUBIETA,
 ];
