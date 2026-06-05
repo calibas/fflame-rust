@@ -13,9 +13,9 @@ Source list: [`output/jwildfire-script-vars.txt`](../../output/jwildfire-script-
 ## Status
 
 - **Total**: 190
-- **Already implemented**: 184 (97%)
-- **Missing**: 6 — see groups below. All six are now legitimately
-  blocked (framework features or missing source), not just unported.
+- **Already implemented**: 187 (98%)
+- **Missing**: 3 — see groups below. All three are framework-blocked
+  (texture sampling / custom-primitive plotting) or source-hunt.
 
 Re-run `python scripts/diff_jwf_list.py` after every change.
 
@@ -27,11 +27,19 @@ per-flame WGSL specialization framework), `juliascope3Db`,
 list (turned out to be a typo of `pdj` + `oscilloscope` smashed
 together, not a real JWF variation).
 
-Batch 2 (`jwf-variations-batch2`) landed the fract_*_wf family
-(`fract_dragon_wf`, `fract_julia_wf`, `fract_mandelbrot_wf`,
-`fract_meteors_wf`, `fract_pearls_wf`, `fract_salamander_wf`) plus
-the standalone `mandelbrot`. All seven share the same escape-time
-infrastructure in [`shaders/core/fractwf.wgsl`](../../shaders/core/fractwf.wgsl).
+Batch 2 (`jwf-variations-batch2`, merged in PR #93) landed the
+fract_*_wf family (`fract_dragon_wf`, `fract_julia_wf`,
+`fract_mandelbrot_wf`, `fract_meteors_wf`, `fract_pearls_wf`,
+`fract_salamander_wf`) plus the standalone `mandelbrot`. All seven
+share the same escape-time infrastructure in
+[`shaders/core/fractwf.wgsl`](../../shaders/core/fractwf.wgsl).
+
+Batch 3 (`jwf-variations-batch3`) landed the noise / Voronoi family:
+`crackle`, `dc_crackle_wf`, `dc_perlin`. Two new shared helpers in
+[`shaders/core/noise.wgsl`](../../shaders/core/noise.wgsl) (table-free
+Gustavson simplex + perlin octave wrapper) and
+[`shaders/core/voronoi.wgsl`](../../shaders/core/voronoi.wgsl) (cell
+math + the shared `crackle_body`).
 
 ## Triage
 
@@ -91,17 +99,32 @@ registered as a different phase.
 |---|---|---|---|---|
 | `pre_subflame_wf` | `subflame_wf` (we have) | yes | ✅ LANDED | Pre-phase variant — same nested chaos-game machinery as `subflame_wf`, but the output replaces the affine point (raw `q` assignment, no scale/angle/offset) instead of being summed. Shader-builder `has_subflame` check extended to fire on either name; both excluded from the parallel `apply_subflame_variations` dispatcher to preserve the v1 no-nested-subflames recursion break. |
 
-### Group D — Voronoi / noise family (3)
+### Group D — Voronoi / noise family (3, all LANDED)
 
-Need either a cell-based Voronoi sampler or a Perlin-noise sampler.
-Once one lands, the others are easier. Both involve hashing + nearest-
-neighbor logic; non-trivial but well-trodden territory.
+Three variations sharing a noise + Voronoi infrastructure layer.
+The cpp sources weren't all present, but the Java in
+`output/variation-jwf-source/` covers all three plus the shared
+`NoiseTools` and `VoronoiTools` helpers. All landed in batch 3.
 
-| Variation | cpp | Notes |
+| Variation | Status | Notes |
 |---|---|---|
-| `crackle` | NO | Need source from jwildfire master or hand-port. |
-| `dc_crackle_wf` | yes | DC version — writes color from the cell index. Needs `crackle` first. |
-| `dc_perlin` | yes | Perlin noise + DC color writing. |
+| `crackle` | ✅ LANDED | Noise-distorted Voronoi cell base shape, 5 params. 18 simplex calls per invocation (9 cells × 2 passes × 2 noise components per `crackle_position`). |
+| `dc_crackle_wf` | ✅ LANDED | Extends `crackle` with two DC color params (`color_scale`, `color_offset`). Shares `crackle_body` from `voronoi.wgsl` via shader-builder dedupe — all four 2D/3D wrappers (both variations × both dimensions) call into the same body, so adding new DC-style cousins is a thin wrapper away. |
+| `dc_perlin` | ✅ LANDED | Perlin-noise base shape with direct color, 14 params (shape × map × select-bailout loop). Uses only `noise.wgsl`, no Voronoi. GPU clamps: `octaves ≤ 8` (in `perlin_noise_3d`), `select_bailout ≤ 4` (in the variation body). |
+
+**Noise implementation note**: ports the table-free Ian McEwan /
+Stefan Gustavson `webgl-noise` simplex (`permute(x) = (x·34 + 10)·x
+mod 289`, gradients derived arithmetically), not JWildfire's 1024-
+entry permutation + gradient tables. Direct port of the JWF tables
+failed catastrophically — naga emits module-scope `const array<u32,
+1024>` into the SPIR-V `Private` storage class, which the driver
+allocates per shader invocation. 32K threads × ~20KB tables × 2
+modules = gigabytes of GPU memory the driver tries to back, and the
+system locks up. Procedural simplex has no global state, fixed cost
+per call. Visual output differs from JWildfire bit-for-bit
+(different gradient layout, scale 42.0 vs 32.0) but produces
+statistically equivalent simplex noise — crackle's cell perturbation
+and dc_perlin's color drive look the same kind of organic.
 
 ### Group E — Escape-time fractal family (6, all LANDED)
 
@@ -188,13 +211,11 @@ needs it.
 ## Order of operations
 
 This doc started life triaging 23 variations into 6 groups. As of
-batches 1 + 2 (17 ports landed) the work-list is much shorter:
+batches 1 + 2 + 3 (20 ports landed) the work-list is down to the
+genuinely-blocked tail:
 
-- **Group D** (3 noise/Voronoi). `crackle` first (still no source
-  — not in `output/jwildfire-vars/output/`), then `dc_crackle_wf`
-  reuses it, then `dc_perlin` separately. Both crackle variants
-  share the cell-noise infra; perlin is a separate noise function.
 - **Group F residue** (`metaballs3d_wf`). Source-hunting; ad hoc.
+  This is the only target left that isn't framework-blocked.
 - **Group B-blocked** (`post_colormap_wf`, `szubieta`,
   `fract_formula_julia_wf`, `fract_formula_mand_wf`). All still
   waiting on framework features (texture sampling, custom-primitive
