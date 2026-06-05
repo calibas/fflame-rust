@@ -212,36 +212,68 @@ features once you read the cpp body carefully):
 | `sphtiling3v2` | `xy/uv` accumulators across iterations |
 | `ztwister` | Reads `FPz` accumulator (`ez = twist*FPz`) |
 
-### JIT-compiled custom code (#1) — ~28 variations
+### JIT-compiled custom code (#1) — 10 variations
 
-| Variation | Notes |
+These variations take a user-supplied code string as a resource
+parameter and JIT-compile it at flame load. JWildfire does this via
+Java's in-memory compiler; we'd need a Rust-side parser + WGSL
+emitter that runs in the shader builder, then trigger a shader
+recompile on formula change. See the discussion thread (post-batch-3
+docs commit) for the proposed design — same shape as the synth
+specialization framework, just driven by formula strings rather than
+mode params.
+
+| Variation | User input |
 |---|---|
-| `colordomain` | `cf_runner.f(z)` user-defined complex function |
-| `custom_wf` | User-typed math expression |
+| `custom_wf` | Math expression (the canonical case) |
 | `custom_wf_full` | Same |
 | `pre_custom_wf` | Same |
 | `post_custom_wf` | Same |
-| `dc_code` | Code-based palette function |
-| `ducks` | `cf_runner.f(z, c)` user-defined fractal iter |
-| `glsl_` | Bare GLSL JIT base |
-| `glsl_acrilic` | GLSL fragment + `DC_BaseFunc` |
-| `glsl_apollonian` | GLSL fragment + `DC_BaseFunc` |
-| `glsl_circlesblue` | GLSL fragment + `DC_BaseFunc` |
-| `glsl_circuits` | GLSL fragment + `DC_BaseFunc` |
-| `glsl_code` | GLSL fragment + `DC_BaseFunc` |
-| `glsl_fractaldots` | GLSL fragment + `DC_BaseFunc` |
-| `glsl_grid3d` | GLSL fragment + `DC_BaseFunc` |
-| `glsl_hoshi` | GLSL fragment + `DC_BaseFunc` |
-| `glsl_hyperbolictile` | GLSL fragment + `DC_BaseFunc` |
-| `glsl_kaleidocomplex` | GLSL fragment + `DC_BaseFunc` |
-| `glsl_kaleidoscopic` | GLSL fragment + `DC_BaseFunc` |
-| `glsl_kaliset` | GLSL fragment + `DC_BaseFunc` |
-| `glsl_kaliset2` | GLSL fragment + `DC_BaseFunc` |
-| `glsl_mandala` | GLSL fragment + `DC_BaseFunc` |
-| `glsl_mandelbox2d` | GLSL fragment + `DC_BaseFunc` |
-| `glsl_randomoctree` | GLSL fragment + `DC_BaseFunc` |
-| `glsl_squares` | GLSL fragment + `DC_BaseFunc` |
-| `glsl_starsfield` | GLSL fragment + `DC_BaseFunc` |
+| `dc_code` | Math expression driving the palette |
+| `colordomain` | `cf_runner.f(z)` — user-defined complex function |
+| `ducks` | `cf_runner.f(z, c)` — user-defined complex iteration |
+| `glsl_code` | GLSL fragment (`getRGBColor` body) — JIT'd via JWildfire's `glslFuncRunner.compile`. `GLSLBaseFunc.java` is the actual implementation. |
+| `fract_formula_julia_wf` | User-typed formula for the escape iter (listed below in the fract family too). |
+| `fract_formula_mand_wf` | Same. |
+
+#### Not JIT-blocked: the rest of the `glsl_*` family — port them like any other variation
+
+`GLSLFunc.java` is an abstract base class with a virtual
+`getRGBColor(i, j) -> vec3`. Concrete `glsl_*` subclasses (e.g.
+`GLSLGrid3DFunc`, `GLSLAcrilicFunc`, `GLSLApollonianFunc`) override
+`getRGBColor` with hand-written Java implementations of specific
+shadertoy-style algorithms — typically raymarchers, kaleidoscopic
+IFS, distance-field tilings. The Java uses JWildfire's `js.glsl.G`
+namespace (a Java reimplementation of GLSL primitives like `vec3`,
+`mat3`, `G.normalize`, `G.cos`, `.times()`, `.add()`) to mimic GLSL
+syntax, which makes the source *look* like it could be user-supplied
+GLSL. **It isn't.** Each variation is a separate, fixed Java port of
+one specific shader algorithm.
+
+These belong in the "per-variation porting effort" bucket, same
+shape as the DC_BaseFunc derivatives section below. Each is 100–200
+lines of math, translatable to WGSL by hand. We'll do them as a
+separate batch.
+
+| Variation | Algorithm |
+|---|---|
+| `glsl_acrilic` | Acrylic-style smudges |
+| `glsl_apollonian` | Apollonian gasket |
+| `glsl_circlesblue` | Blue-circle field |
+| `glsl_circuits` | Circuit-board pattern |
+| `glsl_fractaldots` | Fractal dot field |
+| `glsl_grid3d` | 3D raymarching grid (kabuto) |
+| `glsl_hoshi` | Star/hoshi tiling |
+| `glsl_hyperbolictile` | Hyperbolic tile |
+| `glsl_kaleidocomplex` | Complex kaleidoscope |
+| `glsl_kaleidoscopic` | Kaleidoscopic IFS |
+| `glsl_kaliset` | Kalisetset fractal |
+| `glsl_kaliset2` | Kalisetset variant |
+| `glsl_mandala` | Mandala pattern |
+| `glsl_mandelbox2d` | 2D Mandelbox |
+| `glsl_randomoctree` | Random octree noise |
+| `glsl_squares` | Square tiling |
+| `glsl_starsfield` | Stars field |
 
 ### `DC_BaseFunc` derivatives — infrastructure unblocked, per-variation porting remains
 
