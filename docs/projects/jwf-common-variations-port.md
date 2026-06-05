@@ -13,9 +13,10 @@ Source list: [`output/jwildfire-script-vars.txt`](../../output/jwildfire-script-
 ## Status
 
 - **Total**: 190
-- **Already implemented**: 187 (98%)
-- **Missing**: 3 — see groups below. All three are framework-blocked
-  (texture sampling / custom-primitive plotting) or source-hunt.
+- **Already implemented**: 188 (99%)
+- **Missing**: 2 — see groups below. Both framework-blocked
+  (texture sampling for `post_colormap_wf`, source-hunt for
+  `metaballs3d_wf`).
 
 Re-run `python scripts/diff_jwf_list.py` after every change.
 
@@ -88,7 +89,7 @@ framework features we don't have. Cross-referenced into
 | Variation | Blocker |
 |---|---|
 | `post_colormap_wf` | Texture / image sampling (extends `AbstractColorMapWFFunc`). |
-| `szubieta` | Custom-primitive plotting framework (extends `DrawFunc`, builds `primitives` of `Ngon`s in init, samples via `plotPolygon`). Already listed in variation-port-blockers.md as a "Custom primitive". |
+| `szubieta` | ✅ LANDED — was initially flagged as needing the `DrawFunc` custom-primitive framework, but the algorithm reduces to per-call math (random cell + bitwise pattern formula + random point on a unit 20-gon). No primitive list, no per-instance state. See `src/variations/defs/szubieta.rs`. |
 
 ### Group C — Pre/post phase relatives of variations we have (1, LANDED)
 
@@ -216,10 +217,10 @@ genuinely-blocked tail:
 
 - **Group F residue** (`metaballs3d_wf`). Source-hunting; ad hoc.
   This is the only target left that isn't framework-blocked.
-- **Group B-blocked** (`post_colormap_wf`, `szubieta`,
-  `fract_formula_julia_wf`, `fract_formula_mand_wf`). All still
-  waiting on framework features (texture sampling, custom-primitive
-  plotting, runtime expression interpreter) — see
+- **Group B-blocked** (`post_colormap_wf`,
+  `fract_formula_julia_wf`, `fract_formula_mand_wf`). Still waiting
+  on framework features (texture sampling, runtime expression
+  interpreter) — see
   [variation-port-blockers.md](variation-port-blockers.md).
 
 ## Related docs

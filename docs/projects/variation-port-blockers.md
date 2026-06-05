@@ -11,8 +11,8 @@ holds 516 variations.
 
 For the focused JWF "script vars" subset, see
 [`jwf-common-variations-port.md`](jwf-common-variations-port.md):
-187 / 190 implemented (98%); the 3 remaining (`metaballs3d_wf`,
-`post_colormap_wf`, `szubieta`) all hit blockers in this doc.
+188 / 190 implemented (99%); the 2 remaining (`metaballs3d_wf`,
+`post_colormap_wf`) hit blockers in this doc.
 
 ## Unsupported features
 
@@ -309,7 +309,23 @@ useful flames need them.
 | `pre_falloff3` | `AbstractFalloff3Func` |
 | `post_falloff3` | `AbstractFalloff3Func` |
 
-### Primitives infrastructure (#7) — 14 variations
+### Primitives infrastructure (#7) — 13 variations
+
+Variations that extend `DrawFunc` and build a list of `Primitive`
+objects in `init()`, then sample from them via `plotPolygon` /
+`plotLine` / `plotTriangle` etc. *Most* need the framework — the
+primitive list is consumed by a chaos-game-aware random selector
+plus shape-specific samplers that don't have a one-line WGSL
+equivalent.
+
+Some don't. When the underlying algorithm reduces to "pick a random
+cell, compute a value per-cell, then sample a polygon" with no
+inter-primitive interaction, we can compute the same thing per call
+without ever materializing the list. `szubieta` was in this table
+until we ported it that way (the primitive list collapses to:
+random `(i, j)` + bitwise pattern formula + random point on a
+20-gon — `src/variations/defs/szubieta.rs`). Worth checking each
+entry below for the same shape before assuming it's truly blocked.
 
 | Variation | Primitive type |
 |---|---|
@@ -328,7 +344,6 @@ useful flames need them.
 | `rsquares_js` | Random-squares primitive |
 | `sunflower` | Spiral-arrangement primitive |
 | `sunvoroni` | Voronoi cell layout |
-| `szubieta` | Custom primitive |
 | `taprats` | Tap-rats tile primitive |
 | `tree_js` | Tree-fractal turtle path |
 | `triantruchet` | `Tile`/`Triangle` rotation + `plotTriangle` |
