@@ -65,7 +65,11 @@ Fractal renderers:
 - [Fred's Fractal Factory](https://www.torpor.com/fred/fred.htm)
 - [FractalSet](https://www.fractalset.com/)
 - [IFS Construction Kit](https://larryriddle.agnesscott.org/ifskit/index.htm)
+- [Parsec](https://github.com/zoomacroom-games/Parsec)
 
-| Name | Webpage | Source | Platforms | Type | Language |
-| ---- | ------- | ------ | --------- | ---- | -------- |
-| Apophysis 7x | [link](https://sourceforge.net/projects/apophysis7x/) | [GitHub](https://github.com/xyrus02/apophysis-7x) | Win | Flame | Pascal
+| Name | Webpage | Source | Platforms | Language | License |
+| ---- | ------- | ------ | --------- | -------- | ------- |
+| Apophysis 7x | [link](https://sourceforge.net/projects/apophysis7x/) | [GitHub](https://github.com/xyrus02/apophysis-7x) | Win | Pascal | GPL |
+| JWildfire | [link](https://jwildfire.overwhale.com/) | [GitHub](https://github.com/thargor6/JWildfire) | Win/Mac/Linux | Java | GPL |
+| Chaotica | [link](https://www.chaoticafractals.com/) | --- | Win/Mac/Linux | C++ | © |
+| Ultra Fractal | [link](https://www.ultrafractal.com/) | --- | Win/Mac | Object Pascal | © |
