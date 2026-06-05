@@ -5,14 +5,14 @@ need to be added to unblock them.
 
 This document is the companion to
 [`variation-bulk-port.md`](variation-bulk-port.md), which tracks what
-*has* been ported. As of `jwf-variations-batch2` (2026-06-04, +7
-variations: the six `fract_*_wf` family + standalone `mandelbrot`),
-the registry holds 513 variations.
+*has* been ported. As of `jwf-variations-batch3` (2026-06-05, +3
+variations: `crackle`, `dc_crackle_wf`, `dc_perlin`), the registry
+holds 516 variations.
 
 For the focused JWF "script vars" subset, see
 [`jwf-common-variations-port.md`](jwf-common-variations-port.md):
-184 / 190 implemented (97%); the remaining 6 are all in this
-blockers doc.
+187 / 190 implemented (98%); the 3 remaining (`metaballs3d_wf`,
+`post_colormap_wf`, `szubieta`) all hit blockers in this doc.
 
 ## Unsupported features
 
@@ -204,9 +204,7 @@ features once you read the cpp body carefully):
 | `brownian_js` | Brownian-path canvas — actually #7 (primitives) |
 | `curliecue` | `_x0/_y0/_theta/_phi` accumulators — actually #7 (`primitives.add(...)`) |
 | `dc_dmodulus` | `_oldColor` accumulator (also DC_BaseFunc #8) |
-| `dc_crackle_wf` | Crackle algorithm state (also #8) |
-| `dc_cracklep_wf` | Crackle algorithm state (also #8) |
-| `mandelbrot` | `_x0/_y0` + `_xP/_yP/_zP` point cache + `_pIdx` — actually cross-dispatch persistence |
+| `dc_cracklep_wf` | Crackle algorithm state (also #8) — sibling of the landed `dc_crackle_wf` but with extra persistent state we don't yet support. |
 | `nblur` | Rejection-sampling state |
 | `pre_stabilize` | `x[64]/y[64]/c[64]` plus `start` flag — needs custom thread-init |
 | `recurrenceplot` | `_oldx/_oldy` + 30+ helper functions across 879 lines — own project |
@@ -262,12 +260,15 @@ real port:
 - `getRGBColor()` is typically 100–200 lines of GLSL-style procedural
   pattern math (modulo, trig, multi-octave iteration, distance fields,
   noise hashing) referencing JWildfire's `js.glsl.G` namespace.
-- Several need infrastructure we don't have yet: Perlin permutation
-  tables (`dc_perlin`), Worley/Voronoi cell sampling (`dc_voronoise`),
-  more transcendental complex functions on top of the Klein-group
-  baseline in [`shaders/core/complex.wgsl`](../../shaders/core/complex.wgsl)
+- Several need infrastructure we don't have yet: Worley/Voronoi cell
+  sampling (`dc_voronoise`), more transcendental complex functions on
+  top of the Klein-group baseline in
+  [`shaders/core/complex.wgsl`](../../shaders/core/complex.wgsl)
   (`dc_apollonian`, `dc_mandbrot`, `dc_mandelbox2d`, `dc_kaliset`,
-  `dc_kaliset2`, etc.).
+  `dc_kaliset2`, etc.). The Perlin/simplex infra is now in place via
+  `shaders/core/noise.wgsl` (table-free Gustavson port) — `dc_perlin`
+  itself landed in batch 3, and any other Perlin-dependent dc_*
+  derivative can reuse the same helper.
 - Several use time-based animation params (`time`, elapsed-ms walls)
   that we don't track per-iteration today.
 - The base class's `gradient=0` and `gradient=1` modes inject
@@ -289,9 +290,12 @@ useful flames need them.
 `dc_grid3d`, `dc_hexagons`, `dc_hoshi`, `dc_hyperbolictile`,
 `dc_kaleidocomplex`, `dc_kaleidoscopic`, `dc_kaleidotile`, `dc_kaliset`,
 `dc_kaliset2`, `dc_layers`, `dc_mandala`, `dc_mandbrot`,
-`dc_mandelbox2d`, `dc_menger`, `dc_perlin`, `dc_randomoctree`,
+`dc_mandelbox2d`, `dc_menger`, `dc_randomoctree`,
 `dc_rotations`, `dc_squares`, `dc_starsfield`, `dc_tesla`, `dc_tree`,
 `dc_tritile`, `dc_truchet`, `dc_turbulence`, `dc_voronoise`.
+
+(`dc_perlin` was on this list until batch 3 — landed via
+`src/variations/defs/dc_perlin.rs` on top of `shaders/core/noise.wgsl`.)
 
 ### Other abstract base classes (#8) — 7 variations
 

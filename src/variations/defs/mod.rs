@@ -140,6 +140,8 @@ mod subflame;
 pub mod synth;
 mod fractwf;
 mod mandelbrot;
+mod crackle;
+mod dc_perlin;
 
 pub use basic::*;
 pub use advanced::*;
@@ -276,6 +278,8 @@ pub use subflame::*;
 pub use synth::*;
 pub use fractwf::*;
 pub use mandelbrot::*;
+pub use crackle::*;
+pub use dc_perlin::*;
 
 use super::definition::VariationDef;
 
@@ -942,4 +946,12 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     // (3 slots), distinct from the fract_*_wf family. Source predates JWF
     // (originally Jed Kelsey's Apophysis plugin, 2007).
     &MANDELBROT,
+    // crackle / dc_crackle_wf — Voronoi-cell base shapes (slobo777).
+    // Share `crackle_body` via shader-builder dedupe; require the
+    // noise.wgsl + voronoi.wgsl helpers.
+    &CRACKLE,
+    &DC_CRACKLE_WF,
+    // dc_perlin — Perlin-noise base shape with direct color.
+    // Requires noise.wgsl only (no Voronoi).
+    &DC_PERLIN,
 ];

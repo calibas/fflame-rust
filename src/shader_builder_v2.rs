@@ -1293,6 +1293,27 @@ impl ShaderBuilder {
             shader.push('\n');
         }
 
+        // 7c. Noise + Voronoi helpers — emitted when any variation in the
+        //     crackle / perlin family is active. `noise.wgsl` first because
+        //     `voronoi.wgsl` calls `simplex_noise_3d`. The noise module is
+        //     1024-entry tables (auto-generated from JWildfire's NoiseTools.java
+        //     by `scripts/extract_noise_tables.py`); a flame with no
+        //     noise/voronoi variation pays nothing.
+        let needs_noise = active.iter().any(|(name, _)| {
+            matches!(name.as_str(), "dc_perlin" | "crackle" | "dc_crackle_wf")
+        });
+        let needs_voronoi = active.iter().any(|(name, _)| {
+            matches!(name.as_str(), "crackle" | "dc_crackle_wf")
+        });
+        if needs_noise || needs_voronoi {
+            shader.push_str(include_str!("../shaders/core/noise.wgsl"));
+            shader.push('\n');
+        }
+        if needs_voronoi {
+            shader.push_str(include_str!("../shaders/core/voronoi.wgsl"));
+            shader.push('\n');
+        }
+
         // 8. Per-flame packed get_param (must come before utilities, which
         //    references it in some places via inlined comments). The packed
         //    version replaces the fixed-stride version that used to live in
