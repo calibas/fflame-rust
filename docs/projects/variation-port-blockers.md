@@ -22,13 +22,44 @@ haven't built it yet" and could be added with focused work.
 
 ### Hard architectural limits
 
-1. **JIT-compiled user expressions** — `custom_wf` and the dc_*
-   variations that take a user-typed math expression / GLSL fragment
-   and compile it at flame-load time. We have a precompiled WGSL
-   shader; runtime user code generation requires a totally different
-   pipeline (e.g. Naga-as-library or dynamic dispatch through a
-   bytecode interpreter). The cpp framework does this through Java's
-   in-memory compilation.
+1. **Arbitrary user-supplied Java code (refused on security grounds)**
+   — 8 variations take a user-typed code blob as a resource parameter
+   and JIT-compile it via [Janino](https://janino-compiler.github.io/janino/)
+   (`org.codehaus.janino.ClassBodyEvaluator.createFastClassBodyEvaluator`).
+   The code runs as real JVM bytecode with full classpath access on
+   CPU. JWildfire gets away with this because users only load flames
+   they wrote themselves; .flame files in our ecosystem come from
+   anywhere — friends, downloads, online archives — and silent RCE
+   from a file open is not a feature we ship.
+
+   The "GLSL" naming on `glsl_code` is misleading — it does NOT
+   transpile to GLSL. The user's Java code uses JWildfire's
+   `js.glsl` namespace (a Java reimplementation of GLSL primitives
+   like `vec3`, `mat3`, `G.normalize`) to *mimic* GLSL syntax, but
+   `glslFuncRunner.compile` is the same Janino-based JVM bytecode JIT
+   as `ComplexFuncRunner` and `CustomWFFuncRunner` — confirmed by the
+   `import org.codehaus.janino.ClassBodyEvaluator` line at the top of
+   every `*Runner.java`.
+
+   **Refused (8)**: `custom_wf`, `custom_wf_full`, `pre_custom_wf`,
+   `post_custom_wf`, `dc_code`, `colordomain`, `ducks`, `glsl_code`.
+   A flame using one of these will either skip the variation or fail
+   with a clear "this variation requires arbitrary code execution,
+   which we don't ship for security reasons" message — pick at
+   import time. This is a deliberate, principled divergence from
+   JWildfire.
+
+   **Constrained expression DSL — not refused, deferred**:
+   `fract_formula_julia_wf` and `fract_formula_mand_wf` use
+   `AbstractFractFormulaWFFunc.prepare_formula`, which is a tiny
+   stack-based postfix interpreter over a fixed operator set (`+`,
+   `-`, `*`, `/`, `^`) with an 80-char formula limit, no I/O, no
+   Java semantics. That's a safe-DSL feature we *could* implement
+   without security risk — parse infix → AST in the shader builder,
+   emit native WGSL math, slot into the existing synth specialization
+   framework. Low priority for now; if a future need surfaces, see
+   the "JIT-compiled custom code" section below for the implementation
+   sketch.
 
 2. **Texture / image / SVG sampling** — variations that read from a
    user-supplied image (bump map, displacement map, color map, SVG
@@ -214,27 +245,86 @@ features once you read the cpp body carefully):
 
 ### JIT-compiled custom code (#1) — 10 variations
 
-These variations take a user-supplied code string as a resource
-parameter and JIT-compile it at flame load. JWildfire does this via
-Java's in-memory compiler; we'd need a Rust-side parser + WGSL
-emitter that runs in the shader builder, then trigger a shader
-recompile on formula change. See the discussion thread (post-batch-3
-docs commit) for the proposed design — same shape as the synth
-specialization framework, just driven by formula strings rather than
-mode params.
+Split along a security boundary: **8 refused on security grounds**
+(arbitrary Java JIT) + **2 deferred-but-implementable** (constrained
+expression DSL).
 
-| Variation | User input |
-|---|---|
-| `custom_wf` | Math expression (the canonical case) |
-| `custom_wf_full` | Same |
-| `pre_custom_wf` | Same |
-| `post_custom_wf` | Same |
-| `dc_code` | Math expression driving the palette |
-| `colordomain` | `cf_runner.f(z)` — user-defined complex function |
-| `ducks` | `cf_runner.f(z, c)` — user-defined complex iteration |
-| `glsl_code` | GLSL fragment (`getRGBColor` body) — JIT'd via JWildfire's `glslFuncRunner.compile`. `GLSLBaseFunc.java` is the actual implementation. |
-| `fract_formula_julia_wf` | User-typed formula for the escape iter (listed below in the fract family too). |
-| `fract_formula_mand_wf` | Same. |
+#### Refused (Janino-based Java JIT, 8 variations)
+
+These take a user-supplied Java class body as a resource string and
+compile it to JVM bytecode via Janino's `ClassBodyEvaluator`. The
+compiled instance is then invoked per chaos-game iteration. The
+compiled code runs with full classpath access — file I/O, network,
+reflection, anything the JVM allows.
+
+| Variation | Runner class | User input shape |
+|---|---|---|
+| `custom_wf` | `CustomWFFuncRunner` | Java body computing `(x, y) → (x, y)` |
+| `custom_wf_full` | (variant of above) | Same |
+| `pre_custom_wf` | (variant of above) | Same, pre-phase |
+| `post_custom_wf` | (variant of above) | Same, post-phase |
+| `dc_code` | (uses `glslFuncRunner`) | Java body computing palette color |
+| `colordomain` | `ComplexFuncRunner` | Java body computing `Complex f(Complex z)` |
+| `ducks` | `ComplexFuncRunner` (inner class) | Java body computing `Complex f(Complex z, Complex c)` |
+| `glsl_code` | `glslFuncRunner` (in `GLSLBaseFunc`) | Java body computing `vec3 getRGBColor(int i, int j)` using the `js.glsl` GLSL-mimicking namespace |
+
+**Decision: refuse, do not implement.** Loading a flame using any of
+these will either skip the variation or fail with a clear "this
+variation requires arbitrary code execution, which we don't ship
+for security reasons" message at import time.
+
+Don't be misled by names:
+- `glsl_code` does NOT transpile to GLSL — the runner is Janino-based
+  Java JIT identical to the others. The `js.glsl` namespace is a
+  Java reimplementation of GLSL primitives (`vec3`, `mat3`, `G.cos`,
+  `.times()`-style methods), used so the source *looks* like GLSL
+  while executing as JVM bytecode.
+- `custom_wf` (without the `_full` suffix) is also full Java —
+  `CustomWFFuncRunner.java:19` imports `org.codehaus.janino.ClassBodyEvaluator`.
+  There is no expression-only subset; even simple math like
+  `x * y + 1` is wrapped in a full Java method body and compiled.
+
+#### Deferred (constrained expression DSL, 2 variations)
+
+`fract_formula_julia_wf` and `fract_formula_mand_wf` are different:
+they use `AbstractFractFormulaWFFunc.prepare_formula`, a tiny
+stack-based postfix interpreter implemented inline (no Janino, no
+JVM bytecode). The DSL is bounded:
+
+- Fixed operator set: `+`, `-`, `*`, `/`, `^`
+- 80-character formula limit
+- Variables `re`, `im`, `cre`, `cim` (real/imaginary of `z` and `c`)
+- No I/O, no function calls outside the fixed set
+- No mutation, no allocation, no recursion
+
+That's an expression DSL with bounded semantics — safe to implement
+because there's no escape hatch into arbitrary execution.
+
+**Decision: low priority, not refused.** If a real-world need
+surfaces we can ship this as a small focused feature without
+reopening the security question.
+
+Implementation sketch (same shape as the synth specialization
+framework that already ships):
+
+1. Rust-side parser in the shader builder. Tokenize JWF's infix
+   syntax → AST. Bounded by the 80-char input limit, ~200 lines.
+2. WGSL emitter that walks the AST and produces a real WGSL
+   function `fn user_formula(z: vec2<f32>, c: vec2<f32>) -> vec2<f32>`
+   with the body inlined as native WGSL complex arithmetic (we
+   already have the helpers in
+   [`shaders/core/complex.wgsl`](../../shaders/core/complex.wgsl)).
+3. Variation body calls the generated function. Shader sees normal
+   compiled math, no interpreter at runtime.
+4. Formula string goes into `ShaderCache::specialization_key` (the
+   same channel synth's mode set uses). Edit the formula → key
+   changes → rebuild fires. We measured synth rebuilds at ~100ms
+   cold / 3ms warm; expression rebuilds should be in the same
+   ballpark.
+
+No new framework features needed, no security surface, no runtime
+interpreter. The user's formula compiles to native WGSL math like
+any hand-written variation.
 
 #### Not JIT-blocked: the rest of the `glsl_*` family — port them like any other variation
 
@@ -504,14 +594,22 @@ Pearls, Salamander) ship in `jwf-variations-batch2`.
 
 The remaining two extend `AbstractFractFormulaWFFunc` (not the simpler
 `AbstractFractWFFunc` the others use) and are marked
-`NotDesiredForGPURendering` in JWildfire itself — they take a
-user-typed math expression and walk it via a stack-based interpreter
-per iteration. That's blocker #1 (JIT-compiled user expressions).
+`NotDesiredForGPURendering` in JWildfire itself. Unlike the rest of
+blocker #1's variations they're NOT Janino-based Java JIT — they take
+a user-typed math expression and walk it via a small inline
+stack-based postfix interpreter (`prepare_formula` /
+`perform_formula`) with a fixed operator set and an 80-char limit.
+Safe constrained DSL, not arbitrary code execution.
+
+Status: **deferred but implementable**. See blocker #1's "Deferred
+(constrained expression DSL)" subsection for the implementation
+sketch — Rust-side parser → WGSL emitter slotted into the synth
+specialization framework.
 
 | Variation | Notes |
 |---|---|
-| `fract_formula_julia_wf` | User-typed formula Julia. Blocker #1 (JIT user expressions). |
-| `fract_formula_mand_wf` | User-typed formula Mandelbrot. Blocker #1. |
+| `fract_formula_julia_wf` | User-typed formula Julia. Constrained DSL — see blocker #1 deferred section. |
+| `fract_formula_mand_wf` | User-typed formula Mandelbrot. Same. |
 
 ### Prepost (#12) — 1 remaining
 
