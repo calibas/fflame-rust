@@ -141,6 +141,7 @@ pub mod synth;
 mod fractwf;
 mod mandelbrot;
 mod crackle;
+mod dc_perlin;
 
 pub use basic::*;
 pub use advanced::*;
@@ -278,6 +279,7 @@ pub use synth::*;
 pub use fractwf::*;
 pub use mandelbrot::*;
 pub use crackle::*;
+pub use dc_perlin::*;
 
 use super::definition::VariationDef;
 
@@ -949,4 +951,7 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     // noise.wgsl + voronoi.wgsl helpers.
     &CRACKLE,
     &DC_CRACKLE_WF,
+    // dc_perlin — Perlin-noise base shape with direct color.
+    // Requires noise.wgsl only (no Voronoi).
+    &DC_PERLIN,
 ];
