@@ -297,7 +297,7 @@ useful flames need them.
 (`dc_perlin` was on this list until batch 3 — landed via
 `src/variations/defs/dc_perlin.rs` on top of `shaders/core/noise.wgsl`.)
 
-### Other abstract base classes (#8) — 7 variations
+### Other abstract base classes (#8) — 8 variations
 
 | Variation | Base class |
 |---|---|
@@ -308,6 +308,49 @@ useful flames need them.
 | `falloff3` | `AbstractFalloff3Func` |
 | `pre_falloff3` | `AbstractFalloff3Func` |
 | `post_falloff3` | `AbstractFalloff3Func` |
+| `metaballs3d_wf` | `AbstractOBJMeshWFFunc` — see "Host-precomputed shared buffer" note below |
+
+#### Host-precomputed shared buffer (subset of #8, blocks `metaballs3d_wf`)
+
+`metaballs3d_wf` extends `AbstractOBJMeshWFFunc` but the colormap/UV
+parts are optional — it has six purely-computed color modes (`CM_X`,
+`CM_Y`, `CM_Z`, `CM_XY`, `CM_YZ`, `CM_ZX`, `CM_XYZ`) that don't need
+texture sampling. The actual blocker is more interesting: `init()`
+seeds a `MarsagliaRandomGenerator` with the user-controlled `mb_seed`
+and generates `mb_count` (default 64, up to 250) metaballs as
+`(x, y, z, radius)` quads, then the per-call `transform()` reads the
+*same* array from every thread to evaluate the implicit field.
+
+We can't do this with what we have today:
+- `wgsl_init` initializes per-thread state only — each thread would
+  get a different metaball array if we replicated the seeded PRNG
+  shader-side.
+- `state_count` would need 4 × 250 = 1000 slots per thread (way past
+  the typical 0–5 budget) and would still be per-thread anyway.
+- Recomputing the array from `mb_seed` on every variation call would
+  cost `mb_count` PRNG calls × 32K threads × 256 chaos iters per
+  dispatch — billions of setup ops before the field evaluation even
+  starts. TDR territory.
+
+What's needed is a new framework feature: a **per-(xform, variation)
+host-computed shared data buffer** — call it `wgsl_data_init`. The
+host runs a Rust callback at flame-load (or param-change) time that
+takes the variation's params and emits a `Vec<f32>` (the metaballs
+array). The shader builder wires that as a read-only storage buffer
+slot the variation can index. Same idea as `subflame` metadata or
+`attachments` per-xform lists, but parameterized on a Rust function
+the variation owns.
+
+Worth building only when there's >1 customer. Right now
+`metaballs3d_wf` is the only one in the JWF subset; the
+displacement / colormap base classes need texture sampling on top of
+this same shared-data idea (texture rather than f32 buffer). A
+single framework feature could potentially unblock all of them.
+
+Inner-loop cost note: even with the shared buffer in place,
+`metaballs3d_wf` would need GPU TDR clamps on `max_iter` and
+`mb_count` — worst case 160 × 64 evals × 32K × 256 chaos ≈ 80B
+ops/dispatch.
 
 ### Primitives infrastructure (#7) — 13 variations
 
