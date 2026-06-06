@@ -143,7 +143,7 @@ mod mandelbrot;
 mod crackle;
 mod dc_perlin;
 mod szubieta;
-mod glsl_mandelbox2d;
+mod glsl_fractals;
 
 pub use basic::*;
 pub use advanced::*;
@@ -283,7 +283,7 @@ pub use mandelbrot::*;
 pub use crackle::*;
 pub use dc_perlin::*;
 pub use szubieta::*;
-pub use glsl_mandelbox2d::*;
+pub use glsl_fractals::*;
 
 use super::definition::VariationDef;
 
@@ -969,5 +969,10 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     // Each `glsl_*` is an independent hand-port of one specific
     // shadertoy algorithm (not user-supplied code — see
     // docs/projects/variation-port-blockers.md for the distinction).
+    // Grouped by theme: iterative fractals, kaleidoscope/tilings,
+    // procedural fields.
     &GLSL_MANDELBOX2D,
+    &GLSL_KALISET,
+    &GLSL_KALISET2,
+    &GLSL_APOLLONIAN,
 ];
