@@ -40,7 +40,7 @@
 //! slice), Ch. 9 (Jørgensen).
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -68,7 +68,7 @@ pub static KLEIN_GROUP: VariationDef = VariationDef {
     display_name: "Klein Group",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng, Feature::NeedsTransform],
     parameters: &[
         param!("a_re", "A (real)", unlimited_float, 2.0, -10.0, 10.0, "Real part of the first complex parameter. Interpretation depends on `recipe`: trace of generator A (recipes 0 GRANDMA, 2 JORGENSEN), Maskit's μ parameter (1, 5, 6), or Riley's c parameter (3, 4)."),
         param!("a_im", "A (imag)", unlimited_float, 0.0, -10.0, 10.0, "Imaginary part of the first complex parameter. See `a_re` for recipe-dependent role."),
@@ -77,8 +77,6 @@ pub static KLEIN_GROUP: VariationDef = VariationDef {
         param!("recipe", "Recipe", enum, 0, &["Grandma", "Maskit Mu", "Jorgensen", "Riley", "Riley+", "Maskit+", "Maskit-Leys"], "Generator-pair construction recipe. Grandma is the parabolic commutator from *Indra's Pearls* Ch. 6. Maskit Mu is the Maskit slice (single complex μ). Jorgensen uses Troels Jørgensen's trace-based parameterization. Riley uses Robert Riley's single complex c. The `+` variants add an extra `b1`. Maskit-Leys is Jos Leys' n-fold variant."),
         param!("avoid_reversal", "Avoid Reversal", bool, true, "When on, the next-matrix pick excludes the inverse of the previous matrix (no `aA`, `Aa`, `bB`, or `Bb` cancellations), so the trajectory drifts through the limit set instead of bouncing back-and-forth on a small subset. When off, all four matrices are equally likely each iteration."),
     ],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 16,
     wgsl_init: Some(r#"
 fn init_klein_group(user: array<f32, 6>) -> array<f32, 16> {
@@ -233,7 +231,6 @@ fn init_klein_group(user: array<f32, 6>) -> array<f32, 16> {
         "        let r = rng_nextf(&rng);\n\
          \x20       set_state(xform_id, variation_id, 0u, floor(r * 4.0));"
     ),
-    needs_accum: false,
     wgsl_2d: r#"
 fn klein_load_mat_a(xform_id: u32, variation_id: u32) -> CMat2 {
     return cmat2_make(

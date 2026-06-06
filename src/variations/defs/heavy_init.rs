@@ -21,7 +21,7 @@
 //!     reassigned by the init step.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 
@@ -57,7 +57,7 @@ pub static CPOW2: VariationDef = VariationDef {
     display_name: "CPow2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         VariationParamDef { name: "r", display_name: "R", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Magnitude of the complex exponent.") },
@@ -76,8 +76,6 @@ pub static CPOW2: VariationDef = VariationDef {
     //   8: half_d     (d / 2)
     //   9: inv_range  (0.5 / range)
     //   10: full_range (2π · range)
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 7,
     wgsl_init: Some(r#"
 fn init_cpow2(user: array<f32, 4>) -> array<f32, 7> {
@@ -101,7 +99,6 @@ fn init_cpow2(user: array<f32, 4>) -> array<f32, 7> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_cpow2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let two_pi = 6.28318530717959;
@@ -186,7 +183,7 @@ pub static CPOW3: VariationDef = VariationDef {
     display_name: "CPow3",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         VariationParamDef { name: "r", display_name: "R", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Magnitude of the complex exponent.") },
@@ -204,8 +201,6 @@ pub static CPOW3: VariationDef = VariationDef {
     //   7: half_c
     //   8: half_d
     //   9: coeff      (−0.095 · spread / d_calc, or 0 if d_calc == 0)
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 6,
     wgsl_init: Some(r#"
 fn init_cpow3(user: array<f32, 4>) -> array<f32, 6> {
@@ -231,7 +226,6 @@ fn init_cpow3(user: array<f32, 4>) -> array<f32, 6> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_cpow3(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let two_pi = 6.28318530717959;
@@ -302,7 +296,7 @@ pub static DISC2: VariationDef = VariationDef {
     display_name: "Disc2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         VariationParamDef { name: "rot", display_name: "Rot", param_type: ParamType::UnlimitedFloat,
                             default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Wave frequency for the disc pattern — multiplied by π internally.") },
@@ -313,8 +307,6 @@ pub static DISC2: VariationDef = VariationDef {
     //   2: timespi  (rot · π)
     //   3: cosadd   (with conditional adjustment)
     //   4: sinadd   (with conditional adjustment)
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 3,
     wgsl_init: Some(r#"
 fn init_disc2(user: array<f32, 2>) -> array<f32, 3> {
@@ -343,7 +335,6 @@ fn init_disc2(user: array<f32, 2>) -> array<f32, 3> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_disc2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let pi = 3.14159265358979;

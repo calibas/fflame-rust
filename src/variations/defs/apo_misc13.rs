@@ -45,7 +45,7 @@
 //! `output/jwildfire-vars/output/`.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -69,7 +69,7 @@ pub static Q_ODE: VariationDef = VariationDef {
     display_name: "Q ODE",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[
         param!("q_ode01", "Q ODE 01", unlimited_float, 0.0, -10.0, 10.0, "Constant term on X output."),
         param!("q_ode02", "Q ODE 02", unlimited_float, 1.0, -10.0, 10.0, "x linear coefficient on X output."),
@@ -84,13 +84,10 @@ pub static Q_ODE: VariationDef = VariationDef {
         param!("q_ode11", "Q ODE 11", unlimited_float, 0.0, -10.0, 10.0, "y linear coefficient on Y output."),
         param!("q_ode12", "Q ODE 12", unlimited_float, 0.0, -10.0, 10.0, "y² coefficient on Y output."),
     ],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_q_ode(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let q01 = get_param(xform_id, variation_id, 0u);
@@ -162,7 +159,7 @@ pub static RIPPLE: VariationDef = VariationDef {
     display_name: "Ripple",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("frequency", "Frequency", unlimited_float, 2.0, -10.0, 10.0, "Spatial frequency of the cosine wave (scaled by 5 internally)."),
         param!("velocity", "Velocity", unlimited_float, 1.0, -10.0, 10.0, "Phase velocity multiplier (× the internal `phase·2π − π` term)."),
@@ -173,8 +170,6 @@ pub static RIPPLE: VariationDef = VariationDef {
         param!("scale", "Scale", unlimited_float, 1.0, -10.0, 10.0, "Input pre-scale factor."),
         param!("fixed_dist_calc", "Fixed Dist Calc", bool, false, "When on, use Euclidean distance `sqrt(x² + y²)`. When off, the upstream-quirk product `sqrt(x²·y²)`."),
     ],
-    needs_transform: false,
-    writes_color: false,
     // 6 derived values at slots 8..14:
     //   8: _f, 9: _p, 10: _s, 11: _vxp, 12: _pxa, 13: _pixa
     init_param_count: 6,
@@ -201,7 +196,6 @@ fn init_ripple(user: array<f32, 8>) -> array<f32, 6> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_ripple(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let centerx = get_param(xform_id, variation_id, 3u);
@@ -301,14 +295,12 @@ pub static SCRY2: VariationDef = VariationDef {
     display_name: "Scry 2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[
         param!("sides", "Sides", int, 4.0, 1.0, 50.0, "Polygon side count."),
         param!("star", "Star", unlimited_float, 0.0, -10.0, 10.0, "Star-fold rotation amount (scaled by `-π/2` internally)."),
         param!("circle", "Circle", unlimited_float, 0.0, -10.0, 10.0, "Circularity mixing factor: 0 = pure star/polygon, 1 = pure circle."),
     ],
-    needs_transform: true,
-    writes_color: false,
     // 6 derived values at slots 3..9:
     //   3: sina, 4: cosa, 5: sins, 6: coss, 7: sinc, 8: cosc
     init_param_count: 6,
@@ -334,7 +326,6 @@ fn init_scry2(user: array<f32, 3>) -> array<f32, 6> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_scry2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let sides_in = max(get_param(xform_id, variation_id, 0u), 1.0);

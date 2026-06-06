@@ -32,7 +32,7 @@
 //! revisit with `needs_accum` if a real flame needs it.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -60,7 +60,7 @@ pub static DC_ZTRANSL: VariationDef = VariationDef {
     display_name: "DC Z Translation",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform, Feature::WritesColor],
     parameters: &[
         param!("x0", "X0", unlimited_float, 0.0, 0.0, 1.0, "Lower edge of the color-register input range. (Swapped with `x1` in init if `x0 > x1`.)"),
         param!("x1", "X1", unlimited_float, 1.0, 0.0, 1.0, "Upper edge of the color-register input range. Determines the normalization denominator `x1 − x0`."),
@@ -68,8 +68,6 @@ pub static DC_ZTRANSL: VariationDef = VariationDef {
         param!("overwrite", "Overwrite", bool, true, "When on, Z = `w · zf` (the input Z is discarded). When off, Z = `w · input_z · zf` (multiplicative)."),
         param!("clamp", "Clamp", bool, false, "When on, `zf` is clamped to `[0, 1]` before use."),
     ],
-    needs_transform: true,
-    writes_color: true, // read-only on *vc, but the flag is what gets the parameter passed
     // 1 init slot at 5: x1_m_x0 = max(x0, x1) - min(x0, x1)   (zero-guarded)
     init_param_count: 1,
     wgsl_init: Some(r#"
@@ -84,7 +82,6 @@ fn init_dc_ztransl(user: array<f32, 5>) -> array<f32, 1> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_dc_ztransl(p: vec2<f32>, xform_id: u32, variation_id: u32, vc: ptr<function, f32>) -> vec2<f32> {
     // 2D mode: no Z output, but vc-driven computation has no other XY effect
@@ -136,7 +133,7 @@ pub static PRE_DCZTRANSL: VariationDef = VariationDef {
     display_name: "Pre DC Z Translation",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Pre,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform, Feature::WritesColor],
     parameters: &[
         param!("x0", "X0", unlimited_float, 0.0, -10.0, 10.0, "Lower edge of the color-register input range."),
         param!("x1", "X1", unlimited_float, 1.0, -10.0, 10.0, "Upper edge of the color-register input range."),
@@ -144,8 +141,6 @@ pub static PRE_DCZTRANSL: VariationDef = VariationDef {
         param!("overwrite", "Overwrite", bool, true, "When on, Z = `w · zf`. When off, Z = `w · input_z · zf`."),
         param!("clamp", "Clamp", bool, false, "When on, `zf` is clamped to `[0, 1]`."),
     ],
-    needs_transform: true,
-    writes_color: true,
     init_param_count: 1,
     wgsl_init: Some(r#"
 fn init_pre_dcztransl(user: array<f32, 5>) -> array<f32, 1> {
@@ -159,7 +154,6 @@ fn init_pre_dcztransl(user: array<f32, 5>) -> array<f32, 1> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_pre_dcztransl(p: vec2<f32>, xform_id: u32, variation_id: u32, vc: ptr<function, f32>) -> vec2<f32> {
     let w = transforms[xform_id].variations[variation_id];
@@ -211,7 +205,7 @@ pub static COLORSCALE_WF: VariationDef = VariationDef {
     display_name: "Color Scale WF",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform, Feature::WritesColor],
     parameters: &[
         param!("scale_x", "Scale X", unlimited_float, 0.0, -10.0, 10.0, "X output scale: contribution to result.x is `w · scale_x · p.x`."),
         param!("scale_y", "Scale Y", unlimited_float, 0.0, -10.0, 10.0, "Y output scale."),
@@ -219,13 +213,10 @@ pub static COLORSCALE_WF: VariationDef = VariationDef {
         param!("offset_z", "Offset Z", unlimited_float, 0.0, -10.0, 10.0, "Constant Z bump added after the color-derived term."),
         param!("reset_z", "Reset Z", unlimited_float, 0.0, 0.0, 1.0, "Upstream uses this to override Z when > 0 instead of accumulating; this port always accumulates (see file header)."),
     ],
-    needs_transform: true,
-    writes_color: true,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_colorscale_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, vc: ptr<function, f32>) -> vec2<f32> {
     let scale_x = get_param(xform_id, variation_id, 0u);
@@ -274,7 +265,7 @@ pub static POST_COLORSCALE_WF: VariationDef = VariationDef {
     display_name: "Post Color Scale WF",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Post,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform, Feature::WritesColor],
     parameters: &[
         param!("scale_x", "Scale X", unlimited_float, 0.0, -10.0, 10.0, "X scale: `p.x · (1 + w · scale_x)`."),
         param!("scale_y", "Scale Y", unlimited_float, 0.0, -10.0, 10.0, "Y scale."),
@@ -282,13 +273,10 @@ pub static POST_COLORSCALE_WF: VariationDef = VariationDef {
         param!("offset_z", "Offset Z", unlimited_float, 0.0, -10.0, 10.0, "Constant Z bump."),
         param!("reset_z", "Reset Z", unlimited_float, 0.0, 0.0, 1.0, "When > 0, output Z = `dz`; otherwise output Z = `p.z + dz`."),
     ],
-    needs_transform: true,
-    writes_color: true,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_post_colorscale_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, vc: ptr<function, f32>) -> vec2<f32> {
     let scale_x = get_param(xform_id, variation_id, 0u);

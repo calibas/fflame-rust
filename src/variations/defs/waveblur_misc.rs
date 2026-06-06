@@ -24,7 +24,7 @@
 //! Source: `output/jwildfire-vars/output/waveblur_wf.cpp`.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -40,7 +40,7 @@ pub static WAVEBLUR_WF: VariationDef = VariationDef {
     display_name: "Wave Blur WF",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng, Feature::NeedsTransform, Feature::WritesColor],
     parameters: &[
         param!("count", "Count", int, 5.0, 1.0, 100.0, "Maximum integer multiplier of π in the wave-radius formula (≥ 1)."),
         param!("amplitude_z", "Amplitude Z", unlimited_float, 0.5, -10.0, 10.0, "Z-axis wave amplitude (3D only). 0 zeroes the Z output."),
@@ -50,13 +50,10 @@ pub static WAVEBLUR_WF: VariationDef = VariationDef {
         param!("color_offset", "Color Offset", unlimited_float, 0.0, -10.0, 10.0, "Color register offset added after the `acos(rnd) · color_scale` term."),
         param!("direct_color", "Direct Color", bool, false, "When on, writes the color register from `acos(rnd)` scaled by `color_scale` and shifted by `color_offset`, clamped to `[0, 1]`. Visible color requires the transform's Direct Color slider > 0."),
     ],
-    needs_transform: true,
-    writes_color: true,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_waveblur_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec2<f32> {
     let count_p = max(i32(get_param(xform_id, variation_id, 0u)), 1);

@@ -24,7 +24,7 @@
 //!     for non-negative inputs.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -46,7 +46,7 @@ pub static SUPER_SHAPE: VariationDef = VariationDef {
     display_name: "Super Shape",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("rnd", "RND", unlimited_float, 3.0, -10.0, 10.0, "Mix between random sampling and the input radius. 0 = pure input radius, 1 = uniform random."),
         param!("m", "M", unlimited_float, 1.0, -20.0, 20.0, "Number of symmetry petals — sets how many lobes the super-shape has."),
@@ -55,13 +55,10 @@ pub static SUPER_SHAPE: VariationDef = VariationDef {
         param!("n3", "N3", unlimited_float, 1.0, -20.0, 20.0, "Second inner exponent — controls the other half of each lobe shape."),
         param!("holes", "Holes", unlimited_float, 0.0, -10.0, 10.0, "Radial offset that punches a hole in the center."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_super_shape(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let rnd = get_param(xform_id, variation_id, 0u);
@@ -121,19 +118,16 @@ pub static HENON: VariationDef = VariationDef {
     display_name: "Henon",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("a", "A", unlimited_float, 0.5, -10.0, 10.0, "Quadratic coefficient — controls the strength of the parabolic fold."),
         param!("b", "B", unlimited_float, 1.0, -10.0, 10.0, "Linear coefficient on X — scales the Y output."),
         param!("c", "C", unlimited_float, 1.0, -10.0, 10.0, "Constant offset added to X output."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_henon(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let a = get_param(xform_id, variation_id, 0u);
@@ -176,15 +170,12 @@ pub static APOLLONY: VariationDef = VariationDef {
     display_name: "Apollony",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_apollony(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     let r = 1.7320508075688772;  // sqrt(3)

@@ -35,7 +35,7 @@
 //! `output/jwildfire-vars/output/`.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -69,15 +69,12 @@ pub static RINGS: VariationDef = VariationDef {
     display_name: "Rings",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_rings(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let xf = transforms[xform_id];
@@ -123,15 +120,12 @@ pub static RIPPLED: VariationDef = VariationDef {
     display_name: "Rippled",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_rippled(p: vec2<f32>) -> vec2<f32> {
     let d = p.x * p.x + p.y * p.y + 1e-30;
@@ -171,15 +165,13 @@ pub static WAFFLE: VariationDef = VariationDef {
     display_name: "Waffle",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("slices", "Slices", int, 6.0, 1.0, 100.0, "Number of grid divisions per axis."),
         param!("xthickness", "X thickness", unlimited_float, 0.5, -10.0, 10.0, "X-axis line thickness (0 = grid lines only, 1 = solid fill)."),
         param!("ythickness", "Y thickness", unlimited_float, 0.5, -10.0, 10.0, "Y-axis line thickness."),
         param!("rotation", "Rotation", unlimited_float, 0.0, -10.0, 10.0, "Output rotation in radians."),
     ],
-    needs_transform: false,
-    writes_color: false,
     // 2 derived values at slots 4..6:
     //   4: cos_rot
     //   5: sin_rot
@@ -194,7 +186,6 @@ fn init_waffle(user: array<f32, 4>) -> array<f32, 2> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_waffle(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let slices = max(get_param(xform_id, variation_id, 0u), 1.0);
@@ -286,17 +277,14 @@ pub static STRIPFIT: VariationDef = VariationDef {
     display_name: "Stripfit",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[
         param!("dx", "DX", unlimited_float, 1.0, -10.0, 10.0, "Per-strip horizontal shift amount (scaled by `-0.5` internally)."),
     ],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_stripfit(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let dx = get_param(xform_id, variation_id, 0u);

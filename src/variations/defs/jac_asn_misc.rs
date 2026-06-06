@@ -31,7 +31,7 @@
 //! Source: `output/jwildfire-vars/output/jac_asn.cpp`.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -52,19 +52,16 @@ pub static JAC_ASN: VariationDef = VariationDef {
     display_name: "Jac asn",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[
         param!("jac_asn_kr", "Modulus Real", unlimited_float, 0.5, -10.0, 10.0, "Real part of the elliptic modulus k. Together with `jac_asn_ki` defines the complex modulus used by the Jacobi inverse."),
         param!("jac_asn_ki", "Modulus Imag", unlimited_float, 0.0, -10.0, 10.0, "Imaginary part of the elliptic modulus k."),
         param!("jac_asn_type", "Type", enum, 1, &["Inverse DN", "Inverse SN", "Inverse CN", "Inverse SC", "Inverse DN (swap)", "Inverse SN (swap)", "Inverse CN (swap)", "Inverse SC (swap)"], "Which inverse Jacobi function to compute. The `(swap)` variants additionally swap the modulus and phi after the initial branch — same function-kind axis, different parameter roles."),
     ],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn jac_cmul(a: vec2<f32>, b: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);

@@ -131,7 +131,7 @@ pub static WAVES2B: VariationDef = VariationDef {
     display_name: "Waves2 B",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("freqx", "Freq X", unlimited_float, 2.0, -10.0, 10.0, "Frequency of the wave applied to the X axis (driven by Y)."),
         param!("freqy", "Freq Y", unlimited_float, 2.0, -10.0, 10.0, "Frequency of the wave applied to the Y axis (driven by X)."),
@@ -144,8 +144,6 @@ pub static WAVES2B: VariationDef = VariationDef {
         param!("unity", "Unity", unlimited_float, 1.0, -10.0, 10.0, "Crossover scale for the amplitude interpolation between `scale*` and `scaleinf*`. Larger values keep the origin-amplitude active over a wider region."),
         param!("jacok", "Jacobi K", unlimited_float, 0.25, -10.0, 10.0, "Modulus `k` for the Jacobi `sn` mode (only used when `pwx` or `pwy` falls in `[0, 1e-4)`)."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 2,
     wgsl_init: Some(r#"
 fn init_waves2b(user: array<f32, 10>) -> array<f32, 2> {
@@ -157,7 +155,6 @@ fn init_waves2b(user: array<f32, 10>) -> array<f32, 2> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn w2b_bessel_j1(x: f32) -> f32 {
     let ax = abs(x);

@@ -49,7 +49,7 @@
 //!     (no swap). Following cpp.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -76,15 +76,12 @@ pub static XERF: VariationDef = VariationDef {
     display_name: "X Erf",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn xerf_erf(x: f32) -> f32 {
     // Abramowitz & Stegun 7.1.26 (max error ~1.5e-7)
@@ -159,7 +156,7 @@ pub static INVERTED_JULIA: VariationDef = VariationDef {
     display_name: "Inverted Julia",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("power", "Power", unlimited_float, 0.25, -10.0, 10.0, "Exponent on the squared-radius base term `(x² + y²·y2_mult)`."),
         param!("y2_mult", "Y² Mult", unlimited_float, 1.0, -10.0, 10.0, "Multiplier on y² in the base term."),
@@ -171,13 +168,10 @@ pub static INVERTED_JULIA: VariationDef = VariationDef {
         param!("center", "Center", unlimited_float, 3.14, -10.0, 10.0, "Divisor on the output radius. Higher = tighter pattern."),
         param!("x2y2_add", "X²Y² Add", unlimited_float, 0.0, -10.0, 10.0, "Additive offset on the base term (added after the pow)."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_inverted_julia(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let power = get_param(xform_id, variation_id, 0u);
@@ -257,15 +251,12 @@ pub static IDISC: VariationDef = VariationDef {
     display_name: "I-Disc",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_idisc(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let w = transforms[xform_id].variations[variation_id];
@@ -313,18 +304,15 @@ pub static CONIC: VariationDef = VariationDef {
     display_name: "Conic",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng, Feature::NeedsTransform],
     parameters: &[
         param!("eccentricity", "Eccentricity", unlimited_float, 1.0, -10.0, 10.0, "Conic eccentricity. 0 = circle, 1 = parabola, > 1 = hyperbola."),
         param!("holes", "Holes", unlimited_float, 0.0, -10.0, 10.0, "Random shift offset subtracted from the per-iteration random. Larger = sparser pattern."),
     ],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_conic(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let ecc = get_param(xform_id, variation_id, 0u);
@@ -376,15 +364,12 @@ pub static POWER: VariationDef = VariationDef {
     display_name: "Power",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_power(p: vec2<f32>) -> vec2<f32> {
     let r = sqrt(p.x * p.x + p.y * p.y) + 1e-30;
@@ -424,15 +409,12 @@ pub static ROUNDSPHER: VariationDef = VariationDef {
     display_name: "Round Spher",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_roundspher(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let w = transforms[xform_id].variations[variation_id];
@@ -497,15 +479,12 @@ pub static ROUNDSPHER3D: VariationDef = VariationDef {
     display_name: "Round Spher 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform, Feature::NeedsAccum],
     parameters: &[],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: true,
     wgsl_2d: r#"
 fn variation_roundspher3D(p: vec2<f32>, accum: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     // 2D mode: no Z register to fall back on, so the cpp's tempPZ
@@ -593,18 +572,15 @@ pub static CUBIC3D: VariationDef = VariationDef {
     display_name: "Cubic 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng, Feature::NeedsTransform, Feature::NeedsAccum],
     parameters: &[
         param!("xpand", "Xpand", unlimited_float, 0.25, -10.0, 10.0, "How aggressively each step is pulled toward a cube vertex. Up through ±1 the response is linear (`fill = xpand × 0.5`); past that it follows `sqrt(xpand) × 0.5` so the lattice doesn't blow out at large values."),
         param!("style", "Style", unlimited_float, 0.0, -10.0, 10.0, "Angular warp on the per-axis weights derived from `cos(atan2(x, z))` and `sin(atan2(y, z))`. 0 disables the warp (per-axis weights are exactly 1); positive values soften the lattice along Z. `|style| > 1` introduces a secondary compression on the average XY/Z response."),
     ],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: true,
     wgsl_2d: r#"
 fn variation_cubic3D(p: vec2<f32>, accum: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     // 2D fallback: angular weights degenerate (atan2(_,0)) but stay
@@ -720,18 +696,15 @@ pub static CUBIC_LATTICE_3D: VariationDef = VariationDef {
     display_name: "Cubic Lattice 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng, Feature::NeedsTransform, Feature::NeedsAccum],
     parameters: &[
         param!("xpand", "Xpand", unlimited_float, 0.2, -10.0, 10.0, "How aggressively each step is pulled toward a cube vertex. Linear (`fill = xpand × 0.5`) up through ±1, `sqrt` past that."),
         param!("style", "Style", unlimited_float, 1.0, -10.0, 10.0, "Two-stage switch on the angular weights. `|style| ≥ 2` enables per-axis `cos(atan2(x, z))` / `sin(atan2(y, z))` warps that bias the lattice toward Z; anything below that pins the angular weights at 1 (pure cube)."),
     ],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: true,
     wgsl_2d: r#"
 fn variation_cubicLattice_3D(p: vec2<f32>, accum: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let xpand = get_param(xform_id, variation_id, 0u);
@@ -822,15 +795,13 @@ pub static CHECKS: VariationDef = VariationDef {
     display_name: "Checks",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("x", "X", unlimited_float, 0.5, -10.0, 10.0, "X-cell-shift magnitude."),
         param!("y", "Y", unlimited_float, 0.5, -10.0, 10.0, "Y-cell-shift magnitude."),
         param!("size", "Size", unlimited_float, 0.5, 0.001, 10.0, "Cell grid size."),
         param!("rnd", "Rnd", unlimited_float, 0.0, -10.0, 10.0, "Random jitter magnitude on the cell shift."),
     ],
-    needs_transform: false,
-    writes_color: false,
     // 1 derived value at slot 4: cs = 1 / (size + ε)
     init_param_count: 1,
     wgsl_init: Some(r#"
@@ -842,7 +813,6 @@ fn init_checks(user: array<f32, 4>) -> array<f32, 1> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_checks(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let cx = get_param(xform_id, variation_id, 0u);
@@ -912,7 +882,7 @@ pub static CONE: VariationDef = VariationDef {
     display_name: "Cone",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("radius1", "Radius 1", unlimited_float, 0.5, -10.0, 10.0, "Inner-radius multiplier on the input angle."),
         param!("radius2", "Radius 2", unlimited_float, 1.0, -10.0, 10.0, "Outer-radius multiplier on the random branch offset."),
@@ -924,13 +894,10 @@ pub static CONE: VariationDef = VariationDef {
         param!("warp", "Warp", unlimited_float, 1.0, -10.0, 10.0, "X² weight in the denominator. Controls the aspect ratio of the cone."),
         param!("weight", "Weight", unlimited_float, 2.0, -10.0, 10.0, "Number of random angular branches — `floor(weight · rand)` picks the branch."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_cone(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let radius1 = get_param(xform_id, variation_id, 0u);

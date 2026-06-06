@@ -23,7 +23,7 @@
 //!     once we want a 3D-bubble follow-up.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -51,7 +51,7 @@ pub static BIPOLAR2: VariationDef = VariationDef {
     display_name: "Bipolar 2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("shift", "Shift", unlimited_float, 0.0, -2.0, 2.0, "Vertical offset added to the bipolar angle output."),
         param!("a", "A", unlimited_float, 1.0, -10.0, 10.0, "Inner offset for the radius² term."),
@@ -63,13 +63,10 @@ pub static BIPOLAR2: VariationDef = VariationDef {
         param!("g1", "G", unlimited_float, 1.0, -10.0, 10.0, "Outer scaling on the squared radius."),
         param!("h", "H", unlimited_float, 1.0, -10.0, 10.0, "Output Y scaling factor."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_bipolar2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let shift = get_param(xform_id, variation_id, 0u);
@@ -169,19 +166,16 @@ pub static BLOB3D: VariationDef = VariationDef {
     display_name: "Blob 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("low", "Low", unlimited_float, 0.3, -5.0, 5.0, "Inner radius — how close the bumps recede in the troughs."),
         param!("high", "High", unlimited_float, 1.2, -5.0, 5.0, "Outer radius — how far the bumps reach at their peaks."),
         param!("waves", "Waves", unlimited_float, 6.0, 0.0, 30.0, "Number of bumps around the perimeter."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_blob3D(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let low = get_param(xform_id, variation_id, 0u);
@@ -225,20 +219,17 @@ pub static CIRCULAR2: VariationDef = VariationDef {
     display_name: "Circular 2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("angle", "Angle", angle, 90.0, "Maximum rotation per iteration (degrees)."),
         param!("seed", "Seed", unlimited_float, 0.0, -100.0, 100.0, "Random seed for the hash term — change to vary the pattern."),
         param!("xx", "X mul", unlimited_float, 12.9898, -100.0, 100.0, "X-axis multiplier for the hash. Default 12.9898 matches the standard Circular."),
         param!("yy", "Y mul", unlimited_float, 78.233, -100.0, 100.0, "Y-axis multiplier for the hash. Default 78.233 matches the standard Circular."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_circular2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let angle_deg = get_param(xform_id, variation_id, 0u);

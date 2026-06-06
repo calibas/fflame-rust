@@ -20,7 +20,7 @@
 //!   - output/jwildfire-vars/output/lazytravis.cpp
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -52,15 +52,13 @@ pub static LAZYJESS: VariationDef = VariationDef {
     display_name: "Lazy Jess",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[
         param!("n", "N", int, 4.0, 2.0, 50.0, "Polygon vertex count. The n = 2 special case uses a line-segment test instead of a true polygon."),
         param!("spin", "Spin", unlimited_float, 3.14159265, -10.0, 10.0, "Rotation applied to points inside the N-gon, in radians."),
         param!("space", "Space", unlimited_float, 0.0, -10.0, 10.0, "Radial nudge applied to points outside the N-gon (added to the radius, scaled inversely by `modulus`)."),
         param!("corner", "Corner", int, 1.0, 1.0, 50.0, "Which of the N corners to flip to when the post-rotation inside-test fails (1-based)."),
     ],
-    needs_transform: true,
-    writes_color: false,
     // 4 derived values at slots 4..8:
     //   4: vertex      (π · (n − 2) / (2n))
     //   5: sin_vertex  (sin(vertex))
@@ -85,7 +83,6 @@ fn init_lazyjess(user: array<f32, 4>) -> array<f32, 4> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_lazyjess(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let n = max(get_param(xform_id, variation_id, 0u), 2.0);
@@ -255,14 +252,12 @@ pub static LAZYTRAVIS: VariationDef = VariationDef {
     display_name: "Lazy Travis",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[
         param!("spin_in", "Spin In", unlimited_float, 1.0, -10.0, 10.0, "Inner-square angular offset along the perimeter (multiplied by 4 internally; one unit = one full lap of the square)."),
         param!("spin_out", "Spin Out", unlimited_float, 0.5, -10.0, 10.0, "Outer-square angular offset along the perimeter (same scaling as `spin_in`)."),
         param!("space", "Space", unlimited_float, 1.5707963267948966, -10.0, 10.0, "Outer-square padding — extends the box edge by `space` and proportionally stretches the perpendicular coordinate."),
     ],
-    needs_transform: true,
-    writes_color: false,
     // 2 derived values at slots 3..5:
     //   3: spin_in_4   (4 · spin_in)
     //   4: spin_out_4  (4 · spin_out)
@@ -277,7 +272,6 @@ fn init_lazyTravis(user: array<f32, 3>) -> array<f32, 2> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_lazyTravis(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let space = get_param(xform_id, variation_id, 2u);

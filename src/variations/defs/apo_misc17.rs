@@ -28,7 +28,7 @@
 //! `output/jwildfire-vars/output/`.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -57,17 +57,14 @@ pub static LOQ: VariationDef = VariationDef {
     display_name: "Loq",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("base", "Base", unlimited_float, 2.7182818284590452, 1.01, 100.0, "Log base for the X-output normalization. Defaults to e."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_loq(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let base = max(get_param(xform_id, variation_id, 0u), 1.000001);
@@ -125,7 +122,7 @@ pub static SPIROGRAPH3D: VariationDef = VariationDef {
     display_name: "Spirograph 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("a", "A", unlimited_float, 1.0, -10.0, 10.0, "Outer wheel radius."),
         param!("b", "B", unlimited_float, -0.3, -10.0, 10.0, "Inner wheel radius (signed; negative produces an internal spirograph)."),
@@ -135,13 +132,10 @@ pub static SPIROGRAPH3D: VariationDef = VariationDef {
         param!("width", "Width", unlimited_float, 0.0, -10.0, 10.0, "Per-axis jitter magnitude (interpretation depends on `mode`)."),
         param!("mode", "Mode", enum, 0, &["Uniform", "Phased Sin", "Independent", "Gaussian", "X Only"], "Random jitter pattern applied to the width offset."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_spirograph3D(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let a = get_param(xform_id, variation_id, 0u);

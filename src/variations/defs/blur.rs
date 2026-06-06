@@ -3,7 +3,7 @@
 //! These variations add randomized blur effects.
 
 use crate::variations::{
-    definition::VariationDef,
+    definition::{Feature, VariationDef},
     VariationCategory, VariationPhase,
 };
 
@@ -16,15 +16,12 @@ pub static ZBLUR: VariationDef = VariationDef {
     display_name: "Z-Blur",
     category: VariationCategory::Depth3D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_zblur(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     // ZBlur only affects Z — pure no-op in 2D. Returning `p` here used
@@ -55,15 +52,12 @@ pub static BLUR3D: VariationDef = VariationDef {
     display_name: "Blur 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_blur3D(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     // Apophysis: 3D Gaussian spherical blur
@@ -98,15 +92,12 @@ pub static PRE_BLUR: VariationDef = VariationDef {
     display_name: "Pre-Blur",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Pre,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_pre_blur(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     // Apophysis: Pre-phase Gaussian blur applied before variations

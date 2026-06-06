@@ -32,7 +32,7 @@
 //!     variations in this codebase).
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -56,14 +56,12 @@ pub static DC_LINEAR: VariationDef = VariationDef {
     display_name: "DC Linear",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform, Feature::WritesColor],
     parameters: &[
         param!("offset", "Offset", unlimited_float, 0.0, -10.0, 10.0, "Offset added to the projected coordinate before computing color."),
         param!("angle", "Angle", angle, 0.0, "Rotation angle (degrees) for the projection axis."),
         param!("scale", "Scale", unlimited_float, 1.0, -10.0, 10.0, "Scaling factor on the projection — larger compresses the color gradient, smaller stretches it."),
     ],
-    needs_transform: true,
-    writes_color: true,
     // 3 derived values at slots 3..6:
     //   3: ldcs       (1/scale, with 1/1e-5 fallback when scale is exactly 0)
     //   4: cos_angle  (cos of angle in radians)
@@ -83,7 +81,6 @@ fn init_dc_linear(user: array<f32, 3>) -> array<f32, 3> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_dc_linear(p: vec2<f32>, xform_id: u32, variation_id: u32, vc: ptr<function, f32>) -> vec2<f32> {
     let offset = get_param(xform_id, variation_id, 0u);
@@ -140,14 +137,12 @@ pub static DC_BUBBLE: VariationDef = VariationDef {
     display_name: "DC Bubble",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform, Feature::WritesColor],
     parameters: &[
         param!("centerx", "Center X", unlimited_float, 0.0, -2.0, 2.0, "X coordinate of the radial color center."),
         param!("centery", "Center Y", unlimited_float, 0.0, -2.0, 2.0, "Y coordinate of the radial color center."),
         param!("scale", "Scale", unlimited_float, 1.0, -10.0, 10.0, "Scaling factor on the squared distance — larger compresses the color gradient, smaller stretches it."),
     ],
-    needs_transform: true,
-    writes_color: true,
     // 1 derived value at slot 3:
     //   3: bdcs  (1/scale, with 1/1e-5 fallback when scale is exactly 0)
     init_param_count: 1,
@@ -161,7 +156,6 @@ fn init_dc_bubble(user: array<f32, 3>) -> array<f32, 1> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_dc_bubble(p: vec2<f32>, xform_id: u32, variation_id: u32, vc: ptr<function, f32>) -> vec2<f32> {
     let cx = get_param(xform_id, variation_id, 0u);

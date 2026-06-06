@@ -12,7 +12,7 @@
 //! before merge to avoid a redundant entry.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 
@@ -31,15 +31,12 @@ pub static EXP: VariationDef = VariationDef {
     display_name: "Exp",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_exp(p: vec2<f32>) -> vec2<f32> {
     let e = exp(p.x);
@@ -83,7 +80,7 @@ pub static LOG_DB: VariationDef = VariationDef {
     display_name: "Log DB",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         VariationParamDef { name: "base", display_name: "Base", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(1e-6), max_value: Some(100.0), description: Some("Logarithm base. Larger values compress the output, smaller values stretch it. Mirrors the basic Log variation's `base`.") },
@@ -93,8 +90,6 @@ pub static LOG_DB: VariationDef = VariationDef {
     // 2 derived values stored in slots 2..4:
     //   2: denom    (0.5 / log(e · base), or 0.5 if base <= 0)
     //   3: fixpe    (π · fix_period, or π if fix_period <= 0)
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 2,
     wgsl_init: Some(r#"
 fn init_log_db(user: array<f32, 2>) -> array<f32, 2> {
@@ -108,7 +103,6 @@ fn init_log_db(user: array<f32, 2>) -> array<f32, 2> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_log_db(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let denom = get_param(xform_id, variation_id, 2u);
@@ -169,7 +163,7 @@ pub static LOG_TILE2: VariationDef = VariationDef {
     display_name: "Log Tile2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         VariationParamDef { name: "spreadx", display_name: "Spread X", param_type: ParamType::UnlimitedFloat,
                             default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("X-axis tile spacing. The random integer from the log-of-uniform draw is multiplied by this value.") },
@@ -178,13 +172,10 @@ pub static LOG_TILE2: VariationDef = VariationDef {
         VariationParamDef { name: "spreadz", display_name: "Spread Z", param_type: ParamType::UnlimitedFloat,
                             default_value: 0.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Z-axis tile spacing (3D mode only).") },
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_log_tile2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let sx = get_param(xform_id, variation_id, 0u);
@@ -228,18 +219,15 @@ pub static TILE_LOG: VariationDef = VariationDef {
     display_name: "Tile Log",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         VariationParamDef { name: "spread", display_name: "Spread", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Tile spacing along X. The random integer from the log-of-uniform draw is multiplied by this value.") },
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_tile_log(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let sp = get_param(xform_id, variation_id, 0u);

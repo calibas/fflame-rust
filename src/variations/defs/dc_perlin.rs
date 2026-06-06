@@ -14,7 +14,7 @@
 //! Source: [`output/variation-jwf-source/DCPerlinFunc.java`](../../../output/variation-jwf-source/DCPerlinFunc.java).
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -47,14 +47,11 @@ pub static DC_PERLIN: VariationDef = VariationDef {
     display_name: "DC Perlin",
     category: VariationCategory::Plugin,
     phase: VariationPhase::Normal,
-    needs_rng: true,
-    needs_transform: false,
-    writes_color: true,
+    features: &[Feature::NeedsRng, Feature::WritesColor],
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     parameters: &[
         param!("shape", "Shape", unlimited_int, 0.0, 0.0, 2.0, "0 = square (uniform [-0.5, 0.5]²), 1 = disc (uniform unit disc, triangle-distributed radius), 2 = blur (uniform radius in [0, 1+edge]). The shape is what gets plotted; the noise only drives color and acceptance filtering."),
         param!("map", "Map", unlimited_int, 0.0, 0.0, 5.0, "How the 2D shape point gets mapped into the 3D noise coordinate. 0=flat (just scaled XY, Z=scale·z param). 1=spherical (XY/(r²+ε)), 2/3=hsphere/qsphere (XY/(r²+0.5/0.25)). 4=bubble, 5=bubble2 (Z replaced by sqrt(0.25-r²), gives a hemispherical noise sampling that wraps at the shape boundary)."),

@@ -37,7 +37,7 @@
 //!     the input `(x, y)`) so they stay in the body.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -66,7 +66,7 @@ pub static CORNERS: VariationDef = VariationDef {
     display_name: "Corners",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[
         param!("xwidth", "X Width", unlimited_float, 1.0, -10.0, 10.0, "Constant X offset added per quadrant (signed by the input's X sign)."),
         param!("ywidth", "Y Width", unlimited_float, 1.0, -10.0, 10.0, "Constant Y offset added per quadrant."),
@@ -78,13 +78,10 @@ pub static CORNERS: VariationDef = VariationDef {
         param!("logmode", "Log Mode", bool, false, "When on, use the log-base formula `pow(log_base(x²·mult + 3), …) − 1.33`. When off, plain `pow(x², …)`."),
         param!("log_base", "Log Base", unlimited_float, 2.71828, 0.01, 100.0, "Log base used by the `logmode = 1` formula. Default ≈ e."),
     ],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_corners(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let xwidth = get_param(xform_id, variation_id, 0u);
@@ -171,13 +168,11 @@ pub static MODULUS: VariationDef = VariationDef {
     display_name: "Modulus",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("x", "X", unlimited_float, 0.2, -10.0, 10.0, "X-axis half-width — points outside ±x get mod-wrapped back inside."),
         param!("y", "Y", unlimited_float, 0.5, -10.0, 10.0, "Y-axis half-width."),
     ],
-    needs_transform: false,
-    writes_color: false,
     // 2 derived values at slots 2..4:
     //   2: xr  (2 · x)
     //   3: yr  (2 · y)
@@ -192,7 +187,6 @@ fn init_modulus(user: array<f32, 2>) -> array<f32, 2> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_modulus(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let xp = get_param(xform_id, variation_id, 0u);
@@ -283,19 +277,16 @@ pub static OCTAGON: VariationDef = VariationDef {
     display_name: "Octagon",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("x", "X", unlimited_float, 0.0, -10.0, 10.0, "X-axis sign-shift amount added at the end (signed by `sign(x)`)."),
         param!("y", "Y", unlimited_float, 0.0, -10.0, 10.0, "Y-axis sign-shift amount."),
         param!("z", "Z", unlimited_float, 0.0, -10.0, 10.0, "Z-axis sign-shift amount (3D only)."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_octagon(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let xp = get_param(xform_id, variation_id, 0u);
@@ -384,12 +375,10 @@ pub static CIRCUS: VariationDef = VariationDef {
     display_name: "Circus",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("scale", "Scale", unlimited_float, 1.0, 0.001, 10.0, "Inner-disc (`r ≤ 1`) scaling factor. Outside the disc, the reciprocal `1/scale` is used."),
     ],
-    needs_transform: false,
-    writes_color: false,
     // 1 derived value at slot 1:
     //   1: inv_scale  (1 / scale)
     init_param_count: 1,
@@ -403,7 +392,6 @@ fn init_circus(user: array<f32, 1>) -> array<f32, 1> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_circus(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let scale = get_param(xform_id, variation_id, 0u);
@@ -447,17 +435,14 @@ pub static CIRCLIZE: VariationDef = VariationDef {
     display_name: "Circlize",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[
         param!("hole", "Hole", unlimited_float, 0.4, -10.0, 10.0, "Center-hole radial offset. Larger values produce a bigger central gap."),
     ],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_circlize(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let hole = get_param(xform_id, variation_id, 0u);
@@ -531,17 +516,14 @@ pub static CIRCLIZE2: VariationDef = VariationDef {
     display_name: "Circlize 2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("hole", "Hole", unlimited_float, 0.0, -10.0, 10.0, "Center-hole radial offset (folded into the weighted radius)."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_circlize2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let hole = get_param(xform_id, variation_id, 0u);
@@ -609,18 +591,15 @@ pub static ATAN_VAR: VariationDef = VariationDef {
     display_name: "Atan",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("mode", "Mode", enum, 0, &["Y Only", "X Only", "Both"], "Which axes get the arctangent transform."),
         param!("stretch", "Stretch", unlimited_float, 1.0, -10.0, 10.0, "Pre-atan input scaling. Higher = sharper saturation toward ±1."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_atan(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let mode = get_param(xform_id, variation_id, 0u);
@@ -683,13 +662,11 @@ pub static MURL: VariationDef = VariationDef {
     display_name: "Murl",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("c", "C", unlimited_float, 0.1, -10.0, 10.0, "Möbius coefficient. Rescaled internally by `1/(power−1)` when `power ≠ 1`."),
         param!("power", "Power", int, 1.0, -50.0, 50.0, "Complex power applied to the input. Integer values produce rotational symmetries; `power = 1` reduces to a simpler Möbius warp."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 3,
     wgsl_init: Some(r#"
 fn init_murl(user: array<f32, 2>) -> array<f32, 3> {
@@ -710,7 +687,6 @@ fn init_murl(user: array<f32, 2>) -> array<f32, 3> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_murl(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let power = get_param(xform_id, variation_id, 1u);

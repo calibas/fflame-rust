@@ -26,7 +26,7 @@
 //! patterns.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -51,15 +51,13 @@ pub static TRADE: VariationDef = VariationDef {
     display_name: "Trade",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("r1", "R1", unlimited_float, 1.0, 0.001, 10.0, "Right-disc radius."),
         param!("d1", "D1", unlimited_float, 1.0, -10.0, 10.0, "Right-disc center offset from origin — center sits at `(r1 + d1, 0)`."),
         param!("r2", "R2", unlimited_float, 1.0, 0.001, 10.0, "Left-disc radius."),
         param!("d2", "D2", unlimited_float, 1.0, -10.0, 10.0, "Left-disc center offset from origin — center sits at `(-(r2 + d2), 0)`."),
     ],
-    needs_transform: false,
-    writes_color: false,
     // 2 derived values at slots 4..6:
     //   4: c1  (r1 + d1)
     //   5: c2  (r2 + d2)
@@ -74,7 +72,6 @@ fn init_trade(user: array<f32, 4>) -> array<f32, 2> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_trade(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let r1 = get_param(xform_id, variation_id, 0u);
@@ -151,7 +148,7 @@ pub static VORON: VariationDef = VariationDef {
     display_name: "Voron",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("k", "K", unlimited_float, 0.99, -10.0, 10.0, "Lerp factor toward the nearest Voronoi site. 1 = snap fully to site; 0 = pass through unchanged."),
         param!("step", "Step", unlimited_float, 0.25, 0.001, 10.0, "Voronoi cell size."),
@@ -159,13 +156,10 @@ pub static VORON: VariationDef = VariationDef {
         param!("xseed", "X seed", int, 3.0, -1000.0, 1000.0, "Hash seed for X-coordinate site generation."),
         param!("yseed", "Y seed", int, 7.0, -1000.0, 1000.0, "Hash seed for Y-coordinate site generation."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn voron_noise(x_seed: i32) -> f32 {
     var n = x_seed;
@@ -274,15 +268,12 @@ pub static SQUIRCULAR: VariationDef = VariationDef {
     display_name: "Squircular",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_squircular(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let w = transforms[xform_id].variations[variation_id];
@@ -349,17 +340,14 @@ pub static FLUX: VariationDef = VariationDef {
     display_name: "Flux",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[
         param!("spread", "Spread", unlimited_float, 0.3, -10.0, 10.0, "Output magnitude scale, offset from a base value of 2."),
     ],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_flux(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let spread = get_param(xform_id, variation_id, 0u);
@@ -413,15 +401,12 @@ pub static RAYS: VariationDef = VariationDef {
     display_name: "Rays",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng, Feature::NeedsTransform],
     parameters: &[],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_rays(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let w = transforms[xform_id].variations[variation_id];
@@ -465,15 +450,12 @@ pub static RAYS1: VariationDef = VariationDef {
     display_name: "Rays 1",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_rays1(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let w = transforms[xform_id].variations[variation_id];
@@ -536,14 +518,12 @@ pub static LOONIE2: VariationDef = VariationDef {
     display_name: "Loonie 2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[
         param!("sides", "Sides", int, 4.0, 1.0, 50.0, "Polygon side count (≥ 1)."),
         param!("star", "Star", unlimited_float, 0.0, -10.0, 10.0, "Star-fold rotation amount (scaled by −π/2 internally)."),
         param!("circle", "Circle", unlimited_float, 0.0, -10.0, 10.0, "Circularity mixing factor: 0 = pure star/polygon shape, 1 = pure circle."),
     ],
-    needs_transform: true,
-    writes_color: false,
     // 6 derived values at slots 3..9:
     //   3: sina  (sin(2π/sides))
     //   4: cosa  (cos(2π/sides))
@@ -574,7 +554,6 @@ fn init_loonie2(user: array<f32, 3>) -> array<f32, 6> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_loonie2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let sides_in = max(get_param(xform_id, variation_id, 0u), 1.0);
@@ -692,7 +671,7 @@ pub static FOURTH: VariationDef = VariationDef {
     display_name: "Fourth",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[
         param!("spin", "Spin", unlimited_float, 3.14159265, -10.0, 10.0, "Lazysusan-quadrant rotation amount, in radians."),
         param!("space", "Space", unlimited_float, 0.0, -10.0, 10.0, "Lazysusan-quadrant radial nudge for the outside-threshold case."),
@@ -700,13 +679,10 @@ pub static FOURTH: VariationDef = VariationDef {
         param!("x", "X", unlimited_float, 0.0, -10.0, 10.0, "Lazysusan-quadrant X center offset."),
         param!("y", "Y", unlimited_float, 0.0, -10.0, 10.0, "Lazysusan-quadrant Y center offset."),
     ],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_fourth(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let spin = get_param(xform_id, variation_id, 0u);

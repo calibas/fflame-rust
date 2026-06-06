@@ -26,7 +26,7 @@
 //! Source: `output/jwildfire-vars/output/jubiq.cpp`.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -49,7 +49,7 @@ pub static JUBIQ: VariationDef = VariationDef {
     display_name: "Jubiq",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("power", "Power", int, 1.0, -50.0, 50.0, "Julia angular branch count (integer). 0 collapses the variation to the origin. Otherwise: picks one of `|power|` equally-spaced angles per iteration and divides the polar angle by `power`."),
         param!("dist", "Distance", unlimited_float, 1.0, -10.0, 10.0, "Radial exponent multiplier. Combines with `power` to set the radial power as `0.5 · dist / power` (negative `dist` flips the radial sense)."),
@@ -76,8 +76,6 @@ pub static JUBIQ: VariationDef = VariationDef {
         param!("qdy", "QD y", unlimited_float, 0.0, -10.0, 10.0, "Möbius denominator quaternion D, Y component."),
         param!("qdz", "QD z", unlimited_float, 0.0, -10.0, 10.0, "Möbius denominator quaternion D, Z component."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 2,
     wgsl_init: Some(r#"
 fn init_jubiQ(user: array<f32, 24>) -> array<f32, 2> {
@@ -92,7 +90,6 @@ fn init_jubiQ(user: array<f32, 24>) -> array<f32, 2> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_jubiQ(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let power = i32(get_param(xform_id, variation_id, 0u));

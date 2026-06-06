@@ -13,7 +13,7 @@
 //!     `if isPreserveZCoordinate() FPz += pAmount * FTz`).
 
 use crate::variations::{
-    definition::VariationDef,
+    definition::{Feature, VariationDef},
     VariationCategory, VariationPhase,
 };
 
@@ -30,15 +30,12 @@ pub static SQRT_ACOTH: VariationDef = VariationDef {
     display_name: "Sqrt ACoth",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_sqrt_acoth(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     let two_over_pi = 0.6366197723675814;
@@ -87,15 +84,12 @@ pub static SQRT_ACOSH: VariationDef = VariationDef {
     display_name: "Sqrt ACosh",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_sqrt_acosh(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     let two_over_pi = 0.6366197723675814;
@@ -156,15 +150,12 @@ pub static SQRT_ACOSECH: VariationDef = VariationDef {
     display_name: "Sqrt ACosecH",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_sqrt_acosech(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     let two_over_pi = 0.6366197723675814;
@@ -233,15 +224,12 @@ pub static SQRT_ASECH: VariationDef = VariationDef {
     display_name: "Sqrt ASech",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_sqrt_asech(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     let two_over_pi = 0.6366197723675814;
@@ -297,15 +285,12 @@ pub static SQRT_ASINH: VariationDef = VariationDef {
     display_name: "Sqrt ASinh",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_sqrt_asinh(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     let two_over_pi = 0.6366197723675814;
@@ -362,15 +347,12 @@ pub static SQRT_ATANH: VariationDef = VariationDef {
     display_name: "Sqrt ATanh",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_sqrt_atanh(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     let one_over_pi = 0.3183098861837907;

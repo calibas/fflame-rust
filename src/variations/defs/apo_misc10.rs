@@ -24,7 +24,7 @@
 //! `output/jwildfire-vars/output/`.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -55,7 +55,7 @@ pub static MASK: VariationDef = VariationDef {
     display_name: "Mask",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("xshift", "X shift", unlimited_float, 0.0, -10.0, 10.0, "Additive offset on X before the sin term."),
         param!("yshift", "Y shift", unlimited_float, 0.0, -10.0, 10.0, "Additive offset on Y before the cosh term."),
@@ -63,13 +63,10 @@ pub static MASK: VariationDef = VariationDef {
         param!("xscale", "X scale", unlimited_float, 1.0, -10.0, 10.0, "Multiplier on X before the sin term."),
         param!("yscale", "Y scale", unlimited_float, 1.0, -10.0, 10.0, "Multiplier on Y before the cosh term."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_mask(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let xshift = get_param(xform_id, variation_id, 0u);
@@ -129,19 +126,16 @@ pub static OVOID3D: VariationDef = VariationDef {
     display_name: "Ovoid 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("x", "X scale", unlimited_float, 1.0, -10.0, 10.0, "X-axis scale on the inverted output."),
         param!("y", "Y scale", unlimited_float, 1.0, -10.0, 10.0, "Y-axis scale."),
         param!("z", "Z scale", unlimited_float, 1.0, -10.0, 10.0, "Z-axis scale (3D only)."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_ovoid3d(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let x_scale = get_param(xform_id, variation_id, 0u);
@@ -191,18 +185,15 @@ pub static MURL2: VariationDef = VariationDef {
     display_name: "Murl 2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[
         param!("c", "C", unlimited_float, 0.1, -10.0, 10.0, "Möbius coefficient — controls the strength of the Möbius distortion."),
         param!("power", "Power", int, 3.0, -100.0, 100.0, "Power exponent. 0 falls back to a degenerate case with a high invp."),
     ],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_murl2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let c = get_param(xform_id, variation_id, 0u);
@@ -303,7 +294,7 @@ pub static MINKQM: VariationDef = VariationDef {
     display_name: "Mink QM",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("a", "A", unlimited_float, 1.0, -10.0, 10.0, "Initial denominator `q` of the SB-tree recursion."),
         param!("b", "B", unlimited_float, 1.0, -10.0, 10.0, "Initial offset on the SB-tree numerator `r`."),
@@ -312,13 +303,10 @@ pub static MINKQM: VariationDef = VariationDef {
         param!("e", "E", unlimited_float, 0.5, -10.0, 10.0, "Step decay factor — multiplied with `d` each iteration. 0.5 gives the standard Minkowski function."),
         param!("f", "Iters", int, 20.0, 1.0, 50.0, "Iteration count. Default 20 yields about 1e-6 precision."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn minkqm_minkowski(xv: f32, a: f32, b: f32, c: f32, dd: f32, e: f32, iters: i32) -> f32 {
     var p: f32 = 0.0;

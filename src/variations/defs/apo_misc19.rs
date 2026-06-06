@@ -26,7 +26,7 @@
 //!   - `output/jwildfire-vars/output/circlelinear.cpp`
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -52,7 +52,7 @@ pub static MOBIUS_STRIP: VariationDef = VariationDef {
     display_name: "Mobius Strip",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[
         param!("radius", "Radius", unlimited_float, 1.0, -10.0, 10.0, "Strip's central-circle radius."),
         param!("width", "Width", unlimited_float, 1.0, -10.0, 10.0, "Strip width."),
@@ -65,8 +65,6 @@ pub static MOBIUS_STRIP: VariationDef = VariationDef {
         param!("width_mode", "Width Mode", enum, 0, &["Wrap", "Clamp", "Hide", "Leave"], "Y out-of-range behavior. Leave passes the original point through unchanged."),
         param!("radial_mode", "Radial Mode", enum, 0, &["Wrap", "Clamp", "Hide", "Leave"], "X out-of-range behavior."),
     ],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 4,
     wgsl_init: Some(r#"
 fn init_mobius_strip(user: array<f32, 10>) -> array<f32, 4> {
@@ -81,7 +79,6 @@ fn init_mobius_strip(user: array<f32, 10>) -> array<f32, 4> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_mobius_strip(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let radius = get_param(xform_id, variation_id, 0u);
@@ -262,7 +259,7 @@ pub static CIRCLE_LINEAR: VariationDef = VariationDef {
     display_name: "Circle Linear",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("Sc", "Scale", unlimited_float, 1.0, -10.0, 10.0, "Cell size — each cell occupies a `2·Sc × 2·Sc` region."),
         param!("K", "K", unlimited_float, 0.5, -10.0, 10.0, "Linear-scale factor for the non-identity branch."),
@@ -273,13 +270,10 @@ pub static CIRCLE_LINEAR: VariationDef = VariationDef {
         param!("Y", "Y", unlimited_float, 10.0, -100.0, 100.0, "Unused in the body — preserved for cpp parity and preset compatibility."),
         param!("Seed", "Seed", int, 0.0, -1000.0, 1000.0, "Hash seed for the per-cell deterministic noise."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn cl_disc_noise(x: i32, y: i32) -> f32 {
     var n = x + y * 57;

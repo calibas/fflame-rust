@@ -23,15 +23,12 @@ pub static LINEAR: VariationDef = VariationDef {
     display_name: "Linear",
     category: VariationCategory::Basic2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_linear(p: vec2<f32>) -> vec2<f32> {
     return p;
@@ -56,15 +53,12 @@ pub static SINUSOIDAL: VariationDef = VariationDef {
     display_name: "Sinusoidal",
     category: VariationCategory::Basic2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_sinusoidal(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(sin(p.x), sin(p.y));
@@ -89,15 +83,12 @@ pub static SPHERICAL: VariationDef = VariationDef {
     display_name: "Spherical",
     category: VariationCategory::Basic2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_spherical(p: vec2<f32>) -> vec2<f32> {
     let r2 = dot(p, p) + 1e-6;
@@ -124,15 +115,12 @@ pub static SWIRL: VariationDef = VariationDef {
     display_name: "Swirl",
     category: VariationCategory::Basic2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_swirl(p: vec2<f32>) -> vec2<f32> {
     let r2 = dot(p, p);
@@ -163,15 +151,12 @@ pub static HORSESHOE: VariationDef = VariationDef {
     display_name: "Horseshoe",
     category: VariationCategory::Basic2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_horseshoe(p: vec2<f32>) -> vec2<f32> {
     let r = length(p) + 1e-6;

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use crate::variations::VariationRegistry;
+use crate::variations::{Feature, VariationRegistry};
 
 /// Global flag to enable shader dumping (set via CLI --dump-shader flag)
 static DUMP_SHADER_ENABLED: AtomicBool = AtomicBool::new(false);
@@ -665,7 +665,7 @@ impl ShaderBuilder {
     /// this is true. Flames without DC variations skip them entirely.
     fn has_dc_variation(&self, active_variations: &[(String, u32)]) -> bool {
         active_variations.iter().any(|(name, _)| {
-            self.registry.get(name).is_some_and(|info| info.writes_color)
+            self.registry.get(name).is_some_and(|info| info.has_feature(Feature::WritesColor))
         })
     }
 
@@ -1450,14 +1450,14 @@ impl ShaderBuilder {
                 // get_param lookups. needs_transform variations also get both
                 // so they can read transforms[xform_id].variations[variation_id]
                 // (e.g., pre_rotate_x reads its own weight from the buffer).
-                if !info.parameters.is_empty() || info.needs_transform {
+                if !info.parameters.is_empty() || info.has_feature(Feature::NeedsTransform) {
                     params.push_str(&format!(", xform_id, {}u", idx));
                 }
-                if info.needs_rng {
+                if info.has_feature(Feature::NeedsRng) {
                     params.push_str(", rng");
                 }
                 // DC variations get the iteration-local color register pointer.
-                if info.writes_color {
+                if info.has_feature(Feature::WritesColor) {
                     params.push_str(", vc");
                 }
 
@@ -1486,16 +1486,16 @@ impl ShaderBuilder {
             // variation can read the running accumulator of prior variations.
             // Inserted right after `p` so the order matches the variation
             // function's declared signature.
-            if info.needs_accum {
+            if info.has_feature(Feature::NeedsAccum) {
                 args.push_str(", result");
             }
-            if !info.parameters.is_empty() || info.needs_transform {
+            if !info.parameters.is_empty() || info.has_feature(Feature::NeedsTransform) {
                 args.push_str(&format!(", xform_id, {}u", idx));
             }
-            if info.needs_rng {
+            if info.has_feature(Feature::NeedsRng) {
                 args.push_str(", rng");
             }
-            if info.writes_color {
+            if info.has_feature(Feature::WritesColor) {
                 args.push_str(", vc");
             }
             let call = format!("{}({})", info.wgsl_function, args);
@@ -1533,20 +1533,20 @@ impl ShaderBuilder {
                 // needs_accum: in post-phase, cpp's FP* is the variation
                 // output up to this point — same as our `result`. Pass it as
                 // the accum arg too.
-                if info.needs_accum {
+                if info.has_feature(Feature::NeedsAccum) {
                     params.push_str(", result");
                 }
 
                 // has_params || needs_transform → pass (xform_id, variation_id).
                 // Pure no-param no-needs_transform variations (e.g. flatten 2D
                 // stub) get just `result`.
-                if !info.parameters.is_empty() || info.needs_transform {
+                if !info.parameters.is_empty() || info.has_feature(Feature::NeedsTransform) {
                     params.push_str(&format!(", xform_id, {}u", idx));
                 }
-                if info.needs_rng {
+                if info.has_feature(Feature::NeedsRng) {
                     params.push_str(", rng");
                 }
-                if info.writes_color {
+                if info.has_feature(Feature::WritesColor) {
                     params.push_str(", vc");
                 }
 
@@ -1628,13 +1628,13 @@ impl ShaderBuilder {
                 // Pre-variations directly modify temp (NOT weighted sum!)
                 let mut params = String::new();
 
-                if !info.parameters.is_empty() || info.needs_transform {
+                if !info.parameters.is_empty() || info.has_feature(Feature::NeedsTransform) {
                     params.push_str(&format!(", xform_id, {}u", idx));
                 }
-                if info.needs_rng {
+                if info.has_feature(Feature::NeedsRng) {
                     params.push_str(", rng");
                 }
-                if info.writes_color {
+                if info.has_feature(Feature::WritesColor) {
                     params.push_str(", vc");
                 }
 
@@ -1667,16 +1667,16 @@ impl ShaderBuilder {
             let mut args = String::from("temp");
             // needs_accum: pass current 3D `result` so the variation
             // can read the running accumulator (cpp's FPx/FPy/FPz).
-            if info.needs_accum {
+            if info.has_feature(Feature::NeedsAccum) {
                 args.push_str(", result");
             }
-            if !info.parameters.is_empty() || info.needs_transform {
+            if !info.parameters.is_empty() || info.has_feature(Feature::NeedsTransform) {
                 args.push_str(&format!(", xform_id, {}u", idx));
             }
-            if info.needs_rng {
+            if info.has_feature(Feature::NeedsRng) {
                 args.push_str(", rng");
             }
-            if info.writes_color {
+            if info.has_feature(Feature::WritesColor) {
                 args.push_str(", vc");
             }
             let call = format!("{}({})", info.wgsl_function, args);
@@ -1717,17 +1717,17 @@ impl ShaderBuilder {
                 // `result = variation(result)` dispatch.)
                 let mut params = String::from("result");
                 // needs_accum: in post-phase, cpp's FP* is `result`.
-                if info.needs_accum {
+                if info.has_feature(Feature::NeedsAccum) {
                     params.push_str(", result");
                 }
 
-                if !info.parameters.is_empty() || info.needs_transform {
+                if !info.parameters.is_empty() || info.has_feature(Feature::NeedsTransform) {
                     params.push_str(&format!(", xform_id, {}u", idx));
                 }
-                if info.needs_rng {
+                if info.has_feature(Feature::NeedsRng) {
                     params.push_str(", rng");
                 }
-                if info.writes_color {
+                if info.has_feature(Feature::WritesColor) {
                     params.push_str(", vc");
                 }
 

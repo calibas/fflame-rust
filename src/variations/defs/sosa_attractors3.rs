@@ -20,7 +20,7 @@
 //!   - `output/jwildfire-vars/output/wallpaper_js.cpp`
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -42,15 +42,12 @@ pub static LACE_JS: VariationDef = VariationDef {
     display_name: "Lace (JS)",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_lace_js(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     let r = 2.0;
@@ -130,19 +127,16 @@ pub static WALLPAPER_JS: VariationDef = VariationDef {
     display_name: "Wallpaper (JS)",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng, Feature::NeedsTransform],
     parameters: &[
         param!("a", "A", unlimited_float, 1.156, -10.0, 10.0, "Wallpaper parameter `a` — Y-output offset (`y' = a − x`)."),
         param!("b", "B", unlimited_float, -0.28, -10.0, 10.0, "Wallpaper parameter `b` — coefficient on x inside the sqrt term."),
         param!("c", "C", unlimited_float, 21.288, -100.0, 100.0, "Wallpaper parameter `c` — constant subtracted inside the sqrt term."),
     ],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn wallpaper_signum(v: f32) -> f32 {
     if (v < 0.0) { return -1.0; }

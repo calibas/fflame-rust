@@ -46,17 +46,14 @@ pub static JAC_SN: VariationDef = VariationDef {
     display_name: "Jac SN",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("jac_sn_k", "K", unlimited_float, 0.5, -1.0, 1.0, "Elliptic modulus k. Ranges over [−1, 1]; 0 reduces to circular trig, ±1 reduces to hyperbolic."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn jac_sn_je(uu: f32, emmc: f32) -> vec3<f32> {
     let CA = 0.0003;
@@ -254,17 +251,14 @@ pub static JAC_CN: VariationDef = VariationDef {
     display_name: "Jac CN",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("jac_cn_k", "K", unlimited_float, 0.5, -1.0, 1.0, "Elliptic modulus k. Ranges over [−1, 1]; 0 reduces to circular trig, ±1 reduces to hyperbolic."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn jac_cn_je(uu: f32, emmc: f32) -> vec3<f32> {
     let CA = 0.0003;
@@ -462,17 +456,14 @@ pub static JAC_DN: VariationDef = VariationDef {
     display_name: "Jac DN",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("jac_dn_k", "K", unlimited_float, 0.5, -1.0, 1.0, "Elliptic modulus k. Ranges over [−1, 1]; 0 reduces to circular trig, ±1 reduces to hyperbolic."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn jac_dn_je(uu: f32, emmc: f32) -> vec3<f32> {
     let CA = 0.0003;

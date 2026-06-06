@@ -38,7 +38,7 @@
 //! `output/jwildfire-vars/output/`.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -68,12 +68,10 @@ pub static ASTERIA: VariationDef = VariationDef {
     display_name: "Asteria",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng, Feature::NeedsTransform],
     parameters: &[
         param!("alpha", "Alpha", unlimited_float, 0.0, -10.0, 10.0, "Rotation angle (× π) applied before and inverted after the asteria branch's square-root bend."),
     ],
-    needs_transform: true,
-    writes_color: false,
     // 2 derived values at slots 1..3:
     //   1: sina = sin(π · alpha)
     //   2: cosa = cos(π · alpha)
@@ -89,7 +87,6 @@ fn init_asteria(user: array<f32, 1>) -> array<f32, 2> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_asteria(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let sina = get_param(xform_id, variation_id, 1u);
@@ -197,15 +194,12 @@ pub static ESTIQ: VariationDef = VariationDef {
     display_name: "Estiq",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_estiq(p: vec2<f32>) -> vec2<f32> {
     let e = exp(p.x);
@@ -254,7 +248,7 @@ pub static FDISC: VariationDef = VariationDef {
     display_name: "F-Disc",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("ashift", "A shift", unlimited_float, 1.0, -10.0, 10.0, "Radial denominator offset added to `sqrt(x² + y²)`."),
         param!("rshift", "R shift", unlimited_float, 1.0, -10.0, 10.0, "Angular offset added to `atan2(y, x) / π`."),
@@ -265,13 +259,10 @@ pub static FDISC: VariationDef = VariationDef {
         param!("term3", "Term 3", unlimited_float, 0.0, -10.0, 10.0, "Weight on the `x·pr`/`y·pr` (input-scaled radius) contribution."),
         param!("term4", "Term 4", unlimited_float, 0.0, -10.0, 10.0, "Weight on the pass-through `x`/`y` contribution."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_fdisc(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let ashift = get_param(xform_id, variation_id, 0u);
@@ -351,20 +342,17 @@ pub static BTRANSFORM: VariationDef = VariationDef {
     display_name: "B-Transform",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("rotate", "Rotate", unlimited_float, 0.0, -10.0, 10.0, "Additive rotation on the bipolar σ coordinate."),
         param!("power", "Power", int, 1.0, 1.0, 100.0, "Number of angular branches (≥ 1)."),
         param!("move", "Move", unlimited_float, 0.0, -10.0, 10.0, "Additive offset on τ."),
         param!("split", "Split", unlimited_float, 0.0, -10.0, 10.0, "Asymmetric τ offset: added when x ≥ 0, subtracted when x < 0."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_bTransform(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let rotate = get_param(xform_id, variation_id, 0u);
@@ -462,13 +450,11 @@ pub static NPOLAR: VariationDef = VariationDef {
     display_name: "N-Polar",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng, Feature::NeedsTransform],
     parameters: &[
         param!("parity", "Parity", int, 0.0, -100.0, 100.0, "Parity selector. `|parity| mod 2` chooses the branch (even = log-polar mid-step, odd = cartesian); the value itself also flips the sign of the even-branch's radial magnitude."),
         param!("n", "N", int, 1.0, -100.0, 100.0, "Angular branch count. 0 is forced to 1 internally; negative values use `|n|` branches."),
     ],
-    needs_transform: true,
-    writes_color: false,
     // 4 derived values at slots 2..6:
     //   2: nnz   (n==0 ? 1 : n)
     //   3: isodd (|parity| mod 2)
@@ -492,7 +478,6 @@ fn init_npolar(user: array<f32, 2>) -> array<f32, 4> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_npolar(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let parity = get_param(xform_id, variation_id, 0u);

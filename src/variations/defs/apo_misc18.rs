@@ -20,7 +20,7 @@
 //!   - `output/jwildfire-vars/output/xheart_blur_wf.cpp`
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -43,19 +43,16 @@ pub static LAZYSENSEN: VariationDef = VariationDef {
     display_name: "Lazy Sensen",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("scale_x", "Scale X", unlimited_float, 1.0, -10.0, 10.0, "X-axis stripe scale. 0 disables the X flip; the stripe width is `1/|scale_x|`."),
         param!("scale_y", "Scale Y", unlimited_float, 1.0, -10.0, 10.0, "Y-axis stripe scale."),
         param!("scale_z", "Scale Z", unlimited_float, 0.0, -10.0, 10.0, "Z-axis stripe scale (3D only)."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn lazysensen_flip(c: f32, scale: f32) -> f32 {
     if (abs(scale) < 1e-30) {
@@ -133,7 +130,7 @@ pub static SPHERECROP: VariationDef = VariationDef {
     display_name: "Sphere Crop",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng, Feature::NeedsTransform],
     parameters: &[
         param!("radius", "Radius", unlimited_float, 1.0, -10.0, 10.0, "Sphere radius."),
         param!("x", "X", unlimited_float, 0.0, -10.0, 10.0, "X center of the sphere."),
@@ -142,8 +139,6 @@ pub static SPHERECROP: VariationDef = VariationDef {
         param!("scatter_area", "Scatter Area", unlimited_float, 0.0, -1.0, 1.0, "Random scatter band along the sphere surface. 0 = snap to surface; ±1 = scatter across full half-radius."),
         param!("zero", "Zero", bool, true, "When on, points outside the sphere collapse to the origin. When off, they scatter onto the surface."),
     ],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 1,
     wgsl_init: Some(r#"
 fn init_spherecrop(user: array<f32, 6>) -> array<f32, 1> {
@@ -154,7 +149,6 @@ fn init_spherecrop(user: array<f32, 6>) -> array<f32, 1> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_spherecrop(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let cr = get_param(xform_id, variation_id, 0u);
@@ -243,13 +237,11 @@ pub static XHEART_BLUR_WF: VariationDef = VariationDef {
     display_name: "X-Heart Blur WF",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("angle", "Angle", unlimited_float, 0.0, -10.0, 10.0, "Rotation angle of the heart shape (scaled by π/8 internally and offset from π/4)."),
         param!("ratio", "Ratio", unlimited_float, 0.0, -10.0, 10.0, "Y-axis stretch factor (added to a base of 6 to control heart roundness, same as `xheart`)."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 3,
     wgsl_init: Some(r#"
 fn init_xheart_blur_wf(user: array<f32, 2>) -> array<f32, 3> {
@@ -264,7 +256,6 @@ fn init_xheart_blur_wf(user: array<f32, 2>) -> array<f32, 3> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_xheart_blur_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let sina = get_param(xform_id, variation_id, 2u);

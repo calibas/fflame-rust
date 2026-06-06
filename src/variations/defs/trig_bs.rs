@@ -40,7 +40,7 @@ pub static SIN2_BS: VariationDef = VariationDef {
     display_name: "Sin2 BS",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         VariationParamDef { name: "x1", display_name: "X1", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `sin(x)` in the internal computation.") },
@@ -51,13 +51,10 @@ pub static SIN2_BS: VariationDef = VariationDef {
         VariationParamDef { name: "y2", display_name: "Y2", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `cosh(y)` in the internal computation.") },
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_sin2_bs(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let x1 = get_param(xform_id, variation_id, 0u);
@@ -96,7 +93,7 @@ pub static COS2_BS: VariationDef = VariationDef {
     display_name: "Cos2 BS",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         VariationParamDef { name: "x1", display_name: "X1", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `sin(x)` in the internal computation.") },
@@ -107,13 +104,10 @@ pub static COS2_BS: VariationDef = VariationDef {
         VariationParamDef { name: "y2", display_name: "Y2", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `cosh(y)` in the internal computation.") },
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_cos2_bs(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let x1 = get_param(xform_id, variation_id, 0u);
@@ -155,7 +149,7 @@ pub static TAN2_BS: VariationDef = VariationDef {
     display_name: "Tan2 BS",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         VariationParamDef { name: "x1", display_name: "X1", param_type: ParamType::UnlimitedFloat,
                             default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `sin(x)` in the internal computation.") },
@@ -166,13 +160,10 @@ pub static TAN2_BS: VariationDef = VariationDef {
         VariationParamDef { name: "y2", display_name: "Y2", param_type: ParamType::UnlimitedFloat,
                             default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `cosh(y)` in the internal computation.") },
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_tan2_bs(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let x1 = get_param(xform_id, variation_id, 0u);
@@ -215,7 +206,7 @@ pub static SEC2_BS: VariationDef = VariationDef {
     display_name: "Sec2 BS",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         VariationParamDef { name: "x1", display_name: "X1", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `sin(x)` in the internal computation.") },
@@ -226,13 +217,10 @@ pub static SEC2_BS: VariationDef = VariationDef {
         VariationParamDef { name: "y2", display_name: "Y2", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `cosh(y)` in the internal computation.") },
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_sec2_bs(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let x1 = get_param(xform_id, variation_id, 0u);
@@ -275,7 +263,7 @@ pub static CSC2_BS: VariationDef = VariationDef {
     display_name: "Csc2 BS",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         VariationParamDef { name: "x1", display_name: "X1", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `sin(x)` in the internal computation.") },
@@ -286,13 +274,10 @@ pub static CSC2_BS: VariationDef = VariationDef {
         VariationParamDef { name: "y2", display_name: "Y2", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `cosh(y)` in the internal computation.") },
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_csc2_bs(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let x1 = get_param(xform_id, variation_id, 0u);
@@ -337,7 +322,7 @@ pub static COT2_BS: VariationDef = VariationDef {
     display_name: "Cot2 BS",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         VariationParamDef { name: "x1", display_name: "X1", param_type: ParamType::UnlimitedFloat,
                             default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `sin(x)` in the internal computation.") },
@@ -348,13 +333,10 @@ pub static COT2_BS: VariationDef = VariationDef {
         VariationParamDef { name: "y2", display_name: "Y2", param_type: ParamType::UnlimitedFloat,
                             default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `cosh(y)` in the internal computation.") },
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_cot2_bs(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let x1 = get_param(xform_id, variation_id, 0u);
@@ -400,7 +382,7 @@ pub static SINH2_BS: VariationDef = VariationDef {
     display_name: "Sinh2 BS",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         VariationParamDef { name: "x1", display_name: "X1", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `sin(x)` in the internal computation.") },
@@ -411,13 +393,10 @@ pub static SINH2_BS: VariationDef = VariationDef {
         VariationParamDef { name: "y2", display_name: "Y2", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `cosh(y)` in the internal computation.") },
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_sinh2_bs(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let x1 = get_param(xform_id, variation_id, 0u);
@@ -456,7 +435,7 @@ pub static COSH2_BS: VariationDef = VariationDef {
     display_name: "Cosh2 BS",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         VariationParamDef { name: "x1", display_name: "X1", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `sin(x)` in the internal computation.") },
@@ -467,13 +446,10 @@ pub static COSH2_BS: VariationDef = VariationDef {
         VariationParamDef { name: "y2", display_name: "Y2", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `cosh(y)` in the internal computation.") },
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_cosh2_bs(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let x1 = get_param(xform_id, variation_id, 0u);
@@ -514,7 +490,7 @@ pub static TANH2_BS: VariationDef = VariationDef {
     display_name: "Tanh2 BS",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         VariationParamDef { name: "x1", display_name: "X1", param_type: ParamType::UnlimitedFloat,
                             default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `sin(x)` in the internal computation.") },
@@ -525,13 +501,10 @@ pub static TANH2_BS: VariationDef = VariationDef {
         VariationParamDef { name: "y2", display_name: "Y2", param_type: ParamType::UnlimitedFloat,
                             default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `cosh(y)` in the internal computation.") },
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_tanh2_bs(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let x1 = get_param(xform_id, variation_id, 0u);
@@ -576,7 +549,7 @@ pub static COTH2_BS: VariationDef = VariationDef {
     display_name: "Coth2 BS",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         VariationParamDef { name: "x1", display_name: "X1", param_type: ParamType::UnlimitedFloat,
                             default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `sin(x)` in the internal computation.") },
@@ -587,13 +560,10 @@ pub static COTH2_BS: VariationDef = VariationDef {
         VariationParamDef { name: "y2", display_name: "Y2", param_type: ParamType::UnlimitedFloat,
                             default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `cosh(y)` in the internal computation.") },
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_coth2_bs(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let x1 = get_param(xform_id, variation_id, 0u);
@@ -641,7 +611,7 @@ pub static SECH2_BS: VariationDef = VariationDef {
     display_name: "Sech2 BS",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         VariationParamDef { name: "x1", display_name: "X1", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `sin(x)` in the internal computation.") },
@@ -652,13 +622,10 @@ pub static SECH2_BS: VariationDef = VariationDef {
         VariationParamDef { name: "y2", display_name: "Y2", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `cosh(y)` in the internal computation.") },
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_sech2_bs(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let x1 = get_param(xform_id, variation_id, 0u);
@@ -701,7 +668,7 @@ pub static CSCH2_BS: VariationDef = VariationDef {
     display_name: "Csch2 BS",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         VariationParamDef { name: "x1", display_name: "X1", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `sin(x)` in the internal computation.") },
@@ -712,13 +679,10 @@ pub static CSCH2_BS: VariationDef = VariationDef {
         VariationParamDef { name: "y2", display_name: "Y2", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `cosh(y)` in the internal computation.") },
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_csch2_bs(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let x1 = get_param(xform_id, variation_id, 0u);
@@ -765,7 +729,7 @@ pub static EXP2_BS: VariationDef = VariationDef {
     display_name: "Exp2 BS",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         VariationParamDef { name: "x1", display_name: "X1", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the X exponent — output uses `exp(x · x1)`.") },
@@ -774,13 +738,10 @@ pub static EXP2_BS: VariationDef = VariationDef {
         VariationParamDef { name: "y2", display_name: "Y2", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Scales the argument of `cos(y)`.") },
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_exp2_bs(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let x1 = get_param(xform_id, variation_id, 0u);

@@ -23,7 +23,7 @@
 //!   - `output/jwildfire-vars/output/crown_js.cpp`
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -45,15 +45,12 @@ pub static HADAMARD_JS: VariationDef = VariationDef {
     display_name: "Hadamard (JS)",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_hadamard_js(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     let r1 = rng_nextf(rng);
@@ -115,15 +112,12 @@ pub static INVTREE_JS: VariationDef = VariationDef {
     display_name: "Inv-Tree (JS)",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_invtree_js(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     let r1 = rng_nextf(rng);
@@ -190,18 +184,15 @@ pub static CROWN_JS: VariationDef = VariationDef {
     display_name: "Crown (JS)",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("a", "A", unlimited_float, 5.0, -10.0, 10.0, "Base of the exponential growth (`a^k` in the iteration). Default 5."),
         param!("b", "B", unlimited_float, 0.6309297535714574, -10.0, 10.0, "Power decay rate (`|a|^(b·k)` in the denominator). Default log(2)/log(3) ≈ 0.631."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_crown_js(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let a = get_param(xform_id, variation_id, 0u);

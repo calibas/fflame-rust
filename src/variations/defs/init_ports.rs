@@ -9,7 +9,7 @@
 //! preserved bugs.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 
@@ -39,7 +39,7 @@ pub static TARGET: VariationDef = VariationDef {
     display_name: "Target",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         VariationParamDef { name: "even", display_name: "Even", param_type: ParamType::Angle,
                             default_value: 0.0, min_value: Some(-360.0), max_value: Some(360.0), description: Some("Rotation angle (degrees) applied to even-numbered rings.") },
@@ -50,8 +50,6 @@ pub static TARGET: VariationDef = VariationDef {
     ],
     // 1 derived value at slot 3:
     //   3: t_size_2  (size / 2)
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 1,
     wgsl_init: Some(r#"
 fn init_target(user: array<f32, 3>) -> array<f32, 1> {
@@ -62,7 +60,6 @@ fn init_target(user: array<f32, 3>) -> array<f32, 1> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_target(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let even_p = get_param(xform_id, variation_id, 0u);
@@ -133,7 +130,7 @@ pub static YIN_YANG: VariationDef = VariationDef {
     display_name: "Yin Yang",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         VariationParamDef { name: "radius", display_name: "Radius", param_type: ParamType::Float,
                             default_value: 0.5, min_value: Some(0.0), max_value: Some(1.0), description: Some("Radius of the two yin/yang droplet centers, 0-1.") },
@@ -151,8 +148,6 @@ pub static YIN_YANG: VariationDef = VariationDef {
     //   6: cosa   cos(π · ang1)
     //   7: sinb   sin(π · ang2)
     //   8: cosb   cos(π · ang2)
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 4,
     wgsl_init: Some(r#"
 fn init_yin_yang(user: array<f32, 5>) -> array<f32, 4> {
@@ -169,7 +164,6 @@ fn init_yin_yang(user: array<f32, 5>) -> array<f32, 4> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_yin_yang(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let radius = get_param(xform_id, variation_id, 0u);

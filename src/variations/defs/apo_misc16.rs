@@ -23,7 +23,7 @@
 //! `output/jwildfire-vars/output/`.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -51,20 +51,17 @@ pub static SEASHELL3D: VariationDef = VariationDef {
     display_name: "Seashell 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("a", "Final Radius", unlimited_float, 2.0, -10.0, 10.0, "Final-spiral radius (outer-edge radius coefficient)."),
         param!("b", "Height", unlimited_float, 6.0, -20.0, 20.0, "Height ramp coefficient on Z."),
         param!("c", "Inner Radius", unlimited_float, 0.0, -10.0, 10.0, "Inner-spiral radial offset added to X and Y."),
         param!("n", "N Spirals", int, 5.0, 1.0, 50.0, "Number of spiral turns."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_seashell3D(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let a = get_param(xform_id, variation_id, 0u);
@@ -141,13 +138,11 @@ pub static HYPERSHIFT2: VariationDef = VariationDef {
     display_name: "Hyper Shift 2",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("p", "P", int, 3.0, 2.0, 50.0, "Polygon side count — the {p, q} tiling has regular `p`-gon faces."),
         param!("q", "Q", int, 7.0, 2.0, 50.0, "Vertices per polygon — `q` of them meet at each vertex of the tiling."),
     ],
-    needs_transform: false,
-    writes_color: false,
     // 4 derived values at slots 2..6: shift, scale2, scale, inv_p
     init_param_count: 4,
     wgsl_init: Some(r#"
@@ -181,7 +176,6 @@ fn init_hypershift2(user: array<f32, 2>) -> array<f32, 4> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_hypershift2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let p_u = max(get_param(xform_id, variation_id, 0u), 2.0);

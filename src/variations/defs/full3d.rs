@@ -16,15 +16,12 @@ pub static HEMISPHERE: VariationDef = VariationDef {
     display_name: "Hemisphere",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 // 2D version - projects onto unit circle
 fn variation_hemisphere(p: vec2<f32>) -> vec2<f32> {

@@ -30,7 +30,7 @@
 //! Source: `output/jwildfire-vars/output/truchet.cpp`.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -50,7 +50,7 @@ pub static TRUCHET: VariationDef = VariationDef {
     display_name: "Truchet",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform, Feature::WritesColor],
     parameters: &[
         param!("extended", "Extended", bool, false, "When on, use the slow iterated-LCG hash for tile-type selection (more cells produce distinct patterns). When off, the fast single-step LCG."),
         param!("exponent", "Exponent", unlimited_float, 2.0, 0.001, 2.0, "Lp-norm exponent for the arc shape (clamped to [0.001, 2]). 2 = circular arcs; lower values produce more angular shapes."),
@@ -60,13 +60,10 @@ pub static TRUCHET: VariationDef = VariationDef {
         param!("seed", "Seed", unlimited_float, 50.0, -1000.0, 1000.0, "Hash seed for the per-cell tile-type selection."),
         param!("direct_color", "Direct Color", bool, false, "When on, writes `clamp(r0, 0, 1)` to the color register on the r0 arc and `clamp(1 − r1, 0, 1)` on the r1 arc. Visible color requires the transform's Direct Color slider > 0."),
     ],
-    needs_transform: true,
-    writes_color: true,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_truchet(p: vec2<f32>, xform_id: u32, variation_id: u32, vc: ptr<function, f32>) -> vec2<f32> {
     let extended = i32(get_param(xform_id, variation_id, 0u));

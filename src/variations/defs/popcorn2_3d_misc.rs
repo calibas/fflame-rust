@@ -26,7 +26,7 @@
 //! Source: `output/jwildfire-vars/output/popcorn2_3d.cpp`.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -46,20 +46,17 @@ pub static POPCORN2_3D: VariationDef = VariationDef {
     display_name: "Popcorn2 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[
         param!("popcorn2_3D_x", "X", unlimited_float, 0.1, -10.0, 10.0, "X-axis sine amplitude (multiplies `sin(tan(c · y))` in the X output)."),
         param!("popcorn2_3D_y", "Y", unlimited_float, 0.1, -10.0, 10.0, "Y-axis sine amplitude (multiplies `sin(tan(c · x))` in the Y output)."),
         param!("popcorn2_3D_z", "Z", unlimited_float, 0.1, -10.0, 10.0, "Z-axis amplitude on the secondary `sin(tan(c)) · temp_tz` term."),
         param!("popcorn2_3D_c", "C", unlimited_float, 3.0, -10.0, 10.0, "Frequency multiplier inside `tan(c · coord)` for the XY modulators and `tan(c)` for the Z term."),
     ],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_popcorn2_3D(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let xp = get_param(xform_id, variation_id, 0u);
