@@ -559,6 +559,7 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &POST_JULIA3DQ,
     // Truchet family
     &TRUCHET_FILL,
+    &ARCTRUCHET,
     // Additional blur primitives
     &SINEBLUR,
     &STARBLUR,
