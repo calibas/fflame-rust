@@ -669,6 +669,18 @@ impl ShaderBuilder {
         })
     }
 
+    /// Mirror of `has_dc_variation` for the direct-RGB register (`vrc`).
+    /// Drives the `HAS_RGB` template condition: when no active variation
+    /// has `Feature::WritesRgb`, the per-iteration `vrc` declaration, the
+    /// `vrc` pointer parameter on `apply_variations`, and the plot-time
+    /// RGB blend are all stripped from the compiled shader entirely.
+    /// Flames without RGB-writing variations pay no per-iter cost.
+    fn has_rgb_variation(&self, active_variations: &[(String, u32)]) -> bool {
+        active_variations.iter().any(|(name, _)| {
+            self.registry.get(name).is_some_and(|info| info.has_feature(Feature::WritesRgb))
+        })
+    }
+
     /// Compute the packed parameter layout for the active variation set.
     ///
     /// Wraps [`crate::scene::transforms::compute_packed_layout`] given the
@@ -1180,6 +1192,9 @@ impl ShaderBuilder {
         // Compute has_dc once: drives both the apply_variations signature
         // (with vs without `vc` param) and the HAS_DC template condition.
         let has_dc = self.has_dc_variation(&active);
+        // Same shape for direct-RGB-writing variations: gates the `vrc`
+        // parameter and the plot-time RGB blend.
+        let has_rgb = self.has_rgb_variation(&active);
 
         // Build the template processor up front — both the header and the
         // main_template body have `{{#if ...}}` blocks (header gates which
@@ -1191,6 +1206,7 @@ impl ShaderBuilder {
         processor.set("PATH_TRACKING", path_features_enabled);
         processor.set("XAOS_ENABLED", xaos_enabled);
         processor.set("HAS_DC", has_dc);
+        processor.set("HAS_RGB", has_rgb);
         // HAS_ATTACHMENTS gates the per-iteration `attachments[xform_idx]`
         // load and the Linked/Final chain loops. False when the flame has
         // no Linked or Final transforms, restoring pre-attachment-feature
@@ -1255,9 +1271,9 @@ impl ShaderBuilder {
         // 7. Generate apply_variations with fixed registry indices
         // Pass inlined transforms for dead code elimination if available
         if render_3d {
-            shader.push_str(&self.build_apply_variations_3d(&active, constants.inlined_transforms.as_ref(), has_dc, false));
+            shader.push_str(&self.build_apply_variations_3d(&active, constants.inlined_transforms.as_ref(), has_dc, has_rgb, false));
         } else {
-            shader.push_str(&self.build_apply_variations_2d(&active, constants.inlined_transforms.as_ref(), has_dc, false));
+            shader.push_str(&self.build_apply_variations_2d(&active, constants.inlined_transforms.as_ref(), has_dc, has_rgb, false));
         }
         shader.push('\n');
 
@@ -1273,9 +1289,9 @@ impl ShaderBuilder {
             name == "subflame_wf" || name == "pre_subflame_wf");
         if has_subflame {
             if render_3d {
-                shader.push_str(&self.build_apply_variations_3d(&active, constants.inlined_transforms.as_ref(), has_dc, true));
+                shader.push_str(&self.build_apply_variations_3d(&active, constants.inlined_transforms.as_ref(), has_dc, has_rgb, true));
             } else {
-                shader.push_str(&self.build_apply_variations_2d(&active, constants.inlined_transforms.as_ref(), has_dc, true));
+                shader.push_str(&self.build_apply_variations_2d(&active, constants.inlined_transforms.as_ref(), has_dc, has_rgb, true));
             }
             shader.push('\n');
             let subflame_src = include_str!("../shaders/core/subflame.wgsl");
@@ -1389,6 +1405,7 @@ impl ShaderBuilder {
         active_variations: &[(String, u32)],
         inlined_transforms: Option<&Vec<InlinedTransform>>,
         has_dc: bool,
+        has_rgb: bool,
         is_subflame: bool,
     ) -> String {
         use crate::variations::VariationPhase;
@@ -1399,15 +1416,23 @@ impl ShaderBuilder {
         let use_inlined = !is_subflame && inlined_transforms.is_some();
 
         let fn_name = if is_subflame { "apply_subflame_variations" } else { "apply_variations" };
-        let signature = if has_dc {
-            format!("fn {}(xform: Transform, xform_id: u32, p: vec2<f32>, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec2<f32> {{\n", fn_name)
-        } else {
-            format!("fn {}(xform: Transform, xform_id: u32, p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {{\n", fn_name)
+        // Signature gains a `vc` (palette index) or `vrc` (direct RGB)
+        // pointer per the corresponding feature flag. Both can be present
+        // simultaneously — a flame can mix DC and RGB-writing variations
+        // and each one only takes the pointer it cares about.
+        let signature = {
+            let mut params = String::from("xform: Transform, xform_id: u32, p: vec2<f32>, rng: ptr<function, RngState>");
+            if has_dc { params.push_str(", vc: ptr<function, f32>"); }
+            if has_rgb { params.push_str(", vrc: ptr<function, vec3<f32>>"); }
+            format!("fn {}({}) -> vec2<f32> {{\n", fn_name, params)
         };
         let mut code = String::from(
             "// Apply all variations with Apophysis 4-phase execution model (XForm.pas:343-383)\n\
              // When has_dc=true, takes a `vc` pointer (the iteration-local color register\n\
              // Apophysis calls `vc`) so DC variations (writes_color: true) can write to it.\n\
+             // When has_rgb=true, takes a `vrc` pointer (the direct-RGB register) so\n\
+             // variations with `Feature::WritesRgb` can write a vec3<f32>. Both gated\n\
+             // independently — a flame mixing DC and RGB variations gets both pointers.\n\
              // When has_dc=false, the parameter is omitted — no DC variation in the active\n\
              // set means no inner call references vc, so it's pure overhead.\n",
         );
@@ -1460,6 +1485,10 @@ impl ShaderBuilder {
                 if info.has_feature(Feature::WritesColor) {
                     params.push_str(", vc");
                 }
+                // Direct-RGB-writing variations get the vrc pointer.
+                if info.has_feature(Feature::WritesRgb) {
+                    params.push_str(", vrc");
+                }
 
                 code.push_str(&format!(
                     "    // {}: {} (PRE)\n\
@@ -1497,6 +1526,9 @@ impl ShaderBuilder {
             }
             if info.has_feature(Feature::WritesColor) {
                 args.push_str(", vc");
+            }
+            if info.has_feature(Feature::WritesRgb) {
+                args.push_str(", vrc");
             }
             let call = format!("{}({})", info.wgsl_function, args);
 
@@ -1574,6 +1606,7 @@ impl ShaderBuilder {
         active_variations: &[(String, u32)],
         inlined_transforms: Option<&Vec<InlinedTransform>>,
         has_dc: bool,
+        has_rgb: bool,
         is_subflame: bool,
     ) -> String {
         use crate::variations::VariationPhase;
@@ -1584,14 +1617,17 @@ impl ShaderBuilder {
         let use_inlined = !is_subflame && inlined_transforms.is_some();
 
         let fn_name = if is_subflame { "apply_subflame_variations" } else { "apply_variations" };
-        let signature = if has_dc {
-            format!("fn {}(xform: Transform, xform_id: u32, p: vec3<f32>, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec3<f32> {{\n", fn_name)
-        } else {
-            format!("fn {}(xform: Transform, xform_id: u32, p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {{\n", fn_name)
+        // Same vc/vrc shape as the 2D builder — see that one for the
+        // independent-gating rationale.
+        let signature = {
+            let mut params = String::from("xform: Transform, xform_id: u32, p: vec3<f32>, rng: ptr<function, RngState>");
+            if has_dc { params.push_str(", vc: ptr<function, f32>"); }
+            if has_rgb { params.push_str(", vrc: ptr<function, vec3<f32>>"); }
+            format!("fn {}({}) -> vec3<f32> {{\n", fn_name, params)
         };
         let mut code = String::from(
             "// Apply all variations with Apophysis 4-phase execution model (XForm.pas:343-383)\n\
-             // See 2D variant for the meaning of the `vc` pointer.\n",
+             // See 2D variant for the meaning of the `vc` and `vrc` pointers.\n",
         );
         code.push_str(&signature);
 
@@ -1678,6 +1714,9 @@ impl ShaderBuilder {
             }
             if info.has_feature(Feature::WritesColor) {
                 args.push_str(", vc");
+            }
+            if info.has_feature(Feature::WritesRgb) {
+                args.push_str(", vrc");
             }
             let call = format!("{}({})", info.wgsl_function, args);
 
