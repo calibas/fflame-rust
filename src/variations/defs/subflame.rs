@@ -31,7 +31,7 @@
 //!   - `docs/projects/subflames.md`
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -59,7 +59,7 @@ pub static SUBFLAME_WF: VariationDef = VariationDef {
     display_name: "Subflame",
     category: VariationCategory::Plugin,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng, Feature::WritesColor],
     parameters: &[
         // The subflame index — selects which entry of
         // `FractalConfig.subflames` this variation reads its IFS from.
@@ -89,8 +89,6 @@ pub static SUBFLAME_WF: VariationDef = VariationDef {
         // for round-trip fidelity).
         param!("color_mode", "Color Mode", int, -1.0, -1.0, 4.0, "How the subflame's color scalar interacts with the parent's color register. -1 = Off (leave parent's color alone). 0 = Direct (overwrite with subflame's color). 1-4 are JWildfire's CM_RED/GREEN/BLUE/BRIGHTNESS, which in JWF pick a specific channel of the subflame's RGB output. Our flat single-channel color model collapses those four to the same behavior as Direct — they still trigger the override, just with the subflame's `vc` instead of a per-channel value. Use Off to keep parent color; any other value to pull from subflame."),
     ],
-    needs_transform: false,
-    writes_color: true,
     init_param_count: 0,
     wgsl_init: None,
     // 5 slots per instance — see module doc. Zero-init is OK; the
@@ -100,7 +98,6 @@ pub static SUBFLAME_WF: VariationDef = VariationDef {
     // dilution at the histogram level.)
     state_count: 5,
     wgsl_state_init: None,
-    needs_accum: false,
     // P4b: real subflame_wf body. Calls subflame_iterate() to advance
     // the nested chaos game one step, then applies scale/rotate/offset
     // and the color_mode rule. Forward-references subflame_iterate
@@ -202,19 +199,16 @@ pub static PRE_SUBFLAME_WF: VariationDef = VariationDef {
     display_name: "Pre Subflame",
     category: VariationCategory::Plugin,
     phase: VariationPhase::Pre,
-    needs_rng: true,
+    features: &[Feature::NeedsRng, Feature::WritesColor],
     // Same params as SUBFLAME_WF — JWildfire's PreSubFlameWFFunc extends
     // SubFlameWFFunc, so file XML carries identical names. Body uses
     // only `subflame_id` and `color_mode`; the rest are accepted for
     // round-trip fidelity.
     parameters: SUBFLAME_WF.parameters,
-    needs_transform: false,
-    writes_color: true,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 5,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_pre_subflame_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec2<f32> {
     let subflame_id = u32(get_param(xform_id, variation_id, 0u));

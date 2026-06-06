@@ -55,7 +55,7 @@ pub static BUBBLE_T3D: VariationDef = VariationDef {
     display_name: "Bubble T3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("number_of_stripes", "Number of Stripes", int, 0.0, -50.0, 50.0, "Number of angular stripe sectors around the XY plane. 0 disables stripes entirely. Negative value inverts the stripe pattern (swap drawn vs blanked sectors)."),
         param!("ratio_of_stripes", "Ratio of Stripes", unlimited_float, 1.0, 0.01, 1.99, "Width fraction of the drawn stripe within each sector, clamped to [0.01, 1.99]. 1.0 = stripes and gaps are equal width."),
@@ -64,8 +64,6 @@ pub static BUBBLE_T3D: VariationDef = VariationDef {
         param!("symmetry_z", "Symmetry Z", bool, false, "When on, mirror the Z hole symmetrically across the XY plane (clamps `|angle_of_hole|` to < 180°). When off, apply the hole to only one Z-pole."),
         param!("modus_blur", "Modus Blur", bool, false, "When on, smooth-blend the stripe/hole interior via angular rotation. When off, hard-cutout (zero out). Only effective on the Z hole when `exponent_z == 1`; otherwise falls back to hard cutout regardless."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 7,
     wgsl_init: Some(r#"
 fn init_bubbleT3D(user: array<f32, 6>) -> array<f32, 7> {
@@ -109,7 +107,6 @@ fn init_bubbleT3D(user: array<f32, 6>) -> array<f32, 7> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_bubbleT3D(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let stripes_raw = get_param(xform_id, variation_id, 0u);

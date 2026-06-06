@@ -19,7 +19,7 @@
 //! Source: `output/jwildfire-vars/output/exblur.cpp`.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -39,7 +39,7 @@ pub static EXBLUR: VariationDef = VariationDef {
     display_name: "Ex Blur",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("dist", "Dist", unlimited_float, 0.5, -10.0, 10.0, "Power exponent on the squared-distance scaling. Controls how the blur intensity grows with distance from the origin."),
         param!("r", "R", unlimited_float, 0.0, -10.0, 10.0, "Scaling factor on the perpendicular jitter."),
@@ -47,13 +47,10 @@ pub static EXBLUR: VariationDef = VariationDef {
         param!("y_origin", "Y Origin", unlimited_float, 0.0, -10.0, 10.0, "Y center of the blur — note the upstream sign convention: added to input Y rather than subtracted."),
         param!("z_origin", "Z Origin", unlimited_float, 0.0, -10.0, 10.0, "Z center of the blur (subtracted from input Z; 3D only)."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_exblur(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let dist = get_param(xform_id, variation_id, 0u);

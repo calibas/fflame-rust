@@ -37,18 +37,15 @@ pub static PLUSRECIP: VariationDef = VariationDef {
     display_name: "Plus Recip",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("ar", "A Real", unlimited_float, 4.0, -10.0, 10.0, "Real part of the complex constant `a` in `k = z + sqrt(z² - a)`. Controls the location of the branch cut."),
         param!("ai", "A Imag", unlimited_float, 0.0, -10.0, 10.0, "Imaginary part of the complex constant `a`."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn pr_cabs(z: vec2<f32>) -> f32 {
     return sqrt(z.x * z.x + z.y * z.y);

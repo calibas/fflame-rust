@@ -25,7 +25,7 @@
 //! - Jesus Sosa
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -36,14 +36,11 @@ pub static SZUBIETA: VariationDef = VariationDef {
     display_name: "SZubieta",
     category: VariationCategory::Plugin,
     phase: VariationPhase::Normal,
-    needs_rng: true,
-    needs_transform: false,
-    writes_color: true,
+    features: &[Feature::NeedsRng, Feature::WritesColor],
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     parameters: &[
         param!("width", "Width", unlimited_int, 128.0, 32.0, 256.0, "Grid width in cells. Each cell hosts one 20-gon; the bitwise pattern formula reads i ∈ [0, width) for the color computation."),
         param!("height", "Height", unlimited_int, 128.0, 32.0, 256.0, "Grid height in cells. Same role as `width` but for the j index."),

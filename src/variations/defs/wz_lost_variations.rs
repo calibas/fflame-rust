@@ -56,7 +56,7 @@ pub static Z_VARIATION: VariationDef = VariationDef {
     display_name: "Z (Faber)",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("hypergon", "Hypergon", unlimited_float, 0.0, -10.0, 10.0, "Weight of the hypergon (regular-polygon) shape's contribution to the per-angle radius blender. 0 disables this shape."),
         param!("hypergon_n", "Hypergon N", int, 4.0, 1.0, 50.0, "Hypergon symmetry count (number of sides). Used as the modular reduction divisor for the per-sector angle lookup."),
@@ -72,8 +72,6 @@ pub static Z_VARIATION: VariationDef = VariationDef {
         param!("super_n2", "Super N2", unlimited_float, 1.0, -10.0, 10.0, "Super-shape cosine-term exponent (controls one half of the petal asymmetry)."),
         param!("super_n3", "Super N3", unlimited_float, 0.0, -10.0, 10.0, "Super-shape sine-term exponent."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 7,
     wgsl_init: Some(r#"
 fn init_z(user: array<f32, 13>) -> array<f32, 7> {
@@ -97,7 +95,6 @@ fn init_z(user: array<f32, 13>) -> array<f32, 7> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn z_blend_total(a: f32,
     hypergon: f32, star: f32, lituus: f32, super_w: f32,
@@ -260,7 +257,7 @@ pub static W_VARIATION: VariationDef = VariationDef {
     display_name: "W (Faber)",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("angle", "Angle", unlimited_float, 0.0, -10.0, 10.0, "Rotation angle (radians) applied to the input angle before the radial rebake. The output direction is `a + angle` (wrapped into `[-π, π]`)."),
         param!("hypergon", "Hypergon", unlimited_float, 0.0, -10.0, 10.0, "Weight of the hypergon (regular-polygon) shape's contribution to the per-angle radius blender. 0 disables this shape."),
@@ -277,8 +274,6 @@ pub static W_VARIATION: VariationDef = VariationDef {
         param!("super_n2", "Super N2", unlimited_float, 1.0, -10.0, 10.0, "Super-shape cosine-term exponent (controls one half of the petal asymmetry)."),
         param!("super_n3", "Super N3", unlimited_float, 0.0, -10.0, 10.0, "Super-shape sine-term exponent."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 7,
     wgsl_init: Some(r#"
 fn init_w(user: array<f32, 14>) -> array<f32, 7> {
@@ -302,7 +297,6 @@ fn init_w(user: array<f32, 14>) -> array<f32, 7> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn w_blend_total(a: f32,
     hypergon: f32, star: f32, lituus: f32, super_w: f32,

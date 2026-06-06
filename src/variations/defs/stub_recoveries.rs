@@ -32,7 +32,7 @@
 //!     factor cleanly with no `needs_transform` required.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -57,18 +57,15 @@ pub static BSPLIT: VariationDef = VariationDef {
     display_name: "BSplit",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("x", "X shift", unlimited_float, 0.0, -10.0, 10.0, "X-axis shift added before the trig terms."),
         param!("y", "Y shift", unlimited_float, 0.0, -10.0, 10.0, "Y-axis shift added before the trig terms."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_bsplit(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let x_shift = get_param(xform_id, variation_id, 0u);
@@ -118,15 +115,12 @@ pub static CYLINDER2: VariationDef = VariationDef {
     display_name: "Cylinder 2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_cylinder2(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(p.x / sqrt(p.x * p.x + 1.0), p.y);
@@ -167,17 +161,14 @@ pub static ECLIPSE: VariationDef = VariationDef {
     display_name: "Eclipse",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[
         param!("shift", "Shift", float, 0.0, -2.0, 2.0, "Horizontal shift applied to points inside the eclipse region, scaled by the variation's weight."),
     ],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_eclipse(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let shift = get_param(xform_id, variation_id, 0u);
@@ -235,19 +226,16 @@ pub static LOZI: VariationDef = VariationDef {
     display_name: "Lozi",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("a", "A", unlimited_float, 0.5, -10.0, 10.0, "Coefficient on `|x|` — controls the fold strength."),
         param!("b", "B", unlimited_float, 1.0, -10.0, 10.0, "Coefficient scaling X to the Y output."),
         param!("c", "C", unlimited_float, 1.0, -10.0, 10.0, "Constant offset added to X output."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_lozi(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let a = get_param(xform_id, variation_id, 0u);
@@ -279,20 +267,17 @@ pub static PULSE: VariationDef = VariationDef {
     display_name: "Pulse",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("freqx", "Freq X", unlimited_float, 2.0, -50.0, 50.0, "X-axis sine frequency."),
         param!("freqy", "Freq Y", unlimited_float, 2.0, -50.0, 50.0, "Y-axis sine frequency."),
         param!("scalex", "Scale X", unlimited_float, 1.0, -10.0, 10.0, "X-axis sine amplitude."),
         param!("scaley", "Scale Y", unlimited_float, 1.0, -10.0, 10.0, "Y-axis sine amplitude."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_pulse(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let freqx = get_param(xform_id, variation_id, 0u);
@@ -344,18 +329,15 @@ pub static HYPERSHIFT: VariationDef = VariationDef {
     display_name: "Hypershift",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[
         param!("shift", "Shift", unlimited_float, 2.0, -10.0, 10.0, "Horizontal shift applied after the first inversion. Also scales the overall transformation strength via `1 − shift²`."),
         param!("stretch", "Stretch", unlimited_float, 1.0, -10.0, 10.0, "Y-axis stretching factor applied to the output."),
     ],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_hypershift(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let shift = get_param(xform_id, variation_id, 0u);

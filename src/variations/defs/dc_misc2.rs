@@ -19,7 +19,7 @@
 //!   - `output/jwildfire-vars/output/pre_rect_wf.cpp`
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -43,7 +43,7 @@ pub static DC_CUBE: VariationDef = VariationDef {
     display_name: "DC Cube",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng, Feature::WritesColor],
     parameters: &[
         // x/y/z kept at slots 0..2 so existing saved flames preserve their
         // values; the 6 color params are added at the end as new slots.
@@ -57,8 +57,6 @@ pub static DC_CUBE: VariationDef = VariationDef {
         param!("c5", "Color +Z", unlimited_float, 0.0, -10.0, 10.0, "Color (clamped to [0, 1]) written when the +Z face is picked."),
         param!("c6", "Color -Z", unlimited_float, 0.0, -10.0, 10.0, "Color (clamped to [0, 1]) written when the -Z face is picked."),
     ],
-    needs_transform: false,
-    writes_color: true,
     // 6 init slots (9..14): clamp(c1..c6, 0, 1) — mirrors cpp's PluginVarPrepare.
     init_param_count: 6,
     wgsl_init: Some(r#"
@@ -75,7 +73,6 @@ fn init_dc_cube(user: array<f32, 9>) -> array<f32, 6> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_dc_cube(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec2<f32> {
     let xs = get_param(xform_id, variation_id, 0u);
@@ -163,15 +160,13 @@ pub static PRE_RECT_WF: VariationDef = VariationDef {
     display_name: "Pre Rect WF",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Pre,
-    needs_rng: true,
+    features: &[Feature::NeedsRng, Feature::NeedsTransform],
     parameters: &[
         param!("x0", "X0", unlimited_float, -0.5, -10.0, 10.0, "Left edge of the sampling rectangle."),
         param!("x1", "X1", unlimited_float, 0.5, -10.0, 10.0, "Right edge of the sampling rectangle."),
         param!("y0", "Y0", unlimited_float, -0.5, -10.0, 10.0, "Bottom edge of the sampling rectangle."),
         param!("y1", "Y1", unlimited_float, 0.5, -10.0, 10.0, "Top edge of the sampling rectangle."),
     ],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 2,
     wgsl_init: Some(r#"
 fn init_pre_rect_wf(user: array<f32, 4>) -> array<f32, 2> {
@@ -183,7 +178,6 @@ fn init_pre_rect_wf(user: array<f32, 4>) -> array<f32, 2> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_pre_rect_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let x0 = get_param(xform_id, variation_id, 0u);

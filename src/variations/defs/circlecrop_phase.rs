@@ -23,7 +23,7 @@
 //!   - `output/jwildfire-vars/output/post_circlecrop.cpp`
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -46,7 +46,7 @@ pub static PRE_CIRCLECROP: VariationDef = VariationDef {
     display_name: "Pre Circle Crop",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Pre,
-    needs_rng: true,
+    features: &[Feature::NeedsRng, Feature::NeedsTransform],
     parameters: &[
         param!("radius", "Radius", unlimited_float, 1.0, -10.0, 10.0, "Crop circle radius."),
         param!("x", "X", unlimited_float, 0.0, -10.0, 10.0, "X center of the crop circle."),
@@ -54,8 +54,6 @@ pub static PRE_CIRCLECROP: VariationDef = VariationDef {
         param!("scatter_area", "Scatter Area", unlimited_float, 0.0, -1.0, 1.0, "Random scatter band along the circle boundary. 0 = snap to boundary; ±1 = scatter across full half-radius."),
         param!("zero", "Zero", bool, true, "When on, points outside the circle collapse to the origin. When off, they scatter onto the boundary."),
     ],
-    needs_transform: true,
-    writes_color: false,
     // 1 derived value at slot 5: cA = clamp(scatter_area, -1, 1)
     init_param_count: 1,
     wgsl_init: Some(r#"
@@ -67,7 +65,6 @@ fn init_pre_circlecrop(user: array<f32, 5>) -> array<f32, 1> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_pre_circlecrop(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let cr = get_param(xform_id, variation_id, 0u);
@@ -140,7 +137,7 @@ pub static POST_CIRCLECROP: VariationDef = VariationDef {
     display_name: "Post Circle Crop",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Post,
-    needs_rng: true,
+    features: &[Feature::NeedsRng, Feature::NeedsTransform],
     parameters: &[
         param!("radius", "Radius", unlimited_float, 1.0, -10.0, 10.0, "Crop circle radius."),
         param!("x", "X", unlimited_float, 0.0, -10.0, 10.0, "X center of the crop circle."),
@@ -148,8 +145,6 @@ pub static POST_CIRCLECROP: VariationDef = VariationDef {
         param!("scatter_area", "Scatter Area", unlimited_float, 0.0, -1.0, 1.0, "Random scatter band along the circle boundary. 0 = snap to boundary; ±1 = scatter across full half-radius."),
         param!("zero", "Zero", bool, true, "When on, points outside the circle collapse to the origin. When off, they scatter onto the boundary."),
     ],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 1,
     wgsl_init: Some(r#"
 fn init_post_circlecrop(user: array<f32, 5>) -> array<f32, 1> {
@@ -160,7 +155,6 @@ fn init_post_circlecrop(user: array<f32, 5>) -> array<f32, 1> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_post_circlecrop(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let cr = get_param(xform_id, variation_id, 0u);

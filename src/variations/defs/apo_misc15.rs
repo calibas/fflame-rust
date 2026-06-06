@@ -37,7 +37,7 @@
 //! `output/jwildfire-vars/output/`.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -62,15 +62,12 @@ pub static PRE_SINUSOIDAL3D: VariationDef = VariationDef {
     display_name: "Pre Sinusoidal 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Pre,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_pre_sinusoidal3d(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let w = transforms[xform_id].variations[variation_id];
@@ -110,15 +107,12 @@ pub static PRE_BLUR3D: VariationDef = VariationDef {
     display_name: "Pre Blur 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Pre,
-    needs_rng: true,
+    features: &[Feature::NeedsRng, Feature::NeedsTransform],
     parameters: &[],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_pre_blur3D(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let two_pi = 6.28318530717959;
@@ -179,7 +173,7 @@ pub static JULIAN3DX: VariationDef = VariationDef {
     display_name: "JuliaN 3D X",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng, Feature::NeedsTransform],
     parameters: &[
         param!("power", "Power", int, 0.0, -100.0, 100.0, "Number of angular branches. 0 produces zero output."),
         param!("dist", "Distance", unlimited_float, 1.0, -100.0, 100.0, "Radial-power exponent — `cN = (dist/power − 1)/2`."),
@@ -190,8 +184,6 @@ pub static JULIAN3DX: VariationDef = VariationDef {
         param!("e", "E", unlimited_float, 0.0, -10.0, 10.0, "Pre-affine x offset."),
         param!("f", "F", unlimited_float, 0.0, -10.0, 10.0, "Pre-affine y offset."),
     ],
-    needs_transform: true,
-    writes_color: false,
     // 2 derived values at slots 8..10:
     //   8: absN = |power|
     //   9: cN   = (dist / power − 1) / 2
@@ -207,7 +199,6 @@ fn init_julian3Dx(user: array<f32, 8>) -> array<f32, 2> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_julian3Dx(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let power = get_param(xform_id, variation_id, 0u);

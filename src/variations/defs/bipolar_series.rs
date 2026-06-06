@@ -49,18 +49,15 @@ pub static BCOLLIDE: VariationDef = VariationDef {
     display_name: "BCollide",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("num", "N", int, 1.0, 1.0, 50.0, "Number of σ wedges. Higher = finer tiling."),
         param!("a", "A", unlimited_float, 0.0, -10.0, 10.0, "Per-wedge angular offset."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_bCollide(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let num = max(get_param(xform_id, variation_id, 0u), 1.0);
@@ -128,18 +125,15 @@ pub static BMOD: VariationDef = VariationDef {
     display_name: "BMod",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("radius", "Radius", unlimited_float, 1.0, -10.0, 10.0, "Half-width of the τ band to mod-wrap."),
         param!("distance", "Distance", unlimited_float, 0.0, -10.0, 10.0, "Additional τ offset applied before mod, in units of `radius`."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_bMod(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let radius = get_param(xform_id, variation_id, 0u);
@@ -196,18 +190,15 @@ pub static BSWIRL: VariationDef = VariationDef {
     display_name: "BSwirl",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("in_p", "In", unlimited_float, 0.0, -10.0, 10.0, "Reciprocal-τ swirl coefficient — adds `in/τ` to σ."),
         param!("out_p", "Out", unlimited_float, 0.0, -10.0, 10.0, "Linear-τ swirl coefficient — adds `τ·out` to σ."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_bSwirl(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let in_p = get_param(xform_id, variation_id, 0u);
@@ -260,20 +251,17 @@ pub static BARYCENTROID: VariationDef = VariationDef {
     display_name: "Barycentroid",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("a", "V0.x", unlimited_float, 1.0, -10.0, 10.0, "V0 X coordinate (first triangle vertex)."),
         param!("b", "V0.y", unlimited_float, 0.0, -10.0, 10.0, "V0 Y coordinate."),
         param!("c", "V1.x", unlimited_float, 0.0, -10.0, 10.0, "V1 X coordinate (second triangle vertex)."),
         param!("d", "V1.y", unlimited_float, 1.0, -10.0, 10.0, "V1 Y coordinate."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_barycentroid(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let a = get_param(xform_id, variation_id, 0u);
@@ -352,18 +340,15 @@ pub static ECOLLIDE: VariationDef = VariationDef {
     display_name: "ECollide",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("num", "N", int, 1.0, 1.0, 50.0, "Number of ν wedges."),
         param!("a", "A", unlimited_float, 0.0, -10.0, 10.0, "Per-wedge angular offset."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_eCollide(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let num = max(get_param(xform_id, variation_id, 0u), 1.0);
@@ -436,18 +421,15 @@ pub static EMOD: VariationDef = VariationDef {
     display_name: "EMod",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("radius", "Radius", unlimited_float, 1.0, -10.0, 10.0, "Half-width of the μ band to mod-wrap."),
         param!("distance", "Distance", unlimited_float, 0.0, -10.0, 10.0, "Additional μ offset, in units of `radius`."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_eMod(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let radius = get_param(xform_id, variation_id, 0u);
@@ -515,18 +497,15 @@ pub static ESWIRL: VariationDef = VariationDef {
     display_name: "ESwirl",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("in_p", "In", unlimited_float, 1.2, -10.0, 10.0, "Reciprocal-μ swirl coefficient — adds `in/μ` to ν."),
         param!("out_p", "Out", unlimited_float, 0.2, -10.0, 10.0, "Linear-μ swirl coefficient — adds `μ·out` to ν."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_eSwirl(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let in_p = get_param(xform_id, variation_id, 0u);
@@ -578,18 +557,15 @@ pub static ESCALE: VariationDef = VariationDef {
     display_name: "EScale",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("scale", "Scale", unlimited_float, 1.0, -10.0, 10.0, "Multiplicative scale on μ; also scales the ν mod-wrap window."),
         param!("angle", "Angle", angle, 0.0, "Angular offset applied to ν before scaling, in degrees."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_eScale(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let scale = get_param(xform_id, variation_id, 0u);
@@ -658,19 +634,16 @@ pub static EPUSH: VariationDef = VariationDef {
     display_name: "EPush",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("push", "Push", unlimited_float, 0.0, -10.0, 10.0, "Additive offset on μ."),
         param!("dist", "Dist", unlimited_float, 1.0, -10.0, 10.0, "Multiplicative scale on μ."),
         param!("rotate", "Rotate", unlimited_float, 0.0, -10.0, 10.0, "Angular shift on ν, in radians."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_ePush(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let push = get_param(xform_id, variation_id, 0u);
@@ -726,17 +699,14 @@ pub static EROTATE: VariationDef = VariationDef {
     display_name: "ERotate",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("rotate", "Rotate", unlimited_float, 0.0, -10.0, 10.0, "Angular shift on ν, in radians."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_eRotate(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let rotate = get_param(xform_id, variation_id, 0u);

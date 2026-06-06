@@ -44,7 +44,7 @@ pub static TRUCHET2: VariationDef = VariationDef {
     display_name: "Truchet 2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("exponent1", "Exponent 1", unlimited_float, 1.0, -1.0, 3.0, "Lp-norm exponent at the left edge of each cell."),
         param!("exponent2", "Exponent 2", unlimited_float, 2.0, -1.0, 3.0, "Lp-norm exponent at the right edge."),
@@ -54,13 +54,10 @@ pub static TRUCHET2: VariationDef = VariationDef {
         param!("seed", "Seed", unlimited_float, 50.0, -1000.0, 1000.0, "Hash seed for the per-cell tile-type selection."),
         param!("inverse", "Inverse", bool, false, "When on, output the complement (cells outside the arc test). When off, standard output."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_truchet2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let exp1 = get_param(xform_id, variation_id, 0u);

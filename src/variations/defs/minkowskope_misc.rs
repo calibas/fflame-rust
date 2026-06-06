@@ -41,7 +41,7 @@ pub static MINKOWSKOPE: VariationDef = VariationDef {
     display_name: "Minkowskope",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("separation", "Separation", unlimited_float, 0.5, -10.0, 10.0, "Vertical offset of the band threshold."),
         param!("frequencyx", "Frequency X", unlimited_float, 1.5, -10.0, 10.0, "X-axis Minkowski-cosine frequency (multiplied by 0.5 internally). Negative values enable the `alt_wave` variant."),
@@ -50,8 +50,6 @@ pub static MINKOWSKOPE: VariationDef = VariationDef {
         param!("perturbation", "Perturbation", unlimited_float, 0.3, -10.0, 10.0, "Magnitude of the Y-driven X-perturbation."),
         param!("damping", "Damping", unlimited_float, 0.0, -10.0, 10.0, "Exponential damping rate. Near-zero disables the damping term."),
     ],
-    needs_transform: false,
-    writes_color: false,
     // 2 derived values at slots 6..8: tpf, tpf2
     init_param_count: 2,
     wgsl_init: Some(r#"
@@ -64,7 +62,6 @@ fn init_minkowskope(user: array<f32, 6>) -> array<f32, 2> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn minkowskope_mink(xv: f32) -> f32 {
     var p: f32 = 0.0;

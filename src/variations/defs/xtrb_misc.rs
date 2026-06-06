@@ -26,7 +26,7 @@
 //! Source: `output/jwildfire-vars/output/xtrb.cpp` 
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -49,7 +49,7 @@ pub static XTRB: VariationDef = VariationDef {
     display_name: "XTrB (TriBorders)",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("xtrb_power", "Power", int, 2.0, 1.0, 50.0, "Julia-N branch count (integer). Each iteration picks one of `|power|` equally-spaced angles from the projected coordinate, scaling the polar angle by `1/power`."),
         param!("xtrb_radius", "Radius", unlimited_float, 1.0, -10.0, 10.0, "Triangle inscribed radius — sets the overall scale of the triangular cells in the tessellation."),
@@ -58,8 +58,6 @@ pub static XTRB: VariationDef = VariationDef {
         param!("xtrb_a", "A", unlimited_float, 1.0, -10.0, 10.0, "Angle parameter A (radians). Internally `0.047 + a` becomes one of the triangle's interior angles; the third angle is derived from the angle-sum law `π - angle_b - angle_c`."),
         param!("xtrb_b", "B", unlimited_float, 1.0, -10.0, 10.0, "Angle parameter B (radians). Internally `0.047 + b` becomes another interior angle."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 22,
     wgsl_init: Some(r#"
 fn init_xtrb(user: array<f32, 6>) -> array<f32, 22> {
@@ -157,7 +155,6 @@ fn init_xtrb(user: array<f32, 6>) -> array<f32, 22> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_xtrb(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let pi = 3.14159265358979;

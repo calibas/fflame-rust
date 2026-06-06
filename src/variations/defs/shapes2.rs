@@ -22,7 +22,7 @@
 //!     need init-time precomputed fields recovered from the Java source.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 
@@ -41,15 +41,12 @@ pub static BUTTERFLY: VariationDef = VariationDef {
     display_name: "Butterfly",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_butterfly(p: vec2<f32>) -> vec2<f32> {
     let k = 1.302940031741119;
@@ -79,15 +76,12 @@ pub static BUTTERFLY3D: VariationDef = VariationDef {
     display_name: "Butterfly 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_butterfly3D(p: vec2<f32>) -> vec2<f32> {
     let k = 1.302940031741119;
@@ -124,15 +118,12 @@ pub static ENNEPERS: VariationDef = VariationDef {
     display_name: "Ennepers",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_ennepers(p: vec2<f32>) -> vec2<f32> {
     let x2 = p.x * p.x;
@@ -166,15 +157,12 @@ pub static PYRAMID: VariationDef = VariationDef {
     display_name: "Pyramid",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_pyramid(p: vec2<f32>) -> vec2<f32> {
     let x3 = p.x * p.x * p.x;
@@ -210,15 +198,12 @@ pub static RAYS2: VariationDef = VariationDef {
     display_name: "Rays2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_rays2(p: vec2<f32>) -> vec2<f32> {
     let eps = 1e-30;
@@ -255,15 +240,12 @@ pub static RAYS3: VariationDef = VariationDef {
     display_name: "Rays3",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_rays3(p: vec2<f32>) -> vec2<f32> {
     let eps = 1e-30;
@@ -308,15 +290,12 @@ pub static SPIRALWING: VariationDef = VariationDef {
     display_name: "Spiral Wing",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_spiralwing(p: vec2<f32>) -> vec2<f32> {
     let c1 = p.x * p.x;
@@ -354,15 +333,12 @@ pub static WHITNEY_UMBRELLA: VariationDef = VariationDef {
     display_name: "Whitney Umbrella",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_whitney_umbrella(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(p.x * p.y, p.x);
@@ -393,15 +369,12 @@ pub static CHRYSANTHEMUM: VariationDef = VariationDef {
     display_name: "Chrysanthemum",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_chrysanthemum(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     let pi = 3.14159265358979;
@@ -447,18 +420,15 @@ pub static CELL: VariationDef = VariationDef {
     display_name: "Cell",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         VariationParamDef { name: "size", display_name: "Size", param_type: ParamType::UnlimitedFloat,
                             default_value: 0.6, min_value: Some(0.01), max_value: Some(10.0), description: Some("Width of each cell in the grid.") },
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_cell(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let size = max(get_param(xform_id, variation_id, 0u), 1e-6);
@@ -520,7 +490,7 @@ pub static ENNEPERS2: VariationDef = VariationDef {
     display_name: "Ennepers2",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         VariationParamDef { name: "a", display_name: "A", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Coefficient on the X factor.") },
@@ -529,13 +499,10 @@ pub static ENNEPERS2: VariationDef = VariationDef {
         VariationParamDef { name: "c", display_name: "C", param_type: ParamType::UnlimitedFloat,
                             default_value: 0.075, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Square-root correction strength applied to both X and Y outputs.") },
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_ennepers2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let a = get_param(xform_id, variation_id, 0u);
@@ -586,20 +553,17 @@ pub static FLOWER: VariationDef = VariationDef {
     display_name: "Flower",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         VariationParamDef { name: "holes", display_name: "Holes", param_type: ParamType::UnlimitedFloat,
                             default_value: 0.4, min_value: Some(-10.0), max_value: Some(10.0), description: Some("How hollow the center of the flower is. Higher = bigger center hole.") },
         VariationParamDef { name: "petals", display_name: "Petals", param_type: ParamType::UnlimitedFloat,
                             default_value: 7.0, min_value: Some(1.0), max_value: Some(64.0), description: Some("Number of petals around the flower.") },
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_flower(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let holes = get_param(xform_id, variation_id, 0u);

@@ -17,15 +17,12 @@ pub static ZCONE: VariationDef = VariationDef {
     display_name: "ZCone",
     category: VariationCategory::Depth3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 // 2D stub: zcone only writes Z. Return (0, 0) so the additive
 // dispatch `result += weight * var(p)` contributes nothing in 2D
@@ -55,15 +52,12 @@ pub static FLATTEN: VariationDef = VariationDef {
     category: VariationCategory::Depth3D,
     // NOTE: Flatten is treated as POST despite being index 1 (Apophysis XForm.pas)
     phase: VariationPhase::Post,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 // 2D stub - not used in 2D mode
 fn variation_flatten(p: vec2<f32>) -> vec2<f32> {
@@ -89,15 +83,12 @@ pub static ZSCALE: VariationDef = VariationDef {
     display_name: "ZScale",
     category: VariationCategory::Depth3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 // 2D stub: zscale only writes Z. See zcone above for the rationale.
 fn variation_zscale(p: vec2<f32>) -> vec2<f32> {

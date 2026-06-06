@@ -5,6 +5,61 @@
 
 use super::{ParamType, VariationCategory, VariationParameter, VariationPhase};
 
+/// Capability/requirement flags a variation can opt into. Replaces what
+/// used to be a growing pile of `pub <flag>: bool` fields on
+/// `VariationDef` — adding a new feature is now a single enum variant
+/// plus a `has_feature` check at the relevant codegen site rather than
+/// a bulk edit across every variation file.
+///
+/// Each variation lists the features it uses in
+/// `VariationDef::features: &'static [Feature]`; absence ⇒ doesn't
+/// have / doesn't need that capability. Lookup is via
+/// `VariationDef::has_feature` (and the mirror on `VariationInfo`) —
+/// linear scan over the slice, which is fine because `Feature` has a
+/// handful of variants and lookups happen at shader-build time, not
+/// per-iteration.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Feature {
+    /// Variation reads from the per-thread RNG state. When listed, the
+    /// generated function signature gains `rng: ptr<function, RngState>`
+    /// and the dispatch site passes the thread-local RNG pointer.
+    NeedsRng,
+
+    /// Variation reads fields from `transforms[xform_id]` (affine
+    /// matrix, weight, color, opacity, direct_color). When listed, the
+    /// function signature gains `xform_id: u32` even if the variation
+    /// has no parameters — variations with parameters already get
+    /// `xform_id` for the `get_param` indirection.
+    NeedsTransform,
+
+    /// Variation writes to the iteration-local palette-index register
+    /// `vc` (Apophysis direct-color "DC" variations). When listed, the
+    /// function signature gains `vc: ptr<function, f32>`; the main
+    /// loop's color step lerps between standard color evolution and
+    /// `vc` using the transform's `direct_color` field.
+    WritesColor,
+
+    /// Variation writes a direct RGB color into the iteration-local
+    /// `vrc` register (vec3, parallel to `vc`'s palette-index path).
+    /// When listed, the function signature gains
+    /// `vrc: ptr<function, vec3<f32>>`; the main loop blends the
+    /// variation's RGB output with the palette-sampled color via the
+    /// transform's `direct_color`, bypassing the palette texture
+    /// lookup for the RGB portion of the final color. Used by the
+    /// `glsl_*` family of variations (JWildfire's shadertoy-style
+    /// procedural shapes), which compute RGB directly from a
+    /// per-pixel algorithm.
+    WritesRgb,
+
+    /// Variation reads the running variation-accumulator (Apophysis
+    /// `FPx/FPy/FPz`) so it can compose with prior variations in the
+    /// same iteration. When listed, the function signature gains
+    /// `accum: vec2<f32>` (or `vec3<f32>` in 3D) right after `p`, and
+    /// the shader builder passes the current weighted-sum value.
+    /// Effective only in normal and post phases.
+    NeedsAccum,
+}
+
 /// Static definition of a variation
 ///
 /// Each variation is defined as a const with all its metadata and WGSL code.
@@ -60,23 +115,16 @@ pub struct VariationDef {
     /// Execution phase (pre/normal/post)
     pub phase: VariationPhase,
 
-    /// Whether this variation requires RNG
-    pub needs_rng: bool,
-
-    /// Whether this variation needs `xform_id` so it can read fields from
-    /// the per-transform `transforms[xform_id]` storage buffer — affine
-    /// matrix (a/b/c/d/e/f), weight, color, opacity, direct_color. When
-    /// true, the function signature includes `xform_id: u32` even for
-    /// variations without parameters.
-    pub needs_transform: bool,
-
-    /// Whether this variation writes to the iteration-local color register
-    /// `vc` (Apophysis direct-color "DC" variations). When true, the WGSL
-    /// signature gains `vc: ptr<function, f32>` so the body can do
-    /// `*vc = palette_position;` based on geometry. The main loop lerps
-    /// between standard color evolution and `vc` using the transform's
-    /// `direct_color` field.
-    pub writes_color: bool,
+    /// Capability/requirement flags. See [`Feature`] for individual
+    /// variant docs. Replaces what used to be a growing set of
+    /// `pub <name>: bool` fields (`needs_rng`, `needs_transform`,
+    /// `writes_color`, `needs_accum`, ...). Adding a future feature
+    /// is a new enum variant + the codegen site that consumes it; no
+    /// bulk edit across every variation file.
+    ///
+    /// Empty slice ⇒ a "plain" variation that just reads `p` and
+    /// writes its return value (the linear/sinusoidal/etc. shape).
+    pub features: &'static [Feature],
 
     /// Parameters for this variation
     pub parameters: &'static [VariationParamDef],
@@ -108,14 +156,6 @@ pub struct VariationDef {
     /// beyond zero-fill. Has `xform_id`, `variation_id`, and `set_state` in
     /// scope. Default None (zero-init suffices).
     pub wgsl_state_init: Option<&'static str>,
-
-    /// Whether the variation reads the running variation accumulator (cpp's
-    /// `FPx/FPy/FPz`). When true, the function signature gains
-    /// `accum: vec2<f32>` (or `vec3<f32>` in 3D) after `p`, and the shader
-    /// builder passes the current `result` value so the variation sees the
-    /// sum of contributions from prior variations in this iteration.
-    /// Effective only in normal and post phases. Default false.
-    pub needs_accum: bool,
 
     /// 2D WGSL implementation
     /// Function signature should match one of:
@@ -178,6 +218,13 @@ impl VariationParamDef {
 }
 
 impl VariationDef {
+    /// True if this variation lists the given feature in `features`.
+    /// Linear-scan over a tiny slice — cheap, and only called at
+    /// shader-build time.
+    pub fn has_feature(&self, f: Feature) -> bool {
+        self.features.contains(&f)
+    }
+
     /// Total slots this variation occupies in the packed parameter buffer.
     ///
     /// Equals `parameters.len() + init_param_count`. User params live in

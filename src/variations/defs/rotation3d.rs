@@ -5,7 +5,7 @@
 //! `transforms[xform_id].variations[variation_id]` via `needs_transform`.
 
 use crate::variations::{
-    definition::VariationDef,
+    definition::{Feature, VariationDef},
     VariationCategory, VariationPhase,
 };
 
@@ -18,15 +18,12 @@ pub static PRE_ROTATE_X: VariationDef = VariationDef {
     display_name: "Pre Rotate X",
     category: VariationCategory::Rotation3D,
     phase: VariationPhase::Pre,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 // 2D stub - not used in 2D mode
 fn variation_pre_rotate_x(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
@@ -55,15 +52,12 @@ pub static PRE_ROTATE_Y: VariationDef = VariationDef {
     display_name: "Pre Rotate Y",
     category: VariationCategory::Rotation3D,
     phase: VariationPhase::Pre,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 // 2D stub - not used in 2D mode
 fn variation_pre_rotate_y(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
@@ -93,15 +87,12 @@ pub static POST_ROTATE_X: VariationDef = VariationDef {
     display_name: "Post Rotate X",
     category: VariationCategory::Rotation3D,
     phase: VariationPhase::Post,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 // 2D stub - not used in 2D mode
 fn variation_post_rotate_x(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
@@ -131,15 +122,12 @@ pub static POST_ROTATE_Y: VariationDef = VariationDef {
     display_name: "Post Rotate Y",
     category: VariationCategory::Rotation3D,
     phase: VariationPhase::Post,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 // 2D stub - not used in 2D mode
 fn variation_post_rotate_y(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {

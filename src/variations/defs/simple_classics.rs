@@ -36,7 +36,7 @@
 //!     unit-vector normalization since `ux²+uy²+uz² ≡ 1` always.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -54,15 +54,12 @@ pub static EXP2: VariationDef = VariationDef {
     display_name: "Exp 2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_exp2(p: vec2<f32>) -> vec2<f32> {
     let pi = 3.14159265358979;
@@ -96,15 +93,12 @@ pub static EXPONENTIAL: VariationDef = VariationDef {
     display_name: "Exponential",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_exponential(p: vec2<f32>) -> vec2<f32> {
     let pi = 3.14159265358979;
@@ -141,15 +135,12 @@ pub static FLIPY: VariationDef = VariationDef {
     display_name: "Flip Y",
     category: VariationCategory::Basic2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_flipy(p: vec2<f32>) -> vec2<f32> {
     let sy = select(1.0, -1.0, p.x > 0.0);
@@ -183,17 +174,14 @@ pub static FUNNEL: VariationDef = VariationDef {
     display_name: "Funnel",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("effect", "Effect", int, 8.0, -100.0, 100.0, "Additive angular offset on each axis (scaled by π). Higher = more horizontal/vertical bias."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_funnel(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let effect = get_param(xform_id, variation_id, 0u);
@@ -237,15 +225,12 @@ pub static INVPOLAR: VariationDef = VariationDef {
     display_name: "Inv Polar",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_invpolar(p: vec2<f32>) -> vec2<f32> {
     let pi = 3.14159265358979;
@@ -283,13 +268,11 @@ pub static PERSPECTIVE: VariationDef = VariationDef {
     display_name: "Perspective",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("angle", "Angle", unlimited_float, 0.62, -10.0, 10.0, "Tilt of the projection plane (in units of π/2). 0 = parallel (no perspective); 1 = perpendicular."),
         param!("dist", "Dist", unlimited_float, 2.2, -10.0, 10.0, "Viewing distance from the projection plane. Larger = milder perspective effect."),
     ],
-    needs_transform: false,
-    writes_color: false,
     // 2 derived values at slots 2..4:
     //   2: vsin  = sin(angle · π/2)
     //   3: vfcos = dist · cos(angle · π/2)
@@ -306,7 +289,6 @@ fn init_perspective(user: array<f32, 2>) -> array<f32, 2> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_perspective(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let dist = get_param(xform_id, variation_id, 1u);
@@ -355,18 +337,15 @@ pub static LINE: VariationDef = VariationDef {
     display_name: "Line",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng, Feature::NeedsTransform],
     parameters: &[
         param!("delta", "Delta", unlimited_float, 0.0, -10.0, 10.0, "Azimuthal angle of the line direction (in units of π)."),
         param!("phi", "Phi", unlimited_float, 0.0, -10.0, 10.0, "Polar angle of the line direction (in units of π). When `δ = φ = 0`, the line projects onto the X axis."),
     ],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_line(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let delta = get_param(xform_id, variation_id, 0u);
@@ -427,15 +406,12 @@ pub static HOLESQ: VariationDef = VariationDef {
     display_name: "Hole Square",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_holesq(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let w = transforms[xform_id].variations[variation_id];

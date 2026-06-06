@@ -73,7 +73,7 @@ pub static CSC_SQUARED: VariationDef = VariationDef {
     display_name: "Csc Squared",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("csc_div", "Csc Div", unlimited_float, 1.0, -10.0, 10.0, "Numerator of the csc fraction."),
         param!("cos_div", "Cos Div", unlimited_float, 1.0, -10.0, 10.0, "Divisor on x in the cos term `cos(x/cos_div)`."),
@@ -83,13 +83,10 @@ pub static CSC_SQUARED: VariationDef = VariationDef {
         param!("csc_add", "Csc Add", unlimited_float, 0.25, -10.0, 10.0, "Additive offset on the per-axis scale."),
         param!("scaley", "Scale Y", unlimited_float, 1.0, -10.0, 10.0, "Y-axis scale multiplier (applied after the per-axis scale)."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_csc_squared(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let csc_div = get_param(xform_id, variation_id, 0u);
@@ -156,17 +153,14 @@ pub static HYPERBOLICELLIPSE: VariationDef = VariationDef {
     display_name: "Hyperbolic Ellipse",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("a", "A", unlimited_float, 1.0, -10.0, 10.0, "Frequency multiplier on Y in the cos/sin arguments."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_hyperbolicellipse(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let a = get_param(xform_id, variation_id, 0u);
@@ -204,17 +198,14 @@ pub static LAYERED_SPIRAL: VariationDef = VariationDef {
     display_name: "Layered Spiral",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("radius", "Radius", unlimited_float, 1.0, -10.0, 10.0, "Radial scale on the spiral magnitude."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_layered_spiral(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let radius = get_param(xform_id, variation_id, 0u);
@@ -259,7 +250,7 @@ pub static ATAN2_SPIRALS: VariationDef = VariationDef {
     display_name: "Atan2 Spirals",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("r_mult", "R Mult", unlimited_float, 1.5, -10.0, 10.0, "Multiplier on the first atan2's numerator (r-term)."),
         param!("r_add", "R Add", unlimited_float, 1.0, -10.0, 10.0, "Offset on the first atan2's numerator."),
@@ -276,13 +267,10 @@ pub static ATAN2_SPIRALS: VariationDef = VariationDef {
         param!("r_power", "R Power", unlimited_float, 0.5, -10.0, 10.0, "Exponent on the radial term `r = (x²+y²)^r_power`."),
         param!("x2y2_pow", "X²Y² Pow", unlimited_float, 1.0, -10.0, 10.0, "Exponent on the xy² term `xy² = (x²+y²)^x2y2_pow`."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_atan2_spirals(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let r_mult = get_param(xform_id, variation_id, 0u);
@@ -369,20 +357,17 @@ pub static GRIDOUT2: VariationDef = VariationDef {
     display_name: "Grid Out 2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("a", "A", unlimited_float, 1.0, -10.0, 10.0, "X-axis shift magnitude."),
         param!("b", "B", unlimited_float, 1.0, -10.0, 10.0, "Y-axis shift magnitude."),
         param!("c", "C", unlimited_float, 1.0, -10.0, 10.0, "X-axis cell size (multiplied with `round(x)` before the octant routing)."),
         param!("d", "D", unlimited_float, 1.0, -10.0, 10.0, "Y-axis cell size (multiplied with `round(y)`)."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_gridout2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let a = get_param(xform_id, variation_id, 0u);

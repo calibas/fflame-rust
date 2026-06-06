@@ -34,7 +34,7 @@
 //!     preserve each variation's exact condition.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -58,14 +58,12 @@ pub static HYPERTILE: VariationDef = VariationDef {
     display_name: "Hypertile",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("p", "P", int, 3.0, 3.0, 50.0, "First Schläfli symbol — number of sides per tile (3 = triangle, 4 = square, 5 = pentagon, etc.)."),
         param!("q", "Q", int, 7.0, 3.0, 50.0, "Second Schläfli symbol — number of tiles meeting at each vertex. For a valid hyperbolic tiling, `(p − 2)(q − 2) > 4`."),
         param!("n", "N", int, 1.0, 0.0, 50.0, "Index of which tile to target — deterministic tile selector."),
     ],
-    needs_transform: false,
-    writes_color: false,
     // 2 derived values at slots 3..5:
     //   3: re   r * cos(n * pa)
     //   4: im   r * sin(n * pa)
@@ -94,7 +92,6 @@ fn init_hypertile(user: array<f32, 3>) -> array<f32, 2> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_hypertile(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let re = get_param(xform_id, variation_id, 3u);
@@ -152,13 +149,11 @@ pub static HYPERTILE1: VariationDef = VariationDef {
     display_name: "Hypertile 1",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("p", "P", int, 3.0, 3.0, 50.0, "First Schläfli symbol — number of sides per tile (3 = triangle, 4 = square, 5 = pentagon, etc.)."),
         param!("q", "Q", int, 7.0, 3.0, 50.0, "Second Schläfli symbol — number of tiles meeting at each vertex. For a valid hyperbolic tiling, `(p − 2)(q − 2) > 4`."),
     ],
-    needs_transform: false,
-    writes_color: false,
     // 2 derived values at slots 2..4:
     //   2: pa   2π / p
     //   3: r    tile radius
@@ -185,7 +180,6 @@ fn init_hypertile1(user: array<f32, 2>) -> array<f32, 2> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_hypertile1(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let pa = get_param(xform_id, variation_id, 2u);
@@ -259,13 +253,11 @@ pub static HYPERTILE2: VariationDef = VariationDef {
     display_name: "Hypertile 2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("p", "P", int, 3.0, 3.0, 50.0, "First Schläfli symbol — number of sides per tile (3 = triangle, 4 = square, 5 = pentagon, etc.)."),
         param!("q", "Q", int, 7.0, 3.0, 50.0, "Second Schläfli symbol — number of tiles meeting at each vertex. For a valid hyperbolic tiling, `(p − 2)(q − 2) > 4`."),
     ],
-    needs_transform: false,
-    writes_color: false,
     // 2 derived values at slots 2..4: same as hypertile1.
     init_param_count: 2,
     wgsl_init: Some(r#"
@@ -290,7 +282,6 @@ fn init_hypertile2(user: array<f32, 2>) -> array<f32, 2> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_hypertile2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let pa = get_param(xform_id, variation_id, 2u);
@@ -360,14 +351,12 @@ pub static HYPERTILE3D: VariationDef = VariationDef {
     display_name: "Hypertile 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("p", "P", int, 3.0, 3.0, 50.0, "First Schläfli symbol — number of sides per tile (3 = triangle, 4 = square, 5 = pentagon, etc.)."),
         param!("q", "Q", int, 7.0, 3.0, 50.0, "Second Schläfli symbol — number of tiles meeting at each vertex. For a valid hyperbolic tiling, `(p − 2)(q − 2) > 4`."),
         param!("n", "N", int, 0.0, 0.0, 50.0, "Index of which tile to target — deterministic tile selector."),
     ],
-    needs_transform: false,
-    writes_color: false,
     // 8 derived values at slots 3..11:
     //   3: cx     r * cos(n*pa)
     //   4: cy     r * sin(n*pa)
@@ -413,7 +402,6 @@ fn init_hypertile3D(user: array<f32, 3>) -> array<f32, 8> {
     // 2D form: use only the in-plane part, drop z² from r2.
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_hypertile3D(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let cx = get_param(xform_id, variation_id, 3u);
@@ -479,13 +467,11 @@ pub static HYPERTILE3D1: VariationDef = VariationDef {
     display_name: "Hypertile 3D 1",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("p", "P", int, 3.0, 3.0, 50.0, "First Schläfli symbol — number of sides per tile (3 = triangle, 4 = square, 5 = pentagon, etc.)."),
         param!("q", "Q", int, 7.0, 3.0, 50.0, "Second Schläfli symbol — number of tiles meeting at each vertex. For a valid hyperbolic tiling, `(p − 2)(q − 2) > 4`."),
     ],
-    needs_transform: false,
-    writes_color: false,
     // 4 derived values at slots 2..6:
     //   2: pa
     //   3: r
@@ -517,7 +503,6 @@ fn init_hypertile3D1(user: array<f32, 2>) -> array<f32, 4> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_hypertile3D1(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let pa = get_param(xform_id, variation_id, 2u);
@@ -596,13 +581,11 @@ pub static HYPERTILE3D2: VariationDef = VariationDef {
     display_name: "Hypertile 3D 2",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("p", "P", int, 3.0, 3.0, 50.0, "First Schläfli symbol — number of sides per tile (3 = triangle, 4 = square, 5 = pentagon, etc.)."),
         param!("q", "Q", int, 7.0, 3.0, 50.0, "Second Schläfli symbol — number of tiles meeting at each vertex. For a valid hyperbolic tiling, `(p − 2)(q − 2) > 4`."),
     ],
-    needs_transform: false,
-    writes_color: false,
     // 7 derived values at slots 2..9:
     //   2: pa
     //   3: cx    r
@@ -641,7 +624,6 @@ fn init_hypertile3D2(user: array<f32, 2>) -> array<f32, 7> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_hypertile3D2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let pa = get_param(xform_id, variation_id, 2u);

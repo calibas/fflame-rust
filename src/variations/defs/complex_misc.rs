@@ -54,7 +54,7 @@ pub static COMPLEX: VariationDef = VariationDef {
     display_name: "Complex",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("cospow", "Cos Pow", unlimited_float, 1.0, -10.0, 10.0, "cos: subfunction weight (complex cosine of `x + iy`). 0 disables this branch entirely; non-zero activates and scales its contribution to the accumulated output."),
         param!("cosx1", "Cos X1", unlimited_float, 1.0, -10.0, 10.0, "cos: scale applied to `x` before the first trig/hyperbolic term."),
@@ -121,13 +121,10 @@ pub static COMPLEX: VariationDef = VariationDef {
         param!("tanhy1", "Tanh Y1", unlimited_float, 2.0, -10.0, 10.0, "tanh: scale applied to `y` before the first trig/hyperbolic term."),
         param!("tanhy2", "Tanh Y2", unlimited_float, 2.0, -10.0, 10.0, "tanh: scale applied to `y` before the second trig/hyperbolic term."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_complex(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let x_in = p.x;

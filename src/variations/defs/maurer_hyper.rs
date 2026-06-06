@@ -34,7 +34,7 @@
 //!     blocked (persistent state).
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -68,7 +68,7 @@ pub static MAURER_ROSE: VariationDef = VariationDef {
     display_name: "Maurer Rose",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("kn", "K Numerator", unlimited_float, 2.0, -50.0, 50.0, "K numerator — the rose's petal ratio is `kn/kd`."),
         param!("kd", "K Denominator", unlimited_float, 1.0, -50.0, 50.0, "K denominator."),
@@ -82,8 +82,6 @@ pub static MAURER_ROSE: VariationDef = VariationDef {
         param!("point_thickness", "Point Thick (×100)", unlimited_float, 3.0, 0.0, 100.0, "Random scatter radius around endpoint samples (×100)."),
         param!("curve_thickness", "Curve Thick (×100)", unlimited_float, 1.0, 0.0, 100.0, "Random jitter width around rose-curve samples (×100)."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 10,
     wgsl_init: Some(r#"
 fn init_maurer_rose(user: array<f32, 11>) -> array<f32, 10> {
@@ -122,7 +120,6 @@ fn init_maurer_rose(user: array<f32, 11>) -> array<f32, 10> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_maurer_rose(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let c = get_param(xform_id, variation_id, 2u);
@@ -316,14 +313,12 @@ pub static HYPERCROP: VariationDef = VariationDef {
     display_name: "Hypercrop",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("n", "N", int, 4.0, 3.0, 50.0, "Number of n-gon sides (≥ 3)."),
         param!("rad", "Radius", unlimited_float, 1.0, 0.0, 10.0, "Radius of the corner-cropping disc, relative to the n-gon corner radius."),
         param!("zero", "Zero", unlimited_float, 0.0, 0.0, 2.0, "Behavior inside the corner disc. `> 1.5` snaps to the corner; `> 0.5` collapses to origin; else scatters around the disc edge."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 4,
     wgsl_init: Some(r#"
 fn init_hypercrop(user: array<f32, 3>) -> array<f32, 4> {
@@ -343,7 +338,6 @@ fn init_hypercrop(user: array<f32, 3>) -> array<f32, 4> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_hypercrop(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let zero = get_param(xform_id, variation_id, 2u);

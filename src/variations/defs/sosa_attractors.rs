@@ -33,7 +33,7 @@
 //!   - `output/jwildfire-vars/output/sattractor_js.cpp`
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -55,20 +55,17 @@ pub static CLIFFORD_JS: VariationDef = VariationDef {
     display_name: "Clifford (JS)",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("a", "A", unlimited_float, -1.4, -10.0, 10.0, "Clifford attractor parameter `a` (in `sin(a·y) + c·cos(a·x)`)."),
         param!("b", "B", unlimited_float, 1.6, -10.0, 10.0, "Clifford attractor parameter `b` (in `sin(b·x) + d·cos(b·y)`)."),
         param!("c", "C", unlimited_float, 1.0, -10.0, 10.0, "Clifford attractor parameter `c` — cosine coefficient on the X output."),
         param!("d", "D", unlimited_float, 0.7, -10.0, 10.0, "Clifford attractor parameter `d` — cosine coefficient on the Y output."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_clifford_js(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let a = get_param(xform_id, variation_id, 0u);
@@ -109,20 +106,17 @@ pub static SVENSSON_JS: VariationDef = VariationDef {
     display_name: "Svensson (JS)",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("a", "A", unlimited_float, 1.4, -10.0, 10.0, "Svensson attractor parameter `a` (X-axis sin/cos frequency)."),
         param!("b", "B", unlimited_float, 1.56, -10.0, 10.0, "Svensson attractor parameter `b` (Y-axis sin/cos frequency)."),
         param!("c", "C", unlimited_float, 1.4, -10.0, 10.0, "Svensson attractor parameter `c` — cosine amplitude on Y output."),
         param!("d", "D", unlimited_float, -6.56, -10.0, 10.0, "Svensson attractor parameter `d` — sine amplitude on X output."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_svensson_js(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let a = get_param(xform_id, variation_id, 0u);
@@ -164,17 +158,14 @@ pub static SATTRACTOR_JS: VariationDef = VariationDef {
     display_name: "S-Attractor (JS)",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("m", "M", int, 10.0, 1.0, 12.0, "Number of vertex angles (1-12). Each iteration samples one of `m` evenly-spaced angles around the unit circle."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_sattractor_js(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let m = max(i32(get_param(xform_id, variation_id, 0u)), 1);

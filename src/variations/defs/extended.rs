@@ -3,7 +3,7 @@
 //! Additional variations beyond the basic and advanced sets.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -17,15 +17,12 @@ pub static ZTRANSLATE: VariationDef = VariationDef {
     display_name: "ZTranslate",
     category: VariationCategory::Depth3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_ztranslate(p: vec2<f32>) -> vec2<f32> {
     // 2D stub: ztranslate only writes Z. Returning `p` here would
@@ -55,17 +52,14 @@ pub static JULIA3D: VariationDef = VariationDef {
     display_name: "Julia3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("power", "Power", unlimited_int, 2.0, -10.0, 10.0, "Number of branches in the 3D Julia output. Higher = more arms; negative values flip the rotation."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_julia3D(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     // Apophysis Julia3D in 2D mode (Z = 0). Mirrors cpp transformFunction;
@@ -117,7 +111,7 @@ pub static FALLOFF2: VariationDef = VariationDef {
     display_name: "Falloff2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("scatter", "Scatter", unlimited_float, 1.0, 0.000001, 10.0, "Maximum random scatter applied at full strength."),
         param!("mindist", "Min Distance", unlimited_float, 0.5, 0.0, 10.0, "Distance from the center where the falloff kicks in. Points inside this radius get full strength scatter."),
@@ -132,13 +126,10 @@ pub static FALLOFF2: VariationDef = VariationDef {
         param!("type", "Blur Type", enum, 0, &["Uniform", "Triangular", "Gaussian"],
             "Random distribution shape. Triangular is smoother; Gaussian concentrates near zero."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_falloff2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     // Apophysis Falloff2: Distance-based blur effect with 3 modes
@@ -264,7 +255,7 @@ pub static WEDGE: VariationDef = VariationDef {
     display_name: "Wedge",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("angle", "Angle", angle, 90.0, "Wedge angle in degrees — how wide each pie slice is before compression."),
         param!("hole", "Hole", unlimited_float, 0.0, -5.0, 5.0, "Radial offset added to the output. Positive pushes the pattern outward, negative pulls it inward."),
@@ -274,8 +265,6 @@ pub static WEDGE: VariationDef = VariationDef {
     // 2 derived values at slots 4..6:
     //   4: angle_rad  (angle_deg · π/180)
     //   5: comp_fac   (1 − angle_rad · count / (2π))
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 2,
     wgsl_init: Some(r#"
 fn init_wedge(user: array<f32, 4>) -> array<f32, 2> {
@@ -290,7 +279,6 @@ fn init_wedge(user: array<f32, 4>) -> array<f32, 2> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_wedge(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     const PI: f32 = 3.14159265359;
@@ -345,19 +333,16 @@ pub static EPISPIRAL: VariationDef = VariationDef {
     display_name: "Epispiral",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("n", "N", unlimited_float, 6.0, -20.0, 20.0, "Number of lobes in the spiral pattern."),
         param!("thickness", "Thickness", unlimited_float, 0.0, -2.0, 2.0, "Random thickness of each lobe. 0 = razor-thin curves, higher = wider bands."),
         param!("holes", "Holes", unlimited_float, 1.0, -10.0, 10.0, "Radial offset that punches gaps in the pattern."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_epispiral(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     // Apophysis Epispiral: Epicycloid spiral pattern with random thickness
@@ -403,7 +388,7 @@ pub static BWRAPS: VariationDef = VariationDef {
     display_name: "BWraps",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("cellsize", "Cell Size", unlimited_float, 1.0, -10.0, 10.0, "Width of each grid cell — the plane is divided into cells of this size, each becoming a bubble."),
         param!("space", "Space", unlimited_float, 0.0, -1.0, 1.0, "Gap between cells. 0 = no gap; positive values push the bubbles apart."),
@@ -415,8 +400,6 @@ pub static BWRAPS: VariationDef = VariationDef {
     //   5: g2        (gain² / (radius + ε) + ε)
     //   6: r2        (radius²)
     //   7: rfactor   (radius / max_bubble, where max_bubble = clamp(g2·radius))
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 3,
     wgsl_init: Some(r#"
 fn init_bwraps(user: array<f32, 5>) -> array<f32, 3> {
@@ -445,7 +428,6 @@ fn init_bwraps(user: array<f32, 5>) -> array<f32, 3> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_bwraps(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let cellsize = get_param(xform_id, variation_id, 0u);
@@ -537,18 +519,15 @@ pub static JULIASCOPE: VariationDef = VariationDef {
     display_name: "JuliaScope",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("power", "Power", unlimited_int, 2.0, -20.0, 20.0, "Number of mirror branches. Higher = more reflections; negative values invert the rotation."),
         param!("dist", "Distance", unlimited_float, 1.0, -10.0, 10.0, "Radial scaling factor. 1.0 is balanced; larger values push arms outward."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_juliascope(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     // Apophysis JuliaScope variation
@@ -645,7 +624,7 @@ pub static JULIASCOPE_3DB: VariationDef = VariationDef {
     display_name: "JuliaScope 3Db",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("power", "Power", unlimited_int, 3.0, -20.0, 20.0, "Number of mirror branches. Higher = more reflections; negative values invert the rotation. `0` no-ops the variation to avoid divide-by-zero in the angle dispatch."),
         param!("dist", "Distance", unlimited_float, 1.0, -10.0, 10.0, "Radial scaling factor. Combined with `power` into `cPower = dist / power × 0.5`, which sets the exponent on the radial term."),
@@ -659,13 +638,10 @@ pub static JULIASCOPE_3DB: VariationDef = VariationDef {
         param!("wave1", "Wave 1", unlimited_float, 1.0, -10.0, 10.0, "Argument to `sin()` in the mode-on Z multiplier. Ignored when `mode` is off."),
         param!("wave2", "Wave 2", unlimited_float, 1.0, -10.0, 10.0, "Argument to `cos()` in the mode-on Z multiplier. Ignored when `mode` is off."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_juliascope3Db(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     // 2D mode: drop Z entirely. The `type` switch becomes a no-op
@@ -753,17 +729,14 @@ pub static JULIA3DZ: VariationDef = VariationDef {
     display_name: "Julia3Dz",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("power", "Power", unlimited_int, 2.0, -20.0, 20.0, "Number of Julia branches in the 3D output. Higher = more arms."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_julia3Dz(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     // 2D stub: julia3Dz's XY contribution depends on z-derived
@@ -829,19 +802,16 @@ pub static CURL3D: VariationDef = VariationDef {
     display_name: "Curl3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("cx", "CX", unlimited_float, 0.0, -5.0, 5.0, "Twist strength along the X axis."),
         param!("cy", "CY", unlimited_float, 0.0, -5.0, 5.0, "Twist strength along the Y axis."),
         param!("cz", "CZ", unlimited_float, 0.0, -5.0, 5.0, "Twist strength along the Z axis."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_curl3D(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     // Curl3D is a 3D variation, apply XY curl in 2D
@@ -892,15 +862,13 @@ pub static RADIAL_BLUR: VariationDef = VariationDef {
     display_name: "Radial Blur",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("angle", "Angle", angle, 0.0, "Spin/zoom balance. 0 degrees = pure zoom blur, 90 degrees = pure rotational blur, 45 degrees = balanced mix."),
     ],
     // 2 derived values at slots 1..3:
     //   1: spin_var  (sin(angle_deg · π/360))
     //   2: zoom_var  (cos(angle_deg · π/360))
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 2,
     wgsl_init: Some(r#"
 fn init_radial_blur(user: array<f32, 1>) -> array<f32, 2> {
@@ -913,7 +881,6 @@ fn init_radial_blur(user: array<f32, 1>) -> array<f32, 2> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_radial_blur(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let spin_var = get_param(xform_id, variation_id, 1u);
@@ -960,15 +927,12 @@ pub static BLUR_CIRCLE: VariationDef = VariationDef {
     display_name: "Blur Circle",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_blur_circle(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     // Apophysis Blur Circle - uniform blur in a circle
@@ -1053,19 +1017,16 @@ pub static BLUR_ZOOM: VariationDef = VariationDef {
     display_name: "Blur Zoom",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("length", "Length", unlimited_float, 0.0, -5.0, 5.0, "Maximum zoom distance. Larger values streak points further outward from the center."),
         param!("x", "X", unlimited_float, 0.0, -20.0, 20.0, "X coordinate of the zoom center."),
         param!("y", "Y", unlimited_float, 0.0, -20.0, 20.0, "Y coordinate of the zoom center."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_blur_zoom(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     // Apophysis Blur Zoom - zoom blur from a center point
@@ -1107,18 +1068,15 @@ pub static BLUR_PIXELIZE: VariationDef = VariationDef {
     display_name: "Blur Pixelize",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("size", "Size", unlimited_float, 0.1, 0.0000001, 10.0, "Pixel cell size. Smaller = finer grid; larger = chunkier pixels."),
         param!("scale", "Scale", unlimited_float, 1.0, -20.0, 20.0, "How much each point can jitter within its cell. 0 = points snap to cell centers; 1 = points scatter across the cell."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_blur_pixelize(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     // Apophysis Blur Pixelize - pixelated/mosaic blur effect
@@ -1167,20 +1125,17 @@ pub static SEPARATION: VariationDef = VariationDef {
     display_name: "Separation",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("x", "X", unlimited_float, 1.0, -20.0, 20.0, "How far to push points away from the X axis on either side."),
         param!("y", "Y", unlimited_float, 1.0, -20.0, 20.0, "How far to push points away from the Y axis on either side."),
         param!("xinside", "X Inside", unlimited_float, 0.0, -20.0, 20.0, "Inside offset along X — adjusts how the separation looks near the axis."),
         param!("yinside", "Y Inside", unlimited_float, 0.0, -20.0, 20.0, "Inside offset along Y — adjusts how the separation looks near the axis."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_separation(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     // Apophysis Separation - separates positive/negative quadrants
@@ -1241,7 +1196,7 @@ pub static MOBIUS: VariationDef = VariationDef {
     display_name: "Mobius",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("re_a", "Re A", unlimited_float, 0.1, -1.0, 1.0, "Real component of complex coefficient A in `(Az + B)/(Cz + D)`."),
         param!("im_a", "Im A", unlimited_float, 0.2, -1.0, 1.0, "Imaginary component of complex coefficient A."),
@@ -1252,13 +1207,10 @@ pub static MOBIUS: VariationDef = VariationDef {
         param!("re_d", "Re D", unlimited_float, 0.21, -1.0, 1.0, "Real component of complex coefficient D."),
         param!("im_d", "Im D", unlimited_float, 0.1, -1.0, 1.0, "Imaginary component of complex coefficient D."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_mobius(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     // Apophysis Mobius - Möbius transformation f(z) = (Az + B)/(Cz + D)
@@ -1325,7 +1277,7 @@ pub static CROP: VariationDef = VariationDef {
     display_name: "Crop",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("left", "Left", unlimited_float, -1.0, -5.0, 5.0, "Left edge of the rectangle the points are constrained to."),
         param!("top", "Top", unlimited_float, -1.0, -5.0, 5.0, "Top edge of the rectangle."),
@@ -1334,13 +1286,10 @@ pub static CROP: VariationDef = VariationDef {
         param!("scatter_area", "Scatter Area", float, 0.0, -1.0, 1.0, "Width of the random scatter band along the rectangle's edges. 0 = points snap exactly to the edge."),
         param!("zero", "Zero", bool, false, "When on, points outside the rectangle collapse to the origin. When off, they scatter back to the nearest edge."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_crop(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     // Apophysis Crop - crops to a rectangular region with optional scatter

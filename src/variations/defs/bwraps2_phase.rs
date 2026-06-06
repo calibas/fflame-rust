@@ -22,7 +22,7 @@
 //!   - `output/jwildfire-vars/output/post_bwraps2.cpp`
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -52,7 +52,7 @@ pub static PRE_BWRAPS2: VariationDef = VariationDef {
     display_name: "Pre BWraps 2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Pre,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[
         param!("cellsize", "Cell Size", unlimited_float, 1.0, -10.0, 10.0, "Grid cell size."),
         param!("space", "Space", unlimited_float, 0.0, -1.0, 1.0, "Inter-cell spacing factor. 0 = no space; larger = smaller bubble relative to cell."),
@@ -60,8 +60,6 @@ pub static PRE_BWRAPS2: VariationDef = VariationDef {
         param!("inner_twist", "Inner Twist", unlimited_float, 0.0, -10.0, 10.0, "Rotation amount applied at the bubble center."),
         param!("outer_twist", "Outer Twist", unlimited_float, 0.0, -10.0, 10.0, "Rotation amount applied at the bubble edge. Interpolated radially with `inner_twist`."),
     ],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 3,
     wgsl_init: Some(r#"
 fn init_pre_bwraps2(user: array<f32, 5>) -> array<f32, 3> {
@@ -89,7 +87,6 @@ fn init_pre_bwraps2(user: array<f32, 5>) -> array<f32, 3> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_pre_bwraps2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let cellsize = get_param(xform_id, variation_id, 0u);
@@ -176,7 +173,7 @@ pub static POST_BWRAPS2: VariationDef = VariationDef {
     display_name: "Post BWraps 2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Post,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[
         param!("cellsize", "Cell Size", unlimited_float, 1.0, -10.0, 10.0, "Grid cell size."),
         param!("space", "Space", unlimited_float, 0.0, -1.0, 1.0, "Inter-cell spacing factor. 0 = no space; larger = smaller bubble relative to cell."),
@@ -184,8 +181,6 @@ pub static POST_BWRAPS2: VariationDef = VariationDef {
         param!("inner_twist", "Inner Twist", unlimited_float, 0.0, -10.0, 10.0, "Rotation amount applied at the bubble center."),
         param!("outer_twist", "Outer Twist", unlimited_float, 0.0, -10.0, 10.0, "Rotation amount applied at the bubble edge. Interpolated radially with `inner_twist`."),
     ],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 3,
     wgsl_init: Some(r#"
 fn init_post_bwraps2(user: array<f32, 5>) -> array<f32, 3> {
@@ -213,7 +208,6 @@ fn init_post_bwraps2(user: array<f32, 5>) -> array<f32, 3> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_post_bwraps2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let cellsize = get_param(xform_id, variation_id, 0u);

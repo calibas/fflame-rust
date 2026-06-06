@@ -21,7 +21,7 @@
 //! Source: `output/jwildfire-vars/output/pre_wave3d_wf.cpp`.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -38,7 +38,7 @@ pub static PRE_WAVE3D_WF: VariationDef = VariationDef {
     display_name: "Pre Wave 3D WF",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Pre,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[
         param!("axis", "Axis", enum, 0, &["XY → Z", "YZ → X", "ZX → Y", "Radial"], "Wave plane and displacement axis. Plane modes wave one coordinate in and out of the other two; Radial waves along the unit vector from the origin."),
         param!("wavelen", "Wavelength", unlimited_float, 0.5, -10.0, 10.0, "Wavelength of the sine perturbation."),
@@ -48,13 +48,10 @@ pub static PRE_WAVE3D_WF: VariationDef = VariationDef {
         param!("centre_y", "Centre Y", unlimited_float, 0.0, -10.0, 10.0, "Y coordinate of the wave center."),
         param!("centre_z", "Centre Z", unlimited_float, 0.0, -10.0, 10.0, "Z coordinate of the wave center."),
     ],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_pre_wave3D_wf(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let axis = i32(get_param(xform_id, variation_id, 0u));

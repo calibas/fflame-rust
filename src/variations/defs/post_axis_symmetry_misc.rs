@@ -23,7 +23,7 @@
 //! Source: `output/jwildfire-vars/output/post_axis_symmetry_wf.cpp`.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -40,7 +40,7 @@ pub static POST_AXIS_SYMMETRY_WF: VariationDef = VariationDef {
     display_name: "Post Axis Symmetry WF",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Post,
-    needs_rng: true,
+    features: &[Feature::NeedsRng, Feature::NeedsTransform],
     parameters: &[
         param!("axis", "Axis", enum, 0, &["X", "Y", "Z"], "Axis of symmetry to mirror across. Z is 3D-only."),
         param!("centre_x", "Centre X", unlimited_float, 0.25, -10.0, 10.0, "X coordinate of the symmetry plane center."),
@@ -48,8 +48,6 @@ pub static POST_AXIS_SYMMETRY_WF: VariationDef = VariationDef {
         param!("centre_z", "Centre Z", unlimited_float, 0.5, -10.0, 10.0, "Z coordinate of the symmetry plane center (3D only)."),
         param!("rotation", "Rotation", unlimited_float, 30.0, -360.0, 360.0, "Post-mirror rotation angle, in degrees. Full circle = 360. Init precomputes `sin/cos(rotation · 2π/180 / 2)`."),
     ],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 2,
     wgsl_init: Some(r#"
 fn init_post_axis_symmetry_wf(user: array<f32, 5>) -> array<f32, 2> {
@@ -63,7 +61,6 @@ fn init_post_axis_symmetry_wf(user: array<f32, 5>) -> array<f32, 2> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_post_axis_symmetry_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let axis = i32(get_param(xform_id, variation_id, 0u));
