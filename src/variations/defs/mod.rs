@@ -143,6 +143,7 @@ mod mandelbrot;
 mod crackle;
 mod dc_perlin;
 mod szubieta;
+mod glsl_mandelbox2d;
 
 pub use basic::*;
 pub use advanced::*;
@@ -282,6 +283,7 @@ pub use mandelbrot::*;
 pub use crackle::*;
 pub use dc_perlin::*;
 pub use szubieta::*;
+pub use glsl_mandelbox2d::*;
 
 use super::definition::VariationDef;
 
@@ -960,4 +962,12 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     // JWildfire builds a primitive list in init(); we compute the
     // same thing in pure per-call math.
     &SZUBIETA,
+    // glsl_* family — JWildfire's shadertoy-style procedural base
+    // shapes. Spatial output is always the uniform [-0.5, 0.5]²
+    // sample; the interesting content is in the per-pixel direct-RGB
+    // color computation, written to `vrc` via Feature::WritesRgb.
+    // Each `glsl_*` is an independent hand-port of one specific
+    // shadertoy algorithm (not user-supplied code — see
+    // docs/projects/variation-port-blockers.md for the distinction).
+    &GLSL_MANDELBOX2D,
 ];
