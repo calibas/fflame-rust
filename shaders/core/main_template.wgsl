@@ -109,15 +109,34 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             c_base = color_index * (1.0 + symmetry) * 0.5 + xform.color * (1.0 - symmetry) * 0.5;
         }
         var vc: f32 = c_base;
+{{/if}}
+{{#if HAS_RGB}}
+        // Direct-RGB register, sentinel-init to black. A variation with
+        // `Feature::WritesRgb` opts in and is expected to overwrite *vrc;
+        // if it doesn't (or no Final variation reaches the plot site
+        // with vrc set), the unmodified black is what gets blended via
+        // direct_color at plot time. See the `Feature::WritesRgb` doc
+        // for the contract.
+        var vrc: vec3<f32> = vec3<f32>(0.0);
+{{/if}}
 
         // Apply NORMAL transform: affine + variations + post-affine.
+        // The 4-way call shape (HAS_DC × HAS_RGB) keeps each combination
+        // as its own variant rather than an inline conditional, because
+        // the template processor only does whole-block substitution.
         let affine_p = apply_affine(xform, current);
-        current = apply_variations(xform, xform_idx, affine_p, &rng, &vc);
+{{#if HAS_DC}}
+{{#if HAS_RGB}}
+        current = apply_variations(xform, xform_idx, affine_p, &rng, &vc, &vrc);
 {{else}}
-        // No DC variations active: original 2-step flow — variations first,
-        // then color_speed blend. Bit-identical to pre-direct-color codebase.
-        let affine_p = apply_affine(xform, current);
+        current = apply_variations(xform, xform_idx, affine_p, &rng, &vc);
+{{/if}}
+{{else}}
+{{#if HAS_RGB}}
+        current = apply_variations(xform, xform_idx, affine_p, &rng, &vrc);
+{{else}}
         current = apply_variations(xform, xform_idx, affine_p, &rng);
+{{/if}}
 {{/if}}
         if (HAS_POST_AFFINE) {
             if (xform.post_enabled > 0.5) {
@@ -139,9 +158,17 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let lxform = transforms[lid];
             let laff = apply_affine(lxform, current);
 {{#if HAS_DC}}
+{{#if HAS_RGB}}
+            current = apply_variations(lxform, lid, laff, &rng, &vc, &vrc);
+{{else}}
             current = apply_variations(lxform, lid, laff, &rng, &vc);
+{{/if}}
+{{else}}
+{{#if HAS_RGB}}
+            current = apply_variations(lxform, lid, laff, &rng, &vrc);
 {{else}}
             current = apply_variations(lxform, lid, laff, &rng);
+{{/if}}
 {{/if}}
             if (HAS_POST_AFFINE) {
                 if (lxform.post_enabled > 0.5) {
@@ -229,9 +256,22 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 let faff = apply_affine(fxform, final_pos);
 {{#if HAS_DC}}
                 var final_vc: f32 = color_index;  // discarded after the call
+{{/if}}
+{{#if HAS_RGB}}
+                var final_vrc: vec3<f32> = vec3<f32>(0.0);  // discarded after the call
+{{/if}}
+{{#if HAS_DC}}
+{{#if HAS_RGB}}
+                final_pos = apply_variations(fxform, fid, faff, &rng, &final_vc, &final_vrc);
+{{else}}
                 final_pos = apply_variations(fxform, fid, faff, &rng, &final_vc);
+{{/if}}
+{{else}}
+{{#if HAS_RGB}}
+                final_pos = apply_variations(fxform, fid, faff, &rng, &final_vrc);
 {{else}}
                 final_pos = apply_variations(fxform, fid, faff, &rng);
+{{/if}}
 {{/if}}
                 if (HAS_POST_AFFINE) {
                     if (fxform.post_enabled > 0.5) {
@@ -279,6 +319,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             } else if (COLOR_MODE == 1u) {
                 base_final_color = color;
             }
+{{#if HAS_RGB}}
+            // Direct-RGB-writing variations override (or blend into) the
+            // palette/speed-derived color. Same direct_color slider gates
+            // it as the palette-index DC path: 0 keeps the existing color,
+            // 1 fully replaces with vrc, in-between mixes. Path-map mode
+            // (COLOR_MODE == 2) keeps the default white init regardless.
+            base_final_color = mix(base_final_color, vrc, xform.direct_color);
+{{/if}}
 
             for (var sym_k: u32 = 0u; sym_k < sym_count; sym_k = sym_k + 1u) {
 {{#if HAS_POST_SYMMETRY}}
