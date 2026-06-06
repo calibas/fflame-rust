@@ -144,6 +144,7 @@ mod crackle;
 mod dc_perlin;
 mod szubieta;
 mod glsl_fractals;
+mod glsl_tilings;
 
 pub use basic::*;
 pub use advanced::*;
@@ -284,6 +285,7 @@ pub use crackle::*;
 pub use dc_perlin::*;
 pub use szubieta::*;
 pub use glsl_fractals::*;
+pub use glsl_tilings::*;
 
 use super::definition::VariationDef;
 
@@ -975,4 +977,10 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &GLSL_KALISET,
     &GLSL_KALISET2,
     &GLSL_APOLLONIAN,
+    &GLSL_KALEIDOSCOPIC,
+    &GLSL_KALEIDOCOMPLEX,
+    &GLSL_HYPERBOLICTILE,
+    &GLSL_MANDALA,
+    &GLSL_SQUARES,
+    &GLSL_HOSHI,
 ];
