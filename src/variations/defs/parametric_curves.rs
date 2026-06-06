@@ -34,7 +34,7 @@
 //!     batches.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -55,7 +55,7 @@ pub static SPIROGRAPH: VariationDef = VariationDef {
     display_name: "Spirograph",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("a", "A", unlimited_float, 3.0, -10.0, 10.0, "Outer-wheel radius."),
         param!("b", "B", unlimited_float, 2.0, -10.0, 10.0, "Inner-wheel radius."),
@@ -67,13 +67,10 @@ pub static SPIROGRAPH: VariationDef = VariationDef {
         param!("ymin", "Y Min", unlimited_float, -1.0, -100.0, 100.0, "Minimum random Y offset added to both output coordinates."),
         param!("ymax", "Y Max", unlimited_float, 1.0, -100.0, 100.0, "Maximum random Y offset added to both output coordinates."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_spirograph(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let a = get_param(xform_id, variation_id, 0u);
@@ -142,7 +139,7 @@ pub static LISSAJOUS: VariationDef = VariationDef {
     display_name: "Lissajous",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("tmin", "T Min", unlimited_float, -3.14159265, -100.0, 100.0, "Minimum value of the random parameter `t`."),
         param!("tmax", "T Max", unlimited_float, 3.14159265, -100.0, 100.0, "Maximum value of the random parameter `t`."),
@@ -152,13 +149,10 @@ pub static LISSAJOUS: VariationDef = VariationDef {
         param!("d", "D", unlimited_float, 0.0, -10.0, 10.0, "Phase offset on the X axis."),
         param!("e", "E", unlimited_float, 0.0, -10.0, 10.0, "Noise scale added to both axes."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_lissajous(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let tmin = get_param(xform_id, variation_id, 0u);
@@ -221,13 +215,11 @@ pub static VOGEL: VariationDef = VariationDef {
     display_name: "Vogel",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("n", "N", int, 20.0, 1.0, 1000.0, "Number of seed positions (1-1000). Larger = more points around the spiral."),
         param!("scale", "Scale", unlimited_float, 1.0, -10.0, 10.0, "Mixes the radial distance with the input coordinates. 0 = pure spiral; higher = blended with input."),
     ],
-    needs_transform: false,
-    writes_color: false,
     // 1 derived value at slot 2:
     //   2: two_pi_over_phi2  (2π / φ², where φ = golden ratio)
     init_param_count: 1,
@@ -242,7 +234,6 @@ fn init_vogel(user: array<f32, 2>) -> array<f32, 1> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_vogel(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let n = get_param(xform_id, variation_id, 0u);
@@ -310,7 +301,7 @@ pub static CROP3D: VariationDef = VariationDef {
     display_name: "Crop 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("left", "Left", unlimited_float, -1.0, -10.0, 10.0, "Left bound of the cropping box (X axis)."),
         param!("top", "Top", unlimited_float, -1.0, -10.0, 10.0, "Top bound (Y axis)."),
@@ -321,8 +312,6 @@ pub static CROP3D: VariationDef = VariationDef {
         param!("scatter_area", "Scatter Area", unlimited_float, 0.0, 0.0, 1.0, "Width of the scatter band along each box edge. 0 = snap to edge; 1 = scatter across the full box width."),
         param!("zero", "Zero", bool, false, "When on, out-of-box points collapse to origin. When off, they scatter back toward the nearest edge."),
     ],
-    needs_transform: false,
-    writes_color: false,
     // 6 derived values at slots 8..14:
     //   8: _xmin  10: _ymin  12: _zmin
     //   9: _xmax  11: _ymax  13: _zmax
@@ -343,7 +332,6 @@ fn init_crop3D(user: array<f32, 8>) -> array<f32, 6> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_crop3D(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let scatter = get_param(xform_id, variation_id, 6u);

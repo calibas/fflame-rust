@@ -13,7 +13,7 @@
 //!   - output/jwildfire-vars/output/target_sp.cpp
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -43,20 +43,17 @@ pub static ONION: VariationDef = VariationDef {
     display_name: "Onion",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[
         param!("centre_x", "Centre X", unlimited_float, 0.0, -5.0, 5.0, "X coordinate of the sphere center."),
         param!("centre_y", "Centre Y", unlimited_float, 0.0, -5.0, 5.0, "Y coordinate of the sphere center."),
     ],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     // 2D form: drop the z curl, keep only the X/Y mapping (which is the
     // identity inside the sphere and a radial squeeze outside).
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_onion(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let cx = get_param(xform_id, variation_id, 0u);
@@ -150,15 +147,13 @@ pub static TARGET_SP: VariationDef = VariationDef {
     display_name: "Target Sp",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[
         param!("twist", "Twist", unlimited_float, 0.0, -5.0, 5.0, "Rotation applied to alternating spiral arms, in half-turns."),
         param!("n_of_sp", "N of Spirals", int, 1.0, -20.0, 20.0, "Number of interleaved spiral arms."),
         param!("size", "Size", unlimited_float, 1.0, 0.01, 10.0, "Width of each spiral band in log-radius space."),
         param!("tightness", "Tightness", unlimited_float, 0.5, -5.0, 5.0, "Logarithmic winding rate — higher = arms wind tighter."),
     ],
-    needs_transform: true,
-    writes_color: false,
     // 3 derived values at slots 4..7:
     //   4: t_size_2  (0.5 · size)
     //   5: rota      (π · twist)
@@ -179,7 +174,6 @@ fn init_target_sp(user: array<f32, 4>) -> array<f32, 3> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_target_sp(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let n_of_sp = get_param(xform_id, variation_id, 1u);

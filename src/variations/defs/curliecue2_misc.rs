@@ -45,17 +45,14 @@ pub static CURLIECUE2: VariationDef = VariationDef {
     display_name: "Curliecue 2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("speed", "Speed", float, 0.5, 0.0, 1.0, "Angular velocity of the curlicue walker as a fraction of 2π per iteration. Small irrational values (e.g. golden-ratio fractions) produce the classical curlicue fractal pattern; rational values produce closed loops."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 4,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_curliecue2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let two_pi = 6.28318530717959;

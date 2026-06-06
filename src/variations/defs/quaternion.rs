@@ -38,15 +38,12 @@ pub static SINQ: VariationDef = VariationDef {
     display_name: "Sinq",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_sinq(p: vec2<f32>) -> vec2<f32> {
     let v = max(abs(p.y), 1e-20);
@@ -81,15 +78,12 @@ pub static COSQ: VariationDef = VariationDef {
     display_name: "Cosq",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_cosq(p: vec2<f32>) -> vec2<f32> {
     let v = max(abs(p.y), 1e-20);
@@ -123,15 +117,12 @@ pub static SINHQ: VariationDef = VariationDef {
     display_name: "Sinhq",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_sinhq(p: vec2<f32>) -> vec2<f32> {
     let v = max(abs(p.y), 1e-20);
@@ -165,15 +156,12 @@ pub static COSHQ: VariationDef = VariationDef {
     display_name: "Coshq",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_coshq(p: vec2<f32>) -> vec2<f32> {
     let v = max(abs(p.y), 1e-20);
@@ -210,15 +198,12 @@ pub static SECQ: VariationDef = VariationDef {
     display_name: "Secq",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_secq(p: vec2<f32>) -> vec2<f32> {
     let v = max(abs(p.y), 1e-20);
@@ -256,15 +241,12 @@ pub static CSCQ: VariationDef = VariationDef {
     display_name: "Cscq",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_cscq(p: vec2<f32>) -> vec2<f32> {
     let v = max(abs(p.y), 1e-20);
@@ -302,15 +284,12 @@ pub static SECHQ: VariationDef = VariationDef {
     display_name: "Sechq",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_sechq(p: vec2<f32>) -> vec2<f32> {
     let v = max(abs(p.y), 1e-20);
@@ -348,15 +327,12 @@ pub static CSCHQ: VariationDef = VariationDef {
     display_name: "Cschq",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_cschq(p: vec2<f32>) -> vec2<f32> {
     let v = max(abs(p.y), 1e-20);
@@ -399,15 +375,12 @@ pub static TANQ: VariationDef = VariationDef {
     display_name: "Tanq",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_tanq(p: vec2<f32>) -> vec2<f32> {
     let v = max(abs(p.y), 1e-20);
@@ -456,15 +429,12 @@ pub static COTQ: VariationDef = VariationDef {
     display_name: "Cotq",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_cotq(p: vec2<f32>) -> vec2<f32> {
     let v = max(abs(p.y), 1e-20);
@@ -515,15 +485,12 @@ pub static TANHQ: VariationDef = VariationDef {
     display_name: "Tanhq",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_tanhq(p: vec2<f32>) -> vec2<f32> {
     let v = max(abs(p.y), 1e-20);
@@ -573,15 +540,12 @@ pub static COTHQ: VariationDef = VariationDef {
     display_name: "Cothq",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_cothq(p: vec2<f32>) -> vec2<f32> {
     let v = max(abs(p.y), 1e-20);

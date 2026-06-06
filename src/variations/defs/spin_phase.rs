@@ -24,7 +24,7 @@
 //! `output/jwildfire-vars/output/`.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -43,15 +43,12 @@ pub static PRE_SPIN_Z: VariationDef = VariationDef {
     display_name: "Pre Spin Z",
     category: VariationCategory::Rotation3D,
     phase: VariationPhase::Pre,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_pre_spin_z(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let pi_2 = 1.5707963267948966;
@@ -86,15 +83,12 @@ pub static POST_SPIN_Z: VariationDef = VariationDef {
     display_name: "Post Spin Z",
     category: VariationCategory::Rotation3D,
     phase: VariationPhase::Post,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_post_spin_z(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let pi_2 = 1.5707963267948966;
@@ -135,15 +129,12 @@ pub static POST_SPHERICAL: VariationDef = VariationDef {
     display_name: "Post Spherical",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Post,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_post_spherical(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let w = transforms[xform_id].variations[variation_id];
@@ -188,17 +179,14 @@ pub static PRE_DISC3D: VariationDef = VariationDef {
     display_name: "Pre Disc 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Pre,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[
         param!("pi", "Pi", unlimited_float, 3.141592653589793, -10.0, 10.0, "Divisor in the `vv = w · atan2(x, y) / pi` term. Default is the literal value of π."),
     ],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_pre_disc3d(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let pi_p = get_param(xform_id, variation_id, 0u);

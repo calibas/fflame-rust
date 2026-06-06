@@ -20,7 +20,7 @@
 //!     trivially since `FTz = 0` collapses the trig terms.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 
@@ -41,15 +41,12 @@ pub static TANCOS: VariationDef = VariationDef {
     display_name: "TanCos",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_tancos(p: vec2<f32>) -> vec2<f32> {
     let d1 = 1e-30 + p.x * p.x + p.y * p.y;
@@ -79,15 +76,12 @@ pub static TANGENT: VariationDef = VariationDef {
     display_name: "Tangent",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_tangent(p: vec2<f32>) -> vec2<f32> {
     let d = cos(p.y);
@@ -115,15 +109,12 @@ pub static TANGENT3D: VariationDef = VariationDef {
     display_name: "Tangent 3D",
     category: VariationCategory::Depth3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_tangent3D(p: vec2<f32>) -> vec2<f32> {
     let d = cos(p.y);
@@ -158,15 +149,12 @@ pub static SECANT2: VariationDef = VariationDef {
     display_name: "Secant2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_secant2(p: vec2<f32>) -> vec2<f32> {
     let r = sqrt(p.x * p.x + p.y * p.y) + 1e-30;
@@ -201,15 +189,12 @@ pub static COSINE: VariationDef = VariationDef {
     display_name: "Cosine",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_cosine(p: vec2<f32>) -> vec2<f32> {
     let r = p.x * 3.14159265358979;
@@ -243,15 +228,12 @@ pub static PETAL: VariationDef = VariationDef {
     display_name: "Petal",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_petal(p: vec2<f32>) -> vec2<f32> {
     let cx = cos(p.x);
@@ -296,18 +278,15 @@ pub static CARDIOID: VariationDef = VariationDef {
     display_name: "Cardioid",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         VariationParamDef { name: "a", display_name: "A", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Number of cusps/lobes in the cardioid shape. 1 = standard heart, 2 = figure-eight, higher values add more lobes.") },
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_cardioid(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let a_param = get_param(xform_id, variation_id, 0u);
@@ -342,20 +321,17 @@ pub static HELIX: VariationDef = VariationDef {
     display_name: "Helix",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         VariationParamDef { name: "frequency", display_name: "Frequency", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("How many full turns the helix makes per unit of Z.") },
         VariationParamDef { name: "width", display_name: "Width", param_type: ParamType::UnlimitedFloat,
                             default_value: 0.5, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Radius of the helical winding around the Z axis.") },
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_helix(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     // 2D collapse: z=0, so sin(0)=0 cos(0)=1 → x' = x + width, y' = y
@@ -389,18 +365,15 @@ pub static HELICOID: VariationDef = VariationDef {
     display_name: "Helicoid",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         VariationParamDef { name: "frequency", display_name: "Frequency", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("How fast the (x, y) plane rotates as Z increases. Larger = tighter spiral.") },
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_helicoid(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     // 2D collapse: phase = atan2(y,x) — rotation by 0 → identity
@@ -438,20 +411,17 @@ pub static PARABOLA: VariationDef = VariationDef {
     display_name: "Parabola",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         VariationParamDef { name: "width", display_name: "Width", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Horizontal scaling of the parabolic envelope.") },
         VariationParamDef { name: "height", display_name: "Height", param_type: ParamType::UnlimitedFloat,
                             default_value: 0.5, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Vertical scaling of the parabolic envelope.") },
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_parabola(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let width = get_param(xform_id, variation_id, 0u);
@@ -494,7 +464,7 @@ pub static PIE: VariationDef = VariationDef {
     display_name: "Pie",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         VariationParamDef { name: "slices", display_name: "Slices", param_type: ParamType::Float,
                             default_value: 6.0, min_value: Some(1.0), max_value: Some(64.0), description: Some("Number of pie wedges (1-64).") },
@@ -503,13 +473,10 @@ pub static PIE: VariationDef = VariationDef {
         VariationParamDef { name: "thickness", display_name: "Thickness", param_type: ParamType::Float,
                             default_value: 0.5, min_value: Some(0.0), max_value: Some(1.0), description: Some("Wedge thickness within its slice. 0 = razor-thin spokes, 1 = wedges fill their entire slice.") },
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_pie(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let two_pi = 6.28318530717959;
@@ -547,7 +514,7 @@ pub static PIE3D: VariationDef = VariationDef {
     display_name: "Pie 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         VariationParamDef { name: "slices", display_name: "Slices", param_type: ParamType::Float,
                             default_value: 7.0, min_value: Some(1.0), max_value: Some(64.0), description: Some("Number of pie wedges (1-64).") },
@@ -556,13 +523,10 @@ pub static PIE3D: VariationDef = VariationDef {
         VariationParamDef { name: "thickness", display_name: "Thickness", param_type: ParamType::Float,
                             default_value: 0.5, min_value: Some(0.0), max_value: Some(1.0), description: Some("Wedge thickness within its slice. 0 = razor-thin spokes, 1 = wedges fill their entire slice.") },
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_pie3D(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let two_pi = 6.28318530717959;

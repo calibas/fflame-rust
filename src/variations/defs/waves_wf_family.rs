@@ -86,7 +86,7 @@ pub static WAVES2_WF: VariationDef = VariationDef {
     display_name: "Waves 2 WF",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("scalex", "Scale X", unlimited_float, 0.25, -10.0, 10.0, "X-axis wave amplitude."),
         param!("scaley", "Scale Y", unlimited_float, 0.5, -10.0, 10.0, "Y-axis wave amplitude."),
@@ -97,13 +97,10 @@ pub static WAVES2_WF: VariationDef = VariationDef {
         param!("dampx", "Damp X", unlimited_float, 0.0, -10.0, 10.0, "X-axis exponential damping factor — the output is multiplied by `exp(dampx)` (or 1 when `|dampx|` is tiny)."),
         param!("dampy", "Damp Y", unlimited_float, 0.0, -10.0, 10.0, "Y-axis exponential damping factor — same as dampx but for Y."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 2,
     wgsl_init: Some(WAVES_WF_INIT),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_waves2_wf(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let scalex = get_param(xform_id, variation_id, 0u);
@@ -156,7 +153,7 @@ pub static WAVES3_WF: VariationDef = VariationDef {
     display_name: "Waves 3 WF",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("scalex", "Scale X", unlimited_float, 0.25, -10.0, 10.0, "X-axis wave amplitude."),
         param!("scaley", "Scale Y", unlimited_float, 0.5, -10.0, 10.0, "Y-axis wave amplitude."),
@@ -167,13 +164,10 @@ pub static WAVES3_WF: VariationDef = VariationDef {
         param!("dampx", "Damp X", unlimited_float, 0.0, -10.0, 10.0, "X-axis exponential damping factor — the output is multiplied by `exp(dampx)` (or 1 when `|dampx|` is tiny)."),
         param!("dampy", "Damp Y", unlimited_float, 0.0, -10.0, 10.0, "Y-axis exponential damping factor — same as dampx but for Y."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 2,
     wgsl_init: Some(WAVES3_WF_INIT),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_waves3_wf(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let scalex = get_param(xform_id, variation_id, 0u);
@@ -231,7 +225,7 @@ pub static WAVES4_WF: VariationDef = VariationDef {
     display_name: "Waves 4 WF",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("scalex", "Scale X", unlimited_float, 0.25, -10.0, 10.0, "X-axis wave amplitude."),
         param!("scaley", "Scale Y", unlimited_float, 0.5, -10.0, 10.0, "Y-axis wave amplitude."),
@@ -242,13 +236,10 @@ pub static WAVES4_WF: VariationDef = VariationDef {
         param!("dampx", "Damp X", unlimited_float, 0.0, -10.0, 10.0, "X-axis exponential damping factor — the output is multiplied by `exp(dampx)` (or 1 when `|dampx|` is tiny)."),
         param!("dampy", "Damp Y", unlimited_float, 0.0, -10.0, 10.0, "Y-axis exponential damping factor — same as dampx but for Y."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 2,
     wgsl_init: Some(WAVES4_WF_INIT),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_waves4_wf(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let scalex = get_param(xform_id, variation_id, 0u);
@@ -308,18 +299,15 @@ pub static DINIS_SURFACE_WF: VariationDef = VariationDef {
     display_name: "Dini's Surface WF",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("a", "A", unlimited_float, 0.8, -10.0, 10.0, "Radial scale of the surface (controls XY radius and Z magnitude)."),
         param!("b", "B", unlimited_float, 0.2, -10.0, 10.0, "Helical twist coefficient — multiplies the input U to add a linear helical Z offset."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_dinis_surface_wf(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let a = get_param(xform_id, variation_id, 0u);

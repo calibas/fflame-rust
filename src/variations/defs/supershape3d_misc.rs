@@ -25,7 +25,7 @@
 //! Source: `output/jwildfire-vars/output/supershape3d.cpp`.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -48,7 +48,7 @@ pub static SUPERSHAPE_3D: VariationDef = VariationDef {
     display_name: "SuperShape 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("rho", "Rho", unlimited_float, 9.9, -100.0, 100.0, "Angular range (radians) for uniform random sampling of the ρ axis. Larger values sweep through more of the shape per iteration; default 9.9 (~3π)."),
         param!("phi", "Phi", unlimited_float, 2.5, -100.0, 100.0, "Angular range (radians) for the φ axis (sampled in `[-phi, phi]`). Default 2.5 (~0.8π)."),
@@ -67,8 +67,6 @@ pub static SUPERSHAPE_3D: VariationDef = VariationDef {
         param!("spiral", "Spiral", unlimited_float, 0.0, -10.0, 10.0, "Spiral phase advance: `r1` is incremented by `spiral · ρ`, producing a linear radial growth with angle. 0 disables."),
         param!("toroidmap", "Toroidal", bool, false, "When on, toroidal projection (`cos·(r1 + r2·cos)`, etc.). When off, spherical product (`r1·r2·cos·cos`, etc.). Both modes use `r2·sin(φ)` for Z."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 10,
     wgsl_init: Some(r#"
 fn init_superShape3d(user: array<f32, 16>) -> array<f32, 10> {
@@ -103,7 +101,6 @@ fn init_superShape3d(user: array<f32, 16>) -> array<f32, 10> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_superShape3d(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let n2_1 = get_param(xform_id, variation_id, 10u);

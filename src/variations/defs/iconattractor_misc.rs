@@ -49,15 +49,13 @@ pub static ICONATTRACTOR_JS: VariationDef = VariationDef {
     display_name: "Icon Attractor (JS)",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("preset_id", "Preset ID", int, 0.0, 0.0, 16.0, "Which Field & Golubitsky preset to use (0-16). Each corresponds to a different symmetric icon attractor shape from the original book."),
         param!("centerx", "Center X", unlimited_float, 0.0, -10.0, 10.0, "Color register X center — unused since the color write is dropped. Preserved as a parameter for cpp parity."),
         param!("centery", "Center Y", unlimited_float, 0.0, -10.0, 10.0, "Color register Y center — unused since the color write is dropped. Preserved as a parameter for cpp parity."),
         param!("scale", "Scale", unlimited_float, 5.0, -100.0, 100.0, "Color register scale — unused since the color write is dropped. Init still precomputes `1/scale` to match cpp's `_bdcs`. Preserved as a parameter for cpp parity."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 1,
     wgsl_init: Some(r#"
 fn init_iconattractor_js(user: array<f32, 4>) -> array<f32, 1> {
@@ -70,7 +68,6 @@ fn init_iconattractor_js(user: array<f32, 4>) -> array<f32, 1> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn ic_preset(id: i32) -> array<f32, 6> {
     // Returns [degree, a, b, g, o, l] for preset id in [0, 16].

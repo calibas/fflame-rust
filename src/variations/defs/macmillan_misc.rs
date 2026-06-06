@@ -22,7 +22,7 @@
 //! Source: `output/jwildfire-vars/output/macmillan.cpp`.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -42,7 +42,7 @@ pub static MACMILLAN: VariationDef = VariationDef {
     display_name: "MacMillan",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform, Feature::WritesColor, Feature::NeedsAccum],
     parameters: &[
         param!("a", "A", unlimited_float, 1.6, -10.0, 10.0, "McMillan-map parameter `a` — coefficient of the nonlinear term `2a · y/(1+y²)`. The classic chaotic regime is around `a ≈ 1.6`."),
         param!("b", "B", unlimited_float, 0.4, -10.0, 10.0, "McMillan-map parameter `b` — linear coefficient on `y`. Together with `a` determines whether the trajectory is bounded, periodic, or chaotic."),
@@ -50,8 +50,6 @@ pub static MACMILLAN: VariationDef = VariationDef {
         param!("startx", "Start X", unlimited_float, 0.1, -10.0, 10.0, "Initial X coordinate for the per-thread state (read once via `wgsl_state_init` at thread start). Sets both `xa` and `x` slots."),
         param!("starty", "Start Y", unlimited_float, 0.1, -10.0, 10.0, "Initial Y coordinate for the per-thread state."),
     ],
-    needs_transform: true,
-    writes_color: true,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 3,
@@ -62,7 +60,6 @@ pub static MACMILLAN: VariationDef = VariationDef {
          \x20       set_state(xform_id, variation_id, 1u, startx);\n\
          \x20       set_state(xform_id, variation_id, 2u, starty);"
     ),
-    needs_accum: true,
     wgsl_2d: r#"
 fn variation_macmillan(p: vec2<f32>, accum: vec2<f32>, xform_id: u32, variation_id: u32, vc: ptr<function, f32>) -> vec2<f32> {
     let a = get_param(xform_id, variation_id, 0u);

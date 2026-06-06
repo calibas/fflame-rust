@@ -3,7 +3,7 @@
 //! Post-phase variations directly modify the output coordinates after normal variations.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -16,7 +16,7 @@ pub static POST_BWRAPS: VariationDef = VariationDef {
     display_name: "Post Bwraps",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Post,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("cellsize", "Cell Size", unlimited_float, 1.0, -10.0, 10.0, "Width of each grid cell — the plane is divided into cells of this size, each becoming a bubble."),
         param!("space", "Space", unlimited_float, 0.0, -1.0, 1.0, "Gap between cells. 0 = no gap; positive values push the bubbles apart."),
@@ -26,8 +26,6 @@ pub static POST_BWRAPS: VariationDef = VariationDef {
     ],
     // 5 derived values at slots 5..10 (identical layout to pre_bwraps):
     //   5: g2,  6: r2,  7: rfactor,  8: inner_twist_rad,  9: outer_twist_rad
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 5,
     wgsl_init: Some(r#"
 fn init_post_bwraps(user: array<f32, 5>) -> array<f32, 5> {
@@ -61,7 +59,6 @@ fn init_post_bwraps(user: array<f32, 5>) -> array<f32, 5> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_post_bwraps(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let cellsize = get_param(xform_id, variation_id, 0u);
@@ -162,7 +159,7 @@ pub static POST_CROP: VariationDef = VariationDef {
     display_name: "Post Crop",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Post,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("left", "Left", unlimited_float, -1.0, -5.0, 5.0, "Left edge of the rectangle the points are constrained to."),
         param!("top", "Top", unlimited_float, -1.0, -5.0, 5.0, "Top edge of the rectangle."),
@@ -171,13 +168,10 @@ pub static POST_CROP: VariationDef = VariationDef {
         param!("scatter_area", "Scatter Area", float, 0.0, -1.0, 1.0, "Width of the random scatter band along the rectangle's edges. 0 = points snap exactly to the edge."),
         param!("zero", "Zero", bool, false, "When on, points outside the rectangle collapse to the origin. When off, they scatter back to the nearest edge."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_post_crop(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     // Apophysis Post_Crop - same as crop but applied after variations
@@ -271,7 +265,7 @@ pub static POST_FALLOFF2: VariationDef = VariationDef {
     display_name: "Post Falloff2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Post,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("scatter", "Scatter", unlimited_float, 1.0, 0.000001, 10.0, "Maximum random scatter applied at full strength."),
         param!("mindist", "Min Distance", unlimited_float, 0.5, 0.0, 10.0, "Distance from the center where the falloff kicks in. Points inside this radius get full strength scatter."),
@@ -286,13 +280,10 @@ pub static POST_FALLOFF2: VariationDef = VariationDef {
         param!("type", "Blur Type", enum, 0, &["Uniform", "Triangular", "Gaussian"],
             "Random distribution shape. Triangular is smoother; Gaussian concentrates near zero."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_post_falloff2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     // Apophysis Post_Falloff2 - Same as pre_falloff2 but applied after variations
@@ -422,18 +413,15 @@ pub static POST_CURL: VariationDef = VariationDef {
     display_name: "Post Curl",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Post,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("c1", "C1", unlimited_float, 0.0, -5.0, 5.0, "Linear twist strength. Stronger = tighter curl around the center."),
         param!("c2", "C2", unlimited_float, 0.0, -5.0, 5.0, "Quadratic twist strength. Adds a second-order curl that grows away from the origin."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_post_curl(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     // Apophysis Post_Curl - Same as curl but applied after variations
@@ -480,19 +468,16 @@ pub static POST_CURL3D: VariationDef = VariationDef {
     display_name: "Post Curl 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Post,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("cx", "CX", unlimited_float, 0.0, -5.0, 5.0, "Twist strength along the X axis."),
         param!("cy", "CY", unlimited_float, 0.0, -5.0, 5.0, "Twist strength along the Y axis."),
         param!("cz", "CZ", unlimited_float, 0.0, -5.0, 5.0, "Twist strength along the Z axis."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_post_curl3D(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     // Apophysis Post_Curl3D - 2D version (placeholder)

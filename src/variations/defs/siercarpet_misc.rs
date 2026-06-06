@@ -25,7 +25,7 @@
 //! Source: `output/jwildfire-vars/output/siercarpet_js.cpp`.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -44,17 +44,14 @@ pub static SIERCARPET_JS: VariationDef = VariationDef {
     display_name: "Siercarpet (JS)",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("m", "M", int, 3.0, 3.0, 12.0, "Number of arms in the cross (3-12). Each iteration picks one of `2m` vertex-or-midpoint positions around the circle."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_siercarpet_js(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let m = clamp(i32(get_param(xform_id, variation_id, 0u)), 3, 12);

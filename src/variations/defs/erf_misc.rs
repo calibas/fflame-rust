@@ -36,7 +36,7 @@
 //! not collide with these inlined copies.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -59,15 +59,12 @@ pub static ERF: VariationDef = VariationDef {
     display_name: "Erf",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_erf(p: vec2<f32>) -> vec2<f32> {
     // A&S 7.1.26 inlined twice
@@ -130,15 +127,12 @@ pub static ERF3D: VariationDef = VariationDef {
     display_name: "Erf 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_erf3D(p: vec2<f32>) -> vec2<f32> {
     let pp = 0.3275911;
@@ -207,17 +201,14 @@ pub static D_SPHERICAL: VariationDef = VariationDef {
     display_name: "D-Spherical",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("d_spher_weight", "D Spher Weight", unlimited_float, 0.5, 0.0, 1.0, "Probability of applying the spherical inversion (vs linear pass-through)."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_d_spherical(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let d_spher_weight = get_param(xform_id, variation_id, 0u);
@@ -264,15 +255,12 @@ pub static DUSTPOINT: VariationDef = VariationDef {
     display_name: "Dust Point",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_dustpoint(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     let p_sign = select(-1.0, 1.0, rng_nextf(rng) < 0.5);
@@ -321,15 +309,12 @@ pub static DELTAA: VariationDef = VariationDef {
     display_name: "Delta A",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_deltaA(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let w = transforms[xform_id].variations[variation_id];
@@ -383,15 +368,12 @@ pub static EDISC: VariationDef = VariationDef {
     display_name: "E-Disc",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_edisc(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let w = transforms[xform_id].variations[variation_id];
@@ -464,15 +446,13 @@ pub static CURVE: VariationDef = VariationDef {
     display_name: "Curve",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("xamp", "X Amp", unlimited_float, 0.25, -10.0, 10.0, "X-axis gaussian bump amplitude."),
         param!("yamp", "Y Amp", unlimited_float, 0.5, -10.0, 10.0, "Y-axis gaussian bump amplitude."),
         param!("xlength", "X Length", unlimited_float, 1.0, -10.0, 10.0, "X-axis gaussian width — the Y-direction decay scale of the X bump."),
         param!("ylength", "Y Length", unlimited_float, 1.0, -10.0, 10.0, "Y-axis gaussian width — the X-direction decay scale of the Y bump."),
     ],
-    needs_transform: false,
-    writes_color: false,
     // 2 derived values at slots 4..6:
     //   4: pc_xlen = max(xlength², 1e-20)
     //   5: pc_ylen = max(ylength², 1e-20)
@@ -487,7 +467,6 @@ fn init_curve(user: array<f32, 4>) -> array<f32, 2> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_curve(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let xamp = get_param(xform_id, variation_id, 0u);
@@ -542,7 +521,7 @@ pub static ELLIPTIC2: VariationDef = VariationDef {
     display_name: "Elliptic 2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng, Feature::NeedsTransform],
     parameters: &[
         param!("a1", "A1", unlimited_float, 1.0, -10.0, 10.0, "Constant offset added to `x² + y²` in the elliptic-radius formula."),
         param!("a2", "A2", unlimited_float, 1.0, -10.0, 10.0, "Scale on the `atan2` argument `a = (x/xmax) · a2`."),
@@ -556,8 +535,6 @@ pub static ELLIPTIC2: VariationDef = VariationDef {
         param!("g", "G", unlimited_float, 1.0, -10.0, 10.0, "Sqrt offset for the negative-Y branch (`sqrt(xmax − g)`)."),
         param!("h", "H", unlimited_float, 2.0, -10.0, 10.0, "V-multiplier — output is scaled by `v = w · h / π`."),
     ],
-    needs_transform: true,
-    writes_color: false,
     // 1 derived value at slot 11: _v_div_w = h / π  (so body computes
     // `_v = w · _v_div_w`)
     init_param_count: 1,
@@ -571,7 +548,6 @@ fn init_elliptic2(user: array<f32, 11>) -> array<f32, 1> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_elliptic2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let a1 = get_param(xform_id, variation_id, 0u);

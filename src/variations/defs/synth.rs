@@ -20,7 +20,7 @@
 //! Source: `output/variation-jwf-source/SynthFunc.java`.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -58,7 +58,7 @@ pub static SYNTH: VariationDef = VariationDef {
     display_name: "Synth",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         // Globals (slots 0..4)
         param!("a", "a", unlimited_float, 1.0, -10.0, 10.0, "Constant offset added at the start of every synth_value evaluation. Acts as the baseline `theta_factor` that layers b..f modulate."),
@@ -102,13 +102,10 @@ pub static SYNTH: VariationDef = VariationDef {
         param!("f_phs", "f_phs", unlimited_float, 0.0, -10.0, 10.0, "Phase offset of layer f."),
         param!("f_layer", "f_layer", unlimited_int, 0.0, 0.0, 3.0, "Combination operator for layer f."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     // 2D body. The 3D body just appends `p.z` passthrough — synth is
     // a planar variation in JWildfire and we follow suit.
     wgsl_2d: r#"

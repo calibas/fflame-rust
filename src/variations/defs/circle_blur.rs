@@ -21,7 +21,7 @@
 //!     parameter once per flame setup.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -44,15 +44,12 @@ pub static CIRCLEBLUR: VariationDef = VariationDef {
     display_name: "Circle Blur",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_circleblur(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     let rad = sqrt(rng_nextf(rng));
@@ -94,18 +91,15 @@ pub static CIRCLESPLIT: VariationDef = VariationDef {
     display_name: "Circle Split",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("radius", "Radius", unlimited_float, 1.0, 0.0, 5.0, "Distance from origin where the splitting starts."),
         param!("split", "Split", unlimited_float, 0.5, 0.0, 5.0, "Gap size — how far outside the radius points get pushed."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_circlesplit(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let radius = get_param(xform_id, variation_id, 0u);
@@ -155,15 +149,12 @@ pub static FLIPCIRCLE: VariationDef = VariationDef {
     display_name: "Flip Circle",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_flipcircle(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let w = transforms[xform_id].variations[variation_id];
@@ -207,13 +198,11 @@ pub static BLUR_LINEAR: VariationDef = VariationDef {
     display_name: "Blur Linear",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("length", "Length", unlimited_float, 1.0, 0.0, 10.0, "Maximum scatter distance along the blur direction."),
         param!("angle", "Angle (rad)", unlimited_float, 0.5, -6.28318, 6.28318, "Direction of the blur, in radians."),
     ],
-    needs_transform: false,
-    writes_color: false,
     // 2 derived values at slots 2..4:
     //   2: cos_angle
     //   3: sin_angle
@@ -229,7 +218,6 @@ fn init_blur_linear(user: array<f32, 2>) -> array<f32, 2> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_blur_linear(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let length_p = get_param(xform_id, variation_id, 0u);

@@ -23,7 +23,7 @@
 //! reference at line 252).
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -46,7 +46,7 @@ pub static HARMONOGRAPH_JS: VariationDef = VariationDef {
     display_name: "Harmonograph (Sosa)",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("seed", "Seed", int, 1234.0, 0.0, 999999.0, "Declared but unused in this port — upstream cpp re-seeds `GOODRAND` per Prepare; we use the per-thread RNG instead. Kept in the parameter list for cpp/Java interface parity."),
         param!("time", "Time", int, 100.0, 1.0, 1000.0, "Maximum value of the random sampling time `t ∈ [0, time]`. Larger values let the damped exponential `e^(-d·t)` decay further, attenuating contributions from later samples."),
@@ -67,13 +67,10 @@ pub static HARMONOGRAPH_JS: VariationDef = VariationDef {
         param!("p4", "P4", int, 0.0, 0.0, 360.0, "Y-axis oscillator 2: phase offset in degrees (with `+90°` shift)."),
         param!("d4", "D4", unlimited_float, 0.0, 0.0, 1.0, "Y-axis oscillator 2: exponential damping rate."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn mo_harmonograph(t: f32, a1: f32, f1: f32, p1deg: f32, d1: f32, a2: f32, f2: f32, p2deg: f32, d2: f32) -> f32 {
     let pi = 3.14159265358979;

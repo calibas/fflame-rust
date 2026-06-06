@@ -66,7 +66,7 @@ pub static GRIDOUT_3D: VariationDef = VariationDef {
     display_name: "Gridout 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("xx", "X Gate", unlimited_float, 1.0, -10.0, 10.0, "X gate scale: input `x` is rounded then multiplied by `xx` before the region comparison. Setting to 0 collapses all regions onto `x = 0` (only the y-half decision still applies)."),
         param!("yy", "Y Gate", unlimited_float, 1.0, -10.0, 10.0, "Y gate scale: input `y` is rounded then multiplied by `yy` before the region comparison. Setting to 0 collapses all regions onto `y = 0` (only the x-sign decision still applies)."),
@@ -95,13 +95,10 @@ pub static GRIDOUT_3D: VariationDef = VariationDef {
         param!("zg", "ZG", unlimited_float, 1.0, -10.0, 10.0, "Region G (y > 0, x ≤ 0, y ≥ -x) Z offset, multiplied into Z (regions E-H multiply; A-D add)."),
         param!("zh", "ZH", unlimited_float, 1.0, -10.0, 10.0, "Region H (y > 0, x ≤ 0, y < -x) Z offset, multiplied into Z (regions E-H multiply; A-D add)."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_gridout3D(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let xx = get_param(xform_id, variation_id, 0u);

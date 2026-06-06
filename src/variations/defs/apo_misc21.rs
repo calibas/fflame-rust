@@ -25,7 +25,7 @@
 //!   - `output/jwildfire-vars/output/post_mirror_wf.cpp`
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -45,7 +45,7 @@ pub static HEART_WF: VariationDef = VariationDef {
     display_name: "Heart WF",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("scale_x", "Scale X", unlimited_float, 1.0, -10.0, 10.0, "X output scale factor (multiplies the final X output)."),
         param!("scale_t", "Scale T", unlimited_float, 1.0, -10.0, 10.0, "Unused in body — preserved as a parameter for cpp parity and preset compatibility."),
@@ -53,13 +53,10 @@ pub static HEART_WF: VariationDef = VariationDef {
         param!("scale_r_left", "Scale R Left", unlimited_float, 1.0, -10.0, 10.0, "Radial scale for the left half of the heart (input angle `a < 0`)."),
         param!("scale_r_right", "Scale R Right", unlimited_float, 1.0, -10.0, 10.0, "Radial scale for the right half (input angle `a ≥ 0`)."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_heart_wf(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let scale_x = get_param(xform_id, variation_id, 0u);
@@ -125,15 +122,12 @@ pub static POST_ZTRANSLATE_WF: VariationDef = VariationDef {
     display_name: "Post Z-Translate WF",
     category: VariationCategory::Depth3D,
     phase: VariationPhase::Post,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_post_ztranslate_wf(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     return p;
@@ -162,7 +156,7 @@ pub static POST_MIRROR_WF: VariationDef = VariationDef {
     display_name: "Post Mirror WF",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Post,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("xaxis", "X Axis", bool, true, "Enable the X-axis mirror branch."),
         param!("yaxis", "Y Axis", bool, false, "Enable the Y-axis mirror branch."),
@@ -173,13 +167,10 @@ pub static POST_MIRROR_WF: VariationDef = VariationDef {
         param!("xscale", "X Scale", unlimited_float, 1.0, -10.0, 10.0, "X output scale (applied in both the X-branch and Y-branch paths)."),
         param!("yscale", "Y Scale", unlimited_float, 1.0, -10.0, 10.0, "Y output scale (applied in both branch paths)."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_post_mirror_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let xaxis = i32(get_param(xform_id, variation_id, 0u));

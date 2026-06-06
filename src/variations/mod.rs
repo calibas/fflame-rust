@@ -5,6 +5,7 @@ pub mod definition;
 pub mod defs;
 
 use definition::VariationDef;
+pub use definition::Feature;
 
 /// Parameter type for variation parameters.
 ///
@@ -101,20 +102,11 @@ pub struct VariationInfo {
     /// WGSL function name (e.g., "variation_linear")
     pub wgsl_function: String,
 
-    /// Whether this variation needs RNG
-    pub needs_rng: bool,
-
-    /// Whether this variation needs `xform_id` for reads from the
-    /// per-transform `transforms[xform_id]` storage buffer (affine, weight,
-    /// color, etc.). When true, the function signature includes
-    /// `xform_id: u32` even for variations without parameters.
-    pub needs_transform: bool,
-
-    /// Whether this variation writes the iteration-local color register `vc`
-    /// (Apophysis direct-color variations). When true, the WGSL signature
-    /// gains `vc: ptr<function, f32>`. The shader builder uses this to
-    /// detect whether any DC variation is active and emit the Step 3 lerp.
-    pub writes_color: bool,
+    /// Capability/requirement flags. See [`crate::variations::definition::Feature`]
+    /// for variant docs. Mirrors `VariationDef::features` but as a `Vec`
+    /// because it's the runtime side (API-loaded variations build it at
+    /// download time). Lookup via [`Self::has_feature`].
+    pub features: Vec<crate::variations::definition::Feature>,
 
     /// Whether this is a core (built-in) or plugin variation
     pub is_core: bool,
@@ -144,11 +136,6 @@ pub struct VariationInfo {
     /// Optional WGSL fragment that runs at thread start to initialize state
     /// slots beyond zero-fill. Default None.
     pub wgsl_source_state_init: Option<String>,
-
-    /// Whether the variation reads the running variation accumulator (cpp's
-    /// `FPx/FPy/FPz`). When true, the function signature gains
-    /// `accum: vec2<f32>` / `vec3<f32>` after `p`. Default false.
-    pub needs_accum: bool,
 
     /// Parameters for this variation
     pub parameters: Vec<VariationParameter>,
@@ -195,26 +182,36 @@ impl VariationInfo {
 
         let wgsl_function = format!("variation_{}", dl.name);
 
+        // API contract still exposes the old bool fields. Derive the
+        // runtime `features` slice from them here so the rest of the
+        // codebase only ever sees the consolidated representation.
+        // (When the API contract gets extended to ship a Vec<Feature>
+        // directly, drop this derivation and read it through.)
+        use crate::variations::definition::Feature;
+        let mut features: Vec<Feature> = Vec::new();
+        if dl.needs_rng { features.push(Feature::NeedsRng); }
+        if dl.needs_transform { features.push(Feature::NeedsTransform); }
+        if dl.writes_color { features.push(Feature::WritesColor); }
+        // dl.needs_accum / writes_rgb don't exist in the API contract yet
+        // — default to absent. Same reason state_count defaults to 0 below.
+
         Self {
             name: dl.name.clone(),
             display_name: dl.display_name.clone(),
             category: VariationCategory::from_api_str(&dl.category),
             phase: api_phase_to_runtime(&dl.phase),
             wgsl_function,
-            needs_rng: dl.needs_rng,
-            needs_transform: dl.needs_transform,
-            writes_color: dl.writes_color,
+            features,
             is_core: false,
             wgsl_source: Some(dl.shader_2d.clone()),
             wgsl_source_3d: dl.shader_3d.clone(),
             wgsl_source_init: dl.shader_init.clone(),
             init_param_count: dl.init_param_count,
-            // API-loaded variations do not yet carry state / accum metadata.
-            // Default to stateless and no-accum until the API contract is
-            // extended (separate project — only adds fields, no breakage).
+            // API-loaded variations do not yet carry state metadata.
+            // Default to stateless until the API contract is extended
+            // (separate project — only adds fields, no breakage).
             state_count: 0,
             wgsl_source_state_init: None,
-            needs_accum: false,
             parameters,
             version: dl.version,
         }
@@ -228,9 +225,7 @@ impl VariationInfo {
             category: def.category.clone(),
             phase: def.phase.clone(),
             wgsl_function: def.wgsl_function_name(),
-            needs_rng: def.needs_rng,
-            needs_transform: def.needs_transform,
-            writes_color: def.writes_color,
+            features: def.features.to_vec(),
             is_core: true, // All VariationDef are core variations
             wgsl_source: Some(def.wgsl_2d.to_string()),
             wgsl_source_3d: Some(def.wgsl_3d.to_string()),
@@ -238,10 +233,15 @@ impl VariationInfo {
             init_param_count: def.init_param_count,
             state_count: def.state_count,
             wgsl_source_state_init: def.wgsl_state_init.map(|s| s.to_string()),
-            needs_accum: def.needs_accum,
             parameters: def.parameters_to_runtime(),
             version: 0,
         }
+    }
+
+    /// True if this variation lists the given feature. Mirrors
+    /// [`VariationDef::has_feature`] for the runtime side.
+    pub fn has_feature(&self, f: crate::variations::definition::Feature) -> bool {
+        self.features.contains(&f)
     }
 }
 

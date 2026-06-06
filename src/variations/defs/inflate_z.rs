@@ -34,7 +34,7 @@
 //! All eight factor cleanly through outer.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -54,15 +54,12 @@ pub static INFLATEZ_1: VariationDef = VariationDef {
     display_name: "Inflate Z 1",
     category: VariationCategory::Depth3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_inflateZ_1(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(0.0, 0.0);
@@ -91,15 +88,12 @@ pub static INFLATEZ_2: VariationDef = VariationDef {
     display_name: "Inflate Z 2",
     category: VariationCategory::Depth3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_inflateZ_2(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(0.0, 0.0);
@@ -130,15 +124,12 @@ pub static INFLATEZ_3: VariationDef = VariationDef {
     display_name: "Inflate Z 3",
     category: VariationCategory::Depth3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_inflateZ_3(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(0.0, 0.0);
@@ -169,15 +160,12 @@ pub static INFLATEZ_4: VariationDef = VariationDef {
     display_name: "Inflate Z 4",
     category: VariationCategory::Depth3D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_inflateZ_4(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     let _ = rng_nextf(rng);
@@ -212,15 +200,12 @@ pub static INFLATEZ_5: VariationDef = VariationDef {
     display_name: "Inflate Z 5",
     category: VariationCategory::Depth3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_inflateZ_5(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(0.0, 0.0);
@@ -251,15 +236,12 @@ pub static INFLATEZ_6: VariationDef = VariationDef {
     display_name: "Inflate Z 6",
     category: VariationCategory::Depth3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_inflateZ_6(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(0.0, 0.0);
@@ -297,17 +279,14 @@ pub static SINTRANGE: VariationDef = VariationDef {
     display_name: "Sin T Range",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("w", "W", unlimited_float, 1.0, -10.0, 10.0, "Weight on the radius term `(x²+y²)·w` and the constant offset `+w`. Distinct from the variation's outer weight (VVAR)."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_sintrange(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let w = get_param(xform_id, variation_id, 0u);
@@ -351,15 +330,12 @@ pub static FOCI_3D: VariationDef = VariationDef {
     display_name: "Foci 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_foci_3D(p: vec2<f32>) -> vec2<f32> {
     let expx = exp(p.x) * 0.5;

@@ -25,7 +25,7 @@
 //!     normal-phase calling convention doesn't expose.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -51,17 +51,14 @@ pub static SINEBLUR: VariationDef = VariationDef {
     display_name: "Sine Blur",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("power", "Power", unlimited_float, 1.0, 0.0, 10.0, "Density power. 1.0 gives uniform-on-disc; higher values concentrate density near the edge."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_sineblur(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let power_in = get_param(xform_id, variation_id, 0u);
@@ -122,13 +119,11 @@ pub static STARBLUR: VariationDef = VariationDef {
     display_name: "Star Blur",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("power", "Power", int, 5.0, 2.0, 50.0, "Number of star points."),
         param!("range", "Range", unlimited_float, 0.40162283, 0.0, 1.0, "Inner-vertex radius — 0 gives a circle (no points), 1 gives sharp points."),
     ],
-    needs_transform: false,
-    writes_color: false,
     // 2 derived values at slots 2..4:
     //   2: alpha   asin(sin(π/power) · range / length)
     //   3: length  sqrt(1 + range² − 2·range·cos(π/power))
@@ -147,7 +142,6 @@ fn init_starblur(user: array<f32, 2>) -> array<f32, 2> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_starblur(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let power = get_param(xform_id, variation_id, 0u);
@@ -222,7 +216,7 @@ pub static R_CIRCLEBLUR: VariationDef = VariationDef {
     display_name: "R Circle Blur",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("n", "N", unlimited_float, 1.0, 0.1, 50.0, "Band width — radius is truncated modulo this value."),
         param!("seed", "Seed", unlimited_float, 0.0, -100.0, 100.0, "Random seed for the per-cell hash — change to vary the pattern."),
@@ -230,13 +224,10 @@ pub static R_CIRCLEBLUR: VariationDef = VariationDef {
         param!("min", "Min", float, 0.1, 0.0, 1.0, "Minimum cell-disc radius (fraction of cell)."),
         param!("max", "Max", float, 1.0, 0.0, 1.0, "Maximum cell-disc radius (fraction of cell)."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_r_circleblur(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let n = get_param(xform_id, variation_id, 0u);

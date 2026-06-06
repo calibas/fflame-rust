@@ -38,7 +38,7 @@ pub static BWRAPS7: VariationDef = VariationDef {
     display_name: "BWraps 7",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("cellsize", "Cell Size", unlimited_float, 1.0, -10.0, 10.0, "Grid cell size."),
         param!("space", "Space", unlimited_float, 0.0, -1.0, 1.0, "Inter-cell spacing factor. 0 = no space (bubble fills the cell); larger = smaller bubble relative to the cell."),
@@ -46,8 +46,6 @@ pub static BWRAPS7: VariationDef = VariationDef {
         param!("inner_twist", "Inner Twist", unlimited_float, 0.0, -10.0, 10.0, "Rotation amount applied at the bubble center."),
         param!("outer_twist", "Outer Twist", unlimited_float, 0.0, -10.0, 10.0, "Rotation amount applied at the bubble edge. Interpolated radially with `inner_twist`."),
     ],
-    needs_transform: false,
-    writes_color: false,
     // 3 derived values at slots 5..8: g2, r2, rfactor
     init_param_count: 3,
     wgsl_init: Some(r#"
@@ -76,7 +74,6 @@ fn init_bwraps7(user: array<f32, 5>) -> array<f32, 3> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_bwraps7(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let cellsize = get_param(xform_id, variation_id, 0u);

@@ -60,7 +60,7 @@ pub static QUATERNION: VariationDef = VariationDef {
     display_name: "Quaternion",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         // cosq (default pow=1, others=1)
         param!("cosqpow", "Cosq Pow", unlimited_float, 1.0, -10.0, 10.0, "cosq: subfunction weight (quaternion-extended cosine). 0 disables this branch entirely; non-zero activates and scales its contribution to the accumulated output."),
@@ -169,8 +169,6 @@ pub static QUATERNION: VariationDef = VariationDef {
         param!("tanhqz1", "Tanhq Z1", unlimited_float, 1.0, -10.0, 10.0, "tanhq: pre-multiplier on the `|y, z|` magnitude itself (compounds with y1/y2 axis scalings)."),
         param!("tanhqz2", "Tanhq Z2", unlimited_float, 1.0, -10.0, 10.0, "tanhq: scale applied to the Y/Z cross-term that builds the off-axis output."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 1,
     wgsl_init: Some(r#"
 fn init_quaternion(user: array<f32, 92>) -> array<f32, 1> {
@@ -183,7 +181,6 @@ fn init_quaternion(user: array<f32, 92>) -> array<f32, 1> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_quaternion(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let x_in = p.x;

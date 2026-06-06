@@ -37,7 +37,7 @@
 //!     it shouldn't.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -63,15 +63,12 @@ pub static LOONIE3: VariationDef = VariationDef {
     display_name: "Loonie 3",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_loonie3(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let w = transforms[xform_id].variations[variation_id];
@@ -130,17 +127,14 @@ pub static LOONIE_3D: VariationDef = VariationDef {
     display_name: "Loonie 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     // 2D form: ef_z = atan2(y, x) (since p.z = 0 in 2D mode); same math
     // otherwise. The output's z-component is dropped via the wrapper.
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_loonie_3D(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let w = transforms[xform_id].variations[variation_id];
@@ -197,18 +191,15 @@ pub static SIGMOID: VariationDef = VariationDef {
     display_name: "Sigmoid",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[
         param!("shiftx", "Shift X", unlimited_float, 1.0, -10.0, 10.0, "X-axis saturation curve. Higher absolute value = steeper transition."),
         param!("shifty", "Shift Y", unlimited_float, 1.0, -10.0, 10.0, "Y-axis saturation curve. Higher absolute value = steeper transition."),
     ],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_sigmoid(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let shiftx_in = get_param(xform_id, variation_id, 0u);
@@ -312,19 +303,16 @@ pub static BLOCKY: VariationDef = VariationDef {
     display_name: "Blocky",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[
         param!("x", "X", unlimited_float, 1.0, -10.0, 10.0, "X-axis scaling on the arctan output."),
         param!("y", "Y", unlimited_float, 1.0, -10.0, 10.0, "Y-axis scaling on the arctan output."),
         param!("mp", "MP", unlimited_float, 4.0, 0.1, 20.0, "Block size — smaller values produce more, finer blocks."),
     ],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_blocky(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let px = get_param(xform_id, variation_id, 0u);

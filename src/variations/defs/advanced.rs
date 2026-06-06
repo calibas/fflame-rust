@@ -3,7 +3,7 @@
 //! More complex 2D variations including polar coordinates, Julia sets, etc.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 
@@ -19,15 +19,12 @@ pub static POLAR: VariationDef = VariationDef {
     display_name: "Polar",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_polar(p: vec2<f32>) -> vec2<f32> {
     let theta = atan2(p.x, p.y);  // Apophysis uses atan2(x,y)
@@ -55,15 +52,12 @@ pub static HANDKERCHIEF: VariationDef = VariationDef {
     display_name: "Handkerchief",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_handkerchief(p: vec2<f32>) -> vec2<f32> {
     let r = length(p);
@@ -91,15 +85,12 @@ pub static HEART: VariationDef = VariationDef {
     display_name: "Heart",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_heart(p: vec2<f32>) -> vec2<f32> {
     let r = length(p);
@@ -130,15 +121,12 @@ pub static DISC: VariationDef = VariationDef {
     display_name: "Disc",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_disc(p: vec2<f32>) -> vec2<f32> {
     let theta = atan2(p.x, p.y);  // Apophysis uses atan2(x,y)
@@ -170,15 +158,12 @@ pub static SPIRAL: VariationDef = VariationDef {
     display_name: "Spiral",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_spiral(p: vec2<f32>) -> vec2<f32> {
     let r = length(p) + 1e-6;
@@ -215,15 +200,12 @@ pub static HYPERBOLIC: VariationDef = VariationDef {
     display_name: "Hyperbolic",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_hyperbolic(p: vec2<f32>) -> vec2<f32> {
     let r2 = dot(p, p) + 1e-6;
@@ -249,15 +231,12 @@ pub static DIAMOND: VariationDef = VariationDef {
     display_name: "Diamond",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_diamond(p: vec2<f32>) -> vec2<f32> {
     let r = length(p);
@@ -285,15 +264,12 @@ pub static EX: VariationDef = VariationDef {
     display_name: "Ex",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_ex(p: vec2<f32>) -> vec2<f32> {
     let r = length(p);
@@ -330,15 +306,12 @@ pub static JULIA: VariationDef = VariationDef {
     display_name: "Julia",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn julia(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     let r = length(p);
@@ -372,15 +345,12 @@ pub static BENT: VariationDef = VariationDef {
     display_name: "Bent",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_bent(p: vec2<f32>) -> vec2<f32> {
     let nx = select(2.0 * p.x, p.x, p.x >= 0.0);
@@ -421,15 +391,12 @@ pub static WAVES: VariationDef = VariationDef {
     display_name: "Waves",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_waves(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let xf = transforms[xform_id];
@@ -465,7 +432,7 @@ pub static JULIAN: VariationDef = VariationDef {
     display_name: "JuliaN",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         VariationParamDef {
             name: "power",
@@ -486,10 +453,8 @@ pub static JULIAN: VariationDef = VariationDef {
             description: Some("Stretches or compresses each arm radially. 1.0 is balanced; larger pushes arms outward, smaller pulls them in."),
         },
     ],
-    needs_transform: false,
     // 1 derived value at slot 2:
     //   2: cpower  (dist / |power| / 2)
-    writes_color: false,
     init_param_count: 1,
     wgsl_init: Some(r#"
 fn init_julian(user: array<f32, 2>) -> array<f32, 1> {
@@ -502,7 +467,6 @@ fn init_julian(user: array<f32, 2>) -> array<f32, 1> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_julian(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let power = get_param(xform_id, variation_id, 0u);
@@ -547,7 +511,7 @@ pub static BLOB: VariationDef = VariationDef {
     display_name: "Blob",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         VariationParamDef {
             name: "high",
@@ -577,13 +541,10 @@ pub static BLOB: VariationDef = VariationDef {
             description: Some("How many bumps go around the perimeter. More waves = finer-grained edge."),
         },
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_blob(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let p1 = get_param(xform_id, variation_id, 0u);  // high
@@ -625,15 +586,12 @@ pub static EYEFISH: VariationDef = VariationDef {
     display_name: "Eyefish",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_eyefish(p: vec2<f32>) -> vec2<f32> {
     let r_xy = length(p) + 1.0;
@@ -661,15 +619,12 @@ pub static BUBBLE: VariationDef = VariationDef {
     display_name: "Bubble",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_bubble(p: vec2<f32>) -> vec2<f32> {
     let r2 = dot(p, p);
@@ -706,15 +661,12 @@ pub static CYLINDER: VariationDef = VariationDef {
     display_name: "Cylinder",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_cylinder(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(sin(p.x), p.y);
@@ -739,15 +691,12 @@ pub static NOISE: VariationDef = VariationDef {
     display_name: "Noise",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_noise(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     let theta = rng_nextf(rng) * 6.28318530718;  // 2π
@@ -775,15 +724,12 @@ pub static BLUR: VariationDef = VariationDef {
     display_name: "Blur",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_blur(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     let theta = rng_nextf(rng) * 6.28318530718;  // 2π
@@ -811,15 +757,12 @@ pub static GAUSSIAN_BLUR: VariationDef = VariationDef {
     display_name: "Gaussian Blur",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_gaussian_blur(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     let theta = rng_nextf(rng) * 6.28318530718;  // 2π
@@ -849,15 +792,12 @@ pub static POLAR2: VariationDef = VariationDef {
     display_name: "Polar2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_polar2(p: vec2<f32>) -> vec2<f32> {
     const PI: f32 = 3.14159265359;
@@ -889,15 +829,12 @@ pub static CROSS: VariationDef = VariationDef {
     display_name: "Cross",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_cross(p: vec2<f32>) -> vec2<f32> {
     var r = abs((p.x - p.y) * (p.x + p.y) + 1e-6);
@@ -927,15 +864,12 @@ pub static LOONIE: VariationDef = VariationDef {
     display_name: "Loonie",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_loonie(p: vec2<f32>) -> vec2<f32> {
     let r2 = dot(p, p);
@@ -971,15 +905,12 @@ pub static SCRY: VariationDef = VariationDef {
     display_name: "Scry",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_scry(p: vec2<f32>) -> vec2<f32> {
     let t = dot(p, p);
@@ -1017,15 +948,12 @@ pub static SCRY_3D: VariationDef = VariationDef {
     display_name: "Scry 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform, Feature::NeedsAccum],
     parameters: &[],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: true,
     wgsl_2d: r#"
 fn variation_scry_3D(p: vec2<f32>, accum: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     // 2D mode: no Z register, so the cpp's Foopzee/Footzee branches
@@ -1098,15 +1026,12 @@ pub static FOCI: VariationDef = VariationDef {
     display_name: "Foci",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_foci(p: vec2<f32>) -> vec2<f32> {
     let expx = exp(p.x) * 0.5;
@@ -1144,15 +1069,12 @@ pub static ELLIPTIC: VariationDef = VariationDef {
     display_name: "Elliptic",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_elliptic(p: vec2<f32>) -> vec2<f32> {
     const PI: f32 = 3.14159265359;
@@ -1199,7 +1121,7 @@ pub static WAVES2: VariationDef = VariationDef {
     display_name: "Waves2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         VariationParamDef {
             name: "freqx",
@@ -1256,13 +1178,10 @@ pub static WAVES2: VariationDef = VariationDef {
             description: Some("Depth ripple amplitude (3D mode only)."),
         },
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_waves2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let freqx = get_param(xform_id, variation_id, 0u);
@@ -1301,7 +1220,7 @@ pub static LOG: VariationDef = VariationDef {
     display_name: "Log",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         VariationParamDef {
             name: "base",
@@ -1313,10 +1232,8 @@ pub static LOG: VariationDef = VariationDef {
             description: Some("Logarithm base. Default `e` (natural log); larger compresses the output, smaller stretches it out."),
         },
     ],
-    needs_transform: false,
     // 1 derived value at slot 1:
     //   1: denom  (0.5 / log(base))
-    writes_color: false,
     init_param_count: 1,
     wgsl_init: Some(r#"
 fn init_log(user: array<f32, 1>) -> array<f32, 1> {
@@ -1327,7 +1244,6 @@ fn init_log(user: array<f32, 1>) -> array<f32, 1> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_log(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let denom = get_param(xform_id, variation_id, 1u);
@@ -1355,7 +1271,7 @@ pub static ESCHER: VariationDef = VariationDef {
     display_name: "Escher",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         VariationParamDef {
             name: "beta",
@@ -1367,11 +1283,9 @@ pub static ESCHER: VariationDef = VariationDef {
             description: Some("Balance between scaling and rotation. At 0 degrees the map is pure scaling; near +/-90 degrees it's pure rotation. Sweep this to get spiraling effects."),
         },
     ],
-    needs_transform: false,
     // 2 derived values at slots 1..3:
     //   1: c  (0.5 · (1 + cos(beta·π/180)))
     //   2: d  (0.5 · sin(beta·π/180))
-    writes_color: false,
     init_param_count: 2,
     wgsl_init: Some(r#"
 fn init_escher(user: array<f32, 1>) -> array<f32, 2> {
@@ -1384,7 +1298,6 @@ fn init_escher(user: array<f32, 1>) -> array<f32, 2> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_escher(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let c = get_param(xform_id, variation_id, 1u);
@@ -1420,7 +1333,7 @@ pub static BIPOLAR: VariationDef = VariationDef {
     display_name: "Bipolar",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         VariationParamDef {
             name: "shift",
@@ -1432,13 +1345,10 @@ pub static BIPOLAR: VariationDef = VariationDef {
             description: Some("Vertical offset on the output. Slides the bipolar pattern up or down."),
         },
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_bipolar(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     const PI: f32 = 3.14159265359;
@@ -1500,7 +1410,7 @@ pub static LAZYSUSAN: VariationDef = VariationDef {
     display_name: "LazySusan",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         VariationParamDef {
             name: "spin",
@@ -1548,13 +1458,10 @@ pub static LAZYSUSAN: VariationDef = VariationDef {
             description: Some("Vertical offset of the rotation center."),
         },
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_lazysusan(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     const PI: f32 = 3.14159265359;
@@ -1606,7 +1513,7 @@ pub static RINGS2: VariationDef = VariationDef {
     display_name: "Rings2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         VariationParamDef {
             name: "val",
@@ -1618,13 +1525,10 @@ pub static RINGS2: VariationDef = VariationDef {
             description: Some("Ring spacing. Smaller packs more rings closer together; larger spreads them out."),
         },
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_rings2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let val = get_param(xform_id, variation_id, 0u);
@@ -1657,7 +1561,7 @@ pub static FAN2: VariationDef = VariationDef {
     display_name: "Fan2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         VariationParamDef {
             name: "x",
@@ -1678,13 +1582,10 @@ pub static FAN2: VariationDef = VariationDef {
             description: Some("Rotation offset. Spins the whole fan around the origin."),
         },
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_fan2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     const PI: f32 = 3.14159265359;
@@ -1734,7 +1635,7 @@ pub static PDJ: VariationDef = VariationDef {
     display_name: "PDJ",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         VariationParamDef {
             name: "a",
@@ -1773,13 +1674,10 @@ pub static PDJ: VariationDef = VariationDef {
             description: Some("Coefficient on the second cosine - shapes the Y output curve."),
         },
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_pdj(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let a = get_param(xform_id, variation_id, 0u);
@@ -1818,7 +1716,7 @@ pub static CURL: VariationDef = VariationDef {
     display_name: "Curl",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         VariationParamDef {
             name: "c1",
@@ -1839,13 +1737,10 @@ pub static CURL: VariationDef = VariationDef {
             description: Some("Quadratic twist strength. Adds a second-order curl that grows away from the origin."),
         },
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_curl(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let c1 = get_param(xform_id, variation_id, 0u);
@@ -1886,7 +1781,7 @@ pub static RECTANGLES: VariationDef = VariationDef {
     display_name: "Rectangles",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         VariationParamDef {
             name: "x",
@@ -1907,13 +1802,10 @@ pub static RECTANGLES: VariationDef = VariationDef {
             description: Some("Height of each rectangular tile."),
         },
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_rectangles(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let rect_x = get_param(xform_id, variation_id, 0u);
@@ -1948,7 +1840,7 @@ pub static SPLITS: VariationDef = VariationDef {
     display_name: "Splits",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         VariationParamDef {
             name: "x",
@@ -1969,13 +1861,10 @@ pub static SPLITS: VariationDef = VariationDef {
             description: Some("Vertical gap. Pushes positive-Y and negative-Y points apart by this amount."),
         },
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_splits(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let splits_x = get_param(xform_id, variation_id, 0u);
@@ -2010,7 +1899,7 @@ pub static NGON: VariationDef = VariationDef {
     display_name: "Ngon",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         VariationParamDef {
             name: "sides",
@@ -2049,13 +1938,10 @@ pub static NGON: VariationDef = VariationDef {
             description: Some("Horizontal output offset. Useful for tiling the polygon outward."),
         },
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_ngon(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     const PI: f32 = 3.14159265359;
@@ -2106,7 +1992,7 @@ pub static AUGER: VariationDef = VariationDef {
     display_name: "Auger",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         VariationParamDef {
             name: "freq",
@@ -2145,13 +2031,10 @@ pub static AUGER: VariationDef = VariationDef {
             description: Some("Blend back toward the input. 0 = full displacement, 1 = no displacement."),
         },
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_auger(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let freq = get_param(xform_id, variation_id, 0u);
@@ -2199,7 +2082,7 @@ pub static CPOW: VariationDef = VariationDef {
     display_name: "CPow",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         VariationParamDef {
             name: "r",
@@ -2229,12 +2112,10 @@ pub static CPOW: VariationDef = VariationDef {
             description: Some("Number of branches in the result. Like JuliaN's `power` - more = more arms."),
         },
     ],
-    needs_transform: false,
     // 3 derived values at slots 3..6:
     //   3: va  (2π / power)
     //   4: vc  (r / power)
     //   5: vd  (i / power)
-    writes_color: false,
     init_param_count: 3,
     wgsl_init: Some(r#"
 fn init_cpow(user: array<f32, 3>) -> array<f32, 3> {
@@ -2251,7 +2132,6 @@ fn init_cpow(user: array<f32, 3>) -> array<f32, 3> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_cpow(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let power = get_param(xform_id, variation_id, 2u);

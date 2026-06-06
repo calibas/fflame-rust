@@ -27,7 +27,7 @@
 //!     as their own focused batch (the body is long).
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -59,7 +59,7 @@ pub static OSCILLOSCOPE2: VariationDef = VariationDef {
     display_name: "Oscilloscope 2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("separation", "Separation", unlimited_float, 1.0, -10.0, 10.0, "Vertical offset of the band threshold."),
         param!("frequencyx", "Frequency X", unlimited_float, 3.14159265, -100.0, 100.0, "X-axis cosine frequency (multiplied by 2π internally)."),
@@ -68,8 +68,6 @@ pub static OSCILLOSCOPE2: VariationDef = VariationDef {
         param!("perturbation", "Perturbation", unlimited_float, 1.0, -10.0, 10.0, "Magnitude of the Y-driven X-perturbation."),
         param!("damping", "Damping", unlimited_float, 0.0, -10.0, 10.0, "Exponential damping rate. Values near zero disable the damping term."),
     ],
-    needs_transform: false,
-    writes_color: false,
     // 2 derived values at slots 6..8:
     //   6: tpf   (2π · frequencyx)
     //   7: tpf2  (2π · frequencyy)
@@ -85,7 +83,6 @@ fn init_oscilloscope2(user: array<f32, 6>) -> array<f32, 2> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_oscilloscope2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let separation = get_param(xform_id, variation_id, 0u);
@@ -152,18 +149,15 @@ pub static LINEART: VariationDef = VariationDef {
     display_name: "Line Art",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("powX", "Power X", unlimited_float, 1.2, -10.0, 10.0, "X-axis power exponent."),
         param!("powY", "Power Y", unlimited_float, 1.2, -10.0, 10.0, "Y-axis power exponent."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_linearT(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let powx = get_param(xform_id, variation_id, 0u);
@@ -212,15 +206,13 @@ pub static PHOENIX_JULIA: VariationDef = VariationDef {
     display_name: "Phoenix Julia",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("power", "Power", unlimited_float, 3.0, -50.0, 50.0, "Number of angular branches — `floor(rand · power)` picks the branch each iteration."),
         param!("dist", "Distance", unlimited_float, 1.0, -10.0, 10.0, "Radial-power exponent — output magnitude is `r^(dist/power)`."),
         param!("x_distort", "X distort", unlimited_float, -0.5, -10.0, 10.0, "X-axis pre-rotation distortion (multiplier on X before angle computation, offset by +1)."),
         param!("y_distort", "Y distort", unlimited_float, 0.0, -10.0, 10.0, "Y-axis pre-rotation distortion (offset by +1)."),
     ],
-    needs_transform: false,
-    writes_color: false,
     // 3 derived values at slots 4..7:
     //   4: invN       (dist / power)
     //   5: inv_2pi_N  (2π / power)
@@ -241,7 +233,6 @@ fn init_phoenix_julia(user: array<f32, 4>) -> array<f32, 3> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_phoenix_julia(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let power = get_param(xform_id, variation_id, 0u);
@@ -302,7 +293,7 @@ pub static POW_BLOCK: VariationDef = VariationDef {
     display_name: "Pow Block",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("numerator", "Numerator", unlimited_float, 3.0, -50.0, 50.0, "Output-angle multiplier and effective power numerator."),
         param!("denominator", "Denominator", unlimited_float, 2.0, -50.0, 50.0, "Branch count — `floor(rand · denominator)` picks the branch."),
@@ -310,8 +301,6 @@ pub static POW_BLOCK: VariationDef = VariationDef {
         param!("correctd", "Correct D", unlimited_float, 1.0, -10.0, 10.0, "Power-correction denominator (multiplies the effective exponent)."),
         param!("root", "Root", unlimited_float, 1.0, -10.0, 10.0, "Per-branch angular offset multiplier (× 2π)."),
     ],
-    needs_transform: false,
-    writes_color: false,
     // 2 derived values at slots 5..7:
     //   5: power   ( numerator · 0.5 / (denominator · correctn / max(|correctd|, ε)) )
     //   6: deneps  ( 1 / max(|denominator|, ε) )
@@ -335,7 +324,6 @@ fn init_pow_block(user: array<f32, 5>) -> array<f32, 2> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_pow_block(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let numerator = get_param(xform_id, variation_id, 0u);

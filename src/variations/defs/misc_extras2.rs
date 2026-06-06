@@ -43,18 +43,15 @@ pub static COLLIDEOSCOPE: VariationDef = VariationDef {
     display_name: "Collideoscope",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("a", "A", unlimited_float, 0.2, -10.0, 10.0, "Per-sector angular offset — the parity-based mirror is shifted by ±a."),
         param!("num", "N", int, 1.0, 1.0, 50.0, "Number of angular sectors. Higher = finer kaleidoscope."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_collideoscope(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let a_p = get_param(xform_id, variation_id, 0u);
@@ -142,18 +139,15 @@ pub static BENT2: VariationDef = VariationDef {
     display_name: "Bent 2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("x", "X scale", unlimited_float, 1.0, -10.0, 10.0, "X-axis scale applied where x < 0. Positive x passes through unchanged."),
         param!("y", "Y scale", unlimited_float, 1.0, -10.0, 10.0, "Y-axis scale applied where y < 0. Positive y passes through unchanged."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_bent2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let xs = get_param(xform_id, variation_id, 0u);
@@ -193,20 +187,17 @@ pub static MCARPET: VariationDef = VariationDef {
     display_name: "MCarpet",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("x", "X scale", unlimited_float, 1.0, -10.0, 10.0, "X-axis bubble scale."),
         param!("y", "Y scale", unlimited_float, 1.0, -10.0, 10.0, "Y-axis bubble scale."),
         param!("twist", "Twist", unlimited_float, 0.0, -10.0, 10.0, "Quadratic twist amount on X output (subtracts `twist · x²`)."),
         param!("tilt", "Tilt", unlimited_float, 0.0, -10.0, 10.0, "Linear tilt amount on Y output (adds `tilt · x`)."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_mcarpet(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let xs = get_param(xform_id, variation_id, 0u);
@@ -257,19 +248,16 @@ pub static LINEART3D: VariationDef = VariationDef {
     display_name: "Line Art 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("powX", "Power X", unlimited_float, 1.2, -10.0, 10.0, "X-axis power exponent."),
         param!("powY", "Power Y", unlimited_float, 1.2, -10.0, 10.0, "Y-axis power exponent."),
         param!("powZ", "Power Z", unlimited_float, 1.2, -10.0, 10.0, "Z-axis power exponent (3D only)."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_linearT3D(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let powx = get_param(xform_id, variation_id, 0u);
@@ -322,15 +310,13 @@ pub static OSCILLOSCOPE: VariationDef = VariationDef {
     display_name: "Oscilloscope",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("separation", "Separation", unlimited_float, 1.0, -10.0, 10.0, "Vertical offset of the band threshold, added to the cosine envelope."),
         param!("frequency", "Frequency", unlimited_float, 3.14159265, -100.0, 100.0, "Cosine frequency (multiplied by 2π internally)."),
         param!("amplitude", "Amplitude", unlimited_float, 1.0, -10.0, 10.0, "Cosine amplitude."),
         param!("damping", "Damping", unlimited_float, 0.0, -10.0, 10.0, "Exponential damping rate. Values near zero disable the damping term."),
     ],
-    needs_transform: false,
-    writes_color: false,
     // 1 derived value at slot 4:
     //   4: tpf  (2π · frequency)
     init_param_count: 1,
@@ -343,7 +329,6 @@ fn init_oscilloscope(user: array<f32, 4>) -> array<f32, 1> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_oscilloscope(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let separation = get_param(xform_id, variation_id, 0u);
@@ -408,18 +393,15 @@ pub static FIBONACCI2: VariationDef = VariationDef {
     display_name: "Fibonacci 2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("sc", "Scale", unlimited_float, 1.0, -10.0, 10.0, "Output magnitude scale."),
         param!("sc2", "Scale 2", unlimited_float, 1.0, -10.0, 10.0, "Polar-radius exponential scale — controls how quickly the magnitude grows along X."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_fibonacci2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let sc = get_param(xform_id, variation_id, 0u);

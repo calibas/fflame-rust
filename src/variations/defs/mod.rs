@@ -143,6 +143,9 @@ mod mandelbrot;
 mod crackle;
 mod dc_perlin;
 mod szubieta;
+mod glsl_fractals;
+mod glsl_tilings;
+mod glsl_fields;
 
 pub use basic::*;
 pub use advanced::*;
@@ -282,6 +285,9 @@ pub use mandelbrot::*;
 pub use crackle::*;
 pub use dc_perlin::*;
 pub use szubieta::*;
+pub use glsl_fractals::*;
+pub use glsl_tilings::*;
+pub use glsl_fields::*;
 
 use super::definition::VariationDef;
 
@@ -960,4 +966,29 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     // JWildfire builds a primitive list in init(); we compute the
     // same thing in pure per-call math.
     &SZUBIETA,
+    // glsl_* family — JWildfire's shadertoy-style procedural base
+    // shapes. Spatial output is always the uniform [-0.5, 0.5]²
+    // sample; the interesting content is in the per-pixel direct-RGB
+    // color computation, written to `vrc` via Feature::WritesRgb.
+    // Each `glsl_*` is an independent hand-port of one specific
+    // shadertoy algorithm (not user-supplied code — see
+    // docs/projects/variation-port-blockers.md for the distinction).
+    // Grouped by theme: iterative fractals, kaleidoscope/tilings,
+    // procedural fields.
+    &GLSL_MANDELBOX2D,
+    &GLSL_KALISET,
+    &GLSL_KALISET2,
+    &GLSL_APOLLONIAN,
+    &GLSL_KALEIDOSCOPIC,
+    &GLSL_KALEIDOCOMPLEX,
+    &GLSL_HYPERBOLICTILE,
+    &GLSL_MANDALA,
+    &GLSL_SQUARES,
+    &GLSL_HOSHI,
+    &GLSL_ACRILIC,
+    &GLSL_CIRCLESBLUE,
+    &GLSL_CIRCUITS,
+    &GLSL_FRACTALDOTS,
+    &GLSL_STARSFIELD,
+    &GLSL_GRID3D,
 ];

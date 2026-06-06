@@ -40,7 +40,7 @@ pub static AFFINE3D: VariationDef = VariationDef {
     display_name: "Affine 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("translateX", "Translate X", unlimited_float, 0.0, -10.0, 10.0, "X-axis translation (added to the final output)."),
         param!("translateY", "Translate Y", unlimited_float, 0.0, -10.0, 10.0, "Y-axis translation."),
@@ -58,8 +58,6 @@ pub static AFFINE3D: VariationDef = VariationDef {
         param!("shearZX", "Shear ZX", unlimited_float, 0.0, -10.0, 10.0, "Shear factor applied to X in the Z output."),
         param!("shearZY", "Shear ZY", unlimited_float, 0.0, -10.0, 10.0, "Shear factor applied to Y in the Z output."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 7,
     wgsl_init: Some(r#"
 fn init_affine3D(user: array<f32, 15>) -> array<f32, 7> {
@@ -87,7 +85,6 @@ fn init_affine3D(user: array<f32, 15>) -> array<f32, 7> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_affine3D(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let tx = get_param(xform_id, variation_id, 0u);

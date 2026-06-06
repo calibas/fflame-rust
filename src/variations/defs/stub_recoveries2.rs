@@ -32,7 +32,7 @@
 //!     budget. Documented under [16-slot budget overflow].
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -59,7 +59,7 @@ pub static DISC3: VariationDef = VariationDef {
     display_name: "Disc 3",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("a", "A", unlimited_float, 1.0, -10.0, 10.0, "Sin amplitude scale on the X output."),
         param!("b", "B", unlimited_float, 1.0, -10.0, 10.0, "Cos amplitude scale on the Y output."),
@@ -70,13 +70,10 @@ pub static DISC3: VariationDef = VariationDef {
         param!("g", "G", unlimited_float, 1.0, -10.0, 10.0, "Y-axis radial-weight second factor."),
         param!("h", "H", unlimited_float, 1.0, -10.0, 10.0, "Overall output scale (multiplied into both X and Y)."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_disc3(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let a = get_param(xform_id, variation_id, 0u);
@@ -137,7 +134,7 @@ pub static PROJECTIVE: VariationDef = VariationDef {
     display_name: "Projective",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("a", "A", unlimited_float, 0.0, -10.0, 10.0, "Denominator X coefficient."),
         param!("b", "B", unlimited_float, 0.0, -10.0, 10.0, "Denominator Y coefficient."),
@@ -149,13 +146,10 @@ pub static PROJECTIVE: VariationDef = VariationDef {
         param!("b2", "B2", unlimited_float, 1.0, -10.0, 10.0, "Numerator Y coefficient for Y output."),
         param!("c2", "C2", unlimited_float, 0.0, -10.0, 10.0, "Numerator constant term for Y output."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_projective(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let a = get_param(xform_id, variation_id, 0u);
@@ -228,7 +222,7 @@ pub static TQMIRROR: VariationDef = VariationDef {
     display_name: "TQ Mirror",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[
         param!("a", "A", unlimited_float, 1.0, -10.0, 10.0, "Y threshold for the central-region diagonal-mirror branch."),
         param!("b", "B", unlimited_float, 1.0, -10.0, 10.0, "X offset added to the central-region's right-side gate."),
@@ -240,13 +234,10 @@ pub static TQMIRROR: VariationDef = VariationDef {
         param!("h", "H", unlimited_float, 1.0, -10.0, 10.0, "Scale factor on the central-region diagonal-mirror output."),
         param!("type", "Type", bool, false, "When on, pass the input through. When off, swap (x ↔ y)."),
     ],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_tqmirror(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let a = get_param(xform_id, variation_id, 0u);
@@ -347,7 +338,7 @@ pub static INTERSECTION: VariationDef = VariationDef {
     display_name: "Intersection",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng, Feature::NeedsTransform],
     parameters: &[
         param!("xwidth", "X Width", unlimited_float, 5.0, -50.0, 50.0, "Row-branch X-shift magnitude (multiplied by `log(rand)`)."),
         param!("xtilesize", "X Tile", unlimited_float, 0.5, -10.0, 10.0, "Row-branch X tile size — final X is `xtilesize · (x + shift)`."),
@@ -360,8 +351,6 @@ pub static INTERSECTION: VariationDef = VariationDef {
         param!("ymod2", "Y Mod 2", unlimited_float, 1.0, -10.0, 10.0, "Column-branch X fold period."),
         param!("ywidth", "Y Width", unlimited_float, 0.5, -10.0, 10.0, "Column-branch X output scale."),
     ],
-    needs_transform: true,
-    writes_color: false,
     // 2 derived values at slots 10..12:
     //   10: xr1  (xmod2 · xmod1)
     //   11: yr1  (ymod2 · ymod1)
@@ -376,7 +365,6 @@ fn init_intersection(user: array<f32, 10>) -> array<f32, 2> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_intersection(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let xwidth = get_param(xform_id, variation_id, 0u);

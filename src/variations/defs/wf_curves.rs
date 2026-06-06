@@ -31,7 +31,7 @@
 //!   - `output/variation-jwf-source/CheckerboardWFFunc.java`
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -49,17 +49,14 @@ pub static EPISPIRAL_WF: VariationDef = VariationDef {
     display_name: "Epispiral WF",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("waves", "Waves", unlimited_float, 4.0, -50.0, 50.0, "Number of petals (frequency of the cosine denominator)."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_epispiral_wf(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let waves = get_param(xform_id, variation_id, 0u);
@@ -99,17 +96,14 @@ pub static CLOVERLEAF_WF: VariationDef = VariationDef {
     display_name: "Cloverleaf WF",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("filled", "Filled", bool, true, "1 = fill the curve interior by randomizing the radius per iteration; 0 = trace only the curve outline."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_cloverleaf_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let filled = i32(get_param(xform_id, variation_id, 0u));
@@ -147,19 +141,16 @@ pub static ROSE_WF: VariationDef = VariationDef {
     display_name: "Rose WF",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("amp", "Amplitude", unlimited_float, 0.5, -10.0, 10.0, "Radial amplitude (multiplies the cosine)."),
         param!("waves", "Waves", int, 4.0, -50.0, 50.0, "Number of petals (`waves` petals if odd, `2·waves` if even)."),
         param!("filled", "Filled", bool, false, "1 = fill the curve interior; 0 = trace only the outline."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_rose_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let amp = get_param(xform_id, variation_id, 0u);
@@ -203,15 +194,12 @@ pub static BUBBLE_WF: VariationDef = VariationDef {
     display_name: "Bubble WF",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_bubble_wf(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     let r = (p.x * p.x + p.y * p.y) * 0.25 + 1.0;
@@ -257,7 +245,7 @@ pub static PLANE_WF: VariationDef = VariationDef {
     display_name: "Plane WF",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng, Feature::WritesColor],
     parameters: &[
         param!("position", "Position", unlimited_float, 3.0, -100.0, 100.0, "Fixed coordinate along the axis the plane is perpendicular to. For axis=XY the plane sits at z=position; for YZ at x=position; for ZX at y=position."),
         param!("size", "Size", unlimited_float, 10.0, -100.0, 100.0, "Plane edge length. The two free axes get `(random − 0.5) × size` so positive `size` scatters in a square of side `size` centered on the axis."),
@@ -265,13 +253,10 @@ pub static PLANE_WF: VariationDef = VariationDef {
         param!("direct_color", "Direct Color", bool, true, "Write a direct color scalar to `vc` based on the two random plane coordinates. Off skips the write and lets the standard color evolution carry through."),
         param!("color_mode", "Color Mode", enum, 3, &["Colormap (→ U fallback)", "U", "V", "UV"], "How the direct-color scalar is derived from the two random coordinates u, v ∈ [0,1). `U` and `V` write that coordinate directly, `UV` writes the product, `Colormap` would sample an image in JWildfire (no texture support here — falls back to U)."),
     ],
-    needs_transform: false,
-    writes_color: true,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_plane_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec2<f32> {
     // 2D mode: project the chosen plane down to (x, y) — only XY
@@ -389,7 +374,7 @@ pub static CHECKERBOARD_WF: VariationDef = VariationDef {
     display_name: "Checkerboard WF",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng, Feature::WritesColor],
     parameters: &[
         // Param order matches Java's `paramNames` so `.flame` files
         // round-trip cleanly. The cpp port had them in declaration
@@ -404,8 +389,6 @@ pub static CHECKERBOARD_WF: VariationDef = VariationDef {
         param!("side_color", "Side Color", float, 0.0, 0.0, 1.0, "Palette position written to `vc` for side-wall points (when `with_sides = 1` and a grid line is sampled)."),
         param!("with_sides", "With Sides", bool, true, "When on (and `displ_amount` is non-zero), occasionally snap one coordinate to a grid line and treat it as a side wall — paints the vertical faces of raised cells. Frequency scales with `displ_amount`."),
     ],
-    needs_transform: false,
-    writes_color: true,
     // Two init slots: `_side_prob` and `_max_checks` — both derived
     // from the user params at flame-load time, matching JWildfire's
     // `init()` (`side_prob = 4d / (1 + 4d)`, `max_checks = floor(1 /
@@ -430,7 +413,6 @@ fn init_checkerboard_wf(user: array<f32, 9>) -> array<f32, 2> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_checkerboard_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec2<f32> {
     // 2D mode: project the chosen plane down to (x, y). YZ and ZX

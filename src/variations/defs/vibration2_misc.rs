@@ -47,7 +47,7 @@ pub static VIBRATION2: VariationDef = VariationDef {
     display_name: "Vibration 2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("dir", "Direction", unlimited_float, 0.0, -10.0, 10.0, "Wave 1: direction angle (radians) along which the wave propagates. The input is projected onto this direction before phase computation."),
         param!("angle", "Angle", unlimited_float, 1.5708, -10.0, 10.0, "Wave 1: output rotation angle (radians) — controls which direction in the output plane the wave's displacement points."),
@@ -76,13 +76,10 @@ pub static VIBRATION2: VariationDef = VariationDef {
         param!("a2m", "Amp 2 Modulation", unlimited_float, 0.0, -10.0, 10.0, "Wave 2: amplitude modulation depth. See `am`."),
         param!("a2mfreq", "Amp 2 Mod Freq", unlimited_float, 0.1, -10.0, 10.0, "Wave 2: amplitude modulation frequency. See `amfreq`."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn v2_modulate(amp: f32, freq: f32, x: f32) -> f32 {
     let two_pi = 6.28318530717959;

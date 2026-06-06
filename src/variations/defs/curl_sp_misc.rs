@@ -21,7 +21,7 @@
 //! Source: `output/jwildfire-vars/output/curl_sp.cpp`.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -40,7 +40,7 @@ pub static CURL_SP: VariationDef = VariationDef {
     display_name: "Curl SP",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[
         param!("pow", "Power", unlimited_float, 1.0, -10.0, 10.0, "Sign-preserving power exponent applied to each input axis."),
         param!("c1", "C1", unlimited_float, -0.01, -10.0, 10.0, "Linear-term coefficient in the curl warp."),
@@ -49,8 +49,6 @@ pub static CURL_SP: VariationDef = VariationDef {
         param!("sy", "SY", unlimited_float, 0.0, -10.0, 10.0, "Spread function exponent for the Y component."),
         param!("dc", "DC", unlimited_float, 0.0, -10.0, 10.0, "Color drift amount. Preserved as a parameter for preset compatibility, but the actual color write was dropped during the port (see module header)."),
     ],
-    needs_transform: true,
-    writes_color: false,
     // 4 derived values at slots 6..10:
     //   6: power      (clamped to ≥ ε)
     //   7: c2_x2      (= 2·c2)
@@ -72,7 +70,6 @@ fn init_curl_sp(user: array<f32, 6>) -> array<f32, 4> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn curl_sp_powq4c(x: f32, e: f32) -> f32 {
     if (abs(e - 1.0) < 1e-30) {

@@ -27,7 +27,7 @@
 //!   - `output/jwildfire-vars/output/woggle_js.cpp`
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -49,15 +49,12 @@ pub static THREEPOINT_JS: VariationDef = VariationDef {
     display_name: "Three Point IFS (JS)",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_threepoint_js(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     let r1 = rng_nextf(rng);
@@ -119,7 +116,7 @@ pub static LORENZ_JS: VariationDef = VariationDef {
     display_name: "Lorenz (JS)",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("a", "A", unlimited_float, 10.0, -100.0, 100.0, "Lorenz parameter `a` (Prandtl number; classic value 10)."),
         param!("b", "B", unlimited_float, 28.0, -100.0, 100.0, "Lorenz parameter `b` (Rayleigh number; classic value 28)."),
@@ -129,8 +126,6 @@ pub static LORENZ_JS: VariationDef = VariationDef {
         param!("centery", "Center Y", unlimited_float, 0.0, -10.0, 10.0, "Unused in body — preserved as a parameter for cpp parity."),
         param!("scale", "Scale", unlimited_float, 1000.0, -10000.0, 10000.0, "Unused in body — preserved as a parameter for cpp parity (init slot `1/scale` is computed but never read)."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 1,
     wgsl_init: Some(r#"
 fn init_lorenz_js(user: array<f32, 7>) -> array<f32, 1> {
@@ -143,7 +138,6 @@ fn init_lorenz_js(user: array<f32, 7>) -> array<f32, 1> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_lorenz_js(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let a = get_param(xform_id, variation_id, 0u);
@@ -186,17 +180,14 @@ pub static WOGGLE_JS: VariationDef = VariationDef {
     display_name: "Woggle (JS)",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("m", "M", int, 2.0, 2.0, 12.0, "Number of tiles (2-12). Each iteration samples one of `m` evenly-spaced angles."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_woggle_js(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let m = clamp(i32(get_param(xform_id, variation_id, 0u)), 2, 12);

@@ -20,7 +20,7 @@
 //!   - VVAR factors out cleanly through the outer multiplier in both.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -46,15 +46,13 @@ pub static WEDGE_JULIA: VariationDef = VariationDef {
     display_name: "Wedge Julia",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("power", "Power", unlimited_float, 7.0, -20.0, 20.0, "Number of Julia branches. Higher = more arms."),
         param!("dist", "Distance", unlimited_float, 0.2, -10.0, 10.0, "Radial distance scaling — pushes arms inward or outward."),
         param!("count", "Count", unlimited_float, 2.0, -10.0, 10.0, "Number of wedge sectors around the center."),
         param!("angle", "Angle", unlimited_float, 0.3, -10.0, 10.0, "Wedge sector rotation, in radians."),
     ],
-    needs_transform: false,
-    writes_color: false,
     // 3 derived values at slots 4..7:
     //   4: cf  (1 − angle · count / (2π))
     //   5: r_n (|power|)
@@ -77,7 +75,6 @@ fn init_wedge_julia(user: array<f32, 4>) -> array<f32, 3> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_wedge_julia(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let power = get_param(xform_id, variation_id, 0u);
@@ -146,15 +143,13 @@ pub static WEDGE_SPH: VariationDef = VariationDef {
     display_name: "Wedge Sph",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("angle", "Angle", unlimited_float, 0.2, -10.0, 10.0, "Wedge sector rotation, in radians."),
         param!("hole", "Hole", unlimited_float, 0.2, -10.0, 10.0, "Radial offset added after the inversion. Positive opens a hole at the center; negative compresses inward."),
         param!("count", "Count", unlimited_float, 2.0, -10.0, 10.0, "Number of wedge sectors around the center."),
         param!("swirl", "Swirl", unlimited_float, 0.3, -10.0, 10.0, "Extra rotation that grows with distance — gives the wedges a spiral."),
     ],
-    needs_transform: false,
-    writes_color: false,
     // 1 derived value at slot 4:
     //   4: cf  (1 − angle · count / (2π))
     init_param_count: 1,
@@ -170,7 +165,6 @@ fn init_wedge_sph(user: array<f32, 4>) -> array<f32, 1> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_wedge_sph(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let angle = get_param(xform_id, variation_id, 0u);

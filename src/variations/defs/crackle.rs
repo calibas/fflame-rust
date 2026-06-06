@@ -22,7 +22,7 @@
 //! [`output/variation-jwf-source/DCCrackleWFFunc.java`](../../../output/variation-jwf-source/DCCrackleWFFunc.java).
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -44,14 +44,11 @@ pub static CRACKLE: VariationDef = VariationDef {
     display_name: "Crackle",
     category: VariationCategory::Plugin,
     phase: VariationPhase::Normal,
-    needs_rng: true,
-    needs_transform: false,
-    writes_color: false,
+    features: &[Feature::NeedsRng],
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     parameters: &[
         param!("cellsize", "Cell Size", unlimited_float, 1.0, 0.01, 10.0, "Side length of the underlying square Voronoi grid. Smaller cells = finer detail but more visible aliasing. Values near 0 cause an early-return (no contribution) since 'an infinite number of invisible cells? No thanks!' (per the cpp)."),
         param!("power", "Power", unlimited_float, 0.2, -10.0, 10.0, "Exponent on the cell inside-ness `L` before re-applying. Values < 1 push the warp toward the cell boundary (bubble-like); > 1 push toward the centers (mosaic). Negative values invert."),
@@ -76,14 +73,11 @@ pub static DC_CRACKLE_WF: VariationDef = VariationDef {
     display_name: "DC Crackle (JWF)",
     category: VariationCategory::Plugin,
     phase: VariationPhase::Normal,
-    needs_rng: true,
-    needs_transform: false,
-    writes_color: true,
+    features: &[Feature::NeedsRng, Feature::WritesColor],
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     parameters: &[
         param!("cellsize", "Cell Size", unlimited_float, 1.0, 0.01, 10.0, "Side length of the underlying square Voronoi grid. See `crackle`."),
         param!("power", "Power", unlimited_float, 0.2, -10.0, 10.0, "Exponent on cell inside-ness `L`. See `crackle`."),

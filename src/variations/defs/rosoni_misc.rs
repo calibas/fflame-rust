@@ -39,7 +39,7 @@ pub static ROSONI: VariationDef = VariationDef {
     display_name: "Rosoni",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("maxiter", "Max Iter", int, 25.0, 1.0, 100.0, "Number of rotation iterations (each rotates by `2π/maxiter`)."),
         param!("sweetiter", "Sweet Iter", int, 3.0, 0.0, 100.0, "Which iteration's position is used as the output when the toggle ends true."),
@@ -49,8 +49,6 @@ pub static ROSONI: VariationDef = VariationDef {
         param!("dx", "DX", unlimited_float, 0.6, -10.0, 10.0, "Inner-shape X offset (also acts as the rotation pivot)."),
         param!("dy", "DY", unlimited_float, 0.0, -10.0, 10.0, "Inner-shape Y offset."),
     ],
-    needs_transform: false,
-    writes_color: false,
     // 2 derived values at slots 7..9: sina, cosa
     init_param_count: 2,
     wgsl_init: Some(r#"
@@ -65,7 +63,6 @@ fn init_rosoni(user: array<f32, 7>) -> array<f32, 2> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_rosoni(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let maxiter_f = max(get_param(xform_id, variation_id, 0u), 1.0);
