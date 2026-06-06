@@ -5,9 +5,18 @@ need to be added to unblock them.
 
 This document is the companion to
 [`variation-bulk-port.md`](variation-bulk-port.md), which tracks what
-*has* been ported. As of `jwf-variations-batch3` (2026-06-05, +3
-variations: `crackle`, `dc_crackle_wf`, `dc_perlin`), the registry
-holds 516 variations.
+*has* been ported. As of `variation-features-and-rgb` (2026-06-05,
++16 glsl_* variations: the 4 fractals, 6 tilings, and 6 fields
+detailed in blocker #1's "Not JIT-blocked" RESOLVED section), the
+registry holds 532 variations.
+
+Same branch also landed two framework features used by the glsl_*
+ports: a `Feature` enum + `features: &[Feature]` slice consolidating
+what used to be 4 parallel boolean fields on `VariationDef`
+(`needs_rng`/`needs_transform`/`writes_color`/`needs_accum`), and a
+new `Feature::WritesRgb` + `vrc: ptr<function, vec3<f32>>` register
+parallel to the existing `vc` palette-index register for variations
+that write direct RGB.
 
 For the focused JWF "script vars" subset, see
 [`jwf-common-variations-port.md`](jwf-common-variations-port.md):
@@ -326,44 +335,71 @@ No new framework features needed, no security surface, no runtime
 interpreter. The user's formula compiles to native WGSL math like
 any hand-written variation.
 
-#### Not JIT-blocked: the rest of the `glsl_*` family — port them like any other variation
+#### ~~Not JIT-blocked: the rest of the `glsl_*` family~~ — RESOLVED (16 of 17 shipped, 1 deferred)
 
-`GLSLFunc.java` is an abstract base class with a virtual
-`getRGBColor(i, j) -> vec3`. Concrete `glsl_*` subclasses (e.g.
-`GLSLGrid3DFunc`, `GLSLAcrilicFunc`, `GLSLApollonianFunc`) override
-`getRGBColor` with hand-written Java implementations of specific
-shadertoy-style algorithms — typically raymarchers, kaleidoscopic
-IFS, distance-field tilings. The Java uses JWildfire's `js.glsl.G`
-namespace (a Java reimplementation of GLSL primitives like `vec3`,
-`mat3`, `G.normalize`, `G.cos`, `.times()`, `.add()`) to mimic GLSL
-syntax, which makes the source *look* like it could be user-supplied
-GLSL. **It isn't.** Each variation is a separate, fixed Java port of
-one specific shader algorithm.
+Shipped on branch `variation-features-and-rgb` (16 ports across
+3 themed files plus 1 framework feature). `GLSLFunc.java` is an
+abstract base class with a virtual `getRGBColor(i, j) -> vec3`;
+each concrete `glsl_*` subclass overrides it with a fixed,
+hand-written shadertoy algorithm using JWildfire's `js.glsl.G`
+namespace (a Java reimplementation of GLSL primitives — *not*
+user-supplied GLSL, despite the naming). These are independent
+per-variation port jobs, the same shape as any other JWF port.
 
-These belong in the "per-variation porting effort" bucket, same
-shape as the DC_BaseFunc derivatives section below. Each is 100–200
-lines of math, translatable to WGSL by hand. We'll do them as a
-separate batch.
+Framework feature added to enable them: **direct-RGB color
+register `vrc`** (`Feature::WritesRgb`), parallel to the existing
+`vc` palette-index register. A variation declares
+`Feature::WritesRgb` to gain a `vrc: ptr<function, vec3<f32>>`
+parameter; at plot time the main loop blends the variation's RGB
+with the palette-sampled color via the transform's `direct_color`
+slider. Same shape as the existing `writes_color` / DC plumbing.
 
-| Variation | Algorithm |
-|---|---|
-| `glsl_acrilic` | Acrylic-style smudges |
-| `glsl_apollonian` | Apollonian gasket |
-| `glsl_circlesblue` | Blue-circle field |
-| `glsl_circuits` | Circuit-board pattern |
-| `glsl_fractaldots` | Fractal dot field |
-| `glsl_grid3d` | 3D raymarching grid (kabuto) |
-| `glsl_hoshi` | Star/hoshi tiling |
-| `glsl_hyperbolictile` | Hyperbolic tile |
-| `glsl_kaleidocomplex` | Complex kaleidoscope |
-| `glsl_kaleidoscopic` | Kaleidoscopic IFS |
-| `glsl_kaliset` | Kalisetset fractal |
-| `glsl_kaliset2` | Kalisetset variant |
-| `glsl_mandala` | Mandala pattern |
-| `glsl_mandelbox2d` | 2D Mandelbox |
-| `glsl_randomoctree` | Random octree noise |
-| `glsl_squares` | Square tiling |
-| `glsl_starsfield` | Stars field |
+Visual-quality caveat on the ports: JWildfire's source for each
+`glsl_*` variation has a `gradient` parameter that picks between
+mode 0 (direct RGB to `pVarTP.redColor/greenColor/blueColor`) and
+mode 1 (palette index via `color.r * color.g` or similar). We
+honor **only mode 0** — supporting mode 1 alongside would require
+both `WritesColor` and `WritesRgb` features on the same variation,
+and the unwritten register's sentinel-init darkens the plot-time
+blend. The `gradient` parameter is accepted for `.flame` XML
+round-trip but mode 1 falls through to mode 0 behavior. Similarly,
+the `seed` parameter on most of these (JWildfire seeds a Java
+`Random` and derives `time` from it at flame load) is CPU-only and
+accepted for round-trip; users set `time` directly.
+
+| Variation | File | Algorithm |
+|---|---|---|
+| `glsl_mandelbox2D` | `glsl_fractals.rs` | 2D Mandelbox (boxfold + ballfold) |
+| `glsl_kaliset` | `glsl_fractals.rs` | KaliSet (sphere-inversion iteration) |
+| `glsl_kaliset2` | `glsl_fractals.rs` | KaliSet variant (max-sum, RGB freqs) |
+| `glsl_apollonian` | `glsl_fractals.rs` | Apollonian gasket |
+| `glsl_kaleidoscopic` | `glsl_tilings.rs` | Kaleidoscope + trirop fold |
+| `glsl_kaleidocomplex` | `glsl_tilings.rs` | Complex-z kaleidoscope |
+| `glsl_hyperbolictile` | `glsl_tilings.rs` | Möbius reflections in Poincaré disc |
+| `glsl_mandala` | `glsl_tilings.rs` | Kaleidoscope + Apollonian fold |
+| `glsl_squares` | `glsl_tilings.rs` | Sierpinski carpet tile |
+| `glsl_hoshi` | `glsl_tilings.rs` | Star/hoshi iterative fold |
+| `glsl_acrilic` | `glsl_fields.rs` | Acrylic-style smudges |
+| `glsl_circlesblue` | `glsl_fields.rs` | Animated bubble field |
+| `glsl_circuits` | `glsl_fields.rs` | Circuit-board fractal (*) |
+| `glsl_fractaldots` | `glsl_fields.rs` | Sierpinski-fold dot pattern |
+| `glsl_starsfield` | `glsl_fields.rs` | Rotating layered star field |
+| `glsl_grid3D` | `glsl_fields.rs` | kabuto raymarched grid-of-cubes |
+
+(*) `glsl_circuits` has a documented divergence: JWildfire's source
+uses a class-level mutable `double S` field accumulated across every
+pixel sample (broken multithread semantics on JVM, impossible on
+GPU since threads have isolated stacks). Our port uses a per-call
+local `S`. The algorithm is well-defined; visual output differs
+from JWildfire because the cross-call accumulation is gone.
+
+**Deferred (1 of 17)**: `glsl_randomoctree`. JWildfire's source
+is a variable-depth octree raymarcher (~400 lines, recursive voxel
+subdivision, multiple per-step test paths). The per-call cost is
+hard to bound; 100-step outer loop with intricate inner work would
+need careful per-step clamps to fit the TDR budget when multiplied
+by 32K threads × 256 chaos iters. Worth a separate focused batch
+with an explicit cost model.
 
 ### `DC_BaseFunc` derivatives — infrastructure unblocked, per-variation porting remains
 
