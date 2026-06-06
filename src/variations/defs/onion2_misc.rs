@@ -20,7 +20,7 @@
 //! Source: `output/jwildfire-vars/output/onion2.cpp`.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -39,7 +39,7 @@ pub static ONION2: VariationDef = VariationDef {
     display_name: "Onion 2",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[
         param!("meeting_pt", "Meeting Pt", unlimited_float, 0.5, -10.0, 10.0, "Where the circle and exponential curves meet (in radians)."),
         param!("circle_a", "Circle A", unlimited_float, 1.0, -10.0, 10.0, "Radius scale for the circle branch (controls overall onion radius)."),
@@ -50,13 +50,10 @@ pub static ONION2: VariationDef = VariationDef {
         param!("top_crop", "Top Crop", unlimited_float, 0.0, -10.0, 10.0, "Crops Z above this value in the exponential branch. 0 disables cropping."),
         param!("stretch", "Stretch", unlimited_float, 1.0, -10.0, 10.0, "Radial divisor — `t = sqtr / stretch − π/2`."),
     ],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_onion2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let meeting_pt = get_param(xform_id, variation_id, 0u);

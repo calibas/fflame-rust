@@ -27,7 +27,7 @@
 //!   - `output/jwildfire-vars/output/circletrans1.cpp`
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -48,7 +48,7 @@ pub static CIRCLE_RAND: VariationDef = VariationDef {
     display_name: "Circle Rand",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("Sc", "Scale", unlimited_float, 1.0, -10.0, 10.0, "Cell size — each cell occupies a `2·Sc × 2·Sc` region."),
         param!("Dens", "Density", unlimited_float, 0.5, 0.0, 1.0, "Per-cell density threshold (probability that a cell is 'active' and accepts a sample)."),
@@ -56,13 +56,10 @@ pub static CIRCLE_RAND: VariationDef = VariationDef {
         param!("Y", "Y", unlimited_float, 10.0, -100.0, 100.0, "Bounding-rectangle Y half-extent."),
         param!("Seed", "Seed", int, 0.0, -1000.0, 1000.0, "Hash seed for the per-cell deterministic noise."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn cr_disc_noise(x: i32, y: i32) -> f32 {
     var n = x + y * 57;
@@ -159,7 +156,7 @@ pub static CIRCLE_TRANS1: VariationDef = VariationDef {
     display_name: "Circle Trans 1",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("Sc", "Scale", unlimited_float, 1.0, -10.0, 10.0, "Cell size — each cell occupies a `2·Sc × 2·Sc` region."),
         param!("Dens", "Density", unlimited_float, 0.5, 0.0, 1.0, "Per-cell density threshold (probability that a cell is 'active' and triggers resampling)."),
@@ -167,13 +164,10 @@ pub static CIRCLE_TRANS1: VariationDef = VariationDef {
         param!("Y", "Y", unlimited_float, 10.0, -100.0, 100.0, "Y coordinate of the halfway-translate target point. Also bounds the resample rectangle."),
         param!("Seed", "Seed", int, 0.0, -1000.0, 1000.0, "Hash seed for the per-cell deterministic noise."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn cr_disc_noise(x: i32, y: i32) -> f32 {
     var n = x + y * 57;

@@ -29,7 +29,7 @@
 //!   - `output/jwildfire-vars/output/dc_triangle.cpp`
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -54,7 +54,7 @@ pub static DC_CYLINDER: VariationDef = VariationDef {
     display_name: "DC Cylinder",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng, Feature::NeedsTransform, Feature::WritesColor],
     parameters: &[
         param!("offset", "Offset", unlimited_float, 0.0, -10.0, 10.0, "Color-projection offset. Init precomputes `offset · π` for parity (unused) and the raw `offset` is added to the projection."),
         param!("angle", "Angle", unlimited_float, 0.0, -10.0, 10.0, "Color-projection rotation angle (radians). Init precomputes `cos(angle)` and `sin(angle)`."),
@@ -63,8 +63,6 @@ pub static DC_CYLINDER: VariationDef = VariationDef {
         param!("y", "Y", unlimited_float, 0.125, -10.0, 10.0, "Y-axis output scale (multiplies the input Y in the output)."),
         param!("blur", "Blur", unlimited_float, 1.0, -10.0, 10.0, "Gaussian blur amplitude — multiplies the sum-of-4-uniforms approximation."),
     ],
-    needs_transform: true,
-    writes_color: true,
     // 4 init slots (6..10):
     //   6: ldcs = 1/scale
     //   7: ldca = offset·π  (kept for cpp parity, unused in body)
@@ -86,7 +84,6 @@ fn init_dc_cylinder(user: array<f32, 6>) -> array<f32, 4> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_dc_cylinder(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec2<f32> {
     let offset = get_param(xform_id, variation_id, 0u);
@@ -176,7 +173,7 @@ pub static DC_CYLINDER2: VariationDef = VariationDef {
     display_name: "DC Cylinder 2",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng, Feature::NeedsTransform, Feature::WritesColor],
     parameters: &[
         param!("offset", "Offset", unlimited_float, 0.0, -10.0, 10.0, "Color-projection offset. Init precomputes `offset · π` for parity (unused) and the raw `offset` is added to the projection."),
         param!("angle", "Angle", unlimited_float, 0.0, -10.0, 10.0, "Color-projection rotation angle (radians). Init precomputes `cos(angle)` and `sin(angle)`."),
@@ -185,8 +182,6 @@ pub static DC_CYLINDER2: VariationDef = VariationDef {
         param!("y", "Y", unlimited_float, 0.125, -10.0, 10.0, "Y-axis output scale (multiplies the input Y in the output)."),
         param!("blur", "Blur", unlimited_float, 1.0, -10.0, 10.0, "Gaussian blur amplitude — multiplies the sum-of-4-uniforms approximation."),
     ],
-    needs_transform: true,
-    writes_color: true,
     init_param_count: 4,
     wgsl_init: Some(r#"
 fn init_dc_cylinder2(user: array<f32, 6>) -> array<f32, 4> {
@@ -203,7 +198,6 @@ fn init_dc_cylinder2(user: array<f32, 6>) -> array<f32, 4> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_dc_cylinder2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec2<f32> {
     let offset = get_param(xform_id, variation_id, 0u);
@@ -292,13 +286,11 @@ pub static DC_TRIANGLE: VariationDef = VariationDef {
     display_name: "DC Triangle",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng, Feature::NeedsTransform, Feature::WritesColor],
     parameters: &[
         param!("scatter_area", "Scatter Area", unlimited_float, 0.0, -1.0, 1.0, "Random scatter amount applied to points outside the triangle. Clamped to `[-1, 1]` internally."),
         param!("zero_edges", "Zero Edges", bool, false, "When on, out-of-triangle points collapse to the origin. When off, they scatter by `scatter_area`."),
     ],
-    needs_transform: true,
-    writes_color: true,
     init_param_count: 1,
     wgsl_init: Some(r#"
 fn init_dc_triangle(user: array<f32, 2>) -> array<f32, 1> {
@@ -309,7 +301,6 @@ fn init_dc_triangle(user: array<f32, 2>) -> array<f32, 1> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_dc_triangle(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec2<f32> {
     let zero_edges = i32(get_param(xform_id, variation_id, 1u));

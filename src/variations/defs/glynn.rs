@@ -32,7 +32,7 @@
 //!     slots; per-iteration math keeps user-param reads cheap.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -59,15 +59,12 @@ pub static GLYNNIA: VariationDef = VariationDef {
     display_name: "Glynnia",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_glynnia(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     let half_sqrt2 = 0.7071067811865476;
@@ -146,20 +143,17 @@ pub static GLYNNIA3: VariationDef = VariationDef {
     display_name: "Glynnia 3",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("rscale", "R scale", unlimited_float, 1.0, -10.0, 10.0, "Radial scaling on the input distance."),
         param!("dscale", "D scale", unlimited_float, 1.0, -10.0, 10.0, "Scaling on the `d = r + x` term used by both branches."),
         param!("rthresh", "R threshold", unlimited_float, 0.0, -10.0, 10.0, "Radius threshold for the inside-vs-outside branch split."),
         param!("ythresh", "Y threshold", unlimited_float, 0.0, -10.0, 10.0, "Y threshold added to the branch condition — only points with `y > ythresh` take the outer branch."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_glynnia3(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let rscale = get_param(xform_id, variation_id, 0u);
@@ -258,7 +252,7 @@ pub static GLYNN_SIM1: VariationDef = VariationDef {
     display_name: "Glynn Sim 1",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("radius", "Radius", unlimited_float, 1.0, -5.0, 5.0, "Main Glynn-set inversion radius."),
         param!("radius1", "Radius 1", unlimited_float, 0.1, -5.0, 5.0, "Offset-circle radius for the generator."),
@@ -267,8 +261,6 @@ pub static GLYNN_SIM1: VariationDef = VariationDef {
         param!("pow", "Pow", unlimited_float, 1.5, -10.0, 10.0, "Power for the contrast probability — higher concentrates points near the boundary."),
         param!("contrast", "Contrast", float, 0.5, 0.0, 1.0, "Probability scaling for the inversion-vs-pass-through branch."),
     ],
-    needs_transform: false,
-    writes_color: false,
     // 3 derived values at slots 6..9:
     //   6: x1     radius · cos(π·phi1/180)
     //   7: y1     radius · sin(π·phi1/180)
@@ -289,7 +281,6 @@ fn init_glynnSim1(user: array<f32, 6>) -> array<f32, 3> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_glynnSim1(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let radius = get_param(xform_id, variation_id, 0u);
@@ -401,7 +392,7 @@ pub static GLYNN_SIM2: VariationDef = VariationDef {
     display_name: "Glynn Sim 2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("radius", "Radius", unlimited_float, 1.0, -5.0, 5.0, "Main Glynn-set inversion radius."),
         param!("thickness", "Thickness", float, 0.1, 0.0, 1.0, "Arc thickness — fraction of the radius."),
@@ -410,8 +401,6 @@ pub static GLYNN_SIM2: VariationDef = VariationDef {
         param!("phi1", "Phi 1", unlimited_float, 110.0, -360.0, 360.0, "Start angle of the arc segment (degrees)."),
         param!("phi2", "Phi 2", unlimited_float, 150.0, -360.0, 360.0, "End angle of the arc segment (degrees)."),
     ],
-    needs_transform: false,
-    writes_color: false,
     // 5 derived values at slots 6..11:
     //   6: phi10
     //   7: gamma
@@ -440,7 +429,6 @@ fn init_glynnSim2(user: array<f32, 6>) -> array<f32, 5> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_glynnSim2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let radius = get_param(xform_id, variation_id, 0u);
@@ -514,15 +502,13 @@ pub static GLYNN_SIM3: VariationDef = VariationDef {
     display_name: "Glynn Sim 3",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("radius", "Radius", unlimited_float, 1.0, -5.0, 5.0, "Main Glynn-set inversion radius."),
         param!("thickness", "Thickness", float, 0.1, 0.0, 1.0, "Outer-circle thickness — combined with radius to form `r1` and `r2 = radius² / r1`."),
         param!("contrast", "Contrast", float, 0.5, 0.0, 1.0, "Probability scaling for the inversion-vs-pass-through branch."),
         param!("pow", "Pow", unlimited_float, 1.5, -10.0, 10.0, "Power for the contrast probability."),
     ],
-    needs_transform: false,
-    writes_color: false,
     // 4 derived values at slots 4..8:
     //   4: r1     radius + thickness
     //   5: r2     radius² / r1
@@ -547,7 +533,6 @@ fn init_glynnSim3(user: array<f32, 4>) -> array<f32, 4> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_glynnSim3(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let radius = get_param(xform_id, variation_id, 0u);

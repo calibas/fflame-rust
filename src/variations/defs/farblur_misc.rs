@@ -25,7 +25,7 @@
 //! Reference: zephyrtronium's deviantArt page (now defunct).
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -48,7 +48,7 @@ pub static FARBLUR: VariationDef = VariationDef {
     display_name: "Far Blur",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng, Feature::NeedsAccum],
     parameters: &[
         param!("x", "X Scale", unlimited_float, 1.0, -10.0, 10.0, "X-axis blur scale. Multiplies the X component of the random spherical offset."),
         param!("y", "Y Scale", unlimited_float, 1.0, -10.0, 10.0, "Y-axis blur scale."),
@@ -57,13 +57,10 @@ pub static FARBLUR: VariationDef = VariationDef {
         param!("y_origin", "Y Origin", unlimited_float, 0.0, -10.0, 10.0, "Origin Y coordinate."),
         param!("z_origin", "Z Origin", unlimited_float, 0.0, -10.0, 10.0, "Origin Z coordinate. In 2D mode this becomes a constant offset (the 2D accumulator has no Z, so `dz` reduces to `-z_origin`)."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 5,
     wgsl_state_init: None,
-    needs_accum: true,
     wgsl_2d: r#"
 fn variation_farblur(p: vec2<f32>, accum: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let two_pi = 6.28318530717959;

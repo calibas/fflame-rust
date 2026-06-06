@@ -30,7 +30,7 @@
 //!     matching). Preserved.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -55,19 +55,16 @@ pub static ANAMORPHCYL: VariationDef = VariationDef {
     display_name: "Anamorph Cyl",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("a", "A", unlimited_float, 1.0, -10.0, 10.0, "Radial scale (multiplies the entire output magnitude)."),
         param!("b", "B", unlimited_float, 1.3, -10.0, 10.0, "Y offset added before the radial multiplication."),
         param!("k", "K", unlimited_float, 3.0, -50.0, 50.0, "Angular frequency of the X coordinate."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_anamorphcyl(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let a = get_param(xform_id, variation_id, 0u);
@@ -107,17 +104,14 @@ pub static SVF: VariationDef = VariationDef {
     display_name: "SVF",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("n", "N", unlimited_float, 2.0, -50.0, 50.0, "Frequency multiplier on Y in the inner `cos(n·y)` term."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_svf(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let n = get_param(xform_id, variation_id, 0u);
@@ -158,20 +152,17 @@ pub static SHREDLIN: VariationDef = VariationDef {
     display_name: "Shred Lin",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("xdistance", "X distance", unlimited_float, 1.0, -10.0, 10.0, "X-axis tile size."),
         param!("xwidth", "X width", unlimited_float, 0.5, -10.0, 10.0, "X-axis intra-tile compression. 1 = no shred; 0 = collapse to tile center."),
         param!("ydistance", "Y distance", unlimited_float, 1.0, -10.0, 10.0, "Y-axis tile size."),
         param!("ywidth", "Y width", unlimited_float, 0.5, -10.0, 10.0, "Y-axis intra-tile compression."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_shredlin(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let sxd = get_param(xform_id, variation_id, 0u);
@@ -235,13 +226,11 @@ pub static SHREDRAD: VariationDef = VariationDef {
     display_name: "Shred Rad",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("n", "N", unlimited_float, 4.0, 0.001, 100.0, "Number of angular wedges."),
         param!("width", "Width", float, 0.5, -1.0, 1.0, "Intra-wedge compression. 1 = no shred; 0 = collapse to wedge boundary."),
     ],
-    needs_transform: false,
-    writes_color: false,
     // 1 derived value at slot 2:
     //   2: alpha  (2π / n)        — porter-omitted from cpp; recovered from Java
     init_param_count: 1,
@@ -257,7 +246,6 @@ fn init_shredrad(user: array<f32, 2>) -> array<f32, 1> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_shredrad(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let sw = get_param(xform_id, variation_id, 1u);
@@ -315,13 +303,11 @@ pub static XHEART: VariationDef = VariationDef {
     display_name: "X Heart",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("angle", "Angle", unlimited_float, 0.0, -10.0, 10.0, "Rotation angle of the heart shape (scaled by π/8 internally and offset from π/4)."),
         param!("ratio", "Ratio", unlimited_float, 0.0, -10.0, 10.0, "Y-axis stretch factor (added to a base of 6 to control heart roundness)."),
     ],
-    needs_transform: false,
-    writes_color: false,
     // 3 derived values at slots 2..5:
     //   2: rat   (6 + 2 · ratio)
     //   3: cosa  (cos(π/4 + π/8 · angle))
@@ -341,7 +327,6 @@ fn init_xheart(user: array<f32, 2>) -> array<f32, 3> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_xheart(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let rat = get_param(xform_id, variation_id, 2u);
@@ -404,20 +389,17 @@ pub static STWIN: VariationDef = VariationDef {
     display_name: "STwin",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[
         param!("distort", "Distort", unlimited_float, 1.0, -10.0, 10.0, "Frequency multiplier on the sin term (× 2π internally)."),
         param!("offset_xy", "Offset XY", unlimited_float, 0.0, -10.0, 10.0, "Phase offset added to the sin argument (× 0.1 internally)."),
         param!("offset_x2", "Offset X²", unlimited_float, 0.0, -10.0, 10.0, "Additive offset on x² (× 0.0001 internally). Prevents division by zero at the origin."),
         param!("offset_y2", "Offset Y²", unlimited_float, 0.0, -10.0, 10.0, "Additive offset on y² (× 0.0001 internally)."),
     ],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_stwin(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let distort = get_param(xform_id, variation_id, 0u);
@@ -485,18 +467,15 @@ pub static WHORL: VariationDef = VariationDef {
     display_name: "Whorl",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[
         param!("inside", "Inside", unlimited_float, 0.1, -10.0, 10.0, "Angular-shift coefficient applied where `r < w`."),
         param!("outside", "Outside", unlimited_float, 0.2, -10.0, 10.0, "Angular-shift coefficient applied where `r ≥ w`."),
     ],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_whorl(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let inside = get_param(xform_id, variation_id, 0u);
@@ -553,7 +532,7 @@ pub static DEVIL_WARP: VariationDef = VariationDef {
     display_name: "Devil Warp",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[
         param!("a", "A", unlimited_float, 2.0, -10.0, 10.0, "x² weight in the second power term."),
         param!("b", "B", unlimited_float, 1.0, -10.0, 10.0, "y² weight in the first power term."),
@@ -562,13 +541,10 @@ pub static DEVIL_WARP: VariationDef = VariationDef {
         param!("rmin", "R min", unlimited_float, -0.24, -100.0, 100.0, "Lower clamp on the radial-warp magnitude."),
         param!("rmax", "R max", unlimited_float, 100.0, -1000.0, 1000.0, "Upper clamp on the radial-warp magnitude."),
     ],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_devil_warp(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let a = get_param(xform_id, variation_id, 0u);

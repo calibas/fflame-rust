@@ -28,7 +28,7 @@
 //!   http://mathworld.wolfram.com/Rose.html
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -51,7 +51,7 @@ pub static RHODONEA: VariationDef = VariationDef {
     display_name: "Rhodonea",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng, Feature::NeedsTransform],
     parameters: &[
         param!("knumer", "K Numer", unlimited_float, 3.0, -50.0, 50.0, "Rose-curve `k = knumer/kdenom` numerator. Integer `k` produces `k` petals (even) or `2k` petals (odd); rational `k` produces nested petal patterns with `cycles_to_close = kdenom` cycles."),
         param!("kdenom", "K Denom", unlimited_float, 4.0, -50.0, 50.0, "Rose-curve `k = knumer/kdenom` denominator."),
@@ -69,8 +69,6 @@ pub static RHODONEA: VariationDef = VariationDef {
         param!("metacycles", "Metacycles", unlimited_float, 1.0, 0.0, 100.0, "Number of metacycles when `cycles == 0`. Each metacycle is one `cycles_to_close` worth of θ."),
         param!("fill", "Fill", unlimited_float, 0.0, 0.0, 1.0, "Random radial jitter amplitude. Adds `fill · (rng - 0.5)` to `r` per iteration, filling in the rose shape with noise."),
     ],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 5,
     wgsl_init: Some(r#"
 fn init_rhodonea(user: array<f32, 15>) -> array<f32, 5> {
@@ -147,7 +145,6 @@ fn init_rhodonea(user: array<f32, 15>) -> array<f32, 5> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_rhodonea(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let pi = 3.14159265358979;

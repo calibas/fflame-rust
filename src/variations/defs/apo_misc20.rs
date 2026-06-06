@@ -21,7 +21,7 @@
 //!   - `output/jwildfire-vars/output/swirl3d_wf.cpp`
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -42,17 +42,14 @@ pub static CANNABISCURVE_WF: VariationDef = VariationDef {
     display_name: "Cannabis Curve WF",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("filled", "Filled", bool, true, "When on, fill the curve interior by randomizing the radius per iteration. When off, trace only the outline."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_cannabiscurve_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let filled = i32(get_param(xform_id, variation_id, 0u));
@@ -100,13 +97,11 @@ pub static SPHERICAL3D_WF: VariationDef = VariationDef {
     display_name: "Spherical 3D WF",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("invert", "Invert", int, 0.0, 0.0, 1.0, "1 = flip the sign of the output (inverts through the origin); 0 = standard direction."),
         param!("exponent", "Exponent", unlimited_float, 2.0, -10.0, 10.0, "Radial-inversion exponent. 2 = standard spherical (`r⁻²`); higher = stronger inverse; lower = weaker."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 1,
     wgsl_init: Some(r#"
 fn init_spherical3D_wf(user: array<f32, 2>) -> array<f32, 1> {
@@ -121,7 +116,6 @@ fn init_spherical3D_wf(user: array<f32, 2>) -> array<f32, 1> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_spherical3D_wf(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let invert = i32(get_param(xform_id, variation_id, 0u));
@@ -177,17 +171,14 @@ pub static SWIRL3D_WF: VariationDef = VariationDef {
     display_name: "Swirl 3D WF",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("n", "N", unlimited_float, 0.0, -10.0, 10.0, "Angular multiplier on the Z-output sine: `sin(6·cos(rad) − n·ang)`."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_swirl3D_wf(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let small = 1e-30;

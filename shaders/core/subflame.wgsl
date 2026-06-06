@@ -80,6 +80,16 @@ fn subflame_iterate(
 
     var picked: u32 = 0u;
     var vc: f32 = color;
+{{#if HAS_RGB}}
+    // Sentinel vrc for subflames. WritesRgb variations in the
+    // subflame's xform set may write here; subflame_iterate
+    // discards it (subflame contributes a position + palette
+    // index back to the parent, not direct RGB). Same shape as
+    // the existing `vc` — needed when the parent flame has any
+    // active WritesRgb variation, otherwise apply_subflame_variations'
+    // signature has a vrc parameter we'd be omitting.
+    var vrc: vec3<f32> = vec3<f32>(0.0);
+{{/if}}
 
     for (var k: u32 = 0u; k < total_steps; k = k + 1u) {
         // Pick next transform by weight (v1: no xaos).
@@ -109,7 +119,11 @@ fn subflame_iterate(
 
         // Apply pre-affine, variations, post-affine.
         let affine_p = apply_affine(xform, current);
+{{#if HAS_RGB}}
+        current = apply_subflame_variations(xform, sub_xform_id, affine_p, rng, &vc, &vrc);
+{{else}}
         current = apply_subflame_variations(xform, sub_xform_id, affine_p, rng, &vc);
+{{/if}}
         if (xform.post_enabled > 0.5) {
             current = apply_post_affine(xform, current);
         }
@@ -119,7 +133,11 @@ fn subflame_iterate(
             let f_xform_id = sf_meta.xform_id_base + sf_meta.finals_offset + i;
             let f_xform = transforms[f_xform_id];
             let f_affine_p = apply_affine(f_xform, current);
+{{#if HAS_RGB}}
+            current = apply_subflame_variations(f_xform, f_xform_id, f_affine_p, rng, &vc, &vrc);
+{{else}}
             current = apply_subflame_variations(f_xform, f_xform_id, f_affine_p, rng, &vc);
+{{/if}}
             if (f_xform.post_enabled > 0.5) {
                 current = apply_post_affine(f_xform, current);
             }
@@ -179,6 +197,16 @@ fn subflame_iterate(
 
     var picked: u32 = 0u;
     var vc: f32 = color;
+{{#if HAS_RGB}}
+    // Sentinel vrc for subflames. WritesRgb variations in the
+    // subflame's xform set may write here; subflame_iterate
+    // discards it (subflame contributes a position + palette
+    // index back to the parent, not direct RGB). Same shape as
+    // the existing `vc` — needed when the parent flame has any
+    // active WritesRgb variation, otherwise apply_subflame_variations'
+    // signature has a vrc parameter we'd be omitting.
+    var vrc: vec3<f32> = vec3<f32>(0.0);
+{{/if}}
 
     for (var k: u32 = 0u; k < total_steps; k = k + 1u) {
         let r = rng_nextf(rng) * total_weight_safe;
@@ -202,7 +230,11 @@ fn subflame_iterate(
         vc = c_base;
 
         let affine_p = apply_affine(xform, current);
+{{#if HAS_RGB}}
+        current = apply_subflame_variations(xform, sub_xform_id, affine_p, rng, &vc, &vrc);
+{{else}}
         current = apply_subflame_variations(xform, sub_xform_id, affine_p, rng, &vc);
+{{/if}}
         if (xform.post_enabled > 0.5) {
             current = apply_post_affine(xform, current);
         }
@@ -211,7 +243,11 @@ fn subflame_iterate(
             let f_xform_id = sf_meta.xform_id_base + sf_meta.finals_offset + i;
             let f_xform = transforms[f_xform_id];
             let f_affine_p = apply_affine(f_xform, current);
+{{#if HAS_RGB}}
+            current = apply_subflame_variations(f_xform, f_xform_id, f_affine_p, rng, &vc, &vrc);
+{{else}}
             current = apply_subflame_variations(f_xform, f_xform_id, f_affine_p, rng, &vc);
+{{/if}}
             if (f_xform.post_enabled > 0.5) {
                 current = apply_post_affine(f_xform, current);
             }

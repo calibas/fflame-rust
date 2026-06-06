@@ -22,7 +22,7 @@
 //! Source: `output/jwildfire-vars/output/hexaplay3D.cpp`.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -46,14 +46,12 @@ pub static HEXAPLAY_3D: VariationDef = VariationDef {
     display_name: "Hexaplay 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng, Feature::NeedsTransform, Feature::NeedsAccum],
     parameters: &[
         param!("majp", "Major Plane", unlimited_float, 1.0, -10.0, 10.0, "Major-plane threshold for Z behavior. `|majp| ≤ 1` = all points on a single Z plane (no Z split). `|majp| > 1` = points split into two planes separated by `±(|majp| - 1) · 0.5` along Z; sign picked randomly per iteration. Unused in 2D mode (Z param)."),
         param!("scale", "Scale", unlimited_float, 0.25, -10.0, 10.0, "Input-blend scale. Internally pre-multiplied by 0.5; the X/Y output is `(accum · (scale - 1) + p · scale) / weight + vertex_offset`."),
         param!("zlift", "Z Lift", unlimited_float, 0.25, -10.0, 10.0, "Z input scale: `oz = p.z · 0.5 · zlift / weight`. Unused in 2D mode."),
     ],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 3,
@@ -63,7 +61,6 @@ pub static HEXAPLAY_3D: VariationDef = VariationDef {
          \x20       set_state(xform_id, variation_id, 1u, 0.0);\n\
          \x20       set_state(xform_id, variation_id, 2u, 0.0);"
     ),
-    needs_accum: true,
     wgsl_2d: r#"
 fn hex_seg60_2d(loc: u32) -> vec2<f32> {
     let hlift = 0.86602540378443864;

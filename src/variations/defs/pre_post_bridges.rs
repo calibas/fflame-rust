@@ -34,7 +34,7 @@
 //!     from `writes_color`; needs new flag.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -58,18 +58,15 @@ pub static PRE_CURL: VariationDef = VariationDef {
     display_name: "Pre Curl",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Pre,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[
         param!("c1", "C1", unlimited_float, 0.0, -5.0, 5.0, "Linear twist strength. Stronger = tighter curl around the center."),
         param!("c2", "C2", unlimited_float, 0.0, -5.0, 5.0, "Quadratic twist strength. Adds a second-order curl that grows away from the origin."),
     ],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_pre_curl(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let c1 = get_param(xform_id, variation_id, 0u);
@@ -125,13 +122,11 @@ pub static POST_JULIAQ: VariationDef = VariationDef {
     display_name: "Post JuliaQ",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Post,
-    needs_rng: true,
+    features: &[Feature::NeedsRng, Feature::NeedsTransform],
     parameters: &[
         param!("power", "Power", int, 3.0, -50.0, 50.0, "Number of Julia branches in the rational power."),
         param!("divisor", "Divisor", int, 2.0, -50.0, 50.0, "Rational-power divisor. Combined with `power` lets you pick non-integer branch counts (e.g. power=3, divisor=2 → 1.5 branches)."),
     ],
-    needs_transform: true,
-    writes_color: false,
     // 3 derived values at slots 2..5:
     //   2: half_inv_power  (0.5 · divisor / power)
     //   3: inv_power       (divisor / power)
@@ -152,7 +147,6 @@ fn init_post_juliaq(user: array<f32, 2>) -> array<f32, 3> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_post_juliaq(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let power = get_param(xform_id, variation_id, 0u);
@@ -207,13 +201,11 @@ pub static POST_JULIA3DQ: VariationDef = VariationDef {
     display_name: "Post Julia3DQ",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Post,
-    needs_rng: true,
+    features: &[Feature::NeedsRng, Feature::NeedsTransform],
     parameters: &[
         param!("power", "Power", int, 3.0, -50.0, 50.0, "Number of Julia branches."),
         param!("divisor", "Divisor", int, 2.0, -50.0, 50.0, "Rational-power divisor."),
     ],
-    needs_transform: true,
-    writes_color: false,
     // 4 derived values at slots 2..6:
     //   2: inv_power        (divisor / power)
     //   3: abs_inv_power    (|divisor / power|)
@@ -237,7 +229,6 @@ fn init_post_julia3Dq(user: array<f32, 2>) -> array<f32, 4> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_post_julia3Dq(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let power = get_param(xform_id, variation_id, 0u);

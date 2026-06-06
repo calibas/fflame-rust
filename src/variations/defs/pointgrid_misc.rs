@@ -25,7 +25,7 @@
 //!   - `output/jwildfire-vars/output/apocarpet_js.cpp`
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -49,7 +49,7 @@ pub static POINTGRID_WF: VariationDef = VariationDef {
     display_name: "Point Grid WF",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("xmin", "X Min", unlimited_float, -3.0, -100.0, 100.0, "Left edge of the grid region on the X axis."),
         param!("xmax", "X Max", unlimited_float, 3.0, -100.0, 100.0, "Right edge of the grid region on the X axis."),
@@ -60,8 +60,6 @@ pub static POINTGRID_WF: VariationDef = VariationDef {
         param!("distortion", "Distortion", unlimited_float, 2.3, -10.0, 10.0, "Per-cell jitter amplitude. 0 = no jitter (pure grid); larger = more scatter around each cell center."),
         param!("seed", "Seed", int, 1234.0, -100000.0, 100000.0, "Hash seed for the per-cell jitter — changing it reshuffles the jitter pattern."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 2,
     wgsl_init: Some(r#"
 fn init_pointgrid_wf(user: array<f32, 8>) -> array<f32, 2> {
@@ -75,7 +73,6 @@ fn init_pointgrid_wf(user: array<f32, 8>) -> array<f32, 2> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn pg_disc_noise(x: i32, y: i32) -> f32 {
     var n = x + y * 57;
@@ -156,7 +153,7 @@ pub static POINTGRID3D_WF: VariationDef = VariationDef {
     display_name: "Point Grid 3D WF",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("xmin", "X Min", unlimited_float, -3.0, -100.0, 100.0, "Left edge of the grid region on the X axis."),
         param!("xmax", "X Max", unlimited_float, 3.0, -100.0, 100.0, "Right edge of the grid region on the X axis."),
@@ -170,8 +167,6 @@ pub static POINTGRID3D_WF: VariationDef = VariationDef {
         param!("distortion", "Distortion", unlimited_float, 2.3, -10.0, 10.0, "Per-cell jitter amplitude. 0 = no jitter (pure grid); larger = more scatter around each cell center."),
         param!("seed", "Seed", int, 1234.0, -100000.0, 100000.0, "Hash seed for the per-cell jitter — changing it reshuffles the jitter pattern."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 3,
     wgsl_init: Some(r#"
 fn init_pointgrid3d_wf(user: array<f32, 11>) -> array<f32, 3> {
@@ -187,7 +182,6 @@ fn init_pointgrid3d_wf(user: array<f32, 11>) -> array<f32, 3> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn pg_disc_noise(x: i32, y: i32) -> f32 {
     var n = x + y * 57;
@@ -276,15 +270,12 @@ pub static APOCARPET_JS: VariationDef = VariationDef {
     display_name: "Apocarpet (JS)",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_apocarpet_js(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     let r = 1.0 / (1.0 + sqrt(2.0));

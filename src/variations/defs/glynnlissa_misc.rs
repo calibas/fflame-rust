@@ -20,7 +20,7 @@
 //! Source: `output/jwildfire-vars/output/glynnlissa.cpp`.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -37,7 +37,7 @@ pub static GLYNNLISSA: VariationDef = VariationDef {
     display_name: "Glynn Lissa",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("radius", "Radius", unlimited_float, 1.0, -10.0, 10.0, "Outer cutoff radius. Points inside use the inner curve; outside use the Glynn power-warp."),
         param!("radius1", "Radius 1", unlimited_float, 0.5, -10.0, 10.0, "Inner-curve sampling radius. Negative values trigger a small-circle fallback inside the cutoff."),
@@ -51,8 +51,6 @@ pub static GLYNNLISSA: VariationDef = VariationDef {
         param!("pow", "Pow", unlimited_float, 1.5, -10.0, 10.0, "Glynn power exponent (absolute value used internally)."),
         param!("contrast", "Contrast", unlimited_float, 0.5, -10.0, 10.0, "Glynn warp probability threshold — higher = more aggressive warping outside the cutoff."),
     ],
-    needs_transform: false,
-    writes_color: false,
     // 3 derived values at slots 11..14: _x1, _y1, _absPow
     init_param_count: 3,
     wgsl_init: Some(r#"
@@ -68,7 +66,6 @@ fn init_glynnlissa(user: array<f32, 11>) -> array<f32, 3> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_glynnlissa(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let radius = get_param(xform_id, variation_id, 0u);

@@ -9,7 +9,7 @@
 //!     for the per-axis sine displacement amplitude.
 
 use crate::variations::{
-    definition::VariationDef,
+    definition::{Feature, VariationDef},
     VariationCategory, VariationPhase,
 };
 
@@ -35,15 +35,12 @@ pub static POPCORN: VariationDef = VariationDef {
     display_name: "Popcorn",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
-    needs_transform: true,
+    features: &[Feature::NeedsTransform],
     parameters: &[],
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_popcorn(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let xf = transforms[xform_id];

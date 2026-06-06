@@ -31,7 +31,7 @@
 //! `output/jwildfire-vars/output/`.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -67,12 +67,10 @@ pub static EJULIA: VariationDef = VariationDef {
     display_name: "E-Julia",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("power", "Power", int, 2.0, -100.0, 100.0, "Number of angular branches. Negative values invert the input through the unit circle first."),
     ],
-    needs_transform: false,
-    writes_color: false,
     // 1 derived value at slot 1: sign
     init_param_count: 1,
     wgsl_init: Some(r#"
@@ -84,7 +82,6 @@ fn init_eJulia(user: array<f32, 1>) -> array<f32, 1> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_eJulia(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let power = get_param(xform_id, variation_id, 0u);
@@ -171,18 +168,15 @@ pub static EMOTION: VariationDef = VariationDef {
     display_name: "E-Motion",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("move", "Move", unlimited_float, 0.0, -10.0, 10.0, "Additive offset on μ (sign chosen by the sign of ν)."),
         param!("rotate", "Rotate", unlimited_float, 0.0, -10.0, 10.0, "Additive offset on ν."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_eMotion(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let move_p = get_param(xform_id, variation_id, 0u);
@@ -278,7 +272,7 @@ pub static FLOWER_DB: VariationDef = VariationDef {
     display_name: "Flower DB",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[
         param!("petals", "Petals", unlimited_float, 6.0, -50.0, 50.0, "Number of petal lobes (angular frequency of the sin modulator)."),
         param!("petal_split", "Petal Split", unlimited_float, 0.0, -10.0, 10.0, "Frequency multiplier on the inner cosine that creates per-petal sub-divisions."),
@@ -288,13 +282,10 @@ pub static FLOWER_DB: VariationDef = VariationDef {
         param!("petal_fold_strength", "Petal Fold Strength", unlimited_float, 0.0, -10.0, 10.0, "Z-axis fold strength applied to petals outside `petal_fold_radius`."),
         param!("petal_fold_radius", "Petal Fold Radius", unlimited_float, 1.0, -10.0, 10.0, "Radial threshold beyond which the petal fold kicks in."),
     ],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_flower_db(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let petals = get_param(xform_id, variation_id, 0u);
@@ -366,7 +357,7 @@ pub static JULIAN2: VariationDef = VariationDef {
     display_name: "JuliaN 2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("power", "Power", int, 0.0, -100.0, 100.0, "Number of angular branches. 0 produces zero output."),
         param!("dist", "Distance", unlimited_float, 1.0, -100.0, 100.0, "Radial-power exponent — output radius is `(X²+Y²)^(dist/(2·power))`."),
@@ -377,8 +368,6 @@ pub static JULIAN2: VariationDef = VariationDef {
         param!("e", "E", unlimited_float, 0.0, -10.0, 10.0, "Pre-affine x offset."),
         param!("f", "F", unlimited_float, 0.0, -10.0, 10.0, "Pre-affine y offset."),
     ],
-    needs_transform: false,
-    writes_color: false,
     // 2 derived values at slots 8..10:
     //   8: absN = |power|
     //   9: cN   = dist / (2·power)
@@ -394,7 +383,6 @@ fn init_julian2(user: array<f32, 8>) -> array<f32, 2> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_julian2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let power = get_param(xform_id, variation_id, 0u);

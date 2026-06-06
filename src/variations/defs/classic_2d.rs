@@ -30,7 +30,7 @@
 //!     (also a non-standard "x first" form); preserved.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -56,15 +56,12 @@ pub static FAN: VariationDef = VariationDef {
     display_name: "Fan",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_fan(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let xf = transforms[xform_id];
@@ -119,15 +116,12 @@ pub static FISHEYE: VariationDef = VariationDef {
     display_name: "Fisheye",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_fisheye(p: vec2<f32>) -> vec2<f32> {
     let r0 = sqrt(p.x * p.x + p.y * p.y);
@@ -163,15 +157,12 @@ pub static GRIDOUT: VariationDef = VariationDef {
     display_name: "Gridout",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_gridout(p: vec2<f32>) -> vec2<f32> {
     let x = round(p.x);
@@ -237,18 +228,15 @@ pub static CIRCULAR: VariationDef = VariationDef {
     display_name: "Circular",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("angle", "Angle", angle, 90.0, "Maximum rotation per iteration (degrees)."),
         param!("seed", "Seed", unlimited_float, 0.0, -100.0, 100.0, "Random seed for the noise term — change to vary the pattern."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_circular(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let angle_deg = get_param(xform_id, variation_id, 0u);
@@ -296,15 +284,12 @@ pub static PANORAMA1: VariationDef = VariationDef {
     display_name: "Panorama 1",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_panorama1(p: vec2<f32>) -> vec2<f32> {
     let aux = 1.0 / sqrt(p.x * p.x + p.y * p.y + 1.0);
@@ -341,15 +326,12 @@ pub static PANORAMA2: VariationDef = VariationDef {
     display_name: "Panorama 2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_panorama2(p: vec2<f32>) -> vec2<f32> {
     let aux = 1.0 / (sqrt(p.x * p.x + p.y * p.y) + 1.0);

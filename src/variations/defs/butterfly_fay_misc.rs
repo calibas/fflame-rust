@@ -30,7 +30,7 @@
 //! Source: `output/jwildfire-vars/output/butterfly_fay.cpp`.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -50,7 +50,7 @@ pub static BUTTERFLY_FAY: VariationDef = VariationDef {
     display_name: "Butterfly Fay",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("cycles", "Cycles", unlimited_float, 0.0, -100.0, 100.0, "Number of butterfly-curve cycles per full input rotation. 0 falls back to π² internally."),
         param!("offset", "Offset", unlimited_float, 0.0, -10.0, 10.0, "Additive offset on the curve radius formula."),
@@ -64,8 +64,6 @@ pub static BUTTERFLY_FAY: VariationDef = VariationDef {
         param!("spread_split", "Spread Split", unlimited_float, 1.0, -10.0, 10.0, "Multiplier on the input radius used to decide inner vs outer (compared against the curve radius)."),
         param!("fill", "Fill", unlimited_float, 0.0, -10.0, 10.0, "Random fill amount added to the curve radius. 0 disables; non-zero triggers an RNG call."),
     ],
-    needs_transform: false,
-    writes_color: false,
     // 1 derived value at slot 11: _number_of_cycles
     init_param_count: 1,
     wgsl_init: Some(r#"
@@ -79,7 +77,6 @@ fn init_butterfly_fay(user: array<f32, 11>) -> array<f32, 1> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_butterfly_fay(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let offset = get_param(xform_id, variation_id, 1u);

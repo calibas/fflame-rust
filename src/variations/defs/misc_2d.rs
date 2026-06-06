@@ -21,7 +21,7 @@
 //! to read the per-variation weight directly).
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -44,18 +44,15 @@ pub static SPLIT: VariationDef = VariationDef {
     display_name: "Split",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("xsize", "X size", unlimited_float, 0.4, -10.0, 10.0, "X-axis frequency of the mirror-flip cosine."),
         param!("ysize", "Y size", unlimited_float, 0.6, -10.0, 10.0, "Y-axis frequency of the mirror-flip cosine."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_split(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let xsize = get_param(xform_id, variation_id, 0u);
@@ -104,18 +101,15 @@ pub static SQUIRREL: VariationDef = VariationDef {
     display_name: "Squirrel",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("a", "A", unlimited_float, 1.0, -10.0, 10.0, "X² weight in the radius term."),
         param!("b", "B", unlimited_float, 1.0, -10.0, 10.0, "Y² weight in the radius term."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_squirrel(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let a = get_param(xform_id, variation_id, 0u);
@@ -157,18 +151,15 @@ pub static STRIPES: VariationDef = VariationDef {
     display_name: "Stripes",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("space", "Space", unlimited_float, 0.2, -5.0, 5.0, "Compression factor for X within each stripe — 1 collapses to integer values, 0 disables compression."),
         param!("warp", "Warp", unlimited_float, 0.6, -5.0, 5.0, "Parabolic Y-bend amplitude as a function of local stripe offset."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_stripes(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let space = get_param(xform_id, variation_id, 0u);
@@ -216,14 +207,12 @@ pub static SHIFT: VariationDef = VariationDef {
     display_name: "Shift",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("shift_x", "Shift X", unlimited_float, 0.0, -10.0, 10.0, "X-axis shift amount (in the rotated frame)."),
         param!("shift_y", "Shift Y", unlimited_float, 0.0, -10.0, 10.0, "Y-axis shift amount (in the rotated frame)."),
         param!("angle", "Angle (deg)", angle, 0.0, "Rotation angle of the shift vector, in degrees."),
     ],
-    needs_transform: false,
-    writes_color: false,
     // 2 derived values at slots 3..5:
     //   3: cos_ang
     //   4: sin_ang
@@ -239,7 +228,6 @@ fn init_shift(user: array<f32, 3>) -> array<f32, 2> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_shift(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let sx = get_param(xform_id, variation_id, 0u);
@@ -292,13 +280,11 @@ pub static PRESSURE_WAVE: VariationDef = VariationDef {
     display_name: "Pressure Wave",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("x_freq", "X freq", unlimited_float, 1.0, -50.0, 50.0, "X-axis sine frequency. Amplitude scales as `1 / (2π·freq)`; 0 degenerates to `sin(x)`."),
         param!("y_freq", "Y freq", unlimited_float, 1.0, -50.0, 50.0, "Y-axis sine frequency. Same scaling rule as x_freq."),
     ],
-    needs_transform: false,
-    writes_color: false,
     // 4 derived values at slots 2..6:
     //   2: pwx   (x_freq · 2π,  or 1.0 if x_freq == 0)
     //   3: pwy   (y_freq · 2π,  or 1.0)
@@ -322,7 +308,6 @@ fn init_pressure_wave(user: array<f32, 2>) -> array<f32, 4> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_pressure_wave(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let pwx = get_param(xform_id, variation_id, 2u);
@@ -370,18 +355,15 @@ pub static SPHERICALN: VariationDef = VariationDef {
     display_name: "Spherical N",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("power", "Power", unlimited_float, 1.0, -50.0, 50.0, "Number of angular branches — `⌊|power|⌋` determines the spoke count, and each iteration picks one at random."),
         param!("dist", "Distance", unlimited_float, 1.0, -10.0, 10.0, "Radial-power exponent — output radius is `1 / r^dist`. `dist = 1` reduces to a standard spherical inversion."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_sphericalN(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let power = get_param(xform_id, variation_id, 0u);
@@ -431,13 +413,11 @@ pub static SPLIGON: VariationDef = VariationDef {
     display_name: "Spligon",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("sides", "Sides", unlimited_float, 3.0, 1.0, 50.0, "Number of polygon spokes."),
         param!("i", "I", unlimited_float, 1.0, -10.0, 10.0, "Spike angular offset — rotates the spike direction within its spoke sector."),
     ],
-    needs_transform: false,
-    writes_color: false,
     // 3 derived values at slots 2..5:
     //   2: th   (sides / 2π)
     //   3: thi  (1 / th)
@@ -460,7 +440,6 @@ fn init_spligon(user: array<f32, 2>) -> array<f32, 3> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_spligon(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let th = get_param(xform_id, variation_id, 2u);
@@ -513,17 +492,14 @@ pub static TILE_HLP: VariationDef = VariationDef {
     display_name: "Tile HLP",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng, Feature::NeedsTransform],
     parameters: &[
         param!("width", "Width", unlimited_float, 1.0, -10.0, 10.0, "Stripe width along X. Smaller width = more, narrower stripes."),
     ],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_tile_hlp(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let width = get_param(xform_id, variation_id, 0u);

@@ -3,7 +3,7 @@
 //! Pre-phase variations directly modify the input coordinates before normal variations.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -17,15 +17,12 @@ pub static PRE_ZSCALE: VariationDef = VariationDef {
     display_name: "Pre-ZScale",
     category: VariationCategory::Depth3D,
     phase: VariationPhase::Pre,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_pre_zscale(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     // Pre_ZScale only affects Z (3D mode), pass through in 2D
@@ -49,15 +46,12 @@ pub static PRE_ZTRANSLATE: VariationDef = VariationDef {
     display_name: "Pre-ZTranslate",
     category: VariationCategory::Depth3D,
     phase: VariationPhase::Pre,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_pre_ztranslate(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     // Pre_ZTranslate only affects Z (3D mode), pass through in 2D
@@ -84,15 +78,12 @@ pub static PRE_SPHERICAL: VariationDef = VariationDef {
     display_name: "Pre-Spherical",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Pre,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_pre_spherical(p: vec2<f32>) -> vec2<f32> {
     // Apophysis Pre-Spherical: Pre-phase spherical distortion
@@ -120,15 +111,12 @@ pub static PRE_SINUSOIDAL: VariationDef = VariationDef {
     display_name: "Pre-Sinusoidal",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Pre,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_pre_sinusoidal(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     // Apophysis Pre-Sinusoidal: Pre-phase sinusoidal wave
@@ -156,15 +144,12 @@ pub static PRE_DISC: VariationDef = VariationDef {
     display_name: "Pre-Disc",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Pre,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_pre_disc(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     // Apophysis Pre-Disc: Pre-phase disc transformation
@@ -196,7 +181,7 @@ pub static PRE_BWRAPS: VariationDef = VariationDef {
     display_name: "Pre Bwraps",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Pre,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("cellsize", "Cell Size", unlimited_float, 1.0, -10.0, 10.0, "Width of each grid cell — the plane is divided into cells of this size, each becoming a bubble."),
         param!("space", "Space", unlimited_float, 0.0, -1.0, 1.0, "Gap between cells. 0 = no gap; positive values push the bubbles apart."),
@@ -210,8 +195,6 @@ pub static PRE_BWRAPS: VariationDef = VariationDef {
     //   7: rfactor             (radius / max_bubble)
     //   8: inner_twist_rad     (inner_twist · π/180)
     //   9: outer_twist_rad     (outer_twist · π/180)
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 5,
     wgsl_init: Some(r#"
 fn init_pre_bwraps(user: array<f32, 5>) -> array<f32, 5> {
@@ -245,7 +228,6 @@ fn init_pre_bwraps(user: array<f32, 5>) -> array<f32, 5> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_pre_bwraps(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let cellsize = get_param(xform_id, variation_id, 0u);
@@ -347,7 +329,7 @@ pub static PRE_CROP: VariationDef = VariationDef {
     display_name: "Pre Crop",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Pre,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("left", "Left", unlimited_float, -1.0, -5.0, 5.0, "Left edge of the rectangle the points are constrained to."),
         param!("top", "Top", unlimited_float, -1.0, -5.0, 5.0, "Top edge of the rectangle."),
@@ -356,13 +338,10 @@ pub static PRE_CROP: VariationDef = VariationDef {
         param!("scatter_area", "Scatter Area", float, 0.0, -1.0, 1.0, "Width of the random scatter band along the rectangle's edges. 0 = points snap exactly to the edge."),
         param!("zero", "Zero", bool, false, "When on, points outside the rectangle collapse to the origin. When off, they scatter back to the nearest edge."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_pre_crop(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     // Apophysis Pre_Crop - same as crop but applied before variations
@@ -455,7 +434,7 @@ pub static PRE_FALLOFF2: VariationDef = VariationDef {
     display_name: "Pre Falloff2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Pre,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("scatter", "Scatter", unlimited_float, 1.0, 0.000001, 10.0, "Maximum random scatter applied at full strength."),
         param!("mindist", "Min Distance", unlimited_float, 0.5, 0.0, 10.0, "Distance from the center where the falloff kicks in. Points inside this radius get full strength scatter."),
@@ -470,13 +449,10 @@ pub static PRE_FALLOFF2: VariationDef = VariationDef {
         param!("type", "Blur Type", enum, 0, &["Uniform", "Triangular", "Gaussian"],
             "Random distribution shape. Triangular is smoother; Gaussian concentrates near zero."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_pre_falloff2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     // Apophysis Pre_Falloff2 - Distance-based scatter with multiple blur modes

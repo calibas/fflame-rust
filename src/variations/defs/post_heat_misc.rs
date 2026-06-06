@@ -21,7 +21,7 @@
 //! Source: `output/jwildfire-vars/output/post_heat.cpp`.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -40,7 +40,7 @@ pub static POST_HEAT: VariationDef = VariationDef {
     display_name: "Post Heat",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Post,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[
         param!("theta_period", "Theta Period", unlimited_float, 0.0, -100.0, 100.0, "Period of the θ (azimuthal angle) sine perturbation. 0 disables theta perturbation."),
         param!("theta_phase", "Theta Phase", unlimited_float, 0.0, -10.0, 10.0, "Phase offset on the θ sine."),
@@ -52,13 +52,10 @@ pub static POST_HEAT: VariationDef = VariationDef {
         param!("r_phase", "R Phase", unlimited_float, 0.0, -10.0, 10.0, "Phase offset on the r sine."),
         param!("r_amp", "R Amp", unlimited_float, 0.0, -10.0, 10.0, "Amplitude of the radial sine perturbation."),
     ],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_post_heat(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let theta_period = get_param(xform_id, variation_id, 0u);

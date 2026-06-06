@@ -30,7 +30,7 @@
 //!   - `output/jwildfire-vars/output/cpow3_wf.cpp`
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -50,18 +50,15 @@ pub static DC_CARPET: VariationDef = VariationDef {
     display_name: "DC Carpet",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng, Feature::NeedsTransform],
     parameters: &[
         param!("origin", "Origin", unlimited_float, 1.0, -10.0, 10.0, "Unused in the body — preserved as a parameter for cpp parity and preset compatibility."),
         param!("iterations", "Iterations", int, 5.0, 1.0, 100.0, "Unused in the body — preserved as a parameter for cpp parity."),
     ],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn dc_carpet_signum(v: f32) -> f32 {
     if (v < 0.0) { return -1.0; }
@@ -122,19 +119,16 @@ pub static POST_POINT_SYMMETRY_WF: VariationDef = VariationDef {
     display_name: "Post Point Symmetry WF",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Post,
-    needs_rng: true,
+    features: &[Feature::NeedsRng, Feature::NeedsTransform],
     parameters: &[
         param!("centre_x", "Centre X", unlimited_float, 0.25, -10.0, 10.0, "X center of the rotational symmetry."),
         param!("centre_y", "Centre Y", unlimited_float, 0.5, -10.0, 10.0, "Y center of the rotational symmetry."),
         param!("order", "Order", int, 3.0, 1.0, 16.0, "Number of rotational-symmetry orders (≥ 1). 3 = 3-fold rotation, 4 = 4-fold, etc."),
     ],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_post_point_symmetry_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let cx = get_param(xform_id, variation_id, 0u);
@@ -194,7 +188,7 @@ pub static CPOW3_WF: VariationDef = VariationDef {
     display_name: "CPow3 WF",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("r", "R", unlimited_float, 1.0, -10.0, 10.0, "Complex-power magnitude."),
         param!("a", "A", unlimited_float, 0.1, -10.0, 10.0, "Complex-power angle (scaled by π/2 internally)."),
@@ -204,8 +198,6 @@ pub static CPOW3_WF: VariationDef = VariationDef {
         param!("spread2", "Spread 2", unlimited_float, 0.0, -10.0, 10.0, "Range of the secondary multiplicative random offset on the final angle."),
         param!("offset2", "Offset 2", unlimited_float, 1.0, -10.0, 10.0, "Constant offset added to the secondary random multiplier."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 7,
     wgsl_init: Some(r#"
 fn init_cpow3_wf(user: array<f32, 7>) -> array<f32, 7> {
@@ -232,7 +224,6 @@ fn init_cpow3_wf(user: array<f32, 7>) -> array<f32, 7> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_cpow3_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let spread = get_param(xform_id, variation_id, 3u);

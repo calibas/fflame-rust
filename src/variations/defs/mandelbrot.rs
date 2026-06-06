@@ -31,7 +31,7 @@
 //! Source: [`output/variation-jwf-source/MandelbrotFunc.java`](../../../output/variation-jwf-source/MandelbrotFunc.java).
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -51,14 +51,11 @@ pub static MANDELBROT: VariationDef = VariationDef {
     display_name: "Mandelbrot",
     category: VariationCategory::Plugin,
     phase: VariationPhase::Normal,
-    needs_rng: true,
-    needs_transform: false,
-    writes_color: false,
+    features: &[Feature::NeedsRng],
     init_param_count: 0,
     wgsl_init: None,
     state_count: 3,
     wgsl_state_init: None,
-    needs_accum: false,
     parameters: &[
         param!("iter", "Iter", unlimited_int, 100.0, 1.0, 1000.0, "Maximum escape iterations per seed. **GPU-clamped to 250** to stay within the TDR budget when combined with the 10-retry outer loop and per-dispatch thread count. Values above 250 in the .flame XML round-trip but render at 250."),
         param!("xmin", "X Min", unlimited_float, -1.6, -10.0, 10.0, "Lower X bound of the random-seed sampling rectangle."),

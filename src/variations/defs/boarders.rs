@@ -30,7 +30,7 @@
 //!     `truchet_fill`).
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -51,15 +51,12 @@ pub static BOARDERS: VariationDef = VariationDef {
     display_name: "Boarders",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_boarders(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     let round_x = round(p.x);
@@ -152,14 +149,12 @@ pub static BOARDERS2: VariationDef = VariationDef {
     display_name: "Boarders 2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("c", "C", unlimited_float, 0.4, -5.0, 5.0, "Cell scale factor — how much the in-cell offset shrinks toward the cell center."),
         param!("left", "Left", unlimited_float, 0.65, -5.0, 5.0, "Border push-out distance — how far points get pushed toward the nearest cell border."),
         param!("right", "Right", unlimited_float, 0.35, -5.0, 5.0, "Threshold for border behavior vs pass-through. Higher = more points get pushed to borders."),
     ],
-    needs_transform: false,
-    writes_color: false,
     // 3 derived values at slots 3..6:
     //   3: _c   (max(|c|, ε))
     //   4: _cl  (_c · max(|left|, ε))
@@ -179,7 +174,6 @@ fn init_boarders2(user: array<f32, 3>) -> array<f32, 3> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_boarders2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let c = get_param(xform_id, variation_id, 3u);
@@ -278,14 +272,12 @@ pub static PRE_BOARDERS2: VariationDef = VariationDef {
     display_name: "Pre Boarders 2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Pre,
-    needs_rng: true,
+    features: &[Feature::NeedsRng, Feature::NeedsTransform],
     parameters: &[
         param!("c", "C", unlimited_float, 0.4, -5.0, 5.0, "Cell scale factor — how much the in-cell offset shrinks toward the cell center."),
         param!("left", "Left", unlimited_float, 0.65, -5.0, 5.0, "Border push-out distance — how far points get pushed toward the nearest cell border."),
         param!("right", "Right", unlimited_float, 0.35, -5.0, 5.0, "Threshold for border behavior vs pass-through. Higher = more points get pushed to borders."),
     ],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 3,
     wgsl_init: Some(r#"
 fn init_pre_boarders2(user: array<f32, 3>) -> array<f32, 3> {
@@ -301,7 +293,6 @@ fn init_pre_boarders2(user: array<f32, 3>) -> array<f32, 3> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_pre_boarders2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let c = get_param(xform_id, variation_id, 3u);
@@ -400,20 +391,17 @@ pub static SPLITBRDR: VariationDef = VariationDef {
     display_name: "Split Brdr",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng, Feature::NeedsTransform],
     parameters: &[
         param!("x", "X", unlimited_float, 0.25, -5.0, 5.0, "Border push offset in one direction."),
         param!("y", "Y", unlimited_float, 0.25, -5.0, 5.0, "Border push offset in the other direction."),
         param!("px", "PX", unlimited_float, 0.0, -5.0, 5.0, "Linear pass-through scaling for X — adds a fraction of the input X to the output."),
         param!("py", "PY", unlimited_float, 0.0, -5.0, 5.0, "Linear pass-through scaling for Y."),
     ],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_splitbrdr(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let xp = get_param(xform_id, variation_id, 0u);

@@ -31,7 +31,7 @@
 //! `output/jwildfire-vars/output/`.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -59,17 +59,14 @@ pub static SWIRL3: VariationDef = VariationDef {
     display_name: "Swirl 3",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("shift", "Shift", unlimited_float, 0.5, -10.0, 10.0, "Logarithmic spiral coefficient. Larger = tighter spiral."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_swirl3(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let shift = get_param(xform_id, variation_id, 0u);
@@ -108,15 +105,12 @@ pub static WDISC: VariationDef = VariationDef {
     display_name: "W-Disc",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_wdisc(p: vec2<f32>) -> vec2<f32> {
     let pi = 3.14159265358979;
@@ -167,19 +161,16 @@ pub static SPH3D: VariationDef = VariationDef {
     display_name: "Sph 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("x", "X scale", unlimited_float, 1.0, -10.0, 10.0, "X-axis scale on the inverse-distance denominator."),
         param!("y", "Y scale", unlimited_float, 1.0, -10.0, 10.0, "Y-axis scale."),
         param!("z", "Z scale", unlimited_float, 1.0, -10.0, 10.0, "Z-axis scale — note: due to an upstream typo the body actually uses `x_scale` for `zz`, so this parameter is effectively unused. Preserved for preset compatibility."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_sph3D(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let x_scale = get_param(xform_id, variation_id, 0u);
@@ -223,15 +214,12 @@ pub static INVSQUIRCULAR: VariationDef = VariationDef {
     display_name: "Inv Squircular",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_invsquircular(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let w = transforms[xform_id].variations[variation_id];
@@ -295,7 +283,7 @@ pub static SPHERE_NJA: VariationDef = VariationDef {
     display_name: "Sphere NJA",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[
         param!("circle_a", "Circle A", unlimited_float, 1.0, -10.0, 10.0, "Declared in the upstream source but unused in the body. Preserved as a parameter for preset compatibility."),
         param!("circle_b", "Circle B", unlimited_float, 1.0, -10.0, 10.0, "Declared but unused (same as `circle_a`)."),
@@ -304,13 +292,10 @@ pub static SPHERE_NJA: VariationDef = VariationDef {
         param!("shift_z", "Shift Z", unlimited_float, 0.0, -10.0, 10.0, "Z-axis center offset."),
         param!("stretch", "Stretch", unlimited_float, 1.0, -10.0, 10.0, "Radial-to-angular scaling factor in `t = sqtr/stretch − π/2`."),
     ],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_sphere_nja(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let shift_x = get_param(xform_id, variation_id, 2u);

@@ -20,7 +20,7 @@
 //!     weight's sign — read inside via the same divide-out body.)
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -45,19 +45,16 @@ pub static HO: VariationDef = VariationDef {
     display_name: "HO",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("xpow", "X Power", unlimited_float, 3.0, -10.0, 10.0, "Exponent applied to `cos(x)·cos(y)` in the X output."),
         param!("ypow", "Y Power", unlimited_float, 3.0, -10.0, 10.0, "Exponent applied to `sin(x)·cos(y)` in the Y output."),
         param!("zpow", "Z Power", unlimited_float, 3.0, -10.0, 10.0, "Exponent applied to `sin(y)` in the Z output."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_ho(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let xpow = get_param(xform_id, variation_id, 0u);
@@ -132,7 +129,7 @@ pub static CHUNK: VariationDef = VariationDef {
     display_name: "Chunk",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[
         param!("a", "A", unlimited_float, 1.0, -10.0, 10.0, "x² coefficient."),
         param!("b", "B", unlimited_float, 0.0, -10.0, 10.0, "x·y coefficient."),
@@ -142,13 +139,10 @@ pub static CHUNK: VariationDef = VariationDef {
         param!("f", "F", unlimited_float, -1.0, -10.0, 10.0, "Constant offset."),
         param!("mode", "Mode", bool, false, "When on, keep points where `r > 0`. When off, keep where `r ≤ 0`."),
     ],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_chunk(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let a = get_param(xform_id, variation_id, 0u);
@@ -224,7 +218,7 @@ pub static PTRANSFORM: VariationDef = VariationDef {
     display_name: "P Transform",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("rotate", "Rotate", unlimited_float, 0.0, -10.0, 10.0, "Angular rotation added to θ, in radians."),
         param!("power", "Power", int, 1.0, -50.0, 50.0, "Radial divisor. When `use_log` is off, this is the reciprocal scaling factor on the input radius."),
@@ -232,13 +226,10 @@ pub static PTRANSFORM: VariationDef = VariationDef {
         param!("split", "Split", unlimited_float, 0.0, -10.0, 10.0, "Asymmetric ρ offset, added when x ≥ 0 and subtracted when x < 0."),
         param!("use_log", "Use Log", bool, true, "When on, apply a log/exp transform around the polar radius ρ (true log-polar). When off, use linear radius."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_pTransform(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let rotate = get_param(xform_id, variation_id, 0u);
@@ -295,7 +286,7 @@ pub static RATIONAL3: VariationDef = VariationDef {
     display_name: "Rational 3",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("a", "A", unlimited_float, 0.5, -10.0, 10.0, "Numerator coefficient on the `x³ − 3xy²` term."),
         param!("b", "B", unlimited_float, 0.0, -10.0, 10.0, "Numerator coefficient on the `x² − y²` term."),
@@ -306,13 +297,10 @@ pub static RATIONAL3: VariationDef = VariationDef {
         param!("g", "G", unlimited_float, 0.0, -10.0, 10.0, "Denominator linear coefficient on x."),
         param!("h", "H", unlimited_float, 1.0, -10.0, 10.0, "Denominator constant term."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_rational3(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let a = get_param(xform_id, variation_id, 0u);
@@ -401,19 +389,16 @@ pub static TILE_REVERSE: VariationDef = VariationDef {
     display_name: "Tile Reverse",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("space", "Space", unlimited_float, 1.0, -10.0, 10.0, "Tile offset along the active axis."),
         param!("reversal", "Reversal", unlimited_float, 1.0, -10.0, 10.0, "When equal to 1.0, the active axis is also mirrored. Any other value passes through unchanged."),
         param!("vertical", "Vertical", bool, false, "When on, tile along the vertical axis. When off, horizontal."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_tile_reverse(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let space = get_param(xform_id, variation_id, 0u);
@@ -473,18 +458,15 @@ pub static ORTHO: VariationDef = VariationDef {
     display_name: "Ortho",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("in_p", "In", unlimited_float, 0.0, -10.0, 10.0, "Branch-selector multiplier for the inside-disc Möbius transform."),
         param!("out_p", "Out", unlimited_float, 0.0, -10.0, 10.0, "Branch-selector multiplier for the outside-disc Möbius transform."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_ortho(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let in_p = get_param(xform_id, variation_id, 0u);

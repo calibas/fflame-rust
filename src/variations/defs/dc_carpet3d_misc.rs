@@ -24,7 +24,7 @@
 //! Java body embedded as comment is the canonical reference).
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -54,7 +54,7 @@ pub static DC_CARPET3D: VariationDef = VariationDef {
     display_name: "DC Carpet 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng, Feature::NeedsTransform, Feature::WritesColor],
     parameters: &[
         param!("origin", "Origin", unlimited_float, 0.5, -10.0, 10.0, "Scales the per-iteration color-mix amplitude (precomputed as `H = 0.1 · origin`)."),
         param!("color_a", "Color A", unlimited_float, 0.5, -10.0, 10.0, "Multiplier on the previous color value in the color mix."),
@@ -71,8 +71,6 @@ pub static DC_CARPET3D: VariationDef = VariationDef {
         param!("offset_z", "Offset Z", unlimited_float, 0.0, -10.0, 10.0, "Constant Z bump added to the color-driven Z term per iteration."),
         param!("reset_z", "Reset Z", unlimited_float, 0.0, 0.0, 1.0, "When > 0, the color-derived `dz` overrides Z rather than accumulating onto the pre-existing Z."),
     ],
-    needs_transform: true,
-    writes_color: true,
     // 1 derived value at slot 14:
     //   14: H = 0.1 * origin   (precomputed per-frame init)
     init_param_count: 1,
@@ -85,7 +83,6 @@ fn init_dc_carpet3D(user: array<f32, 14>) -> array<f32, 1> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     // 2D body: spatial carpet + color write. No Z output (2D mode), so the
     // `dz` term collapses; we still write color so the variation behaves
     // consistently across render modes.

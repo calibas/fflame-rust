@@ -18,7 +18,7 @@
 //! the `unportable_dc` (writes color) or `unported_stub` buckets.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -55,7 +55,7 @@ pub static TRUCHET_FILL: VariationDef = VariationDef {
     display_name: "Truchet Fill",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[
         param!("exponent", "Exponent", unlimited_float, 2.0, 0.001, 2.0,
             "Lp-norm exponent for the cell distance metric — controls how rounded or cornered the arcs are. Clamped to [0.001, 2.0]."),
@@ -64,8 +64,6 @@ pub static TRUCHET_FILL: VariationDef = VariationDef {
         param!("seed", "Seed", unlimited_float, 0.0, 0.0, 100.0,
             "Hash seed for per-cell tile orientation. 0 = all same orientation; 1 = all flipped; other values produce a varied pattern."),
     ],
-    needs_transform: true,
-    writes_color: false,
     // 4 derived values at slots 3..7:
     //   3: _exponent  clamp(exponent, 0.001, 2.0)
     //   4: _onen      1 / _exponent
@@ -89,7 +87,6 @@ fn init_truchet_fill(user: array<f32, 3>) -> array<f32, 4> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_truchet_fill(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let seed = get_param(xform_id, variation_id, 2u);

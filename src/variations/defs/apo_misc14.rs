@@ -36,7 +36,7 @@
 //! `output/jwildfire-vars/output/`.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -64,7 +64,7 @@ pub static WAVES2_RADIAL: VariationDef = VariationDef {
     display_name: "Waves2 Radial",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("w2r_scalex", "Scale X", unlimited_float, 0.1, -10.0, 10.0, "X-axis sine amplitude."),
         param!("w2r_scaley", "Scale Y", unlimited_float, 0.1, -10.0, 10.0, "Y-axis sine amplitude."),
@@ -73,13 +73,10 @@ pub static WAVES2_RADIAL: VariationDef = VariationDef {
         param!("w2r_null", "Null", unlimited_float, 2.0, -10.0, 10.0, "Inner radius — full effect below this distance from the origin."),
         param!("w2r_distance", "Distance", unlimited_float, 10.0, -100.0, 100.0, "Outer radius — zero effect above this distance."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_waves2_radial(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let scalex = get_param(xform_id, variation_id, 0u);
@@ -150,13 +147,11 @@ pub static SPLIPTIC_BS: VariationDef = VariationDef {
     display_name: "Spliptic BS",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng, Feature::NeedsTransform],
     parameters: &[
         param!("x", "X", unlimited_float, 0.05, -10.0, 10.0, "X-axis constant offset. Sign added when input x ≥ 0, subtracted when input x < 0."),
         param!("y", "Y", unlimited_float, 0.05, -10.0, 10.0, "Y-axis constant offset. Sign chosen by the same random branch that picks the Y-output sign."),
     ],
-    needs_transform: true,
-    writes_color: false,
     // 1 derived value at slot 2: _v_div_w = 2/π
     init_param_count: 1,
     wgsl_init: Some(r#"
@@ -168,7 +163,6 @@ fn init_spliptic_bs(user: array<f32, 2>) -> array<f32, 1> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_spliptic_bs(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let x_p = get_param(xform_id, variation_id, 0u);
@@ -271,14 +265,12 @@ pub static POINCARE3D: VariationDef = VariationDef {
     display_name: "Poincare 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("r", "R", unlimited_float, 0.0, -10.0, 10.0, "Center distance from origin (radius of the inversion center)."),
         param!("a", "A", unlimited_float, 0.0, -10.0, 10.0, "Azimuthal angle of the inversion center (in units of π/2)."),
         param!("b", "B", unlimited_float, 0.0, -10.0, 10.0, "Polar angle of the inversion center (in units of π/2)."),
     ],
-    needs_transform: false,
-    writes_color: false,
     // 10 derived values at slots 3..13
     init_param_count: 10,
     wgsl_init: Some(r#"
@@ -310,7 +302,6 @@ fn init_poincare3D(user: array<f32, 3>) -> array<f32, 10> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_poincare3D(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let cx = get_param(xform_id, variation_id, 3u);

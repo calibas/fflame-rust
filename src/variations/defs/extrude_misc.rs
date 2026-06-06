@@ -16,7 +16,7 @@
 //! Source: `output/jwildfire-vars/output/extrude.cpp`.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -34,17 +34,14 @@ pub static EXTRUDE: VariationDef = VariationDef {
     display_name: "Extrude",
     category: VariationCategory::Depth3D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng, Feature::NeedsTransform],
     parameters: &[
         param!("root_face", "Root Face", unlimited_float, 0.5, -10.0, 10.0, "Probability threshold for the `root face` branch — values below it set Z to the (clamped) weight; values above set Z to `weight · rand`."),
     ],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_extrude(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let _ = rng_nextf(rng);

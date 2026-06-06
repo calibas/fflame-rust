@@ -23,7 +23,7 @@
 //! Source: `output/jwildfire-vars/output/glynnsshape.cpp`.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -40,7 +40,7 @@ pub static GLYNNSSHAPE: VariationDef = VariationDef {
     display_name: "Glynn S-Shape",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("radius", "Radius", unlimited_float, 1.0, -10.0, 10.0, "Outer cutoff radius. Points inside use the super-shape curve; outside use the Glynn power-warp."),
         param!("radius1", "Radius 1", unlimited_float, 0.5, -10.0, 10.0, "Inner-curve sampling radius. Negative values trigger a small-circle fallback inside the cutoff."),
@@ -54,8 +54,6 @@ pub static GLYNNSSHAPE: VariationDef = VariationDef {
         param!("pow", "Pow", unlimited_float, 1.5, -10.0, 10.0, "Glynn power exponent (absolute value used internally)."),
         param!("contrast", "Contrast", unlimited_float, 0.5, -10.0, 10.0, "Glynn warp probability threshold — higher = more aggressive warping outside the cutoff."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 3,
     wgsl_init: Some(r#"
 fn init_glynnSShape(user: array<f32, 11>) -> array<f32, 3> {
@@ -70,7 +68,6 @@ fn init_glynnSShape(user: array<f32, 11>) -> array<f32, 3> {
 "#),
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn glynnSShape_super(m: f32, n1: f32, n2: f32, n3: f32, phi: f32) -> vec2<f32> {
     let half_phi = m * phi * 0.25;

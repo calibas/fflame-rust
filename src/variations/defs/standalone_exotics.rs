@@ -28,7 +28,7 @@
 //!     in our outer-multiplier convention.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -54,7 +54,7 @@ pub static KALEIDOSCOPE: VariationDef = VariationDef {
     display_name: "Kaleidoscope",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[
         param!("pull", "Pull", unlimited_float, 0.0, -5.0, 5.0, "Y-axis pull strength — pulls the upper and lower halves apart."),
         param!("rotate", "Rotate", unlimited_float, 1.0, -5.0, 5.0, "Rotation scaling on both axes."),
@@ -62,13 +62,10 @@ pub static KALEIDOSCOPE: VariationDef = VariationDef {
         param!("x", "X", unlimited_float, 0.0, -5.0, 5.0, "Additional X offset."),
         param!("y", "Y", unlimited_float, 0.0, -5.0, 5.0, "Additional Y offset for the upper half."),
     ],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_kaleidoscope(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let pull = get_param(xform_id, variation_id, 0u);
@@ -134,20 +131,17 @@ pub static TAURUS: VariationDef = VariationDef {
     display_name: "Taurus",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[Feature::NeedsTransform],
     parameters: &[
         param!("r", "R", unlimited_float, 3.0, -10.0, 10.0, "Torus radius."),
         param!("n", "N", unlimited_float, 5.0, -20.0, 20.0, "Number of cosine-modulation cycles around the torus."),
         param!("inv", "Inv", unlimited_float, 1.5, -10.0, 10.0, "Blend between fixed and modulated radius. 0 = fully modulated; 1 = fixed."),
         param!("sor", "Sor", unlimited_float, 1.0, -10.0, 10.0, "Spherical-coordinate blend factor for the Z output."),
     ],
-    needs_transform: true,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_taurus(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let r_p = get_param(xform_id, variation_id, 0u);
@@ -211,7 +205,7 @@ pub static HOLE2: VariationDef = VariationDef {
     display_name: "Hole 2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("a", "A", unlimited_float, 1.0, -10.0, 10.0, "Power for the angle-derived scaling factor."),
         param!("b", "B", unlimited_float, 2.0, -10.0, 10.0, "Angular wave frequency — used by shapes 2, 6, 7, 8, 9 to vary their angular modulation."),
@@ -220,13 +214,10 @@ pub static HOLE2: VariationDef = VariationDef {
         param!("inside", "Inside", bool, false, "When on, inverts the radial formula (`w/r`) instead of scaling (`w·r`)."),
         param!("shape", "Shape", enum, 0, &["Linear", "Constant", "Petals", "Dipolar", "Quadratic", "Spiked", "Cardioid", "Half-Petals", "Nested Sin", "Harmonic"], "Radial-formula family. Each option applies a different geometric term inside the `sqrt(rhosq + …)` that determines the output radius."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_hole2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let a = get_param(xform_id, variation_id, 0u);

@@ -24,7 +24,7 @@
 //! decision; tracked on the watchlist.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -60,7 +60,7 @@ pub static MOBIUSN: VariationDef = VariationDef {
     display_name: "MobiusN",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    needs_rng: true,
+    features: &[Feature::NeedsRng],
     parameters: &[
         param!("re_a", "Re A", unlimited_float, 1.0, -10.0, 10.0, "Real part of complex coefficient A (numerator multiplier)."),
         param!("re_b", "Re B", unlimited_float, 0.0, -10.0, 10.0, "Real part of complex coefficient B (numerator offset)."),
@@ -73,13 +73,10 @@ pub static MOBIUSN: VariationDef = VariationDef {
         param!("power", "Power", unlimited_float, 1.0, -10.0, 10.0, "Exponent for the `z^power` transform that wraps the Möbius operation. Higher values create more arms in the output."),
         param!("dist", "Distance", unlimited_float, 1.0, -10.0, 10.0, "Scales the radial component of the wrapping transform."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_mobiusN(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let re_a = get_param(xform_id, variation_id, 0u);
@@ -192,7 +189,7 @@ pub static MOBIQ: VariationDef = VariationDef {
     display_name: "Mobiq",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    needs_rng: false,
+    features: &[],
     parameters: &[
         param!("qat", "qa.t", unlimited_float, 1.0, -10.0, 10.0, "T (scalar) component of quaternion A (numerator multiplier)."),
         param!("qax", "qa.x", unlimited_float, 0.0, -10.0, 10.0, "X (i) component of quaternion A (numerator multiplier)."),
@@ -211,8 +208,6 @@ pub static MOBIQ: VariationDef = VariationDef {
         param!("qdy", "qd.y", unlimited_float, 0.0, -10.0, 10.0, "Y (j) component of quaternion D (denominator offset)."),
         param!("qdz", "qd.z", unlimited_float, 0.0, -10.0, 10.0, "Z (k) component of quaternion D (denominator offset)."),
     ],
-    needs_transform: false,
-    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     // 2D form: FTz = 0 substituted into the full quaternion math, returning
@@ -220,7 +215,6 @@ pub static MOBIQ: VariationDef = VariationDef {
     // q*y and q*z parameter columns, so we still compute the whole thing.
     state_count: 0,
     wgsl_state_init: None,
-    needs_accum: false,
     wgsl_2d: r#"
 fn variation_mobiq(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let qat = get_param(xform_id, variation_id, 0u);
