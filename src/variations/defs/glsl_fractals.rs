@@ -478,6 +478,29 @@ fn variation_glsl_apollonian(p: vec2<f32>, xform_id: u32, variation_id: u32, rng
 "#;
 
 const APOLLONIAN_3D: &str = r#"
+fn apollonian_rot(a: vec3<f32>) -> mat3x3<f32> {
+    // ZYX Euler rotation (standard shadertoy convention). Column-major
+    // (WGSL mat3x3 is column-major).
+    let sx = sin(a.x); let cx = cos(a.x);
+    let sy = sin(a.y); let cy = cos(a.y);
+    let sz = sin(a.z); let cz = cos(a.z);
+    return mat3x3<f32>(
+        vec3<f32>(cy * cz,                 cy * sz,                 -sy),
+        vec3<f32>(sx * sy * cz - cx * sz,  sx * sy * sz + cx * cz,  sx * cy),
+        vec3<f32>(cx * sy * cz + sx * sz,  cx * sy * sz - sx * cz,  cx * cy),
+    );
+}
+
+fn apollonian_fold(p_in: vec3<f32>, k: f32, m: mat3x3<f32>) -> vec3<f32> {
+    var pp = m * p_in;
+    for (var i: u32 = 0u; i < 8u; i = i + 1u) {
+        pp = -1.0 + 2.0 * fract(0.5 + 0.5 * pp);
+        let r2 = max(dot(pp, pp), 1.0e-32);
+        pp = pp * (k / r2);
+    }
+    return pp;
+}
+
 fn variation_glsl_apollonian(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vrc: ptr<function, vec3<f32>>) -> vec3<f32> {
     let resolution = max(get_param(xform_id, variation_id, 0u), 100.0);
     let time = get_param(xform_id, variation_id, 2u);
