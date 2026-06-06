@@ -205,7 +205,12 @@ fn parse_flame_element(
 
     // Parse child elements (xform, finalxform, and palette)
     let mut xform_results = Vec::new();
-    let mut final_transform_with_index: Option<(Transform, Option<usize>)> = None;
+    // JWildfire allows multiple <finalxform> elements per flame and they
+    // are chained at plot time. Apophysis 7X also supports this. Collect
+    // all of them rather than overwriting; if `migrate_legacy_final`
+    // pushes them in order, the chain ends up in the same order as the
+    // source XML.
+    let mut final_transforms_with_index: Vec<(Transform, Option<usize>)> = Vec::new();
     let mut palette = None;
     let mut buf = Vec::new();
 
@@ -219,7 +224,7 @@ fn parse_flame_element(
                     }
                     b"finalxform" => {
                         let (transform, color_index) = parse_finalxform_element(&e)?;
-                        final_transform_with_index = Some((transform, color_index));
+                        final_transforms_with_index.push((transform, color_index));
                     }
                     b"palette" => {
                         palette = Some(parse_palette_element(reader, &e)?);
@@ -292,19 +297,21 @@ fn parse_flame_element(
         None
     };
 
-    // Process final transform if present
-    let final_transform = if let Some((mut final_xform, color_index)) = final_transform_with_index {
-        if let Some(idx) = color_index {
-            if palette.is_some() {
-                // Palette mode: Store color coordinate (0-1)
-                let color_coord = idx as f32 / 255.0;
-                final_xform.color = color_coord;
+    // Process final transforms — JWF chains multiple finals at plot
+    // time so we need to keep them all. Each gets its color coordinate
+    // promoted to the palette position the same way normal xforms do.
+    let final_transforms_processed: Vec<Transform> = final_transforms_with_index
+        .into_iter()
+        .map(|(mut final_xform, color_index)| {
+            if let Some(idx) = color_index {
+                if palette.is_some() {
+                    let color_coord = idx as f32 / 255.0;
+                    final_xform.color = color_coord;
+                }
             }
-        }
-        Some(final_xform)
-    } else {
-        None
-    };
+            final_xform
+        })
+        .collect();
 
     // Apophysis 7X and JWildfire write 3D flames exclusively (every
     // variation in their corpus is treated as 3D-capable; the camera
@@ -329,10 +336,11 @@ fn parse_flame_element(
     // Determine perspective strength from cam_perspective
     let perspective_strength = f32::abs(cam_perspective);
 
-    // Apophysis XML always carries a singular global Final (or none).
-    // `Flame::migrate_legacy_final` pushes it into the new
-    // `final_transforms` pool and auto-attaches to every normal so the
-    // rest of the pipeline sees a consistent shape.
+    // Apophysis XML originally carried a singular global Final; JWildfire
+    // extended the format with multiple <finalxform> elements that chain
+    // at plot time. `Flame::migrate_legacy_final` pushes each into the
+    // `final_transforms` pool and auto-attaches them to every normal so
+    // the rest of the pipeline sees a consistent shape.
     // See `docs/projects/per-transform-linked-and-final.md`.
     let mut flame = Flame {
         id: crate::scene::transforms::next_id(),
@@ -350,7 +358,9 @@ fn parse_flame_element(
         post_symmetry,
         preserve_z,
     };
-    flame.migrate_legacy_final(final_transform);
+    for final_xform in final_transforms_processed {
+        flame.migrate_legacy_final(Some(final_xform));
+    }
 
     // Convert Apophysis scale/center to our zoom/pan
     // Apophysis: scale = pixels per unit, where scale 200 ≈ zoom 1.0
@@ -1431,6 +1441,50 @@ mod tests {
         assert_eq!(final_xform.post_d, 0.5);
         assert_eq!(final_xform.post_e, 0.2);
         assert_eq!(final_xform.post_f, 0.3);
+    }
+
+    #[test]
+    fn test_multiple_finalxform_import() {
+        // JWildfire (and Apophysis 7X with the JWF extension) allow
+        // multiple <finalxform> elements per flame, chained at plot time.
+        // Pre-fix, the importer kept only the last one. Verify all of
+        // them now land in `final_transforms` in source order.
+        let xml = r#"
+<flames name="test">
+<flame name="Multi-Final Test" size="800 600" center="0 0" scale="200">
+   <xform weight="1" color="0" linear="1" coefs="1 0 0 1 0 0" opacity="1" />
+   <finalxform weight="0" color="0.1" spherical="1" coefs="1 0 0 1 0 0" />
+   <finalxform weight="0" color="0.5" linear="1" coefs="2 0 0 2 0 0" />
+   <finalxform weight="0" color="0.9" bubble="1" coefs="1 0 0 1 3 4" />
+</flame>
+</flames>
+        "#;
+        let configs = parse_flame_xml(xml).expect("parse must succeed");
+        let flame = &configs[0].flame;
+        assert_eq!(flame.final_transforms.len(), 3,
+            "expected three finalxforms, got {}", flame.final_transforms.len());
+        // Order preserved — each final's variation + affine round-trip.
+        // (Color isn't checked because the existing palette-conditional
+        // promotion path only writes the color coordinate when a
+        // `<palette>` is present in the XML, and this fixture omits one.
+        // That's pre-existing behavior, not a multi-final regression.)
+        let f0 = &flame.final_transforms[0];
+        assert!(f0.active_variations().iter().any(|n| n == "spherical"));
+        let f1 = &flame.final_transforms[1];
+        assert!(f1.active_variations().iter().any(|n| n == "linear"));
+        assert_eq!(f1.a, 2.0);
+        assert_eq!(f1.d, 2.0);
+        let f2 = &flame.final_transforms[2];
+        assert!(f2.active_variations().iter().any(|n| n == "bubble"));
+        // coefs="1 0 0 1 3 4" → a,c,b,d,e,f order (Apophysis column-major),
+        // so the translation lands in (e, f), not (c, f).
+        assert_eq!(f2.e, 3.0);
+        assert_eq!(f2.f, 4.0);
+        // migrate_legacy_final should have auto-attached every final to
+        // every normal so the plot-time chain sees all of them.
+        let normal = &flame.transforms[0];
+        assert_eq!(normal.final_attachments, vec![0, 1, 2],
+            "expected normal xform to attach to all 3 finals");
     }
 
     #[test]
