@@ -232,3 +232,6 @@ genuinely-blocked tail:
   check before starting any of the above.
 - [VARIATIONS_TODOS.md](VARIATIONS_TODOS.md) — running residue
   buckets for everything else variation-related.
+- [jwf-features.md](jwf-features.md) — JWildfire features beyond
+  variations (XML attributes, per-transform settings, etc.) we
+  don't yet honor. `wfield_*` is the first entry.
