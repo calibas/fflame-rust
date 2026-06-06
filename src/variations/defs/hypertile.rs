@@ -32,6 +32,27 @@
 //!     algebraically equal — all yield the same `r`. The fallback branch
 //!     differs slightly (each variation tests its own intermediate); we
 //!     preserve each variation's exact condition.
+//!   - **Discrete tile-angle sampling** for the random-tile variants
+//!     (`hypertile1`, `hypertile2`, `hypertile3D1`, `hypertile3D2`).
+//!     JWildfire's CPU body uses
+//!         `double rpa = pContext.random(Integer.MAX_VALUE) * pa;`
+//!     where `random(int n)` returns an *integer* in `[0, n)` cast to
+//!     double. With `pa = 2π/p`, the resulting `rpa` is `k · (2π/p)` for
+//!     some integer `k`. Modulo 2π (which is all sin/cos care about),
+//!     this collapses to `(k mod p) · (2π/p)` — i.e. one of the `p`
+//!     discrete tile-center angles, picked uniformly. That is what
+//!     gives the {p, q} tiling its p-fold rotational symmetry.
+//!
+//!     Our previous WGSL `rng_nextf(rng) * pa` produced a *continuous*
+//!     angle in `[0, 2π/p)`, which sampled inside one tile's slice only
+//!     and dropped the symmetry — the visible output was a single tile
+//!     repeated, not the full hyperbolic ring. The fix:
+//!         `floor(rng_nextf(rng) * p) * pa`
+//!     picks an integer `k ∈ [0, p)` and multiplies by `pa`, exactly
+//!     matching the JWF CPU output distribution. `p` is the user param
+//!     in init slot 0 of all four variations. (JWildfire's own GPU port
+//!     hardcodes `(int)(RANDFLOAT()*10) * pa` regardless of `p` — that
+//!     appears to be a JWF GPU-port bug; we match the CPU behavior.)
 
 use crate::variations::{
     definition::{Feature, VariationDef, VariationParamDef},
@@ -185,7 +206,10 @@ fn variation_hypertile1(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr
     let pa = get_param(xform_id, variation_id, 2u);
     let r = get_param(xform_id, variation_id, 3u);
 
-    let ang = rng_nextf(rng) * pa;
+    // Discrete tile-angle sampling — see module-level "Notes on
+    // faithfulness" for why the previous `rng_nextf * pa` dropped the
+    // p-fold symmetry. `p` is the user param in init slot 0.
+    let ang = floor(rng_nextf(rng) * get_param(xform_id, variation_id, 0u)) * pa;
     let cosa = cos(ang);
     let sina = sin(ang);
     let re = r * cosa;
@@ -209,7 +233,10 @@ fn variation_hypertile1(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
     let pa = get_param(xform_id, variation_id, 2u);
     let r = get_param(xform_id, variation_id, 3u);
 
-    let ang = rng_nextf(rng) * pa;
+    // Discrete tile-angle sampling — see module-level "Notes on
+    // faithfulness" for why the previous `rng_nextf * pa` dropped the
+    // p-fold symmetry. `p` is the user param in init slot 0.
+    let ang = floor(rng_nextf(rng) * get_param(xform_id, variation_id, 0u)) * pa;
     let cosa = cos(ang);
     let sina = sin(ang);
     let re = r * cosa;
@@ -296,7 +323,10 @@ fn variation_hypertile2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr
     let denom = c * c + d * d;
     let inv = 1.0 / max(denom, 1e-30);
 
-    let ang = rng_nextf(rng) * pa;
+    // Discrete tile-angle sampling — see module-level "Notes on
+    // faithfulness" for why the previous `rng_nextf * pa` dropped the
+    // p-fold symmetry. `p` is the user param in init slot 0.
+    let ang = floor(rng_nextf(rng) * get_param(xform_id, variation_id, 0u)) * pa;
     let cosa = cos(ang);
     let sina = sin(ang);
 
@@ -320,7 +350,10 @@ fn variation_hypertile2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
     let denom = c * c + d * d;
     let inv = 1.0 / max(denom, 1e-30);
 
-    let ang = rng_nextf(rng) * pa;
+    // Discrete tile-angle sampling — see module-level "Notes on
+    // faithfulness" for why the previous `rng_nextf * pa` dropped the
+    // p-fold symmetry. `p` is the user param in init slot 0.
+    let ang = floor(rng_nextf(rng) * get_param(xform_id, variation_id, 0u)) * pa;
     let cosa = cos(ang);
     let sina = sin(ang);
 
@@ -509,7 +542,10 @@ fn variation_hypertile3D1(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: p
     let r = get_param(xform_id, variation_id, 3u);
     let c2 = get_param(xform_id, variation_id, 4u);
 
-    let ang = rng_nextf(rng) * pa;
+    // Discrete tile-angle sampling — see module-level "Notes on
+    // faithfulness" for why the previous `rng_nextf * pa` dropped the
+    // p-fold symmetry. `p` is the user param in init slot 0.
+    let ang = floor(rng_nextf(rng) * get_param(xform_id, variation_id, 0u)) * pa;
     let cosa = cos(ang);
     let sina = sin(ang);
     let cx = r * cosa;
@@ -538,7 +574,10 @@ fn variation_hypertile3D1(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: p
     let c2 = get_param(xform_id, variation_id, 4u);
     let s2z = get_param(xform_id, variation_id, 5u);
 
-    let ang = rng_nextf(rng) * pa;
+    // Discrete tile-angle sampling — see module-level "Notes on
+    // faithfulness" for why the previous `rng_nextf * pa` dropped the
+    // p-fold symmetry. `p` is the user param in init slot 0.
+    let ang = floor(rng_nextf(rng) * get_param(xform_id, variation_id, 0u)) * pa;
     let cosa = cos(ang);
     let sina = sin(ang);
     let cx = r * cosa;
@@ -640,7 +679,10 @@ fn variation_hypertile3D2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: p
     let denom = c2 * r2 + x2cx + 1.0;
     let inv = 1.0 / max(denom, 1e-30);
 
-    let ang = rng_nextf(rng) * pa;
+    // Discrete tile-angle sampling — see module-level "Notes on
+    // faithfulness" for why the previous `rng_nextf * pa` dropped the
+    // p-fold symmetry. `p` is the user param in init slot 0.
+    let ang = floor(rng_nextf(rng) * get_param(xform_id, variation_id, 0u)) * pa;
     let cosa = cos(ang);
     let sina = sin(ang);
 
@@ -667,7 +709,10 @@ fn variation_hypertile3D2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: p
     let denom = c2 * r2 + x2cx + 1.0;
     let inv = 1.0 / max(denom, 1e-30);
 
-    let ang = rng_nextf(rng) * pa;
+    // Discrete tile-angle sampling — see module-level "Notes on
+    // faithfulness" for why the previous `rng_nextf * pa` dropped the
+    // p-fold symmetry. `p` is the user param in init slot 0.
+    let ang = floor(rng_nextf(rng) * get_param(xform_id, variation_id, 0u)) * pa;
     let cosa = cos(ang);
     let sina = sin(ang);
 
