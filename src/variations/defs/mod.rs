@@ -145,6 +145,7 @@ mod dc_perlin;
 mod szubieta;
 mod glsl_fractals;
 mod glsl_tilings;
+mod glsl_fields;
 
 pub use basic::*;
 pub use advanced::*;
@@ -286,6 +287,7 @@ pub use dc_perlin::*;
 pub use szubieta::*;
 pub use glsl_fractals::*;
 pub use glsl_tilings::*;
+pub use glsl_fields::*;
 
 use super::definition::VariationDef;
 
@@ -983,4 +985,10 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &GLSL_MANDALA,
     &GLSL_SQUARES,
     &GLSL_HOSHI,
+    &GLSL_ACRILIC,
+    &GLSL_CIRCLESBLUE,
+    &GLSL_CIRCUITS,
+    &GLSL_FRACTALDOTS,
+    &GLSL_STARSFIELD,
+    &GLSL_GRID3D,
 ];

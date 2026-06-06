@@ -41,6 +41,9 @@ use crate::param;
 ///
 /// 7 params: standard 4 + `sides` (kaleidoscope sector count), `zoom`,
 /// `p1` (color phase parameter), `radial` (kaleidoscope mode flag).
+/// 
+/// # Authors
+/// - Jesus Sosa
 pub static GLSL_KALEIDOSCOPIC: VariationDef = VariationDef {
     name: "glsl_kaleidoscopic",
     aliases: &[],
@@ -115,6 +118,15 @@ fn variation_glsl_kaleidoscopic(p: vec2<f32>, xform_id: u32, variation_id: u32, 
 "#;
 
 const KALEIDOSCOPIC_3D: &str = r#"
+fn kaleidoscopic_kscope(uv: vec2<f32>, ka: f32, time: f32) -> vec2<f32> {
+    var a = atan2(uv.y, uv.x);
+    let two_ka = 2.0 * ka;
+    a = a - two_ka * floor(a / two_ka);  // mod into [0, 2·ka]
+    a = abs(a - ka) + 0.1 * time;          // reflect + time-rotation
+    let r = length(uv);
+    return vec2<f32>(cos(a), sin(a)) * r;
+}
+
 fn variation_glsl_kaleidoscopic(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vrc: ptr<function, vec3<f32>>) -> vec3<f32> {
     let resolution = max(get_param(xform_id, variation_id, 0u), 100.0);
     let time = get_param(xform_id, variation_id, 2u);
@@ -157,6 +169,9 @@ fn variation_glsl_kaleidoscopic(p: vec3<f32>, xform_id: u32, variation_id: u32, 
 ///
 /// 9 params: standard 4 + `i_max` (iter count), `color` (intensity),
 /// `fr`/`fg`/`fb` (per-channel frequencies).
+/// 
+/// # Authors
+/// - Jesus Sosa
 pub static GLSL_KALEIDOCOMPLEX: VariationDef = VariationDef {
     name: "glsl_kaleidocomplex",
     aliases: &[],
@@ -259,6 +274,10 @@ fn variation_glsl_kaleidocomplex(p: vec2<f32>, xform_id: u32, variation_id: u32,
 "#;
 
 const KALEIDOCOMPLEX_3D: &str = r#"
+fn kaleidocomplex_cmult(a: vec2<f32>, b: vec2<f32>) -> vec2<f32> {
+    return vec2<f32>(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);
+}
+
 fn variation_glsl_kaleidocomplex(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vrc: ptr<function, vec3<f32>>) -> vec3<f32> {
     let resolution = max(get_param(xform_id, variation_id, 0u), 100.0);
     let time = get_param(xform_id, variation_id, 2u);
@@ -330,6 +349,9 @@ fn variation_glsl_kaleidocomplex(p: vec3<f32>, xform_id: u32, variation_id: u32,
 /// **Note on control flow**: JWildfire's source uses nested loops
 /// with `continue` and early-termination flags. We mirror the
 /// structure exactly so the output matches.
+/// 
+/// # Authors
+/// - Jesus Sosa
 pub static GLSL_HYPERBOLICTILE: VariationDef = VariationDef {
     name: "glsl_hyperbolictile",
     aliases: &[],
@@ -427,6 +449,32 @@ fn variation_glsl_hyperbolictile(p: vec2<f32>, xform_id: u32, variation_id: u32,
 "#;
 
 const HYPERBOLICTILE_3D: &str = r#"
+fn hyperbolictile_tocart(polar: vec2<f32>) -> vec2<f32> {
+    return vec2<f32>(polar.x * cos(polar.y), polar.x * sin(polar.y));
+}
+
+fn hyperbolictile_topolar(c: vec2<f32>) -> vec2<f32> {
+    return vec2<f32>(sqrt(c.x * c.x + c.y * c.y), atan2(c.y, c.x));
+}
+
+// Möbius reflection across a hyperbolic line. The line is encoded as
+// polar (radius, angle): radius < 100 means a circular arc (inverted
+// circle), radius >= 100 means a straight line through the origin.
+fn hyperbolictile_mirror(line: vec2<f32>, point: vec2<f32>) -> vec2<f32> {
+    if (line.x < 100.0) {
+        let linecenter = hyperbolictile_tocart(line);
+        let cart = hyperbolictile_tocart(point);
+        let dx = cart.x - linecenter.x;
+        let dy = cart.y - linecenter.y;
+        let r1 = line.x * line.x - 1.0;
+        let r2 = max(dx * dx + dy * dy, 1.0e-32);
+        let rr = r1 / r2;
+        return hyperbolictile_topolar(linecenter + vec2<f32>(dx * rr, dy * rr));
+    } else {
+        return vec2<f32>(point.x, -point.y + 2.0 * line.y + 3.14159265);
+    }
+}
+
 fn variation_glsl_hyperbolictile(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vrc: ptr<function, vec3<f32>>) -> vec3<f32> {
     let resolution = max(get_param(xform_id, variation_id, 0u), 100.0);
     let i_f = floor(rng_nextf(rng) * resolution);
@@ -480,6 +528,9 @@ fn variation_glsl_hyperbolictile(p: vec3<f32>, xform_id: u32, variation_id: u32,
 /// 10 params: `density_pixels` + 9 algorithm controls (no `seed` or
 /// `time` here — JWildfire's source omits the seed-based time
 /// randomization).
+/// 
+/// # Authors
+/// - Jesus Sosa
 pub static GLSL_MANDALA: VariationDef = VariationDef {
     name: "glsl_mandala",
     aliases: &[],
@@ -578,6 +629,15 @@ fn variation_glsl_mandala(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: p
 "#;
 
 const MANDALA_3D: &str = r#"
+fn mandala_kscope(v: vec2<f32>, k: f32) -> vec2<f32> {
+    var a = atan2(v.y, v.x);
+    let two_k = 2.0 * k;
+    a = a - two_k * floor(a / two_k);   // mod into [0, 2k]
+    a = abs(a - k);                      // reflect to [0, k]
+    let r = length(v);
+    return vec2<f32>(r * cos(a), r * sin(a));
+}
+
 fn variation_glsl_mandala(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vrc: ptr<function, vec3<f32>>) -> vec3<f32> {
     let resolution = max(get_param(xform_id, variation_id, 0u), 100.0);
     let mx = get_param(xform_id, variation_id, 1u);
@@ -644,6 +704,9 @@ fn variation_glsl_mandala(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: p
 ///
 /// 9 params: standard 4 + `n` (recursion depth), `dir` (zoom-in vs
 /// zoom-out), `fr`/`fg`/`fb` (color frequencies).
+/// 
+/// # Authors
+/// - Jesus Sosa
 pub static GLSL_SQUARES: VariationDef = VariationDef {
     name: "glsl_squares",
     aliases: &[],
@@ -717,6 +780,23 @@ fn variation_glsl_squares(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: p
 "#;
 
 const SQUARES_3D: &str = r#"
+fn squares_hit(p_in: vec2<f32>, n: u32, time: f32, dir: u32) -> bool {
+    var direction: f32;
+    if (dir == 1u) { direction = 0.1; } else { direction = -1.0; }
+    let arg = direction * time;
+    let arg_mod = arg - floor(arg);
+    let scale = pow(0.5, arg_mod);
+    var coord_iter = p_in / scale;
+    for (var i: u32 = 0u; i < n; i = i + 1u) {
+        let sectors = floor(coord_iter * 3.0);
+        if (sectors.x == 1.0 && sectors.y == 1.0) {
+            return false;
+        }
+        coord_iter = coord_iter * 3.0 - sectors;
+    }
+    return true;
+}
+
 fn variation_glsl_squares(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vrc: ptr<function, vec3<f32>>) -> vec3<f32> {
     let resolution = max(get_param(xform_id, variation_id, 0u), 100.0);
     let time = get_param(xform_id, variation_id, 2u);
@@ -752,6 +832,9 @@ fn variation_glsl_squares(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: p
 ///
 /// 6 params: `density_pixels`, `seed` (CPU-only), `time`, `steps`,
 /// `scale`, `translate`.
+/// 
+/// # Authors
+/// - Jesus Sosa
 pub static GLSL_HOSHI: VariationDef = VariationDef {
     name: "glsl_hoshi",
     aliases: &[],
@@ -832,6 +915,21 @@ fn variation_glsl_hoshi(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr
 "#;
 
 const HOSHI_3D: &str = r#"
+fn hoshi_hsv(h_in: f32, s: f32, v: f32) -> vec3<f32> {
+    var t1 = vec3<f32>(3.0, 2.0, 1.0);
+    t1 = (t1 + h_in) / 3.0;
+    var t2 = (t1 - floor(t1)) * 6.0 - 3.0;
+    t2 = abs(t2) - 1.0;
+    t2 = clamp(t2, vec3<f32>(0.0), vec3<f32>(1.0));
+    return mix(vec3<f32>(3.1), t2, vec3<f32>(s)) * v;
+}
+
+fn hoshi_rotate(p: vec2<f32>, a: f32) -> vec2<f32> {
+    let c = cos(a);
+    let s = sin(a);
+    return vec2<f32>(p.x * c - p.y * s, p.x * s + p.y * c);
+}
+
 fn variation_glsl_hoshi(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vrc: ptr<function, vec3<f32>>) -> vec3<f32> {
     let resolution = max(get_param(xform_id, variation_id, 0u), 100.0);
     let time = max(get_param(xform_id, variation_id, 2u), 1.0e-4);
