@@ -13,9 +13,17 @@
 //! then divide the body's output by `w` so the outer multiplier (`× w`)
 //! restores the cpp result exactly.
 //!
+//! `arctruchet` (Jesus Sosa, 2018) added below — a sibling Truchet
+//! pattern that uses random per-cell tilt (0°/90°/180°/270°) plus a
+//! per-call arc sample. JWildfire's reference seeds a Java `Random`
+//! at init to build a per-cell tilt array; we hash `(i, j, seed)` on
+//! the fly instead since each GPU thread has isolated state and we
+//! can't replicate Java's RNG. Visually equivalent random pattern,
+//! not identical per-cell to JWildfire's output.
+//!
 //! Other Truchet-family entries from upstream (`truchet`, `truchet_ae`,
-//! `truchet2`, `triantruchet`, `arctruchet`) are deferred — most are in
-//! the `unportable_dc` (writes color) or `unported_stub` buckets.
+//! `truchet2`, `triantruchet`) are still deferred — most are in the
+//! `unportable_dc` (writes color) or `unported_stub` buckets.
 
 use crate::variations::{
     definition::{Feature, VariationDef, VariationParamDef},
@@ -234,3 +242,204 @@ fn variation_truchet_fill(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec
 }
 "#,
 };
+
+// =============================================================================
+// arctruchet (Jesus Sosa, August 2018)
+//
+// Quarter-circle Truchet tile pattern. The plane is divided into a
+// `tiles_per_row × tiles_per_column` grid; each cell hosts a randomly-
+// tilted quarter-arc (0°/90°/180°/270° rotation), and per call the
+// variation samples a uniformly-random point within the cell's arc
+// band (radius `[radius, radius + thickness]`, angle from `phi1` to
+// `phi2`).
+//
+// Hardcoded `radius = 0.25` in the source (private field, not a
+// param); we follow suit. `tile_size = 2 · radius = 0.5`.
+//
+// Two quadrants per cell at 50/50 odds:
+//   `(phi1, phi2) = (0°, 90°)`   — upper-right quadrant
+//   `(phi1, phi2) = (180°, 270°)` — lower-left quadrant
+// The anchor point `d` shifts the arc origin to a cell corner so the
+// quarter-arc visually connects to neighbouring cells.
+//
+// JWildfire's per-cell tilt array is seeded with a Java `Random` at
+// init; we hash `(i, j, seed)` per call instead, since GPU threads
+// have isolated RNG state and we can't replicate Java's PRNG. The
+// resulting pattern is statistically equivalent (each cell gets a
+// uniformly-random tilt in {0, 1, 2, 3}) but not bit-identical
+// per-cell to JWildfire's output.
+// =============================================================================
+/// Quarter-arc Truchet tile pattern. Each cell in a `tiles_per_row ×
+/// tiles_per_column` grid hosts a randomly-tilted quarter-arc, and the
+/// variation samples points uniformly inside each cell's arc band
+/// (width controlled by `thickness`). Produces interlocking
+/// curve-and-corner tile patterns reminiscent of an Escher-style maze.
+///
+/// # Authors
+/// - Jesus Sosa
+pub static ARCTRUCHET: VariationDef = VariationDef {
+    name: "arctruchet",
+    aliases: &[],
+    display_name: "Arctruchet",
+    category: VariationCategory::Plugin,
+    phase: VariationPhase::Normal,
+    features: &[Feature::NeedsRng],
+    parameters: &[
+        // Cell-tilt PRNG seed. We feed it into a per-call hash of
+        // `(i, j, seed)` rather than into a Java `Random` constructor.
+        // Values not matching JWildfire's Java RNG output bit-for-bit
+        // produce visually equivalent random Truchet patterns; users
+        // who want a different pattern just dial the seed.
+        param!("seed", "Seed", unlimited_int, 10000.0, 0.0, 100000.0,
+            "PRNG seed feeding the per-cell tilt hash. JWildfire seeds a Java `Random` at init to build a static per-cell tilt array; on GPU we hash `(i, j, seed)` per call instead. Visually equivalent random Truchet pattern, not bit-identical per-cell to JWildfire's output. Same range as JWF."),
+        param!("thickness", "Thickness", unlimited_float, 0.025, 0.0, 1.0,
+            "Arc band thickness in cell units (`radius = 0.25` is hardcoded). Wider = chunkier arcs. JWildfire clamps to [0, 1]; we follow suit at runtime."),
+        param!("tiles_per_row", "Tiles Per Row", unlimited_int, 10.0, 1.0, 100.0,
+            "Grid columns (matches JWF's `TilesPerRow` label). Higher = denser pattern. **GPU-clamped to [1, 100]** matching JWF."),
+        param!("tiles_per_column", "Tiles Per Column", unlimited_int, 10.0, 1.0, 100.0,
+            "Grid rows. **GPU-clamped to [1, 100]** matching JWF."),
+    ],
+    init_param_count: 0,
+    wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    wgsl_2d: ARCTRUCHET_2D,
+    wgsl_3d: ARCTRUCHET_3D,
+};
+
+// Per call: ~30 ops + 4 rng draws + 1 hash. Cheap.
+const ARCTRUCHET_2D: &str = r#"
+// PCG-style integer hash. Mixes `(i, j, seed)` into a u32 we mod by 4
+// for the cell's tilt count. Output distribution is uniform enough
+// for visual purposes — not a cryptographic hash, just an avalanche
+// step or two so neighbouring (i, j) cells get unrelated tilts.
+fn arctruchet_cell_tilt(i: u32, j: u32, seed: u32) -> u32 {
+    var h: u32 = i * 374761393u + j * 668265263u + seed * 1274126177u;
+    h = (h ^ (h >> 13u)) * 1274126177u;
+    h = h ^ (h >> 16u);
+    return h % 4u;
+}
+
+fn variation_arctruchet(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
+    let seed_f = get_param(xform_id, variation_id, 0u);
+    let thickness = clamp(get_param(xform_id, variation_id, 1u), 0.0, 1.0);
+    let tpr_f = clamp(get_param(xform_id, variation_id, 2u), 1.0, 100.0);
+    let tpc_f = clamp(get_param(xform_id, variation_id, 3u), 1.0, 100.0);
+    let tpr = u32(tpr_f);
+    let tpc = u32(tpc_f);
+
+    let radius: f32 = 0.25;        // hardcoded in JWF source
+    let tile_size: f32 = 0.5;      // 2 * radius
+
+    // Pick a random cell (i, j).
+    let i = u32(rng_nextf(rng) * tpr_f);
+    let j = u32(rng_nextf(rng) * tpc_f);
+
+    // Cell-center world position.
+    let cx = f32(i) * tile_size + tile_size * 0.5;
+    let cy = f32(j) * tile_size + tile_size * 0.5;
+
+    // Per-cell tilt angle from the hash → 0°, 90°, 180°, 270°.
+    let tilt_idx = arctruchet_cell_tilt(i, j, u32(seed_f));
+    let ang = f32(tilt_idx) * 1.57079632679;  // π/2 radians
+
+    // 50/50 choice between the two quadrants. The `radio` sign flips
+    // for the lower-left quadrant per JWF — that's what makes the arcs
+    // line up at the corner instead of overlapping at the centre.
+    let phi1: f32 = select(180.0, 0.0, rng_nextf(rng) < 0.5);
+    let phi2: f32 = phi1 + 90.0;
+    let radio: f32 = select(-radius, radius, phi1 == 0.0);
+
+    let phi10 = phi1 * 0.01745329251;  // π/180
+    let phi20 = phi2 * 0.01745329251;
+    let delta = phi20 - phi10;
+
+    // Annulus radial range — sample uniformly within
+    // `[radius + thickness - gamma, radius + thickness]`. The `gamma`
+    // formula keeps the visible arc-band width close to `thickness`
+    // even as `radius` varies; we keep it for parity with JWF.
+    let denom = radius + thickness;
+    let gamma = thickness * (2.0 * radius + thickness) / max(denom, 1.0e-32);
+    let r = radius + thickness - gamma * rng_nextf(rng);
+    let phi = phi10 + delta * rng_nextf(rng);
+
+    // Arc sample then per-cell rotation.
+    let xp = r * cos(phi);
+    let yp = r * sin(phi);
+    let ca = cos(ang);
+    let sa = sin(ang);
+    let prx = xp * ca + yp * sa;
+    let pry = -xp * sa + yp * ca;
+
+    // Anchor offset shifts the arc to a cell corner.
+    let dx = radio * ca + radio * sa;
+    let dy = -radio * sa + radio * ca;
+
+    let local_x = prx - dx;
+    let local_y = pry - dy;
+
+    // Centre the grid around the origin.
+    let half_w = tile_size * f32(tpr) * 0.5;
+    let half_h = tile_size * f32(tpc) * 0.5;
+
+    return vec2<f32>(local_x + cx - half_w, local_y + cy - half_h);
+}
+"#;
+
+// 3D body: arctruchet is a 2D base shape (VARTYPE_BASE_SHAPE in JWF);
+// the JWF source passes p.z through when `preserve_z` is set. We
+// always pass p.z through.
+const ARCTRUCHET_3D: &str = r#"
+fn arctruchet_cell_tilt(i: u32, j: u32, seed: u32) -> u32 {
+    var h: u32 = i * 374761393u + j * 668265263u + seed * 1274126177u;
+    h = (h ^ (h >> 13u)) * 1274126177u;
+    h = h ^ (h >> 16u);
+    return h % 4u;
+}
+
+fn variation_arctruchet(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
+    let seed_f = get_param(xform_id, variation_id, 0u);
+    let thickness = clamp(get_param(xform_id, variation_id, 1u), 0.0, 1.0);
+    let tpr_f = clamp(get_param(xform_id, variation_id, 2u), 1.0, 100.0);
+    let tpc_f = clamp(get_param(xform_id, variation_id, 3u), 1.0, 100.0);
+    let tpr = u32(tpr_f);
+    let tpc = u32(tpc_f);
+
+    let radius: f32 = 0.25;
+    let tile_size: f32 = 0.5;
+
+    let i = u32(rng_nextf(rng) * tpr_f);
+    let j = u32(rng_nextf(rng) * tpc_f);
+    let cx = f32(i) * tile_size + tile_size * 0.5;
+    let cy = f32(j) * tile_size + tile_size * 0.5;
+    let tilt_idx = arctruchet_cell_tilt(i, j, u32(seed_f));
+    let ang = f32(tilt_idx) * 1.57079632679;
+
+    let phi1: f32 = select(180.0, 0.0, rng_nextf(rng) < 0.5);
+    let phi2: f32 = phi1 + 90.0;
+    let radio: f32 = select(-radius, radius, phi1 == 0.0);
+
+    let phi10 = phi1 * 0.01745329251;
+    let phi20 = phi2 * 0.01745329251;
+    let delta = phi20 - phi10;
+    let denom = radius + thickness;
+    let gamma = thickness * (2.0 * radius + thickness) / max(denom, 1.0e-32);
+    let r = radius + thickness - gamma * rng_nextf(rng);
+    let phi = phi10 + delta * rng_nextf(rng);
+
+    let xp = r * cos(phi);
+    let yp = r * sin(phi);
+    let ca = cos(ang);
+    let sa = sin(ang);
+    let prx = xp * ca + yp * sa;
+    let pry = -xp * sa + yp * ca;
+    let dx = radio * ca + radio * sa;
+    let dy = -radio * sa + radio * ca;
+    let local_x = prx - dx;
+    let local_y = pry - dy;
+    let half_w = tile_size * f32(tpr) * 0.5;
+    let half_h = tile_size * f32(tpc) * 0.5;
+
+    return vec3<f32>(local_x + cx - half_w, local_y + cy - half_h, p.z);
+}
+"#;
