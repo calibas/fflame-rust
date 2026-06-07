@@ -1041,18 +1041,14 @@ fn write_single_flame(out: &mut String, config: &FractalConfig, flame: &Flame) {
         write_xform(out, xform, false, chaos_row, &*registry, config, &flame.subflames);
     }
 
-    // Final transforms. Apo's `<finalxform>` is singular — when we have
-    // multiple, write the first and drop the rest with a log warning.
-    // (Multi-final is a per-transform feature we added on top of Apo;
-    // there's no Apo-side concept for it.)
-    if let Some(final_xform) = flame.final_transforms.first() {
+    // Final transforms. JWildfire (and Apophysis 7X with the JWF
+    // extension) allow multiple `<finalxform>` elements chained at
+    // plot time. The importer fix in a8bf010 collected all of them
+    // into `final_transforms: Vec<Transform>`; mirror that on export
+    // by writing each in source order. Round-trips through JWF
+    // cleanly.
+    for final_xform in &flame.final_transforms {
         write_xform(out, final_xform, true, None, &*registry, config, &flame.subflames);
-        if flame.final_transforms.len() > 1 {
-            log::warn!(
-                "write_flame_xml: dropping {} extra final transform(s) — Apo XML only supports a single <finalxform>",
-                flame.final_transforms.len() - 1
-            );
-        }
     }
 
     // Palette: 256 colors, RGB hex, 8 colors per line.
@@ -1485,6 +1481,42 @@ mod tests {
         let normal = &flame.transforms[0];
         assert_eq!(normal.final_attachments, vec![0, 1, 2],
             "expected normal xform to attach to all 3 finals");
+    }
+
+    #[test]
+    fn test_multiple_finalxform_roundtrip() {
+        // Companion to test_multiple_finalxform_import. The exporter
+        // previously wrote only the first final and logged a warning
+        // about the rest — round-trip through XML lost them silently.
+        // Verify all of them survive write_flame_xml → parse_flame_xml.
+        let xml = r#"
+<flames name="test">
+<flame name="Multi-Final Roundtrip" size="800 600" center="0 0" scale="200">
+   <xform weight="1" color="0" linear="1" coefs="1 0 0 1 0 0" opacity="1" />
+   <finalxform weight="0" color="0.1" spherical="1" coefs="1 0 0 1 0 0" />
+   <finalxform weight="0" color="0.5" linear="1" coefs="2 0 0 2 0 0" />
+   <finalxform weight="0" color="0.9" bubble="1" coefs="1 0 0 1 3 4" />
+</flame>
+</flames>
+        "#;
+        let configs = parse_flame_xml(xml).expect("parse must succeed");
+        let exported = write_flame_xml(&configs[0]);
+        // Substring check is enough — count of <finalxform tags must be 3.
+        let final_count = exported.matches("<finalxform").count();
+        assert_eq!(final_count, 3,
+            "expected 3 <finalxform> elements in export, got {}\n--- output ---\n{}",
+            final_count, exported);
+        // Round-trip back through parser to confirm each survives.
+        let reimported = parse_flame_xml(&exported).expect("re-parse must succeed");
+        let flame = &reimported[0].flame;
+        assert_eq!(flame.final_transforms.len(), 3,
+            "expected 3 finalxforms after round-trip, got {}", flame.final_transforms.len());
+        assert!(flame.final_transforms[0].active_variations().iter().any(|n| n == "spherical"));
+        assert!(flame.final_transforms[1].active_variations().iter().any(|n| n == "linear"));
+        assert!(flame.final_transforms[2].active_variations().iter().any(|n| n == "bubble"));
+        assert_eq!(flame.final_transforms[1].a, 2.0);
+        assert_eq!(flame.final_transforms[2].e, 3.0);
+        assert_eq!(flame.final_transforms[2].f, 4.0);
     }
 
     #[test]
