@@ -228,6 +228,208 @@ fn render_post_affine_controls(
     max_update
 }
 
+/// Which JWildfire plane affine a section is editing. Used both to
+/// pick the `Transform` array field and to construct the matching
+/// `ConfigPath` variant for the undo/redo + GPU-sync path.
+#[derive(Copy, Clone)]
+enum JwfPlane {
+    YzPre,
+    ZxPre,
+    YzPost,
+    ZxPost,
+}
+
+impl JwfPlane {
+    fn label_key(self) -> &'static str {
+        match self {
+            JwfPlane::YzPre => "transform.yz_affine_section",
+            JwfPlane::ZxPre => "transform.zx_affine_section",
+            JwfPlane::YzPost => "transform.yz_post_affine_section",
+            JwfPlane::ZxPost => "transform.zx_post_affine_section",
+        }
+    }
+
+    fn tooltip_key(self) -> &'static str {
+        match self {
+            JwfPlane::YzPre => "tooltips.yz_affine",
+            JwfPlane::ZxPre => "tooltips.zx_affine",
+            JwfPlane::YzPost => "tooltips.yz_post_affine",
+            JwfPlane::ZxPost => "tooltips.zx_post_affine",
+        }
+    }
+
+    fn id_salt(self) -> &'static str {
+        match self {
+            JwfPlane::YzPre => "yz_affine",
+            JwfPlane::ZxPre => "zx_affine",
+            JwfPlane::YzPost => "yz_post_affine",
+            JwfPlane::ZxPost => "zx_post_affine",
+        }
+    }
+
+    /// Build the ConfigPath for this plane and position on whichever
+    /// pool the transform lives in (Normal / Linked / Final). Routes
+    /// through `TransformRef`'s per-pool path helpers added to delta.rs.
+    fn path(self, xref: TransformRef, position: u8) -> ConfigPath {
+        match self {
+            JwfPlane::YzPre => xref.yz_coefs_path(position),
+            JwfPlane::ZxPre => xref.zx_coefs_path(position),
+            JwfPlane::YzPost => xref.yz_post_coefs_path(position),
+            JwfPlane::ZxPost => xref.zx_post_coefs_path(position),
+        }
+    }
+
+    fn coefs_mut(self, t: &mut crate::scene::transforms::Transform) -> &mut [f32; 6] {
+        match self {
+            JwfPlane::YzPre => &mut t.yz_coefs,
+            JwfPlane::ZxPre => &mut t.zx_coefs,
+            JwfPlane::YzPost => &mut t.yz_post_coefs,
+            JwfPlane::ZxPost => &mut t.zx_post_coefs,
+        }
+    }
+
+    fn coefs<'a>(self, t: &'a crate::scene::transforms::Transform) -> &'a [f32; 6] {
+        match self {
+            JwfPlane::YzPre => &t.yz_coefs,
+            JwfPlane::ZxPre => &t.zx_coefs,
+            JwfPlane::YzPost => &t.yz_post_coefs,
+            JwfPlane::ZxPost => &t.zx_post_coefs,
+        }
+    }
+}
+
+/// Render one JWildfire-extension plane affine section. Six positional
+/// inputs `[a, c, b, d, e, f]` in JWildfire's XML write order, laid
+/// out as three 2-wide rows (same shape as the XY affine), plus a
+/// "Reset to identity" button. The `plane.path(xref, pos)` call
+/// builds the matching ConfigPath variant (Normal / Linked / Final
+/// pool, picked from `xref`) so undo/redo + GPU sync work identically
+/// to the XY affine.
+fn render_jwf_plane_section(
+    ui: &mut egui::Ui,
+    config_manager: &mut ConfigManager,
+    xref: TransformRef,
+    transform: &mut crate::scene::transforms::Transform,
+    index: usize,
+    plane: JwfPlane,
+) -> UpdateType {
+    let mut max_update = UpdateType::None;
+
+    // id_salt must distinguish pool + index so the same xform index
+    // in Normal/Linked/Final doesn't collide their collapsing state.
+    egui::CollapsingHeader::new(t!(plane.label_key()))
+        .id_salt(format!("{}_{}_{}", plane.id_salt(), xref.pool_kind(), index))
+        .default_open(false)
+        .show(ui, |ui| {
+            ui.label(t!(plane.tooltip_key()));
+
+            // Reset button — restores identity. The GPU's
+            // `plane_flags` recompute on upload, so resetting drops
+            // this plane back to the flat path automatically; same
+            // for the on-disk XML/JSON which skip-writes identity.
+            if ui.button(t!("transform.plane_reset")).clicked() {
+                let identity = crate::scene::transforms::IDENTITY_PLANE_COEFS;
+                for position in 0u8..6 {
+                    let path = plane.path(xref, position);
+                    if let Ok(u) = config_manager.update_param(
+                        path,
+                        identity[position as usize].into(),
+                    ) {
+                        max_update = max_update.max(u);
+                    }
+                }
+                if let Some(t) = xref.get(&config_manager.active_config().flame) {
+                    *plane.coefs_mut(transform) = *plane.coefs(t);
+                }
+            }
+
+            // Render a single coefficient cell. Closure rather than a
+            // helper function so the borrows on `transform` and
+            // `config_manager` stay scoped to the call site.
+            let mut render_cell = |ui: &mut egui::Ui,
+                                   transform: &mut crate::scene::transforms::Transform,
+                                   config_manager: &mut ConfigManager,
+                                   pos: u8,
+                                   label: &str| {
+                ui.label(label);
+                let coefs = plane.coefs_mut(transform);
+                let response = ui.add(super::VkbDragValue::new(&mut coefs[pos as usize]).speed(0.01));
+                let path = plane.path(xref, pos);
+                if response.changed() {
+                    let value = coefs[pos as usize];
+                    if let Ok(u) = config_manager.update_param(path.clone(), value.into()) {
+                        if let Some(t) = xref.get(&config_manager.active_config().flame) {
+                            *plane.coefs_mut(transform) = *plane.coefs(t);
+                        }
+                        max_update = max_update.max(u);
+                    }
+                }
+                if response.drag_stopped() {
+                    let _ = config_manager.force_commit_preview(&path);
+                }
+            };
+
+            // Same `a b / c d / e f` two-wide layout as the XY affine.
+            ui.horizontal(|ui| {
+                render_cell(ui, transform, config_manager, 0, "a");
+                render_cell(ui, transform, config_manager, 1, "c");
+            });
+            ui.horizontal(|ui| {
+                render_cell(ui, transform, config_manager, 2, "b");
+                render_cell(ui, transform, config_manager, 3, "d");
+            });
+            ui.horizontal(|ui| {
+                render_cell(ui, transform, config_manager, 4, "e");
+                render_cell(ui, transform, config_manager, 5, "f");
+            });
+        });
+
+    max_update
+}
+
+/// Render the four JWildfire-extension plane affine sections (YZ pre,
+/// ZX pre, YZ post, ZX post) under the transform's "Advanced" group.
+/// Works for all three pools (Normal / Linked / Final) — the
+/// `TransformRef`-based ConfigPath helpers route to the right
+/// variants on each pool.
+///
+/// Post-affine sections (`YZ Post` / `ZX Post`) are hidden when the
+/// transform's XY post-affine isn't enabled — `apply_post_affine`
+/// only runs when `post_enabled=1`, so the post-plane fields would
+/// be inert anyway. 3D-mode gated overall: in 2D these affines have
+/// no effect.
+fn render_jwf_plane_sections(
+    ui: &mut egui::Ui,
+    config_manager: &mut ConfigManager,
+    xref: TransformRef,
+    transform: &mut crate::scene::transforms::Transform,
+    render_mode: RenderMode,
+) -> UpdateType {
+    if !matches!(render_mode, RenderMode::ThreeD) {
+        return UpdateType::None;
+    }
+    // `id_salt` needs a stable suffix per panel so multiple
+    // transforms' sections don't collide. The pool kind plus the
+    // pool-local index gives that.
+    let index = xref.index();
+
+    let mut max_update = UpdateType::None;
+    let planes: &[JwfPlane] = if transform.post_affine_enabled {
+        &[JwfPlane::YzPre, JwfPlane::ZxPre, JwfPlane::YzPost, JwfPlane::ZxPost]
+    } else {
+        // Post-affine disabled → the post planes can't contribute
+        // either (apply_post_affine isn't called when post_enabled=0).
+        // Hide their sections to keep the panel focused.
+        &[JwfPlane::YzPre, JwfPlane::ZxPre]
+    };
+    for plane in planes {
+        max_update = max_update.max(render_jwf_plane_section(
+            ui, config_manager, xref, transform, index, *plane,
+        ));
+    }
+    max_update
+}
+
 /// Render advanced settings (color speed, opacity, solo toggle)
 fn render_advanced_settings(
     ui: &mut egui::Ui,
@@ -847,6 +1049,12 @@ fn render_pool_member_block(
                         update = update.max(render_affine_controls(ui, config_manager, xref, transform, render_mode));
                         ui.add_space(4.0);
                         update = update.max(render_post_affine_controls(ui, config_manager, xref, transform, render_mode));
+                        ui.add_space(4.0);
+
+                        // JWildfire-extension YZ/ZX plane affines and
+                        // their post-affine siblings. Self-gated:
+                        // 3D-mode-only, Normal pool only.
+                        update = update.max(render_jwf_plane_sections(ui, config_manager, xref, transform, render_mode));
                         ui.add_space(4.0);
 
                         // color_speed / opacity / direct_color / solo are only

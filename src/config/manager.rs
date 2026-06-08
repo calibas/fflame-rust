@@ -1606,6 +1606,26 @@ impl ConfigManager {
                 };
                 Ok(value.into())
             }
+            ConfigPath::TransformYzCoefs { index, position } => {
+                let xform = flame.transforms.get(*index).ok_or(ConfigError::InvalidIndex)?;
+                let v = *xform.yz_coefs.get(*position as usize).ok_or(ConfigError::InvalidIndex)?;
+                Ok(v.into())
+            }
+            ConfigPath::TransformZxCoefs { index, position } => {
+                let xform = flame.transforms.get(*index).ok_or(ConfigError::InvalidIndex)?;
+                let v = *xform.zx_coefs.get(*position as usize).ok_or(ConfigError::InvalidIndex)?;
+                Ok(v.into())
+            }
+            ConfigPath::TransformYzPostCoefs { index, position } => {
+                let xform = flame.transforms.get(*index).ok_or(ConfigError::InvalidIndex)?;
+                let v = *xform.yz_post_coefs.get(*position as usize).ok_or(ConfigError::InvalidIndex)?;
+                Ok(v.into())
+            }
+            ConfigPath::TransformZxPostCoefs { index, position } => {
+                let xform = flame.transforms.get(*index).ok_or(ConfigError::InvalidIndex)?;
+                let v = *xform.zx_post_coefs.get(*position as usize).ok_or(ConfigError::InvalidIndex)?;
+                Ok(v.into())
+            }
             ConfigPath::TransformVariation { index, variation } => {
                 let xform = flame
                     .transforms
@@ -1785,6 +1805,22 @@ impl ConfigManager {
                 };
                 Ok(value.into())
             }
+            ConfigPath::LinkedTransformYzCoefs { index, position } => {
+                let xform = flame.linked_transforms.get(*index).ok_or(ConfigError::InvalidIndex)?;
+                Ok((*xform.yz_coefs.get(*position as usize).ok_or(ConfigError::InvalidIndex)?).into())
+            }
+            ConfigPath::LinkedTransformZxCoefs { index, position } => {
+                let xform = flame.linked_transforms.get(*index).ok_or(ConfigError::InvalidIndex)?;
+                Ok((*xform.zx_coefs.get(*position as usize).ok_or(ConfigError::InvalidIndex)?).into())
+            }
+            ConfigPath::LinkedTransformYzPostCoefs { index, position } => {
+                let xform = flame.linked_transforms.get(*index).ok_or(ConfigError::InvalidIndex)?;
+                Ok((*xform.yz_post_coefs.get(*position as usize).ok_or(ConfigError::InvalidIndex)?).into())
+            }
+            ConfigPath::LinkedTransformZxPostCoefs { index, position } => {
+                let xform = flame.linked_transforms.get(*index).ok_or(ConfigError::InvalidIndex)?;
+                Ok((*xform.zx_post_coefs.get(*position as usize).ok_or(ConfigError::InvalidIndex)?).into())
+            }
             ConfigPath::LinkedTransformVariation { index, variation } => {
                 let xform = flame.linked_transforms.get(*index)
                     .ok_or(ConfigError::InvalidIndex)?;
@@ -1825,6 +1861,22 @@ impl ConfigManager {
                     AffineParam::G => xform.post_g,
                 };
                 Ok(value.into())
+            }
+            ConfigPath::FinalTransformYzCoefs { index, position } => {
+                let xform = flame.final_transforms.get(*index).ok_or(ConfigError::InvalidIndex)?;
+                Ok((*xform.yz_coefs.get(*position as usize).ok_or(ConfigError::InvalidIndex)?).into())
+            }
+            ConfigPath::FinalTransformZxCoefs { index, position } => {
+                let xform = flame.final_transforms.get(*index).ok_or(ConfigError::InvalidIndex)?;
+                Ok((*xform.zx_coefs.get(*position as usize).ok_or(ConfigError::InvalidIndex)?).into())
+            }
+            ConfigPath::FinalTransformYzPostCoefs { index, position } => {
+                let xform = flame.final_transforms.get(*index).ok_or(ConfigError::InvalidIndex)?;
+                Ok((*xform.yz_post_coefs.get(*position as usize).ok_or(ConfigError::InvalidIndex)?).into())
+            }
+            ConfigPath::FinalTransformZxPostCoefs { index, position } => {
+                let xform = flame.final_transforms.get(*index).ok_or(ConfigError::InvalidIndex)?;
+                Ok((*xform.zx_post_coefs.get(*position as usize).ok_or(ConfigError::InvalidIndex)?).into())
             }
             ConfigPath::FinalTransformVariation { index, variation } => {
                 let xform = flame.final_transforms.get(*index)
@@ -2217,6 +2269,39 @@ impl ConfigManager {
                     AffineParam::G => xform.post_g = new_value,
                 }
             }
+            // JWildfire plane coefs — write the one position into the
+            // [f32; 6] array. The GpuTransform builder picks up the
+            // change on the next upload and re-computes plane_flags
+            // automatically (identity comparison drops back to the
+            // flat path when values return to identity).
+            ConfigPath::TransformYzCoefs { index, position } => {
+                let xform = self.normal_transform_mut(*index)?;
+                let new_value: f32 = value.try_into()?;
+                if let Some(slot) = xform.yz_coefs.get_mut(*position as usize) {
+                    *slot = new_value;
+                }
+            }
+            ConfigPath::TransformZxCoefs { index, position } => {
+                let xform = self.normal_transform_mut(*index)?;
+                let new_value: f32 = value.try_into()?;
+                if let Some(slot) = xform.zx_coefs.get_mut(*position as usize) {
+                    *slot = new_value;
+                }
+            }
+            ConfigPath::TransformYzPostCoefs { index, position } => {
+                let xform = self.normal_transform_mut(*index)?;
+                let new_value: f32 = value.try_into()?;
+                if let Some(slot) = xform.yz_post_coefs.get_mut(*position as usize) {
+                    *slot = new_value;
+                }
+            }
+            ConfigPath::TransformZxPostCoefs { index, position } => {
+                let xform = self.normal_transform_mut(*index)?;
+                let new_value: f32 = value.try_into()?;
+                if let Some(slot) = xform.zx_post_coefs.get_mut(*position as usize) {
+                    *slot = new_value;
+                }
+            }
             ConfigPath::TransformVariation { index, variation } => {
                 let xform = self.normal_transform_mut(*index)?;
                 Self::apply_variation_weight(xform, variation, value)?;
@@ -2387,6 +2472,29 @@ impl ConfigManager {
                     AffineParam::G => xform.post_g = v,
                 };
             }
+            // JWildfire plane coefs on the Linked pool. Same per-slot
+            // write pattern as the Normal-pool variants — the
+            // GpuTransform builder picks up the change on next upload.
+            ConfigPath::LinkedTransformYzCoefs { index, position } => {
+                let xform = self.linked_transform_mut(*index)?;
+                let v: f32 = value.try_into()?;
+                if let Some(slot) = xform.yz_coefs.get_mut(*position as usize) { *slot = v; }
+            }
+            ConfigPath::LinkedTransformZxCoefs { index, position } => {
+                let xform = self.linked_transform_mut(*index)?;
+                let v: f32 = value.try_into()?;
+                if let Some(slot) = xform.zx_coefs.get_mut(*position as usize) { *slot = v; }
+            }
+            ConfigPath::LinkedTransformYzPostCoefs { index, position } => {
+                let xform = self.linked_transform_mut(*index)?;
+                let v: f32 = value.try_into()?;
+                if let Some(slot) = xform.yz_post_coefs.get_mut(*position as usize) { *slot = v; }
+            }
+            ConfigPath::LinkedTransformZxPostCoefs { index, position } => {
+                let xform = self.linked_transform_mut(*index)?;
+                let v: f32 = value.try_into()?;
+                if let Some(slot) = xform.zx_post_coefs.get_mut(*position as usize) { *slot = v; }
+            }
             ConfigPath::LinkedTransformVariation { index, variation } => {
                 let xform = self.linked_transform_mut(*index)?;
                 Self::apply_variation_weight(xform, variation, value)?;
@@ -2420,6 +2528,27 @@ impl ConfigManager {
                     AffineParam::E => xform.post_e = v, AffineParam::F => xform.post_f = v,
                     AffineParam::G => xform.post_g = v,
                 };
+            }
+            // JWildfire plane coefs on the Final pool.
+            ConfigPath::FinalTransformYzCoefs { index, position } => {
+                let xform = self.final_transform_mut(*index)?;
+                let v: f32 = value.try_into()?;
+                if let Some(slot) = xform.yz_coefs.get_mut(*position as usize) { *slot = v; }
+            }
+            ConfigPath::FinalTransformZxCoefs { index, position } => {
+                let xform = self.final_transform_mut(*index)?;
+                let v: f32 = value.try_into()?;
+                if let Some(slot) = xform.zx_coefs.get_mut(*position as usize) { *slot = v; }
+            }
+            ConfigPath::FinalTransformYzPostCoefs { index, position } => {
+                let xform = self.final_transform_mut(*index)?;
+                let v: f32 = value.try_into()?;
+                if let Some(slot) = xform.yz_post_coefs.get_mut(*position as usize) { *slot = v; }
+            }
+            ConfigPath::FinalTransformZxPostCoefs { index, position } => {
+                let xform = self.final_transform_mut(*index)?;
+                let v: f32 = value.try_into()?;
+                if let Some(slot) = xform.zx_post_coefs.get_mut(*position as usize) { *slot = v; }
             }
             ConfigPath::FinalTransformVariation { index, variation } => {
                 let xform = self.final_transform_mut(*index)?;

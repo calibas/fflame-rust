@@ -386,6 +386,35 @@ pub struct Transform {
     /// Post-affine Z offset for 3D mode (default: 0.0 = identity)
     pub post_g: f32,
 
+    /// JWildfire-style YZ-plane pre-affine coefficients in the same
+    /// `[a, c, b, d, e, f]` positional order as the standard `coefs`
+    /// XML attribute. Acts on `(y, z)`: `y' = a·y + b·z + e`,
+    /// `z' = c·y + d·z + f` (using the JWF naming convention where
+    /// position 00 = input-Y to output-Y = YY, etc.). Identity is
+    /// `[1, 0, 0, 1, 0, 0]` — when this is identity (and `zx_coefs`
+    /// is also identity), the affine dispatch picks the "flat" path
+    /// matching Apophysis math byte-for-byte. See
+    /// `docs/projects/jwf-features.md` ("zxCoefs / yzCoefs") for the
+    /// full composition rule.
+    pub yz_coefs: [f32; 6],
+
+    /// JWildfire-style ZX-plane pre-affine coefficients. Same positional
+    /// layout as `yz_coefs`. Acts on `(x, z)` per JWildfire's convention
+    /// where position 00 = input-X to output-X = XX, etc. — note the
+    /// "first axis" in JWF's ZX plane is X, not Z (despite the name).
+    /// Identity is `[1, 0, 0, 1, 0, 0]`.
+    pub zx_coefs: [f32; 6],
+
+    /// JWildfire-style YZ-plane post-affine coefficients. Same layout as
+    /// `yz_coefs` but applied after the variation chain. Identity is
+    /// `[1, 0, 0, 1, 0, 0]`.
+    pub yz_post_coefs: [f32; 6],
+
+    /// JWildfire-style ZX-plane post-affine coefficients. Same layout as
+    /// `zx_coefs` but applied after the variation chain. Identity is
+    /// `[1, 0, 0, 1, 0, 0]`.
+    pub zx_post_coefs: [f32; 6],
+
     /// Indexes into `flame.linked_transforms` — Linked transforms that
     /// run sequentially after this normal transform's variations.
     /// Linked transforms are part of dynamics: their output feeds the
@@ -430,13 +459,52 @@ impl Default for Transform {
             post_e: 0.0,
             post_f: 0.0,
             post_g: 0.0,
+            yz_coefs: IDENTITY_PLANE_COEFS,
+            zx_coefs: IDENTITY_PLANE_COEFS,
+            yz_post_coefs: IDENTITY_PLANE_COEFS,
+            zx_post_coefs: IDENTITY_PLANE_COEFS,
             linked_attachments: Vec::new(),
             final_attachments: Vec::new(),
         }
     }
 }
 
+/// Identity 2D affine for a single plane (XY, YZ, or ZX), in the JWF
+/// XML positional order `[a, c, b, d, e, f]` = `[1, 0, 0, 1, 0, 0]`.
+/// Used as the default for all four JWildfire-extension plane fields
+/// (`yz_coefs`, `zx_coefs`, plus their post-affine siblings) so any
+/// `Transform` constructed without explicitly setting them behaves as
+/// an Apophysis flame.
+pub const IDENTITY_PLANE_COEFS: [f32; 6] = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+
 impl Transform {
+    /// True when `yz_coefs` equals the identity 2D affine and therefore
+    /// the YZ plane has no effect. Drives both the conditional XML
+    /// export (we don't write the attribute when identity, matching
+    /// JWildfire's `if (xForm.isHasYZCoeffs())` output) and the GPU
+    /// flag bit that picks the flat-vs-full affine path in the shader.
+    pub fn is_yz_identity(&self) -> bool {
+        self.yz_coefs == IDENTITY_PLANE_COEFS
+    }
+
+    /// True when `zx_coefs` is the identity 2D affine. See
+    /// [`Self::is_yz_identity`] for what this gates.
+    pub fn is_zx_identity(&self) -> bool {
+        self.zx_coefs == IDENTITY_PLANE_COEFS
+    }
+
+    /// True when `yz_post_coefs` is the identity 2D affine. Same
+    /// dispatch semantics as the pre-affine variant but for the
+    /// post-affine chain.
+    pub fn is_yz_post_identity(&self) -> bool {
+        self.yz_post_coefs == IDENTITY_PLANE_COEFS
+    }
+
+    /// True when `zx_post_coefs` is the identity 2D affine.
+    pub fn is_zx_post_identity(&self) -> bool {
+        self.zx_post_coefs == IDENTITY_PLANE_COEFS
+    }
+
     /// Create a new transform with identity affine matrix and a fresh
     /// session-local ID. Use this from editor code paths; use
     /// `Transform::default()` (which leaves `id == 0`) for code that
@@ -911,14 +979,23 @@ impl Serialize for Transform {
         let params_sorted: BTreeMap<_, _> = self.variation_params.iter().collect();
 
         // Count fields: 13 base + 1 if direct_color != 0 + up to 8 post-affine
-        // + up to 2 attachment lists (only when non-empty)
+        // + up to 4 plane-affine arrays (yz/zx pre and post, only when
+        // non-identity) + up to 2 attachment lists (only when non-empty)
         let has_post = self.post_affine_enabled;
         let has_direct_color = self.direct_color.abs() > 1e-6;
+        let has_yz = !self.is_yz_identity();
+        let has_zx = !self.is_zx_identity();
+        let has_yz_post = !self.is_yz_post_identity();
+        let has_zx_post = !self.is_zx_post_identity();
         let has_linked = !self.linked_attachments.is_empty();
         let has_final = !self.final_attachments.is_empty();
         let field_count = 13
             + if has_direct_color { 1 } else { 0 }
             + if has_post { 8 } else { 0 }
+            + if has_yz { 1 } else { 0 }
+            + if has_zx { 1 } else { 0 }
+            + if has_yz_post { 1 } else { 0 }
+            + if has_zx_post { 1 } else { 0 }
             + if has_linked { 1 } else { 0 }
             + if has_final { 1 } else { 0 };
 
@@ -951,6 +1028,22 @@ impl Serialize for Transform {
             state.serialize_field("post_f", &self.post_f)?;
             state.serialize_field("post_g", &self.post_g)?;
         }
+        // JWildfire-extension plane affines. Each is a 6-float array
+        // serialized only when non-identity, so existing .fflame files
+        // remain unchanged and Apophysis-imported flames produce no
+        // extra noise. JSON shape: `"yz_coefs": [a, c, b, d, e, f]`.
+        if has_yz {
+            state.serialize_field("yz_coefs", &self.yz_coefs)?;
+        }
+        if has_zx {
+            state.serialize_field("zx_coefs", &self.zx_coefs)?;
+        }
+        if has_yz_post {
+            state.serialize_field("yz_post_coefs", &self.yz_post_coefs)?;
+        }
+        if has_zx_post {
+            state.serialize_field("zx_post_coefs", &self.zx_post_coefs)?;
+        }
         if has_linked {
             state.serialize_field("linked_attachments", &self.linked_attachments)?;
         }
@@ -973,6 +1066,7 @@ impl<'de> Deserialize<'de> for Transform {
             A, B, C, D, E, F, G, Weight, Variations, VariationParams, Color, ColorSpeed, Opacity,
             DirectColor,
             PostAffineEnabled, PostA, PostB, PostC, PostD, PostE, PostF, PostG,
+            YzCoefs, ZxCoefs, YzPostCoefs, ZxPostCoefs,
             LinkedAttachments, FinalAttachments,
         }
 
@@ -1011,6 +1105,10 @@ impl<'de> Deserialize<'de> for Transform {
                 let mut post_e = None;
                 let mut post_f = None;
                 let mut post_g = None;
+                let mut yz_coefs: Option<[f32; 6]> = None;
+                let mut zx_coefs: Option<[f32; 6]> = None;
+                let mut yz_post_coefs: Option<[f32; 6]> = None;
+                let mut zx_post_coefs: Option<[f32; 6]> = None;
                 let mut linked_attachments: Option<Vec<usize>> = None;
                 let mut final_attachments: Option<Vec<usize>> = None;
 
@@ -1103,6 +1201,10 @@ impl<'de> Deserialize<'de> for Transform {
                         Field::PostE => post_e = Some(map.next_value()?),
                         Field::PostF => post_f = Some(map.next_value()?),
                         Field::PostG => post_g = Some(map.next_value()?),
+                        Field::YzCoefs => yz_coefs = Some(map.next_value()?),
+                        Field::ZxCoefs => zx_coefs = Some(map.next_value()?),
+                        Field::YzPostCoefs => yz_post_coefs = Some(map.next_value()?),
+                        Field::ZxPostCoefs => zx_post_coefs = Some(map.next_value()?),
                         Field::LinkedAttachments => linked_attachments = Some(map.next_value()?),
                         Field::FinalAttachments => final_attachments = Some(map.next_value()?),
                     }
@@ -1141,13 +1243,17 @@ impl<'de> Deserialize<'de> for Transform {
                     post_e: post_e.unwrap_or(0.0),
                     post_f: post_f.unwrap_or(0.0),
                     post_g: post_g.unwrap_or(0.0),
+                    yz_coefs: yz_coefs.unwrap_or(IDENTITY_PLANE_COEFS),
+                    zx_coefs: zx_coefs.unwrap_or(IDENTITY_PLANE_COEFS),
+                    yz_post_coefs: yz_post_coefs.unwrap_or(IDENTITY_PLANE_COEFS),
+                    zx_post_coefs: zx_post_coefs.unwrap_or(IDENTITY_PLANE_COEFS),
                     linked_attachments: linked_attachments.unwrap_or_default(),
                     final_attachments: final_attachments.unwrap_or_default(),
                 })
             }
         }
 
-        const FIELDS: &[&str] = &["a", "b", "c", "d", "e", "f", "g", "weight", "variations", "variation_params", "color", "color_speed", "opacity", "direct_color", "post_affine_enabled", "post_a", "post_b", "post_c", "post_d", "post_e", "post_f", "post_g", "linked_attachments", "final_attachments"];
+        const FIELDS: &[&str] = &["a", "b", "c", "d", "e", "f", "g", "weight", "variations", "variation_params", "color", "color_speed", "opacity", "direct_color", "post_affine_enabled", "post_a", "post_b", "post_c", "post_d", "post_e", "post_f", "post_g", "yz_coefs", "zx_coefs", "yz_post_coefs", "zx_post_coefs", "linked_attachments", "final_attachments"];
         deserializer.deserialize_struct("Transform", FIELDS, TransformVisitor)
     }
 }

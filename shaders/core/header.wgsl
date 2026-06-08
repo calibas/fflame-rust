@@ -35,6 +35,29 @@ struct Transform {
     color_speed: f32,
     opacity: f32,
     direct_color: f32,
+
+    // JWildfire-extension plane affines, indexed `[a, c, b, d, e, f]`
+    // matching the XML attribute write order. See
+    // `docs/projects/jwf-features.md` ("zxCoefs / yzCoefs") for the
+    // composition rule transcribed from `TransformationAffineFullStep`.
+    yz_coefs: array<f32, 6>,
+    zx_coefs: array<f32, 6>,
+    yz_post_coefs: array<f32, 6>,
+    zx_post_coefs: array<f32, 6>,
+
+    // Bit flags: bit 0 = YZ active, bit 1 = ZX active,
+    // bit 2 = YZ post active, bit 3 = ZX post active. The host
+    // computes these on upload by comparing each plane to identity.
+    // When the relevant bit is 0, the corresponding step in
+    // `apply_affine` / `apply_post_affine` is skipped — flat 2D math
+    // (the Apophysis path) takes over with zero added cost.
+    plane_flags: u32,
+
+    // 3-u32 padding so `array<Transform>` strides at 16-byte
+    // boundaries (std430 alignment). Matches `GpuTransform::_plane_pad`.
+    _plane_pad0: u32,
+    _plane_pad1: u32,
+    _plane_pad2: u32,
 }
 
 // Dispatch parameters
