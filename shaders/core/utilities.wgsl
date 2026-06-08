@@ -318,9 +318,17 @@ fn post_symmetry_copy(p: vec3<f32>, k: u32) -> vec3<f32> {
         x = x + half_dist;
     }
 
-    // Rotation around the center.
-    let cs = cos(params.post_symmetry.rotation);
-    let sn = sin(params.post_symmetry.rotation);
+    // Rotation around the center. JWildfire's PostAxisSymmetryWFFunc
+    // uses a clockwise rotation matrix (`[cos sin; -sin cos]`); we
+    // use the standard math-convention counterclockwise
+    // (`[cos -sin; sin cos]`). Negate the angle here so the on-disk
+    // `rotation_deg` value round-trips with JWildfire at the same
+    // sign — pre-fix, JWildfire's `-15°` looked like our `+15°`.
+    // No `/2` factor on rotation (unlike distance) — JWildfire's init
+    // does `a = rotation_deg × π/180`, just degrees-to-radians.
+    let a = -params.post_symmetry.rotation;
+    let cs = cos(a);
+    let sn = sin(a);
     let dx = x - cx;
     let dy = y - cy;
     x = dx * cs - dy * sn + cx;
