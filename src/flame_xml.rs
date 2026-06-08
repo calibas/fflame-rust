@@ -74,13 +74,11 @@ fn parse_flame_element(
 ) -> Result<FractalConfig> {
     // Parse flame attributes
     let mut name = String::from("Untitled");
-    // `size` is parsed but currently discarded — JWF/Apo use it as a
-    // canvas-extent term in their zoom math, and our import-side zoom
-    // formula assumes a 1920×1080 baseline. Tracked as a deferred
-    // feature in docs/projects/jwf-features.md ("size attribute").
-    // Underscore prefix silences the dead-store warning while keeping
-    // the parsing in place for when we wire it through.
-    let mut _size = (1920, 1080);
+    // `size` lands on `FractalConfig::image_size` below. Default
+    // matches both the pre-feature behavior (we used to write a
+    // fixed `size="1920 1080"` on export) and the FractalConfig
+    // default, so missing-attribute flames behave unchanged.
+    let mut size: (u32, u32) = (1920, 1080);
     let mut center = (0.0, 0.0);
     let mut scale = 100.0;
     let mut rotate = 0.0;  // View rotation in degrees
@@ -127,8 +125,8 @@ fn parse_flame_element(
             "size" => {
                 let parts: Vec<&str> = value.split_whitespace().collect();
                 if parts.len() == 2 {
-                    _size.0 = parts[0].parse().unwrap_or(1920);
-                    _size.1 = parts[1].parse().unwrap_or(1080);
+                    size.0 = parts[0].parse().unwrap_or(1920);
+                    size.1 = parts[1].parse().unwrap_or(1080);
                 }
             }
             "center" => {
@@ -406,6 +404,7 @@ fn parse_flame_element(
         camera_rotation_x: cam_pitch,
         camera_rotation_y: cam_yaw,
         camera_z: cam_zpos,
+        image_size: size,
         dof_focus_distance: crate::config::defaults::DEFAULT_DOF_FOCUS_DISTANCE,
         // Direct copy of Apo's `cam_dof` after the step-3 strength rescale —
         // shader divides by 10 internally, so the stored value carries the
@@ -974,9 +973,11 @@ fn write_single_flame(out: &mut String, config: &FractalConfig, flame: &Flame) {
     let rotate_deg = config.rotation * 180.0 / std::f32::consts::PI;
     let apo_gamma_threshold = ((config.gamma_threshold - 50.0) / 2000.0).max(0.0);
 
-    // 1920×1080 default — FractalConfig doesn't carry a render size.
-    // Apo just uses this for the preview canvas; doesn't affect math.
-    let size = (1920, 1080);
+    // Canvas dimensions live on the FractalConfig now (round-tripped
+    // through both XML import and JSON serde). Pre-feature flames
+    // default to (1920, 1080) — same value we used to write
+    // unconditionally — so on-disk output is unchanged for them.
+    let size = config.image_size;
 
     let bg = config.background_color;
     let bg_str = format!(
@@ -1702,6 +1703,43 @@ mod tests {
         // exported form parses back to the same internal value.
         let reimport = parse_flame_xml(&exported).expect("re-parse must succeed");
         assert!((reimport[0].flame.transforms[0].color_speed - 0.42).abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_image_size_roundtrip() {
+        // The `size` XML attribute now lands on `FractalConfig::image_size`
+        // instead of being discarded. Verify (a) import populates the
+        // field, (b) export writes the stored value (not the historic
+        // fixed `1920 1080`), and (c) flames without the attribute
+        // get the (1920, 1080) default.
+        let with_size = r#"
+<flames name="t">
+<flame name="Custom" size="1024 768" center="0 0" scale="200">
+   <xform weight="1" color="0" linear="1" coefs="1 0 0 1 0 0" opacity="1" />
+</flame>
+</flames>
+        "#;
+        let configs = parse_flame_xml(with_size).expect("parse must succeed");
+        assert_eq!(configs[0].image_size, (1024, 768));
+
+        // Export writes the stored value, not 1920 1080.
+        let exported = write_flame_xml(&configs[0]);
+        assert!(exported.contains(r#"size="1024 768""#), "must write `size=\"1024 768\"`, got: {}", exported);
+
+        // Round-trip preserves it.
+        let reimport = parse_flame_xml(&exported).expect("re-parse must succeed");
+        assert_eq!(reimport[0].image_size, (1024, 768));
+
+        // A flame without the size attribute defaults to (1920, 1080).
+        let no_size = r#"
+<flames name="t">
+<flame name="Default" center="0 0" scale="200">
+   <xform weight="1" color="0" linear="1" coefs="1 0 0 1 0 0" opacity="1" />
+</flame>
+</flames>
+        "#;
+        let default_configs = parse_flame_xml(no_size).expect("parse must succeed");
+        assert_eq!(default_configs[0].image_size, (1920, 1080));
     }
 
     #[test]
