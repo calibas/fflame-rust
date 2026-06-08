@@ -78,6 +78,26 @@ impl App {
         // making the image very dim and effects invisible until accumulation builds up.
         self.use_overwrite_next_frame = true;
 
+        // Pre-fill the Custom Export Size inputs with the flame's saved
+        // image dimensions. This is the user-facing payoff for
+        // `FractalConfig::image_size`: the Export PNG dialog now lands
+        // on the flame's authored canvas dimensions by default, so a
+        // 16:9 portrait flame doesn't get exported at the previous
+        // flame's 4K square pref. The values still persist to disk
+        // via SystemSettings — the user can override and their override
+        // sticks until the next flame load (next flame's image_size
+        // takes over). Best effort; any failure is silent because
+        // it's UX polish, not a load blocker.
+        let (w, h) = self.config_manager.active_config().image_size;
+        let _ = self.config_manager.update_system_setting(
+            crate::config::ConfigPath::SystemExportWidth,
+            w.into(),
+        );
+        let _ = self.config_manager.update_system_setting(
+            crate::config::ConfigPath::SystemExportHeight,
+            h.into(),
+        );
+
         // Check for unknown variations and fetch them from the API.
         // This pauses rendering until fetches complete (or fail/timeout).
         let missing = crate::variations::missing_variations_in(

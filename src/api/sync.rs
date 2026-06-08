@@ -688,6 +688,11 @@ pub fn flame_response_to_config(resp: &FlameResponse) -> FractalConfig {
         camera_rotation_x: resp.camera_rotation_x,
         camera_rotation_y: resp.camera_rotation_y,
         camera_z: resp.camera_z,
+        // API contract doesn't carry image_size yet; default to the
+        // historical 1920×1080 so API-loaded flames behave the same
+        // as a fresh `FractalConfig::default()`. Wire through when
+        // the API grows a field for it.
+        image_size: (1920, 1080),
         dof_focus_distance: resp.dof_focus_distance,
         dof_blur_strength: resp.dof_blur_strength,
         fog_strength: resp.fog_strength,

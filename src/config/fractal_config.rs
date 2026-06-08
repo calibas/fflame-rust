@@ -34,6 +34,23 @@ pub struct FractalConfig {
     #[serde(default)]
     pub camera_z: f32,  // Camera Z position (height)
 
+    /// Saved image dimensions. Mirrors the `size` attribute on
+    /// JWildfire / Apophysis `<flame>` elements — historically a
+    /// canvas-extent concept that also participates in the zoom math
+    /// (see docs/projects/jwf-features.md "size attribute"). Today
+    /// we only consume this for one thing: pre-filling the
+    /// "Custom Export Size" inputs in the Export PNG dialog so
+    /// users get the flame's intended dimensions by default. The
+    /// stored value round-trips through JSON and through XML
+    /// import/export so flames opened in JWF/Apo see the same
+    /// number.
+    ///
+    /// Default `(1920, 1080)` matches what we used to write
+    /// unconditionally on export. Existing `.fflame` JSON files
+    /// without the field deserialize identically to before.
+    #[serde(default = "default_image_size", skip_serializing_if = "is_default_image_size")]
+    pub image_size: (u32, u32),
+
     /// Depth of Field settings (3D mode)
     #[serde(default = "default_dof_focus_distance")]
     pub dof_focus_distance: f32,  // Distance from origin where image is sharpest
@@ -227,6 +244,21 @@ fn default_zoom() -> f32 {
     1.0
 }
 
+/// Default saved image dimensions, matching what we historically
+/// wrote as a fixed `size="1920 1080"` on every XML export. Old
+/// `.fflame` JSON files (no `image_size` field) deserialize to
+/// this value, so behavior is unchanged for them.
+fn default_image_size() -> (u32, u32) {
+    (1920, 1080)
+}
+
+/// Skip-serialize helper for `image_size`. Keeps existing flame
+/// JSON files free of the field unless the user actually changes
+/// it from the default — same pattern as `is_default_filter_radius`.
+fn is_default_image_size(v: &(u32, u32)) -> bool {
+    *v == default_image_size()
+}
+
 fn default_density_scale() -> f32 {
     super::defaults::DEFAULT_DENSITY_SCALE
 }
@@ -409,6 +441,7 @@ impl Default for FractalConfig {
             camera_rotation_x: 0.0,
             camera_rotation_y: 0.0,
             camera_z: 0.0,
+            image_size: default_image_size(),
             dof_focus_distance: default_dof_focus_distance(),
             dof_blur_strength: 0.0,
             fog_strength: 0.0,
