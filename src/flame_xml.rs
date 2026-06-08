@@ -478,6 +478,22 @@ struct XformParseResult {
     imported_subflame: Option<Flame>,
 }
 
+/// Parse a 6-float space-separated value (as used by JWildfire's
+/// `yzCoefs`, `zxCoefs`, `yzPost`, `zxPost` attributes) into the
+/// provided buffer. The buffer is passed pre-initialized to the
+/// identity so a malformed or short value leaves the corresponding
+/// plane at identity (effectively a no-op).
+fn parse_plane_coefs(value: &str, out: &mut [f32; 6]) {
+    let parts: Vec<&str> = value.split_whitespace().collect();
+    if parts.len() >= 6 {
+        for i in 0..6 {
+            if let Ok(v) = parts[i].parse::<f32>() {
+                out[i] = v;
+            }
+        }
+    }
+}
+
 fn parse_xform_element(
     element: &quick_xml::events::BytesStart,
 ) -> Result<XformParseResult> {
@@ -547,6 +563,17 @@ fn parse_xform_element(
                     transform.post_f = parts[5].parse().unwrap_or(0.0);  // c[2,1]
                 }
             }
+            // JWildfire extension: per-transform plane affines for the
+            // YZ and ZX planes (and post-affine variants). Stored
+            // positionally as 6 floats `a c b d e f` matching the JWF
+            // XML write order — same indexing convention as
+            // TransformationAffineFullStep reads them. Identity
+            // (no-op) is `1 0 0 1 0 0`; flames that don't write the
+            // attribute leave the plane at identity.
+            "yzCoefs" => parse_plane_coefs(value, &mut transform.yz_coefs),
+            "zxCoefs" => parse_plane_coefs(value, &mut transform.zx_coefs),
+            "yzPost"  => parse_plane_coefs(value, &mut transform.yz_post_coefs),
+            "zxPost"  => parse_plane_coefs(value, &mut transform.zx_post_coefs),
             "chaos" => {
                 // Parse chaos/xaos weights (space-separated floats)
                 // chaos="1.0 0.5 0.75" means P(this→0)=1.0, P(this→1)=0.5, P(this→2)=0.75
@@ -686,6 +713,12 @@ fn parse_finalxform_element(
                     transform.post_f = parts[5].parse().unwrap_or(0.0);
                 }
             }
+            // JWildfire plane affines — same as the normal xform parser.
+            // See the xform branch for the convention details.
+            "yzCoefs" => parse_plane_coefs(value, &mut transform.yz_coefs),
+            "zxCoefs" => parse_plane_coefs(value, &mut transform.zx_coefs),
+            "yzPost"  => parse_plane_coefs(value, &mut transform.yz_post_coefs),
+            "zxPost"  => parse_plane_coefs(value, &mut transform.zx_post_coefs),
             _ => {
                 // Try to parse as variation or variation parameter
                 if let Ok(parsed_value) = value.parse::<f32>() {
@@ -1159,7 +1192,13 @@ fn write_xform(
     }
     out.push_str(&format!(" color=\"{}\"", fmt_f32(xform.color)));
     if xform.color_speed.abs() > 1e-6 {
-        out.push_str(&format!(" color_speed=\"{}\"", fmt_f32(xform.color_speed)));
+        // Apophysis and JWildfire both name this attribute `symmetry`
+        // in the on-disk XML even though their internal field for it
+        // is `colorSpeed` / `color_speed`. Importers above accept
+        // either spelling; we write `symmetry` so flames opened in
+        // Apo/JWF show the value in the right field rather than
+        // appearing as an unknown attribute.
+        out.push_str(&format!(" symmetry=\"{}\"", fmt_f32(xform.color_speed)));
     }
     if !is_final {
         // Apo always writes opacity; we follow suit so a re-import sees
@@ -1194,6 +1233,34 @@ fn write_xform(
             fmt_f32(xform.post_b), fmt_f32(xform.post_d),
             fmt_f32(xform.post_e), fmt_f32(xform.post_f),
         ));
+    }
+
+    // JWildfire-extension plane affines. Written conditionally — only
+    // when the plane isn't identity — matching JWildfire's own
+    // `if (xForm.isHasYZCoeffs()) { ... }` conditional XML output.
+    // Apophysis readers ignore unknown attributes, so this is also
+    // safe for Apo round-trip. Layout matches JWF's XML write block
+    // in `XForm.java`: six positional floats per attribute.
+    let write_plane = |out: &mut String, name: &str, coefs: &[f32; 6]| {
+        out.push_str(&format!(
+            " {}=\"{} {} {} {} {} {}\"",
+            name,
+            fmt_f32(coefs[0]), fmt_f32(coefs[1]),
+            fmt_f32(coefs[2]), fmt_f32(coefs[3]),
+            fmt_f32(coefs[4]), fmt_f32(coefs[5]),
+        ));
+    };
+    if !xform.is_yz_identity() {
+        write_plane(out, "yzCoefs", &xform.yz_coefs);
+    }
+    if !xform.is_zx_identity() {
+        write_plane(out, "zxCoefs", &xform.zx_coefs);
+    }
+    if !xform.is_yz_post_identity() {
+        write_plane(out, "yzPost", &xform.yz_post_coefs);
+    }
+    if !xform.is_zx_post_identity() {
+        write_plane(out, "zxPost", &xform.zx_post_coefs);
     }
 
     // Variation parameters: `variation_params` keys are
@@ -1517,6 +1584,118 @@ mod tests {
         assert_eq!(flame.final_transforms[1].a, 2.0);
         assert_eq!(flame.final_transforms[2].e, 3.0);
         assert_eq!(flame.final_transforms[2].f, 4.0);
+    }
+
+    #[test]
+    fn test_jwf_plane_affines_roundtrip() {
+        // JWildfire-extension per-xform plane affines (yzCoefs, zxCoefs,
+        // yzPost, zxPost). Verify: (a) import populates the arrays in
+        // positional order, (b) identity values are skipped on export
+        // (matching JWF's `if (xForm.isHasYZCoeffs())` conditional),
+        // (c) non-identity values round-trip through import → export
+        // → re-import preserved.
+        let xml = r#"
+<flames name="test">
+<flame name="3D Affine Test" size="800 600" center="0 0" scale="200">
+   <xform weight="1" color="0" linear="1"
+          coefs="1 0 0 1 0 0"
+          yzCoefs="0.9 0.1 -0.1 0.9 0.5 0.7"
+          zxCoefs="0.8 0.2 -0.2 0.8 -0.3 0.4"
+          opacity="1" />
+   <xform weight="1" color="0.5" spherical="1"
+          coefs="1 0 0 1 0 0"
+          yzPost="1.5 0 0 1.5 0 0"
+          zxPost="1.2 0.3 -0.3 1.2 0.1 -0.1"
+          opacity="1" />
+   <xform weight="1" color="1" linear="1" coefs="1 0 0 1 0 0" opacity="1" />
+</flame>
+</flames>
+        "#;
+
+        // Import: arrays populate in positional order.
+        let configs = parse_flame_xml(xml).expect("parse must succeed");
+        let flame = &configs[0].flame;
+        assert_eq!(flame.transforms.len(), 3);
+
+        // Xform 0: yzCoefs + zxCoefs (pre-affine only).
+        let x0 = &flame.transforms[0];
+        assert_eq!(x0.yz_coefs, [0.9, 0.1, -0.1, 0.9, 0.5, 0.7]);
+        assert_eq!(x0.zx_coefs, [0.8, 0.2, -0.2, 0.8, -0.3, 0.4]);
+        assert!(x0.is_yz_post_identity(), "x0 has no yzPost");
+        assert!(x0.is_zx_post_identity(), "x0 has no zxPost");
+        assert!(!x0.is_yz_identity());
+        assert!(!x0.is_zx_identity());
+
+        // Xform 1: yzPost + zxPost (post-affine only).
+        let x1 = &flame.transforms[1];
+        assert!(x1.is_yz_identity());
+        assert!(x1.is_zx_identity());
+        assert_eq!(x1.yz_post_coefs, [1.5, 0.0, 0.0, 1.5, 0.0, 0.0]);
+        assert_eq!(x1.zx_post_coefs, [1.2, 0.3, -0.3, 1.2, 0.1, -0.1]);
+
+        // Xform 2: no plane attrs at all → all identity.
+        let x2 = &flame.transforms[2];
+        assert!(x2.is_yz_identity());
+        assert!(x2.is_zx_identity());
+        assert!(x2.is_yz_post_identity());
+        assert!(x2.is_zx_post_identity());
+
+        // Export → re-import. Identity-plane attributes must be skipped
+        // (Apophysis-style flame stays clean of the extension noise);
+        // non-identity attributes must survive byte-for-byte.
+        let exported = write_flame_xml(&configs[0]);
+        // Xform 2 (all identity) must not have any of the four attrs.
+        // Pull the third <xform line — color may be formatted in various
+        // ways, so index by position rather than by content.
+        let xform_lines: Vec<&str> = exported.lines()
+            .filter(|line| line.trim_start().starts_with("<xform"))
+            .collect();
+        assert_eq!(xform_lines.len(), 3, "three xform lines in export");
+        let x2_block = xform_lines[2];
+        assert!(!x2_block.contains("yzCoefs="), "identity yz_coefs must not be written: {}", x2_block);
+        assert!(!x2_block.contains("zxCoefs="), "identity zx_coefs must not be written: {}", x2_block);
+        assert!(!x2_block.contains("yzPost="), "identity yz_post must not be written: {}", x2_block);
+        assert!(!x2_block.contains("zxPost="), "identity zx_post must not be written: {}", x2_block);
+        // Xform 0 must have yzCoefs and zxCoefs but not yzPost/zxPost.
+        assert!(exported.contains("yzCoefs=\"0.9 0.1 -0.1 0.9 0.5 0.7\""), "yzCoefs preserved: {}", exported);
+        assert!(exported.contains("zxCoefs=\"0.8 0.2 -0.2 0.8 -0.3 0.4\""), "zxCoefs preserved: {}", exported);
+
+        // Re-import and re-check the round-tripped values land exactly.
+        let reimport = parse_flame_xml(&exported).expect("re-parse must succeed");
+        let r0 = &reimport[0].flame.transforms[0];
+        assert_eq!(r0.yz_coefs, [0.9, 0.1, -0.1, 0.9, 0.5, 0.7]);
+        assert_eq!(r0.zx_coefs, [0.8, 0.2, -0.2, 0.8, -0.3, 0.4]);
+        let r1 = &reimport[0].flame.transforms[1];
+        assert_eq!(r1.yz_post_coefs, [1.5, 0.0, 0.0, 1.5, 0.0, 0.0]);
+        assert_eq!(r1.zx_post_coefs, [1.2, 0.3, -0.3, 1.2, 0.1, -0.1]);
+    }
+
+    #[test]
+    fn test_color_speed_exports_as_symmetry() {
+        // Apophysis and JWildfire both name the per-transform color
+        // speed/symmetry value `symmetry` in the on-disk XML. Our
+        // importer accepts both `color_speed` and `symmetry`; the
+        // exporter must write `symmetry` so the round-trip stays
+        // compatible with Apo/JWF (they show it as an unknown
+        // attribute under `color_speed`).
+        let xml = r#"
+<flames name="test">
+<flame name="ColorSpeed" size="800 600" center="0 0" scale="200">
+   <xform weight="1" color="0" linear="1" coefs="1 0 0 1 0 0" symmetry="0.42" opacity="1" />
+</flame>
+</flames>
+        "#;
+        let configs = parse_flame_xml(xml).expect("parse must succeed");
+        assert!((configs[0].flame.transforms[0].color_speed - 0.42).abs() < 1e-4);
+
+        let exported = write_flame_xml(&configs[0]);
+        assert!(exported.contains(r#"symmetry="0.42""#), "must write `symmetry=`, got: {}", exported);
+        assert!(!exported.contains("color_speed="), "must NOT write `color_speed=`, got: {}", exported);
+
+        // Round-trip the value through re-parse to make sure the
+        // exported form parses back to the same internal value.
+        let reimport = parse_flame_xml(&exported).expect("re-parse must succeed");
+        assert!((reimport[0].flame.transforms[0].color_speed - 0.42).abs() < 1e-4);
     }
 
     #[test]

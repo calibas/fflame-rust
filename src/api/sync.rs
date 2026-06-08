@@ -253,6 +253,14 @@ fn transform_from_api(resp: &TransformResponse) -> Transform {
         post_e: resp.post_e,
         post_f: resp.post_f,
         post_g: resp.post_g,
+        // JWildfire-extension plane affines. The API contract doesn't
+        // carry these yet — default to identity so API-loaded flames
+        // stay Apophysis-semantics. When the API contract grows fields
+        // for them we'll wire them through here.
+        yz_coefs: crate::scene::transforms::IDENTITY_PLANE_COEFS,
+        zx_coefs: crate::scene::transforms::IDENTITY_PLANE_COEFS,
+        yz_post_coefs: crate::scene::transforms::IDENTITY_PLANE_COEFS,
+        zx_post_coefs: crate::scene::transforms::IDENTITY_PLANE_COEFS,
         linked_attachments: resp.linked_attachments.clone(),
         final_attachments: resp.final_attachments.clone(),
     }
