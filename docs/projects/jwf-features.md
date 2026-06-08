@@ -6,6 +6,57 @@ Same shape as [`apophysis-remaining-features.md`](apophysis-remaining-features.m
 
 Each feature listed below has a status, what it does in JWildfire, what it would take to implement, and how its absence currently manifests when importing a JWF flame.
 
+## Shipped
+
+### `zxCoefs` / `yzCoefs` — per-transform 3D-plane affines
+
+**Shipped in [PR #97](https://github.com/calibas/fflame-rust/pull/97)** (commit range `176a0f8..843c1e4` on `main`). Closes what was previously the largest gap in JWF 3D-flame interop.
+
+**What it does**: JWildfire extends Apophysis's XY affine (`coefs`) with per-xform 2D affines on the YZ and ZX planes (`yzCoefs`, `zxCoefs`), plus their post-affine siblings (`yzPost`, `zxPost`). Together they cover all 12 coefficients of a 3D affine, applied via `TransformationAffineFullStep`'s composition: sequential 2×2 linear application in fixed XY → YZ → ZX order, then **all six raw offsets summed at the end without rotation by subsequent matrices**. The offset-decoupling is JWildfire-specific — not "true" affine composition where offsets would propagate through later rotations. We mirror their math exactly.
+
+**Composition rule** (transcribed from [`TransformationAffineFullStep.java`](../../output/TransformationAffineFullStep.java)):
+
+```java
+if (xform.hasXYCoeffs) { x = xy00·sx + xy10·sy; y = xy01·sx + xy11·sy; z = sz; }
+if (xform.hasYZCoeffs) { ny = yz00·y + yz10·z; nz = yz01·y + yz11·z; y = ny; z = nz; }
+if (xform.hasZXCoeffs) { nx = zx00·x + zx10·z; nz = zx01·x + zx11·z; x = nx; z = nz; }
+pAffineT.x = x + xy20 + zx20;
+pAffineT.y = y + xy21 + yz20;
+pAffineT.z = z + yz21 + zx21;
+```
+
+**Coefficient indexing** (`xyCoeffIJ` where `I` = input axis, `J` = output axis, `2` = constant). Six floats per attribute in XML position order `00 01 10 11 20 21`. Mapping into the 12-coef 3D affine model:
+
+| Attribute | XML positions yield |
+|---|---|
+| `coefs` (Apo XY) | XX, XY, YX, YY, XO, YO |
+| `zxCoefs` | XX, XZ, ZX, ZZ, XO, ZO |
+| `yzCoefs` | YY, YZ, ZY, ZZ, YO, ZO |
+
+Standard `coefs` is required; the JWF planes are conditionally present (JWildfire only writes them when non-identity, and we do too).
+
+**Implementation pointers**:
+
+- Storage: four `[f32; 6]` arrays on `Transform` — `yz_coefs`, `zx_coefs`, `yz_post_coefs`, `zx_post_coefs`. No `has_*` flags on the struct; identity comparison via `is_*_identity()` helpers stands in for them (and matches JWildfire's "write only when non-identity" XML output naturally). See [`src/scene/transforms.rs`](../../src/scene/transforms.rs).
+- GPU: `GpuTransform.plane_flags: u32` packs the four "non-identity" bits, computed host-side on upload. The WGSL `apply_affine` / `apply_post_affine` in [`shaders/core/affine_3d.wgsl`](../../shaders/core/affine_3d.wgsl) have two paths — "Flat" (flags == 0, byte-identical to pre-extension Apo math) and "Full" (any flag set, transcribes `TransformationAffineFullStep`).
+- UI: four collapsible sections per transform (`render_jwf_plane_sections` in [`src/ui/transforms.rs`](../../src/ui/transforms.rs)). Works for all three transform pools (Normal / Linked / Final). Post sections hide when the XY post-affine is disabled.
+- XML round-trip: `parse_xform_element` + `write_xform` in [`src/flame_xml.rs`](../../src/flame_xml.rs); coverage in `test_jwf_plane_affines_roundtrip`.
+
+**One documented caveat**: in Full mode the Apo `g` (Z offset) is silently dropped — JWildfire has no equivalent field, so we follow their semantics. A flame mixing non-zero `g` with active plane affines won't see `g`. Acceptable because flames that opt into the JWF plane affines are explicitly the JWF-extension path; Apo flames stay on the flat path where `g` keeps working.
+
+**Originally discovered in**: `output/JWF-rando22.flame` ("Brokat3D" random preset). At 90° pitch, JWildfire showed a tall 3D structure with two cone-like spires; our app showed a flat horizontal line because we silently dropped `zxCoefs`. Post-fix the structure matches.
+
+**Still deferred** (split out of this entry — not regressions, just scope cuts):
+
+- **Plane selector in the triangle editor.** Currently the new plane affines are edited via the numeric DragValue inputs in the four collapsible sections. JWildfire lets users switch the triangle editor between editing the XY/YZ/ZX plane. Worth doing once we have user feedback on the numeric-only UX. Track here.
+- **True 12-coefficient 3D affine mode.** Discussed in [`../experimental/PROPOSAL-true-3d-affine.md`](../experimental/PROPOSAL-true-3d-affine.md). Not the same as JWildfire's three-plane decomposition — would have offsets-rotate-with-matrix semantics where JWF has offsets-summed-raw. JWF's approach has the same *linear* expressive power (three plane rotations compose to any SO(3) rotation), so the practical visual difference is small. Deferred indefinitely pending a concrete use case that the JWF path can't express.
+
+### `symmetry` XML attribute — `color_speed` name correction
+
+**Shipped in [PR #97](https://github.com/calibas/fflame-rust/pull/97)** (commit `843c1e4`). One-line fix tagged onto the 3D affine PR.
+
+Apophysis and JWildfire both store per-transform color speed under the XML attribute name `symmetry` despite their internal field being `colorSpeed`. Our importer already accepted both spellings; the exporter was emitting `color_speed=`, which Apo and JWF then showed as an unknown attribute. Now we write `symmetry=` like everyone else. Coverage in `test_color_speed_exports_as_symmetry`.
+
 ## Deferred (not urgent)
 
 ### Per-transform `color_type` — color-flow mode selector
@@ -86,113 +137,6 @@ Defaults are all `0.0` — they're opt-in modulators.
 **What it would take**: Per-transform noise-field metadata on the GPU `Transform`, a sample step at the variation dispatch site that reads the field at the affine-input coordinates, and per-channel modulation hooks for variation amount, variation params, color, and position. Probably also new shader helpers for cellular and perlin noise (we already have some via `crackle` and `dc_perlin` — see [`shaders/core/noise.wgsl`](../../shaders/core/noise.wgsl) and [`shaders/core/voronoi.wgsl`](../../shaders/core/voronoi.wgsl)). The XML importer side is straightforward (collect the attributes onto the `Transform`); the runtime side is the bulk of the work.
 
 **Discovered in**: `output/JWF-rando1.flame` ("Orchids" random preset) uses `wfield_type="CELLULAR_NOISE"` on xform #3.
-
-### `zxCoefs` (and likely `yzCoefs`) — per-transform 3D-plane affines
-
-**Status**: Not parsed on import. Causes Z to collapse to zero on 3D flames where xforms depend on the Z affine to generate depth.
-
-#### The 12-coefficient picture
-
-A general 3D affine `(x, y, z) → (x', y', z')` is a 3×4 matrix with 12 coefficients (using the convention "first letter = which output channel, second letter = which input channel", and "`O`" = the constant offset column):
-
-```
-[XX  YX  ZX  XO] [x]   [x']
-[XY  YY  ZY  YO] [y] = [y']
-[XZ  YZ  ZZ  ZO] [z]   [z']
-                 [1]
-```
-
-**Apophysis** stores only the XY plane (6 coefs: `XX, YX, XO, XY, YY, YO`) plus a single Z offset (our `Transform.g` field = `ZO`). That's 7 of 12 — leaving `XZ, YZ, ZX, ZY, ZZ` as the five Apo doesn't have. In Apo's effective transform `ZX=ZY=ZZ=0`, so input Z is *ignored* and output Z is *just the constant `ZO`*. Z is effectively a per-transform constant.
-
-XML serialization: Apo's `coefs="a c b d e f"` stores `XX, XY, YX, YY, XO, YO` in that order. (Yes, the column-major order is unusual — `a` and `c` together are the X-output row's X- and Y-input coefficients in the matrix above, etc.) Apo's Z offset `ZO` rides on a separate attribute.
-
-#### What JWildfire adds via `zxCoefs`
-
-`zxCoefs="a c b d e f"` is six floats in the *same XML layout* as `coefs` but for the **ZX plane** — a 2D affine acting on `(z, x)`:
-
-```
-[ZZ  XZ  ZO_zx] [z]   [z']
-[ZX  XX  XO_zx] [x] = [x']
-                [1]
-```
-
-That supplies **`ZZ, XZ, ZX`** and re-supplies **`XX, XO, ZO`** which the standard `coefs` and Apo's `g` already provide. So `zxCoefs` adds the three truly new ZX-channel coefficients to the 12-coefficient model, plus duplicates of three Apo already supplies.
-
-**Coefficient indexing** (verified against [`output/TransformationAffineFullStep.java`](../../output/TransformationAffineFullStep.java)): `xyCoeffIJ` where **`I` = input axis index, `J` = output axis index**, with `2` = the constant (homogeneous) row. So for XY plane: `xy00 = XX, xy01 = XY, xy10 = YX, xy11 = YY, xy20 = XO, xy21 = YO`. The XML attribute order is `00 01 10 11 20 21`, matching the standard Apo `coefs="a c b d e f"` of `XX XY YX YY XO YO`.
-
-For `zxCoefs` the same indexing gives: `zx00 = XX, zx01 = XZ, zx10 = ZX, zx11 = ZZ, zx20 = XO, zx21 = ZO`. Notably the *first* axis in JWildfire's ZX plane is X, not Z (despite the name). For `yzCoefs`: `yz00 = YY, yz01 = YZ, yz10 = ZY, yz11 = ZZ, yz20 = YO, yz21 = ZO`. First axis is Y, second is Z.
-
-`yzCoefs` is **confirmed to exist** in `XForm.java`. So the three sources collectively cover all 12 coefficients of the full 3D affine — with multiple overlaps (`XX, XO` from `coefs` and `zxCoefs`; `YY, YO` from `coefs` and `yzCoefs`; `ZZ, ZO` from `zxCoefs` and `yzCoefs`; `XZ` only from `zxCoefs`; `YZ` only from `yzCoefs`; `ZX` only from `zxCoefs`; `ZY` only from `yzCoefs`).
-
-**Post-affine siblings also exist** in `XForm.java`: `xyPost`, `yzPost`, `zxPost`. Same coefficient layout as their pre-affine counterparts, applied after variations.
-
-#### Composition rule (from `TransformationAffineFullStep.java`)
-
-```java
-if (xform.hasXYCoeffs) {
-    x = xy00·sx + xy10·sy;
-    y = xy01·sx + xy11·sy;
-    z = sz;                  // XY only touches x and y
-}
-if (xform.hasYZCoeffs) {
-    ny = yz00·y + yz10·z;
-    nz = yz01·y + yz11·z;
-    y = ny;  z = nz;         // YZ only touches y and z
-}
-if (xform.hasZXCoeffs) {
-    nx = zx00·x + zx10·z;
-    nz = zx01·x + zx11·z;
-    x = nx;  z = nz;         // ZX only touches x and z
-}
-pAffineT.x = x + xy20 + zx20;
-pAffineT.y = y + xy21 + yz20;
-pAffineT.z = z + yz21 + zx21;
-```
-
-Two important details for any reimplementation:
-
-1. **Linear and offset parts are decoupled.** Each plane's 2×2 (rotation/scale) is applied during the sequential phase; offsets are summed at the end. This is *not* mathematically equivalent to true sequential affine composition (which would propagate each offset through subsequent rotations) — JWildfire just adds the raw offsets in the final coordinate frame. Easy to get wrong if you try to optimize via matrix multiplication. Need to mirror the per-step linear-only + final offset-sum pattern.
-
-2. **Application order is fixed**: XY → YZ → ZX. Independent of which flags are set (skipped if unset). The fact that ZX runs last means a non-trivial XY rotation followed by a non-trivial ZX rotation does *not* commute — and JWildfire picks the specific order in the code, so we must too.
-
-**JWildfire's dispatch** (from `XForm.createTransformations`):
-
-- `TransformationAffineNoneStep` — fires when no affines (none of XY/YZ/ZX) are set
-- `TransformationAffineFlatStep` — fires when only XY is set (Apo case, the cheap path)
-- `TransformationAffineFullStep` — fires when *any* of YZ or ZX is set (or both)
-
-So our existing 2D affine math is the right code path for any flame that *doesn't* use `yzCoefs` or `zxCoefs` — and it stays that path for those flames after we add the 3D affine support. The Full path is opt-in.
-
-#### Why we don't have it
-
-JWildfire-specific extension. Our import stops after reading the 2D `coefs` and Apo's `g`. Our `Transform` struct treats Z as a per-transform constant (Apo semantics). Without `zxCoefs` / `yzCoefs`, the missing 5 coefficients are all implicitly 0, so input Z is ignored by the affine and only variations can drive Z dynamics.
-
-#### Impact when a flame uses non-identity `zxCoefs`
-
-Z output collapses to whatever the chaos game's previous-iteration Z was, with no in-affine generation. If any xform in the active set has a flatten-equivalent in post-phase (very common in JWildfire 3D flames), once that xform fires the Z is zero forever afterward — there's no way to regenerate it without the ZX affine. Visible symptom: at high pitch / side view, the 3D fractal appears as a flat line in our render where JWildfire shows depth.
-
-#### Open questions
-
-All resolved with the `TransformationAffineFullStep.java` find. Summary of what's now known:
-
-- ~~**Coefficient overlap resolution**~~: ✓ confirmed — sequential application of the 2×2 linear parts (XY → YZ → ZX), then offset-sum at the end. Linear parts compose multiplicatively through the sequence; offsets are added raw in the final frame without rotation by subsequent matrices.
-- ~~**Post-affine equivalent**~~: ✓ confirmed — `xyPost`, `yzPost`, `zxPost` all exist.
-- ~~**Does `yzCoefs` exist**~~: ✓ confirmed.
-
-The post-affine path almost certainly uses an analogous `TransformationPostAffineStep` with the same composition pattern. Worth verifying when we touch that file but unlikely to surprise.
-
-#### What it would take
-
-1. Add 3D affine fields to `Transform`. Mirroring JWildfire's storage (separate `xy_coefs`, `yz_coefs`, `zx_coefs` plus their `*_post` siblings, each a `[f32; 6]`, plus `has_*` flags) keeps round-trip natural and matches the source-of-truth representation. Default flags all false, which gives us Apo semantics for free.
-2. Parse `xyCoefs`/`yzCoefs`/`zxCoefs` (and the `*Post` siblings) in `parse_xform_element`. Set the corresponding `has_*` flag when an attribute is present.
-3. Extend the GPU `Transform` struct + bytemuck layout. The "flat" case can keep using our existing 2D-only affine math; only the "full" case needs the 12-coefficient path.
-4. Implement `apply_affine` for the full path mirroring `TransformationAffineFullStep.transform` line-for-line — sequential 2×2 application in XY → YZ → ZX order with `has_*` gating each step, then sum the six raw offsets (`xy20 + zx20` for x, `xy21 + yz20` for y, `yz21 + zx21` for z) at the end. Same shape on the post side using the corresponding post coefficients.
-5. Round-trip on export — only write `yzCoefs`/`zxCoefs` (and posts) when the corresponding `has_*` flag is set, matching JWildfire's conditional XML output in `XForm.java`'s write block.
-6. UI: optional "3D affine" matrix in the transform panel for power users. Most users won't touch it; default Apo-semantics identity preserves existing flame appearance.
-
-Test plan worth doing before locking it in: build a flame with non-trivial XY rotation followed by a non-trivial ZX rotation (they don't commute), render in JWildfire, then in our app, confirm pixel-identical at one or two sample iterations. That covers both the order-fixed and offset-doesn't-rotate properties.
-
-**Discovered in**: `output/JWF-rando22.flame` ("Brokat3D" random preset). At 90° pitch, JWildfire shows a tall 3D structure with two cone-like spires; our app shows a flat horizontal line. The flame uses `zxCoefs` on xforms #0 (curl) and #1 (julia3Dz + flatten). User confirmed by resetting xform #0's affine to default in JWildfire — the flame also goes flat in JWF, narrowing the Z-generating role to that xform's full affine including the ZX channel.
 
 ### `size` — saved canvas extent (not just image dimensions)
 
