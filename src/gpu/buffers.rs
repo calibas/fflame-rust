@@ -70,6 +70,18 @@ pub const MAX_TRANSFORMS_UNIFIED: usize = MAX_TRANSFORMS + MAX_SUBFLAME_TRANSFOR
 /// regressions traced to the larger struct's bandwidth cost.
 pub const MAX_ATTACHMENTS_PER_TRANSFORM: usize = 32;
 
+/// Bit flags packed into `GpuTransform::plane_flags`. Each bit
+/// indicates whether the corresponding JWildfire-extension plane
+/// affine is non-identity (and therefore needs the per-step linear
+/// math in `apply_affine` / `apply_post_affine`). When all four bits
+/// are zero, the shader takes the existing flat 2D-affine path —
+/// the equivalent of JWildfire's `TransformationAffineFlatStep`.
+/// Apophysis flames always land here.
+pub const PLANE_FLAG_YZ: u32 = 1 << 0;
+pub const PLANE_FLAG_ZX: u32 = 1 << 1;
+pub const PLANE_FLAG_YZ_POST: u32 = 1 << 2;
+pub const PLANE_FLAG_ZX_POST: u32 = 1 << 3;
+
 /// GPU representation of Transform (must match WGSL struct layout)
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
@@ -102,6 +114,27 @@ pub struct GpuTransform {
     pub color_speed: f32,
     pub opacity: f32,
     pub direct_color: f32,
+
+    // JWildfire-extension plane affines (positional `[a, c, b, d, e, f]`
+    // matching the XML write order). Read in the shader as
+    // `array<f32, 6>` with JWildfire-style 00/01/10/11/20/21 indexing.
+    // See `docs/projects/jwf-features.md` for the composition rule.
+    pub yz_coefs: [f32; 6],
+    pub zx_coefs: [f32; 6],
+    pub yz_post_coefs: [f32; 6],
+    pub zx_post_coefs: [f32; 6],
+
+    // Bit flags (see `PLANE_FLAG_*` constants). When 0, the shader's
+    // existing flat 2D-affine path runs — same math as before this
+    // extension. When non-zero, the gated YZ → ZX steps run too.
+    // Computed host-side on upload by comparing each plane to identity.
+    pub plane_flags: u32,
+
+    // Pad to a 16-byte boundary so `array<GpuTransform>` in std430
+    // storage buffers has aligned strides. 24 plane floats (96 B) +
+    // 1 u32 (4 B) = 100 B added to the previous 480 B → 580 B; the
+    // 3-u32 padding takes it to 592 B = 37 × 16.
+    pub _plane_pad: [u32; 3],
 }
 
 // Manual implementation for bytemuck (arrays of size 50 not auto-derived)
@@ -171,6 +204,17 @@ impl GpuTransform {
         effective_opacity: f32,
         local_map: &std::collections::HashMap<String, u32>,
     ) -> Self {
+        // Host-computed plane-flag word. Comparing the [f32; 6] arrays
+        // to the identity constant via the Transform helpers — the
+        // bit gates the corresponding shader step entirely. JWildfire
+        // does the equivalent decision once at xform-build time via
+        // `isHasYZCoeffs()` etc.
+        let mut plane_flags: u32 = 0;
+        if !xform.is_yz_identity() { plane_flags |= PLANE_FLAG_YZ; }
+        if !xform.is_zx_identity() { plane_flags |= PLANE_FLAG_ZX; }
+        if !xform.is_yz_post_identity() { plane_flags |= PLANE_FLAG_YZ_POST; }
+        if !xform.is_zx_post_identity() { plane_flags |= PLANE_FLAG_ZX_POST; }
+
         Self {
             a: xform.a,
             b: xform.b,
@@ -193,6 +237,12 @@ impl GpuTransform {
             color_speed: xform.color_speed,
             opacity: effective_opacity,
             direct_color: xform.direct_color,
+            yz_coefs: xform.yz_coefs,
+            zx_coefs: xform.zx_coefs,
+            yz_post_coefs: xform.yz_post_coefs,
+            zx_post_coefs: xform.zx_post_coefs,
+            plane_flags,
+            _plane_pad: [0; 3],
         }
     }
 
