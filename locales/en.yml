@@ -293,6 +293,14 @@ transform:
   affine_g: "g (Z):"
   post_affine_enabled: "Post-Affine"
   post_affine_matrix: "Post-Affine Matrix"
+  # JWildfire 3D affine extension — per-plane affines for YZ and ZX.
+  # See docs/projects/jwf-features.md ("zxCoefs / yzCoefs") for the
+  # math; these only matter in 3D mode.
+  yz_affine_section: "YZ Plane Affine"
+  zx_affine_section: "ZX Plane Affine"
+  yz_post_affine_section: "YZ Plane Post-Affine"
+  zx_post_affine_section: "ZX Plane Post-Affine"
+  plane_reset: "Reset to identity"
 
 # Variation Controls
 variations:
@@ -1424,6 +1432,14 @@ tooltips:
   affine_g: "Z offset - depth in 3D mode"
   post_affine_enabled: "Enable a second affine transform applied after variations.\nUsed for fine-tuning shape and position independently of the pre-affine."
   post_affine_matrix: "Post-affine coefficients applied after variations."
+  # JWildfire-extension plane affines. Six positional coefficients
+  # `a c b d e f` (same layout as the XY `coefs`) acting on the
+  # named plane, composed sequentially after XY per JWildfire's
+  # TransformationAffineFullStep. Identity is `1 0 0 1 0 0`.
+  yz_affine: "JWildfire YZ plane affine. Acts on (y, z) before variations. Identity `1 0 0 1 0 0` = no effect."
+  zx_affine: "JWildfire ZX plane affine. Acts on (x, z) before variations. Identity `1 0 0 1 0 0` = no effect."
+  yz_post_affine: "JWildfire YZ plane post-affine. Applied after variations. Identity = no effect."
+  zx_post_affine: "JWildfire ZX plane post-affine. Applied after variations. Identity = no effect."
   color_speed: "How fast the color index changes during iteration.\n-1 to 1, where 0 = no change."
   opacity: "Transparency of points from this transform.\n0 = invisible, 1 = fully opaque"
   direct_color: "Blend strength for direct-color (DC) variations like dc_linear, dc_bubble.\n0 = standard color evolution; 1 = DC variations fully control color (default).\nNo effect when no DC variations are active in this transform — safe to leave at 1."

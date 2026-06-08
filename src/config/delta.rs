@@ -98,6 +98,18 @@ pub enum ConfigPath {
     TransformPostAffineEnabled { index: usize },
     /// Post-affine transformation parameter for a transform
     TransformPostAffine { index: usize, param: AffineParam },
+
+    // JWildfire-extension plane affines. Each path identifies one of
+    // the six positions in a `[f32; 6]` plane-coefficient array
+    // (`position` = 0..6, JWildfire's XML positional order matching
+    // `yz_coefs[position]`). Normal pool only for now — Linked/Final
+    // pool variants can be added when the UI grows past Normal
+    // editing. The round-trip on XML/JSON already covers all pools;
+    // this is just about which transforms get UI controls.
+    TransformYzCoefs { index: usize, position: u8 },
+    TransformZxCoefs { index: usize, position: u8 },
+    TransformYzPostCoefs { index: usize, position: u8 },
+    TransformZxPostCoefs { index: usize, position: u8 },
     /// High-level transform origin X (translate X)
     /// Computed from affine: origin_x = e
     TransformOriginX { index: usize },
@@ -503,6 +515,18 @@ impl Display for ConfigPath {
             ConfigPath::TransformPostAffine { index, param } => {
                 write!(f, "Transform {} → Post-Affine {:?}", index + 1, param)
             }
+            ConfigPath::TransformYzCoefs { index, position } => {
+                write!(f, "Transform {} → YZ Coef [{}]", index + 1, position)
+            }
+            ConfigPath::TransformZxCoefs { index, position } => {
+                write!(f, "Transform {} → ZX Coef [{}]", index + 1, position)
+            }
+            ConfigPath::TransformYzPostCoefs { index, position } => {
+                write!(f, "Transform {} → YZ Post Coef [{}]", index + 1, position)
+            }
+            ConfigPath::TransformZxPostCoefs { index, position } => {
+                write!(f, "Transform {} → ZX Post Coef [{}]", index + 1, position)
+            }
 
             // Linked Transform pool
             ConfigPath::LinkedTransformAffine { index, param } => {
@@ -838,6 +862,26 @@ impl ConfigPath {
             ConfigPath::TransformPostAffineScale { index } => I18nKey::with_params(
                 "history.param.transform_scale",
                 vec![("index", (index + 1).to_string())],
+            ),
+            // JWildfire plane coefs — fall back to a generic key with
+            // index + position parameters. Localizers can flesh these
+            // out per-plane later if it matters for UX; the history
+            // panel shows them as e.g. "Transform 2 → YZ Coef [4]".
+            ConfigPath::TransformYzCoefs { index, position } => I18nKey::with_params(
+                "history.param.transform_yz_coefs",
+                vec![("index", (index + 1).to_string()), ("position", position.to_string())],
+            ),
+            ConfigPath::TransformZxCoefs { index, position } => I18nKey::with_params(
+                "history.param.transform_zx_coefs",
+                vec![("index", (index + 1).to_string()), ("position", position.to_string())],
+            ),
+            ConfigPath::TransformYzPostCoefs { index, position } => I18nKey::with_params(
+                "history.param.transform_yz_post_coefs",
+                vec![("index", (index + 1).to_string()), ("position", position.to_string())],
+            ),
+            ConfigPath::TransformZxPostCoefs { index, position } => I18nKey::with_params(
+                "history.param.transform_zx_post_coefs",
+                vec![("index", (index + 1).to_string()), ("position", position.to_string())],
             ),
 
             // Linked Transform pool
@@ -1815,6 +1859,10 @@ impl ConfigPath {
             | ConfigPath::TransformAffine { .. }
             | ConfigPath::TransformPostAffineEnabled { .. }
             | ConfigPath::TransformPostAffine { .. }
+            | ConfigPath::TransformYzCoefs { .. }
+            | ConfigPath::TransformZxCoefs { .. }
+            | ConfigPath::TransformYzPostCoefs { .. }
+            | ConfigPath::TransformZxPostCoefs { .. }
             | ConfigPath::TransformVariation { .. }
             | ConfigPath::TransformVariationParam { .. }
             | ConfigPath::TransformOriginX { .. }
@@ -1976,6 +2024,18 @@ impl ConfigPath {
             ConfigPath::TransformPostAffineEnabled { index } => format!("Transform.{}.PostAffineEnabled", index),
             ConfigPath::TransformPostAffine { index, param } => {
                 format!("Transform.{}.PostAffine.{}", index, param.to_char())
+            }
+            ConfigPath::TransformYzCoefs { index, position } => {
+                format!("Transform.{}.YzCoefs.{}", index, position)
+            }
+            ConfigPath::TransformZxCoefs { index, position } => {
+                format!("Transform.{}.ZxCoefs.{}", index, position)
+            }
+            ConfigPath::TransformYzPostCoefs { index, position } => {
+                format!("Transform.{}.YzPostCoefs.{}", index, position)
+            }
+            ConfigPath::TransformZxPostCoefs { index, position } => {
+                format!("Transform.{}.ZxPostCoefs.{}", index, position)
             }
             ConfigPath::TransformPostAffineOriginX { index } => format!("Transform.{}.PostAffineOriginX", index),
             ConfigPath::TransformPostAffineOriginY { index } => format!("Transform.{}.PostAffineOriginY", index),
@@ -2471,6 +2531,10 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::TransformDirectColor { .. }
         | ConfigPath::TransformAffine { .. }
         | ConfigPath::TransformPostAffine { .. }
+        | ConfigPath::TransformYzCoefs { .. }
+        | ConfigPath::TransformZxCoefs { .. }
+        | ConfigPath::TransformYzPostCoefs { .. }
+        | ConfigPath::TransformZxPostCoefs { .. }
         | ConfigPath::TransformVariation { .. }
         | ConfigPath::TransformVariationParam { .. }
         | ConfigPath::TransformOriginX { .. }
