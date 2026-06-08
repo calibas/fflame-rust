@@ -57,6 +57,30 @@ Standard `coefs` is required; the JWF planes are conditionally present (JWildfir
 
 Apophysis and JWildfire both store per-transform color speed under the XML attribute name `symmetry` despite their internal field being `colorSpeed`. Our importer already accepted both spellings; the exporter was emitting `color_speed=`, which Apo and JWF then showed as an unknown attribute. Now we write `symmetry=` like everyone else. Coverage in `test_color_speed_exports_as_symmetry`.
 
+### `size` — saved canvas dimensions (partial implementation)
+
+**Partially shipped** in commit `032755f`. Data plumbing + Export PNG pre-fill are done; the visual zoom mismatch on non-1920×1080 flames is **not** fixed yet — see "Still deferred" below.
+
+**What ships in this round**:
+
+- `FractalConfig::image_size: (u32, u32)` field with default `(1920, 1080)` ([`src/config/fractal_config.rs`](../../src/config/fractal_config.rs)). Skip-serialized when at default so existing `.fflame` JSON files stay unchanged.
+- XML import: `size` lands on `image_size` instead of being discarded.
+- XML export: `image_size` replaces the hardcoded `(1920, 1080)` write — flames now round-trip their authored dimensions through JWF / Apo.
+- Export PNG dialog pre-fill: `load_config_with_undo` pushes `image_size` into `SystemExportWidth` / `SystemExportHeight`, so opening a portrait flame no longer leaves the previous flame's pref in the Custom Export Size inputs.
+- Coverage in `test_image_size_roundtrip`.
+
+**Still deferred** (the visual issue the entry was originally written about):
+
+- **Zoom magnification mismatch.** Our `zoom` is a pure viewport multiplier with no canvas-extent term. JWildfire / Apophysis define their visible fractal area as `size / (scale × cam_zoom)`. A JWF flame saved at `size="638 359"` renders at ~3× the magnification ours does because our import formula `zoom = (scale / 200) × cam_zoom` implicitly assumes a 1920-wide canvas. The shipped field lets us *track* the saved size; the compensation math hasn't been wired into the import/export zoom formulas yet. Visible on JWF "random" presets that save at small preview sizes (`192×108`, `638×359`); Apo flames usually save at `1500×1000` which lands close enough to our reference that the divergence isn't usually noticeable.
+- **Which dimension drives the zoom formula** — width, height, `min(saved)`, or `max(saved)`. Needs a non-uniform stretch test (same flame saved at `size="638 718"` vs `size="1276 359"`) to pin down. Three data points distinguish the candidates; we have one pair from uniform-scale captures that doesn't.
+- **The `200` divisor** in our import formula was empirically tuned by eyeballing — possibly a `size.x / ~10` ratio at the 1920 default, but not verified against any Apo or JWF constant. May become re-derivable from `image_size` once the formula above is nailed down.
+- **Viewport aspect ratio**: when importing a flame, optionally adjust our viewport's aspect ratio to match `image_size` so flames saved at non-standard ratios don't letterbox.
+- **UI for editing**: a "Source / Canvas" advanced panel would let power users who care about JWF round-trip adjust `image_size` directly. Today the only way to change it is to re-import a JWF flame with the new value.
+
+The deferred items are loosely coupled — the zoom math is the heaviest single piece and the most user-visible improvement. Pre-fill alone is a real UX win on its own merit, hence the partial-ship.
+
+**Originally discovered in**: `output/JWF-rando1.flame` and a side-by-side recreation comparison via `output/JWF1a.flame` / `output/JWF1b.flame` (identical fractal, only difference is `size="638 359"` vs `size="1920 1080"`).
+
 ## Deferred (not urgent)
 
 ### Per-transform `color_type` — color-flow mode selector
@@ -137,49 +161,6 @@ Defaults are all `0.0` — they're opt-in modulators.
 **What it would take**: Per-transform noise-field metadata on the GPU `Transform`, a sample step at the variation dispatch site that reads the field at the affine-input coordinates, and per-channel modulation hooks for variation amount, variation params, color, and position. Probably also new shader helpers for cellular and perlin noise (we already have some via `crackle` and `dc_perlin` — see [`shaders/core/noise.wgsl`](../../shaders/core/noise.wgsl) and [`shaders/core/voronoi.wgsl`](../../shaders/core/voronoi.wgsl)). The XML importer side is straightforward (collect the attributes onto the `Transform`); the runtime side is the bulk of the work.
 
 **Discovered in**: `output/JWF-rando1.flame` ("Orchids" random preset) uses `wfield_type="CELLULAR_NOISE"` on xform #3.
-
-### `size` — saved canvas extent (not just image dimensions)
-
-**Status**: Parsed but discarded on import; written as a fixed `size="1920 1080"` on export. Causes a visible zoom mismatch on JWF/Apo flames saved at non-default dimensions.
-
-**JWF/Apo XML attribute** (on the `<flame>` element): `size="W H"`. Looks superficially like "image dimensions for the saved PNG" but is actually a coordinate-system concept that participates in the rendering math alongside `scale` and `cam_zoom`.
-
-**What it does in JWildfire / Apophysis**: Defines the fractal canvas the saved flame anchors to. `scale` is "pixels per fractal unit *at the saved canvas dimensions*" — so for a given `scale`, a smaller saved `size` shows a smaller portion of the fractal (zoomed in), and a larger saved `size` shows more (zoomed out). User-confirmed example: reducing `size` from `1920×1080` to `192×108` (×0.1 each axis, same aspect) renders 10× zoomed in in JWildfire. The saved fractal coordinate triple is `size + scale + cam_zoom`; any of the three can be changed to adjust the visible extent.
-
-**What our app does instead**: Our `zoom` is a pure viewport multiplier. Our renderer's effective pixels-per-unit is `zoom × min(viewport) × 0.25` — no dependency on any saved canvas. Our import formula `zoom = (scale / 200) × cam_zoom` implicitly assumes the saved canvas is close to `1920×1080`. Flames saved at other dimensions import at the wrong visual zoom because the `size`-derived term is missing.
-
-**Impact when a flame uses a non-1920×1080 size**: The flame renders at the wrong magnification compared to JWildfire. Easy to spot on JWF "random" presets, which often save at small preview sizes (e.g. `638×359`, `192×108`). Apo-exported flames typically save at their default `1500×1000` or close, which lands near enough to our implicit reference that the divergence isn't usually visible. Aspect ratio doesn't matter — the magnification factor is tied to one of the dimensions (width or height — single-dim, not area / min / max). Concrete confirmation needed via a non-uniform-stretch experiment before nailing the exact formula; see "Open questions" below.
-
-**The conceptual mismatch**:
-
-| | JWF / Apo | Ours |
-|---|---|---|
-| `size` | Saved canvas dimensions; defines the fractal coordinate grid `scale` anchors to | Parsed and discarded |
-| `scale` | Pixels per fractal unit *at the saved canvas dimensions* | Folded into `zoom = scale/200 × cam_zoom` |
-| `cam_zoom` | Linear multiplier on the rendering | Folded into our zoom |
-| Visible fractal extent | `size / (scale × cam_zoom)` | `4 / zoom` (viewport-independent — depends only on our zoom) |
-
-**Three options considered** (B selected as the path forward):
-
-- **A. Compensate at import only**. Multiply `zoom` by `1920 / saved_width` (or whichever single-dim formula the experiment confirms). On export, always write `size="1920 1080"`. One-line import fix, *but lossy round-trip* — exporting our flame back into JWildfire produces a different `size + scale + cam_zoom` triple than the source, so re-importing it in JWF renders at a different magnification than the original.
-- **B. Add `image_size` metadata to FractalConfig** (selected). Track the saved size as a first-class config field. Import reads `size` and uses it for the zoom compensation; export writes it back. Our `zoom` stays a viewport multiplier (no renderer/UI refactor), and round-trip with JWF/Apo is exact. Field defaults to `(1920, 1080)` so existing `.fflame` JSON files without it deserialize identically to current behavior.
-- **C. Replace `zoom` with `fractal_extent`** (the JWF/Apo model). Refactor our primary view representation to store visible fractal area directly. Conceptually aligned with JWF/Apo but a major refactor touching the renderer, every zoom UI control, the config schema, undo history, and animation interpolation. Not justified by this issue alone.
-
-**Plan for B (when picked up)**:
-
-1. Add `pub image_size: (u32, u32)` to [`FractalConfig`](../../src/config/fractal_config.rs). Default `(1920, 1080)` via `#[serde(default = "...")]` so existing JSON deserializes unchanged.
-2. `flame_xml.rs` import: read `size`, store on config, compute `zoom = (scale / 200) × cam_zoom × (1920 / size.0)` (or the corrected formula).
-3. `flame_xml.rs` export: write `size="{w} {h}"` from `config.image_size`; back-compute `scale = config.zoom × 200 / cam_zoom × (image_size.0 / 1920)` so the triple round-trips.
-4. **Viewport aspect ratio**: when importing a flame, optionally adjust our viewport's aspect ratio to match `image_size`. This avoids letterboxing on flames saved at unusual aspect ratios. (Could be a per-import opt-in.)
-5. **PNG export default**: use `image_size` as the default resolution in the PNG export dialog. Users overriding it doesn't change `image_size`; it's just a smarter default.
-6. UI consideration: probably expose `image_size` in an "Source / Export" advanced panel so power users who care about JWF round-trip have a knob; everyone else ignores it.
-
-**Open questions before implementation**:
-
-- **Which dimension drives the formula?** `width`, `height`, `min(saved)`, `max(saved)`, or something else? The pair (`JWF1a.flame` at 638×359 vs `JWF1b.flame` at 1920×1080) doesn't distinguish these because the dimensions scale uniformly. Need a non-uniform stretch test — e.g., save the same flame at `size="638 718"` (height doubled) vs `size="1276 359"` (width doubled) and measure the zoom adjustment needed in our app for each. Three data points pin down the formula.
-- **Where did the `200` divisor come from?** Empirically tuned during the original import code by eyeballing the visual match against JWF for typical flames. Possibly aligned with our default size of `1920×1080` via something like `size.x / ~10`, but not verified to derive from any Apophysis or JWildfire constant. With size-aware compensation in place, the `200` might be re-derivable from `image_size` directly (e.g., `image_size.x / 9.6` or similar), eliminating the magic number — or it might stay an empirical tuning knob. Worth revisiting once the `size` formula above is nailed down.
-
-**Discovered in**: `output/JWF-rando1.flame` and a side-by-side recreation comparison via `output/JWF1a.flame` / `output/JWF1b.flame` (identical fractal, only difference is `size="638 359"` vs `size="1920 1080"`).
 
 ## Related docs
 
