@@ -91,33 +91,61 @@ Defaults are all `0.0` — they're opt-in modulators.
 
 **Status**: Not parsed on import. Causes Z to collapse to zero on 3D flames where xforms depend on the Z affine to generate depth.
 
-**JWildfire XML attribute** (on each `<xform>` / `<finalxform>`): `zxCoefs="a c b d e f"` — six floats, same layout as the standard `coefs` attribute. Defines a 2D affine in the ZX plane. We don't have JWildfire's `XForm.java` source locally to confirm the application order, but the empirical behavior matches the hypothesis that `zxCoefs` is applied as part of the affine transform alongside the standard XY `coefs`, producing a 3D affine of the form:
+#### The 12-coefficient picture
+
+A general 3D affine `(x, y, z) → (x', y', z')` is a 3×4 matrix with 12 coefficients (using the convention "first letter = which output channel, second letter = which input channel", and "`O`" = the constant offset column):
 
 ```
-x' = a·x + b·y + zxa·z + e
-y' = c·x + d·y + …
-z' = zxc·x + zxd·z + zxf
+[XX  YX  ZX  XO] [x]   [x']
+[XY  YY  ZY  YO] [y] = [y']
+[XZ  YZ  ZZ  ZO] [z]   [z']
+                 [1]
 ```
 
-(With `coefs="a c b d e f"` and `zxCoefs="zxa zxc zxb zxd zxe zxf"` mixing into the standard rotation/translation. Exact coefficient layout needs verification once we touch the importer — likely a one-line test against a known-rotation flame.)
+**Apophysis** stores only the XY plane (6 coefs: `XX, YX, XO, XY, YY, YO`) plus a single Z offset (our `Transform.g` field = `ZO`). That's 7 of 12 — leaving `XZ, YZ, ZX, ZY, ZZ` as the five Apo doesn't have. In Apo's effective transform `ZX=ZY=ZZ=0`, so input Z is *ignored* and output Z is *just the constant `ZO`*. Z is effectively a per-transform constant.
 
-A `yzCoefs` sibling for the YZ plane would round out the 3D affine; I haven't seen one in our local flame samples, but it's a reasonable guess that JWildfire supports it for symmetry. Worth confirming when we look at the JWF source.
+XML serialization: Apo's `coefs="a c b d e f"` stores `XX, XY, YX, YY, XO, YO` in that order. (Yes, the column-major order is unusual — `a` and `c` together are the X-output row's X- and Y-input coefficients in the matrix above, etc.) Apo's Z offset `ZO` rides on a separate attribute.
 
-**Why we don't have it**: JWildfire-specific extension to Apophysis's 2D affine. Apophysis flames have only the XY `coefs` and `post` attributes; JWildfire adds a ZX channel to give xforms a way to generate Z from X without needing a Z-producing variation. Our app stops reading after the 2D `coefs` / `post`, treating Z as either preserved (when `preserve_z="1"`) or reset per iteration (when off).
+#### What JWildfire adds via `zxCoefs`
 
-**Impact when a flame uses non-identity `zxCoefs`**: Z output collapses to whatever the chaos game's previous-iteration Z was, with no in-affine generation. If any xform in the active set has a flatten-equivalent in post-phase (very common in JWildfire 3D flames), once that xform fires the Z is zero forever afterward — there's no way to regenerate it without the ZX affine. Visible symptom: at high pitch / side view, the 3D fractal appears as a flat line in our render where JWildfire shows depth.
+`zxCoefs="a c b d e f"` is six floats in the *same XML layout* as `coefs` but for the **ZX plane** — a 2D affine acting on `(z, x)`:
 
-**What it would take**:
+```
+[ZZ  XZ  ZO_zx] [z]   [z']
+[ZX  XX  XO_zx] [x] = [x']
+                [1]
+```
 
-1. Add `zx_*` fields (six floats) to the `Transform` struct, default to identity (`1 0 0 1 0 0`).
-2. Parse `zxCoefs` in `parse_xform_element` (and probably the post equivalent if it exists in JWildfire, e.g. `zxPost`).
+That supplies **`ZZ, XZ, ZX`** and re-supplies **`XX, XO, ZO`** which the standard `coefs` and Apo's `g` already provide. So `zxCoefs` adds the three truly new ZX-channel coefficients to the 12-coefficient model, plus duplicates of three Apo already supplies.
+
+A presumed `yzCoefs` (not seen in our local flame samples — inferred from symmetry, not source) would symmetrically supply **`ZZ, YZ, ZY`** and re-supply `YY, YO, ZO` for the YZ plane. Combined with the XY `coefs` and `zxCoefs`, that gives all 12 coefficients of the full 3D affine — with multiple overlaps (`XX, XO` from `coefs` and `zxCoefs`; `YY, YO` from `coefs` and `yzCoefs`; `ZZ`, `ZO` from `zxCoefs` and `yzCoefs`; `XZ` only from `zxCoefs`; `YZ` only from `yzCoefs`; `ZX` only from `zxCoefs`; `ZY` only from `yzCoefs`).
+
+How JWildfire resolves the overlap is the open question — see "Open questions" below.
+
+#### Why we don't have it
+
+JWildfire-specific extension. Our import stops after reading the 2D `coefs` and Apo's `g`. Our `Transform` struct treats Z as a per-transform constant (Apo semantics). Without `zxCoefs` / `yzCoefs`, the missing 5 coefficients are all implicitly 0, so input Z is ignored by the affine and only variations can drive Z dynamics.
+
+#### Impact when a flame uses non-identity `zxCoefs`
+
+Z output collapses to whatever the chaos game's previous-iteration Z was, with no in-affine generation. If any xform in the active set has a flatten-equivalent in post-phase (very common in JWildfire 3D flames), once that xform fires the Z is zero forever afterward — there's no way to regenerate it without the ZX affine. Visible symptom: at high pitch / side view, the 3D fractal appears as a flat line in our render where JWildfire shows depth.
+
+#### Open questions
+
+- **Coefficient overlap resolution**: standard `coefs`, `zxCoefs`, and (probably) `yzCoefs` collectively define 18 floats covering 12 unique target coefficients with 6 floats of overlap (mostly on `XX, XO, YY, YO, ZZ, ZO`). JWildfire might (a) compose them as three sequential 2D affines in their respective planes — easy to implement and self-consistent, (b) matrix-multiply them into a single composite 3D affine, or (c) treat the standard `coefs` as authoritative for `XX/XY/YX/YY/XO/YO` and let `zxCoefs`/`yzCoefs` fill only the new coefficients (overrides silently ignored on duplicates). Without `XForm.java` source we can't tell. Cheap test once we touch this: build a known-rotation flame (e.g., 45° pure ZX rotation, no XY component) and check which composition rule matches JWildfire's render bit-for-bit.
+
+- **Post-affine equivalent**: JWildfire might also have `zxPost` / `yzPost` for the post-affine side. Not seen in samples; worth checking.
+
+- **Does `yzCoefs` exist**: inferred from symmetry, not confirmed in samples. Probable but verify before implementing.
+
+#### What it would take
+
+1. Add 3D affine fields to `Transform` — likely a `[f32; 12]` representing the 12-coefficient matrix (or 6 floats each for `coefs`, `zx_coefs`, `yz_coefs` if we mirror JWildfire's storage to keep round-trip natural). Default to "Apo semantics": `XX=YY=1`, `ZZ=1`, others zero, with `ZO=g`.
+2. Parse `zxCoefs` (and `yzCoefs` if confirmed) in `parse_xform_element`. Equivalent on the post-affine side if present.
 3. Extend the GPU `Transform` struct + bytemuck layout.
-4. Apply the ZX affine in `apply_affine` in the shader — multiply the input point through a 3×3 (or 4×4) matrix combining the XY and ZX coefs.
+4. Resolve the overlap question (above) and apply the composed 3D affine in `apply_affine`.
 5. Round-trip on export.
-6. UI: a "ZX affine" matrix in the transform panel for power users. Most users won't touch it; default identity preserves existing flame appearance.
-7. (If `yzCoefs` exists) same for the YZ plane — `yz_*` fields + parse + apply + export.
-
-The complication: combining XY `coefs`, ZX `zxCoefs`, and possibly YZ `yzCoefs` cleanly into a single 3D affine matrix. JWildfire likely applies them in a documented order (probably standard XY first, then ZX, then YZ — or matrix-composes them). Need to verify against the source before implementing.
+6. UI: optional "3D affine" matrix in the transform panel for power users. Most users won't touch it; default Apo-semantics identity preserves existing flame appearance.
 
 **Discovered in**: `output/JWF-rando22.flame` ("Brokat3D" random preset). At 90° pitch, JWildfire shows a tall 3D structure with two cone-like spires; our app shows a flat horizontal line. The flame uses `zxCoefs` on xforms #0 (curl) and #1 (julia3Dz + flatten). User confirmed by resetting xform #0's affine to default in JWildfire — the flame also goes flat in JWF, narrowing the Z-generating role to that xform's full affine including the ZX channel.
 
