@@ -139,6 +139,12 @@ pub enum ConfigPath {
     LinkedTransformAffine { index: usize, param: AffineParam },
     LinkedTransformPostAffineEnabled { index: usize },
     LinkedTransformPostAffine { index: usize, param: AffineParam },
+    // JWildfire-extension plane affines — Linked pool counterparts
+    // of the Normal-pool `Transform{Yz,Zx}{,Post}Coefs` variants.
+    LinkedTransformYzCoefs { index: usize, position: u8 },
+    LinkedTransformZxCoefs { index: usize, position: u8 },
+    LinkedTransformYzPostCoefs { index: usize, position: u8 },
+    LinkedTransformZxPostCoefs { index: usize, position: u8 },
     LinkedTransformVariation { index: usize, variation: String },
     LinkedTransformVariationParam {
         index: usize,
@@ -171,6 +177,11 @@ pub enum ConfigPath {
     FinalTransformAffine { index: usize, param: AffineParam },
     FinalTransformPostAffineEnabled { index: usize },
     FinalTransformPostAffine { index: usize, param: AffineParam },
+    // JWildfire-extension plane affines — Final pool counterparts.
+    FinalTransformYzCoefs { index: usize, position: u8 },
+    FinalTransformZxCoefs { index: usize, position: u8 },
+    FinalTransformYzPostCoefs { index: usize, position: u8 },
+    FinalTransformZxPostCoefs { index: usize, position: u8 },
     FinalTransformVariation { index: usize, variation: String },
     FinalTransformVariationParam {
         index: usize,
@@ -381,6 +392,45 @@ impl TransformRef {
             },
         }
     }
+
+    /// Build the right ConfigPath variant for a JWildfire YZ-plane
+    /// pre-affine coefficient on whichever pool this transform lives
+    /// in. The position is the 0..6 index into the [f32; 6] array
+    /// (JWildfire's XML positional order).
+    pub fn yz_coefs_path(&self, position: u8) -> ConfigPath {
+        match self {
+            TransformRef::Normal(i) => ConfigPath::TransformYzCoefs { index: *i, position },
+            TransformRef::Linked(i) => ConfigPath::LinkedTransformYzCoefs { index: *i, position },
+            TransformRef::Final(i) => ConfigPath::FinalTransformYzCoefs { index: *i, position },
+        }
+    }
+
+    /// ZX-plane pre-affine path. See [`Self::yz_coefs_path`].
+    pub fn zx_coefs_path(&self, position: u8) -> ConfigPath {
+        match self {
+            TransformRef::Normal(i) => ConfigPath::TransformZxCoefs { index: *i, position },
+            TransformRef::Linked(i) => ConfigPath::LinkedTransformZxCoefs { index: *i, position },
+            TransformRef::Final(i) => ConfigPath::FinalTransformZxCoefs { index: *i, position },
+        }
+    }
+
+    /// YZ-plane post-affine path. See [`Self::yz_coefs_path`].
+    pub fn yz_post_coefs_path(&self, position: u8) -> ConfigPath {
+        match self {
+            TransformRef::Normal(i) => ConfigPath::TransformYzPostCoefs { index: *i, position },
+            TransformRef::Linked(i) => ConfigPath::LinkedTransformYzPostCoefs { index: *i, position },
+            TransformRef::Final(i) => ConfigPath::FinalTransformYzPostCoefs { index: *i, position },
+        }
+    }
+
+    /// ZX-plane post-affine path. See [`Self::yz_coefs_path`].
+    pub fn zx_post_coefs_path(&self, position: u8) -> ConfigPath {
+        match self {
+            TransformRef::Normal(i) => ConfigPath::TransformZxPostCoefs { index: *i, position },
+            TransformRef::Linked(i) => ConfigPath::LinkedTransformZxPostCoefs { index: *i, position },
+            TransformRef::Final(i) => ConfigPath::FinalTransformZxPostCoefs { index: *i, position },
+        }
+    }
 }
 
 impl Display for ConfigPath {
@@ -538,6 +588,18 @@ impl Display for ConfigPath {
             ConfigPath::LinkedTransformPostAffine { index, param } => {
                 write!(f, "Linked Transform {} → Post-Affine {:?}", index + 1, param)
             }
+            ConfigPath::LinkedTransformYzCoefs { index, position } => {
+                write!(f, "Linked Transform {} → YZ Coef [{}]", index + 1, position)
+            }
+            ConfigPath::LinkedTransformZxCoefs { index, position } => {
+                write!(f, "Linked Transform {} → ZX Coef [{}]", index + 1, position)
+            }
+            ConfigPath::LinkedTransformYzPostCoefs { index, position } => {
+                write!(f, "Linked Transform {} → YZ Post Coef [{}]", index + 1, position)
+            }
+            ConfigPath::LinkedTransformZxPostCoefs { index, position } => {
+                write!(f, "Linked Transform {} → ZX Post Coef [{}]", index + 1, position)
+            }
             ConfigPath::LinkedTransformVariation { index, variation } => {
                 write!(f, "Linked Transform {} → {} variation", index + 1, variation)
             }
@@ -578,6 +640,18 @@ impl Display for ConfigPath {
             }
             ConfigPath::FinalTransformPostAffine { index, param } => {
                 write!(f, "Final Transform {} → Post-Affine {:?}", index + 1, param)
+            }
+            ConfigPath::FinalTransformYzCoefs { index, position } => {
+                write!(f, "Final Transform {} → YZ Coef [{}]", index + 1, position)
+            }
+            ConfigPath::FinalTransformZxCoefs { index, position } => {
+                write!(f, "Final Transform {} → ZX Coef [{}]", index + 1, position)
+            }
+            ConfigPath::FinalTransformYzPostCoefs { index, position } => {
+                write!(f, "Final Transform {} → YZ Post Coef [{}]", index + 1, position)
+            }
+            ConfigPath::FinalTransformZxPostCoefs { index, position } => {
+                write!(f, "Final Transform {} → ZX Post Coef [{}]", index + 1, position)
             }
             ConfigPath::FinalTransformVariation { index, variation } => {
                 write!(f, "Final Transform {} → {} variation", index + 1, variation)
@@ -897,6 +971,26 @@ impl ConfigPath {
                 "history.param.transform_post_affine",
                 vec![("index", (index + 1).to_string()), ("param", format!("{:?}", param))],
             ),
+            // Reuse the normal-pool plane-coef i18n keys — surrounding
+            // panel labels distinguish the pool, same pattern as the
+            // existing LinkedTransformOriginX => transform_origin_x
+            // reuse below.
+            ConfigPath::LinkedTransformYzCoefs { index, position } => I18nKey::with_params(
+                "history.param.transform_yz_coefs",
+                vec![("index", (index + 1).to_string()), ("position", position.to_string())],
+            ),
+            ConfigPath::LinkedTransformZxCoefs { index, position } => I18nKey::with_params(
+                "history.param.transform_zx_coefs",
+                vec![("index", (index + 1).to_string()), ("position", position.to_string())],
+            ),
+            ConfigPath::LinkedTransformYzPostCoefs { index, position } => I18nKey::with_params(
+                "history.param.transform_yz_post_coefs",
+                vec![("index", (index + 1).to_string()), ("position", position.to_string())],
+            ),
+            ConfigPath::LinkedTransformZxPostCoefs { index, position } => I18nKey::with_params(
+                "history.param.transform_zx_post_coefs",
+                vec![("index", (index + 1).to_string()), ("position", position.to_string())],
+            ),
             ConfigPath::LinkedTransformVariation { index, variation } => I18nKey::with_params(
                 "history.param.transform_variation",
                 vec![("index", (index + 1).to_string()), ("variation", variation.clone())],
@@ -944,6 +1038,22 @@ impl ConfigPath {
             ConfigPath::FinalTransformPostAffine { index, param } => I18nKey::with_params(
                 "history.param.transform_post_affine",
                 vec![("index", (index + 1).to_string()), ("param", format!("{:?}", param))],
+            ),
+            ConfigPath::FinalTransformYzCoefs { index, position } => I18nKey::with_params(
+                "history.param.transform_yz_coefs",
+                vec![("index", (index + 1).to_string()), ("position", position.to_string())],
+            ),
+            ConfigPath::FinalTransformZxCoefs { index, position } => I18nKey::with_params(
+                "history.param.transform_zx_coefs",
+                vec![("index", (index + 1).to_string()), ("position", position.to_string())],
+            ),
+            ConfigPath::FinalTransformYzPostCoefs { index, position } => I18nKey::with_params(
+                "history.param.transform_yz_post_coefs",
+                vec![("index", (index + 1).to_string()), ("position", position.to_string())],
+            ),
+            ConfigPath::FinalTransformZxPostCoefs { index, position } => I18nKey::with_params(
+                "history.param.transform_zx_post_coefs",
+                vec![("index", (index + 1).to_string()), ("position", position.to_string())],
             ),
             ConfigPath::FinalTransformVariation { index, variation } => I18nKey::with_params(
                 "history.param.transform_variation",
@@ -1876,6 +1986,10 @@ impl ConfigPath {
             | ConfigPath::LinkedTransformAffine { .. }
             | ConfigPath::LinkedTransformPostAffineEnabled { .. }
             | ConfigPath::LinkedTransformPostAffine { .. }
+            | ConfigPath::LinkedTransformYzCoefs { .. }
+            | ConfigPath::LinkedTransformZxCoefs { .. }
+            | ConfigPath::LinkedTransformYzPostCoefs { .. }
+            | ConfigPath::LinkedTransformZxPostCoefs { .. }
             | ConfigPath::LinkedTransformVariation { .. }
             | ConfigPath::LinkedTransformVariationParam { .. }
             | ConfigPath::LinkedTransformOriginX { .. }
@@ -1889,6 +2003,10 @@ impl ConfigPath {
             | ConfigPath::FinalTransformAffine { .. }
             | ConfigPath::FinalTransformPostAffineEnabled { .. }
             | ConfigPath::FinalTransformPostAffine { .. }
+            | ConfigPath::FinalTransformYzCoefs { .. }
+            | ConfigPath::FinalTransformZxCoefs { .. }
+            | ConfigPath::FinalTransformYzPostCoefs { .. }
+            | ConfigPath::FinalTransformZxPostCoefs { .. }
             | ConfigPath::FinalTransformVariation { .. }
             | ConfigPath::FinalTransformVariationParam { .. }
             | ConfigPath::FinalTransformOriginX { .. }
@@ -2052,6 +2170,18 @@ impl ConfigPath {
             ConfigPath::LinkedTransformPostAffine { index, param } => {
                 format!("LinkedTransform.{}.PostAffine.{}", index, param.to_char())
             }
+            ConfigPath::LinkedTransformYzCoefs { index, position } => {
+                format!("LinkedTransform.{}.YzCoefs.{}", index, position)
+            }
+            ConfigPath::LinkedTransformZxCoefs { index, position } => {
+                format!("LinkedTransform.{}.ZxCoefs.{}", index, position)
+            }
+            ConfigPath::LinkedTransformYzPostCoefs { index, position } => {
+                format!("LinkedTransform.{}.YzPostCoefs.{}", index, position)
+            }
+            ConfigPath::LinkedTransformZxPostCoefs { index, position } => {
+                format!("LinkedTransform.{}.ZxPostCoefs.{}", index, position)
+            }
             ConfigPath::LinkedTransformVariation { index, variation } => {
                 format!("LinkedTransform.{}.Variation.{}", index, variation)
             }
@@ -2080,6 +2210,18 @@ impl ConfigPath {
             }
             ConfigPath::FinalTransformPostAffine { index, param } => {
                 format!("FinalTransform.{}.PostAffine.{}", index, param.to_char())
+            }
+            ConfigPath::FinalTransformYzCoefs { index, position } => {
+                format!("FinalTransform.{}.YzCoefs.{}", index, position)
+            }
+            ConfigPath::FinalTransformZxCoefs { index, position } => {
+                format!("FinalTransform.{}.ZxCoefs.{}", index, position)
+            }
+            ConfigPath::FinalTransformYzPostCoefs { index, position } => {
+                format!("FinalTransform.{}.YzPostCoefs.{}", index, position)
+            }
+            ConfigPath::FinalTransformZxPostCoefs { index, position } => {
+                format!("FinalTransform.{}.ZxPostCoefs.{}", index, position)
             }
             ConfigPath::FinalTransformVariation { index, variation } => {
                 format!("FinalTransform.{}.Variation.{}", index, variation)
@@ -2547,6 +2689,10 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::TransformPostAffineScale { .. }
         | ConfigPath::LinkedTransformAffine { .. }
         | ConfigPath::LinkedTransformPostAffine { .. }
+        | ConfigPath::LinkedTransformYzCoefs { .. }
+        | ConfigPath::LinkedTransformZxCoefs { .. }
+        | ConfigPath::LinkedTransformYzPostCoefs { .. }
+        | ConfigPath::LinkedTransformZxPostCoefs { .. }
         | ConfigPath::LinkedTransformVariation { .. }
         | ConfigPath::LinkedTransformVariationParam { .. }
         | ConfigPath::LinkedTransformOriginX { .. }
@@ -2559,6 +2705,10 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::LinkedTransformPostAffineScale { .. }
         | ConfigPath::FinalTransformAffine { .. }
         | ConfigPath::FinalTransformPostAffine { .. }
+        | ConfigPath::FinalTransformYzCoefs { .. }
+        | ConfigPath::FinalTransformZxCoefs { .. }
+        | ConfigPath::FinalTransformYzPostCoefs { .. }
+        | ConfigPath::FinalTransformZxPostCoefs { .. }
         | ConfigPath::FinalTransformVariation { .. }
         | ConfigPath::FinalTransformVariationParam { .. }
         | ConfigPath::FinalTransformOriginX { .. }
