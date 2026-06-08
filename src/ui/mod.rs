@@ -389,7 +389,7 @@ impl EguiLayer {
 
         // egui 0.34 requires Context::run() to be called at least once before
         // fonts can be accessed. Run a dummy frame to initialize the font system.
-        let _ = ctx.run(egui_dock::egui::RawInput::default(), |_ctx| {});
+        let _ = ctx.run_ui(egui_dock::egui::RawInput::default(), |_ctx| {});
 
         // Initialize fonts with Noto Sans (better Unicode coverage than Ubuntu-Light)
         font_loader::initialize_default_fonts(&ctx);
