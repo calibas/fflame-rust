@@ -1192,7 +1192,13 @@ fn write_xform(
     }
     out.push_str(&format!(" color=\"{}\"", fmt_f32(xform.color)));
     if xform.color_speed.abs() > 1e-6 {
-        out.push_str(&format!(" color_speed=\"{}\"", fmt_f32(xform.color_speed)));
+        // Apophysis and JWildfire both name this attribute `symmetry`
+        // in the on-disk XML even though their internal field for it
+        // is `colorSpeed` / `color_speed`. Importers above accept
+        // either spelling; we write `symmetry` so flames opened in
+        // Apo/JWF show the value in the right field rather than
+        // appearing as an unknown attribute.
+        out.push_str(&format!(" symmetry=\"{}\"", fmt_f32(xform.color_speed)));
     }
     if !is_final {
         // Apo always writes opacity; we follow suit so a re-import sees
@@ -1662,6 +1668,34 @@ mod tests {
         let r1 = &reimport[0].flame.transforms[1];
         assert_eq!(r1.yz_post_coefs, [1.5, 0.0, 0.0, 1.5, 0.0, 0.0]);
         assert_eq!(r1.zx_post_coefs, [1.2, 0.3, -0.3, 1.2, 0.1, -0.1]);
+    }
+
+    #[test]
+    fn test_color_speed_exports_as_symmetry() {
+        // Apophysis and JWildfire both name the per-transform color
+        // speed/symmetry value `symmetry` in the on-disk XML. Our
+        // importer accepts both `color_speed` and `symmetry`; the
+        // exporter must write `symmetry` so the round-trip stays
+        // compatible with Apo/JWF (they show it as an unknown
+        // attribute under `color_speed`).
+        let xml = r#"
+<flames name="test">
+<flame name="ColorSpeed" size="800 600" center="0 0" scale="200">
+   <xform weight="1" color="0" linear="1" coefs="1 0 0 1 0 0" symmetry="0.42" opacity="1" />
+</flame>
+</flames>
+        "#;
+        let configs = parse_flame_xml(xml).expect("parse must succeed");
+        assert!((configs[0].flame.transforms[0].color_speed - 0.42).abs() < 1e-4);
+
+        let exported = write_flame_xml(&configs[0]);
+        assert!(exported.contains(r#"symmetry="0.42""#), "must write `symmetry=`, got: {}", exported);
+        assert!(!exported.contains("color_speed="), "must NOT write `color_speed=`, got: {}", exported);
+
+        // Round-trip the value through re-parse to make sure the
+        // exported form parses back to the same internal value.
+        let reimport = parse_flame_xml(&exported).expect("re-parse must succeed");
+        assert!((reimport[0].flame.transforms[0].color_speed - 0.42).abs() < 1e-4);
     }
 
     #[test]
