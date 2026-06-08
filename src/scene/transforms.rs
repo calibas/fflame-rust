@@ -1576,22 +1576,17 @@ pub struct Flame {
     ///   `preserve_z="1"` and is needed by some Z-aware flames.
     ///
     /// `.fflame` files saved before this field existed default to
-    /// **true** via the serde fallback (preserving their original
-    /// look). `Default::default()` returns **false** so newly
-    /// authored flames and JWF imports match Apo/JWF defaults.
-    #[serde(default = "default_serde_preserve_z", skip_serializing_if = "skip_serializing_preserve_z_if_default")]
+    /// **true** via the manual `Deserialize` fallback (preserving
+    /// their original look — see the `preserve_z.unwrap_or(true)`
+    /// call in the `Flame` deserializer's construction step).
+    /// `Default::default()` returns **false** so newly authored
+    /// flames and JWF imports match Apo/JWF defaults.
+    #[serde(skip_serializing_if = "skip_serializing_preserve_z_if_default")]
     pub preserve_z: bool,
 }
 
-fn default_serde_preserve_z() -> bool {
-    // Pre-field `.fflame` files had no preserve_z; treat their
-    // missing field as "preserve Z" so they keep rendering the way
-    // they did before this feature landed.
-    true
-}
-
 fn skip_serializing_preserve_z_if_default(v: &bool) -> bool {
-    // Skip writing the field when it matches the serde fallback
+    // Skip writing the field when it matches the pre-field default
     // (`true`). New flames default to `false` and write the field
     // explicitly, so the round-trip is well-defined for both eras.
     *v

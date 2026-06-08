@@ -1616,7 +1616,7 @@ impl HighResExporter {
         transparent: bool,
         total_iterations: u64,
     ) -> Result<Vec<u8>, String> {
-        use crate::config::defaults::{DEFAULT_WHITE_LEVEL, PREFILTER_WHITE, BRIGHT_ADJUST};
+        use crate::config::defaults::{PREFILTER_WHITE, BRIGHT_ADJUST};
 
         // ===== Step 1: Convert histogram to Rgba16Float format (parallelized) =====
         // The GPU accumulation buffer stores:

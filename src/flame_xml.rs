@@ -74,7 +74,13 @@ fn parse_flame_element(
 ) -> Result<FractalConfig> {
     // Parse flame attributes
     let mut name = String::from("Untitled");
-    let mut size = (1920, 1080);
+    // `size` is parsed but currently discarded — JWF/Apo use it as a
+    // canvas-extent term in their zoom math, and our import-side zoom
+    // formula assumes a 1920×1080 baseline. Tracked as a deferred
+    // feature in docs/projects/jwf-features.md ("size attribute").
+    // Underscore prefix silences the dead-store warning while keeping
+    // the parsing in place for when we wire it through.
+    let mut _size = (1920, 1080);
     let mut center = (0.0, 0.0);
     let mut scale = 100.0;
     let mut rotate = 0.0;  // View rotation in degrees
@@ -121,8 +127,8 @@ fn parse_flame_element(
             "size" => {
                 let parts: Vec<&str> = value.split_whitespace().collect();
                 if parts.len() == 2 {
-                    size.0 = parts[0].parse().unwrap_or(1920);
-                    size.1 = parts[1].parse().unwrap_or(1080);
+                    _size.0 = parts[0].parse().unwrap_or(1920);
+                    _size.1 = parts[1].parse().unwrap_or(1080);
                 }
             }
             "center" => {
