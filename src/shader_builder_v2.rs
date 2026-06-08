@@ -2097,7 +2097,6 @@ fn split_wgsl_top_level_fns(source: &str) -> Vec<(String, String)> {
                 depth -= 1;
                 if depth == 0 {
                     block_end = j + 1;
-                    j += 1;
                     break;
                 }
             }
