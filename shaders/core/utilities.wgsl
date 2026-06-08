@@ -300,12 +300,22 @@ fn post_symmetry_copy(p: vec3<f32>, k: u32) -> vec3<f32> {
     var y = p.y;
 
     // Pan along the flip direction (perpendicular to the mirror line).
+    // JWildfire stores `distance` as the *total separation* between
+    // the original and the mirror; the per-copy pan is `distance / 2`.
+    // See JWildfire's `PostAxisSymmetryWFFunc.init` —
+    // `_halve_dist = pAmount / 2.0` — used as `+halve_dist` for the
+    // original and `-halve_dist` for the mirror, giving total
+    // separation `distance`. Pre-fix we panned by the full `distance`,
+    // doubling the visible spread vs JWildfire at the same numeric
+    // input. We split by 2 here so on-disk values round-trip 1:1
+    // with JWildfire (no import/export multiplier needed).
+    let half_dist = params.post_symmetry.distance * 0.5;
     if (kind == 1u) {
         // XAxis flips Y → distance pans along Y.
-        y = y + params.post_symmetry.distance;
+        y = y + half_dist;
     } else {
         // YAxis flips X → distance pans along X.
-        x = x + params.post_symmetry.distance;
+        x = x + half_dist;
     }
 
     // Rotation around the center.
