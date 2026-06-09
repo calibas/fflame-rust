@@ -207,7 +207,20 @@ fn project_3d_to_2d_apophysis(
     // Pass `-yaw` to mirror JWildfire's
     // `double yaw = -flame.getCamYaw() * M_PI / 180.0;`
     // (see output/FlameRendererView.java line ~91).
-    let camera_matrix = build_camera_matrix(-yaw, pitch, bank, roll);
+    //
+    // Pass `-pitch` too. The transcribed JWildfire matrix, applied
+    // as M·v in WGSL column-major convention, produces a YZ rotation
+    // by `-pitch` for the pitch-only case (`y' = cp·y + sp·z`,
+    // `z' = -sp·y + cp·z`). The pre-branch shader and JWildfire's
+    // own render both spin the pitch axis in the opposite sense
+    // (`y' = cp·y - sp·z`, `z' = sp·y + cp·z` = rotation by
+    // `+pitch`). The negation flips the apparent direction back so
+    // moving the Pitch slider up tilts the view up — matches both
+    // JWildfire and our pre-branch behavior. (Almost certainly a
+    // convention quirk between JWildfire's M·v vs ours, but we
+    // mirror the visible direction users care about rather than
+    // chase the underlying math difference.)
+    let camera_matrix = build_camera_matrix(-yaw, -pitch, bank, roll);
     let camera_space = camera_transform(p, camera_matrix, camera_z);
     return apply_perspective(camera_space, persp_strength);
 }
