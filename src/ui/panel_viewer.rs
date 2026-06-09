@@ -444,12 +444,8 @@ pub fn pan_fractal_view(
     let dx = -drag_delta.x * scale;
     let dy = -drag_delta.y * scale;
 
-    // Apply rotation (negate to convert screen to fractal space)
-    let cos_r = (-config.rotation).cos();
-    let sin_r = (-config.rotation).sin();
-
-    let fractal_dx = dx * cos_r - dy * sin_r;
-    let fractal_dy = dx * sin_r + dy * cos_r;
+    // Screen space → pan frame (rotation-aware in 2D, identity in 3D)
+    let (fractal_dx, fractal_dy) = config.screen_delta_to_pan_frame(dx, dy);
 
     let new_pan_x = config.pan_x + fractal_dx;
     let new_pan_y = config.pan_y + fractal_dy;
@@ -499,11 +495,11 @@ pub fn zoom_fractal_view(
                 // Convert to fractal space (account for current zoom, scale, and rotation)
                 let scale = f32::min(panel_size.x, panel_size.y) * 0.25;
 
-                // Apply rotation to convert screen space to fractal space
-                let cos_r = (-config.rotation).cos();
-                let sin_r = (-config.rotation).sin();
-                let rotated_offset_x = mouse_offset_x * cos_r - mouse_offset_y * sin_r;
-                let rotated_offset_y = mouse_offset_x * sin_r + mouse_offset_y * cos_r;
+                // Screen space → pan frame (rotation-aware in 2D,
+                // identity in 3D). Same offset serves both zoom
+                // levels — the conversion doesn't depend on zoom.
+                let (rotated_offset_x, rotated_offset_y) =
+                    config.screen_delta_to_pan_frame(mouse_offset_x, mouse_offset_y);
 
                 let fractal_offset_x = rotated_offset_x / (scale * config.zoom);
                 let fractal_offset_y = rotated_offset_y / (scale * config.zoom);
@@ -512,12 +508,10 @@ pub fn zoom_fractal_view(
                 let point_x = config.pan_x + fractal_offset_x;
                 let point_y = config.pan_y + fractal_offset_y;
 
-                // Apply zoom and adjust pan (also need rotation for new zoom level)
+                // Apply zoom and adjust pan so that point stays under the cursor
                 let new_zoom = (config.zoom * zoom_factor).clamp(0.01, 1000.0);
-                let new_rotated_offset_x = mouse_offset_x * cos_r - mouse_offset_y * sin_r;
-                let new_rotated_offset_y = mouse_offset_x * sin_r + mouse_offset_y * cos_r;
-                let new_fractal_offset_x = new_rotated_offset_x / (scale * new_zoom);
-                let new_fractal_offset_y = new_rotated_offset_y / (scale * new_zoom);
+                let new_fractal_offset_x = rotated_offset_x / (scale * new_zoom);
+                let new_fractal_offset_y = rotated_offset_y / (scale * new_zoom);
                 let new_pan_x = point_x - new_fractal_offset_x;
                 let new_pan_y = point_y - new_fractal_offset_y;
 
@@ -1159,10 +1153,8 @@ impl<'a> PanelViewer<'a> {
             let offset_y = pinch_center.y - center_y;
 
             let scale = f32::min(panel_size.x, panel_size.y) * 0.25;
-            let cos_r = (-config.rotation).cos();
-            let sin_r = (-config.rotation).sin();
-            let rot_x = offset_x * cos_r - offset_y * sin_r;
-            let rot_y = offset_x * sin_r + offset_y * cos_r;
+            // Screen space → pan frame (rotation-aware in 2D, identity in 3D)
+            let (rot_x, rot_y) = config.screen_delta_to_pan_frame(offset_x, offset_y);
 
             let point_x = config.pan_x + rot_x / (scale * config.zoom);
             let point_y = config.pan_y + rot_y / (scale * config.zoom);
@@ -1178,10 +1170,9 @@ impl<'a> PanelViewer<'a> {
             let dx = -translation.x * drag_scale;
             let dy = -translation.y * drag_scale;
 
-            let cos_r = (-config.rotation).cos();
-            let sin_r = (-config.rotation).sin();
-            new_pan_x += dx * cos_r - dy * sin_r;
-            new_pan_y += dx * sin_r + dy * cos_r;
+            let (pan_dx, pan_dy) = config.screen_delta_to_pan_frame(dx, dy);
+            new_pan_x += pan_dx;
+            new_pan_y += pan_dy;
         }
 
         // Single batch update: zoom + combined pan = one history entry

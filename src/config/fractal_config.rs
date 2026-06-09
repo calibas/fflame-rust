@@ -540,6 +540,32 @@ impl Default for FractalConfig {
 }
 
 impl FractalConfig {
+    /// Convert a screen-aligned XY delta into the pan coordinate frame.
+    ///
+    /// In 2D mode, `world_to_pixel` applies pan BEFORE the screen
+    /// rotation, so screen-space movement must be rotated by
+    /// `−rotation` to land in pan coordinates.
+    ///
+    /// In 3D mode, `world_to_pixel_3d` applies pan AFTER the camera
+    /// matrix (where `rotation` participates as the roll angle), so
+    /// the pan frame is already screen-aligned and no compensation
+    /// applies. Rotating there double-counts the rotation — panning
+    /// inverted at rotation = 180° was the visible symptom.
+    ///
+    /// Every input path that turns screen motion into a pan change
+    /// (mouse drag, arrow keys, zoom-to-cursor, pinch) must go
+    /// through this so the modes stay consistent.
+    pub fn screen_delta_to_pan_frame(&self, dx: f32, dy: f32) -> (f32, f32) {
+        match self.flame.render_mode {
+            crate::scene::transforms::RenderMode::TwoD => {
+                let cos_r = (-self.rotation).cos();
+                let sin_r = (-self.rotation).sin();
+                (dx * cos_r - dy * sin_r, dx * sin_r + dy * cos_r)
+            }
+            crate::scene::transforms::RenderMode::ThreeD => (dx, dy),
+        }
+    }
+
     /// Export configuration to JSON string with version header
     /// Omits fields that match defaults for compact output
     pub fn to_json(&self) -> Result<String, serde_json::Error> {
