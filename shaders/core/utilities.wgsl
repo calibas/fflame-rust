@@ -107,18 +107,40 @@ fn speed_to_color(speed: f32) -> vec3<f32> {
 
 // Build the 4-angle Apophysis / JWildfire camera matrix.
 //
-// Transcribed verbatim from `output/FlameRendererView.java`'s
-// `createProjectionMatrix(yaw, pitch, bank, roll)`. Each WGSL
-// column holds `(JWF m[0][col], JWF m[1][col], JWF m[2][col])` so
-// `camera_matrix * v` in WGSL produces the same result as JWF's
-// row-major `m[row][col]` application.
+// Originally a verbatim transcription of `createProjectionMatrix`
+// from `output/FlameRendererView.java`. That turned out to be subtly
+// wrong: JWF *applies* its matrix transposed (`applyCameraMatrix`
+// multiplies point components against matrix COLUMNS, see
+// FlameRendererView.java lines 262-266), while our `camera_transform`
+// applies rows. Transposing a product reverses the factor order, so
+// a verbatim copy applied row-wise reverses the rotation composition.
+// The empirical yaw↔roll slot swap at the call site repaired the two
+// OUTER factors, but left bank and pitch in reversed relative order —
+// bank acted outside pitch (world-axis-ish behavior) instead of
+// inside (camera-axis-ish). Symptom: at pitch 90° the Bank slider
+// yawed around world-Z in our app while JWF rolls around the look
+// axis. At pitch 0 the two orders coincide, which is why this
+// survived the original axis-by-axis slider tuning.
 //
-// All four angles in radians. The argument convention (which
-// parameter slot consumes which user-facing slider input) and
-// the input sign tuning both live at the call site in
-// `project_3d_to_2d_apophysis` — keeping this function as a
-// faithful JWF transcription means future debugging can match
-// the Java source character-by-character.
+// This body now constructs the factorization directly:
+//
+//   M(yaw, pitch, bank, roll) = Rz(−yaw)·Rx(−pitch)·Ry(−bank)·Rz(−roll)
+//
+// which, with the call-site slot mapping (yaw slot ← −rotation,
+// pitch ← −pitch, bank ← −bank, roll slot ← yaw), yields the
+// effective world→camera chain
+//
+//   M_eff = Rz(rotation)·Rx(pitch)·Ry(bank)·Rz(−yaw)
+//
+// — exactly JWF's effective (transposed) chain
+// Rz(camRoll)·Rx(camPitch)·Ry(camBank)·Rz(−camYaw). With bank = 0
+// this is algebraically identical to the old transcription, so all
+// existing flames without bank render unchanged. Verified numerically
+// against the JWF source formula + transposed application.
+//
+// All four angles in radians. Each WGSL column holds
+// `(m[0][col], m[1][col], m[2][col])` of the row-major matrix, same
+// storage convention as before.
 fn build_camera_matrix(yaw: f32, pitch: f32, bank: f32, roll: f32) -> mat3x3<f32> {
     let sy = sin(yaw);
     let cy = cos(yaw);
@@ -130,22 +152,22 @@ fn build_camera_matrix(yaw: f32, pitch: f32, bank: f32, roll: f32) -> mat3x3<f32
     let cr = cos(roll);
 
     return mat3x3<f32>(
-        // Column 0 — populates JWF m[0][0], m[1][0], m[2][0]
+        // Column 0 — m[0][0], m[1][0], m[2][0]
         vec3<f32>(
-            -cp*sr*sy - (sp*sb*sr - cb*cr)*cy,
-            -cp*cy*sr + (sp*sb*sr - cb*cr)*sy,
-             cb*sp*sr + cr*sb
+             cy*cb*cr - sy*cp*sr + sy*sp*sb*cr,
+            -sy*cb*cr - cy*cp*sr + cy*sp*sb*cr,
+             sp*sr + cp*sb*cr
         ),
-        // Column 1 — JWF m[0][1], m[1][1], m[2][1]
+        // Column 1 — m[0][1], m[1][1], m[2][1]
         vec3<f32>(
-             cp*cr*sy + (cr*sp*sb + cb*sr)*cy,
-             cp*cr*cy - (cr*sp*sb + cb*sr)*sy,
-            -cb*cr*sp + sb*sr
+             cy*cb*sr + sy*cp*cr + sy*sp*sb*sr,
+            -sy*cb*sr + cy*cp*cr + cy*sp*sb*sr,
+            -sp*cr + cp*sb*sr
         ),
-        // Column 2 — JWF m[0][2], m[1][2], m[2][2]
+        // Column 2 — m[0][2], m[1][2], m[2][2]
         vec3<f32>(
-            -cp*cy*sb + sp*sy,
-             cp*sb*sy + cy*sp,
+            -cy*sb + sy*sp*cb,
+             sy*sb + cy*sp*cb,
              cp*cb
         )
     );
@@ -227,19 +249,19 @@ fn project_3d_to_2d_apophysis(
     camera_pos: vec3<f32>,
     persp_strength: f32
 ) -> vec2<f32> {
-    // Empirical convention mapping — keeps the JWF matrix verbatim
-    // and routes our slider inputs to the right slots here. Two
-    // adjustments vs. the naive (yaw, pitch, bank, roll) pass-through:
+    // Convention mapping — routes our slider inputs to the right
+    // matrix slots. Two adjustments vs. the naive (yaw, pitch, bank,
+    // roll) pass-through:
     //
     //   1. **Yaw ↔ roll slot swap.** Our `yaw` parameter goes into
     //      the matrix's `roll` slot, and our `roll` parameter goes
-    //      into the matrix's `yaw` slot. Without this, our Yaw
-    //      slider produces look-axis behavior and our Rotation
-    //      slider produces world-Z behavior — backwards from JWF.
-    //      Almost certainly because JWildfire applies their matrix
-    //      with a different convention internally (M^T·v or
-    //      different basis), but rather than chase the underlying
-    //      transform we swap at this call site.
+    //      into the matrix's `yaw` slot. Root cause (confirmed from
+    //      JWF source, `FlameRendererView.applyCameraMatrix`): JWF
+    //      applies its matrix TRANSPOSED, which reverses the factor
+    //      order; the swap re-lands the two outer factors. The
+    //      middle factors (bank vs. pitch) couldn't be fixed by any
+    //      slot routing — that order is corrected inside
+    //      `build_camera_matrix` itself (see its comment).
     //
     //   2. **Sign tuning.** Each angle's input is negated or
     //      passed direct to match JWildfire's per-slider direction

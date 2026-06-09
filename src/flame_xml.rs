@@ -167,9 +167,10 @@ fn parse_flame_element(
             // actually carries the internal *bank* field (Y-axis
             // rotation), not the roll. JWildfire's `roll` parameter
             // goes out as the top-level `rotate` attribute in degrees,
-            // which we already parse into `rotation`. Confirmed by
-            // reading `output/FlameRendererView.java`'s XML writer:
-            //   createAttr("cam_roll", getCamBank() * Math.PI / 180.0)
+            // which we already parse into `rotation`. Confirmed from
+            // upstream JWF source `AbstractFlameWriter.java`:
+            //   createAttr("rotate", pFlame.getCamRoll())
+            //   createAttr("cam_roll", (pFlame.getCamBank() * Math.PI) / 180.0)
             // So `cam_roll` here lands on `camera_bank`, in radians.
             // See docs/projects/jwf-features.md ("Camera rotation").
             "cam_roll" => cam_bank = value.parse().unwrap_or(0.0),
