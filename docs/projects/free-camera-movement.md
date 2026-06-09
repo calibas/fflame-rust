@@ -84,7 +84,7 @@ A side fix that fell out of testing at high perspective: `apply_perspective` now
 - Per-frame integration uses delta-time (`web_time::Instant`, clamped to 0.1 s per step) so speed is frame-rate-independent. The event loop forces continuous redraws while any fly key is held.
 - W/S: ± `forward` — the camera-look direction, `−row 2` of the camera matrix
 - A/D: ∓/± `right` — `row 0` of the camera matrix, which bakes in `rotation` so D always strafes toward screen-right
-- Q/E: ∓/± world-up `(0, 0, 1)` — FPS convention, "up" doesn't follow pitch
+- Q/E: ∓/± camera-relative up (screen-down/up, `−row 1`). Shipped as world-up in PR B; switched to camera-relative alongside stage 3 to match the free-look space-sim model
 - Shift: multiplies speed by the sprint multiplier
 
 ### Activation gating
@@ -153,12 +153,12 @@ M_old = build(P, Y, R)
 axis  = (a_pitch, a_yaw, 0) / |·|          // camera space; a_yaw = dx·sens,
 angle = |(a_pitch, a_yaw)|                  // a_pitch = dy·sens·invert_sign
 M_new = axis_angle(axis, angle) · M_old     // left-multiply = camera space
-(P', Y', R') = M_new.to_euler_near((P, Y, R))
+(P', Y', R') = M_new.to_euler_near((P, Y, R))   // then wrapped into [−π, π]
 write P', Y'; write R' only when it changed
 pan-pivot compensation with (M_old, M_new)  // unchanged from stage 2
 ```
 
-No persistent quaternion or matrix between events — the Euler triple in `FractalConfig` remains the source of truth. New `CameraMatrix` methods: `axis_angle` (Rodrigues), `mul`, `to_euler_near`.
+No persistent quaternion or matrix between events — the Euler triple in `FractalConfig` remains the source of truth. Written angles are wrapped into `[−π, π]` so the config always stays within the −180°..180° range the View sliders display (the decomposition tracks angles continuously for branch selection, so sustained drags would otherwise walk values past ±π). New `CameraMatrix` methods: `axis_angle` (Rodrigues), `mul`, `to_euler_near`.
 
 Decomposition (away from the poles; exact for the `+acos` branch):
 

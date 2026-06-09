@@ -39,11 +39,11 @@
 //!
 //! # Position keys
 //!
-//! The camera-forward and camera-right vectors for WASD are computed
-//! from the full camera matrix (pitch + yaw + rotation), so D always
-//! strafes toward what's on screen-right. Q/E use world-up, FPS
-//! style. Bank is intentionally ignored throughout (assumed 0 in
-//! fly mode).
+//! The camera-local basis for WASD/QE comes from the full camera
+//! matrix (pitch + yaw + rotation): W/S along the look axis, A/D
+//! along screen-right, Q/E along screen-down/up. All six directions
+//! are camera-relative (space-sim style — no world-anchored axis).
+//! Bank is intentionally ignored throughout (assumed 0 in fly mode).
 
 use crate::app::App;
 use crate::config::ConfigPath;
@@ -53,6 +53,17 @@ use winit::keyboard::KeyCode;
 /// as gimbal-locked (yaw and rotation alias). f32 `acos` near ±1
 /// can't resolve sin-pitch much below ~5e-4 anyway.
 const POLE_EPS: f32 = 1e-3;
+
+/// Wrap an angle into `[−π, π]` — the range the View-panel sliders
+/// display as −180°..180°. The free-look decomposition tracks angles
+/// continuously, so a sustained drag would otherwise walk the stored
+/// value past the slider range; wrapping at the write boundary keeps
+/// the config canonical. 2π-periodic, so the camera matrix rebuilt
+/// from the wrapped value is identical.
+fn wrap_pi(a: f32) -> f32 {
+    use std::f32::consts::TAU;
+    a - TAU * (a / TAU).round()
+}
 
 /// Camera orientation matrix. Mirrors the matrix the GPU builds in
 /// [`shaders/core/utilities.wgsl::build_camera_matrix`] with our
@@ -128,6 +139,14 @@ impl CameraMatrix {
     /// camera-local `−Z`, which is `−row2(M)`.
     fn forward(&self) -> [f32; 3] {
         [-self.m[2][0], -self.m[2][1], -self.m[2][2]]
+    }
+
+    /// World-space direction that appears as "up" on screen — the
+    /// negation of row 1, because camera-local `+Y` is screen-down
+    /// (pixel y grows downward). Forms a right-handed frame:
+    /// `right × up = forward`.
+    fn up(&self) -> [f32; 3] {
+        [-self.m[1][0], -self.m[1][1], -self.m[1][2]]
     }
 
     /// Returns `M^T · (a, b, 0)`. Used by the pan compensator: a
@@ -341,6 +360,14 @@ impl App {
         let m_new = delta.mul(&m_old);
         let (pitch_new, yaw_new, rotation_new) =
             m_new.to_euler_near((pitch_old, yaw_old, rotation_old));
+        // Canonicalize into the slider-visible range. to_euler_near
+        // tracks angles continuously for branch selection, so values
+        // can walk past ±π during sustained drags; wrapping here
+        // keeps the config matching the −180°..180° the View sliders
+        // show, with an identical rebuilt matrix.
+        let pitch_new = wrap_pi(pitch_new);
+        let yaw_new = wrap_pi(yaw_new);
+        let rotation_new = wrap_pi(rotation_new);
 
         let _ = self
             .config_manager
@@ -380,9 +407,10 @@ impl App {
     }
 
     /// Per-frame fly-camera integration. Reads `fly_keys_held` and
-    /// translates `camera_x/y/z` along the camera-local basis (for
-    /// WASD) or world-up (for QE). Speed comes from SystemSettings,
-    /// scaled by the sprint multiplier while Shift is held.
+    /// translates `camera_x/y/z` along the camera-local basis:
+    /// W/S = look axis, A/D = screen-right, Q/E = screen-down/up.
+    /// Speed comes from SystemSettings, scaled by the sprint
+    /// multiplier while Shift is held.
     ///
     /// No-op when fly_mode is off OR no movement keys are currently
     /// held. Resets `fly_last_update` whenever the held set is empty
@@ -432,9 +460,10 @@ impl App {
         );
         let forward = m.forward();
         let right = m.right();
-        // World up for Q/E. Always world-Z regardless of camera
-        // orientation (FPS convention — "up" doesn't follow pitch).
-        let world_up = [0.0_f32, 0.0, 1.0];
+        // Camera-relative up for Q/E — rise/fall follows where the
+        // camera is looking (screen-up/down), space-sim style,
+        // instead of world-Z.
+        let up = m.up();
 
         let mut delta = [0.0_f32; 3];
         let step = speed * dt;
@@ -460,12 +489,12 @@ impl App {
         }
         if self.fly_keys_held.contains(&KeyCode::KeyE) {
             for i in 0..3 {
-                delta[i] += world_up[i] * step;
+                delta[i] += up[i] * step;
             }
         }
         if self.fly_keys_held.contains(&KeyCode::KeyQ) {
             for i in 0..3 {
-                delta[i] -= world_up[i] * step;
+                delta[i] -= up[i] * step;
             }
         }
 
@@ -670,6 +699,42 @@ mod tests {
         // Phase 3: pure yaw from wherever we ended up.
         for _ in 0..40 {
             step(&mut m, &mut prev, &mut euler, [0.0, 1.0, 0.0], 0.025);
+        }
+    }
+
+    /// `up()` is screen-up and completes a right-handed camera frame:
+    /// right × up = forward.
+    #[test]
+    fn up_is_screen_up() {
+        for &(p, y, r) in &[(0.7f32, -1.9f32, 2.2f32), (0.0, 0.0, 0.0), (1.5, 0.4, -0.9)] {
+            let m = CameraMatrix::build(p, y, r);
+            let (rt, up, fw) = (m.right(), m.up(), m.forward());
+            let cross = [
+                rt[1] * up[2] - rt[2] * up[1],
+                rt[2] * up[0] - rt[0] * up[2],
+                rt[0] * up[1] - rt[1] * up[0],
+            ];
+            for i in 0..3 {
+                assert!(
+                    (cross[i] - fw[i]).abs() < 1e-5,
+                    "right × up ≠ forward at ({p}, {y}, {r})"
+                );
+            }
+        }
+    }
+
+    /// `wrap_pi` lands in [−π, π] and never changes the angle mod 2π.
+    #[test]
+    fn wrap_pi_lands_in_range() {
+        use std::f32::consts::TAU;
+        for &a in &[0.0f32, 3.0, -3.0, 4.0, -4.0, 7.5, -7.5, 100.0, -100.0] {
+            let w = wrap_pi(a);
+            assert!((-PI..=PI).contains(&w), "wrap_pi({a}) = {w} out of range");
+            let turns = (a - w) / TAU;
+            assert!(
+                (turns - turns.round()).abs() < 1e-3,
+                "wrap_pi({a}) changed the angle"
+            );
         }
     }
 
