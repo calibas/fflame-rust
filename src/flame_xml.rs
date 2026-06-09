@@ -90,6 +90,7 @@ fn parse_flame_element(
     let mut filter_radius = 0.0_f32;  // Apo's `filter` attribute
     let mut cam_pitch = 0.0;  // Camera rotation X (radians)
     let mut cam_yaw = 0.0;    // Camera rotation Y (radians)
+    let mut cam_bank: f32 = 0.0;  // Camera bank — lands here from XML `cam_roll` (rename quirk; see comment below)
     let mut cam_zpos = 0.0;   // Camera Z position (height)
     let mut cam_perspective = 0.0;  // Perspective strength
     let mut cam_dof = 0.0;    // Depth-of-field blur strength (Apo's `cam_dof`)
@@ -155,6 +156,16 @@ fn parse_flame_element(
             "filter" => filter_radius = value.parse().unwrap_or(0.0),
             "cam_pitch" => cam_pitch = value.parse().unwrap_or(0.0),
             "cam_yaw" => cam_yaw = value.parse().unwrap_or(0.0),
+            // JWildfire rename quirk: the XML attribute named `cam_roll`
+            // actually carries the internal *bank* field (Y-axis
+            // rotation), not the roll. JWildfire's `roll` parameter
+            // goes out as the top-level `rotate` attribute in degrees,
+            // which we already parse into `rotation`. Confirmed by
+            // reading `output/FlameRendererView.java`'s XML writer:
+            //   createAttr("cam_roll", getCamBank() * Math.PI / 180.0)
+            // So `cam_roll` here lands on `camera_bank`, in radians.
+            // See docs/projects/jwf-features.md ("Camera rotation").
+            "cam_roll" => cam_bank = value.parse().unwrap_or(0.0),
             "cam_zpos" => cam_zpos = value.parse().unwrap_or(0.0),
             // Apo uses `cam_perspective`; JWF uses `cam_persp`.
             "cam_perspective" | "cam_persp" => cam_perspective = value.parse().unwrap_or(0.0),
@@ -403,6 +414,7 @@ fn parse_flame_element(
         rotation,
         camera_rotation_x: cam_pitch,
         camera_rotation_y: cam_yaw,
+        camera_bank: cam_bank,
         camera_z: cam_zpos,
         image_size: size,
         dof_focus_distance: crate::config::defaults::DEFAULT_DOF_FOCUS_DISTANCE,
@@ -1007,6 +1019,14 @@ fn write_single_flame(out: &mut String, config: &FractalConfig, flame: &Flame) {
     }
     if config.camera_rotation_y.abs() > 1e-6 {
         out.push_str(&format!(" cam_yaw=\"{}\"", fmt_f32(config.camera_rotation_y)));
+    }
+    // JWildfire's rename quirk: bank is serialized under the on-disk
+    // attribute name `cam_roll`. See the import-side comment for the
+    // full explanation. This export side mirrors JWildfire's
+    // `createAttr("cam_roll", getCamBank() * π/180)` — we already
+    // store the value in radians so there's no unit conversion.
+    if config.camera_bank.abs() > 1e-6 {
+        out.push_str(&format!(" cam_roll=\"{}\"", fmt_f32(config.camera_bank)));
     }
     if config.camera_z.abs() > 1e-6 {
         out.push_str(&format!(" cam_zpos=\"{}\"", fmt_f32(config.camera_z)));
@@ -1740,6 +1760,61 @@ mod tests {
         "#;
         let default_configs = parse_flame_xml(no_size).expect("parse must succeed");
         assert_eq!(default_configs[0].image_size, (1920, 1080));
+    }
+
+    #[test]
+    fn test_cam_roll_maps_to_camera_bank() {
+        // JWildfire's rename quirk: the XML attribute `cam_roll`
+        // carries the *bank* parameter, not the roll. Verify (a)
+        // import lands `cam_roll` on `camera_bank` and leaves
+        // `rotation` (which would be JWF's roll, via `rotate`)
+        // untouched, (b) export writes `camera_bank` as `cam_roll`,
+        // (c) round-trip preserves the value byte-for-byte, (d)
+        // identity bank is skipped on export so existing flames
+        // stay clean.
+        let xml = r#"
+<flames name="t">
+<flame name="WithBank" size="800 600" center="0 0" scale="200" cam_roll="0.3927" cam_pitch="0.5" cam_yaw="0.2">
+   <xform weight="1" color="0" linear="1" coefs="1 0 0 1 0 0" opacity="1" />
+</flame>
+</flames>
+        "#;
+        let configs = parse_flame_xml(xml).expect("parse must succeed");
+        let cfg = &configs[0];
+
+        // cam_roll → camera_bank (in radians, as-stored).
+        assert!((cfg.camera_bank - 0.3927).abs() < 1e-4, "camera_bank should be 0.3927, got {}", cfg.camera_bank);
+        // Sanity: pitch and yaw land where expected.
+        assert!((cfg.camera_rotation_x - 0.5).abs() < 1e-4);
+        assert!((cfg.camera_rotation_y - 0.2).abs() < 1e-4);
+        // The XML had no `rotate` attribute, so `rotation` stays at
+        // the import default. The cam_roll value must NOT have
+        // landed there.
+        assert!(cfg.rotation.abs() < 1e-4, "rotation should be 0, got {}", cfg.rotation);
+
+        // Export writes the bank as `cam_roll` (not as `rotate`),
+        // mirroring JWildfire's serializer.
+        let exported = write_flame_xml(cfg);
+        assert!(exported.contains("cam_roll=\"0.3927\""), "must write `cam_roll=`, got: {}", exported);
+
+        // Round-trip preserves it.
+        let reimport = parse_flame_xml(&exported).expect("re-parse must succeed");
+        assert!((reimport[0].camera_bank - 0.3927).abs() < 1e-4);
+
+        // A flame without `cam_roll` defaults camera_bank to 0 and
+        // the export skips writing the attribute (keeps Apo files
+        // clean).
+        let no_bank = r#"
+<flames name="t">
+<flame name="NoBank" size="800 600" center="0 0" scale="200">
+   <xform weight="1" color="0" linear="1" coefs="1 0 0 1 0 0" opacity="1" />
+</flame>
+</flames>
+        "#;
+        let no_bank_cfg = &parse_flame_xml(no_bank).expect("parse must succeed")[0];
+        assert_eq!(no_bank_cfg.camera_bank, 0.0);
+        let no_bank_xml = write_flame_xml(no_bank_cfg);
+        assert!(!no_bank_xml.contains("cam_roll="), "identity bank must not be written: {}", no_bank_xml);
     }
 
     #[test]

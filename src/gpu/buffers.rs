@@ -654,7 +654,11 @@ pub struct GpuParams {
     pub speed_factor: f32, // Blend factor for speed-based coloring
     pub perspective_strength: f32, // Strength for perspective projection
     pub camera_rotation_x: f32, // 3D camera pitch (rotation around X axis)
-    pub camera_rotation_y: f32, // 3D camera yaw (rotation around Y axis)
+    pub camera_rotation_y: f32, // 3D camera yaw (rotation around Z axis — Apo ZXY Euler)
+    // JWildfire/Apophysis bank — Y-axis rotation, applied as the 3rd
+    // angle in the 4-input camera matrix per
+    // `createProjectionMatrix(yaw, pitch, bank, roll)`. In radians.
+    pub camera_bank: f32,
     pub camera_z: f32, // 3D camera Z position (height)
     pub dof_focus_distance: f32, // Depth of field: distance where image is sharpest (default: 1.0)
     pub dof_blur_strength: f32, // Depth of field: blur amount (0.0 = disabled, default: 0.0)
@@ -669,13 +673,13 @@ pub struct GpuParams {
     pub background_r: f32, // Background color R (for depth fog)
     pub background_g: f32, // Background color G (for depth fog)
     pub background_b: f32, // Background color B (for depth fog)
-    /// std140 alignment pad. The `PostSymmetry` substruct below is a
-    /// struct type, which std140 requires to start at a 16-byte
-    /// boundary. The preceding fields end at offset 124 (31 × 4),
-    /// so 4 bytes of pad land `post_symmetry` at offset 128. Mirror
-    /// it in `header.wgsl`'s `Params`.
-    pub _pad_before_post_symmetry: u32,
 
+    // No explicit pad needed before `post_symmetry`: the f32 fields
+    // above add up to 32 × 4 = 128 bytes, already a 16-byte boundary
+    // (std140 requires struct fields to start there). Was previously
+    // 31 × 4 + 1 × u32 pad = 128, but the `camera_bank` f32 filled
+    // the alignment gap naturally. Mirror in `header.wgsl`'s `Params`.
+    //
     // Post-symmetry — plot-time density replication. Each chaos-game
     // sample also deposits at K−1 mirrored/rotated positions before the
     // camera transform. Gated by the HAS_POST_SYMMETRY shader-builder
@@ -1099,6 +1103,7 @@ impl FlameBuffers {
             perspective_strength: 2.0,
             camera_rotation_x: 0.0,
             camera_rotation_y: 0.0,
+            camera_bank: 0.0,
             camera_z: 0.0,
             dof_focus_distance: crate::config::DEFAULT_DOF_FOCUS_DISTANCE,
             dof_blur_strength: crate::config::DEFAULT_DOF_BLUR_STRENGTH,
@@ -1113,7 +1118,6 @@ impl FlameBuffers {
             background_r: 0.0,
             background_g: 0.0,
             background_b: 0.0,
-            _pad_before_post_symmetry: 0,
             post_symmetry: GpuPostSymmetry::none(),
         };
 
