@@ -356,7 +356,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     -params.camera_rotation_y,  // yaw (JWF negates on entry)
                     params.camera_rotation_x,   // pitch
                     params.camera_bank,         // bank
-                    params.rotation,            // roll (= XML `rotate`)
+                    // Negate roll to match 2D rotation's CCW convention —
+                    // see camera_transform comment in utilities.wgsl.
+                    -params.rotation,
                 );
                 let camera_space = camera_transform(plot_pos, camera_matrix, params.camera_z);
                 let depth = camera_space.z;  // Z in camera space = depth from camera
