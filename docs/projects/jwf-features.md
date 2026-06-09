@@ -155,7 +155,7 @@ Confirms (a) the existing 3-angle behavior matches JWildfire at extreme pitches,
 
 The rotation work in stage 1 makes stage 2 cheap: the camera-local basis vectors are derived from the rotation matrix, which is built once per frame regardless.
 
-**Skip-bank-for-now option**. The cheapest path is to port the matrix function (4-input, with bank always 0) without adding the bank field. Gets the matrix shape right, fixes the `camera_transform` bug, and matches JWildfire for the common case. Bank can be a 5-minute follow-up (one slider, one wire-through) when a real flame uses it. Recommended for first cut.
+**Implementation order**. All of bank field, matrix port, `camera_transform` fix, roll re-routing, and Bank UI slider should ship together. They're a single coherent change — partial versions either (a) leave the matrix bug unfixed or (b) let users author flames they can't round-trip through JWildfire. Total scope is about 1 new field + 1 new XML attribute + 1 shader function rewrite + 1 UI slider + a couple of tests.
 
 **Discovered**: User-reported during the size-attribute / image_size work cycle while exploring camera options. Cross-referenced against `output/FlameRendererView.java` (import side, lines ~91) and `output/FlameRendererView.java`-or-similar XML writer (export side — `getCamPitch() * Math.PI / 180.0` confirms degrees-internal / radians-on-disk).
 
