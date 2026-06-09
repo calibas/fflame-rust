@@ -95,6 +95,11 @@ impl App {
                         update_config.camera_rotation_x,
                         update_config.camera_rotation_y,
                         update_config.camera_bank,
+
+                        update_config.camera_x,
+
+                        update_config.camera_y,
+
                         update_config.camera_z,
                         update_config.speed_factor,
                         update_config.dof_focus_distance,
@@ -121,6 +126,11 @@ impl App {
                         update_config.camera_rotation_x,
                         update_config.camera_rotation_y,
                         update_config.camera_bank,
+
+                        update_config.camera_x,
+
+                        update_config.camera_y,
+
                         update_config.camera_z,
                         update_config.speed_factor,
                     );
@@ -167,6 +177,11 @@ impl App {
                         update_config.camera_rotation_x,
                         update_config.camera_rotation_y,
                         update_config.camera_bank,
+
+                        update_config.camera_x,
+
+                        update_config.camera_y,
+
                         update_config.camera_z,
                         update_config.speed_factor,
                     );
@@ -215,6 +230,11 @@ impl App {
                         update_config.camera_rotation_x,
                         update_config.camera_rotation_y,
                         update_config.camera_bank,
+
+                        update_config.camera_x,
+
+                        update_config.camera_y,
+
                         update_config.camera_z,
                         update_config.speed_factor,
                     );

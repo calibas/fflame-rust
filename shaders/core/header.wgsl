@@ -80,7 +80,9 @@ struct Params {
     camera_rotation_x: f32,  // 3D camera pitch (rotation around X)
     camera_rotation_y: f32,  // 3D camera yaw (rotation around Z — Apo ZXY Euler)
     camera_bank: f32,        // 3D camera bank — rotation around Y (JWildfire bank parameter)
-    camera_z: f32,  // 3D camera Z position (height)
+    camera_x: f32,  // 3D camera X position (world space)
+    camera_y: f32,  // 3D camera Y position (world space)
+    camera_z: f32,  // 3D camera Z position (height / world space)
     dof_focus_distance: f32,  // Depth of field: distance where image is sharpest
     dof_blur_strength: f32,  // Depth of field: blur amount (0.0 = disabled)
     fog_strength: f32,  // Depth fog: exponential fog density (0.0 = disabled)
@@ -94,11 +96,11 @@ struct Params {
     background_r: f32,  // Background color R (for depth fog)
     background_g: f32,  // Background color G (for depth fog)
     background_b: f32,  // Background color B (for depth fog)
-    // No explicit pad before `post_symmetry`: the f32 fields above
-    // total 32 × 4 = 128 bytes, already a 16-byte boundary (std140
-    // requires struct fields to start there). The `camera_bank`
-    // f32 fills the alignment gap that the old `_pad_before_post_symmetry`
-    // u32 used to fill. Mirror in `src/gpu/buffers.rs`.
+    // std140 alignment pad — the f32 fields above total 34 × 4 = 136
+    // bytes, and `post_symmetry` is a struct so std140 requires it
+    // to start at a 16-byte boundary. 8 bytes of pad land it at 144.
+    // Mirror in `src/gpu/buffers.rs`.
+    _pad_before_post_symmetry: vec2<u32>,
     post_symmetry: PostSymmetry,  // Plot-time symmetry (gated by HAS_POST_SYMMETRY)
 }
 

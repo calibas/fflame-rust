@@ -47,8 +47,22 @@ pub struct FractalConfig {
     /// In radians. Default 0. 3D-mode only — has no effect in 2D.
     #[serde(default, skip_serializing_if = "is_default_camera_bank")]
     pub camera_bank: f32,
+    /// Camera X position in world space. JWildfire stores this as
+    /// `cam_pos_x` on every flame; we round-trip via that attribute.
+    /// 3D-mode only.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub camera_x: f32,
+    /// Camera Y position in world space. Round-trips via JWildfire's
+    /// `cam_pos_y`. 3D-mode only.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub camera_y: f32,
+    /// Camera Z position (height). Round-trips via JWildfire's
+    /// `cam_pos_z` (preferred) and the older `cam_zpos` (fallback —
+    /// import only honors `cam_zpos` when `cam_pos_z` is absent; export
+    /// writes both for backward compat with older JWildfire and Apo
+    /// versions that only know `cam_zpos`).
     #[serde(default)]
-    pub camera_z: f32,  // Camera Z position (height)
+    pub camera_z: f32,
 
     /// Saved image dimensions. Mirrors the `size` attribute on
     /// JWildfire / Apophysis `<flame>` elements — historically a
@@ -279,6 +293,13 @@ fn is_default_image_size(v: &(u32, u32)) -> bool {
 /// no bank applied, so the default skip keeps `.fflame` JSON files
 /// free of the field unless a user explicitly tilts the camera
 /// (or imports a JWF flame that wrote a non-zero `cam_roll`).
+/// Skip-serialize helper — keeps fields free from existing flame
+/// JSON files unless the user actually changes them from zero.
+/// Shared by `camera_x` / `camera_y` and other zero-defaulted f32s.
+fn is_zero_f32(v: &f32) -> bool {
+    *v == 0.0
+}
+
 fn is_default_camera_bank(v: &f32) -> bool {
     *v == 0.0
 }
@@ -465,6 +486,8 @@ impl Default for FractalConfig {
             camera_rotation_x: 0.0,
             camera_rotation_y: 0.0,
             camera_bank: 0.0,
+            camera_x: 0.0,
+            camera_y: 0.0,
             camera_z: 0.0,
             image_size: default_image_size(),
             dof_focus_distance: default_dof_focus_distance(),

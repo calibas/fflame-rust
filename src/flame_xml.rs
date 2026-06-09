@@ -91,7 +91,14 @@ fn parse_flame_element(
     let mut cam_pitch = 0.0;  // Camera rotation X (radians)
     let mut cam_yaw = 0.0;    // Camera rotation Y (radians)
     let mut cam_bank: f32 = 0.0;  // Camera bank — lands here from XML `cam_roll` (rename quirk; see comment below)
-    let mut cam_zpos = 0.0;   // Camera Z position (height)
+    // Camera world-space position. JWildfire writes `cam_pos_x/y/z`
+    // on every flame; the older `cam_zpos` single-axis form also
+    // appears in Apo and older JWildfire saves. We honor `cam_pos_z`
+    // when present and fall back to `cam_zpos` otherwise.
+    let mut cam_pos_x: f32 = 0.0;
+    let mut cam_pos_y: f32 = 0.0;
+    let mut cam_pos_z_opt: Option<f32> = None;
+    let mut cam_zpos: f32 = 0.0;   // Camera Z position — legacy single-axis
     let mut cam_perspective = 0.0;  // Perspective strength
     let mut cam_dof = 0.0;    // Depth-of-field blur strength (Apo's `cam_dof`)
     let mut curves: Option<Vec<f32>> = None;  // Tone curve data (48 floats)
@@ -167,6 +174,13 @@ fn parse_flame_element(
             // See docs/projects/jwf-features.md ("Camera rotation").
             "cam_roll" => cam_bank = value.parse().unwrap_or(0.0),
             "cam_zpos" => cam_zpos = value.parse().unwrap_or(0.0),
+            // JWildfire's modern 3-axis camera position attributes.
+            // `cam_pos_z` takes priority over the legacy `cam_zpos`
+            // when both appear (the fallback happens at the
+            // FractalConfig construction site below).
+            "cam_pos_x" => cam_pos_x = value.parse().unwrap_or(0.0),
+            "cam_pos_y" => cam_pos_y = value.parse().unwrap_or(0.0),
+            "cam_pos_z" => cam_pos_z_opt = value.parse().ok(),
             // Apo uses `cam_perspective`; JWF uses `cam_persp`.
             "cam_perspective" | "cam_persp" => cam_perspective = value.parse().unwrap_or(0.0),
             "cam_dof" => cam_dof = value.parse().unwrap_or(0.0),
@@ -415,7 +429,13 @@ fn parse_flame_element(
         camera_rotation_x: cam_pitch,
         camera_rotation_y: cam_yaw,
         camera_bank: cam_bank,
-        camera_z: cam_zpos,
+        camera_x: cam_pos_x,
+        camera_y: cam_pos_y,
+        // Prefer `cam_pos_z` (modern JWildfire) over `cam_zpos`
+        // (legacy single-axis form). If both are present, JWildfire
+        // itself uses `cam_pos_z`; if only `cam_zpos` appears (older
+        // saves), fall back to that.
+        camera_z: cam_pos_z_opt.unwrap_or(cam_zpos),
         image_size: size,
         dof_focus_distance: crate::config::defaults::DEFAULT_DOF_FOCUS_DISTANCE,
         // Direct copy of Apo's `cam_dof` after the step-3 strength rescale —
@@ -1028,7 +1048,21 @@ fn write_single_flame(out: &mut String, config: &FractalConfig, flame: &Flame) {
     if config.camera_bank.abs() > 1e-6 {
         out.push_str(&format!(" cam_roll=\"{}\"", fmt_f32(config.camera_bank)));
     }
+    // Camera world-space position. Emit JWildfire's modern
+    // `cam_pos_x/y/z` triple when any axis is non-zero. Also emit the
+    // legacy `cam_zpos` (Z only) for backward compat — older JWildfire
+    // and Apo versions only understand `cam_zpos`, and ignoring the
+    // attributes they don't know is a no-op for them. On re-import,
+    // `cam_pos_z` takes priority over `cam_zpos` so the round-trip
+    // value is the one we wrote.
+    if config.camera_x.abs() > 1e-6 {
+        out.push_str(&format!(" cam_pos_x=\"{}\"", fmt_f32(config.camera_x)));
+    }
+    if config.camera_y.abs() > 1e-6 {
+        out.push_str(&format!(" cam_pos_y=\"{}\"", fmt_f32(config.camera_y)));
+    }
     if config.camera_z.abs() > 1e-6 {
+        out.push_str(&format!(" cam_pos_z=\"{}\"", fmt_f32(config.camera_z)));
         out.push_str(&format!(" cam_zpos=\"{}\"", fmt_f32(config.camera_z)));
     }
     if flame.perspective_strength.abs() > 1e-6 {
@@ -1815,6 +1849,75 @@ mod tests {
         assert_eq!(no_bank_cfg.camera_bank, 0.0);
         let no_bank_xml = write_flame_xml(no_bank_cfg);
         assert!(!no_bank_xml.contains("cam_roll="), "identity bank must not be written: {}", no_bank_xml);
+    }
+
+    #[test]
+    fn test_camera_position_roundtrip() {
+        // JWildfire's modern `cam_pos_x/y/z` triple now round-trips
+        // through `FractalConfig::camera_x/y/z`. Verify:
+        //   (a) import populates all three when present
+        //   (b) `cam_pos_z` takes priority over the legacy `cam_zpos`
+        //       (Apo / older JWildfire single-axis form)
+        //   (c) when only `cam_zpos` is present, it falls back into z
+        //   (d) export writes the `cam_pos_*` triple AND keeps emitting
+        //       `cam_zpos` for legacy backward compat
+        //   (e) identity-zero values are skipped on export so existing
+        //       flames stay clean
+        let xml_all = r#"
+<flames name="t">
+<flame name="WithPos" size="800 600" center="0 0" scale="200" cam_pos_x="1.5" cam_pos_y="-2.25" cam_pos_z="3.75" cam_zpos="999">
+   <xform weight="1" color="0" linear="1" coefs="1 0 0 1 0 0" opacity="1" />
+</flame>
+</flames>
+        "#;
+        let cfg = &parse_flame_xml(xml_all).expect("parse must succeed")[0];
+
+        // (a) all three populated
+        assert!((cfg.camera_x - 1.5).abs() < 1e-4, "camera_x = {}", cfg.camera_x);
+        assert!((cfg.camera_y - (-2.25)).abs() < 1e-4, "camera_y = {}", cfg.camera_y);
+        // (b) `cam_pos_z` (3.75) wins over `cam_zpos` (999) when both present.
+        assert!((cfg.camera_z - 3.75).abs() < 1e-4, "camera_z should be 3.75 (cam_pos_z), got {}", cfg.camera_z);
+
+        // (d) export writes the modern triple AND legacy cam_zpos
+        let exported = write_flame_xml(cfg);
+        assert!(exported.contains("cam_pos_x=\"1.5\""), "missing cam_pos_x: {}", exported);
+        assert!(exported.contains("cam_pos_y=\"-2.25\""), "missing cam_pos_y: {}", exported);
+        assert!(exported.contains("cam_pos_z=\"3.75\""), "missing cam_pos_z: {}", exported);
+        assert!(exported.contains("cam_zpos=\"3.75\""), "missing cam_zpos legacy fallback: {}", exported);
+
+        // Round-trip preserves the values
+        let reimport = &parse_flame_xml(&exported).expect("re-parse must succeed")[0];
+        assert!((reimport.camera_x - 1.5).abs() < 1e-4);
+        assert!((reimport.camera_y - (-2.25)).abs() < 1e-4);
+        assert!((reimport.camera_z - 3.75).abs() < 1e-4);
+
+        // (c) legacy `cam_zpos` only — falls back into z
+        let xml_legacy = r#"
+<flames name="t">
+<flame name="Legacy" size="800 600" center="0 0" scale="200" cam_zpos="2.5">
+   <xform weight="1" color="0" linear="1" coefs="1 0 0 1 0 0" opacity="1" />
+</flame>
+</flames>
+        "#;
+        let legacy = &parse_flame_xml(xml_legacy).expect("parse must succeed")[0];
+        assert_eq!(legacy.camera_x, 0.0);
+        assert_eq!(legacy.camera_y, 0.0);
+        assert!((legacy.camera_z - 2.5).abs() < 1e-4, "cam_zpos should fall back to z: {}", legacy.camera_z);
+
+        // (e) identity-zero export stays clean — no cam_pos_x/y/z written
+        let xml_default = r#"
+<flames name="t">
+<flame name="Default" size="800 600" center="0 0" scale="200">
+   <xform weight="1" color="0" linear="1" coefs="1 0 0 1 0 0" opacity="1" />
+</flame>
+</flames>
+        "#;
+        let default_cfg = &parse_flame_xml(xml_default).expect("parse must succeed")[0];
+        let default_xml = write_flame_xml(default_cfg);
+        assert!(!default_xml.contains("cam_pos_x="), "default x must not be written: {}", default_xml);
+        assert!(!default_xml.contains("cam_pos_y="), "default y must not be written: {}", default_xml);
+        assert!(!default_xml.contains("cam_pos_z="), "default z must not be written: {}", default_xml);
+        assert!(!default_xml.contains("cam_zpos="), "default zpos must not be written: {}", default_xml);
     }
 
     #[test]

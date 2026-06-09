@@ -244,6 +244,17 @@ pub fn render_view_content(
             );
         }
 
+        // Camera world-space position. Round-trips through JWildfire's
+        // `cam_pos_x/y/z` triple. Default (0, 0, 0). Will be driven by
+        // WASD / mouse-look in stage 2; for now, numeric sliders only.
+        ui.horizontal(|ui| {
+            ui.label(t!("view.camera_x")).on_hover_text(t!("view.tooltip_camera_x"));
+            let _ = ui.lazy_drag(config_manager, ConfigPath::CameraX, 0.01, "");
+        });
+        ui.horizontal(|ui| {
+            ui.label(t!("view.camera_y")).on_hover_text(t!("view.tooltip_camera_y"));
+            let _ = ui.lazy_drag(config_manager, ConfigPath::CameraY, 0.01, "");
+        });
         ui.horizontal(|ui| {
             ui.label(t!("view.camera_z")).on_hover_text(t!("view.tooltip_camera_z"));
             let _ = ui.lazy_drag(config_manager, ConfigPath::CameraZ, 0.01, "");
@@ -341,6 +352,8 @@ pub fn render_view_content(
                 (ConfigPath::CameraRotationX, 0.0.into()),
                 (ConfigPath::CameraRotationY, 0.0.into()),
                 (ConfigPath::CameraBank, 0.0.into()),
+                (ConfigPath::CameraX, 0.0.into()),
+                (ConfigPath::CameraY, 0.0.into()),
                 (ConfigPath::CameraZ, 0.0.into()),
                 (ConfigPath::DofFocusDistance, crate::config::DEFAULT_DOF_FOCUS_DISTANCE.into()),
                 (ConfigPath::DofBlurStrength, crate::config::DEFAULT_DOF_BLUR_STRENGTH.into()),
