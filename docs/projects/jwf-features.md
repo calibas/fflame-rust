@@ -83,6 +83,82 @@ The deferred items are loosely coupled — the zoom math is the heaviest single 
 
 ## Deferred (not urgent)
 
+### Camera rotation — Apophysis/JWildfire `bank` + matrix port
+
+**Status**: Three of four Apo/JWF camera-rotation angles are wired up; the fourth (`bank`) is missing. The matrix function we use is also a slight approximation of JWildfire's — the same shape at small angles, diverges at extremes. Apophysis interop is *mostly* correct; full parity is a small follow-up.
+
+**The 4-angle model**. Apophysis and JWildfire both treat the camera as a 4-Euler-angle system, though only 3 of the angles are strictly necessary to span SO(3). The redundancy is historical / animation-friendly. Mapping to axes (verified by experiment on a flat 2D image):
+
+| Apo/JWF angle | Rotates around | Visual effect (camera default) |
+|---|---|---|
+| Pitch | X | Tilts camera elevation up/down |
+| Yaw | Z (world-up) | Pans heading left/right |
+| Roll | Z (look-axis when pitch=yaw=0) | Twists view around look direction |
+| Bank | Y | Tilts camera, creating a perspective skew |
+
+**XML attribute quirks**. JWildfire's serialization names don't match the parameter names:
+
+| JWF internal field | XML attribute | XML unit | Internal unit |
+|---|---|---|---|
+| `pitch` | `cam_pitch` | radians | degrees |
+| `yaw` | `cam_yaw` | radians | degrees |
+| `bank` | **`cam_roll`** ← rename quirk | radians | degrees |
+| `roll` | **`rotate`** | **degrees** | degrees |
+
+Two specific traps in here:
+
+1. The XML attribute named `cam_roll` actually carries the `bank` parameter. JWF's internal `roll` field is serialized as `rotate` instead.
+2. All four `cam_*` attributes are radians, but `rotate` is degrees. Verified by reading JWildfire's `XMLFlameWriter`: it does `pFlame.getCamPitch() * Math.PI / 180.0` (internal degrees → XML radians) for the `cam_*` set, and writes `rotate` directly without conversion.
+
+**What we have**:
+
+- `camera_rotation_x` ← XML `cam_pitch` (radians) ✓
+- `camera_rotation_y` ← XML `cam_yaw` (radians) ✓
+- `rotation` ← XML `rotate` (degrees, converted to radians on import) ✓ — semantically the same as JWildfire's `roll`
+- Camera matrix function `build_camera_matrix(pitch, yaw)` — only handles 2 angles
+
+**What's missing**:
+
+1. **Bank field.** Need a `camera_bank: f32` (radians, default 0) on `FractalConfig`. Round-trips via XML `cam_roll` (per JWF's rename quirk). None of our JWF sample files have a non-zero `cam_roll` so the practical impact today is small, but full Apo round-trip needs it.
+
+2. **Matrix function port.** Replace `build_camera_matrix(pitch, yaw)` with the 4-angle function transcribed verbatim from JWildfire's `FlameRendererView.createProjectionMatrix(yaw, pitch, bank, roll)` (see `output/FlameRendererView.java`). Our current shader builds an approximation that's *the transpose* of JWildfire's matrix and is missing one term. At small angles the divergence is invisible (~`sin(pitch)·sin(yaw)` for the missing x-z coupling); at high pitch+yaw it's substantial. Pure pitch and pure yaw render the same as JWildfire (user-confirmed by 90° experiment); combined pitch+yaw diverge mildly.
+
+3. **`camera_transform` 9-term fix.** The shader's `camera_transform` function drops the `m[2][0]·z_translated` term entirely because for the current matrix's specific shape that element is always zero. After the matrix port, that term will be non-zero. The function needs to use all 9 matrix elements.
+
+4. **Roll composition order.** Our existing `rotation` is applied as a 2D rotation *after* projection. JWildfire applies its `roll` (= our `rotation`) *inside* the 3D matrix. For pure roll with no other camera rotation, these are equivalent (rotating around the look axis = rotating the projected image). With pitch and/or yaw active, the order matters: JWildfire's order produces a different final orientation than ours. In 3D mode, the `rotation` field should be routed into the new matrix function as the `roll` argument instead of post-projection. In 2D mode, keep it as 2D post-projection (no camera matrix there).
+
+5. **UI**. Add a "Bank" slider next to existing Pitch/Yaw in 3D mode. The existing "Rotation" slider stays — it's still the Z-axis / look-axis twist, just routed into the matrix now in 3D mode.
+
+**Behavior change for existing flames**. After the matrix port:
+- 2D mode: unchanged
+- 3D mode flames with `rotation = 0`: unchanged
+- 3D mode flames with non-zero `rotation` AND non-zero pitch or yaw: rendering shifts slightly to match JWildfire / Apophysis. One-time correction toward parity. Vast majority of our existing flames have `rotation = 0` so this is rarely visible.
+
+**Experimental verification** (user-tested on a flat 2D image, both apps):
+
+| Test | Our app | JWF |
+|---|---|---|
+| Pitch=0, Yaw=90 | rotates CCW | rotates CCW ✓ |
+| Pitch=0, Rotation=90 | rotates CW | rotates CW ✓ |
+| Pitch=0, Bank=90 | (no bank field) | line along Y ✓ matches matrix |
+| Pitch=90, Yaw=90 | line along Z | line along Z ✓ |
+| Pitch=90, Rotation=90 | rotates CW | rotates CW ✓ |
+| Pitch=90, Bank=90 | (no bank field) | rotates CW ✓ matches matrix |
+
+Confirms (a) the existing 3-angle behavior matches JWildfire at extreme pitches, (b) bank is the Y-axis rotation we'd need to add for full parity, (c) bank at pitch=90 acts as a clockwise screen twist because the Y axis is now aligned with the look direction.
+
+**Bigger picture — free 3D camera movement**. This work is stage 1 of a longer goal: full FPS-style movement around the fractal (WASD + mouse-look + Q/E for up/down). The pieces stage 2 needs:
+
+- Camera *position* fields (`camera_x`, `camera_y` alongside the existing `camera_z`), or a JWildfire-style position triple (`cam_pos_x/y/z`) plus orbital focus point (`cam_xfocus/y/zfocus`). JWildfire's `.flame` XML already stores these — they appear in every random preset (e.g., `cam_pos_x="0.0" cam_pos_y="0.0" cam_pos_z="0.0"`).
+- Camera transform that translates by the position before applying the rotation matrix.
+- Input handlers that convert WASD/QE deltas to world-space using the current rotation matrix (so "forward" means "where the camera is currently looking").
+
+The rotation work in stage 1 makes stage 2 cheap: the camera-local basis vectors are derived from the rotation matrix, which is built once per frame regardless.
+
+**Skip-bank-for-now option**. The cheapest path is to port the matrix function (4-input, with bank always 0) without adding the bank field. Gets the matrix shape right, fixes the `camera_transform` bug, and matches JWildfire for the common case. Bank can be a 5-minute follow-up (one slider, one wire-through) when a real flame uses it. Recommended for first cut.
+
+**Discovered**: User-reported during the size-attribute / image_size work cycle while exploring camera options. Cross-referenced against `output/FlameRendererView.java` (import side, lines ~91) and `output/FlameRendererView.java`-or-similar XML writer (export side — `getCamPitch() * Math.PI / 180.0` confirms degrees-internal / radians-on-disk).
+
 ### Per-transform `color_type` — color-flow mode selector
 
 **Status**: Not implemented. Silently ignored on import. We always use Apophysis-standard `DIFFUSION` semantics for every transform regardless of what the source XML says.
