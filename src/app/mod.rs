@@ -1268,7 +1268,7 @@ impl App {
 
                     renderer.resize(&self.gpu.device, &mut resize_encoder, &self.gpu.queue, viewport_size.0, viewport_size.1,
                         resize_source, self.config_manager.system_settings().iterations_per_thread, resize_config.zoom, resize_config.pan_x, resize_config.pan_y, resize_config.rotation,
-                        resize_config.camera_rotation_x, resize_config.camera_rotation_y, resize_config.camera_z, resize_config.speed_factor);
+                        resize_config.camera_rotation_x, resize_config.camera_rotation_y, resize_config.camera_bank, resize_config.camera_z, resize_config.speed_factor);
                     self.gpu.queue.submit(std::iter::once(resize_encoder.finish()));
 
                     // Resize effect chain textures
@@ -1278,7 +1278,7 @@ impl App {
                     renderer.update_palette(&self.gpu.device, &self.gpu.queue, &resize_config.palette, resize_config.palette_rotation, resize_config.palette_squeeze, resize_config.palette_squeeze_mode, resize_config.palette_squeeze_falloff, resize_config.palette_log_strength, resize_config.palette_reverse);
                     renderer.set_color_mode(&self.gpu.queue, resize_config.color_mode, self.config_manager.system_settings().iterations_per_thread, self.config_manager.system_settings().burn_in,
                         resize_config.zoom, resize_config.pan_x, resize_config.pan_y, resize_config.rotation,
-                        resize_config.camera_rotation_x, resize_config.camera_rotation_y, resize_config.camera_z, resize_config.speed_factor);
+                        resize_config.camera_rotation_x, resize_config.camera_rotation_y, resize_config.camera_bank, resize_config.camera_z, resize_config.speed_factor);
                     renderer.set_path_map_style(resize_config.path_map_style);
 
                     // Update path buffer allocation based on color_mode and filters (after resize recreates buffers).
@@ -1512,6 +1512,7 @@ impl App {
                             export_config.rotation,
                             export_config.camera_rotation_x,
                             export_config.camera_rotation_y,
+                            export_config.camera_bank,
                             export_config.camera_z,
                             export_config.speed_factor,
                             clear_histogram,
@@ -1969,7 +1970,7 @@ impl App {
                 let samples_this_frame = renderer.compute_pass(&mut render_encoder, &self.gpu.queue, NUM_WORKGROUPS,
                     self.config_manager.system_settings().iterations_per_thread, self.config_manager.system_settings().burn_in,
                     final_config.zoom, final_config.pan_x, final_config.pan_y, final_config.rotation,
-                    final_config.camera_rotation_x, final_config.camera_rotation_y, final_config.camera_z, final_config.speed_factor, clear_histogram, clear_paths);
+                    final_config.camera_rotation_x, final_config.camera_rotation_y, final_config.camera_bank, final_config.camera_z, final_config.speed_factor, clear_histogram, clear_paths);
 
                 self.metrics.record_compute_time(t_compute.elapsed().as_secs_f64() * 1000.0);
 

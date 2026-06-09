@@ -81,6 +81,43 @@ The deferred items are loosely coupled — the zoom math is the heaviest single 
 
 **Originally discovered in**: `output/JWF-rando1.flame` and a side-by-side recreation comparison via `output/JWF1a.flame` / `output/JWF1b.flame` (identical fractal, only difference is `size="638 359"` vs `size="1920 1080"`).
 
+### Camera rotation — Apophysis/JWildfire 4-angle camera matrix
+
+**Shipped on the `camera-bank-and-matrix-port` branch** (PR pending). Closes the rotation half of the Apo/JWF camera-parity work.
+
+**What it does** (the 4-angle model):
+
+| Apo/JWF angle | Rotates around | Visual effect (camera default) |
+|---|---|---|
+| Pitch | X | Tilts camera elevation up/down |
+| Yaw | Z (world-up) | Pans heading left/right |
+| Roll | Z (look-axis when pitch=yaw=0) | Twists view around look direction |
+| Bank | Y | Tilts camera, creating a perspective skew |
+
+**XML attribute rename quirks** (JWildfire's serialization names don't match parameter names — discovered from `output/FlameRendererView.java`):
+
+| JWF internal field | XML attribute | XML unit |
+|---|---|---|
+| `pitch` | `cam_pitch` | radians |
+| `yaw` | `cam_yaw` | radians |
+| `bank` | **`cam_roll`** ← rename quirk | radians |
+| `roll` | **`rotate`** | **degrees** |
+
+**Pieces shipped**:
+
+- Bank field on `FractalConfig` + JSON serde + XML round-trip via `cam_roll`
+- 4-angle `build_camera_matrix(yaw, pitch, bank, roll)` ported from JWildfire's `createProjectionMatrix` in `output/FlameRendererView.java`
+- `camera_transform` uses all 9 matrix elements (was dropping one term in the 2-angle approximation)
+- Empirical convention mapping at the call site: yaw↔roll slot swap + per-axis sign tuning so each slider direction matches JWildfire and our pre-branch app. The matrix function stays a verbatim JWildfire transcription; the call site documents the convention diff for future debugging.
+- Bank UI slider in the View panel + ConfigPath wiring + animation target
+
+**Caveats**:
+
+- Pure JWF/Apo camera math reproduction would land all four slider directions naturally. We needed empirical sign tuning to get it right — JWildfire almost certainly applies their matrix with a different convention internally (M^T·v or different basis vectors). The tuning is documented at `project_3d_to_2d_apophysis` in `shaders/core/utilities.wgsl`.
+- The 2D `rotation` field doubles as the 3D `roll` angle in our model (mirroring JWildfire's `rotate` ↔ `roll` mapping). 2D mode still applies `rotation` as a post-projection screen rotation since there's no camera matrix there.
+
+**Stage 2 — free camera movement**. With rotation done, the natural next project is FPS-style free-fly: WASD + mouse-look + Q/E for up/down. See [`free-camera-movement.md`](free-camera-movement.md) for the full plan.
+
 ## Deferred (not urgent)
 
 ### Per-transform `color_type` — color-flow mode selector

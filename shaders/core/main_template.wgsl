@@ -348,8 +348,19 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
             // Apply depth of field blur (3D mode only)
             if (params.dof_blur_strength > 0.0) {
-                // Transform to camera space to get depth along view direction
-                let camera_matrix = build_camera_matrix(params.camera_rotation_x, params.camera_rotation_y);
+                // Transform to camera space to get depth along view direction.
+                // 4-angle matrix per JWildfire's createProjectionMatrix —
+                // see utilities.wgsl `build_camera_matrix`. The negated
+                // yaw mirrors JWildfire's caller-side `-getCamYaw()`.
+                let camera_matrix = build_camera_matrix(
+                    // Same yaw↔roll slot swap + sign convention as
+                    // project_3d_to_2d_apophysis. See its call site
+                    // for the empirical-tuning derivation.
+                    -params.rotation,            // matrix yaw  ← our roll
+                    -params.camera_rotation_x,   // pitch
+                    -params.camera_bank,        // bank
+                     params.camera_rotation_y,   // matrix roll ← our yaw
+                );
                 let camera_space = camera_transform(plot_pos, camera_matrix, params.camera_z);
                 let depth = camera_space.z;  // Z in camera space = depth from camera
 
@@ -424,10 +435,17 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 {{#if RENDER_3D}}
                 // Apply depth fog (3D mode only, blend toward background color)
                 if (params.fog_strength > 0.0) {
-                    // Get camera-space depth
-                    // In camera space, objects in front have negative Z (looking down -Z axis)
-                    // Negate to get positive depth where larger = further from camera
-                    let camera_matrix = build_camera_matrix(params.camera_rotation_x, params.camera_rotation_y);
+                    // Get camera-space depth — same 4-angle matrix as DoF above.
+                    // In camera space, objects in front have negative Z (looking
+                    // down -Z axis); negate to get positive depth.
+                    let camera_matrix = build_camera_matrix(
+                        // Same yaw↔roll slot swap + sign convention
+                        // as utilities.wgsl `project_3d_to_2d_apophysis`.
+                        -params.rotation,           // matrix yaw  ← our roll
+                        -params.camera_rotation_x,  // pitch
+                        -params.camera_bank,        // bank
+                         params.camera_rotation_y,  // matrix roll ← our yaw
+                    );
                     let camera_space = camera_transform(plot_pos, camera_matrix, params.camera_z);
                     let fog_depth = -camera_space.z;  // Negate: distant objects have larger depth
 
