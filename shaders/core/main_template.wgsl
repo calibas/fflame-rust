@@ -353,13 +353,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 // see utilities.wgsl `build_camera_matrix`. The negated
                 // yaw mirrors JWildfire's caller-side `-getCamYaw()`.
                 let camera_matrix = build_camera_matrix(
-                    -params.camera_rotation_y,  // yaw (JWF negates on entry)
-                    -params.camera_rotation_x,  // pitch (negated — see comment
-                                                // in project_3d_to_2d_apophysis)
-                    params.camera_bank,         // bank
-                    // Negate roll to match 2D rotation's CCW convention —
-                    // see camera_transform comment in utilities.wgsl.
-                    -params.rotation,
+                    // Same yaw↔roll slot swap + sign convention as
+                    // project_3d_to_2d_apophysis. See its call site
+                    // for the empirical-tuning derivation.
+                    -params.rotation,            // matrix yaw  ← our roll
+                    -params.camera_rotation_x,   // pitch
+                    -params.camera_bank,        // bank
+                     params.camera_rotation_y,   // matrix roll ← our yaw
                 );
                 let camera_space = camera_transform(plot_pos, camera_matrix, params.camera_z);
                 let depth = camera_space.z;  // Z in camera space = depth from camera
@@ -439,10 +439,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     // In camera space, objects in front have negative Z (looking
                     // down -Z axis); negate to get positive depth.
                     let camera_matrix = build_camera_matrix(
-                        -params.camera_rotation_y,  // yaw (JWF negates on entry)
-                        params.camera_rotation_x,   // pitch
-                        params.camera_bank,         // bank
-                        params.rotation,            // roll
+                        // Same yaw↔roll slot swap + sign convention
+                        // as utilities.wgsl `project_3d_to_2d_apophysis`.
+                        -params.rotation,           // matrix yaw  ← our roll
+                        -params.camera_rotation_x,  // pitch
+                        -params.camera_bank,        // bank
+                         params.camera_rotation_y,  // matrix roll ← our yaw
                     );
                     let camera_space = camera_transform(plot_pos, camera_matrix, params.camera_z);
                     let fog_depth = -camera_space.z;  // Negate: distant objects have larger depth

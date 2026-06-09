@@ -105,23 +105,20 @@ fn speed_to_color(speed: f32) -> vec3<f32> {
     return srgb_to_linear(srgb);
 }
 
-// Build the 4-angle Apophysis / JWildfire camera matrix. Ported
-// verbatim from `output/FlameRendererView.java`'s
-// `createProjectionMatrix(yaw, pitch, bank, roll)`. Each WGSL column
-// holds `(JWF m[0][col], JWF m[1][col], JWF m[2][col])` so that
-// `camera_matrix[col][row]` in WGSL matches JWF's `m[row][col]`
-// indexing — and `camera_matrix * v` (WGSL standard matmul) produces
-// the same output as JWildfire's apply step.
+// Build the 4-angle Apophysis / JWildfire camera matrix.
 //
-// JWildfire's caller passes `-yaw` from the field, so we follow the
-// same convention at the call site in `project_3d_to_2d_apophysis`.
+// Transcribed verbatim from `output/FlameRendererView.java`'s
+// `createProjectionMatrix(yaw, pitch, bank, roll)`. Each WGSL
+// column holds `(JWF m[0][col], JWF m[1][col], JWF m[2][col])` so
+// `camera_matrix * v` in WGSL produces the same result as JWF's
+// row-major `m[row][col]` application.
 //
-// All four angles in radians. Pre-port we used a 2-angle approximation
-// that matched at small angles but diverged at extreme pitch / yaw
-// (see `docs/projects/jwf-features.md`, "Camera rotation"). Existing
-// 3D flames with `rotation` (= JWF roll) ≠ 0 AND non-zero pitch/yaw
-// will shift slightly toward the correct JWildfire orientation; the
-// vast majority of flames have rotation = 0 and don't move.
+// All four angles in radians. The argument convention (which
+// parameter slot consumes which user-facing slider input) and
+// the input sign tuning both live at the call site in
+// `project_3d_to_2d_apophysis` — keeping this function as a
+// faithful JWF transcription means future debugging can match
+// the Java source character-by-character.
 fn build_camera_matrix(yaw: f32, pitch: f32, bank: f32, roll: f32) -> mat3x3<f32> {
     let sy = sin(yaw);
     let cy = cos(yaw);
@@ -133,23 +130,23 @@ fn build_camera_matrix(yaw: f32, pitch: f32, bank: f32, roll: f32) -> mat3x3<f32
     let cr = cos(roll);
 
     return mat3x3<f32>(
-        // Column 0 — populates camera_matrix[0][0], [0][1], [0][2]
+        // Column 0 — populates JWF m[0][0], m[1][0], m[2][0]
         vec3<f32>(
-            -cp*sr*sy - (sp*sb*sr - cb*cr)*cy,   // JWF m[0][0]
-            -cp*cy*sr + (sp*sb*sr - cb*cr)*sy,   // JWF m[1][0]
-             cb*sp*sr + cr*sb                    // JWF m[2][0]
+            -cp*sr*sy - (sp*sb*sr - cb*cr)*cy,
+            -cp*cy*sr + (sp*sb*sr - cb*cr)*sy,
+             cb*sp*sr + cr*sb
         ),
-        // Column 1
+        // Column 1 — JWF m[0][1], m[1][1], m[2][1]
         vec3<f32>(
-             cp*cr*sy + (cr*sp*sb + cb*sr)*cy,   // JWF m[0][1]
-             cp*cr*cy - (cr*sp*sb + cb*sr)*sy,   // JWF m[1][1]
-            -cb*cr*sp + sb*sr                    // JWF m[2][1]
+             cp*cr*sy + (cr*sp*sb + cb*sr)*cy,
+             cp*cr*cy - (cr*sp*sb + cb*sr)*sy,
+            -cb*cr*sp + sb*sr
         ),
-        // Column 2
+        // Column 2 — JWF m[0][2], m[1][2], m[2][2]
         vec3<f32>(
-            -cp*cy*sb + sp*sy,                   // JWF m[0][2]
-             cp*sb*sy + cy*sp,                   // JWF m[1][2]
-             cp*cb                               // JWF m[2][2]
+            -cp*cy*sb + sp*sy,
+             cp*sb*sy + cy*sp,
+             cp*cb
         )
     );
 }
@@ -204,23 +201,39 @@ fn project_3d_to_2d_apophysis(
     camera_z: f32,
     persp_strength: f32
 ) -> vec2<f32> {
-    // Pass `-yaw` to mirror JWildfire's
-    // `double yaw = -flame.getCamYaw() * M_PI / 180.0;`
-    // (see output/FlameRendererView.java line ~91).
+    // Empirical convention mapping — keeps the JWF matrix verbatim
+    // and routes our slider inputs to the right slots here. Two
+    // adjustments vs. the naive (yaw, pitch, bank, roll) pass-through:
     //
-    // Pass `-pitch` too. The transcribed JWildfire matrix, applied
-    // as M·v in WGSL column-major convention, produces a YZ rotation
-    // by `-pitch` for the pitch-only case (`y' = cp·y + sp·z`,
-    // `z' = -sp·y + cp·z`). The pre-branch shader and JWildfire's
-    // own render both spin the pitch axis in the opposite sense
-    // (`y' = cp·y - sp·z`, `z' = sp·y + cp·z` = rotation by
-    // `+pitch`). The negation flips the apparent direction back so
-    // moving the Pitch slider up tilts the view up — matches both
-    // JWildfire and our pre-branch behavior. (Almost certainly a
-    // convention quirk between JWildfire's M·v vs ours, but we
-    // mirror the visible direction users care about rather than
-    // chase the underlying math difference.)
-    let camera_matrix = build_camera_matrix(-yaw, -pitch, bank, roll);
+    //   1. **Yaw ↔ roll slot swap.** Our `yaw` parameter goes into
+    //      the matrix's `roll` slot, and our `roll` parameter goes
+    //      into the matrix's `yaw` slot. Without this, our Yaw
+    //      slider produces look-axis behavior and our Rotation
+    //      slider produces world-Z behavior — backwards from JWF.
+    //      Almost certainly because JWildfire applies their matrix
+    //      with a different convention internally (M^T·v or
+    //      different basis), but rather than chase the underlying
+    //      transform we swap at this call site.
+    //
+    //   2. **Sign tuning.** Each angle's input is negated or
+    //      passed direct to match JWildfire's per-slider direction
+    //      empirically. The negation pattern was tuned by testing
+    //      each slider against JWildfire's renderer one axis at a
+    //      time:
+    //
+    //          yaw    → roll slot,  direct
+    //          pitch  → pitch slot, negated
+    //          bank   → bank slot,  negated
+    //          roll   → yaw slot,   direct
+    //
+    // Combined, this gives slider behavior matching JWildfire and
+    // our pre-branch app for all four axes.
+    let camera_matrix = build_camera_matrix(
+        roll,     // matrix's `yaw` slot ← our `roll` input
+        -pitch,
+        -bank,
+        yaw,      // matrix's `roll` slot ← our `yaw` input
+    );
     let camera_space = camera_transform(p, camera_matrix, camera_z);
     return apply_perspective(camera_space, persp_strength);
 }
