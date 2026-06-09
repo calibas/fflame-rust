@@ -114,12 +114,32 @@ impl App {
         let cy = yaw.cos();
         let sy = yaw.sin();
 
-        // forward: where the camera is "looking" in world space
-        // (negate Z so positive pitch tilts the view up the +Z axis).
-        let forward = [-sy * cp, cy * cp, -sp];
-        // right: perpendicular to forward, horizontal
+        // Camera-local basis vectors in world space. Derived from
+        // the actual `build_camera_matrix` in `utilities.wgsl` with
+        // our slider→slot mapping: our `yaw` feeds the JWF `roll`
+        // slot, our `pitch` feeds the `pitch` slot negated, and
+        // bank=roll-internal=0. The resulting camera matrix M maps
+        // world → camera space; the camera looks toward camera-local
+        // `-Z`, so the world-space forward direction is
+        // `-M.row(2) = (sin P·sin Y, -sin P·cos Y, -cos P)`. Bank
+        // (twist around look axis) doesn't change which way is
+        // forward, so we ignore it here.
+        //
+        // Spot-checks:
+        //   P=0, Y=0   → (0, 0, -1)   — look straight down at the flame
+        //   P=π/2, Y=0 → (0, -1, 0)   — horizontal, facing toward -Y
+        //   P=0, Y=Y   → (0, 0, -1)   — yaw at zero pitch doesn't
+        //                                change forward (spinning
+        //                                while looking straight down)
+        let forward = [sp * sy, -sp * cy, -cp];
+        // Right = world direction mapping to camera-space +X
+        // = M^T·(1,0,0) = M.row(0) = (cos Y, sin Y, 0). Independent
+        // of pitch — strafing stays horizontal regardless of how the
+        // camera is tilted up/down. This is `right` in the
+        // camera-relative sense; pressing D adds it to position.
         let right = [cy, sy, 0.0];
-        // world-up for Q/E
+        // World up for Q/E. Always world-Z regardless of camera
+        // orientation (FPS convention — "up" doesn't follow pitch).
         let world_up = [0.0_f32, 0.0, 1.0];
 
         let mut delta = [0.0_f32; 3];
