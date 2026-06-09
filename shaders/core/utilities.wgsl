@@ -228,7 +228,14 @@ fn world_to_pixel_3d(p: vec3<f32>) -> vec2<i32> {
         params.camera_rotation_x,  // pitch
         params.camera_rotation_y,  // yaw
         params.camera_bank,        // bank (XML `cam_roll` — JWildfire rename quirk)
-        params.rotation,           // roll (XML `rotate` — JWildfire writes it under that name)
+        // Roll: negated so positive `rotation` matches the 2D
+        // `world_to_pixel` direction (standard math-convention CCW).
+        // JWildfire's matrix roll rotates CW for positive input; the
+        // negation flips it to CCW so a flame loaded in 2D and
+        // switched to 3D keeps the same visual rotation direction.
+        // XML round-trip stays exact — `rotate` is still written
+        // verbatim from `config.rotation`.
+        -params.rotation,
         params.camera_z,
         params.perspective_strength
     );
