@@ -275,6 +275,40 @@ pub fn render_view_content(
         egui::CollapsingHeader::new(t!("view.fly_mode_settings").as_ref())
             .default_open(false)
             .show(ui, |ui| {
+                // Mouse-look model. FreeLook = screen-relative
+                // (space-sim); Fps = world-up anchored (horizon
+                // stays level). Q/E rise axis follows the choice.
+                let mode = config_manager.system_settings().fly_camera_mode;
+                ui.horizontal(|ui| {
+                    ui.label(t!("view.fly_camera_mode"));
+                    if ui.selectable_label(
+                        mode == crate::storage::FlyCameraMode::FreeLook,
+                        t!("view.fly_camera_mode_free_look").as_ref(),
+                    )
+                    .on_hover_text(t!("view.tooltip_fly_camera_mode_free_look"))
+                    .clicked()
+                        && mode != crate::storage::FlyCameraMode::FreeLook
+                    {
+                        let _ = config_manager.update_system_setting(
+                            ConfigPath::SystemFlyCameraMode,
+                            "free_look".into(),
+                        );
+                    }
+                    if ui.selectable_label(
+                        mode == crate::storage::FlyCameraMode::Fps,
+                        t!("view.fly_camera_mode_fps").as_ref(),
+                    )
+                    .on_hover_text(t!("view.tooltip_fly_camera_mode_fps"))
+                    .clicked()
+                        && mode != crate::storage::FlyCameraMode::Fps
+                    {
+                        let _ = config_manager.update_system_setting(
+                            ConfigPath::SystemFlyCameraMode,
+                            "fps".into(),
+                        );
+                    }
+                });
+
                 let mut sensitivity = config_manager.system_settings().fly_mouse_sensitivity;
                 ui.horizontal(|ui| {
                     ui.label(t!("view.fly_sensitivity"));

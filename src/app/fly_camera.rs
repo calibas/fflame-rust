@@ -15,27 +15,39 @@
 //!     pushes a position delta into `camera_x` / `camera_y` /
 //!     `camera_z`. Called from the main render loop.
 //!
-//! # Mouse-look model: free-look (screen-relative)
+//! # Mouse-look models (SystemSettings::fly_camera_mode)
 //!
-//! Drag right rotates about the screen-vertical axis; drag down
-//! rotates about the screen-horizontal axis — at *every* camera
-//! orientation, including the default straight-down pose. This is
-//! the space-sim convention: there is no world-anchored "up" in the
-//! control scheme, so the controls never invert and never lock.
-//! The cost is that circular mouse motions accumulate roll (the
-//! horizon can tilt); the `rotation` value drifts accordingly and
-//! can be re-leveled via its slider.
+//! **FreeLook** (default): drag right rotates about the
+//! screen-vertical axis; drag down rotates about the
+//! screen-horizontal axis — at *every* camera orientation,
+//! including the default straight-down pose. This is the space-sim
+//! convention: there is no world-anchored "up" in the control
+//! scheme, so the controls never invert and never lock. The cost is
+//! that circular mouse motions accumulate roll (the horizon can
+//! tilt); the `rotation` value drifts accordingly and can be
+//! re-leveled via its slider.
 //!
-//! The rotation is composed on the camera matrix itself and only
-//! converted back to our `(pitch, yaw, rotation)` Euler triple at
-//! the end of each event, so the *view* is smooth and stable
-//! everywhere. The Euler values, however, live in a chart with
-//! singularities at pitch = 0 and pitch = π (where yaw and rotation
-//! alias); passing near those poses can reshuffle the stored values
-//! discontinuously even though the view moves continuously — the
-//! same way longitude jumps when you walk over the north pole.
-//! `to_euler_near` guarantees the reshuffled values still rebuild
-//! the exact same matrix.
+//! In FreeLook the rotation is composed on the camera matrix itself
+//! and only converted back to our `(pitch, yaw, rotation)` Euler
+//! triple at the end of each event, so the *view* is smooth and
+//! stable everywhere. The Euler values, however, live in a chart
+//! with singularities at pitch = 0 and pitch = π (where yaw and
+//! rotation alias); passing near those poses can reshuffle the
+//! stored values discontinuously even though the view moves
+//! continuously — the same way longitude jumps when you walk over
+//! the north pole. `to_euler_near` guarantees the reshuffled values
+//! still rebuild the exact same matrix.
+//!
+//! **Fps**: drag right yaws about the world-up axis (a plain Euler
+//! yaw increment — algebraically identical, see the
+//! `axis_angle_matches_euler_increments` test); drag down pitches
+//! about the screen-plane axis (Euler pitch increment, with the
+//! drag pre-rotated into the camera frame when `rotation ≠ 0`).
+//! The horizon — the fractal's XY plane — always stays level, and
+//! mouse-look never touches `rotation`. In exchange, looking past
+//! straight-down/up reverses horizontal drag, and at the
+//! straight-down home pose horizontal drag spins the view in place
+//! (geometric necessity for any world-anchored scheme).
 //!
 //! # Position keys
 //!
@@ -47,6 +59,7 @@
 
 use crate::app::App;
 use crate::config::ConfigPath;
+use crate::storage::FlyCameraMode;
 use winit::keyboard::KeyCode;
 
 /// Threshold on |sin pitch| below which the Euler chart is treated
@@ -288,19 +301,26 @@ impl App {
         self.fly_last_update = None;
     }
 
-    /// Apply a mouse-drag delta as a free-look camera rotation.
+    /// Apply a mouse-drag delta as a camera rotation, per the
+    /// configured fly-camera mode (see module docs):
     ///
-    /// The drag vector maps to a single rotation about the
-    /// camera-space axis perpendicular to it (exponential map):
-    /// horizontal drag rotates about the screen-vertical axis,
-    /// vertical drag about the screen-horizontal axis, diagonals
-    /// in between — order-free by construction. Sensitivity is
-    /// radians per pixel; invert-Y flips the vertical sign.
+    /// **FreeLook** — the drag vector maps to a single rotation
+    /// about the camera-space axis perpendicular to it (exponential
+    /// map): horizontal drag rotates about the screen-vertical
+    /// axis, vertical drag about the screen-horizontal axis,
+    /// diagonals in between — order-free by construction. Because
+    /// camera-space axes ARE screen axes, a twisted view
+    /// (`rotation ≠ 0`) gets screen-correct drag directions with no
+    /// compensation.
     ///
-    /// Because camera-space axes ARE screen axes (the projection
-    /// uses camera-space x/y directly), no screen-rotation
-    /// compensation is needed — a twisted view (`rotation ≠ 0`)
-    /// still gets screen-correct drag directions for free.
+    /// **Fps** — Euler increments: yaw about world-up, pitch about
+    /// the screen-plane axis, with the drag pre-rotated by
+    /// `rotation` so directions track a twisted screen. `rotation`
+    /// itself is never written.
+    ///
+    /// Sensitivity is radians per pixel; invert-Y flips the
+    /// vertical sign. Both modes wrap written angles into
+    /// `[−π, π]` (the slider-visible range).
     ///
     /// When `pan_x` / `pan_y` are non-zero the rotation pivot would
     /// otherwise be off-center: the camera rotates around
@@ -321,9 +341,13 @@ impl App {
         if !self.fly_mode {
             return;
         }
+        if drag_dx == 0.0 && drag_dy == 0.0 {
+            return;
+        }
         let settings = self.config_manager.system_settings();
         let sensitivity = settings.fly_mouse_sensitivity;
         let invert_y = settings.fly_invert_y;
+        let mode = settings.fly_camera_mode;
 
         // Snapshot every scalar we need up-front and drop the
         // immutable borrow so the `update_param` calls below can take
@@ -342,36 +366,67 @@ impl App {
             )
         };
 
-        // Per-axis rotation amounts. Signs chosen so behavior matches
-        // the previous FPS-style scheme at the horizon pose (pitch =
-        // π/2, rotation = 0), where the two schemes coincide: drag
-        // right looks toward screen-right, drag down looks toward
-        // screen-bottom (non-inverted).
         let dy_sign = if invert_y { 1.0 } else { -1.0 };
-        let a_pitch = drag_dy * sensitivity * dy_sign; // about screen-right axis (camera x̂)
-        let a_yaw = drag_dx * sensitivity; // about screen-vertical axis (camera ŷ)
-        let angle = (a_pitch * a_pitch + a_yaw * a_yaw).sqrt();
-        if angle < 1e-8 {
-            return;
-        }
 
-        let m_old = CameraMatrix::build(pitch_old, yaw_old, rotation_old);
-        // Single combined rotation about the camera-space axis
-        // perpendicular to the drag direction. Left-multiply =
-        // applied in camera space.
-        let delta =
-            CameraMatrix::axis_angle([a_pitch / angle, a_yaw / angle, 0.0], angle);
-        let m_new = delta.mul(&m_old);
-        let (pitch_new, yaw_new, rotation_new) =
-            m_new.to_euler_near((pitch_old, yaw_old, rotation_old));
-        // Canonicalize into the slider-visible range. to_euler_near
-        // tracks angles continuously for branch selection, so values
-        // can walk past ±π during sustained drags; wrapping here
-        // keeps the config matching the −180°..180° the View sliders
-        // show, with an identical rebuilt matrix.
+        let (pitch_new, yaw_new, rotation_new) = match mode {
+            FlyCameraMode::FreeLook => {
+                // Per-axis rotation amounts. Signs chosen so behavior
+                // matches the Fps scheme at the horizon pose (pitch =
+                // π/2, rotation = 0), where the two modes coincide:
+                // drag right looks toward screen-right, drag down
+                // looks toward screen-bottom (non-inverted).
+                let a_pitch = drag_dy * sensitivity * dy_sign; // about screen-right axis (camera x̂)
+                let a_yaw = drag_dx * sensitivity; // about screen-vertical axis (camera ŷ)
+                let angle = (a_pitch * a_pitch + a_yaw * a_yaw).sqrt();
+                if angle < 1e-8 {
+                    return;
+                }
+
+                let m_old = CameraMatrix::build(pitch_old, yaw_old, rotation_old);
+                // Single combined rotation about the camera-space
+                // axis perpendicular to the drag direction.
+                // Left-multiply = applied in camera space.
+                let delta =
+                    CameraMatrix::axis_angle([a_pitch / angle, a_yaw / angle, 0.0], angle);
+                let m_new = delta.mul(&m_old);
+                m_new.to_euler_near((pitch_old, yaw_old, rotation_old))
+            }
+            FlyCameraMode::Fps => {
+                // Euler increments ARE the world-anchored rotations:
+                // yaw += δ is exactly "rotate camera about world-up",
+                // pitch += δ is exactly "rotate about the screen-plane
+                // axis at angle `rotation` from screen-right" (both
+                // pinned by `axis_angle_matches_euler_increments`).
+                // Convert the drag from screen frame to camera frame
+                // first so directions track a twisted screen; at
+                // rotation = 0 this is the identity.
+                let cr = rotation_old.cos();
+                let sr = rotation_old.sin();
+                let dx_local = drag_dx * cr + drag_dy * sr;
+                let dy_local = -drag_dx * sr + drag_dy * cr;
+                (
+                    pitch_old + dy_local * sensitivity * dy_sign,
+                    yaw_old + dx_local * sensitivity,
+                    rotation_old, // FPS look never rolls
+                )
+            }
+        };
+
+        // Canonicalize into the slider-visible range. Both modes
+        // track angles continuously, so values can walk past ±π
+        // during sustained drags; wrapping here keeps the config
+        // matching the −180°..180° the View sliders show, with an
+        // identical rebuilt matrix. Rotation is only wrapped when
+        // mouse-look actually changed it — wrap_pi(π) = −π, and
+        // silently rewriting an untouched slider value (FPS mode
+        // never rolls) would be surprising.
         let pitch_new = wrap_pi(pitch_new);
         let yaw_new = wrap_pi(yaw_new);
-        let rotation_new = wrap_pi(rotation_new);
+        let rotation_new = if rotation_new != rotation_old {
+            wrap_pi(rotation_new)
+        } else {
+            rotation_old
+        };
 
         let _ = self
             .config_manager
@@ -421,9 +476,10 @@ impl App {
 
     /// Per-frame fly-camera integration. Reads `fly_keys_held` and
     /// translates `camera_x/y/z` along the camera-local basis:
-    /// W/S = look axis, A/D = screen-right, Q/E = screen-down/up.
-    /// Speed comes from SystemSettings, scaled by the sprint
-    /// multiplier while Shift is held.
+    /// W/S = look axis, A/D = screen-right, Q/E = screen-down/up in
+    /// FreeLook or world-down/up in Fps mode. Speed comes from
+    /// SystemSettings, scaled by the sprint multiplier while Shift
+    /// is held.
     ///
     /// No-op when fly_mode is off OR no movement keys are currently
     /// held. Resets `fly_last_update` whenever the held set is empty
@@ -473,10 +529,13 @@ impl App {
         );
         let forward = m.forward();
         let right = m.right();
-        // Camera-relative up for Q/E — rise/fall follows where the
-        // camera is looking (screen-up/down), space-sim style,
-        // instead of world-Z.
-        let up = m.up();
+        // Q/E axis follows the camera mode: FreeLook rises along
+        // screen-up (space-sim — everything camera-relative), Fps
+        // rises along world-Z (everything anchored to the XY plane).
+        let up = match self.config_manager.system_settings().fly_camera_mode {
+            FlyCameraMode::FreeLook => m.up(),
+            FlyCameraMode::Fps => [0.0, 0.0, 1.0],
+        };
 
         let mut delta = [0.0_f32; 3];
         let step = speed * dt;

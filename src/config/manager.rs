@@ -807,6 +807,18 @@ impl ConfigManager {
             ConfigPath::SystemFlyInvertY => {
                 self.system_settings.fly_invert_y = new_value.try_into()?;
             }
+            ConfigPath::SystemFlyCameraMode => {
+                // String transport ("free_look" / "fps") so future
+                // modes (e.g. orbital) don't need a new value type.
+                let value = match new_value {
+                    ConfigValue::String(s) => s,
+                    _ => return Err(ConfigError::TypeMismatch),
+                };
+                self.system_settings.fly_camera_mode = match value.as_str() {
+                    "fps" => crate::storage::FlyCameraMode::Fps,
+                    _ => crate::storage::FlyCameraMode::FreeLook,
+                };
+            }
             ConfigPath::SystemExportWidth => {
                 let value: u32 = new_value.try_into()?;
                 self.system_settings.default_export_width = value;
@@ -1982,6 +1994,7 @@ impl ConfigManager {
             | ConfigPath::SystemFlyMoveSpeed
             | ConfigPath::SystemFlySprintMultiplier
             | ConfigPath::SystemFlyInvertY
+            | ConfigPath::SystemFlyCameraMode
             | ConfigPath::SystemExportWidth
             | ConfigPath::SystemExportHeight
             | ConfigPath::SystemLanguage
@@ -2717,6 +2730,7 @@ impl ConfigManager {
             | ConfigPath::SystemFlyMoveSpeed
             | ConfigPath::SystemFlySprintMultiplier
             | ConfigPath::SystemFlyInvertY
+            | ConfigPath::SystemFlyCameraMode
             | ConfigPath::SystemExportWidth
             | ConfigPath::SystemExportHeight
             | ConfigPath::SystemLanguage

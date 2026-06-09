@@ -22,5 +22,5 @@ pub mod variation_cache;
 
 pub use backend::{StorageError, StorageResult};
 pub use custom_palettes::CustomPaletteLibrary;
-pub use settings::SystemSettings;
+pub use settings::{FlyCameraMode, SystemSettings};
 pub use thumbnail_cache::{ThumbnailCache, GalleryItem, TextureCache};
