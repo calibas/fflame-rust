@@ -82,6 +82,30 @@ pub struct SystemSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub saved_credentials: Option<crate::storage::credentials::SavedCredentials>,
 
+    // Free-fly camera (3D mode) tuning. Used when the user enters
+    // fly mode (F key or toggle button) — WASD/QE for movement,
+    // mouse drag in viewport for look-around. See
+    // `docs/projects/free-camera-movement.md`.
+    /// Mouse-look sensitivity in radians per pixel of drag.
+    /// Default 0.005 = ~0.3° per pixel, comfortable for most mice.
+    #[serde(default = "default_fly_mouse_sensitivity")]
+    pub fly_mouse_sensitivity: f32,
+
+    /// Movement speed in world units per second for WASD/QE in fly mode.
+    /// Default 1.0 — same magnitude as `camera_x/y/z` values.
+    #[serde(default = "default_fly_move_speed")]
+    pub fly_move_speed: f32,
+
+    /// Sprint multiplier — speed × this value while Shift is held.
+    /// Default 3.0.
+    #[serde(default = "default_fly_sprint_multiplier")]
+    pub fly_sprint_multiplier: f32,
+
+    /// Invert mouse Y axis for fly-mode look (some users prefer it).
+    /// Default false.
+    #[serde(default)]
+    pub fly_invert_y: bool,
+
     // Export Defaults
     /// Default export width in pixels
     #[serde(default = "default_export_width")]
@@ -149,6 +173,18 @@ fn default_export_height() -> u32 {
     1080
 }
 
+fn default_fly_mouse_sensitivity() -> f32 {
+    0.005
+}
+
+fn default_fly_move_speed() -> f32 {
+    1.0
+}
+
+fn default_fly_sprint_multiplier() -> f32 {
+    3.0
+}
+
 impl Default for SystemSettings {
     fn default() -> Self {
         Self {
@@ -165,6 +201,10 @@ impl Default for SystemSettings {
             auth_email: None,
             #[cfg(not(target_arch = "wasm32"))]
             saved_credentials: None,
+            fly_mouse_sensitivity: default_fly_mouse_sensitivity(),
+            fly_move_speed: default_fly_move_speed(),
+            fly_sprint_multiplier: default_fly_sprint_multiplier(),
+            fly_invert_y: false,
             default_export_width: default_export_width(),
             default_export_height: default_export_height(),
             #[cfg(not(target_arch = "wasm32"))]

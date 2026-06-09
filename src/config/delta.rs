@@ -257,6 +257,10 @@ pub enum ConfigPath {
     SystemBurnIn,
     SystemVsyncEnabled,
     SystemTargetFps,
+    SystemFlyMouseSensitivity,
+    SystemFlyMoveSpeed,
+    SystemFlySprintMultiplier,
+    SystemFlyInvertY,
     SystemExportWidth,
     SystemExportHeight,
     SystemLanguage,
@@ -741,6 +745,10 @@ impl Display for ConfigPath {
             ConfigPath::SystemBurnIn => write!(f, "System: Burn-in Iterations"),
             ConfigPath::SystemVsyncEnabled => write!(f, "System: VSync Enabled"),
             ConfigPath::SystemTargetFps => write!(f, "System: Target FPS"),
+            ConfigPath::SystemFlyMouseSensitivity => write!(f, "System: Fly Mouse Sensitivity"),
+            ConfigPath::SystemFlyMoveSpeed => write!(f, "System: Fly Move Speed"),
+            ConfigPath::SystemFlySprintMultiplier => write!(f, "System: Fly Sprint Multiplier"),
+            ConfigPath::SystemFlyInvertY => write!(f, "System: Fly Invert Y"),
             ConfigPath::SystemExportWidth => write!(f, "System: Export Width"),
             ConfigPath::SystemExportHeight => write!(f, "System: Export Height"),
             ConfigPath::SystemLanguage => write!(f, "System: Language"),
@@ -1164,6 +1172,10 @@ impl ConfigPath {
             ConfigPath::SystemBurnIn => I18nKey::simple("history.param.system_burn_in"),
             ConfigPath::SystemVsyncEnabled => I18nKey::simple("history.param.system_vsync_enabled"),
             ConfigPath::SystemTargetFps => I18nKey::simple("history.param.system_target_fps"),
+            ConfigPath::SystemFlyMouseSensitivity => I18nKey::simple("history.param.system_fly_mouse_sensitivity"),
+            ConfigPath::SystemFlyMoveSpeed => I18nKey::simple("history.param.system_fly_move_speed"),
+            ConfigPath::SystemFlySprintMultiplier => I18nKey::simple("history.param.system_fly_sprint_multiplier"),
+            ConfigPath::SystemFlyInvertY => I18nKey::simple("history.param.system_fly_invert_y"),
             ConfigPath::SystemExportWidth => I18nKey::simple("history.param.system_export_width"),
             ConfigPath::SystemExportHeight => I18nKey::simple("history.param.system_export_height"),
             ConfigPath::SystemLanguage => I18nKey::simple("history.param.system_language"),
@@ -2058,7 +2070,7 @@ impl ConfigPath {
 
             // System Settings
             ConfigPath::SystemIterationsPerThread | ConfigPath::SystemBurnIn => UpdateType::IterationReset,
-            ConfigPath::SystemVsyncEnabled | ConfigPath::SystemTargetFps => UpdateType::ViewOnly,
+            ConfigPath::SystemVsyncEnabled | ConfigPath::SystemTargetFps | ConfigPath::SystemFlyMouseSensitivity | ConfigPath::SystemFlyMoveSpeed | ConfigPath::SystemFlySprintMultiplier | ConfigPath::SystemFlyInvertY => UpdateType::ViewOnly,
             ConfigPath::SystemExportWidth | ConfigPath::SystemExportHeight | ConfigPath::SystemLanguage | ConfigPath::SystemShowHelpOnStartup => UpdateType::None,
         }
     }
@@ -2284,6 +2296,10 @@ impl ConfigPath {
             ConfigPath::SystemBurnIn => "System.BurnIn".to_string(),
             ConfigPath::SystemVsyncEnabled => "System.VsyncEnabled".to_string(),
             ConfigPath::SystemTargetFps => "System.TargetFps".to_string(),
+            ConfigPath::SystemFlyMouseSensitivity => "System.FlyMouseSensitivity".to_string(),
+            ConfigPath::SystemFlyMoveSpeed => "System.FlyMoveSpeed".to_string(),
+            ConfigPath::SystemFlySprintMultiplier => "System.FlySprintMultiplier".to_string(),
+            ConfigPath::SystemFlyInvertY => "System.FlyInvertY".to_string(),
             ConfigPath::SystemExportWidth => "System.ExportWidth".to_string(),
             ConfigPath::SystemExportHeight => "System.ExportHeight".to_string(),
             ConfigPath::SystemLanguage => "System.Language".to_string(),
@@ -2566,6 +2582,10 @@ impl ConfigPath {
                 "BurnIn" => return Some(ConfigPath::SystemBurnIn),
                 "VsyncEnabled" => return Some(ConfigPath::SystemVsyncEnabled),
                 "TargetFps" => return Some(ConfigPath::SystemTargetFps),
+                "FlyMouseSensitivity" => return Some(ConfigPath::SystemFlyMouseSensitivity),
+                "FlyMoveSpeed" => return Some(ConfigPath::SystemFlyMoveSpeed),
+                "FlySprintMultiplier" => return Some(ConfigPath::SystemFlySprintMultiplier),
+                "FlyInvertY" => return Some(ConfigPath::SystemFlyInvertY),
                 "ExportWidth" => return Some(ConfigPath::SystemExportWidth),
                 "ExportHeight" => return Some(ConfigPath::SystemExportHeight),
                 "Language" => return Some(ConfigPath::SystemLanguage),
@@ -2745,6 +2765,10 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::FinalTransformPostAffineScale { .. }
         | ConfigPath::Xaos { .. }
         | ConfigPath::SystemTargetFps
+        | ConfigPath::SystemFlyMouseSensitivity
+        | ConfigPath::SystemFlyMoveSpeed
+        | ConfigPath::SystemFlySprintMultiplier
+        | ConfigPath::SystemFlyInvertY
         | ConfigPath::LevelsLow
         | ConfigPath::LevelsHigh
         | ConfigPath::LevelsGamma
@@ -3291,6 +3315,10 @@ mod tests {
             ConfigPath::SystemBurnIn,
             ConfigPath::SystemVsyncEnabled,
             ConfigPath::SystemTargetFps,
+            ConfigPath::SystemFlyMouseSensitivity,
+            ConfigPath::SystemFlyMoveSpeed,
+            ConfigPath::SystemFlySprintMultiplier,
+            ConfigPath::SystemFlyInvertY,
             ConfigPath::SystemExportWidth,
             ConfigPath::SystemExportHeight,
             ConfigPath::SystemLanguage,

@@ -7,6 +7,8 @@ pub fn render_view_content(
     ui: &mut egui::Ui,
     config_manager: &mut ConfigManager,
     flame: &Flame,
+    fly_mode_active: bool,
+    fly_mode_toggle_requested: &mut bool,
 ) {
     use crate::config::slider::LazyUndoUi;
 
@@ -259,6 +261,80 @@ pub fn render_view_content(
             ui.label(t!("view.camera_z")).on_hover_text(t!("view.tooltip_camera_z"));
             let _ = ui.lazy_drag(config_manager, ConfigPath::CameraZ, 0.01, "");
         });
+
+        // Free-fly camera mode toggle. When on:
+        //   - Primary mouse drag in the fractal viewport rotates the
+        //     view (pitch + yaw) instead of panning the fractal.
+        //   - WASD moves the camera along its forward / right axes.
+        //   - Q / E move it along world-down / world-up.
+        //   - Shift acts as a sprint multiplier.
+        // F2 toggles the same state from any focus. Sensitivity and
+        // speed live in Settings → Preferences. See
+        // `docs/projects/free-camera-movement.md` for the full plan.
+        let fly_label = if fly_mode_active {
+            t!("view.fly_mode_on")
+        } else {
+            t!("view.fly_mode_off")
+        };
+        if ui.button(fly_label.as_ref())
+            .on_hover_text(t!("view.tooltip_fly_mode"))
+            .clicked()
+        {
+            *fly_mode_toggle_requested = true;
+        }
+
+        // Fly-mode tuning. Folded behind a collapsing header so it
+        // doesn't crowd the main View panel; the defaults are good
+        // for typical mice and most users will never touch these.
+        egui::CollapsingHeader::new(t!("view.fly_mode_settings").as_ref())
+            .default_open(false)
+            .show(ui, |ui| {
+                let mut sensitivity = config_manager.system_settings().fly_mouse_sensitivity;
+                ui.horizontal(|ui| {
+                    ui.label(t!("view.fly_sensitivity"));
+                    if ui.add(super::VkbSlider::new(&mut sensitivity, 0.0005..=0.05)
+                            .logarithmic(true)
+                            ).changed() {
+                        let _ = config_manager.update_system_setting(
+                            ConfigPath::SystemFlyMouseSensitivity,
+                            sensitivity.into(),
+                        );
+                    }
+                });
+
+                let mut speed = config_manager.system_settings().fly_move_speed;
+                ui.horizontal(|ui| {
+                    ui.label(t!("view.fly_move_speed"));
+                    if ui.add(super::VkbSlider::new(&mut speed, 0.05..=20.0)
+                            .logarithmic(true)
+                            ).changed() {
+                        let _ = config_manager.update_system_setting(
+                            ConfigPath::SystemFlyMoveSpeed,
+                            speed.into(),
+                        );
+                    }
+                });
+
+                let mut sprint = config_manager.system_settings().fly_sprint_multiplier;
+                ui.horizontal(|ui| {
+                    ui.label(t!("view.fly_sprint_multiplier"));
+                    if ui.add(super::VkbSlider::new(&mut sprint, 1.0..=20.0)
+                            ).changed() {
+                        let _ = config_manager.update_system_setting(
+                            ConfigPath::SystemFlySprintMultiplier,
+                            sprint.into(),
+                        );
+                    }
+                });
+
+                let mut invert_y = config_manager.system_settings().fly_invert_y;
+                if ui.checkbox(&mut invert_y, t!("view.fly_invert_y").as_ref()).changed() {
+                    let _ = config_manager.update_system_setting(
+                        ConfigPath::SystemFlyInvertY,
+                        invert_y.into(),
+                    );
+                }
+            });
 
         // Preserve Z — JWildfire's `preserve_z` flag. Defaults to
         // off (Apo/JWF default) so flames with variations that scale

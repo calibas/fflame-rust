@@ -5,6 +5,39 @@ impl App {
     pub(super) fn handle_keyboard(&mut self, event: &KeyEvent) {
         use winit::keyboard::{KeyCode, PhysicalKey};
 
+        // Fly-mode key tracking — when fly_mode is on, WASD / QE /
+        // Shift drive `update_fly_camera` per-frame instead of
+        // falling through to the existing press-only shortcuts. We
+        // track press AND release here (the other branches below
+        // only handle press) so the held-set stays accurate even
+        // if a key is held across multiple frames.
+        if self.fly_mode {
+            if let PhysicalKey::Code(code) = event.physical_key {
+                if matches!(
+                    code,
+                    KeyCode::KeyW | KeyCode::KeyA | KeyCode::KeyS | KeyCode::KeyD
+                    | KeyCode::KeyQ | KeyCode::KeyE
+                    | KeyCode::ShiftLeft | KeyCode::ShiftRight
+                ) {
+                    if event.state.is_pressed() {
+                        self.fly_keys_held.insert(code);
+                    } else {
+                        self.fly_keys_held.remove(&code);
+                    }
+                    return;  // Consume — don't let WASD bleed into other shortcuts
+                }
+            }
+        }
+
+        // F2 toggles fly mode regardless of current state (press only,
+        // not release — so the toggle doesn't double-fire).
+        if event.state.is_pressed() {
+            if let PhysicalKey::Code(KeyCode::F2) = event.physical_key {
+                self.toggle_fly_mode();
+                return;
+            }
+        }
+
         // Only handle key press (not release)
         if !event.state.is_pressed() {
             return;

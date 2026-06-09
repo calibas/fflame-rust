@@ -84,6 +84,15 @@ pub struct UiResponse {
     // Fractal viewport size (for matching texture dimensions to panel)
     pub fractal_viewport_size: Option<(u32, u32)>,
 
+    // Free-fly camera: viewport drag delta in pixels (only set when
+    // fly_mode is active AND the user dragged in the viewport this
+    // frame). The App consumes this via `apply_fly_mouse_look` to
+    // update camera_rotation_x/y.
+    pub fly_mouse_drag: Option<(f32, f32)>,
+
+    // Free-fly camera: user requested toggle (View panel button).
+    pub fly_mode_toggle_requested: bool,
+
     // UI interaction state (for frame rate optimization)
     pub needs_repaint: bool,
 
@@ -214,6 +223,8 @@ impl Default for UiResponse {
             open_preset_library: false,
             open_random_generator: false,
             fractal_viewport_size: None,
+            fly_mouse_drag: None,
+            fly_mode_toggle_requested: false,
             needs_repaint: false,
             selected_preset_config: None,
             file_browser_open_requested: false,
