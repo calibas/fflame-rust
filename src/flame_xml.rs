@@ -95,6 +95,24 @@ fn parse_flame_element(
     // on every flame; the older `cam_zpos` single-axis form also
     // appears in Apo and older JWildfire saves. We honor `cam_pos_z`
     // when present and fall back to `cam_zpos` otherwise.
+    //
+    // SEMANTICS CAVEAT (deliberate divergence from JWildfire): JWF
+    // applies cam_pos AFTER the camera rotation, in camera space,
+    // ADDED (`FlameRendererView.project`: `camPoint = Mᵀ·p + camPos`,
+    // plus an extra `+ camPosZ` term in the perspective denominator).
+    // Ours is a true world-space camera position applied before
+    // rotation (`M·(p − camera_pos)`) — what free-fly navigation
+    // needs. Flames with non-zero cam_pos therefore render
+    // differently here vs JWF, in both round-trip directions.
+    //
+    // TODO: an exact position conversion exists for the rotation
+    // part — import as `c_ours = −M_eff^T·c_jwf`, export as
+    // `c_jwf = −M_eff·c_ours`, with M_eff built from the four camera
+    // angles — but JWF's extra `+camPosZ` perspective term has no
+    // counterpart in our projection, so the conversion is only
+    // faithful for orthographic flames (or cam_pos_z = 0). Skipped
+    // until someone actually hits this; JWF's own random flames all
+    // write cam_pos as zeros.
     let mut cam_pos_x: f32 = 0.0;
     let mut cam_pos_y: f32 = 0.0;
     let mut cam_pos_z_opt: Option<f32> = None;

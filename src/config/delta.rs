@@ -261,6 +261,7 @@ pub enum ConfigPath {
     SystemFlyMoveSpeed,
     SystemFlySprintMultiplier,
     SystemFlyInvertY,
+    SystemFlyCameraMode,
     SystemExportWidth,
     SystemExportHeight,
     SystemLanguage,
@@ -749,6 +750,7 @@ impl Display for ConfigPath {
             ConfigPath::SystemFlyMoveSpeed => write!(f, "System: Fly Move Speed"),
             ConfigPath::SystemFlySprintMultiplier => write!(f, "System: Fly Sprint Multiplier"),
             ConfigPath::SystemFlyInvertY => write!(f, "System: Fly Invert Y"),
+            ConfigPath::SystemFlyCameraMode => write!(f, "System: Fly Camera Mode"),
             ConfigPath::SystemExportWidth => write!(f, "System: Export Width"),
             ConfigPath::SystemExportHeight => write!(f, "System: Export Height"),
             ConfigPath::SystemLanguage => write!(f, "System: Language"),
@@ -1176,6 +1178,7 @@ impl ConfigPath {
             ConfigPath::SystemFlyMoveSpeed => I18nKey::simple("history.param.system_fly_move_speed"),
             ConfigPath::SystemFlySprintMultiplier => I18nKey::simple("history.param.system_fly_sprint_multiplier"),
             ConfigPath::SystemFlyInvertY => I18nKey::simple("history.param.system_fly_invert_y"),
+            ConfigPath::SystemFlyCameraMode => I18nKey::simple("history.param.system_fly_camera_mode"),
             ConfigPath::SystemExportWidth => I18nKey::simple("history.param.system_export_width"),
             ConfigPath::SystemExportHeight => I18nKey::simple("history.param.system_export_height"),
             ConfigPath::SystemLanguage => I18nKey::simple("history.param.system_language"),
@@ -2070,7 +2073,7 @@ impl ConfigPath {
 
             // System Settings
             ConfigPath::SystemIterationsPerThread | ConfigPath::SystemBurnIn => UpdateType::IterationReset,
-            ConfigPath::SystemVsyncEnabled | ConfigPath::SystemTargetFps | ConfigPath::SystemFlyMouseSensitivity | ConfigPath::SystemFlyMoveSpeed | ConfigPath::SystemFlySprintMultiplier | ConfigPath::SystemFlyInvertY => UpdateType::ViewOnly,
+            ConfigPath::SystemVsyncEnabled | ConfigPath::SystemTargetFps | ConfigPath::SystemFlyMouseSensitivity | ConfigPath::SystemFlyMoveSpeed | ConfigPath::SystemFlySprintMultiplier | ConfigPath::SystemFlyInvertY | ConfigPath::SystemFlyCameraMode => UpdateType::ViewOnly,
             ConfigPath::SystemExportWidth | ConfigPath::SystemExportHeight | ConfigPath::SystemLanguage | ConfigPath::SystemShowHelpOnStartup => UpdateType::None,
         }
     }
@@ -2300,6 +2303,7 @@ impl ConfigPath {
             ConfigPath::SystemFlyMoveSpeed => "System.FlyMoveSpeed".to_string(),
             ConfigPath::SystemFlySprintMultiplier => "System.FlySprintMultiplier".to_string(),
             ConfigPath::SystemFlyInvertY => "System.FlyInvertY".to_string(),
+            ConfigPath::SystemFlyCameraMode => "System.FlyCameraMode".to_string(),
             ConfigPath::SystemExportWidth => "System.ExportWidth".to_string(),
             ConfigPath::SystemExportHeight => "System.ExportHeight".to_string(),
             ConfigPath::SystemLanguage => "System.Language".to_string(),
@@ -2586,6 +2590,7 @@ impl ConfigPath {
                 "FlyMoveSpeed" => return Some(ConfigPath::SystemFlyMoveSpeed),
                 "FlySprintMultiplier" => return Some(ConfigPath::SystemFlySprintMultiplier),
                 "FlyInvertY" => return Some(ConfigPath::SystemFlyInvertY),
+                "FlyCameraMode" => return Some(ConfigPath::SystemFlyCameraMode),
                 "ExportWidth" => return Some(ConfigPath::SystemExportWidth),
                 "ExportHeight" => return Some(ConfigPath::SystemExportHeight),
                 "Language" => return Some(ConfigPath::SystemLanguage),
@@ -2842,7 +2847,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         }
 
         // String parameters
-        ConfigPath::SystemLanguage => {
+        ConfigPath::SystemLanguage | ConfigPath::SystemFlyCameraMode => {
             json.as_str().map(|s| ConfigValue::String(s.to_string()))
         }
 
@@ -3319,6 +3324,7 @@ mod tests {
             ConfigPath::SystemFlyMoveSpeed,
             ConfigPath::SystemFlySprintMultiplier,
             ConfigPath::SystemFlyInvertY,
+            ConfigPath::SystemFlyCameraMode,
             ConfigPath::SystemExportWidth,
             ConfigPath::SystemExportHeight,
             ConfigPath::SystemLanguage,

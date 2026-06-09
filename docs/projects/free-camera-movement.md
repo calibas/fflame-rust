@@ -9,6 +9,11 @@
   - Behind-camera perspective wraparound clip (`baf1547`)
   - Dynamic pan + rotation compensation in fly mode (`514821f`)
 - Stage 3 (free-look mouse-look) — shipped on `free-camera-position` (see below for the corrected analysis that reshaped it).
+- Follow-ups shipped on the same branch:
+  - Camera-relative Q/E + angle wrapping into the slider range (`a05a795`)
+  - Bank composition order fixed to match JWildfire (`556f9bd`)
+  - 3D pan unified with 2D semantics (`875cdc4` input side, `f151233` pipeline)
+  - Camera modes: FreeLook | FPS as a SystemSettings preference (below)
 
 **Goal**: FPS-style free-fly navigation of the fractal. Mouse drag in the viewport rotates the view (look-around). `WASD` translates the camera along its current look/right axes. `Q` / `E` move down / up along the world-up axis.
 
@@ -187,6 +192,59 @@ The two-fold ambiguity `(P, Y, R) ≡ (−P, Y+π, R+π)` and all 2π wraps are 
 - **Slider behavior** — View panel sliders still write Euler directly; only mouse-look round-trips through SO(3).
 - **Auto-level assist** — a "snap horizon level" button/behavior for accumulated free-look roll; add later if wanted.
 - **Other input sources** — animation tracks, preset loads, undo/redo, XML import all continue to write Euler directly and never enter the mouse-look round-trip.
+
+## Camera modes (FreeLook | FPS)
+
+Both mouse-look schemes are available as `SystemSettings::fly_camera_mode`
+(a device input preference like sensitivity — deliberately NOT part of
+`FractalConfig`). Selector lives in View → Fly Mode Settings; persisted
+via `ConfigPath::SystemFlyCameraMode` with string transport
+(`"free_look"` / `"fps"`) so future modes (orbital) don't need a new
+value type.
+
+| | FreeLook (default) | FPS |
+|---|---|---|
+| Drag axes | camera screen axes (space-sim) | world-up yaw + screen-plane pitch |
+| Horizon | can roll (mouse circles accumulate roll) | always level (XY plane anchored) |
+| `rotation` | drifts during look | never written |
+| Gimbal | none anywhere | inverts horizontal drag past straight-down/up; spins in place at the straight-down pose |
+| Q/E | screen-down/up | world-down/up |
+| Implementation | SO(3) round-trip (`to_euler_near`) | plain Euler increments (which ARE the world-anchored rotations — pinned by `axis_angle_matches_euler_increments`) with the drag pre-rotated by `rotation` |
+
+W/S (look axis) and A/D (screen-right) are identical in both modes.
+
+## Pan semantics unified across 2D/3D
+
+The 2D pipeline composes pan → rotate → zoom (Apophysis convention:
+Pan X/Y are a position in the fractal plane). 3D used to pan in
+post-projection screen coordinates (JWildfire's 3D convention), so the
+same pan values showed different locations when toggling render modes
+with rotation set — the same jump JWF exhibits when perspective crosses
+zero. Apophysis is the internally-consistent one; we unified on it.
+
+Mechanism: the roll factor is outermost in the camera chain and never
+touches camera-space z, so it commutes exactly with the perspective
+divide — rolling inside the matrix ≡ rotating the projected 2D point.
+`world_to_pixel_3d` now passes roll = 0 into the matrix and applies the
+identical pan → rotate → zoom block as `world_to_pixel`. Renders are
+unchanged whenever pan = 0 or rotation = 0. This deliberately diverges
+from JWF's 3D pan; `FractalConfig::screen_delta_to_pan_frame` is the
+single screen→pan conversion used by every input path.
+
+## JWildfire cam_pos semantics (documented divergence)
+
+From JWF source (`output/FlameRendererView.java`): JWF applies
+`cam_pos_x/y/z` AFTER rotation, in camera space, added — plus an extra
+`+ camPosZ` term in the perspective denominator. Ours is a true
+world-space camera position applied before rotation, which is what
+free-fly needs. Flames with non-zero cam_pos render differently here
+vs JWF. An exact conversion exists for the position part
+(`c_ours = −M_eff^T·c_jwf`) but JWF's perspective term has no
+counterpart in our projection, so a boundary conversion can only be
+faithful for orthographic flames — skipped for now; formula documented
+at the import site in `src/flame_xml.rs`. (Same source reading
+confirmed our behind-camera clip matches JWF: `if (zr < EPSILON)
+return false`.)
 
 ## Open questions
 

@@ -25,6 +25,27 @@ pub const VERSION_HISTORY: &[&str] = &[
     "4: Added compact_mode for mobile/small-screen layout",
 ];
 
+/// Fly-mode mouse-look behavior. A device-level input preference
+/// (like sensitivity), not per-fractal state.
+///
+/// `FreeLook`: drag rotates about the camera's own screen axes
+/// (space-sim style). Works identically at every orientation, never
+/// gimbal-locks, full-sphere coverage; circular mouse motions
+/// accumulate roll, so the `rotation` value drifts during look.
+///
+/// `Fps`: drag yaws about the world-up axis and pitches about the
+/// screen-right axis (classic FPS). The horizon (the fractal's XY
+/// plane) always stays level and `rotation` is never touched by
+/// mouse-look; in exchange, looking past straight-down/up reverses
+/// horizontal drag, and at the straight-down home pose horizontal
+/// drag spins the view in place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum FlyCameraMode {
+    #[default]
+    FreeLook,
+    Fps,
+}
+
 /// System settings - device-specific application preferences
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemSettings {
@@ -105,6 +126,11 @@ pub struct SystemSettings {
     /// Default false.
     #[serde(default)]
     pub fly_invert_y: bool,
+
+    /// Mouse-look behavior in fly mode. Device preference, not
+    /// per-fractal state — deliberately NOT part of FractalConfig.
+    #[serde(default)]
+    pub fly_camera_mode: FlyCameraMode,
 
     // Export Defaults
     /// Default export width in pixels
@@ -205,6 +231,7 @@ impl Default for SystemSettings {
             fly_move_speed: default_fly_move_speed(),
             fly_sprint_multiplier: default_fly_sprint_multiplier(),
             fly_invert_y: false,
+            fly_camera_mode: FlyCameraMode::default(),
             default_export_width: default_export_width(),
             default_export_height: default_export_height(),
             #[cfg(not(target_arch = "wasm32"))]
