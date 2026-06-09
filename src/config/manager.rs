@@ -795,6 +795,18 @@ impl ConfigManager {
                 let value: f32 = new_value.try_into()?;
                 self.system_settings.target_fps = value;
             }
+            ConfigPath::SystemFlyMouseSensitivity => {
+                self.system_settings.fly_mouse_sensitivity = new_value.try_into()?;
+            }
+            ConfigPath::SystemFlyMoveSpeed => {
+                self.system_settings.fly_move_speed = new_value.try_into()?;
+            }
+            ConfigPath::SystemFlySprintMultiplier => {
+                self.system_settings.fly_sprint_multiplier = new_value.try_into()?;
+            }
+            ConfigPath::SystemFlyInvertY => {
+                self.system_settings.fly_invert_y = new_value.try_into()?;
+            }
             ConfigPath::SystemExportWidth => {
                 let value: u32 = new_value.try_into()?;
                 self.system_settings.default_export_width = value;
@@ -1966,6 +1978,10 @@ impl ConfigManager {
             ConfigPath::SystemIterationsPerThread
             | ConfigPath::SystemVsyncEnabled
             | ConfigPath::SystemTargetFps
+            | ConfigPath::SystemFlyMouseSensitivity
+            | ConfigPath::SystemFlyMoveSpeed
+            | ConfigPath::SystemFlySprintMultiplier
+            | ConfigPath::SystemFlyInvertY
             | ConfigPath::SystemExportWidth
             | ConfigPath::SystemExportHeight
             | ConfigPath::SystemLanguage
@@ -2697,6 +2713,10 @@ impl ConfigManager {
             ConfigPath::SystemIterationsPerThread
             | ConfigPath::SystemVsyncEnabled
             | ConfigPath::SystemTargetFps
+            | ConfigPath::SystemFlyMouseSensitivity
+            | ConfigPath::SystemFlyMoveSpeed
+            | ConfigPath::SystemFlySprintMultiplier
+            | ConfigPath::SystemFlyInvertY
             | ConfigPath::SystemExportWidth
             | ConfigPath::SystemExportHeight
             | ConfigPath::SystemLanguage

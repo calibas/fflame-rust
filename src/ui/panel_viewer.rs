@@ -163,6 +163,16 @@ impl TouchTracker {
 pub struct PanelContext<'a> {
     // Core state
     pub config_manager: &'a mut crate::config::ConfigManager,
+    /// Free-fly camera mode signal from App. When true the viewport
+    /// panel re-routes primary mouse drag from "pan" to "look around"
+    /// (writes the delta into `fly_mouse_drag` instead of calling
+    /// pan_fractal_view).
+    pub fly_mode_active: bool,
+    /// Set by the viewport panel when a mouse drag in fly mode produces
+    /// pixel-space delta. Consumed by App.
+    pub fly_mouse_drag: &'a mut Option<(f32, f32)>,
+    /// Set by the View panel's fly-mode toggle button. Consumed by App.
+    pub fly_mode_toggle_requested: &'a mut bool,
     pub flame: &'a mut crate::scene::transforms::Flame,
 
     // Libraries
@@ -738,6 +748,8 @@ impl<'a> PanelViewer<'a> {
             ui,
             self.context.config_manager,
             self.context.flame,
+            self.context.fly_mode_active,
+            self.context.fly_mode_toggle_requested,
         );
     }
 
@@ -1093,9 +1105,18 @@ impl<'a> PanelViewer<'a> {
         }
     }
 
-    /// Handle fractal panning via mouse drag
+    /// Handle fractal panning via mouse drag. When fly mode is active
+    /// the drag becomes a look-around delta instead of a pan —
+    /// recorded into `fly_mouse_drag` for the App to consume after
+    /// the UI render. In all other cases the existing pan behavior
+    /// applies.
     fn handle_fractal_drag(&mut self, drag_delta: egui::Vec2, panel_size: egui::Vec2) {
-        pan_fractal_view(self.context.config_manager, drag_delta, panel_size);
+        if self.context.fly_mode_active {
+            let prev = self.context.fly_mouse_drag.unwrap_or((0.0, 0.0));
+            *self.context.fly_mouse_drag = Some((prev.0 + drag_delta.x, prev.1 + drag_delta.y));
+        } else {
+            pan_fractal_view(self.context.config_manager, drag_delta, panel_size);
+        }
     }
 
     /// Handle fractal zooming via mouse wheel
