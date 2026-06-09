@@ -363,7 +363,8 @@ view:
   perspective: "Perspective"
   camera_3d: "3D Camera Rotation"
   camera_pitch: "Pitch (X):"
-  camera_yaw: "Yaw (Y):"
+  camera_yaw: "Yaw (Z):"
+  camera_bank: "Bank (Y):"
   camera_z: "Z Position:"
 
   # Depth Effects (collapsible section)
@@ -391,6 +392,7 @@ view:
   tooltip_perspective: "Strength of 3D perspective effect.\n0 = orthographic, higher = more depth."
   tooltip_camera_pitch: "3D camera rotation (up/down).\nTilts the view vertically."
   tooltip_camera_yaw: "3D camera rotation (left/right).\nRotates the view horizontally."
+  tooltip_camera_bank: "3D camera bank (Y-axis tilt).\nJWildfire/Apophysis 4th camera angle — creates perspective skew. Round-trips through XML as cam_roll."
   tooltip_camera_z: "Camera Z position.\nMoves the viewpoint closer/further."
   tooltip_dof_focus_distance: "Distance from origin where image is sharpest.\nObjects at this depth appear in focus."
   tooltip_dof_blur_strength: "Amount of depth blur (0 = disabled).\nHigher values create stronger bokeh effect."
@@ -606,6 +608,7 @@ history:
     rotation: "Rotation"
     camera_pitch: "Camera Pitch"
     camera_yaw: "Camera Yaw"
+    camera_bank: "Camera Bank"
     camera_z: "Camera Z"
     dof_focus_distance: "DOF Focus Distance"
     dof_blur_strength: "DOF Blur Strength"

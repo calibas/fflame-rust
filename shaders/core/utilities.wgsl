@@ -105,34 +105,68 @@ fn speed_to_color(speed: f32) -> vec3<f32> {
     return srgb_to_linear(srgb);
 }
 
-// Build Apophysis camera matrix (ZXY Euler rotation: yaw around Z, then pitch around X)
-// Source: Apophysis ControlPoint.pas:467-475
-fn build_camera_matrix(pitch: f32, yaw: f32) -> mat3x3<f32> {
-    let cy = cos(-yaw);  // Note: -yaw inversion as in Apophysis
-    let sy = sin(-yaw);
-    let cp = cos(pitch);
+// Build the 4-angle Apophysis / JWildfire camera matrix. Ported
+// verbatim from `output/FlameRendererView.java`'s
+// `createProjectionMatrix(yaw, pitch, bank, roll)`. Each WGSL column
+// holds `(JWF m[0][col], JWF m[1][col], JWF m[2][col])` so that
+// `camera_matrix[col][row]` in WGSL matches JWF's `m[row][col]`
+// indexing — and `camera_matrix * v` (WGSL standard matmul) produces
+// the same output as JWildfire's apply step.
+//
+// JWildfire's caller passes `-yaw` from the field, so we follow the
+// same convention at the call site in `project_3d_to_2d_apophysis`.
+//
+// All four angles in radians. Pre-port we used a 2-angle approximation
+// that matched at small angles but diverged at extreme pitch / yaw
+// (see `docs/projects/jwf-features.md`, "Camera rotation"). Existing
+// 3D flames with `rotation` (= JWF roll) ≠ 0 AND non-zero pitch/yaw
+// will shift slightly toward the correct JWildfire orientation; the
+// vast majority of flames have rotation = 0 and don't move.
+fn build_camera_matrix(yaw: f32, pitch: f32, bank: f32, roll: f32) -> mat3x3<f32> {
+    let sy = sin(yaw);
+    let cy = cos(yaw);
     let sp = sin(pitch);
+    let cp = cos(pitch);
+    let sb = sin(bank);
+    let cb = cos(bank);
+    let sr = sin(roll);
+    let cr = cos(roll);
 
-    // Camera matrix from Apophysis formula
-    // Returns column-major matrix for WGSL
     return mat3x3<f32>(
-        vec3<f32>(cy,           cp * sy,      sp * sy),      // Column 0
-        vec3<f32>(-sy,          cp * cy,      sp * cy),      // Column 1
-        vec3<f32>(0.0,          -sp,          cp)            // Column 2
+        // Column 0 — populates camera_matrix[0][0], [0][1], [0][2]
+        vec3<f32>(
+            -cp*sr*sy - (sp*sb*sr - cb*cr)*cy,   // JWF m[0][0]
+            -cp*cy*sr + (sp*sb*sr - cb*cr)*sy,   // JWF m[1][0]
+             cb*sp*sr + cr*sb                    // JWF m[2][0]
+        ),
+        // Column 1
+        vec3<f32>(
+             cp*cr*sy + (cr*sp*sb + cb*sr)*cy,   // JWF m[0][1]
+             cp*cr*cy - (cr*sp*sb + cb*sr)*sy,   // JWF m[1][1]
+            -cb*cr*sp + sb*sr                    // JWF m[2][1]
+        ),
+        // Column 2
+        vec3<f32>(
+            -cp*cy*sb + sp*sy,                   // JWF m[0][2]
+             cp*sb*sy + cy*sp,                   // JWF m[1][2]
+             cp*cb                               // JWF m[2][2]
+        )
     );
 }
 
-// Apply Apophysis camera transformation: translate + rotate
+// Apply Apophysis camera transformation: translate + rotate.
+// Uses ALL nine matrix elements — the pre-port 2-angle matrix had
+// `m[2][0] = 0` always, so this function used to drop the
+// `m[2][0]·z_translated` contribution to x entirely. The new
+// 4-angle matrix populates `m[2][0] = cos(bank)·sin(pitch)·sin(roll)
+// + cos(roll)·sin(bank)`, so the term has to come back. Without it,
+// 3D flames with non-zero pitch/yaw and any roll or bank would
+// undershoot the x output by an `sin(pitch)·sin(yaw)`-ish amount.
 fn camera_transform(p: vec3<f32>, camera_matrix: mat3x3<f32>, camera_z: f32) -> vec3<f32> {
-    // Step 1: Translate Z coordinate (move origin to camera height)
-    let z_translated = p.z - camera_z;
-
-    // Step 2: Rotate using camera matrix (Apophysis formula)
-    // Matrix multiplication: camera_matrix * vec3(p.x, p.y, z_translated)
-    let x = camera_matrix[0][0] * p.x + camera_matrix[1][0] * p.y;
-    let y = camera_matrix[0][1] * p.x + camera_matrix[1][1] * p.y + camera_matrix[2][1] * z_translated;
-    let z = camera_matrix[0][2] * p.x + camera_matrix[1][2] * p.y + camera_matrix[2][2] * z_translated;
-
+    let z_t = p.z - camera_z;
+    let x = camera_matrix[0][0] * p.x + camera_matrix[1][0] * p.y + camera_matrix[2][0] * z_t;
+    let y = camera_matrix[0][1] * p.x + camera_matrix[1][1] * p.y + camera_matrix[2][1] * z_t;
+    let z = camera_matrix[0][2] * p.x + camera_matrix[1][2] * p.y + camera_matrix[2][2] * z_t;
     return vec3<f32>(x, y, z);
 }
 
@@ -156,47 +190,53 @@ fn apply_perspective(p: vec3<f32>, persp_strength: f32) -> vec2<f32> {
     return p.xy / zr;
 }
 
-// Complete Apophysis 3D → 2D projection pipeline
+// Complete Apophysis 3D → 2D projection pipeline. Takes all four
+// camera rotation angles (yaw, pitch, bank, roll) plus camera height
+// and perspective strength. JWildfire's reference path negates yaw
+// at the call site — we mirror that here so on-disk values render
+// the same in both apps.
 fn project_3d_to_2d_apophysis(
     p: vec3<f32>,
     pitch: f32,
     yaw: f32,
+    bank: f32,
+    roll: f32,
     camera_z: f32,
     persp_strength: f32
 ) -> vec2<f32> {
-    // Build camera matrix
-    let camera_matrix = build_camera_matrix(pitch, yaw);
-
-    // Transform to camera space (translate + rotate)
+    // Pass `-yaw` to mirror JWildfire's
+    // `double yaw = -flame.getCamYaw() * M_PI / 180.0;`
+    // (see output/FlameRendererView.java line ~91).
+    let camera_matrix = build_camera_matrix(-yaw, pitch, bank, roll);
     let camera_space = camera_transform(p, camera_matrix, camera_z);
-
-    // Apply perspective projection
     return apply_perspective(camera_space, persp_strength);
 }
 
-// Convert 3D fractal coords to pixel coords (with Apophysis camera system)
+// Convert 3D fractal coords to pixel coords (with Apophysis camera system).
+//
+// In 3D mode the `rotation` field plays the role of JWildfire's *roll*
+// angle (XML `rotate`, degrees → radians on import) and goes *into*
+// the camera matrix as the roll argument — NOT applied as a 2D
+// post-projection twist the way `world_to_pixel` (2D) does it. This
+// matches JWildfire's composition order: roll is inside the 3D
+// matrix, so it interacts correctly with pitch and yaw. The 2D
+// version still applies `rotation` as a post-projection screen
+// rotation since there's no camera matrix there.
 fn world_to_pixel_3d(p: vec3<f32>) -> vec2<i32> {
-    // Apply Apophysis 3D → 2D projection (camera transform + perspective)
     let p2d = project_3d_to_2d_apophysis(
         p,
         params.camera_rotation_x,  // pitch
         params.camera_rotation_y,  // yaw
+        params.camera_bank,        // bank (XML `cam_roll` — JWildfire rename quirk)
+        params.rotation,           // roll (XML `rotate` — JWildfire writes it under that name)
         params.camera_z,
         params.perspective_strength
     );
 
-    // Apply view transform: pan, rotation, and zoom
+    // Pan + zoom only. The screen-space rotation block that used to
+    // live here has been removed in 3D mode — `params.rotation`
+    // already participated as the matrix's `roll` argument above.
     var transformed = p2d - vec2<f32>(params.pan_x, params.pan_y);
-
-    // Apply rotation
-    let cos_r = cos(params.rotation);
-    let sin_r = sin(params.rotation);
-    transformed = vec2<f32>(
-        transformed.x * cos_r - transformed.y * sin_r,
-        transformed.x * sin_r + transformed.y * cos_r
-    );
-
-    // Apply zoom
     transformed = transformed * params.zoom;
 
     // Map from fractal space (typically -2 to 2) to pixel space

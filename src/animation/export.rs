@@ -1569,6 +1569,7 @@ async fn render_frame_to_completion(
             config.rotation,
             config.camera_rotation_x,
             config.camera_rotation_y,
+            config.camera_bank,
             config.camera_z,
             config.speed_factor,
             clear_histogram,

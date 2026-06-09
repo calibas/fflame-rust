@@ -226,6 +226,24 @@ pub fn render_view_content(
             );
         }
 
+        // Bank — JWildfire/Apophysis Y-axis rotation, the 4th camera
+        // angle. Tilts the view horizontally (perspective skew).
+        // Round-trips through XML as `cam_roll` per JWildfire's
+        // rename quirk; see docs/projects/jwf-features.md.
+        let mut degrees_bank = config.camera_bank.to_degrees();
+        let response = ui.add(
+            super::VkbSlider::new(&mut degrees_bank, -180.0..=180.0)
+                .text(t!("view.camera_bank").as_ref())
+                .suffix("°")
+        ).on_hover_text(t!("view.tooltip_camera_bank"));
+        if response.changed() {
+            let new_bank = degrees_bank.to_radians();
+            let _ = config_manager.update_param(
+                ConfigPath::CameraBank,
+                new_bank.into()
+            );
+        }
+
         ui.horizontal(|ui| {
             ui.label(t!("view.camera_z")).on_hover_text(t!("view.tooltip_camera_z"));
             let _ = ui.lazy_drag(config_manager, ConfigPath::CameraZ, 0.01, "");
@@ -322,6 +340,7 @@ pub fn render_view_content(
                 (ConfigPath::Rotation, 0.0.into()),
                 (ConfigPath::CameraRotationX, 0.0.into()),
                 (ConfigPath::CameraRotationY, 0.0.into()),
+                (ConfigPath::CameraBank, 0.0.into()),
                 (ConfigPath::CameraZ, 0.0.into()),
                 (ConfigPath::DofFocusDistance, crate::config::DEFAULT_DOF_FOCUS_DISTANCE.into()),
                 (ConfigPath::DofBlurStrength, crate::config::DEFAULT_DOF_BLUR_STRENGTH.into()),

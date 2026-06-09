@@ -1270,6 +1270,7 @@ pub fn get_current_value(
         ConfigPath::Rotation => Some(config.rotation as f64),
         ConfigPath::CameraRotationX => Some(config.camera_rotation_x as f64),
         ConfigPath::CameraRotationY => Some(config.camera_rotation_y as f64),
+        ConfigPath::CameraBank => Some(config.camera_bank as f64),
         ConfigPath::CameraZ => Some(config.camera_z as f64),
 
         // Tone mapping
@@ -1477,7 +1478,8 @@ pub fn get_auto_fill_end_value(path: &ConfigPath, start_value: f64) -> f64 {
         ConfigPath::FinalTransformPostAffineRotation { .. } |
         ConfigPath::Rotation |
         ConfigPath::CameraRotationX |
-        ConfigPath::CameraRotationY => start_value + TAU,
+        ConfigPath::CameraRotationY |
+        ConfigPath::CameraBank => start_value + TAU,
 
         // Color index: add 1.0 for full palette cycle
         ConfigPath::TransformColor { .. } => start_value + 1.0,
