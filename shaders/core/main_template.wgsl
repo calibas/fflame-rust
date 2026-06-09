@@ -354,7 +354,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 // yaw mirrors JWildfire's caller-side `-getCamYaw()`.
                 let camera_matrix = build_camera_matrix(
                     -params.camera_rotation_y,  // yaw (JWF negates on entry)
-                    params.camera_rotation_x,   // pitch
+                    -params.camera_rotation_x,  // pitch (negated — see comment
+                                                // in project_3d_to_2d_apophysis)
                     params.camera_bank,         // bank
                     // Negate roll to match 2D rotation's CCW convention —
                     // see camera_transform comment in utilities.wgsl.
