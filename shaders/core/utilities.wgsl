@@ -288,36 +288,46 @@ fn project_3d_to_2d_apophysis(
 
 // Convert 3D fractal coords to pixel coords (with Apophysis camera system).
 //
-// In 3D mode the `rotation` field plays the role of JWildfire's *roll*
-// angle (XML `rotate`, degrees → radians on import) and goes *into*
-// the camera matrix as the roll argument — NOT applied as a 2D
-// post-projection twist the way `world_to_pixel` (2D) does it. This
-// matches JWildfire's composition order: roll is inside the 3D
-// matrix, so it interacts correctly with pitch and yaw. The 2D
-// version still applies `rotation` as a post-projection screen
-// rotation since there's no camera matrix there.
+// `params.rotation` (XML `rotate`) is deliberately NOT passed into
+// the camera matrix here. The roll factor sits outermost in the
+// camera chain (`Rz(R)·Rx(P)·Ry(B)·Rz(−Y)`) and never touches
+// camera-space z, so it commutes exactly with the perspective
+// divide: rolling inside the matrix ≡ rotating the projected 2D
+// point. We exploit that to apply rotation AFTER the pan
+// subtraction, with the identical composition (and identical code)
+// as the 2D `world_to_pixel`:
+//
+//     pan → rotate → zoom
+//
+// This makes Pan X/Y mean the same thing in both render modes —
+// a pre-rotation position in the fractal plane, the Apophysis
+// convention — so toggling 2D/3D never shifts the view when pan and
+// rotation are both set. (JWildfire's 3D path instead pans in
+// screen-aligned post-projection coordinates, which is why JWF
+// flames jump when perspective crosses zero. We diverge from JWF
+// deliberately here; pitch/yaw/bank behavior is unaffected because
+// the outermost roll composes after them either way.)
 fn world_to_pixel_3d(p: vec3<f32>) -> vec2<i32> {
     let p2d = project_3d_to_2d_apophysis(
         p,
         params.camera_rotation_x,  // pitch
         params.camera_rotation_y,  // yaw
         params.camera_bank,        // bank (XML `cam_roll` — JWildfire rename quirk)
-        // Roll: negated so positive `rotation` matches the 2D
-        // `world_to_pixel` direction (standard math-convention CCW).
-        // JWildfire's matrix roll rotates CW for positive input; the
-        // negation flips it to CCW so a flame loaded in 2D and
-        // switched to 3D keeps the same visual rotation direction.
-        // XML round-trip stays exact — `rotate` is still written
-        // verbatim from `config.rotation`.
-        -params.rotation,
+        0.0,                       // roll applied post-projection below
         vec3<f32>(params.camera_x, params.camera_y, params.camera_z),
         params.perspective_strength
     );
 
-    // Pan + zoom only. The screen-space rotation block that used to
-    // live here has been removed in 3D mode — `params.rotation`
-    // already participated as the matrix's `roll` argument above.
+    // Pan, rotate, zoom — mirrors `world_to_pixel` (2D) exactly.
     var transformed = p2d - vec2<f32>(params.pan_x, params.pan_y);
+
+    let cos_r = cos(params.rotation);
+    let sin_r = sin(params.rotation);
+    transformed = vec2<f32>(
+        transformed.x * cos_r - transformed.y * sin_r,
+        transformed.x * sin_r + transformed.y * cos_r
+    );
+
     transformed = transformed * params.zoom;
 
     // Map from fractal space (typically -2 to 2) to pixel space
