@@ -393,8 +393,17 @@ impl App {
         // because then `camera_pos` already projects to screen center
         // and the rotation pivot is correct as-is.
         if pan_x != 0.0 || pan_y != 0.0 {
-            let off_old = m_old.world_offset_for_camera_xy(pan_x, pan_y);
-            let off_new = m_new.world_offset_for_camera_xy(pan_x, pan_y);
+            // Pan lives in the no-roll projected frame —
+            // `world_to_pixel_3d` subtracts pan BEFORE applying the
+            // screen rotation (2D-parity composition). The world
+            // point at screen center is therefore
+            // `camera_pos + M_noroll^T · (pan_x, pan_y, 0)`, so the
+            // compensation uses matrices built without the rotation
+            // factor.
+            let m_old_nr = CameraMatrix::build(pitch_old, yaw_old, 0.0);
+            let m_new_nr = CameraMatrix::build(pitch_new, yaw_new, 0.0);
+            let off_old = m_old_nr.world_offset_for_camera_xy(pan_x, pan_y);
+            let off_new = m_new_nr.world_offset_for_camera_xy(pan_x, pan_y);
             let new_x = cam_x + off_old[0] - off_new[0];
             let new_y = cam_y + off_old[1] - off_new[1];
             let new_z = cam_z + off_old[2] - off_new[2];
