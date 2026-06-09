@@ -77,53 +77,39 @@ pub fn render_view_content(
     ui.separator();
     ui.label(t!("view.arrow_controls"));
 
-    // Pre-calculate rotation for arrow controls
-    let cos_r = (-config.rotation).cos();
-    let sin_r = (-config.rotation).sin();
-
-    // Arrow keys layout
+    // Arrow buttons pan in screen space; conversion to the pan frame
+    // is rotation-aware in 2D and identity in 3D (see
+    // FractalConfig::screen_delta_to_pan_frame).
     ui.horizontal(|ui| {
         ui.add_space(30.0);
         if ui.button("  ^  ").clicked() {
-            let screen_dx = 0.0;
-            let screen_dy = -pan_step;
-            let new_pan_x = config.pan_x + (screen_dx * cos_r - screen_dy * sin_r);
-            let new_pan_y = config.pan_y + (screen_dx * sin_r + screen_dy * cos_r);
+            let (dx, dy) = config.screen_delta_to_pan_frame(0.0, -pan_step);
             let _ = config_manager.update_param(
                 ConfigPath::Pan,
-                (new_pan_x, new_pan_y).into()
+                (config.pan_x + dx, config.pan_y + dy).into()
             );
         }
     });
     ui.horizontal(|ui| {
         if ui.button("  <  ").clicked() {
-            let screen_dx = -pan_step;
-            let screen_dy = 0.0;
-            let new_pan_x = config.pan_x + (screen_dx * cos_r - screen_dy * sin_r);
-            let new_pan_y = config.pan_y + (screen_dx * sin_r + screen_dy * cos_r);
+            let (dx, dy) = config.screen_delta_to_pan_frame(-pan_step, 0.0);
             let _ = config_manager.update_param(
                 ConfigPath::Pan,
-                (new_pan_x, new_pan_y).into()
+                (config.pan_x + dx, config.pan_y + dy).into()
             );
         }
         if ui.button("  v  ").clicked() {
-            let screen_dx = 0.0;
-            let screen_dy = pan_step;
-            let new_pan_x = config.pan_x + (screen_dx * cos_r - screen_dy * sin_r);
-            let new_pan_y = config.pan_y + (screen_dx * sin_r + screen_dy * cos_r);
+            let (dx, dy) = config.screen_delta_to_pan_frame(0.0, pan_step);
             let _ = config_manager.update_param(
                 ConfigPath::Pan,
-                (new_pan_x, new_pan_y).into()
+                (config.pan_x + dx, config.pan_y + dy).into()
             );
         }
         if ui.button("  >  ").clicked() {
-            let screen_dx = pan_step;
-            let screen_dy = 0.0;
-            let new_pan_x = config.pan_x + (screen_dx * cos_r - screen_dy * sin_r);
-            let new_pan_y = config.pan_y + (screen_dx * sin_r + screen_dy * cos_r);
+            let (dx, dy) = config.screen_delta_to_pan_frame(pan_step, 0.0);
             let _ = config_manager.update_param(
                 ConfigPath::Pan,
-                (new_pan_x, new_pan_y).into()
+                (config.pan_x + dx, config.pan_y + dy).into()
             );
         }
     });

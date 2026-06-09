@@ -2320,11 +2320,8 @@ impl App {
         let scaled_x = ndc_x * aspect;
         let scaled_y = ndc_y;
 
-        // Apply inverse rotation
-        let cos_r = (-config.rotation).cos();
-        let sin_r = (-config.rotation).sin();
-        let rotated_x = scaled_x * cos_r - scaled_y * sin_r;
-        let rotated_y = scaled_x * sin_r + scaled_y * cos_r;
+        // Screen space → pan frame (rotation-aware in 2D, identity in 3D)
+        let (rotated_x, rotated_y) = config.screen_delta_to_pan_frame(scaled_x, scaled_y);
 
         // Apply inverse zoom and add pan
         let fractal_x = rotated_x / config.zoom + config.pan_x;
