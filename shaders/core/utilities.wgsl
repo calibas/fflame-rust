@@ -151,19 +151,22 @@ fn build_camera_matrix(yaw: f32, pitch: f32, bank: f32, roll: f32) -> mat3x3<f32
     );
 }
 
-// Apply Apophysis camera transformation: translate + rotate.
-// Uses ALL nine matrix elements — the pre-port 2-angle matrix had
-// `m[2][0] = 0` always, so this function used to drop the
-// `m[2][0]·z_translated` contribution to x entirely. The new
-// 4-angle matrix populates `m[2][0] = cos(bank)·sin(pitch)·sin(roll)
-// + cos(roll)·sin(bank)`, so the term has to come back. Without it,
-// 3D flames with non-zero pitch/yaw and any roll or bank would
-// undershoot the x output by an `sin(pitch)·sin(yaw)`-ish amount.
-fn camera_transform(p: vec3<f32>, camera_matrix: mat3x3<f32>, camera_z: f32) -> vec3<f32> {
-    let z_t = p.z - camera_z;
-    let x = camera_matrix[0][0] * p.x + camera_matrix[1][0] * p.y + camera_matrix[2][0] * z_t;
-    let y = camera_matrix[0][1] * p.x + camera_matrix[1][1] * p.y + camera_matrix[2][1] * z_t;
-    let z = camera_matrix[0][2] * p.x + camera_matrix[1][2] * p.y + camera_matrix[2][2] * z_t;
+// Apply Apophysis camera transformation: translate by camera position,
+// then rotate. Uses ALL nine matrix elements — the pre-port 2-angle
+// matrix had `m[2][0] = 0` always, so this function used to drop the
+// `m[2][0]·z_translated` contribution to x entirely. The new 4-angle
+// matrix populates `m[2][0] = cos(bank)·sin(pitch)·sin(roll) +
+// cos(roll)·sin(bank)`, so the term has to come back.
+//
+// The translation was Z-only pre-PR ("camera moves up and down");
+// now it's the full position vector (camera_x, camera_y, camera_z)
+// so the camera can be anywhere in world space. Existing flames have
+// camera_x = camera_y = 0 by default so behavior is preserved.
+fn camera_transform(p: vec3<f32>, camera_matrix: mat3x3<f32>, camera_pos: vec3<f32>) -> vec3<f32> {
+    let p_t = p - camera_pos;
+    let x = camera_matrix[0][0] * p_t.x + camera_matrix[1][0] * p_t.y + camera_matrix[2][0] * p_t.z;
+    let y = camera_matrix[0][1] * p_t.x + camera_matrix[1][1] * p_t.y + camera_matrix[2][1] * p_t.z;
+    let z = camera_matrix[0][2] * p_t.x + camera_matrix[1][2] * p_t.y + camera_matrix[2][2] * p_t.z;
     return vec3<f32>(x, y, z);
 }
 
@@ -198,7 +201,7 @@ fn project_3d_to_2d_apophysis(
     yaw: f32,
     bank: f32,
     roll: f32,
-    camera_z: f32,
+    camera_pos: vec3<f32>,
     persp_strength: f32
 ) -> vec2<f32> {
     // Empirical convention mapping — keeps the JWF matrix verbatim
@@ -234,7 +237,7 @@ fn project_3d_to_2d_apophysis(
         -bank,
         yaw,      // matrix's `roll` slot ← our `yaw` input
     );
-    let camera_space = camera_transform(p, camera_matrix, camera_z);
+    let camera_space = camera_transform(p, camera_matrix, camera_pos);
     return apply_perspective(camera_space, persp_strength);
 }
 
@@ -262,7 +265,7 @@ fn world_to_pixel_3d(p: vec3<f32>) -> vec2<i32> {
         // XML round-trip stays exact — `rotate` is still written
         // verbatim from `config.rotation`.
         -params.rotation,
-        params.camera_z,
+        vec3<f32>(params.camera_x, params.camera_y, params.camera_z),
         params.perspective_strength
     );
 

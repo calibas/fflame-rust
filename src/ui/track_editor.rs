@@ -1271,6 +1271,8 @@ pub fn get_current_value(
         ConfigPath::CameraRotationX => Some(config.camera_rotation_x as f64),
         ConfigPath::CameraRotationY => Some(config.camera_rotation_y as f64),
         ConfigPath::CameraBank => Some(config.camera_bank as f64),
+        ConfigPath::CameraX => Some(config.camera_x as f64),
+        ConfigPath::CameraY => Some(config.camera_y as f64),
         ConfigPath::CameraZ => Some(config.camera_z as f64),
 
         // Tone mapping

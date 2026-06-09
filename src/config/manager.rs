@@ -1467,6 +1467,8 @@ impl ConfigManager {
             ConfigPath::CameraRotationX => Ok(config.camera_rotation_x.into()),
             ConfigPath::CameraRotationY => Ok(config.camera_rotation_y.into()),
             ConfigPath::CameraBank => Ok(config.camera_bank.into()),
+            ConfigPath::CameraX => Ok(config.camera_x.into()),
+            ConfigPath::CameraY => Ok(config.camera_y.into()),
             ConfigPath::CameraZ => Ok(config.camera_z.into()),
             ConfigPath::DofFocusDistance => Ok(config.dof_focus_distance.into()),
             ConfigPath::DofBlurStrength => Ok(config.dof_blur_strength.into()),
@@ -2042,6 +2044,12 @@ impl ConfigManager {
             }
             ConfigPath::CameraBank => {
                 self.current.camera_bank = value.try_into()?;
+            }
+            ConfigPath::CameraX => {
+                self.current.camera_x = value.try_into()?;
+            }
+            ConfigPath::CameraY => {
+                self.current.camera_y = value.try_into()?;
             }
             ConfigPath::CameraZ => {
                 self.current.camera_z = value.try_into()?;

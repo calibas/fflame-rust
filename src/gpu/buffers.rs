@@ -659,7 +659,9 @@ pub struct GpuParams {
     // angle in the 4-input camera matrix per
     // `createProjectionMatrix(yaw, pitch, bank, roll)`. In radians.
     pub camera_bank: f32,
-    pub camera_z: f32, // 3D camera Z position (height)
+    pub camera_x: f32, // 3D camera X position (world space)
+    pub camera_y: f32, // 3D camera Y position (world space)
+    pub camera_z: f32, // 3D camera Z position (height / world space)
     pub dof_focus_distance: f32, // Depth of field: distance where image is sharpest (default: 1.0)
     pub dof_blur_strength: f32, // Depth of field: blur amount (0.0 = disabled, default: 0.0)
     pub fog_strength: f32, // Depth fog: exponential fog density (0.0 = disabled)
@@ -674,12 +676,13 @@ pub struct GpuParams {
     pub background_g: f32, // Background color G (for depth fog)
     pub background_b: f32, // Background color B (for depth fog)
 
-    // No explicit pad needed before `post_symmetry`: the f32 fields
-    // above add up to 32 × 4 = 128 bytes, already a 16-byte boundary
-    // (std140 requires struct fields to start there). Was previously
-    // 31 × 4 + 1 × u32 pad = 128, but the `camera_bank` f32 filled
-    // the alignment gap naturally. Mirror in `header.wgsl`'s `Params`.
-    //
+    // std140 alignment pad. With the camera_x / camera_y f32 fields
+    // added by the free-camera-position work, the f32 fields above
+    // total 34 × 4 = 136 bytes. `post_symmetry` is a struct and
+    // std140 requires struct fields to start at a 16-byte boundary,
+    // so 8 bytes of pad land it at 144. Mirror in `header.wgsl`.
+    pub _pad_before_post_symmetry: [u32; 2],
+
     // Post-symmetry — plot-time density replication. Each chaos-game
     // sample also deposits at K−1 mirrored/rotated positions before the
     // camera transform. Gated by the HAS_POST_SYMMETRY shader-builder
@@ -1104,6 +1107,10 @@ impl FlameBuffers {
             camera_rotation_x: 0.0,
             camera_rotation_y: 0.0,
             camera_bank: 0.0,
+
+            camera_x: 0.0,
+
+            camera_y: 0.0,
             camera_z: 0.0,
             dof_focus_distance: crate::config::DEFAULT_DOF_FOCUS_DISTANCE,
             dof_blur_strength: crate::config::DEFAULT_DOF_BLUR_STRENGTH,
@@ -1118,7 +1125,8 @@ impl FlameBuffers {
             background_r: 0.0,
             background_g: 0.0,
             background_b: 0.0,
-            post_symmetry: GpuPostSymmetry::none(),
+            _pad_before_post_symmetry: [0; 2],
+post_symmetry: GpuPostSymmetry::none(),
         };
 
         let params_buffer = device.create_buffer_init(&util::BufferInitDescriptor {

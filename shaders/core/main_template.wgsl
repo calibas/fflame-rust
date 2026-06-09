@@ -361,7 +361,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     -params.camera_bank,        // bank
                      params.camera_rotation_y,   // matrix roll ← our yaw
                 );
-                let camera_space = camera_transform(plot_pos, camera_matrix, params.camera_z);
+                let camera_space = camera_transform(plot_pos, camera_matrix, vec3<f32>(params.camera_x, params.camera_y, params.camera_z));
                 let depth = camera_space.z;  // Z in camera space = depth from camera
 
                 // Calculate blur amount based on distance from focus plane (in world units).
@@ -446,7 +446,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                         -params.camera_bank,        // bank
                          params.camera_rotation_y,  // matrix roll ← our yaw
                     );
-                    let camera_space = camera_transform(plot_pos, camera_matrix, params.camera_z);
+                    let camera_space = camera_transform(plot_pos, camera_matrix, vec3<f32>(params.camera_x, params.camera_y, params.camera_z));
                     let fog_depth = -camera_space.z;  // Negate: distant objects have larger depth
 
                     // Exponential fog: fog_factor increases with distance beyond fog_start
