@@ -3,9 +3,10 @@
 //! Active only when `App::fly_mode` is true (toggled by the View
 //! panel button or the F2 hotkey). Two responsibilities:
 //!
-//!   * `apply_mouse_look(drag_delta)`: convert pixel-space mouse
-//!     drag into pitch/yaw deltas and push them through the config
-//!     manager. Called from `panel_viewer`'s drag handler when
+//!   * `apply_fly_mouse_look(drag_delta)`: free-look rotation. The
+//!     drag rotates the camera about its own screen axes (rotation
+//!     composed in SO(3), then decomposed back to our Euler triple
+//!     for storage). Called from `panel_viewer`'s drag handler when
 //!     fly_mode is active.
 //!
 //!   * `update_fly_camera()`: per-frame integration. Reads the set
@@ -14,26 +15,44 @@
 //!     pushes a position delta into `camera_x` / `camera_y` /
 //!     `camera_z`. Called from the main render loop.
 //!
-//! Compensation for `pan_x` / `pan_y` / `rotation` is applied
-//! dynamically — the underlying config values are never modified by
-//! fly mode. The user's saved pan and rotation are preserved exactly
-//! across enter/exit:
+//! # Mouse-look model: free-look (screen-relative)
 //!
-//!   * `rotation` is baked into the camera basis so WASD's `right`
-//!     vector turns with the on-screen orientation. With rotation =
-//!     90° the right axis is no longer world +X; it's whatever
-//!     "screen-right" maps to in world coords.
+//! Drag right rotates about the screen-vertical axis; drag down
+//! rotates about the screen-horizontal axis — at *every* camera
+//! orientation, including the default straight-down pose. This is
+//! the space-sim convention: there is no world-anchored "up" in the
+//! control scheme, so the controls never invert and never lock.
+//! The cost is that circular mouse motions accumulate roll (the
+//! horizon can tilt); the `rotation` value drifts accordingly and
+//! can be re-leveled via its slider.
 //!
-//!   * `pan_x` / `pan_y` shift the visual center of the screen away
-//!     from where `camera_pos` projects. When the user mouse-looks,
-//!     the rotation pivot would otherwise be off-center by exactly
-//!     the pan magnitude. We compensate by translating `camera_pos`
-//!     each mouse-look event so the world point that was at screen
-//!     center stays at screen center after the rotation.
+//! The rotation is composed on the camera matrix itself and only
+//! converted back to our `(pitch, yaw, rotation)` Euler triple at
+//! the end of each event, so the *view* is smooth and stable
+//! everywhere. The Euler values, however, live in a chart with
+//! singularities at pitch = 0 and pitch = π (where yaw and rotation
+//! alias); passing near those poses can reshuffle the stored values
+//! discontinuously even though the view moves continuously — the
+//! same way longitude jumps when you walk over the north pole.
+//! `to_euler_near` guarantees the reshuffled values still rebuild
+//! the exact same matrix.
+//!
+//! # Position keys
+//!
+//! The camera-forward and camera-right vectors for WASD are computed
+//! from the full camera matrix (pitch + yaw + rotation), so D always
+//! strafes toward what's on screen-right. Q/E use world-up, FPS
+//! style. Bank is intentionally ignored throughout (assumed 0 in
+//! fly mode).
 
 use crate::app::App;
 use crate::config::ConfigPath;
 use winit::keyboard::KeyCode;
+
+/// Threshold on |sin pitch| below which the Euler chart is treated
+/// as gimbal-locked (yaw and rotation alias). f32 `acos` near ±1
+/// can't resolve sin-pitch much below ~5e-4 anyway.
+const POLE_EPS: f32 = 1e-3;
 
 /// Camera orientation matrix. Mirrors the matrix the GPU builds in
 /// [`shaders/core/utilities.wgsl::build_camera_matrix`] with our
@@ -44,13 +63,18 @@ use winit::keyboard::KeyCode;
 ///   - `bank`     → JWF bank slot, negated (we assume 0 here)
 ///   - `yaw`      → JWF roll slot
 ///
+/// Algebraically this factors as the ZXZ Euler product
+/// `M = Rz(rotation) · Rx(pitch) · Rz(−yaw)` (verified numerically
+/// against the shipped WGSL element-by-element).
+///
 /// Stored row-major as `m[row][col]`. The matrix maps a world point
 /// to camera space via `p_cam = M · (p_world − camera_pos)`. The
 /// camera's look direction is camera-space `−Z`, so its rows have
 /// useful geometric meaning:
 ///
 ///   - row 0 = camera-local `+X` in world coords ("right")
-///   - row 1 = camera-local `+Y` in world coords ("up" within view)
+///   - row 1 = camera-local `+Y` in world coords (screen-down,
+///             because pixel y grows downward)
 ///   - row 2 = camera-local `+Z` in world coords (look direction is
 ///             the negation of this row)
 struct CameraMatrix {
@@ -95,16 +119,13 @@ impl CameraMatrix {
     }
 
     /// World-space direction the camera treats as "right" — i.e.
-    /// camera-local `+X`. Independent of bank (we assume 0). At
-    /// `rotation = 0` this collapses to `(cos Y, sin Y, 0)`.
+    /// camera-local `+X`. Independent of bank (we assume 0).
     fn right(&self) -> [f32; 3] {
         self.m[0]
     }
 
     /// World-space direction the camera looks toward — i.e.
-    /// camera-local `−Z`, which is `−row2(M)`. Does not depend on
-    /// rotation or bank (twisting around the look axis can't change
-    /// which way it points), so this is just pitch + yaw.
+    /// camera-local `−Z`, which is `−row2(M)`.
     fn forward(&self) -> [f32; 3] {
         [-self.m[2][0], -self.m[2][1], -self.m[2][2]]
     }
@@ -123,6 +144,115 @@ impl CameraMatrix {
             self.m[0][2] * a + self.m[1][2] * b,
         ]
     }
+
+    /// Rotation by `angle` radians about a unit `axis`, via
+    /// Rodrigues' formula: `R = I + sinθ·K + (1−cosθ)·K²` where K is
+    /// the cross-product matrix of the axis. Caller must normalize
+    /// the axis.
+    fn axis_angle(axis: [f32; 3], angle: f32) -> Self {
+        let (x, y, z) = (axis[0], axis[1], axis[2]);
+        let s = angle.sin();
+        let c = angle.cos();
+        let t = 1.0 - c;
+        Self {
+            m: [
+                [t * x * x + c,      t * x * y - s * z,  t * x * z + s * y],
+                [t * x * y + s * z,  t * y * y + c,      t * y * z - s * x],
+                [t * x * z - s * y,  t * y * z + s * x,  t * z * z + c],
+            ],
+        }
+    }
+
+    /// Matrix product `self · other`. Left-multiplying the camera
+    /// matrix by a rotation applies that rotation in *camera space*
+    /// (i.e., about an axis given in camera/screen coordinates).
+    fn mul(&self, other: &Self) -> Self {
+        let mut m = [[0.0f32; 3]; 3];
+        for (i, row) in m.iter_mut().enumerate() {
+            for (j, cell) in row.iter_mut().enumerate() {
+                *cell = self.m[i][0] * other.m[0][j]
+                    + self.m[i][1] * other.m[1][j]
+                    + self.m[i][2] * other.m[2][j];
+            }
+        }
+        Self { m }
+    }
+
+    /// Decompose into our `(pitch, yaw, rotation)` Euler triple,
+    /// preferring the representation closest to `near`.
+    ///
+    /// Away from the poles the chart is unique up to two discrete
+    /// choices: the sign branch of `pitch = ±acos(m22)` (flipping it
+    /// shifts yaw and rotation by π each — same matrix) and 2π wraps
+    /// on each angle. Both are resolved toward `near`.
+    ///
+    /// Within `POLE_EPS` of a pole (|sin pitch| ≈ 0), yaw and
+    /// rotation alias into a single angle. We hold `rotation` at its
+    /// prior value and put the whole aliased angle into yaw, which
+    /// keeps the user's rotation slider stable while hovering near
+    /// straight-down/straight-up. (Leaving the pole region, the
+    /// exact formulas take over and yaw/rotation land wherever the
+    /// geometry dictates — stored values can jump even though the
+    /// matrix path is continuous. That is the unavoidable chart
+    /// singularity; the guarantee that matters is that the returned
+    /// triple always rebuilds this exact matrix.)
+    fn to_euler_near(&self, near: (f32, f32, f32)) -> (f32, f32, f32) {
+        use std::f32::consts::{PI, TAU};
+        let (p_old, y_old, r_old) = near;
+        let m = &self.m;
+
+        // Shift `a` by whole turns to land within π of `near`.
+        let unwrap_near = |a: f32, near: f32| a + ((near - a) / TAU).round() * TAU;
+
+        let cp = m[2][2].clamp(-1.0, 1.0);
+        let p_abs = cp.acos(); // in [0, π]
+        let sp_abs = p_abs.sin(); // ≥ 0
+
+        if sp_abs < POLE_EPS {
+            // Gimbal-pole regime. The in-plane 2×2 block holds the
+            // single well-defined angle:
+            //   at pitch ≈ 0: m00 = cos(Y−R), m01 = sin(Y−R)
+            //   at pitch ≈ π: m00 = cos(Y+R), m01 = sin(Y+R)
+            // (Both verified by substituting sin P = 0 into `build`.)
+            let phi = m[0][1].atan2(m[0][0]);
+            let (p_pole, y_new) = if cp > 0.0 {
+                (0.0, phi + r_old)
+            } else {
+                (PI, phi - r_old)
+            };
+            return (
+                unwrap_near(p_pole, p_old),
+                unwrap_near(y_new, y_old),
+                r_old,
+            );
+        }
+
+        // Away from the pole. Row 2 = (−sinP·sinY, sinP·cosY, cosP)
+        // gives yaw; column 2 = (sinP·sinR, −sinP·cosR, cosP) gives
+        // rotation. These are exact for the +p_abs branch.
+        let y_a = (-m[2][0]).atan2(m[2][1]);
+        let r_a = m[0][2].atan2(-m[1][2]);
+
+        // The two equivalent representations: (P, Y, R) and
+        // (−P, Y+π, R+π). Score each by summed wrapped distance to
+        // `near` and keep the closer one — this is what makes paths
+        // through arbitrary orientations come back as continuous
+        // angle sequences instead of jumping branches every event.
+        let candidate = |p: f32, y: f32, r: f32| {
+            let p = unwrap_near(p, p_old);
+            let y = unwrap_near(y, y_old);
+            let r = unwrap_near(r, r_old);
+            let dist = (p - p_old).abs() + (y - y_old).abs() + (r - r_old).abs();
+            (dist, (p, y, r))
+        };
+        let a = candidate(p_abs, y_a, r_a);
+        let b = candidate(-p_abs, y_a + PI, r_a + PI);
+        if a.0 <= b.0 {
+            a.1
+        } else {
+            b.1
+        }
+    }
 }
 
 impl App {
@@ -135,10 +265,19 @@ impl App {
         self.fly_last_update = None;
     }
 
-    /// Apply a mouse-drag delta as a camera rotation. Horizontal
-    /// drag rotates yaw, vertical drag rotates pitch. Sensitivity
-    /// (radians per pixel) and Y-axis inversion come from
-    /// SystemSettings.
+    /// Apply a mouse-drag delta as a free-look camera rotation.
+    ///
+    /// The drag vector maps to a single rotation about the
+    /// camera-space axis perpendicular to it (exponential map):
+    /// horizontal drag rotates about the screen-vertical axis,
+    /// vertical drag about the screen-horizontal axis, diagonals
+    /// in between — order-free by construction. Sensitivity is
+    /// radians per pixel; invert-Y flips the vertical sign.
+    ///
+    /// Because camera-space axes ARE screen axes (the projection
+    /// uses camera-space x/y directly), no screen-rotation
+    /// compensation is needed — a twisted view (`rotation ≠ 0`)
+    /// still gets screen-correct drag directions for free.
     ///
     /// When `pan_x` / `pan_y` are non-zero the rotation pivot would
     /// otherwise be off-center: the camera rotates around
@@ -166,7 +305,7 @@ impl App {
         // Snapshot every scalar we need up-front and drop the
         // immutable borrow so the `update_param` calls below can take
         // the mutable borrow.
-        let (pitch_old, yaw_old, rotation, pan_x, pan_y, cam_x, cam_y, cam_z) = {
+        let (pitch_old, yaw_old, rotation_old, pan_x, pan_y, cam_x, cam_y, cam_z) = {
             let cfg = self.config_manager.active_config();
             (
                 cfg.camera_rotation_x,
@@ -180,26 +319,28 @@ impl App {
             )
         };
 
-        // Convert the screen-pixel drag delta into the camera's
-        // intrinsic frame before applying it to yaw / pitch. With
-        // `rotation = 0` the two frames coincide and this is a no-op.
-        // With `rotation ≠ 0` the screen is rotated relative to the
-        // camera's intrinsic XY axes (because `params.rotation` enters
-        // the camera matrix as the JWF yaw slot, spinning the world on
-        // screen). A drag of `(dx, dy)` in screen-aligned pixels then
-        // maps onto camera-frame axes as `(dx·cosR + dy·sinR,
-        // −dx·sinR + dy·cosR)`. Tested at `R = π/2`: a horizontal
-        // screen drag turns into a pure pitch change, which tilts the
-        // camera toward whatever is at screen-right under the rotated
-        // view (world `−Y` after the 90° CCW spin).
-        let cr = rotation.cos();
-        let sr = rotation.sin();
-        let drag_dx_local = drag_dx * cr + drag_dy * sr;
-        let drag_dy_local = -drag_dx * sr + drag_dy * cr;
-
-        let yaw_new = yaw_old + drag_dx_local * sensitivity;
+        // Per-axis rotation amounts. Signs chosen so behavior matches
+        // the previous FPS-style scheme at the horizon pose (pitch =
+        // π/2, rotation = 0), where the two schemes coincide: drag
+        // right looks toward screen-right, drag down looks toward
+        // screen-bottom (non-inverted).
         let dy_sign = if invert_y { 1.0 } else { -1.0 };
-        let pitch_new = pitch_old + drag_dy_local * sensitivity * dy_sign;
+        let a_pitch = drag_dy * sensitivity * dy_sign; // about screen-right axis (camera x̂)
+        let a_yaw = drag_dx * sensitivity; // about screen-vertical axis (camera ŷ)
+        let angle = (a_pitch * a_pitch + a_yaw * a_yaw).sqrt();
+        if angle < 1e-8 {
+            return;
+        }
+
+        let m_old = CameraMatrix::build(pitch_old, yaw_old, rotation_old);
+        // Single combined rotation about the camera-space axis
+        // perpendicular to the drag direction. Left-multiply =
+        // applied in camera space.
+        let delta =
+            CameraMatrix::axis_angle([a_pitch / angle, a_yaw / angle, 0.0], angle);
+        let m_new = delta.mul(&m_old);
+        let (pitch_new, yaw_new, rotation_new) =
+            m_new.to_euler_near((pitch_old, yaw_old, rotation_old));
 
         let _ = self
             .config_manager
@@ -207,13 +348,20 @@ impl App {
         let _ = self
             .config_manager
             .update_param(ConfigPath::CameraRotationY, yaw_new.into());
+        // Free-look rolls: rotation legitimately drifts as the
+        // camera's screen axes precess (e.g. circular mouse motion).
+        // Skip the write when unchanged so undo history and the
+        // slider stay quiet on pure pitch/yaw paths.
+        if rotation_new != rotation_old {
+            let _ = self
+                .config_manager
+                .update_param(ConfigPath::Rotation, rotation_new.into());
+        }
 
         // Pan-pivot compensation. Skip entirely when pan is zero
         // because then `camera_pos` already projects to screen center
         // and the rotation pivot is correct as-is.
         if pan_x != 0.0 || pan_y != 0.0 {
-            let m_old = CameraMatrix::build(pitch_old, yaw_old, rotation);
-            let m_new = CameraMatrix::build(pitch_new, yaw_new, rotation);
             let off_old = m_old.world_offset_for_camera_xy(pan_x, pan_y);
             let off_new = m_new.world_offset_for_camera_xy(pan_x, pan_y);
             let new_x = cam_x + off_old[0] - off_new[0];
@@ -337,5 +485,206 @@ impl App {
         let _ = self
             .config_manager
             .update_param(ConfigPath::CameraZ, new_z.into());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::f32::consts::PI;
+
+    fn mat_err(a: &CameraMatrix, b: &CameraMatrix) -> f32 {
+        let mut worst = 0.0f32;
+        for i in 0..3 {
+            for j in 0..3 {
+                worst = worst.max((a.m[i][j] - b.m[i][j]).abs());
+            }
+        }
+        worst
+    }
+
+    /// `build` produces orthonormal right-handed matrices, and `mul`
+    /// against the transpose recovers identity.
+    #[test]
+    fn build_is_rotation_matrix() {
+        let angles = [-2.8f32, -1.2, -0.3, 0.0, 0.4, 1.5, 2.9];
+        for &p in &angles {
+            for &y in &angles {
+                for &r in &angles {
+                    let m = CameraMatrix::build(p, y, r);
+                    let mt = CameraMatrix {
+                        m: [
+                            [m.m[0][0], m.m[1][0], m.m[2][0]],
+                            [m.m[0][1], m.m[1][1], m.m[2][1]],
+                            [m.m[0][2], m.m[1][2], m.m[2][2]],
+                        ],
+                    };
+                    let ident = m.mul(&mt);
+                    for i in 0..3 {
+                        for j in 0..3 {
+                            let want = if i == j { 1.0 } else { 0.0 };
+                            assert!(
+                                (ident.m[i][j] - want).abs() < 1e-5,
+                                "M·Mᵀ ≠ I at ({p}, {y}, {r})"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// The two sign-convention identities everything else rests on,
+    /// ported from the numeric derivation:
+    ///   1. Euler yaw increment == right-multiply by Rz(−δ)
+    ///      (rotating the camera about world-up)
+    ///   2. Euler pitch increment == left-multiply by a rotation
+    ///      about the camera-space axis (cos R, sin R, 0)
+    #[test]
+    fn axis_angle_matches_euler_increments() {
+        let cases = [
+            (0.3f32, -1.1f32, 0.7f32, 0.25f32),
+            (-2.0, 2.4, -0.4, -0.6),
+            (1.5, 0.0, 0.0, 0.1),
+            (0.05, 3.0, -2.0, 0.5),
+        ];
+        for &(p, y, r, d) in &cases {
+            let m = CameraMatrix::build(p, y, r);
+
+            let yaw_inc = CameraMatrix::build(p, y + d, r);
+            let rz_neg = CameraMatrix::axis_angle([0.0, 0.0, 1.0], -d);
+            assert!(
+                mat_err(&yaw_inc, &m.mul(&rz_neg)) < 1e-5,
+                "yaw identity failed at ({p}, {y}, {r}, {d})"
+            );
+
+            let pitch_inc = CameraMatrix::build(p + d, y, r);
+            let axis = [r.cos(), r.sin(), 0.0];
+            let rot = CameraMatrix::axis_angle(axis, d);
+            assert!(
+                mat_err(&pitch_inc, &rot.mul(&m)) < 1e-5,
+                "pitch identity failed at ({p}, {y}, {r}, {d})"
+            );
+        }
+    }
+
+    /// Round trip: decompose(build(P, Y, R)) returns (P, Y, R) when
+    /// told to stay near the original — across a grid that avoids
+    /// the poles.
+    #[test]
+    fn to_euler_round_trip_grid() {
+        let pitches = [-2.9f32, -1.6, -0.8, 0.2, 1.1, 2.4];
+        let others = [-3.0f32, -1.2, 0.0, 0.9, 2.7];
+        for &p in &pitches {
+            for &y in &others {
+                for &r in &others {
+                    let m = CameraMatrix::build(p, y, r);
+                    let (p2, y2, r2) = m.to_euler_near((p, y, r));
+                    assert!(
+                        (p2 - p).abs() < 1e-3
+                            && (y2 - y).abs() < 1e-3
+                            && (r2 - r).abs() < 1e-3,
+                        "round trip ({p}, {y}, {r}) → ({p2}, {y2}, {r2})"
+                    );
+                }
+            }
+        }
+    }
+
+    /// At the gimbal pole the decomposition holds rotation at its
+    /// prior value exactly, and the returned triple still rebuilds
+    /// the same matrix.
+    #[test]
+    fn pole_holds_rotation_and_reconstructs() {
+        // Pure-pole orientation: pitch = 0 → M = Rz(R − Y).
+        for &(y0, r0) in &[(0.4f32, 1.3f32), (-2.0, 0.0), (3.0, -2.5)] {
+            let m = CameraMatrix::build(0.0, y0, r0);
+            let (p2, y2, r2) = m.to_euler_near((0.0, y0, r0));
+            assert_eq!(r2, r0, "rotation must be held at the pole");
+            let rebuilt = CameraMatrix::build(p2, y2, r2);
+            assert!(
+                mat_err(&m, &rebuilt) < 1e-5,
+                "pole reconstruction failed for ({y0}, {r0})"
+            );
+        }
+        // Same at the pitch = π pole.
+        let m = CameraMatrix::build(PI, 0.7, -0.9);
+        let (p2, y2, r2) = m.to_euler_near((PI, 0.7, -0.9));
+        assert_eq!(r2, -0.9);
+        let rebuilt = CameraMatrix::build(p2, y2, r2);
+        assert!(mat_err(&m, &rebuilt) < 1e-5);
+    }
+
+    /// The gimbal-free guarantee: a free-look path that pitches
+    /// straight through the pole (and then wanders diagonally) stays
+    /// smooth at the matrix level AND every decomposed triple
+    /// faithfully rebuilds its matrix. This is exactly the per-event
+    /// flow of `apply_fly_mouse_look`, simulated.
+    #[test]
+    fn free_look_through_pole_is_smooth_and_faithful() {
+        let mut euler = (0.2f32, 0.7f32, 0.4f32);
+        let mut m = CameraMatrix::build(euler.0, euler.1, euler.2);
+        let mut prev = CameraMatrix { m: m.m };
+
+        let mut step = |m: &mut CameraMatrix,
+                        prev: &mut CameraMatrix,
+                        euler: &mut (f32, f32, f32),
+                        axis: [f32; 3],
+                        angle: f32| {
+            let delta = CameraMatrix::axis_angle(axis, angle);
+            *m = delta.mul(m);
+            // Matrix path must be continuous: one step of size
+            // `angle` moves matrix entries by at most ~angle.
+            assert!(
+                mat_err(m, prev) < 2.0 * angle.abs() + 1e-4,
+                "matrix path jumped"
+            );
+            prev.m = m.m;
+            // Decompose near the previous stored triple, as the real
+            // code does, then verify faithful reconstruction. The
+            // pole-hold approximation may force rotation, costing up
+            // to ~POLE_EPS of matrix error in the cone — allow 2×.
+            let new_euler = m.to_euler_near(*euler);
+            let rebuilt = CameraMatrix::build(new_euler.0, new_euler.1, new_euler.2);
+            assert!(
+                mat_err(m, &rebuilt) < 2.0 * POLE_EPS,
+                "reconstruction unfaithful at euler {new_euler:?}"
+            );
+            // The real code feeds the *rebuilt* orientation forward
+            // (config is the source of truth), so mirror that here to
+            // catch error accumulation across the pole cone.
+            m.m = rebuilt.m;
+            *euler = new_euler;
+        };
+
+        // Phase 1: pitch straight down through the pole (pitch
+        // crosses 0 around step 10).
+        for _ in 0..40 {
+            step(&mut m, &mut prev, &mut euler, [1.0, 0.0, 0.0], -0.02);
+        }
+        // Phase 2: diagonal drag (pitch + yaw mix) — exercises the
+        // roll-drift path where rotation legitimately changes.
+        for _ in 0..40 {
+            step(&mut m, &mut prev, &mut euler, [0.6, 0.8, 0.0], 0.03);
+        }
+        // Phase 3: pure yaw from wherever we ended up.
+        for _ in 0..40 {
+            step(&mut m, &mut prev, &mut euler, [0.0, 1.0, 0.0], 0.025);
+        }
+    }
+
+    /// Free-look coincides with the old FPS scheme at the horizon
+    /// pose (pitch = π/2, rotation = 0): rotating about the
+    /// screen-vertical axis is exactly an Euler yaw increment there.
+    #[test]
+    fn free_look_yaw_matches_euler_yaw_at_horizon() {
+        let m = CameraMatrix::build(PI / 2.0, 0.3, 0.0);
+        let d = 0.2f32;
+        let rotated = CameraMatrix::axis_angle([0.0, 1.0, 0.0], d).mul(&m);
+        let euler_inc = CameraMatrix::build(PI / 2.0, 0.3 + d, 0.0);
+        assert!(
+            mat_err(&rotated, &euler_inc) < 1e-5,
+            "free-look yaw ≠ Euler yaw at horizon"
+        );
     }
 }
