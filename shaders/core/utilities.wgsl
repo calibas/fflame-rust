@@ -170,8 +170,29 @@ fn camera_transform(p: vec3<f32>, camera_matrix: mat3x3<f32>, camera_pos: vec3<f
     return vec3<f32>(x, y, z);
 }
 
-// Apply Apophysis perspective projection
+// Apply Apophysis perspective projection.
 // Source: Apophysis ControlPoint.pas:606
+//
+// The classic Apo formula `zr = 1 - persp · z` is a stylistic effect,
+// not a true perspective matrix. For points the camera can see
+// (camera-space z < 0 in our convention) `zr > 1` and behavior is
+// sensible. For points behind the focal plane, however, `zr` shrinks
+// to zero (singularity at z = 1/persp) and then flips sign, which
+// mirrors the point onto the opposite side of the screen — the
+// "wraparound where the sky lands above the floor" artifact that
+// becomes obvious at persp ≥ ~0.5.
+//
+// We clip points where zr drops below a small positive threshold:
+// returning an out-of-frame sentinel makes the downstream bounds
+// check drop the sample naturally. This matches JWildfire behavior
+// (Apo had the same wraparound bug; we deliberately don't reproduce
+// it here). Existing Apo flames at typical persp ≈ 0.1 are unaffected
+// because their content never gets close to the z = 10 singularity.
+//
+// TODO: expose this as a "Behind-camera wraparound (Apo-compatible)"
+// toggle in the View panel if anyone needs the original Apo behavior
+// back — e.g., a flame author who deliberately leans on the
+// wraparound as a stylistic effect. Default would stay clipped.
 fn apply_perspective(p: vec3<f32>, persp_strength: f32) -> vec2<f32> {
     if (abs(persp_strength) < 1e-6) {
         // Orthographic: no perspective
@@ -181,9 +202,11 @@ fn apply_perspective(p: vec3<f32>, persp_strength: f32) -> vec2<f32> {
     // Apophysis formula: zr = 1 - cameraPersp * z
     let zr = 1.0 - persp_strength * p.z;
 
-    // Avoid division by zero
-    if (abs(zr) < 1e-6) {
-        return p.xy;
+    // Clip behind-camera and near-focal-plane points. The threshold
+    // is small but positive so we drop both the singularity itself
+    // and the extreme-magnification halo just in front of it.
+    if (zr < 1e-3) {
+        return vec2<f32>(1e30, 1e30);
     }
 
     // Perspective divide: x' = x / zr, y' = y / zr
