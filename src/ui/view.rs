@@ -166,7 +166,7 @@ pub fn render_view_content(
         let response = ui.add(
             super::VkbSlider::new(&mut perspective, 0.0..=10.0)
                 .text(t!("view.perspective").as_ref())
-                .step_by(0.1)
+                .step_by(0.01)
         ).on_hover_text(t!("view.tooltip_perspective"));
         let changed = response.changed();
         if changed {
