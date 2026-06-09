@@ -76,7 +76,11 @@ fn wrap_pi(a: f32) -> f32 {
 ///
 /// Algebraically this factors as the ZXZ Euler product
 /// `M = Rz(rotation) · Rx(pitch) · Rz(−yaw)` (verified numerically
-/// against the shipped WGSL element-by-element).
+/// against the shipped WGSL element-by-element). With non-zero bank
+/// the full chain is `Rz(rotation) · Rx(pitch) · Ry(bank) · Rz(−yaw)`
+/// — bank sits between pitch and yaw, matching JWildfire's
+/// transposed-application order — but fly mode assumes bank = 0, so
+/// the `Ry` factor is omitted here.
 ///
 /// Stored row-major as `m[row][col]`. The matrix maps a world point
 /// to camera space via `p_cam = M · (p_world − camera_pos)`. The
