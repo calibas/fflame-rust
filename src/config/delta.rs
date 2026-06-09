@@ -24,6 +24,10 @@ pub enum ConfigPath {
     Rotation,
     CameraRotationX,
     CameraRotationY,
+    /// JWildfire/Apophysis bank angle (Y-axis rotation in the
+    /// 4-angle camera matrix). Stored in radians on
+    /// `FractalConfig::camera_bank`.
+    CameraBank,
     CameraZ,
     DofFocusDistance,
     DofBlurStrength,
@@ -444,6 +448,7 @@ impl Display for ConfigPath {
             ConfigPath::Rotation => write!(f, "Rotation"),
             ConfigPath::CameraRotationX => write!(f, "Camera Pitch"),
             ConfigPath::CameraRotationY => write!(f, "Camera Yaw"),
+            ConfigPath::CameraBank => write!(f, "Camera Bank"),
             ConfigPath::CameraZ => write!(f, "Camera Z"),
             ConfigPath::DofFocusDistance => write!(f, "DOF Focus Distance"),
             ConfigPath::DofBlurStrength => write!(f, "DOF Blur Strength"),
@@ -795,6 +800,7 @@ impl ConfigPath {
             ConfigPath::Rotation => I18nKey::simple("history.param.rotation"),
             ConfigPath::CameraRotationX => I18nKey::simple("history.param.camera_pitch"),
             ConfigPath::CameraRotationY => I18nKey::simple("history.param.camera_yaw"),
+            ConfigPath::CameraBank => I18nKey::simple("history.param.camera_bank"),
             ConfigPath::CameraZ => I18nKey::simple("history.param.camera_z"),
             ConfigPath::DofFocusDistance => I18nKey::simple("history.param.dof_focus_distance"),
             ConfigPath::DofBlurStrength => I18nKey::simple("history.param.dof_blur_strength"),
@@ -1896,6 +1902,7 @@ impl ConfigPath {
             | ConfigPath::Rotation
             | ConfigPath::CameraRotationX
             | ConfigPath::CameraRotationY
+            | ConfigPath::CameraBank
             | ConfigPath::CameraZ => UpdateType::ViewOnly,
 
             // DOF, fog, and spatial filter change the per-sample
@@ -2064,6 +2071,7 @@ impl ConfigPath {
             ConfigPath::Rotation => "Rotation".to_string(),
             ConfigPath::CameraRotationX => "CameraRotationX".to_string(),
             ConfigPath::CameraRotationY => "CameraRotationY".to_string(),
+            ConfigPath::CameraBank => "CameraBank".to_string(),
             ConfigPath::CameraZ => "CameraZ".to_string(),
             ConfigPath::DofFocusDistance => "DofFocusDistance".to_string(),
             ConfigPath::DofBlurStrength => "DofBlurStrength".to_string(),
@@ -2287,6 +2295,7 @@ impl ConfigPath {
             "Rotation" => return Some(ConfigPath::Rotation),
             "CameraRotationX" => return Some(ConfigPath::CameraRotationX),
             "CameraRotationY" => return Some(ConfigPath::CameraRotationY),
+            "CameraBank" => return Some(ConfigPath::CameraBank),
             "CameraZ" => return Some(ConfigPath::CameraZ),
             "DofFocusDistance" => return Some(ConfigPath::DofFocusDistance),
             "DofBlurStrength" => return Some(ConfigPath::DofBlurStrength),
@@ -2637,6 +2646,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::Rotation
         | ConfigPath::CameraRotationX
         | ConfigPath::CameraRotationY
+        | ConfigPath::CameraBank
         | ConfigPath::CameraZ
         | ConfigPath::DofFocusDistance
         | ConfigPath::DofBlurStrength
@@ -3149,6 +3159,7 @@ mod tests {
             ConfigPath::Rotation,
             ConfigPath::CameraRotationX,
             ConfigPath::CameraRotationY,
+            ConfigPath::CameraBank,
             ConfigPath::CameraZ,
             ConfigPath::DofFocusDistance,
             ConfigPath::DofBlurStrength,

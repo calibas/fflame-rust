@@ -1290,6 +1290,7 @@ impl HighResExporter {
                 perspective_strength: config.flame.perspective_strength,
                 camera_rotation_x: config.camera_rotation_x,
                 camera_rotation_y: config.camera_rotation_y,
+                camera_bank: config.camera_bank,
                 camera_z: config.camera_z,
                 dof_focus_distance: config.dof_focus_distance,
                 dof_blur_strength: config.dof_blur_strength,
@@ -1304,7 +1305,6 @@ impl HighResExporter {
                 background_r: config.background_color[0],
                 background_g: config.background_color[1],
                 background_b: config.background_color[2],
-                _pad_before_post_symmetry: 0,
                 post_symmetry: (&config.flame.post_symmetry).into(),
             };
             self.queue

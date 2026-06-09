@@ -687,6 +687,9 @@ pub fn flame_response_to_config(resp: &FlameResponse) -> FractalConfig {
         rotation: resp.rotation,
         camera_rotation_x: resp.camera_rotation_x,
         camera_rotation_y: resp.camera_rotation_y,
+        // API contract doesn't carry camera_bank yet — defaults to 0
+        // (no bank applied). Wire through when the API grows a field.
+        camera_bank: 0.0,
         camera_z: resp.camera_z,
         // API contract doesn't carry image_size yet; default to the
         // historical 1920×1080 so API-loaded flames behave the same

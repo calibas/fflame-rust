@@ -225,6 +225,7 @@ pub async fn render(
             job.config.rotation,
             job.config.camera_rotation_x,
             job.config.camera_rotation_y,
+            job.config.camera_bank,
             job.config.camera_z,
             job.config.speed_factor,
             clear_histogram,
