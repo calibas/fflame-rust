@@ -80,6 +80,11 @@ struct Params {
     // Depth-density compensation strength s: 3D samples weighted by
     // zr^(-2s) so apparent brightness is depth-invariant. 0 = off.
     depth_density_compensation: f32,
+    // Far density fade: sample density weighted by
+    // exp(-(far_density_fade_start - camera_z)^2 * far_density_fade)
+    // beyond the start depth. 0 = off.
+    far_density_fade: f32,
+    far_density_fade_start: f32,
     camera_rotation_x: f32,  // 3D camera pitch (rotation around X)
     camera_rotation_y: f32,  // 3D camera yaw (rotation around Z — Apo ZXY Euler)
     camera_bank: f32,        // 3D camera bank — rotation around Y (JWildfire bank parameter)
@@ -99,11 +104,13 @@ struct Params {
     background_r: f32,  // Background color R (for depth fog)
     background_g: f32,  // Background color G (for depth fog)
     background_b: f32,  // Background color B (for depth fog)
-    // std140 alignment pad — the scalar fields above total 35 × 4 =
-    // 140 bytes, and `post_symmetry` is a struct so std140 requires
-    // it to start at a 16-byte boundary. 4 bytes of pad land it at
-    // 144. Mirror in `src/gpu/buffers.rs`.
-    _pad_before_post_symmetry: u32,
+    // std140 alignment pad — the scalar fields above total 37 × 4 =
+    // 148 bytes, and `post_symmetry` is a struct so std140 requires
+    // it to start at a 16-byte boundary. 12 bytes of pad land it at
+    // 160. Mirror in `src/gpu/buffers.rs`.
+    _pad0_before_post_symmetry: u32,
+    _pad1_before_post_symmetry: u32,
+    _pad2_before_post_symmetry: u32,
     post_symmetry: PostSymmetry,  // Plot-time symmetry (gated by HAS_POST_SYMMETRY)
 }
 

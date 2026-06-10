@@ -162,6 +162,8 @@ pub struct FlameRenderer {
     current_render_mode: crate::scene::transforms::RenderMode,
     perspective_strength: f32,
     depth_density_compensation: f32,
+    far_density_fade: f32,
+    far_density_fade_start: f32,
     deterministic_rng: bool,
     frame_counter: u32, // For deterministic seed progression
     dof_focus_distance: f32, // DOF: Distance from origin where image is sharpest
@@ -278,6 +280,8 @@ impl FlameRenderer {
             current_render_mode: flame.render_mode,
             perspective_strength: flame.perspective_strength,
             depth_density_compensation: flame.depth_density_compensation,
+            far_density_fade: flame.far_density_fade,
+            far_density_fade_start: flame.far_density_fade_start,
             deterministic_rng: true, // Default to deterministic for reproducible rendering
             frame_counter: 0,
             dof_focus_distance: crate::config::DEFAULT_DOF_FOCUS_DISTANCE,
@@ -478,6 +482,9 @@ impl FlameRenderer {
             speed_factor,
             perspective_strength: self.perspective_strength,
             depth_density_compensation: self.depth_density_compensation,
+            far_density_fade: self.far_density_fade,
+            far_density_fade_start: self.far_density_fade_start,
+            _pad_before_post_symmetry: [0; 3],
             camera_rotation_x,
             camera_rotation_y,
             camera_bank,
@@ -499,7 +506,6 @@ impl FlameRenderer {
             background_r: self.background_r,
             background_g: self.background_g,
             background_b: self.background_b,
-            _pad_before_post_symmetry: [0; 1],
 post_symmetry: (&self.post_symmetry).into(),
         };
         self.buffers.update_params(queue, &params);
@@ -922,6 +928,8 @@ post_symmetry: (&self.post_symmetry).into(),
         self.current_render_mode = config.flame.render_mode;
         self.perspective_strength = config.flame.perspective_strength;
         self.depth_density_compensation = config.flame.depth_density_compensation;
+        self.far_density_fade = config.flame.far_density_fade;
+        self.far_density_fade_start = config.flame.far_density_fade_start;
         self.dof_focus_distance = config.dof_focus_distance;
         self.dof_blur_strength = config.dof_blur_strength;
         self.fog_strength = config.fog_strength;
@@ -975,6 +983,9 @@ post_symmetry: (&self.post_symmetry).into(),
             speed_factor: config.speed_factor,
             perspective_strength: self.perspective_strength,
             depth_density_compensation: self.depth_density_compensation,
+            far_density_fade: self.far_density_fade,
+            far_density_fade_start: self.far_density_fade_start,
+            _pad_before_post_symmetry: [0; 3],
             camera_rotation_x: config.camera_rotation_x,
             camera_rotation_y: config.camera_rotation_y,
             camera_bank: config.camera_bank,
@@ -996,7 +1007,6 @@ post_symmetry: (&self.post_symmetry).into(),
             background_r: config.background_color[0],
             background_g: config.background_color[1],
             background_b: config.background_color[2],
-            _pad_before_post_symmetry: [0; 1],
 post_symmetry: (&config.flame.post_symmetry).into(),
         };
         self.buffers.update_params(queue, &params);
@@ -1072,6 +1082,8 @@ post_symmetry: (&config.flame.post_symmetry).into(),
         self.current_render_mode = flame.render_mode;
         self.perspective_strength = flame.perspective_strength;
         self.depth_density_compensation = flame.depth_density_compensation;
+        self.far_density_fade = flame.far_density_fade;
+        self.far_density_fade_start = flame.far_density_fade_start;
         self.dof_focus_distance = dof_focus_distance;
         self.dof_blur_strength = dof_blur_strength;
         self.fog_strength = fog_strength;
@@ -1111,6 +1123,9 @@ post_symmetry: (&config.flame.post_symmetry).into(),
             speed_factor,
             perspective_strength: self.perspective_strength,
             depth_density_compensation: self.depth_density_compensation,
+            far_density_fade: self.far_density_fade,
+            far_density_fade_start: self.far_density_fade_start,
+            _pad_before_post_symmetry: [0; 3],
             camera_rotation_x,
             camera_rotation_y,
             camera_bank,
@@ -1132,7 +1147,6 @@ post_symmetry: (&config.flame.post_symmetry).into(),
             background_r: self.background_r,
             background_g: self.background_g,
             background_b: self.background_b,
-            _pad_before_post_symmetry: [0; 1],
 post_symmetry: (&self.post_symmetry).into(),
         };
 
@@ -1329,6 +1343,9 @@ post_symmetry: (&self.post_symmetry).into(),
             },
             perspective_strength: self.perspective_strength,
             depth_density_compensation: self.depth_density_compensation,
+            far_density_fade: self.far_density_fade,
+            far_density_fade_start: self.far_density_fade_start,
+            _pad_before_post_symmetry: [0; 3],
             camera_rotation_x,
             camera_rotation_y,
             camera_bank,
@@ -1350,7 +1367,6 @@ post_symmetry: (&self.post_symmetry).into(),
             background_r: self.background_r,
             background_g: self.background_g,
             background_b: self.background_b,
-            _pad_before_post_symmetry: [0; 1],
 post_symmetry: (&self.post_symmetry).into(),
         };
         self.buffers.update_params(queue, &params);
@@ -1669,6 +1685,9 @@ post_symmetry: (&self.post_symmetry).into(),
             },
             perspective_strength: self.perspective_strength,
             depth_density_compensation: self.depth_density_compensation,
+            far_density_fade: self.far_density_fade,
+            far_density_fade_start: self.far_density_fade_start,
+            _pad_before_post_symmetry: [0; 3],
             camera_rotation_x,
             camera_rotation_y,
             camera_bank,
@@ -1690,7 +1709,6 @@ post_symmetry: (&self.post_symmetry).into(),
             background_r: self.background_r,
             background_g: self.background_g,
             background_b: self.background_b,
-            _pad_before_post_symmetry: [0; 1],
 post_symmetry: (&self.post_symmetry).into(),
         };
         self.buffers.update_params(queue, &params);

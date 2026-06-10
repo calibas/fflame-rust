@@ -657,6 +657,11 @@ pub struct GpuParams {
     // zr^(-2s) so apparent brightness is depth-invariant (radiance-
     // preserving splats). 0 = off. See Flame field docs.
     pub depth_density_compensation: f32,
+    // Far density fade: sample density weighted by
+    // exp(-(far_density_fade_start - camera_z)^2 * far_density_fade)
+    // beyond the start depth. 0 = off.
+    pub far_density_fade: f32,
+    pub far_density_fade_start: f32,
     pub camera_rotation_x: f32, // 3D camera pitch (rotation around X axis)
     pub camera_rotation_y: f32, // 3D camera yaw (rotation around Z axis — Apo ZXY Euler)
     // JWildfire/Apophysis bank — Y-axis rotation, applied as the 3rd
@@ -685,13 +690,16 @@ pub struct GpuParams {
     // total 34 × 4 = 136 bytes. `post_symmetry` is a struct and
     // std140 requires struct fields to start at a 16-byte boundary,
     // so 8 bytes of pad land it at 144. Mirror in `header.wgsl`.
-    pub _pad_before_post_symmetry: [u32; 1],
 
     // Post-symmetry — plot-time density replication. Each chaos-game
     // sample also deposits at K−1 mirrored/rotated positions before the
     // camera transform. Gated by the HAS_POST_SYMMETRY shader-builder
     // flag, so when `post_symmetry.kind == 0` the symmetry block
     // doesn't compile in and these fields aren't read.
+    // std140 alignment pad: 37 scalars x 4 = 148 bytes; post_symmetry
+    // (a struct) must start on a 16-byte boundary -> 12 bytes pad to 160.
+    // Mirror in shaders/core/header.wgsl.
+    pub _pad_before_post_symmetry: [u32; 3],
     pub post_symmetry: GpuPostSymmetry,
 }
 
@@ -1109,6 +1117,8 @@ impl FlameBuffers {
             speed_factor: 0.5,
             perspective_strength: 2.0,
             depth_density_compensation: 0.0,
+            far_density_fade: 0.0,
+            far_density_fade_start: 0.0,
             camera_rotation_x: 0.0,
             camera_rotation_y: 0.0,
             camera_bank: 0.0,
@@ -1130,8 +1140,8 @@ impl FlameBuffers {
             background_r: 0.0,
             background_g: 0.0,
             background_b: 0.0,
-            _pad_before_post_symmetry: [0; 1],
-post_symmetry: GpuPostSymmetry::none(),
+            _pad_before_post_symmetry: [0; 3],
+            post_symmetry: GpuPostSymmetry::none(),
         };
 
         let params_buffer = device.create_buffer_init(&util::BufferInitDescriptor {

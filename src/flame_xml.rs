@@ -400,6 +400,9 @@ fn parse_flame_element(
         perspective_strength,
         // Our own extension; no .flame XML attribute (see Flame field docs)
         depth_density_compensation: 0.0,
+        // Our own extension; no .flame XML attribute (see Flame field docs)
+        far_density_fade: 0.0,
+        far_density_fade_start: 0.0,
         xaos,
         solo_transform: solo_xform,
         // JWF `subflame_wf_flame` payloads decoded above; empty when no

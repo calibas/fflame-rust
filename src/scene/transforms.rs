@@ -1540,6 +1540,23 @@ pub struct Flame {
     /// .fflame only, dropped on .flame XML export.
     #[serde(default, skip_serializing_if = "f32_is_zero")]
     pub depth_density_compensation: f32,
+    /// Far density fade strength. For samples farther than
+    /// `far_density_fade_start` (camera-space z below the threshold;
+    /// far = more negative z), the sample's histogram DENSITY weight
+    /// is multiplied by `exp(−zdist² · strength)` where
+    /// `zdist = far_density_fade_start − camera_z` — far structures
+    /// genuinely thin out and vanish with distance, unlike fog
+    /// (which recolors toward the background at full density).
+    /// Gaussian falloff borrowed from JWildfire's diminish-Z curve,
+    /// but the semantics differ (JWF lerps color, never density), so
+    /// this is our own extension: .fflame only, no XML attribute.
+    /// 0 = off.
+    #[serde(default, skip_serializing_if = "f32_is_zero")]
+    pub far_density_fade: f32,
+    /// Camera-space depth where the far density fade starts. Only
+    /// meaningful when `far_density_fade > 0`.
+    #[serde(default, skip_serializing_if = "f32_is_zero")]
+    pub far_density_fade_start: f32,
     /// Xaos transition weights: xaos[src][dst] = modifier for src→dst transition
     /// None when all weights are 1.0 (default behavior, no memory allocated)
     /// When Some, outer Vec has len = transforms.len(), inner Vec has len = transforms.len()
@@ -1730,6 +1747,8 @@ impl Default for Flame {
             render_mode: RenderMode::default(),
             perspective_strength: 0.0,  // Default to orthographic (flat)
             depth_density_compensation: 0.0,  // Off: classic flux-conserving splats
+            far_density_fade: 0.0,      // Off
+            far_density_fade_start: 0.0,
             xaos: None,  // Default: no xaos (all weights implicitly 1.0)
             solo_transform: None,  // Default: no solo (all transforms active)
             subflames: Vec::new(),  // Default: no subflames
@@ -1910,6 +1929,8 @@ impl<'de> Deserialize<'de> for Flame {
             RenderMode,
             PerspectiveStrength,
             DepthDensityCompensation,
+            FarDensityFade,
+            FarDensityFadeStart,
             Projection, // Old field name for backward compatibility
             Xaos,
             SoloTransform,
@@ -1939,6 +1960,8 @@ impl<'de> Deserialize<'de> for Flame {
                 let mut render_mode = None;
                 let mut perspective_strength = None;
                 let mut depth_density_compensation = None;
+                let mut far_density_fade = None;
+                let mut far_density_fade_start = None;
                 let mut xaos = None;
                 let mut solo_transform = None;
                 let mut subflames: Option<Vec<Flame>> = None;
@@ -1970,6 +1993,12 @@ impl<'de> Deserialize<'de> for Flame {
                         }
                         Field::DepthDensityCompensation => {
                             depth_density_compensation = Some(map.next_value()?);
+                        }
+                        Field::FarDensityFade => {
+                            far_density_fade = Some(map.next_value()?);
+                        }
+                        Field::FarDensityFadeStart => {
+                            far_density_fade_start = Some(map.next_value()?);
                         }
                         Field::Projection => {
                             // Old format: enum ProjectionType
@@ -2030,6 +2059,8 @@ impl<'de> Deserialize<'de> for Flame {
                     render_mode: render_mode.unwrap_or_default(),
                     perspective_strength: perspective_strength.unwrap_or(0.0),
                     depth_density_compensation: depth_density_compensation.unwrap_or(0.0),
+                    far_density_fade: far_density_fade.unwrap_or(0.0),
+                    far_density_fade_start: far_density_fade_start.unwrap_or(0.0),
                     xaos,
                     solo_transform: solo_transform.unwrap_or(None),
                     subflames: subflames.unwrap_or_default(),
@@ -2049,7 +2080,7 @@ impl<'de> Deserialize<'de> for Flame {
             }
         }
 
-        const FIELDS: &[&str] = &["name", "transforms", "final_transform", "linked_transforms", "final_transforms", "render_mode", "perspective_strength", "depth_density_compensation", "projection", "xaos", "solo_transform", "subflames", "post_symmetry", "preserve_z"];
+        const FIELDS: &[&str] = &["name", "transforms", "final_transform", "linked_transforms", "final_transforms", "render_mode", "perspective_strength", "depth_density_compensation", "far_density_fade", "far_density_fade_start", "projection", "xaos", "solo_transform", "subflames", "post_symmetry", "preserve_z"];
         deserializer.deserialize_struct("Flame", FIELDS, FlameVisitor)
     }
 }

@@ -451,6 +451,37 @@ pub fn render_view_content(
                         depth_comp.into()
                     );
                 }
+
+                // Far density fade: thins far samples' density with a
+                // Gaussian falloff past the start depth (unlike fog,
+                // which recolors at full density). Our own extension.
+                ui.add_space(8.0);
+                ui.label(t!("view.far_density_fade_section").as_ref());
+
+                let mut far_fade = config.flame.far_density_fade;
+                let response = ui.add(
+                    super::VkbSlider::new(&mut far_fade, 0.0..=5.0)
+                        .text(t!("view.far_density_fade").as_ref())
+                        .step_by(0.01)
+                ).on_hover_text(t!("view.tooltip_far_density_fade"));
+                if response.changed() {
+                    let _ = config_manager.update_param(
+                        ConfigPath::FarDensityFade,
+                        far_fade.into()
+                    );
+                }
+
+                let mut far_fade_start = config.flame.far_density_fade_start;
+                let response = ui.add(
+                    super::VkbSlider::new(&mut far_fade_start, -5.0..=5.0)
+                        .text(t!("view.far_density_fade_start").as_ref())
+                ).on_hover_text(t!("view.tooltip_far_density_fade_start"));
+                if response.changed() {
+                    let _ = config_manager.update_param(
+                        ConfigPath::FarDensityFadeStart,
+                        far_fade_start.into()
+                    );
+                }
             });
     }
 
