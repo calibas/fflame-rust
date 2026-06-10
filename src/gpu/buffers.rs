@@ -653,6 +653,10 @@ pub struct GpuParams {
     pub rotation: f32, // Rotation in radians (2D rotation around Z)
     pub speed_factor: f32, // Blend factor for speed-based coloring
     pub perspective_strength: f32, // Strength for perspective projection
+    // Depth-density compensation strength s: 3D samples weighted by
+    // zr^(-2s) so apparent brightness is depth-invariant (radiance-
+    // preserving splats). 0 = off. See Flame field docs.
+    pub depth_density_compensation: f32,
     pub camera_rotation_x: f32, // 3D camera pitch (rotation around X axis)
     pub camera_rotation_y: f32, // 3D camera yaw (rotation around Z axis — Apo ZXY Euler)
     // JWildfire/Apophysis bank — Y-axis rotation, applied as the 3rd
@@ -681,7 +685,7 @@ pub struct GpuParams {
     // total 34 × 4 = 136 bytes. `post_symmetry` is a struct and
     // std140 requires struct fields to start at a 16-byte boundary,
     // so 8 bytes of pad land it at 144. Mirror in `header.wgsl`.
-    pub _pad_before_post_symmetry: [u32; 2],
+    pub _pad_before_post_symmetry: [u32; 1],
 
     // Post-symmetry — plot-time density replication. Each chaos-game
     // sample also deposits at K−1 mirrored/rotated positions before the
@@ -1104,6 +1108,7 @@ impl FlameBuffers {
             rotation: 0.0,
             speed_factor: 0.5,
             perspective_strength: 2.0,
+            depth_density_compensation: 0.0,
             camera_rotation_x: 0.0,
             camera_rotation_y: 0.0,
             camera_bank: 0.0,
@@ -1125,7 +1130,7 @@ impl FlameBuffers {
             background_r: 0.0,
             background_g: 0.0,
             background_b: 0.0,
-            _pad_before_post_symmetry: [0; 2],
+            _pad_before_post_symmetry: [0; 1],
 post_symmetry: GpuPostSymmetry::none(),
         };
 

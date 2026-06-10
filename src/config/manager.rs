@@ -1921,6 +1921,7 @@ impl ConfigManager {
             // Flame metadata — per-flame, so read from the resolved target.
             ConfigPath::RenderMode => Ok(flame.render_mode.into()),
             ConfigPath::PerspectiveStrength => Ok(flame.perspective_strength.into()),
+            ConfigPath::DepthDensityCompensation => Ok(flame.depth_density_compensation.into()),
 
             // Effects
             ConfigPath::DensityEffectEnabled { index } => {
@@ -2608,6 +2609,10 @@ impl ConfigManager {
             ConfigPath::PerspectiveStrength => {
                 let v = value.try_into()?;
                 self.active_flame_mut()?.perspective_strength = v;
+            }
+            ConfigPath::DepthDensityCompensation => {
+                let v = value.try_into()?;
+                self.active_flame_mut()?.depth_density_compensation = v;
             }
 
             // Effects

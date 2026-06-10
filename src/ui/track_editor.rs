@@ -1299,6 +1299,7 @@ pub fn get_current_value(
         // Rendering
         ConfigPath::BlendFactor => Some(config.blend_factor as f64),
         ConfigPath::PerspectiveStrength => Some(config.flame.perspective_strength as f64),
+        ConfigPath::DepthDensityCompensation => Some(config.flame.depth_density_compensation as f64),
 
         // Transform parameters
         ConfigPath::TransformWeight { index } => {

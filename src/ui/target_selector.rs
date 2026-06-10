@@ -404,6 +404,7 @@ fn get_rendering_items() -> Vec<TargetItem> {
     vec![
         TargetItem::new(ConfigPath::BlendFactor, "Blend Factor"),
         TargetItem::new(ConfigPath::PerspectiveStrength, "Perspective Strength"),
+        TargetItem::new(ConfigPath::DepthDensityCompensation, "Depth Density Compensation"),
         TargetItem::new(ConfigPath::SoloTransform, "Solo Transform"),
     ]
 }
