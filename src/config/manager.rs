@@ -122,6 +122,15 @@ impl Default for EditingTarget {
 /// Maximum duration for coalescing - total span from first to last change
 const MAX_COALESCE_SPAN: Duration = Duration::from_millis(3000);
 
+/// History description shared by all fly-mode camera writes (mouse-look
+/// and WASD/QE movement). Changes carrying this description coalesce
+/// with each other even when their path sets differ — a fly gesture
+/// alternates between look writes (pitch/yaw, sometimes rotation or
+/// position-compensation) and movement writes (position only), and
+/// without the exception every event would be its own history entry,
+/// flooding the undo stack within seconds of flight.
+pub const FLY_CAMERA_HISTORY_DESC: &str = "history.action.fly_camera";
+
 /// Inactivity threshold - pausing longer than this creates a new undo point
 const COALESCE_INACTIVITY_THRESHOLD: Duration = Duration::from_millis(500);
 
@@ -795,6 +804,30 @@ impl ConfigManager {
                 let value: f32 = new_value.try_into()?;
                 self.system_settings.target_fps = value;
             }
+            ConfigPath::SystemFlyMouseSensitivity => {
+                self.system_settings.fly_mouse_sensitivity = new_value.try_into()?;
+            }
+            ConfigPath::SystemFlyMoveSpeed => {
+                self.system_settings.fly_move_speed = new_value.try_into()?;
+            }
+            ConfigPath::SystemFlySprintMultiplier => {
+                self.system_settings.fly_sprint_multiplier = new_value.try_into()?;
+            }
+            ConfigPath::SystemFlyInvertY => {
+                self.system_settings.fly_invert_y = new_value.try_into()?;
+            }
+            ConfigPath::SystemFlyCameraMode => {
+                // String transport ("free_look" / "fps") so future
+                // modes (e.g. orbital) don't need a new value type.
+                let value = match new_value {
+                    ConfigValue::String(s) => s,
+                    _ => return Err(ConfigError::TypeMismatch),
+                };
+                self.system_settings.fly_camera_mode = match value.as_str() {
+                    "fps" => crate::storage::FlyCameraMode::Fps,
+                    _ => crate::storage::FlyCameraMode::FreeLook,
+                };
+            }
             ConfigPath::SystemExportWidth => {
                 let value: u32 = new_value.try_into()?;
                 self.system_settings.default_export_width = value;
@@ -1343,12 +1376,25 @@ impl ConfigManager {
             log::debug!("  COALESCING with previous change (within {}ms inactivity, {}ms total span)",
                 COALESCE_INACTIVITY_THRESHOLD.as_millis(), MAX_COALESCE_SPAN.as_millis());
 
-            // Update the last change's new_value, description, and last_update_time
-            // Keep the original old_value and timestamp from the first change in the sequence
-            for (i, new_delta) in change.deltas.iter().enumerate() {
-                if let Some(old_delta) = self.history[last_idx].deltas.get_mut(i) {
+            // Update the last change's new_value, description, and last_update_time.
+            // Keep the original old_value and timestamp from the first change in
+            // the sequence. Merge is path-keyed: for the normal case
+            // should_coalesce guarantees identical path sequences so this
+            // behaves like the old positional merge; for fly-camera gestures
+            // (varying path sets) a path not yet present in the entry is
+            // appended with its own old_value — correct, since that's when
+            // the parameter first changed within the merged gesture.
+            for new_delta in change.deltas.iter() {
+                let last_entry = &mut self.history[last_idx];
+                if let Some(old_delta) = last_entry
+                    .deltas
+                    .iter_mut()
+                    .find(|d| d.path == new_delta.path)
+                {
                     old_delta.new_value = new_delta.new_value.clone();
                     // NOTE: We do NOT update timestamp - it preserves when the sequence started
+                } else {
+                    last_entry.deltas.push(new_delta.clone());
                 }
             }
 
@@ -1411,21 +1457,32 @@ impl ConfigManager {
             return false;
         }
 
-        // Must have same number of deltas (same parameters being changed)
-        if last_change.deltas.len() != new_change.deltas.len() {
-            return false;
-        }
+        // Fly-mode camera gestures coalesce as a unit even though the
+        // per-event path set varies (mouse-look writes pitch/yaw and
+        // sometimes rotation or position-compensation; WASD writes
+        // position only). Identified by the shared batch description;
+        // merged path-keyed in push_undo. Timing rules below still
+        // apply, so a pause still starts a new history entry.
+        let fly_gesture = last_change.description == FLY_CAMERA_HISTORY_DESC
+            && new_change.description == FLY_CAMERA_HISTORY_DESC;
 
-        // Check each delta
-        for (old_delta, new_delta) in last_change.deltas.iter().zip(new_change.deltas.iter()) {
-            // Must be same path
-            if old_delta.path != new_delta.path {
+        if !fly_gesture {
+            // Must have same number of deltas (same parameters being changed)
+            if last_change.deltas.len() != new_change.deltas.len() {
                 return false;
             }
 
-            // Path must support coalescing
-            if !supports_coalescing(&new_delta.path) {
-                return false;
+            // Check each delta
+            for (old_delta, new_delta) in last_change.deltas.iter().zip(new_change.deltas.iter()) {
+                // Must be same path
+                if old_delta.path != new_delta.path {
+                    return false;
+                }
+
+                // Path must support coalescing
+                if !supports_coalescing(&new_delta.path) {
+                    return false;
+                }
             }
         }
 
@@ -1467,6 +1524,8 @@ impl ConfigManager {
             ConfigPath::CameraRotationX => Ok(config.camera_rotation_x.into()),
             ConfigPath::CameraRotationY => Ok(config.camera_rotation_y.into()),
             ConfigPath::CameraBank => Ok(config.camera_bank.into()),
+            ConfigPath::CameraX => Ok(config.camera_x.into()),
+            ConfigPath::CameraY => Ok(config.camera_y.into()),
             ConfigPath::CameraZ => Ok(config.camera_z.into()),
             ConfigPath::DofFocusDistance => Ok(config.dof_focus_distance.into()),
             ConfigPath::DofBlurStrength => Ok(config.dof_blur_strength.into()),
@@ -1895,6 +1954,9 @@ impl ConfigManager {
             // Flame metadata — per-flame, so read from the resolved target.
             ConfigPath::RenderMode => Ok(flame.render_mode.into()),
             ConfigPath::PerspectiveStrength => Ok(flame.perspective_strength.into()),
+            ConfigPath::DepthDensityCompensation => Ok(flame.depth_density_compensation.into()),
+            ConfigPath::FarDensityFade => Ok(flame.far_density_fade.into()),
+            ConfigPath::FarDensityFadeStart => Ok(flame.far_density_fade_start.into()),
 
             // Effects
             ConfigPath::DensityEffectEnabled { index } => {
@@ -1964,6 +2026,11 @@ impl ConfigManager {
             ConfigPath::SystemIterationsPerThread
             | ConfigPath::SystemVsyncEnabled
             | ConfigPath::SystemTargetFps
+            | ConfigPath::SystemFlyMouseSensitivity
+            | ConfigPath::SystemFlyMoveSpeed
+            | ConfigPath::SystemFlySprintMultiplier
+            | ConfigPath::SystemFlyInvertY
+            | ConfigPath::SystemFlyCameraMode
             | ConfigPath::SystemExportWidth
             | ConfigPath::SystemExportHeight
             | ConfigPath::SystemLanguage
@@ -2042,6 +2109,12 @@ impl ConfigManager {
             }
             ConfigPath::CameraBank => {
                 self.current.camera_bank = value.try_into()?;
+            }
+            ConfigPath::CameraX => {
+                self.current.camera_x = value.try_into()?;
+            }
+            ConfigPath::CameraY => {
+                self.current.camera_y = value.try_into()?;
             }
             ConfigPath::CameraZ => {
                 self.current.camera_z = value.try_into()?;
@@ -2572,6 +2645,18 @@ impl ConfigManager {
                 let v = value.try_into()?;
                 self.active_flame_mut()?.perspective_strength = v;
             }
+            ConfigPath::DepthDensityCompensation => {
+                let v = value.try_into()?;
+                self.active_flame_mut()?.depth_density_compensation = v;
+            }
+            ConfigPath::FarDensityFade => {
+                let v = value.try_into()?;
+                self.active_flame_mut()?.far_density_fade = v;
+            }
+            ConfigPath::FarDensityFadeStart => {
+                let v = value.try_into()?;
+                self.active_flame_mut()?.far_density_fade_start = v;
+            }
 
             // Effects
             ConfigPath::DensityEffectEnabled { index } => {
@@ -2689,6 +2774,11 @@ impl ConfigManager {
             ConfigPath::SystemIterationsPerThread
             | ConfigPath::SystemVsyncEnabled
             | ConfigPath::SystemTargetFps
+            | ConfigPath::SystemFlyMouseSensitivity
+            | ConfigPath::SystemFlyMoveSpeed
+            | ConfigPath::SystemFlySprintMultiplier
+            | ConfigPath::SystemFlyInvertY
+            | ConfigPath::SystemFlyCameraMode
             | ConfigPath::SystemExportWidth
             | ConfigPath::SystemExportHeight
             | ConfigPath::SystemLanguage

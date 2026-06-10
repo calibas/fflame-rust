@@ -25,7 +25,9 @@ struct Sample {
     r: f32,
     g: f32,
     b: f32,
-    _pad1: f32,
+    // Density weight (depth-density compensation; 1.0 = neutral).
+    // Scales all four histogram adds below.
+    weight: f32,
     _pad2: f32,
     _pad3: f32,
 }
@@ -86,10 +88,14 @@ fn accumulate_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let pixel_idx = local_y * ap.bound_width + local_x;
     let base = pixel_idx * 4u;
 
-    let r_u32 = u32(clamp(s.r, 0.0, 1.0) * ap.color_scale);
-    let g_u32 = u32(clamp(s.g, 0.0, 1.0) * ap.color_scale);
-    let b_u32 = u32(clamp(s.b, 0.0, 1.0) * ap.color_scale);
-    let density_u32 = u32(ap.color_scale);
+    // All four channels carry the sample's weight so the color
+    // recovery ratio Σcolor/Σdensity is weight-invariant. Weight is
+    // 1.0 unless depth-density compensation produced it.
+    let weighted_scale = ap.color_scale * s.weight;
+    let r_u32 = u32(clamp(s.r, 0.0, 1.0) * weighted_scale);
+    let g_u32 = u32(clamp(s.g, 0.0, 1.0) * weighted_scale);
+    let b_u32 = u32(clamp(s.b, 0.0, 1.0) * weighted_scale);
+    let density_u32 = u32(weighted_scale);
 
     atomicAdd(&histogram[base + 0u], r_u32);
     atomicAdd(&histogram[base + 1u], g_u32);

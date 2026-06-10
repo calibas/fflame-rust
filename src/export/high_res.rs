@@ -31,7 +31,10 @@ pub struct Sample {
     pub r: f32,
     pub g: f32,
     pub b: f32,
-    pub _pad1: f32,
+    /// Density weight (depth-density compensation; 1.0 = neutral).
+    /// Scales the sample's contribution to all four histogram
+    /// channels — mirror of the WGSL `Sample.weight` field.
+    pub weight: f32,
     pub _pad2: f32,
     pub _pad3: f32,
 }
@@ -1288,9 +1291,17 @@ impl HighResExporter {
                 rotation: config.rotation,
                 speed_factor: config.speed_factor,
                 perspective_strength: config.flame.perspective_strength,
+                depth_density_compensation: config.flame.depth_density_compensation,
+                far_density_fade: config.flame.far_density_fade,
+                far_density_fade_start: config.flame.far_density_fade_start,
+                _pad_before_post_symmetry: [0; 3],
                 camera_rotation_x: config.camera_rotation_x,
                 camera_rotation_y: config.camera_rotation_y,
                 camera_bank: config.camera_bank,
+
+                camera_x: config.camera_x,
+
+                camera_y: config.camera_y,
                 camera_z: config.camera_z,
                 dof_focus_distance: config.dof_focus_distance,
                 dof_blur_strength: config.dof_blur_strength,
@@ -1305,7 +1316,7 @@ impl HighResExporter {
                 background_r: config.background_color[0],
                 background_g: config.background_color[1],
                 background_b: config.background_color[2],
-                post_symmetry: (&config.flame.post_symmetry).into(),
+post_symmetry: (&config.flame.post_symmetry).into(),
             };
             self.queue
                 .write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));
@@ -1450,10 +1461,14 @@ impl HighResExporter {
                                 let x = sample.x as i32;
                                 if x >= 0 && x < width {
                                     let pixel = &mut row_pixels[x as usize];
-                                    pixel.r += sample.r as f64;
-                                    pixel.g += sample.g as f64;
-                                    pixel.b += sample.b as f64;
-                                    pixel.count += 1.0;
+                                    // Weight scales all four channels so the
+                                    // color ratio Σcolor/count is invariant
+                                    // (matches accumulate_samples.wgsl).
+                                    let w = sample.weight as f64;
+                                    pixel.r += sample.r as f64 * w;
+                                    pixel.g += sample.g as f64 * w;
+                                    pixel.b += sample.b as f64 * w;
+                                    pixel.count += w;
                                 }
                             }
                         });

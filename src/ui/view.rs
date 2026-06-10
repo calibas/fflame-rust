@@ -7,6 +7,8 @@ pub fn render_view_content(
     ui: &mut egui::Ui,
     config_manager: &mut ConfigManager,
     flame: &Flame,
+    fly_mode_active: bool,
+    fly_mode_toggle_requested: &mut bool,
 ) {
     use crate::config::slider::LazyUndoUi;
 
@@ -75,53 +77,39 @@ pub fn render_view_content(
     ui.separator();
     ui.label(t!("view.arrow_controls"));
 
-    // Pre-calculate rotation for arrow controls
-    let cos_r = (-config.rotation).cos();
-    let sin_r = (-config.rotation).sin();
-
-    // Arrow keys layout
+    // Arrow buttons pan in screen space; conversion to the pan frame
+    // is rotation-aware in 2D and identity in 3D (see
+    // FractalConfig::screen_delta_to_pan_frame).
     ui.horizontal(|ui| {
         ui.add_space(30.0);
         if ui.button("  ^  ").clicked() {
-            let screen_dx = 0.0;
-            let screen_dy = -pan_step;
-            let new_pan_x = config.pan_x + (screen_dx * cos_r - screen_dy * sin_r);
-            let new_pan_y = config.pan_y + (screen_dx * sin_r + screen_dy * cos_r);
+            let (dx, dy) = config.screen_delta_to_pan_frame(0.0, -pan_step);
             let _ = config_manager.update_param(
                 ConfigPath::Pan,
-                (new_pan_x, new_pan_y).into()
+                (config.pan_x + dx, config.pan_y + dy).into()
             );
         }
     });
     ui.horizontal(|ui| {
         if ui.button("  <  ").clicked() {
-            let screen_dx = -pan_step;
-            let screen_dy = 0.0;
-            let new_pan_x = config.pan_x + (screen_dx * cos_r - screen_dy * sin_r);
-            let new_pan_y = config.pan_y + (screen_dx * sin_r + screen_dy * cos_r);
+            let (dx, dy) = config.screen_delta_to_pan_frame(-pan_step, 0.0);
             let _ = config_manager.update_param(
                 ConfigPath::Pan,
-                (new_pan_x, new_pan_y).into()
+                (config.pan_x + dx, config.pan_y + dy).into()
             );
         }
         if ui.button("  v  ").clicked() {
-            let screen_dx = 0.0;
-            let screen_dy = pan_step;
-            let new_pan_x = config.pan_x + (screen_dx * cos_r - screen_dy * sin_r);
-            let new_pan_y = config.pan_y + (screen_dx * sin_r + screen_dy * cos_r);
+            let (dx, dy) = config.screen_delta_to_pan_frame(0.0, pan_step);
             let _ = config_manager.update_param(
                 ConfigPath::Pan,
-                (new_pan_x, new_pan_y).into()
+                (config.pan_x + dx, config.pan_y + dy).into()
             );
         }
         if ui.button("  >  ").clicked() {
-            let screen_dx = pan_step;
-            let screen_dy = 0.0;
-            let new_pan_x = config.pan_x + (screen_dx * cos_r - screen_dy * sin_r);
-            let new_pan_y = config.pan_y + (screen_dx * sin_r + screen_dy * cos_r);
+            let (dx, dy) = config.screen_delta_to_pan_frame(pan_step, 0.0);
             let _ = config_manager.update_param(
                 ConfigPath::Pan,
-                (new_pan_x, new_pan_y).into()
+                (config.pan_x + dx, config.pan_y + dy).into()
             );
         }
     });
@@ -178,7 +166,7 @@ pub fn render_view_content(
         let response = ui.add(
             super::VkbSlider::new(&mut perspective, 0.0..=10.0)
                 .text(t!("view.perspective").as_ref())
-                .step_by(0.1)
+                .step_by(0.01)
         ).on_hover_text(t!("view.tooltip_perspective"));
         let changed = response.changed();
         if changed {
@@ -189,6 +177,7 @@ pub fn render_view_content(
                 log::error!("Failed to update perspective strength: {}", e);
             }
         }
+
     }
 
     ui.separator();
@@ -244,10 +233,129 @@ pub fn render_view_content(
             );
         }
 
+        // Camera world-space position. Round-trips through JWildfire's
+        // `cam_pos_x/y/z` triple. Default (0, 0, 0). Will be driven by
+        // WASD / mouse-look in stage 2; for now, numeric sliders only.
+        ui.horizontal(|ui| {
+            ui.label(t!("view.camera_x")).on_hover_text(t!("view.tooltip_camera_x"));
+            let _ = ui.lazy_drag(config_manager, ConfigPath::CameraX, 0.01, "");
+        });
+        ui.horizontal(|ui| {
+            ui.label(t!("view.camera_y")).on_hover_text(t!("view.tooltip_camera_y"));
+            let _ = ui.lazy_drag(config_manager, ConfigPath::CameraY, 0.01, "");
+        });
         ui.horizontal(|ui| {
             ui.label(t!("view.camera_z")).on_hover_text(t!("view.tooltip_camera_z"));
             let _ = ui.lazy_drag(config_manager, ConfigPath::CameraZ, 0.01, "");
         });
+
+        // Free-fly camera mode toggle. When on:
+        //   - Primary mouse drag in the fractal viewport rotates the
+        //     view (pitch + yaw) instead of panning the fractal.
+        //   - WASD moves the camera along its forward / right axes.
+        //   - Q / E move it along world-down / world-up.
+        //   - Shift acts as a sprint multiplier.
+        // F2 toggles the same state from any focus. Sensitivity and
+        // speed live in Settings → Preferences. See
+        // `docs/projects/free-camera-movement.md` for the full plan.
+        let fly_label = if fly_mode_active {
+            t!("view.fly_mode_on")
+        } else {
+            t!("view.fly_mode_off")
+        };
+        if ui.button(fly_label.as_ref())
+            .on_hover_text(t!("view.tooltip_fly_mode"))
+            .clicked()
+        {
+            *fly_mode_toggle_requested = true;
+        }
+
+        // Fly-mode tuning. Folded behind a collapsing header so it
+        // doesn't crowd the main View panel; the defaults are good
+        // for typical mice and most users will never touch these.
+        egui::CollapsingHeader::new(t!("view.fly_mode_settings").as_ref())
+            .default_open(false)
+            .show(ui, |ui| {
+                // Mouse-look model. FreeLook = screen-relative
+                // (space-sim); Fps = world-up anchored (horizon
+                // stays level). Q/E rise axis follows the choice.
+                let mode = config_manager.system_settings().fly_camera_mode;
+                ui.horizontal(|ui| {
+                    ui.label(t!("view.fly_camera_mode"));
+                    if ui.selectable_label(
+                        mode == crate::storage::FlyCameraMode::FreeLook,
+                        t!("view.fly_camera_mode_free_look").as_ref(),
+                    )
+                    .on_hover_text(t!("view.tooltip_fly_camera_mode_free_look"))
+                    .clicked()
+                        && mode != crate::storage::FlyCameraMode::FreeLook
+                    {
+                        let _ = config_manager.update_system_setting(
+                            ConfigPath::SystemFlyCameraMode,
+                            "free_look".into(),
+                        );
+                    }
+                    if ui.selectable_label(
+                        mode == crate::storage::FlyCameraMode::Fps,
+                        t!("view.fly_camera_mode_fps").as_ref(),
+                    )
+                    .on_hover_text(t!("view.tooltip_fly_camera_mode_fps"))
+                    .clicked()
+                        && mode != crate::storage::FlyCameraMode::Fps
+                    {
+                        let _ = config_manager.update_system_setting(
+                            ConfigPath::SystemFlyCameraMode,
+                            "fps".into(),
+                        );
+                    }
+                });
+
+                let mut sensitivity = config_manager.system_settings().fly_mouse_sensitivity;
+                ui.horizontal(|ui| {
+                    ui.label(t!("view.fly_sensitivity"));
+                    if ui.add(super::VkbSlider::new(&mut sensitivity, 0.0005..=0.05)
+                            .logarithmic(true)
+                            ).changed() {
+                        let _ = config_manager.update_system_setting(
+                            ConfigPath::SystemFlyMouseSensitivity,
+                            sensitivity.into(),
+                        );
+                    }
+                });
+
+                let mut speed = config_manager.system_settings().fly_move_speed;
+                ui.horizontal(|ui| {
+                    ui.label(t!("view.fly_move_speed"));
+                    if ui.add(super::VkbSlider::new(&mut speed, 0.05..=20.0)
+                            .logarithmic(true)
+                            ).changed() {
+                        let _ = config_manager.update_system_setting(
+                            ConfigPath::SystemFlyMoveSpeed,
+                            speed.into(),
+                        );
+                    }
+                });
+
+                let mut sprint = config_manager.system_settings().fly_sprint_multiplier;
+                ui.horizontal(|ui| {
+                    ui.label(t!("view.fly_sprint_multiplier"));
+                    if ui.add(super::VkbSlider::new(&mut sprint, 1.0..=20.0)
+                            ).changed() {
+                        let _ = config_manager.update_system_setting(
+                            ConfigPath::SystemFlySprintMultiplier,
+                            sprint.into(),
+                        );
+                    }
+                });
+
+                let mut invert_y = config_manager.system_settings().fly_invert_y;
+                if ui.checkbox(&mut invert_y, t!("view.fly_invert_y").as_ref()).changed() {
+                    let _ = config_manager.update_system_setting(
+                        ConfigPath::SystemFlyInvertY,
+                        invert_y.into(),
+                    );
+                }
+            });
 
         // Preserve Z — JWildfire's `preserve_z` flag. Defaults to
         // off (Apo/JWF default) so flames with variations that scale
@@ -323,6 +431,57 @@ pub fn render_view_content(
                         fog_start.into()
                     );
                 }
+
+                // Density weighting by depth
+                ui.add_space(8.0);
+                ui.label(t!("view.depth_density_section").as_ref());
+
+                // Depth-density compensation — only meaningful with
+                // perspective > 0 (the weight collapses to 1 in
+                // orthographic).
+                let mut depth_comp = config.flame.depth_density_compensation;
+                let response = ui.add(
+                    super::VkbSlider::new(&mut depth_comp, 0.0..=1.0)
+                        .text(t!("view.depth_density_compensation").as_ref())
+                        .step_by(0.01)
+                ).on_hover_text(t!("view.tooltip_depth_density_compensation"));
+                if response.changed() {
+                    let _ = config_manager.update_param(
+                        ConfigPath::DepthDensityCompensation,
+                        depth_comp.into()
+                    );
+                }
+
+                // Far density fade: thins far samples' density with a
+                // Gaussian falloff past the start depth (unlike fog,
+                // which recolors at full density). Our own extension.
+                ui.add_space(8.0);
+                ui.label(t!("view.far_density_fade_section").as_ref());
+
+                let mut far_fade = config.flame.far_density_fade;
+                let response = ui.add(
+                    super::VkbSlider::new(&mut far_fade, 0.0..=5.0)
+                        .text(t!("view.far_density_fade").as_ref())
+                        .step_by(0.01)
+                ).on_hover_text(t!("view.tooltip_far_density_fade"));
+                if response.changed() {
+                    let _ = config_manager.update_param(
+                        ConfigPath::FarDensityFade,
+                        far_fade.into()
+                    );
+                }
+
+                let mut far_fade_start = config.flame.far_density_fade_start;
+                let response = ui.add(
+                    super::VkbSlider::new(&mut far_fade_start, -5.0..=5.0)
+                        .text(t!("view.far_density_fade_start").as_ref())
+                ).on_hover_text(t!("view.tooltip_far_density_fade_start"));
+                if response.changed() {
+                    let _ = config_manager.update_param(
+                        ConfigPath::FarDensityFadeStart,
+                        far_fade_start.into()
+                    );
+                }
             });
     }
 
@@ -341,6 +500,8 @@ pub fn render_view_content(
                 (ConfigPath::CameraRotationX, 0.0.into()),
                 (ConfigPath::CameraRotationY, 0.0.into()),
                 (ConfigPath::CameraBank, 0.0.into()),
+                (ConfigPath::CameraX, 0.0.into()),
+                (ConfigPath::CameraY, 0.0.into()),
                 (ConfigPath::CameraZ, 0.0.into()),
                 (ConfigPath::DofFocusDistance, crate::config::DEFAULT_DOF_FOCUS_DISTANCE.into()),
                 (ConfigPath::DofBlurStrength, crate::config::DEFAULT_DOF_BLUR_STRENGTH.into()),

@@ -676,6 +676,7 @@ impl EguiLayer {
         signal_names: &[String],
         api_state: &crate::app::ApiContentState,
         current_user_id: Option<&str>,
+        fly_mode_active: bool,
     ) -> UiResponse {
         // Sync compact mode from workspace (handles layout switches from menus)
         let is_compact = workspace.is_compact();
@@ -829,6 +830,11 @@ impl EguiLayer {
 
         // Fractal viewport size tracking
         let mut fractal_viewport_size = None;
+
+        // Free-fly camera: drag delta accumulator + toggle flag
+        // populated by the viewport panel; consumed by App on response.
+        let mut fly_mouse_drag: Option<(f32, f32)> = None;
+        let mut fly_mode_toggle_requested = false;
 
         // File browser
         let mut file_browser_open_requested = false;
@@ -1037,6 +1043,9 @@ impl EguiLayer {
                         // Fractal texture for display
                         fractal_texture_id,
                         fractal_viewport_size: &mut fractal_viewport_size,
+                        fly_mouse_drag: &mut fly_mouse_drag,
+                        fly_mode_toggle_requested: &mut fly_mode_toggle_requested,
+                        fly_mode_active,
                         viewport_tab_bar_height: self.viewport_tab_bar_height,
 
                         // Config dialog state
@@ -1229,6 +1238,8 @@ impl EguiLayer {
                                             response.hover_pos(),
                                             leaf_rect,
                                             leaf_size,
+                                            // Fly mode: zoom to center, not cursor
+                                            !fly_mode_active,
                                         );
                                     }
                                 }
@@ -1642,6 +1653,8 @@ impl EguiLayer {
             open_preset_library,
             open_random_generator,
             fractal_viewport_size,
+            fly_mouse_drag,
+            fly_mode_toggle_requested,
             needs_repaint,
             selected_preset_config,
             file_browser_open_requested,

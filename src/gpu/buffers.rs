@@ -653,13 +653,24 @@ pub struct GpuParams {
     pub rotation: f32, // Rotation in radians (2D rotation around Z)
     pub speed_factor: f32, // Blend factor for speed-based coloring
     pub perspective_strength: f32, // Strength for perspective projection
+    // Depth-density compensation strength s: 3D samples weighted by
+    // zr^(-2s) so apparent brightness is depth-invariant (radiance-
+    // preserving splats). 0 = off. See Flame field docs.
+    pub depth_density_compensation: f32,
+    // Far density fade: sample density weighted by
+    // exp(-(far_density_fade_start - camera_z)^2 * far_density_fade)
+    // beyond the start depth. 0 = off.
+    pub far_density_fade: f32,
+    pub far_density_fade_start: f32,
     pub camera_rotation_x: f32, // 3D camera pitch (rotation around X axis)
     pub camera_rotation_y: f32, // 3D camera yaw (rotation around Z axis — Apo ZXY Euler)
     // JWildfire/Apophysis bank — Y-axis rotation, applied as the 3rd
     // angle in the 4-input camera matrix per
     // `createProjectionMatrix(yaw, pitch, bank, roll)`. In radians.
     pub camera_bank: f32,
-    pub camera_z: f32, // 3D camera Z position (height)
+    pub camera_x: f32, // 3D camera X position (world space)
+    pub camera_y: f32, // 3D camera Y position (world space)
+    pub camera_z: f32, // 3D camera Z position (height / world space)
     pub dof_focus_distance: f32, // Depth of field: distance where image is sharpest (default: 1.0)
     pub dof_blur_strength: f32, // Depth of field: blur amount (0.0 = disabled, default: 0.0)
     pub fog_strength: f32, // Depth fog: exponential fog density (0.0 = disabled)
@@ -674,17 +685,21 @@ pub struct GpuParams {
     pub background_g: f32, // Background color G (for depth fog)
     pub background_b: f32, // Background color B (for depth fog)
 
-    // No explicit pad needed before `post_symmetry`: the f32 fields
-    // above add up to 32 × 4 = 128 bytes, already a 16-byte boundary
-    // (std140 requires struct fields to start there). Was previously
-    // 31 × 4 + 1 × u32 pad = 128, but the `camera_bank` f32 filled
-    // the alignment gap naturally. Mirror in `header.wgsl`'s `Params`.
-    //
+    // std140 alignment pad. With the camera_x / camera_y f32 fields
+    // added by the free-camera-position work, the f32 fields above
+    // total 34 × 4 = 136 bytes. `post_symmetry` is a struct and
+    // std140 requires struct fields to start at a 16-byte boundary,
+    // so 8 bytes of pad land it at 144. Mirror in `header.wgsl`.
+
     // Post-symmetry — plot-time density replication. Each chaos-game
     // sample also deposits at K−1 mirrored/rotated positions before the
     // camera transform. Gated by the HAS_POST_SYMMETRY shader-builder
     // flag, so when `post_symmetry.kind == 0` the symmetry block
     // doesn't compile in and these fields aren't read.
+    // std140 alignment pad: 37 scalars x 4 = 148 bytes; post_symmetry
+    // (a struct) must start on a 16-byte boundary -> 12 bytes pad to 160.
+    // Mirror in shaders/core/header.wgsl.
+    pub _pad_before_post_symmetry: [u32; 3],
     pub post_symmetry: GpuPostSymmetry,
 }
 
@@ -1101,9 +1116,16 @@ impl FlameBuffers {
             rotation: 0.0,
             speed_factor: 0.5,
             perspective_strength: 2.0,
+            depth_density_compensation: 0.0,
+            far_density_fade: 0.0,
+            far_density_fade_start: 0.0,
             camera_rotation_x: 0.0,
             camera_rotation_y: 0.0,
             camera_bank: 0.0,
+
+            camera_x: 0.0,
+
+            camera_y: 0.0,
             camera_z: 0.0,
             dof_focus_distance: crate::config::DEFAULT_DOF_FOCUS_DISTANCE,
             dof_blur_strength: crate::config::DEFAULT_DOF_BLUR_STRENGTH,
@@ -1118,6 +1140,7 @@ impl FlameBuffers {
             background_r: 0.0,
             background_g: 0.0,
             background_b: 0.0,
+            _pad_before_post_symmetry: [0; 3],
             post_symmetry: GpuPostSymmetry::none(),
         };
 

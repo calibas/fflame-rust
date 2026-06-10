@@ -342,9 +342,43 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 let plot_pos = final_pos;
 {{/if}}
 
+            // Per-sample histogram weight (1.0 = neutral). Only the
+            // 3D depth-density compensation below changes it; the 2D
+            // path always plots at weight 1.
+            var density_weight = 1.0;
+
             // Convert to pixel coordinates
 {{#if RENDER_3D}}
             var pixel = world_to_pixel_3d(plot_pos);
+
+            // Depth-density compensation (radiance-preserving splats).
+            // Perspective magnifies a structure at camera depth z by
+            // 1/zr per axis (zr = 1 − persp·z), spreading its samples
+            // over 1/zr² more pixels — so apparent density scales by
+            // zr², and structures fade as the camera approaches. Weight
+            // each sample by zr^(−2s) to cancel it: near samples gain,
+            // far samples (compressed, artificially dense) lose, and
+            // the focal plane (zr = 1) is invariant at any strength.
+            // Clamped to [1/64, 64] to bound noise amplification near
+            // the perspective singularity and to keep far samples from
+            // truncating to zero in the u32 histogram.
+            if (params.depth_density_compensation > 0.0 && abs(params.perspective_strength) > 1e-6) {
+                let camera_matrix = build_camera_matrix(
+                    // Same slot mapping as project_3d_to_2d_apophysis;
+                    // only z matters here and z is roll-invariant.
+                    -params.rotation,
+                    -params.camera_rotation_x,
+                    -params.camera_bank,
+                     params.camera_rotation_y,
+                );
+                let camera_space = camera_transform(plot_pos, camera_matrix, vec3<f32>(params.camera_x, params.camera_y, params.camera_z));
+                let zr = 1.0 - params.perspective_strength * camera_space.z;
+                // Behind-camera / near-singularity samples keep weight
+                // 1 — they're clipped by apply_perspective anyway.
+                if (zr > 1e-3) {
+                    density_weight = clamp(pow(zr, -2.0 * params.depth_density_compensation), 0.015625, 64.0);
+                }
+            }
 
             // Apply depth of field blur (3D mode only)
             if (params.dof_blur_strength > 0.0) {
@@ -361,7 +395,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     -params.camera_bank,        // bank
                      params.camera_rotation_y,   // matrix roll ← our yaw
                 );
-                let camera_space = camera_transform(plot_pos, camera_matrix, params.camera_z);
+                let camera_space = camera_transform(plot_pos, camera_matrix, vec3<f32>(params.camera_x, params.camera_y, params.camera_z));
                 let depth = camera_space.z;  // Z in camera space = depth from camera
 
                 // Calculate blur amount based on distance from focus plane (in world units).
@@ -433,6 +467,32 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 {{/if}}
 
 {{#if RENDER_3D}}
+                // Far density fade (3D mode only): genuinely thin out
+                // far samples by scaling their histogram DENSITY
+                // weight, unlike fog which recolors at full density.
+                // Gaussian falloff borrowed from JWildfire's
+                // diminish-Z curve: weight = exp(-zdist² · strength)
+                // for zdist = fade_start − camera_z > 0 (camera-space
+                // z is more negative the farther the sample). Far
+                // structures fade to nothing instead of tinting.
+                // Composes multiplicatively with the depth-density
+                // compensation weight above.
+                if (params.far_density_fade > 0.0) {
+                    let camera_matrix = build_camera_matrix(
+                        // Same slot mapping as project_3d_to_2d_apophysis;
+                        // only z matters here and z is roll-invariant.
+                        -params.rotation,
+                        -params.camera_rotation_x,
+                        -params.camera_bank,
+                         params.camera_rotation_y,
+                    );
+                    let camera_space = camera_transform(plot_pos, camera_matrix, vec3<f32>(params.camera_x, params.camera_y, params.camera_z));
+                    let zdist = params.far_density_fade_start - camera_space.z;
+                    if (zdist > 0.0) {
+                        density_weight *= exp(-zdist * zdist * params.far_density_fade);
+                    }
+                }
+
                 // Apply depth fog (3D mode only, blend toward background color)
                 if (params.fog_strength > 0.0) {
                     // Get camera-space depth — same 4-angle matrix as DoF above.
@@ -446,7 +506,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                         -params.camera_bank,        // bank
                          params.camera_rotation_y,  // matrix roll ← our yaw
                     );
-                    let camera_space = camera_transform(plot_pos, camera_matrix, params.camera_z);
+                    let camera_space = camera_transform(plot_pos, camera_matrix, vec3<f32>(params.camera_x, params.camera_y, params.camera_z));
                     let fog_depth = -camera_space.z;  // Negate: distant objects have larger depth
 
                     // Exponential fog: fog_factor increases with distance beyond fog_start
@@ -476,12 +536,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 // Must match the const in `accumulate.wgsl`.
                 let color_scale = 100.0;
 
-                // Convert colors to u32 using global scale
-                // No packing needed - each channel gets its own u32 word
-                let r_u32 = u32(clamp(final_color.r, 0.0, 1.0) * color_scale);
-                let g_u32 = u32(clamp(final_color.g, 0.0, 1.0) * color_scale);
-                let b_u32 = u32(clamp(final_color.b, 0.0, 1.0) * color_scale);
-                let density_u32 = u32(color_scale);  // Density includes scale (u32 prevents overflow)
+                // Convert colors to u32 using global scale. All four
+                // channels carry the same density_weight so the color
+                // recovery ratio Σcolor/Σdensity is weight-invariant.
+                let weighted_scale = color_scale * density_weight;
+                let r_u32 = u32(clamp(final_color.r, 0.0, 1.0) * weighted_scale);
+                let g_u32 = u32(clamp(final_color.g, 0.0, 1.0) * weighted_scale);
+                let b_u32 = u32(clamp(final_color.b, 0.0, 1.0) * weighted_scale);
+                let density_u32 = u32(weighted_scale);  // Density includes scale (u32 prevents overflow)
 
                 // Atomic add to histogram (4 separate u32 words)
                 atomicAdd(&histogram[base_idx + 0u], r_u32);
@@ -508,7 +570,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                         clamp(final_color.r, 0.0, 1.0),
                         clamp(final_color.g, 0.0, 1.0),
                         clamp(final_color.b, 0.0, 1.0),
-                        0.0, 0.0, 0.0
+                        density_weight, 0.0, 0.0
                     );
                 }
 {{/if}}

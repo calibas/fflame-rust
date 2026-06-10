@@ -1570,6 +1570,11 @@ async fn render_frame_to_completion(
             config.camera_rotation_x,
             config.camera_rotation_y,
             config.camera_bank,
+
+            config.camera_x,
+
+            config.camera_y,
+
             config.camera_z,
             config.speed_factor,
             clear_histogram,
