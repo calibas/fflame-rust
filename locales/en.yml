@@ -370,6 +370,7 @@ view:
   camera_z: "Z Position:"
   fly_mode_on: "🚀 Exit Fly Mode (F2)"
   fly_mode_off: "🚀 Enter Fly Mode (F2)"
+  depth_density_section: "Depth Density"
   depth_density_compensation: "Depth Density Comp."
   fly_mode_settings: "Fly Mode Settings"
   fly_camera_mode: "Camera mode:"
@@ -759,6 +760,7 @@ history:
     load_animation_config: "Load Animation Config"
     animation_exit: "Animation Exit"
     wheel_zoom: "Wheel Zoom"
+    fly_camera: "Fly Camera"
 
 # Triangle Editor Panel
 triangle_editor:

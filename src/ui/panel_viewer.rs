@@ -462,12 +462,18 @@ pub fn pan_fractal_view(
 /// input here, passing the leaf's full rect/size so zoom-toward-cursor
 /// stays anchored correctly whether the cursor is in the body or the
 /// cover.
+///
+/// `zoom_to_cursor = false` (fly mode) always zooms to center: the
+/// cursor-anchored pan adjustment fights the fly camera — the view
+/// should stay locked to where the camera points, not drift toward
+/// wherever the mouse happens to rest.
 pub fn zoom_fractal_view(
     config_manager: &mut crate::config::ConfigManager,
     scroll_delta: f32,
     mouse_pos: Option<egui::Pos2>,
     panel_rect: egui::Rect,
     panel_size: egui::Vec2,
+    zoom_to_cursor: bool,
 ) {
     let config = config_manager.active_config();
 
@@ -482,7 +488,7 @@ pub fn zoom_fractal_view(
         // Zoom in toward cursor, zoom out from center
         if zoom_factor > 1.0 {
             // Zooming in - zoom toward mouse cursor position
-            if let Some(mouse_pos) = mouse_pos {
+            if let Some(mouse_pos) = mouse_pos.filter(|_| zoom_to_cursor) {
                 // Convert mouse position from panel space to fractal space
                 // Panel center
                 let center_x = panel_rect.center().x;
@@ -1127,6 +1133,9 @@ impl<'a> PanelViewer<'a> {
             mouse_pos,
             panel_rect,
             panel_size,
+            // In fly mode, zoom to center — cursor-anchored pan
+            // adjustments fight the camera.
+            !self.context.fly_mode_active,
         );
     }
 

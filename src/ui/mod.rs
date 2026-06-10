@@ -1238,6 +1238,8 @@ impl EguiLayer {
                                             response.hover_pos(),
                                             leaf_rect,
                                             leaf_size,
+                                            // Fly mode: zoom to center, not cursor
+                                            !fly_mode_active,
                                         );
                                     }
                                 }

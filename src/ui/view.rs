@@ -178,22 +178,6 @@ pub fn render_view_content(
             }
         }
 
-        // Depth-density compensation — only meaningful with
-        // perspective > 0 (the weight collapses to 1 in orthographic).
-        let mut depth_comp = config.flame.depth_density_compensation;
-        let response = ui.add(
-            super::VkbSlider::new(&mut depth_comp, 0.0..=1.0)
-                .text(t!("view.depth_density_compensation").as_ref())
-                .step_by(0.01)
-        ).on_hover_text(t!("view.tooltip_depth_density_compensation"));
-        if response.changed() {
-            if let Err(e) = config_manager.update_param(
-                ConfigPath::DepthDensityCompensation,
-                depth_comp.into()
-            ) {
-                log::error!("Failed to update depth density compensation: {}", e);
-            }
-        }
     }
 
     ui.separator();
@@ -445,6 +429,26 @@ pub fn render_view_content(
                     let _ = config_manager.update_param(
                         ConfigPath::FogStart,
                         fog_start.into()
+                    );
+                }
+
+                // Density weighting by depth
+                ui.add_space(8.0);
+                ui.label(t!("view.depth_density_section").as_ref());
+
+                // Depth-density compensation — only meaningful with
+                // perspective > 0 (the weight collapses to 1 in
+                // orthographic).
+                let mut depth_comp = config.flame.depth_density_compensation;
+                let response = ui.add(
+                    super::VkbSlider::new(&mut depth_comp, 0.0..=1.0)
+                        .text(t!("view.depth_density_compensation").as_ref())
+                        .step_by(0.01)
+                ).on_hover_text(t!("view.tooltip_depth_density_compensation"));
+                if response.changed() {
+                    let _ = config_manager.update_param(
+                        ConfigPath::DepthDensityCompensation,
+                        depth_comp.into()
                     );
                 }
             });
