@@ -199,6 +199,7 @@ pub fn generate_random_flame_with_rng<R: Rng>(settings: &RandomGeneratorSettings
         final_transforms: Vec::new(),
         render_mode,
         perspective_strength,
+        depth_density_compensation: 0.0,
         xaos: None,
         solo_transform: None,
         subflames: Vec::new(),

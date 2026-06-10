@@ -1493,6 +1493,12 @@ impl Point {
     }
 }
 
+/// Serde skip helper — omit zero-valued optional f32 fields so
+/// existing .fflame files stay byte-stable.
+fn f32_is_zero(v: &f32) -> bool {
+    *v == 0.0
+}
+
 /// Flame system - collection of transforms
 #[derive(Debug, Clone, Serialize)]
 pub struct Flame {
@@ -1520,6 +1526,20 @@ pub struct Flame {
     pub render_mode: RenderMode,
     /// Perspective strength for 3D rendering (0.0 = flat/orthographic, 10.0 = strong perspective)
     pub perspective_strength: f32,
+    /// Depth-dependent density compensation for 3D perspective
+    /// rendering (0.0 = off / classic flux-conserving splats, 1.0 =
+    /// full radiance preservation). Each plotted sample's histogram
+    /// contribution is weighted by `zr^(−2·s)`, where `zr = 1 −
+    /// perspective · camera_z` is the perspective divisor at the
+    /// sample's depth: near structures (magnified, so diluted over
+    /// more pixels) gain weight, far structures (compressed, so
+    /// artificially dense) lose it, and the focal plane (`zr = 1`)
+    /// is invariant at any strength. Counters the "structures fade
+    /// as the camera approaches" effect of pure point splatting.
+    /// Our own extension — no Apo/JWF equivalent; serialized in
+    /// .fflame only, dropped on .flame XML export.
+    #[serde(default, skip_serializing_if = "f32_is_zero")]
+    pub depth_density_compensation: f32,
     /// Xaos transition weights: xaos[src][dst] = modifier for src→dst transition
     /// None when all weights are 1.0 (default behavior, no memory allocated)
     /// When Some, outer Vec has len = transforms.len(), inner Vec has len = transforms.len()
@@ -1709,6 +1729,7 @@ impl Default for Flame {
             final_transforms: Vec::new(),
             render_mode: RenderMode::default(),
             perspective_strength: 0.0,  // Default to orthographic (flat)
+            depth_density_compensation: 0.0,  // Off: classic flux-conserving splats
             xaos: None,  // Default: no xaos (all weights implicitly 1.0)
             solo_transform: None,  // Default: no solo (all transforms active)
             subflames: Vec::new(),  // Default: no subflames
@@ -1888,6 +1909,7 @@ impl<'de> Deserialize<'de> for Flame {
             FinalTransforms,
             RenderMode,
             PerspectiveStrength,
+            DepthDensityCompensation,
             Projection, // Old field name for backward compatibility
             Xaos,
             SoloTransform,
@@ -1916,6 +1938,7 @@ impl<'de> Deserialize<'de> for Flame {
                 let mut final_transforms: Option<Vec<Transform>> = None;
                 let mut render_mode = None;
                 let mut perspective_strength = None;
+                let mut depth_density_compensation = None;
                 let mut xaos = None;
                 let mut solo_transform = None;
                 let mut subflames: Option<Vec<Flame>> = None;
@@ -1944,6 +1967,9 @@ impl<'de> Deserialize<'de> for Flame {
                         }
                         Field::PerspectiveStrength => {
                             perspective_strength = Some(map.next_value()?);
+                        }
+                        Field::DepthDensityCompensation => {
+                            depth_density_compensation = Some(map.next_value()?);
                         }
                         Field::Projection => {
                             // Old format: enum ProjectionType
@@ -2003,6 +2029,7 @@ impl<'de> Deserialize<'de> for Flame {
                     final_transforms,
                     render_mode: render_mode.unwrap_or_default(),
                     perspective_strength: perspective_strength.unwrap_or(0.0),
+                    depth_density_compensation: depth_density_compensation.unwrap_or(0.0),
                     xaos,
                     solo_transform: solo_transform.unwrap_or(None),
                     subflames: subflames.unwrap_or_default(),
@@ -2022,7 +2049,7 @@ impl<'de> Deserialize<'de> for Flame {
             }
         }
 
-        const FIELDS: &[&str] = &["name", "transforms", "final_transform", "linked_transforms", "final_transforms", "render_mode", "perspective_strength", "projection", "xaos", "solo_transform", "subflames", "post_symmetry", "preserve_z"];
+        const FIELDS: &[&str] = &["name", "transforms", "final_transform", "linked_transforms", "final_transforms", "render_mode", "perspective_strength", "depth_density_compensation", "projection", "xaos", "solo_transform", "subflames", "post_symmetry", "preserve_z"];
         deserializer.deserialize_struct("Flame", FIELDS, FlameVisitor)
     }
 }

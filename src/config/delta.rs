@@ -208,6 +208,7 @@ pub enum ConfigPath {
     // ===== Flame-level (require iteration reset) =====
     RenderMode,
     PerspectiveStrength,
+    DepthDensityCompensation,
     /// Xaos (chaos) weight for transition from src transform to dst transform
     /// Modifies the probability of selecting dst when coming from src
     Xaos { src: usize, dst: usize },
@@ -701,6 +702,7 @@ impl Display for ConfigPath {
             // Flame
             ConfigPath::RenderMode => write!(f, "Render Mode"),
             ConfigPath::PerspectiveStrength => write!(f, "Perspective Strength"),
+            ConfigPath::DepthDensityCompensation => write!(f, "Depth Density Compensation"),
             ConfigPath::Xaos { src, dst } => {
                 write!(f, "Xaos {} → {}", src + 1, dst + 1)
             }
@@ -1113,6 +1115,7 @@ impl ConfigPath {
             // Flame
             ConfigPath::RenderMode => I18nKey::simple("history.param.render_mode"),
             ConfigPath::PerspectiveStrength => I18nKey::simple("history.param.perspective_strength"),
+            ConfigPath::DepthDensityCompensation => I18nKey::simple("history.param.depth_density_compensation"),
             ConfigPath::Xaos { src, dst } => I18nKey::with_params(
                 "history.param.xaos",
                 vec![
@@ -2049,6 +2052,8 @@ impl ConfigPath {
             | ConfigPath::FinalTransformPostAffineScale { .. }
             | ConfigPath::RenderMode
             | ConfigPath::PerspectiveStrength
+        | ConfigPath::DepthDensityCompensation
+            | ConfigPath::DepthDensityCompensation
             | ConfigPath::Xaos { .. }
             | ConfigPath::SoloTransform
             | ConfigPath::PostSymmetryType
@@ -2274,6 +2279,7 @@ impl ConfigPath {
             // Flame
             ConfigPath::RenderMode => "RenderMode".to_string(),
             ConfigPath::PerspectiveStrength => "PerspectiveStrength".to_string(),
+            ConfigPath::DepthDensityCompensation => "DepthDensityCompensation".to_string(),
             ConfigPath::Xaos { src, dst } => format!("Xaos.{}.{}", src, dst),
             ConfigPath::SoloTransform => "SoloTransform".to_string(),
             ConfigPath::PostSymmetryType => "PostSymmetryType".to_string(),
@@ -2387,6 +2393,7 @@ impl ConfigPath {
             "TransformCount" => return Some(ConfigPath::TransformCount),
             "RenderMode" => return Some(ConfigPath::RenderMode),
             "PerspectiveStrength" => return Some(ConfigPath::PerspectiveStrength),
+            "DepthDensityCompensation" => return Some(ConfigPath::DepthDensityCompensation),
             "SoloTransform" => return Some(ConfigPath::SoloTransform),
             "PostSymmetryType" => return Some(ConfigPath::PostSymmetryType),
             "PostSymmetryOrder" => return Some(ConfigPath::PostSymmetryOrder),
@@ -2715,6 +2722,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::BackgroundColorB
         | ConfigPath::BlendFactor
         | ConfigPath::PerspectiveStrength
+        | ConfigPath::DepthDensityCompensation
         | ConfigPath::TransformWeight { .. }
         | ConfigPath::TransformColor { .. }
         | ConfigPath::TransformColorSpeed { .. }
@@ -3305,6 +3313,7 @@ mod tests {
             // Flame
             ConfigPath::RenderMode,
             ConfigPath::PerspectiveStrength,
+            ConfigPath::DepthDensityCompensation,
             ConfigPath::Xaos { src: 0, dst: 1 },
             ConfigPath::Xaos { src: 3, dst: 7 },
             ConfigPath::SoloTransform,

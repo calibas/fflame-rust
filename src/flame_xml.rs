@@ -398,6 +398,8 @@ fn parse_flame_element(
         final_transforms: Vec::new(),
         render_mode,
         perspective_strength,
+        // Our own extension; no .flame XML attribute (see Flame field docs)
+        depth_density_compensation: 0.0,
         xaos,
         solo_transform: solo_xform,
         // JWF `subflame_wf_flame` payloads decoded above; empty when no
