@@ -467,6 +467,32 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 {{/if}}
 
 {{#if RENDER_3D}}
+                // Far density fade (3D mode only): genuinely thin out
+                // far samples by scaling their histogram DENSITY
+                // weight, unlike fog which recolors at full density.
+                // Gaussian falloff borrowed from JWildfire's
+                // diminish-Z curve: weight = exp(-zdist² · strength)
+                // for zdist = fade_start − camera_z > 0 (camera-space
+                // z is more negative the farther the sample). Far
+                // structures fade to nothing instead of tinting.
+                // Composes multiplicatively with the depth-density
+                // compensation weight above.
+                if (params.far_density_fade > 0.0) {
+                    let camera_matrix = build_camera_matrix(
+                        // Same slot mapping as project_3d_to_2d_apophysis;
+                        // only z matters here and z is roll-invariant.
+                        -params.rotation,
+                        -params.camera_rotation_x,
+                        -params.camera_bank,
+                         params.camera_rotation_y,
+                    );
+                    let camera_space = camera_transform(plot_pos, camera_matrix, vec3<f32>(params.camera_x, params.camera_y, params.camera_z));
+                    let zdist = params.far_density_fade_start - camera_space.z;
+                    if (zdist > 0.0) {
+                        density_weight *= exp(-zdist * zdist * params.far_density_fade);
+                    }
+                }
+
                 // Apply depth fog (3D mode only, blend toward background color)
                 if (params.fog_strength > 0.0) {
                     // Get camera-space depth — same 4-angle matrix as DoF above.

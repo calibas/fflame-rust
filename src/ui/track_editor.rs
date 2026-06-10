@@ -1300,6 +1300,8 @@ pub fn get_current_value(
         ConfigPath::BlendFactor => Some(config.blend_factor as f64),
         ConfigPath::PerspectiveStrength => Some(config.flame.perspective_strength as f64),
         ConfigPath::DepthDensityCompensation => Some(config.flame.depth_density_compensation as f64),
+        ConfigPath::FarDensityFade => Some(config.flame.far_density_fade as f64),
+        ConfigPath::FarDensityFadeStart => Some(config.flame.far_density_fade_start as f64),
 
         // Transform parameters
         ConfigPath::TransformWeight { index } => {

@@ -209,6 +209,8 @@ pub enum ConfigPath {
     RenderMode,
     PerspectiveStrength,
     DepthDensityCompensation,
+    FarDensityFade,
+    FarDensityFadeStart,
     /// Xaos (chaos) weight for transition from src transform to dst transform
     /// Modifies the probability of selecting dst when coming from src
     Xaos { src: usize, dst: usize },
@@ -703,6 +705,8 @@ impl Display for ConfigPath {
             ConfigPath::RenderMode => write!(f, "Render Mode"),
             ConfigPath::PerspectiveStrength => write!(f, "Perspective Strength"),
             ConfigPath::DepthDensityCompensation => write!(f, "Depth Density Compensation"),
+            ConfigPath::FarDensityFade => write!(f, "Far Density Fade"),
+            ConfigPath::FarDensityFadeStart => write!(f, "Far Density Fade Start"),
             ConfigPath::Xaos { src, dst } => {
                 write!(f, "Xaos {} → {}", src + 1, dst + 1)
             }
@@ -1116,6 +1120,8 @@ impl ConfigPath {
             ConfigPath::RenderMode => I18nKey::simple("history.param.render_mode"),
             ConfigPath::PerspectiveStrength => I18nKey::simple("history.param.perspective_strength"),
             ConfigPath::DepthDensityCompensation => I18nKey::simple("history.param.depth_density_compensation"),
+            ConfigPath::FarDensityFade => I18nKey::simple("history.param.far_density_fade"),
+            ConfigPath::FarDensityFadeStart => I18nKey::simple("history.param.far_density_fade_start"),
             ConfigPath::Xaos { src, dst } => I18nKey::with_params(
                 "history.param.xaos",
                 vec![
@@ -1939,6 +1945,8 @@ impl ConfigPath {
             | ConfigPath::DofBlurStrength
             | ConfigPath::FogStrength
             | ConfigPath::FogStart
+            | ConfigPath::FarDensityFade
+            | ConfigPath::FarDensityFadeStart
             | ConfigPath::FilterRadius
             | ConfigPath::FilterBlurEdges => UpdateType::IterationReset,
 
@@ -2053,6 +2061,8 @@ impl ConfigPath {
             | ConfigPath::RenderMode
             | ConfigPath::PerspectiveStrength
         | ConfigPath::DepthDensityCompensation
+        | ConfigPath::FarDensityFade
+        | ConfigPath::FarDensityFadeStart
             | ConfigPath::DepthDensityCompensation
             | ConfigPath::Xaos { .. }
             | ConfigPath::SoloTransform
@@ -2280,6 +2290,8 @@ impl ConfigPath {
             ConfigPath::RenderMode => "RenderMode".to_string(),
             ConfigPath::PerspectiveStrength => "PerspectiveStrength".to_string(),
             ConfigPath::DepthDensityCompensation => "DepthDensityCompensation".to_string(),
+            ConfigPath::FarDensityFade => "FarDensityFade".to_string(),
+            ConfigPath::FarDensityFadeStart => "FarDensityFadeStart".to_string(),
             ConfigPath::Xaos { src, dst } => format!("Xaos.{}.{}", src, dst),
             ConfigPath::SoloTransform => "SoloTransform".to_string(),
             ConfigPath::PostSymmetryType => "PostSymmetryType".to_string(),
@@ -2394,6 +2406,8 @@ impl ConfigPath {
             "RenderMode" => return Some(ConfigPath::RenderMode),
             "PerspectiveStrength" => return Some(ConfigPath::PerspectiveStrength),
             "DepthDensityCompensation" => return Some(ConfigPath::DepthDensityCompensation),
+            "FarDensityFade" => return Some(ConfigPath::FarDensityFade),
+            "FarDensityFadeStart" => return Some(ConfigPath::FarDensityFadeStart),
             "SoloTransform" => return Some(ConfigPath::SoloTransform),
             "PostSymmetryType" => return Some(ConfigPath::PostSymmetryType),
             "PostSymmetryOrder" => return Some(ConfigPath::PostSymmetryOrder),
@@ -2723,6 +2737,8 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::BlendFactor
         | ConfigPath::PerspectiveStrength
         | ConfigPath::DepthDensityCompensation
+        | ConfigPath::FarDensityFade
+        | ConfigPath::FarDensityFadeStart
         | ConfigPath::TransformWeight { .. }
         | ConfigPath::TransformColor { .. }
         | ConfigPath::TransformColorSpeed { .. }
@@ -3314,6 +3330,8 @@ mod tests {
             ConfigPath::RenderMode,
             ConfigPath::PerspectiveStrength,
             ConfigPath::DepthDensityCompensation,
+            ConfigPath::FarDensityFade,
+            ConfigPath::FarDensityFadeStart,
             ConfigPath::Xaos { src: 0, dst: 1 },
             ConfigPath::Xaos { src: 3, dst: 7 },
             ConfigPath::SoloTransform,
