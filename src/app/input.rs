@@ -5,6 +5,39 @@ impl App {
     pub(super) fn handle_keyboard(&mut self, event: &KeyEvent) {
         use winit::keyboard::{KeyCode, PhysicalKey};
 
+        // Fly-mode key tracking — when fly_mode is on, WASD / QE /
+        // Shift drive `update_fly_camera` per-frame instead of
+        // falling through to the existing press-only shortcuts. We
+        // track press AND release here (the other branches below
+        // only handle press) so the held-set stays accurate even
+        // if a key is held across multiple frames.
+        if self.fly_mode {
+            if let PhysicalKey::Code(code) = event.physical_key {
+                if matches!(
+                    code,
+                    KeyCode::KeyW | KeyCode::KeyA | KeyCode::KeyS | KeyCode::KeyD
+                    | KeyCode::KeyQ | KeyCode::KeyE
+                    | KeyCode::ShiftLeft | KeyCode::ShiftRight
+                ) {
+                    if event.state.is_pressed() {
+                        self.fly_keys_held.insert(code);
+                    } else {
+                        self.fly_keys_held.remove(&code);
+                    }
+                    return;  // Consume — don't let WASD bleed into other shortcuts
+                }
+            }
+        }
+
+        // F2 toggles fly mode regardless of current state (press only,
+        // not release — so the toggle doesn't double-fire).
+        if event.state.is_pressed() {
+            if let PhysicalKey::Code(KeyCode::F2) = event.physical_key {
+                self.toggle_fly_mode();
+                return;
+            }
+        }
+
         // Only handle key press (not release)
         if !event.state.is_pressed() {
             return;
@@ -37,18 +70,12 @@ impl App {
         let config = self.config_manager.active_config();
         let pan_step = 0.1 / config.zoom;
 
-        // Pre-calculate rotation for arrow controls
-        // Negate rotation to convert screen space to fractal space
-        let cos_r = (-config.rotation).cos();
-        let sin_r = (-config.rotation).sin();
-
         match event.physical_key {
             PhysicalKey::Code(KeyCode::ArrowUp) => {
-                // Up in screen space: (0, -1), rotate to fractal space
-                let screen_dx = 0.0;
-                let screen_dy = -pan_step;
-                let new_pan_x = config.pan_x + (screen_dx * cos_r - screen_dy * sin_r);
-                let new_pan_y = config.pan_y + (screen_dx * sin_r + screen_dy * cos_r);
+                // Up in screen space: (0, -1), convert to pan frame
+                let (dx, dy) = config.screen_delta_to_pan_frame(0.0, -pan_step);
+                let new_pan_x = config.pan_x + dx;
+                let new_pan_y = config.pan_y + dy;
                 let _ = self.config_manager.update_param(
                     crate::config::ConfigPath::Pan,
                     (new_pan_x, new_pan_y).into(),
@@ -56,11 +83,10 @@ impl App {
                 self.view_changed_by_keyboard = true;
             }
             PhysicalKey::Code(KeyCode::ArrowDown) => {
-                // Down in screen space: (0, 1), rotate to fractal space
-                let screen_dx = 0.0;
-                let screen_dy = pan_step;
-                let new_pan_x = config.pan_x + (screen_dx * cos_r - screen_dy * sin_r);
-                let new_pan_y = config.pan_y + (screen_dx * sin_r + screen_dy * cos_r);
+                // Down in screen space: (0, 1), convert to pan frame
+                let (dx, dy) = config.screen_delta_to_pan_frame(0.0, pan_step);
+                let new_pan_x = config.pan_x + dx;
+                let new_pan_y = config.pan_y + dy;
                 let _ = self.config_manager.update_param(
                     crate::config::ConfigPath::Pan,
                     (new_pan_x, new_pan_y).into(),
@@ -68,11 +94,10 @@ impl App {
                 self.view_changed_by_keyboard = true;
             }
             PhysicalKey::Code(KeyCode::ArrowLeft) => {
-                // Left in screen space: (-1, 0), rotate to fractal space
-                let screen_dx = -pan_step;
-                let screen_dy = 0.0;
-                let new_pan_x = config.pan_x + (screen_dx * cos_r - screen_dy * sin_r);
-                let new_pan_y = config.pan_y + (screen_dx * sin_r + screen_dy * cos_r);
+                // Left in screen space: (-1, 0), convert to pan frame
+                let (dx, dy) = config.screen_delta_to_pan_frame(-pan_step, 0.0);
+                let new_pan_x = config.pan_x + dx;
+                let new_pan_y = config.pan_y + dy;
                 let _ = self.config_manager.update_param(
                     crate::config::ConfigPath::Pan,
                     (new_pan_x, new_pan_y).into(),
@@ -80,11 +105,10 @@ impl App {
                 self.view_changed_by_keyboard = true;
             }
             PhysicalKey::Code(KeyCode::ArrowRight) => {
-                // Right in screen space: (1, 0), rotate to fractal space
-                let screen_dx = pan_step;
-                let screen_dy = 0.0;
-                let new_pan_x = config.pan_x + (screen_dx * cos_r - screen_dy * sin_r);
-                let new_pan_y = config.pan_y + (screen_dx * sin_r + screen_dy * cos_r);
+                // Right in screen space: (1, 0), convert to pan frame
+                let (dx, dy) = config.screen_delta_to_pan_frame(pan_step, 0.0);
+                let new_pan_x = config.pan_x + dx;
+                let new_pan_y = config.pan_y + dy;
                 let _ = self.config_manager.update_param(
                     crate::config::ConfigPath::Pan,
                     (new_pan_x, new_pan_y).into(),

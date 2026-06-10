@@ -161,6 +161,9 @@ pub struct FlameRenderer {
     background_color: [f32; 3],
     current_render_mode: crate::scene::transforms::RenderMode,
     perspective_strength: f32,
+    depth_density_compensation: f32,
+    far_density_fade: f32,
+    far_density_fade_start: f32,
     deterministic_rng: bool,
     frame_counter: u32, // For deterministic seed progression
     dof_focus_distance: f32, // DOF: Distance from origin where image is sharpest
@@ -276,6 +279,9 @@ impl FlameRenderer {
             background_color: [0.0, 0.0, 0.0],
             current_render_mode: flame.render_mode,
             perspective_strength: flame.perspective_strength,
+            depth_density_compensation: flame.depth_density_compensation,
+            far_density_fade: flame.far_density_fade,
+            far_density_fade_start: flame.far_density_fade_start,
             deterministic_rng: true, // Default to deterministic for reproducible rendering
             frame_counter: 0,
             dof_focus_distance: crate::config::DEFAULT_DOF_FOCUS_DISTANCE,
@@ -299,7 +305,7 @@ impl FlameRenderer {
     }
 
     /// Resize the accumulation buffer
-    pub fn resize(&mut self, device: &Device, encoder: &mut CommandEncoder, queue: &Queue, width: u32, height: u32, flame: &Flame, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_bank: f32, camera_z: f32, speed_factor: f32) {
+    pub fn resize(&mut self, device: &Device, encoder: &mut CommandEncoder, queue: &Queue, width: u32, height: u32, flame: &Flame, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_bank: f32, camera_x: f32, camera_y: f32, camera_z: f32, speed_factor: f32) {
         self.width = width;
         self.height = height;
 
@@ -346,7 +352,7 @@ impl FlameRenderer {
         self.fractal_texture_view = self.fractal_texture.create_view(&TextureViewDescriptor::default());
 
         // Clear accumulation counter
-        self.reset(encoder, queue, iterations_per_thread, zoom, pan_x, pan_y, rotation, camera_rotation_x, camera_rotation_y, camera_bank, camera_z, speed_factor);
+        self.reset(encoder, queue, iterations_per_thread, zoom, pan_x, pan_y, rotation, camera_rotation_x, camera_rotation_y, camera_bank, camera_x, camera_y, camera_z, speed_factor);
 
         // NOTE: Tonemap params need to be restored after buffer recreation
         // The caller should call update_tonemap() with current config values after resize()
@@ -433,7 +439,7 @@ impl FlameRenderer {
     }
 
     /// Reset accumulation buffer and sample count (full reset including effective iterations)
-    pub fn reset(&mut self, encoder: &mut CommandEncoder, queue: &Queue, _iterations_per_thread: u32, _zoom: f32, _pan_x: f32, _pan_y: f32, _rotation: f32, _camera_rotation_x: f32, _camera_rotation_y: f32, _camera_bank: f32, _camera_z: f32, _speed_factor: f32) {
+    pub fn reset(&mut self, encoder: &mut CommandEncoder, queue: &Queue, _iterations_per_thread: u32, _zoom: f32, _pan_x: f32, _pan_y: f32, _rotation: f32, _camera_rotation_x: f32, _camera_rotation_y: f32, _camera_bank: f32, _camera_x: f32, _camera_y: f32, _camera_z: f32, _speed_factor: f32) {
         self.reset_iteration_counter();
         // Reset effective_iterations when doing a full reset (buffer cleared)
         self.effective_iterations = 0;
@@ -450,7 +456,7 @@ impl FlameRenderer {
     /// Returns the number of samples generated this frame
     /// - `clear_histogram`: Clear histogram buffer (needed each batch for proper accumulation math)
     /// - `clear_paths`: Clear path buffer (only needed on full reset, not each batch)
-    pub fn compute_pass(&mut self, encoder: &mut CommandEncoder, queue: &Queue, num_workgroups: u32, iterations_per_thread: u32, burn_in: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_bank: f32, camera_z: f32, speed_factor: f32, clear_histogram: bool, clear_paths: bool) -> u64 {
+    pub fn compute_pass(&mut self, encoder: &mut CommandEncoder, queue: &Queue, num_workgroups: u32, iterations_per_thread: u32, burn_in: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_bank: f32, camera_x: f32, camera_y: f32, camera_z: f32, speed_factor: f32, clear_histogram: bool, clear_paths: bool) -> u64 {
         // Update seed for new random samples each frame
         // projection_type removed - shader now uses perspective_strength directly
         // 0.0 = orthographic (flat), higher values = increasing perspective
@@ -475,9 +481,17 @@ impl FlameRenderer {
             rotation,
             speed_factor,
             perspective_strength: self.perspective_strength,
+            depth_density_compensation: self.depth_density_compensation,
+            far_density_fade: self.far_density_fade,
+            far_density_fade_start: self.far_density_fade_start,
+            _pad_before_post_symmetry: [0; 3],
             camera_rotation_x,
             camera_rotation_y,
             camera_bank,
+
+            camera_x,
+
+            camera_y,
             camera_z,
             dof_focus_distance: self.dof_focus_distance,
             dof_blur_strength: self.dof_blur_strength,
@@ -492,7 +506,7 @@ impl FlameRenderer {
             background_r: self.background_r,
             background_g: self.background_g,
             background_b: self.background_b,
-            post_symmetry: (&self.post_symmetry).into(),
+post_symmetry: (&self.post_symmetry).into(),
         };
         self.buffers.update_params(queue, &params);
 
@@ -913,6 +927,9 @@ impl FlameRenderer {
         // 4. Update render mode and perspective
         self.current_render_mode = config.flame.render_mode;
         self.perspective_strength = config.flame.perspective_strength;
+        self.depth_density_compensation = config.flame.depth_density_compensation;
+        self.far_density_fade = config.flame.far_density_fade;
+        self.far_density_fade_start = config.flame.far_density_fade_start;
         self.dof_focus_distance = config.dof_focus_distance;
         self.dof_blur_strength = config.dof_blur_strength;
         self.fog_strength = config.fog_strength;
@@ -965,9 +982,17 @@ impl FlameRenderer {
             rotation: config.rotation,
             speed_factor: config.speed_factor,
             perspective_strength: self.perspective_strength,
+            depth_density_compensation: self.depth_density_compensation,
+            far_density_fade: self.far_density_fade,
+            far_density_fade_start: self.far_density_fade_start,
+            _pad_before_post_symmetry: [0; 3],
             camera_rotation_x: config.camera_rotation_x,
             camera_rotation_y: config.camera_rotation_y,
             camera_bank: config.camera_bank,
+
+            camera_x: config.camera_x,
+
+            camera_y: config.camera_y,
             camera_z: config.camera_z,
             dof_focus_distance: config.dof_focus_distance,
             dof_blur_strength: config.dof_blur_strength,
@@ -982,7 +1007,7 @@ impl FlameRenderer {
             background_r: config.background_color[0],
             background_g: config.background_color[1],
             background_b: config.background_color[2],
-            post_symmetry: (&config.flame.post_symmetry).into(),
+post_symmetry: (&config.flame.post_symmetry).into(),
         };
         self.buffers.update_params(queue, &params);
 
@@ -1015,7 +1040,7 @@ impl FlameRenderer {
     }
 
     /// Update the flame being rendered
-    pub fn update_flame(&mut self, device: &Device, queue: &Queue, flame: &Flame, iterations_per_thread: u32, burn_in: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_bank: f32, camera_z: f32, speed_factor: f32, dof_focus_distance: f32, dof_blur_strength: f32, fog_strength: f32, fog_start: f32, background_color: [f32; 3], filter_radius: f32, filter_blur_edges: f32) {
+    pub fn update_flame(&mut self, device: &Device, queue: &Queue, flame: &Flame, iterations_per_thread: u32, burn_in: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_bank: f32, camera_x: f32, camera_y: f32, camera_z: f32, speed_factor: f32, dof_focus_distance: f32, dof_blur_strength: f32, fog_strength: f32, fog_start: f32, background_color: [f32; 3], filter_radius: f32, filter_blur_edges: f32) {
         // Check if shaders need to be recompiled (variations or constants changed)
         let constants = self.build_shader_constants(flame);
         let path_features_enabled = self.color_mode == ColorMode::PathMap
@@ -1056,6 +1081,9 @@ impl FlameRenderer {
         // Update render mode, perspective, DOF, fog, and background color
         self.current_render_mode = flame.render_mode;
         self.perspective_strength = flame.perspective_strength;
+        self.depth_density_compensation = flame.depth_density_compensation;
+        self.far_density_fade = flame.far_density_fade;
+        self.far_density_fade_start = flame.far_density_fade_start;
         self.dof_focus_distance = dof_focus_distance;
         self.dof_blur_strength = dof_blur_strength;
         self.fog_strength = fog_strength;
@@ -1094,9 +1122,17 @@ impl FlameRenderer {
             rotation,
             speed_factor,
             perspective_strength: self.perspective_strength,
+            depth_density_compensation: self.depth_density_compensation,
+            far_density_fade: self.far_density_fade,
+            far_density_fade_start: self.far_density_fade_start,
+            _pad_before_post_symmetry: [0; 3],
             camera_rotation_x,
             camera_rotation_y,
             camera_bank,
+
+            camera_x,
+
+            camera_y,
             camera_z,
             dof_focus_distance: self.dof_focus_distance,
             dof_blur_strength: self.dof_blur_strength,
@@ -1111,7 +1147,7 @@ impl FlameRenderer {
             background_r: self.background_r,
             background_g: self.background_g,
             background_b: self.background_b,
-            post_symmetry: (&self.post_symmetry).into(),
+post_symmetry: (&self.post_symmetry).into(),
         };
 
         self.buffers.update_params(queue, &params);
@@ -1284,7 +1320,7 @@ impl FlameRenderer {
     }
 
     /// Update iterations per thread
-    pub fn update_iterations(&mut self, queue: &Queue, iterations_per_thread: u32, burn_in: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_bank: f32, camera_z: f32, speed_factor: f32) {
+    pub fn update_iterations(&mut self, queue: &Queue, iterations_per_thread: u32, burn_in: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_bank: f32, camera_x: f32, camera_y: f32, camera_z: f32, speed_factor: f32) {
         self.burn_in = burn_in;
 
         let params = GpuParams {
@@ -1306,9 +1342,17 @@ impl FlameRenderer {
                 crate::scene::transforms::RenderMode::ThreeD => 1,
             },
             perspective_strength: self.perspective_strength,
+            depth_density_compensation: self.depth_density_compensation,
+            far_density_fade: self.far_density_fade,
+            far_density_fade_start: self.far_density_fade_start,
+            _pad_before_post_symmetry: [0; 3],
             camera_rotation_x,
             camera_rotation_y,
             camera_bank,
+
+            camera_x,
+
+            camera_y,
             camera_z,
             dof_focus_distance: self.dof_focus_distance,
             dof_blur_strength: self.dof_blur_strength,
@@ -1323,7 +1367,7 @@ impl FlameRenderer {
             background_r: self.background_r,
             background_g: self.background_g,
             background_b: self.background_b,
-            post_symmetry: (&self.post_symmetry).into(),
+post_symmetry: (&self.post_symmetry).into(),
         };
         self.buffers.update_params(queue, &params);
     }
@@ -1617,7 +1661,7 @@ impl FlameRenderer {
     }
 
     /// Set color mode
-    pub fn set_color_mode(&mut self, queue: &Queue, color_mode: ColorMode, iterations_per_thread: u32, burn_in: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_bank: f32, camera_z: f32, speed_factor: f32) {
+    pub fn set_color_mode(&mut self, queue: &Queue, color_mode: ColorMode, iterations_per_thread: u32, burn_in: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_bank: f32, camera_x: f32, camera_y: f32, camera_z: f32, speed_factor: f32) {
         self.color_mode = color_mode;
 
         // Update params to reflect new color mode
@@ -1640,9 +1684,17 @@ impl FlameRenderer {
                 crate::scene::transforms::RenderMode::ThreeD => 1,
             },
             perspective_strength: self.perspective_strength,
+            depth_density_compensation: self.depth_density_compensation,
+            far_density_fade: self.far_density_fade,
+            far_density_fade_start: self.far_density_fade_start,
+            _pad_before_post_symmetry: [0; 3],
             camera_rotation_x,
             camera_rotation_y,
             camera_bank,
+
+            camera_x,
+
+            camera_y,
             camera_z,
             dof_focus_distance: self.dof_focus_distance,
             dof_blur_strength: self.dof_blur_strength,
@@ -1657,7 +1709,7 @@ impl FlameRenderer {
             background_r: self.background_r,
             background_g: self.background_g,
             background_b: self.background_b,
-            post_symmetry: (&self.post_symmetry).into(),
+post_symmetry: (&self.post_symmetry).into(),
         };
         self.buffers.update_params(queue, &params);
     }

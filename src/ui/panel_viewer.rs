@@ -163,6 +163,16 @@ impl TouchTracker {
 pub struct PanelContext<'a> {
     // Core state
     pub config_manager: &'a mut crate::config::ConfigManager,
+    /// Free-fly camera mode signal from App. When true the viewport
+    /// panel re-routes primary mouse drag from "pan" to "look around"
+    /// (writes the delta into `fly_mouse_drag` instead of calling
+    /// pan_fractal_view).
+    pub fly_mode_active: bool,
+    /// Set by the viewport panel when a mouse drag in fly mode produces
+    /// pixel-space delta. Consumed by App.
+    pub fly_mouse_drag: &'a mut Option<(f32, f32)>,
+    /// Set by the View panel's fly-mode toggle button. Consumed by App.
+    pub fly_mode_toggle_requested: &'a mut bool,
     pub flame: &'a mut crate::scene::transforms::Flame,
 
     // Libraries
@@ -434,12 +444,8 @@ pub fn pan_fractal_view(
     let dx = -drag_delta.x * scale;
     let dy = -drag_delta.y * scale;
 
-    // Apply rotation (negate to convert screen to fractal space)
-    let cos_r = (-config.rotation).cos();
-    let sin_r = (-config.rotation).sin();
-
-    let fractal_dx = dx * cos_r - dy * sin_r;
-    let fractal_dy = dx * sin_r + dy * cos_r;
+    // Screen space → pan frame (rotation-aware in 2D, identity in 3D)
+    let (fractal_dx, fractal_dy) = config.screen_delta_to_pan_frame(dx, dy);
 
     let new_pan_x = config.pan_x + fractal_dx;
     let new_pan_y = config.pan_y + fractal_dy;
@@ -456,12 +462,18 @@ pub fn pan_fractal_view(
 /// input here, passing the leaf's full rect/size so zoom-toward-cursor
 /// stays anchored correctly whether the cursor is in the body or the
 /// cover.
+///
+/// `zoom_to_cursor = false` (fly mode) always zooms to center: the
+/// cursor-anchored pan adjustment fights the fly camera — the view
+/// should stay locked to where the camera points, not drift toward
+/// wherever the mouse happens to rest.
 pub fn zoom_fractal_view(
     config_manager: &mut crate::config::ConfigManager,
     scroll_delta: f32,
     mouse_pos: Option<egui::Pos2>,
     panel_rect: egui::Rect,
     panel_size: egui::Vec2,
+    zoom_to_cursor: bool,
 ) {
     let config = config_manager.active_config();
 
@@ -476,7 +488,7 @@ pub fn zoom_fractal_view(
         // Zoom in toward cursor, zoom out from center
         if zoom_factor > 1.0 {
             // Zooming in - zoom toward mouse cursor position
-            if let Some(mouse_pos) = mouse_pos {
+            if let Some(mouse_pos) = mouse_pos.filter(|_| zoom_to_cursor) {
                 // Convert mouse position from panel space to fractal space
                 // Panel center
                 let center_x = panel_rect.center().x;
@@ -489,11 +501,11 @@ pub fn zoom_fractal_view(
                 // Convert to fractal space (account for current zoom, scale, and rotation)
                 let scale = f32::min(panel_size.x, panel_size.y) * 0.25;
 
-                // Apply rotation to convert screen space to fractal space
-                let cos_r = (-config.rotation).cos();
-                let sin_r = (-config.rotation).sin();
-                let rotated_offset_x = mouse_offset_x * cos_r - mouse_offset_y * sin_r;
-                let rotated_offset_y = mouse_offset_x * sin_r + mouse_offset_y * cos_r;
+                // Screen space → pan frame (rotation-aware in 2D,
+                // identity in 3D). Same offset serves both zoom
+                // levels — the conversion doesn't depend on zoom.
+                let (rotated_offset_x, rotated_offset_y) =
+                    config.screen_delta_to_pan_frame(mouse_offset_x, mouse_offset_y);
 
                 let fractal_offset_x = rotated_offset_x / (scale * config.zoom);
                 let fractal_offset_y = rotated_offset_y / (scale * config.zoom);
@@ -502,12 +514,10 @@ pub fn zoom_fractal_view(
                 let point_x = config.pan_x + fractal_offset_x;
                 let point_y = config.pan_y + fractal_offset_y;
 
-                // Apply zoom and adjust pan (also need rotation for new zoom level)
+                // Apply zoom and adjust pan so that point stays under the cursor
                 let new_zoom = (config.zoom * zoom_factor).clamp(0.01, 1000.0);
-                let new_rotated_offset_x = mouse_offset_x * cos_r - mouse_offset_y * sin_r;
-                let new_rotated_offset_y = mouse_offset_x * sin_r + mouse_offset_y * cos_r;
-                let new_fractal_offset_x = new_rotated_offset_x / (scale * new_zoom);
-                let new_fractal_offset_y = new_rotated_offset_y / (scale * new_zoom);
+                let new_fractal_offset_x = rotated_offset_x / (scale * new_zoom);
+                let new_fractal_offset_y = rotated_offset_y / (scale * new_zoom);
                 let new_pan_x = point_x - new_fractal_offset_x;
                 let new_pan_y = point_y - new_fractal_offset_y;
 
@@ -738,6 +748,8 @@ impl<'a> PanelViewer<'a> {
             ui,
             self.context.config_manager,
             self.context.flame,
+            self.context.fly_mode_active,
+            self.context.fly_mode_toggle_requested,
         );
     }
 
@@ -1093,9 +1105,18 @@ impl<'a> PanelViewer<'a> {
         }
     }
 
-    /// Handle fractal panning via mouse drag
+    /// Handle fractal panning via mouse drag. When fly mode is active
+    /// the drag becomes a look-around delta instead of a pan —
+    /// recorded into `fly_mouse_drag` for the App to consume after
+    /// the UI render. In all other cases the existing pan behavior
+    /// applies.
     fn handle_fractal_drag(&mut self, drag_delta: egui::Vec2, panel_size: egui::Vec2) {
-        pan_fractal_view(self.context.config_manager, drag_delta, panel_size);
+        if self.context.fly_mode_active {
+            let prev = self.context.fly_mouse_drag.unwrap_or((0.0, 0.0));
+            *self.context.fly_mouse_drag = Some((prev.0 + drag_delta.x, prev.1 + drag_delta.y));
+        } else {
+            pan_fractal_view(self.context.config_manager, drag_delta, panel_size);
+        }
     }
 
     /// Handle fractal zooming via mouse wheel
@@ -1112,6 +1133,9 @@ impl<'a> PanelViewer<'a> {
             mouse_pos,
             panel_rect,
             panel_size,
+            // In fly mode, zoom to center — cursor-anchored pan
+            // adjustments fight the camera.
+            !self.context.fly_mode_active,
         );
     }
 
@@ -1138,10 +1162,8 @@ impl<'a> PanelViewer<'a> {
             let offset_y = pinch_center.y - center_y;
 
             let scale = f32::min(panel_size.x, panel_size.y) * 0.25;
-            let cos_r = (-config.rotation).cos();
-            let sin_r = (-config.rotation).sin();
-            let rot_x = offset_x * cos_r - offset_y * sin_r;
-            let rot_y = offset_x * sin_r + offset_y * cos_r;
+            // Screen space → pan frame (rotation-aware in 2D, identity in 3D)
+            let (rot_x, rot_y) = config.screen_delta_to_pan_frame(offset_x, offset_y);
 
             let point_x = config.pan_x + rot_x / (scale * config.zoom);
             let point_y = config.pan_y + rot_y / (scale * config.zoom);
@@ -1157,10 +1179,9 @@ impl<'a> PanelViewer<'a> {
             let dx = -translation.x * drag_scale;
             let dy = -translation.y * drag_scale;
 
-            let cos_r = (-config.rotation).cos();
-            let sin_r = (-config.rotation).sin();
-            new_pan_x += dx * cos_r - dy * sin_r;
-            new_pan_y += dx * sin_r + dy * cos_r;
+            let (pan_dx, pan_dy) = config.screen_delta_to_pan_frame(dx, dy);
+            new_pan_x += pan_dx;
+            new_pan_y += pan_dy;
         }
 
         // Single batch update: zoom + combined pan = one history entry

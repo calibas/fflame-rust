@@ -28,6 +28,8 @@ pub enum ConfigPath {
     /// 4-angle camera matrix). Stored in radians on
     /// `FractalConfig::camera_bank`.
     CameraBank,
+    CameraX,
+    CameraY,
     CameraZ,
     DofFocusDistance,
     DofBlurStrength,
@@ -206,6 +208,9 @@ pub enum ConfigPath {
     // ===== Flame-level (require iteration reset) =====
     RenderMode,
     PerspectiveStrength,
+    DepthDensityCompensation,
+    FarDensityFade,
+    FarDensityFadeStart,
     /// Xaos (chaos) weight for transition from src transform to dst transform
     /// Modifies the probability of selecting dst when coming from src
     Xaos { src: usize, dst: usize },
@@ -255,6 +260,11 @@ pub enum ConfigPath {
     SystemBurnIn,
     SystemVsyncEnabled,
     SystemTargetFps,
+    SystemFlyMouseSensitivity,
+    SystemFlyMoveSpeed,
+    SystemFlySprintMultiplier,
+    SystemFlyInvertY,
+    SystemFlyCameraMode,
     SystemExportWidth,
     SystemExportHeight,
     SystemLanguage,
@@ -449,6 +459,8 @@ impl Display for ConfigPath {
             ConfigPath::CameraRotationX => write!(f, "Camera Pitch"),
             ConfigPath::CameraRotationY => write!(f, "Camera Yaw"),
             ConfigPath::CameraBank => write!(f, "Camera Bank"),
+            ConfigPath::CameraX => write!(f, "Camera X"),
+            ConfigPath::CameraY => write!(f, "Camera Y"),
             ConfigPath::CameraZ => write!(f, "Camera Z"),
             ConfigPath::DofFocusDistance => write!(f, "DOF Focus Distance"),
             ConfigPath::DofBlurStrength => write!(f, "DOF Blur Strength"),
@@ -692,6 +704,9 @@ impl Display for ConfigPath {
             // Flame
             ConfigPath::RenderMode => write!(f, "Render Mode"),
             ConfigPath::PerspectiveStrength => write!(f, "Perspective Strength"),
+            ConfigPath::DepthDensityCompensation => write!(f, "Depth Density Compensation"),
+            ConfigPath::FarDensityFade => write!(f, "Far Density Fade"),
+            ConfigPath::FarDensityFadeStart => write!(f, "Far Density Fade Start"),
             ConfigPath::Xaos { src, dst } => {
                 write!(f, "Xaos {} → {}", src + 1, dst + 1)
             }
@@ -737,6 +752,11 @@ impl Display for ConfigPath {
             ConfigPath::SystemBurnIn => write!(f, "System: Burn-in Iterations"),
             ConfigPath::SystemVsyncEnabled => write!(f, "System: VSync Enabled"),
             ConfigPath::SystemTargetFps => write!(f, "System: Target FPS"),
+            ConfigPath::SystemFlyMouseSensitivity => write!(f, "System: Fly Mouse Sensitivity"),
+            ConfigPath::SystemFlyMoveSpeed => write!(f, "System: Fly Move Speed"),
+            ConfigPath::SystemFlySprintMultiplier => write!(f, "System: Fly Sprint Multiplier"),
+            ConfigPath::SystemFlyInvertY => write!(f, "System: Fly Invert Y"),
+            ConfigPath::SystemFlyCameraMode => write!(f, "System: Fly Camera Mode"),
             ConfigPath::SystemExportWidth => write!(f, "System: Export Width"),
             ConfigPath::SystemExportHeight => write!(f, "System: Export Height"),
             ConfigPath::SystemLanguage => write!(f, "System: Language"),
@@ -801,6 +821,8 @@ impl ConfigPath {
             ConfigPath::CameraRotationX => I18nKey::simple("history.param.camera_pitch"),
             ConfigPath::CameraRotationY => I18nKey::simple("history.param.camera_yaw"),
             ConfigPath::CameraBank => I18nKey::simple("history.param.camera_bank"),
+            ConfigPath::CameraX => I18nKey::simple("history.param.camera_x"),
+            ConfigPath::CameraY => I18nKey::simple("history.param.camera_y"),
             ConfigPath::CameraZ => I18nKey::simple("history.param.camera_z"),
             ConfigPath::DofFocusDistance => I18nKey::simple("history.param.dof_focus_distance"),
             ConfigPath::DofBlurStrength => I18nKey::simple("history.param.dof_blur_strength"),
@@ -1097,6 +1119,9 @@ impl ConfigPath {
             // Flame
             ConfigPath::RenderMode => I18nKey::simple("history.param.render_mode"),
             ConfigPath::PerspectiveStrength => I18nKey::simple("history.param.perspective_strength"),
+            ConfigPath::DepthDensityCompensation => I18nKey::simple("history.param.depth_density_compensation"),
+            ConfigPath::FarDensityFade => I18nKey::simple("history.param.far_density_fade"),
+            ConfigPath::FarDensityFadeStart => I18nKey::simple("history.param.far_density_fade_start"),
             ConfigPath::Xaos { src, dst } => I18nKey::with_params(
                 "history.param.xaos",
                 vec![
@@ -1158,6 +1183,11 @@ impl ConfigPath {
             ConfigPath::SystemBurnIn => I18nKey::simple("history.param.system_burn_in"),
             ConfigPath::SystemVsyncEnabled => I18nKey::simple("history.param.system_vsync_enabled"),
             ConfigPath::SystemTargetFps => I18nKey::simple("history.param.system_target_fps"),
+            ConfigPath::SystemFlyMouseSensitivity => I18nKey::simple("history.param.system_fly_mouse_sensitivity"),
+            ConfigPath::SystemFlyMoveSpeed => I18nKey::simple("history.param.system_fly_move_speed"),
+            ConfigPath::SystemFlySprintMultiplier => I18nKey::simple("history.param.system_fly_sprint_multiplier"),
+            ConfigPath::SystemFlyInvertY => I18nKey::simple("history.param.system_fly_invert_y"),
+            ConfigPath::SystemFlyCameraMode => I18nKey::simple("history.param.system_fly_camera_mode"),
             ConfigPath::SystemExportWidth => I18nKey::simple("history.param.system_export_width"),
             ConfigPath::SystemExportHeight => I18nKey::simple("history.param.system_export_height"),
             ConfigPath::SystemLanguage => I18nKey::simple("history.param.system_language"),
@@ -1903,6 +1933,8 @@ impl ConfigPath {
             | ConfigPath::CameraRotationX
             | ConfigPath::CameraRotationY
             | ConfigPath::CameraBank
+            | ConfigPath::CameraX
+            | ConfigPath::CameraY
             | ConfigPath::CameraZ => UpdateType::ViewOnly,
 
             // DOF, fog, and spatial filter change the per-sample
@@ -1913,6 +1945,8 @@ impl ConfigPath {
             | ConfigPath::DofBlurStrength
             | ConfigPath::FogStrength
             | ConfigPath::FogStart
+            | ConfigPath::FarDensityFade
+            | ConfigPath::FarDensityFadeStart
             | ConfigPath::FilterRadius
             | ConfigPath::FilterBlurEdges => UpdateType::IterationReset,
 
@@ -2026,6 +2060,10 @@ impl ConfigPath {
             | ConfigPath::FinalTransformPostAffineScale { .. }
             | ConfigPath::RenderMode
             | ConfigPath::PerspectiveStrength
+        | ConfigPath::DepthDensityCompensation
+        | ConfigPath::FarDensityFade
+        | ConfigPath::FarDensityFadeStart
+            | ConfigPath::DepthDensityCompensation
             | ConfigPath::Xaos { .. }
             | ConfigPath::SoloTransform
             | ConfigPath::PostSymmetryType
@@ -2050,7 +2088,7 @@ impl ConfigPath {
 
             // System Settings
             ConfigPath::SystemIterationsPerThread | ConfigPath::SystemBurnIn => UpdateType::IterationReset,
-            ConfigPath::SystemVsyncEnabled | ConfigPath::SystemTargetFps => UpdateType::ViewOnly,
+            ConfigPath::SystemVsyncEnabled | ConfigPath::SystemTargetFps | ConfigPath::SystemFlyMouseSensitivity | ConfigPath::SystemFlyMoveSpeed | ConfigPath::SystemFlySprintMultiplier | ConfigPath::SystemFlyInvertY | ConfigPath::SystemFlyCameraMode => UpdateType::ViewOnly,
             ConfigPath::SystemExportWidth | ConfigPath::SystemExportHeight | ConfigPath::SystemLanguage | ConfigPath::SystemShowHelpOnStartup => UpdateType::None,
         }
     }
@@ -2072,6 +2110,8 @@ impl ConfigPath {
             ConfigPath::CameraRotationX => "CameraRotationX".to_string(),
             ConfigPath::CameraRotationY => "CameraRotationY".to_string(),
             ConfigPath::CameraBank => "CameraBank".to_string(),
+            ConfigPath::CameraX => "CameraX".to_string(),
+            ConfigPath::CameraY => "CameraY".to_string(),
             ConfigPath::CameraZ => "CameraZ".to_string(),
             ConfigPath::DofFocusDistance => "DofFocusDistance".to_string(),
             ConfigPath::DofBlurStrength => "DofBlurStrength".to_string(),
@@ -2249,6 +2289,9 @@ impl ConfigPath {
             // Flame
             ConfigPath::RenderMode => "RenderMode".to_string(),
             ConfigPath::PerspectiveStrength => "PerspectiveStrength".to_string(),
+            ConfigPath::DepthDensityCompensation => "DepthDensityCompensation".to_string(),
+            ConfigPath::FarDensityFade => "FarDensityFade".to_string(),
+            ConfigPath::FarDensityFadeStart => "FarDensityFadeStart".to_string(),
             ConfigPath::Xaos { src, dst } => format!("Xaos.{}.{}", src, dst),
             ConfigPath::SoloTransform => "SoloTransform".to_string(),
             ConfigPath::PostSymmetryType => "PostSymmetryType".to_string(),
@@ -2274,6 +2317,11 @@ impl ConfigPath {
             ConfigPath::SystemBurnIn => "System.BurnIn".to_string(),
             ConfigPath::SystemVsyncEnabled => "System.VsyncEnabled".to_string(),
             ConfigPath::SystemTargetFps => "System.TargetFps".to_string(),
+            ConfigPath::SystemFlyMouseSensitivity => "System.FlyMouseSensitivity".to_string(),
+            ConfigPath::SystemFlyMoveSpeed => "System.FlyMoveSpeed".to_string(),
+            ConfigPath::SystemFlySprintMultiplier => "System.FlySprintMultiplier".to_string(),
+            ConfigPath::SystemFlyInvertY => "System.FlyInvertY".to_string(),
+            ConfigPath::SystemFlyCameraMode => "System.FlyCameraMode".to_string(),
             ConfigPath::SystemExportWidth => "System.ExportWidth".to_string(),
             ConfigPath::SystemExportHeight => "System.ExportHeight".to_string(),
             ConfigPath::SystemLanguage => "System.Language".to_string(),
@@ -2296,6 +2344,8 @@ impl ConfigPath {
             "CameraRotationX" => return Some(ConfigPath::CameraRotationX),
             "CameraRotationY" => return Some(ConfigPath::CameraRotationY),
             "CameraBank" => return Some(ConfigPath::CameraBank),
+            "CameraX" => return Some(ConfigPath::CameraX),
+            "CameraY" => return Some(ConfigPath::CameraY),
             "CameraZ" => return Some(ConfigPath::CameraZ),
             "DofFocusDistance" => return Some(ConfigPath::DofFocusDistance),
             "DofBlurStrength" => return Some(ConfigPath::DofBlurStrength),
@@ -2355,6 +2405,9 @@ impl ConfigPath {
             "TransformCount" => return Some(ConfigPath::TransformCount),
             "RenderMode" => return Some(ConfigPath::RenderMode),
             "PerspectiveStrength" => return Some(ConfigPath::PerspectiveStrength),
+            "DepthDensityCompensation" => return Some(ConfigPath::DepthDensityCompensation),
+            "FarDensityFade" => return Some(ConfigPath::FarDensityFade),
+            "FarDensityFadeStart" => return Some(ConfigPath::FarDensityFadeStart),
             "SoloTransform" => return Some(ConfigPath::SoloTransform),
             "PostSymmetryType" => return Some(ConfigPath::PostSymmetryType),
             "PostSymmetryOrder" => return Some(ConfigPath::PostSymmetryOrder),
@@ -2554,6 +2607,11 @@ impl ConfigPath {
                 "BurnIn" => return Some(ConfigPath::SystemBurnIn),
                 "VsyncEnabled" => return Some(ConfigPath::SystemVsyncEnabled),
                 "TargetFps" => return Some(ConfigPath::SystemTargetFps),
+                "FlyMouseSensitivity" => return Some(ConfigPath::SystemFlyMouseSensitivity),
+                "FlyMoveSpeed" => return Some(ConfigPath::SystemFlyMoveSpeed),
+                "FlySprintMultiplier" => return Some(ConfigPath::SystemFlySprintMultiplier),
+                "FlyInvertY" => return Some(ConfigPath::SystemFlyInvertY),
+                "FlyCameraMode" => return Some(ConfigPath::SystemFlyCameraMode),
                 "ExportWidth" => return Some(ConfigPath::SystemExportWidth),
                 "ExportHeight" => return Some(ConfigPath::SystemExportHeight),
                 "Language" => return Some(ConfigPath::SystemLanguage),
@@ -2647,6 +2705,8 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::CameraRotationX
         | ConfigPath::CameraRotationY
         | ConfigPath::CameraBank
+        | ConfigPath::CameraX
+        | ConfigPath::CameraY
         | ConfigPath::CameraZ
         | ConfigPath::DofFocusDistance
         | ConfigPath::DofBlurStrength
@@ -2676,6 +2736,9 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::BackgroundColorB
         | ConfigPath::BlendFactor
         | ConfigPath::PerspectiveStrength
+        | ConfigPath::DepthDensityCompensation
+        | ConfigPath::FarDensityFade
+        | ConfigPath::FarDensityFadeStart
         | ConfigPath::TransformWeight { .. }
         | ConfigPath::TransformColor { .. }
         | ConfigPath::TransformColorSpeed { .. }
@@ -2731,6 +2794,10 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::FinalTransformPostAffineScale { .. }
         | ConfigPath::Xaos { .. }
         | ConfigPath::SystemTargetFps
+        | ConfigPath::SystemFlyMouseSensitivity
+        | ConfigPath::SystemFlyMoveSpeed
+        | ConfigPath::SystemFlySprintMultiplier
+        | ConfigPath::SystemFlyInvertY
         | ConfigPath::LevelsLow
         | ConfigPath::LevelsHigh
         | ConfigPath::LevelsGamma
@@ -2804,7 +2871,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         }
 
         // String parameters
-        ConfigPath::SystemLanguage => {
+        ConfigPath::SystemLanguage | ConfigPath::SystemFlyCameraMode => {
             json.as_str().map(|s| ConfigValue::String(s.to_string()))
         }
 
@@ -3160,6 +3227,8 @@ mod tests {
             ConfigPath::CameraRotationX,
             ConfigPath::CameraRotationY,
             ConfigPath::CameraBank,
+            ConfigPath::CameraX,
+            ConfigPath::CameraY,
             ConfigPath::CameraZ,
             ConfigPath::DofFocusDistance,
             ConfigPath::DofBlurStrength,
@@ -3260,6 +3329,9 @@ mod tests {
             // Flame
             ConfigPath::RenderMode,
             ConfigPath::PerspectiveStrength,
+            ConfigPath::DepthDensityCompensation,
+            ConfigPath::FarDensityFade,
+            ConfigPath::FarDensityFadeStart,
             ConfigPath::Xaos { src: 0, dst: 1 },
             ConfigPath::Xaos { src: 3, dst: 7 },
             ConfigPath::SoloTransform,
@@ -3275,6 +3347,11 @@ mod tests {
             ConfigPath::SystemBurnIn,
             ConfigPath::SystemVsyncEnabled,
             ConfigPath::SystemTargetFps,
+            ConfigPath::SystemFlyMouseSensitivity,
+            ConfigPath::SystemFlyMoveSpeed,
+            ConfigPath::SystemFlySprintMultiplier,
+            ConfigPath::SystemFlyInvertY,
+            ConfigPath::SystemFlyCameraMode,
             ConfigPath::SystemExportWidth,
             ConfigPath::SystemExportHeight,
             ConfigPath::SystemLanguage,

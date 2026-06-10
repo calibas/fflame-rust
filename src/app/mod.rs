@@ -6,6 +6,7 @@ mod ui_handlers;
 mod gpu_updates;
 mod animation_update;
 mod variation_fetch;
+mod fly_camera;
 pub mod export;
 pub mod render_mode;
 
@@ -465,6 +466,17 @@ pub struct App {
     pub(super) window_fullscreen: bool,  // Window is in fullscreen mode
     pub(super) ui_hidden: bool,          // UI panels are hidden (only in fullscreen)
 
+    // Free-fly camera mode (3D mode only). Toggled via the View panel
+    // button or the F2 hotkey. When on, mouse drag in the viewport
+    // rotates the camera (instead of panning) and WASD/QE/Shift
+    // translate the camera position. The set of currently-held movement
+    // keys is integrated per-frame via `update_fly_camera`.
+    pub(super) fly_mode: bool,
+    pub(super) fly_keys_held: std::collections::HashSet<winit::keyboard::KeyCode>,
+    /// Time of the last fly-mode movement integration step. Used to
+    /// compute delta-time so movement speed is frame-rate-independent.
+    pub(super) fly_last_update: Option<web_time::Instant>,
+
     // Surface recovery: set on surface error, handled at top of next RedrawRequested
     pub(super) needs_surface_recreate: bool,
 
@@ -634,6 +646,9 @@ impl App {
             needs_surface_recreate: false,
             window_fullscreen: false,
             ui_hidden: false,
+            fly_mode: false,
+            fly_keys_held: std::collections::HashSet::new(),
+            fly_last_update: None,
             audio_manager: crate::audio::AudioManager::new(),
             audio_player: crate::audio::AudioPlayer::new(),
             audio_capture: crate::audio::AudioCapture::new(),
@@ -957,8 +972,16 @@ impl App {
 
                     // EVENT-DRIVEN RENDERING:
                     // Only render when something actually changes
+                    // Fly mode with any movement key held also drives
+                    // continuous redraws — the per-frame integrator in
+                    // `update_fly_camera` only advances when render()
+                    // runs, so without this the camera would freeze
+                    // mid-flight as soon as event-driven rendering
+                    // settled.
+                    let fly_active = app.fly_mode && !app.fly_keys_held.is_empty();
+
                     // During export, audio playback, or live capture, keep redrawing to update UI
-                    if is_rendering || animation_playing || audio_playing || audio_capturing || ui_active || is_exporting || app.viewport_resize_pending || just_finished_rendering {
+                    if is_rendering || animation_playing || audio_playing || audio_capturing || ui_active || is_exporting || app.viewport_resize_pending || just_finished_rendering || fly_active {
                         // Actively rendering fractals OR UI is active (for tooltips, hover effects)
                         if app.config_manager.system_settings().vsync_enabled {
                             // VSync enabled: render continuously, let VSync cap frame rate
@@ -1016,6 +1039,11 @@ impl App {
             .unwrap_or(1.0 / 60.0);
 
         self.last_frame_time = Some(render_start);
+
+        // Fly-mode camera integration. No-op when fly_mode is off or
+        // no movement keys are held. Runs before the UI / GPU update
+        // step so any camera-position changes flow through normally.
+        self.update_fly_camera();
 
         // ============================================================================
         // NEW FRAME ORDER (Fixed race conditions):
@@ -1177,7 +1205,16 @@ impl App {
             &signal_names,
             &self.api_state,
             self.current_user_id.as_deref(),
+            self.fly_mode,
         );
+
+        // Consume fly-mode responses produced by the UI this frame.
+        if let Some((dx, dy)) = ui_response.fly_mouse_drag {
+            self.apply_fly_mouse_look(dx, dy);
+        }
+        if ui_response.fly_mode_toggle_requested {
+            self.toggle_fly_mode();
+        }
 
         self.metrics.record_ui_time(t_ui_start.elapsed().as_secs_f64() * 1000.0);
 
@@ -1268,7 +1305,7 @@ impl App {
 
                     renderer.resize(&self.gpu.device, &mut resize_encoder, &self.gpu.queue, viewport_size.0, viewport_size.1,
                         resize_source, self.config_manager.system_settings().iterations_per_thread, resize_config.zoom, resize_config.pan_x, resize_config.pan_y, resize_config.rotation,
-                        resize_config.camera_rotation_x, resize_config.camera_rotation_y, resize_config.camera_bank, resize_config.camera_z, resize_config.speed_factor);
+                        resize_config.camera_rotation_x, resize_config.camera_rotation_y, resize_config.camera_bank, resize_config.camera_x, resize_config.camera_y, resize_config.camera_z, resize_config.speed_factor);
                     self.gpu.queue.submit(std::iter::once(resize_encoder.finish()));
 
                     // Resize effect chain textures
@@ -1278,7 +1315,7 @@ impl App {
                     renderer.update_palette(&self.gpu.device, &self.gpu.queue, &resize_config.palette, resize_config.palette_rotation, resize_config.palette_squeeze, resize_config.palette_squeeze_mode, resize_config.palette_squeeze_falloff, resize_config.palette_log_strength, resize_config.palette_reverse);
                     renderer.set_color_mode(&self.gpu.queue, resize_config.color_mode, self.config_manager.system_settings().iterations_per_thread, self.config_manager.system_settings().burn_in,
                         resize_config.zoom, resize_config.pan_x, resize_config.pan_y, resize_config.rotation,
-                        resize_config.camera_rotation_x, resize_config.camera_rotation_y, resize_config.camera_bank, resize_config.camera_z, resize_config.speed_factor);
+                        resize_config.camera_rotation_x, resize_config.camera_rotation_y, resize_config.camera_bank, resize_config.camera_x, resize_config.camera_y, resize_config.camera_z, resize_config.speed_factor);
                     renderer.set_path_map_style(resize_config.path_map_style);
 
                     // Update path buffer allocation based on color_mode and filters (after resize recreates buffers).
@@ -1513,6 +1550,11 @@ impl App {
                             export_config.camera_rotation_x,
                             export_config.camera_rotation_y,
                             export_config.camera_bank,
+
+                            export_config.camera_x,
+
+                            export_config.camera_y,
+
                             export_config.camera_z,
                             export_config.speed_factor,
                             clear_histogram,
@@ -1970,7 +2012,7 @@ impl App {
                 let samples_this_frame = renderer.compute_pass(&mut render_encoder, &self.gpu.queue, NUM_WORKGROUPS,
                     self.config_manager.system_settings().iterations_per_thread, self.config_manager.system_settings().burn_in,
                     final_config.zoom, final_config.pan_x, final_config.pan_y, final_config.rotation,
-                    final_config.camera_rotation_x, final_config.camera_rotation_y, final_config.camera_bank, final_config.camera_z, final_config.speed_factor, clear_histogram, clear_paths);
+                    final_config.camera_rotation_x, final_config.camera_rotation_y, final_config.camera_bank, final_config.camera_x, final_config.camera_y, final_config.camera_z, final_config.speed_factor, clear_histogram, clear_paths);
 
                 self.metrics.record_compute_time(t_compute.elapsed().as_secs_f64() * 1000.0);
 
@@ -2278,11 +2320,8 @@ impl App {
         let scaled_x = ndc_x * aspect;
         let scaled_y = ndc_y;
 
-        // Apply inverse rotation
-        let cos_r = (-config.rotation).cos();
-        let sin_r = (-config.rotation).sin();
-        let rotated_x = scaled_x * cos_r - scaled_y * sin_r;
-        let rotated_y = scaled_x * sin_r + scaled_y * cos_r;
+        // Screen space → pan frame (rotation-aware in 2D, identity in 3D)
+        let (rotated_x, rotated_y) = config.screen_delta_to_pan_frame(scaled_x, scaled_y);
 
         // Apply inverse zoom and add pan
         let fractal_x = rotated_x / config.zoom + config.pan_x;

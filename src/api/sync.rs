@@ -612,6 +612,9 @@ fn flame_from_subflame_response(resp: &FlameResponse) -> Flame {
         final_transforms: finals.iter().map(|t| transform_from_api(t)).collect(),
         render_mode: resp.render_mode.into(),
         perspective_strength: resp.perspective_strength,
+        depth_density_compensation: 0.0,
+        far_density_fade: 0.0,
+        far_density_fade_start: 0.0,
         xaos,
         solo_transform: resp.solo_transform.map(|i| i as usize),
         subflames: resp.subflames.iter().map(flame_from_subflame_response).collect(),
@@ -652,6 +655,9 @@ pub fn flame_response_to_config(resp: &FlameResponse) -> FractalConfig {
         final_transforms: finals.iter().map(|t| transform_from_api(t)).collect(),
         render_mode: resp.render_mode.into(),
         perspective_strength: resp.perspective_strength,
+        depth_density_compensation: 0.0,
+        far_density_fade: 0.0,
+        far_density_fade_start: 0.0,
         xaos,
         solo_transform: resp.solo_transform.map(|i| i as usize),
         subflames: resp.subflames.iter().map(flame_from_subflame_response).collect(),
@@ -690,6 +696,10 @@ pub fn flame_response_to_config(resp: &FlameResponse) -> FractalConfig {
         // API contract doesn't carry camera_bank yet — defaults to 0
         // (no bank applied). Wire through when the API grows a field.
         camera_bank: 0.0,
+        // API contract doesn't carry camera_x/y yet — default to 0
+        // (camera at origin). Wire through when the API grows fields.
+        camera_x: 0.0,
+        camera_y: 0.0,
         camera_z: resp.camera_z,
         // API contract doesn't carry image_size yet; default to the
         // historical 1920×1080 so API-loaded flames behave the same

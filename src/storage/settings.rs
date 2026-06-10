@@ -25,6 +25,27 @@ pub const VERSION_HISTORY: &[&str] = &[
     "4: Added compact_mode for mobile/small-screen layout",
 ];
 
+/// Fly-mode mouse-look behavior. A device-level input preference
+/// (like sensitivity), not per-fractal state.
+///
+/// `FreeLook`: drag rotates about the camera's own screen axes
+/// (space-sim style). Works identically at every orientation, never
+/// gimbal-locks, full-sphere coverage; circular mouse motions
+/// accumulate roll, so the `rotation` value drifts during look.
+///
+/// `Fps`: drag yaws about the world-up axis and pitches about the
+/// screen-right axis (classic FPS). The horizon (the fractal's XY
+/// plane) always stays level and `rotation` is never touched by
+/// mouse-look; in exchange, looking past straight-down/up reverses
+/// horizontal drag, and at the straight-down home pose horizontal
+/// drag spins the view in place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum FlyCameraMode {
+    #[default]
+    FreeLook,
+    Fps,
+}
+
 /// System settings - device-specific application preferences
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemSettings {
@@ -81,6 +102,35 @@ pub struct SystemSettings {
     #[cfg(not(target_arch = "wasm32"))]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub saved_credentials: Option<crate::storage::credentials::SavedCredentials>,
+
+    // Free-fly camera (3D mode) tuning. Used when the user enters
+    // fly mode (F key or toggle button) — WASD/QE for movement,
+    // mouse drag in viewport for look-around. See
+    // `docs/projects/free-camera-movement.md`.
+    /// Mouse-look sensitivity in radians per pixel of drag.
+    /// Default 0.005 = ~0.3° per pixel, comfortable for most mice.
+    #[serde(default = "default_fly_mouse_sensitivity")]
+    pub fly_mouse_sensitivity: f32,
+
+    /// Movement speed in world units per second for WASD/QE in fly mode.
+    /// Default 1.0 — same magnitude as `camera_x/y/z` values.
+    #[serde(default = "default_fly_move_speed")]
+    pub fly_move_speed: f32,
+
+    /// Sprint multiplier — speed × this value while Shift is held.
+    /// Default 3.0.
+    #[serde(default = "default_fly_sprint_multiplier")]
+    pub fly_sprint_multiplier: f32,
+
+    /// Invert mouse Y axis for fly-mode look (some users prefer it).
+    /// Default false.
+    #[serde(default)]
+    pub fly_invert_y: bool,
+
+    /// Mouse-look behavior in fly mode. Device preference, not
+    /// per-fractal state — deliberately NOT part of FractalConfig.
+    #[serde(default)]
+    pub fly_camera_mode: FlyCameraMode,
 
     // Export Defaults
     /// Default export width in pixels
@@ -149,6 +199,18 @@ fn default_export_height() -> u32 {
     1080
 }
 
+fn default_fly_mouse_sensitivity() -> f32 {
+    0.005
+}
+
+fn default_fly_move_speed() -> f32 {
+    1.0
+}
+
+fn default_fly_sprint_multiplier() -> f32 {
+    3.0
+}
+
 impl Default for SystemSettings {
     fn default() -> Self {
         Self {
@@ -165,6 +227,11 @@ impl Default for SystemSettings {
             auth_email: None,
             #[cfg(not(target_arch = "wasm32"))]
             saved_credentials: None,
+            fly_mouse_sensitivity: default_fly_mouse_sensitivity(),
+            fly_move_speed: default_fly_move_speed(),
+            fly_sprint_multiplier: default_fly_sprint_multiplier(),
+            fly_invert_y: false,
+            fly_camera_mode: FlyCameraMode::default(),
             default_export_width: default_export_width(),
             default_export_height: default_export_height(),
             #[cfg(not(target_arch = "wasm32"))]
