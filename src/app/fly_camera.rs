@@ -428,20 +428,21 @@ impl App {
             rotation_old
         };
 
-        let _ = self
-            .config_manager
-            .update_param(ConfigPath::CameraRotationX, pitch_new.into());
-        let _ = self
-            .config_manager
-            .update_param(ConfigPath::CameraRotationY, yaw_new.into());
+        // All writes for this event go out as ONE batch carrying the
+        // fly-camera history marker: consecutive fly batches coalesce
+        // into a single undo entry (path-keyed merge in push_undo)
+        // even though the path set varies event to event — without
+        // this, flying floods the undo history within seconds.
+        let mut changes: Vec<(ConfigPath, crate::config::ConfigValue)> = vec![
+            (ConfigPath::CameraRotationX, pitch_new.into()),
+            (ConfigPath::CameraRotationY, yaw_new.into()),
+        ];
         // Free-look rolls: rotation legitimately drifts as the
         // camera's screen axes precess (e.g. circular mouse motion).
         // Skip the write when unchanged so undo history and the
         // slider stay quiet on pure pitch/yaw paths.
         if rotation_new != rotation_old {
-            let _ = self
-                .config_manager
-                .update_param(ConfigPath::Rotation, rotation_new.into());
+            changes.push((ConfigPath::Rotation, rotation_new.into()));
         }
 
         // Pan-pivot compensation. Skip entirely when pan is zero
@@ -459,19 +460,14 @@ impl App {
             let m_new_nr = CameraMatrix::build(pitch_new, yaw_new, 0.0);
             let off_old = m_old_nr.world_offset_for_camera_xy(pan_x, pan_y);
             let off_new = m_new_nr.world_offset_for_camera_xy(pan_x, pan_y);
-            let new_x = cam_x + off_old[0] - off_new[0];
-            let new_y = cam_y + off_old[1] - off_new[1];
-            let new_z = cam_z + off_old[2] - off_new[2];
-            let _ = self
-                .config_manager
-                .update_param(ConfigPath::CameraX, new_x.into());
-            let _ = self
-                .config_manager
-                .update_param(ConfigPath::CameraY, new_y.into());
-            let _ = self
-                .config_manager
-                .update_param(ConfigPath::CameraZ, new_z.into());
+            changes.push((ConfigPath::CameraX, (cam_x + off_old[0] - off_new[0]).into()));
+            changes.push((ConfigPath::CameraY, (cam_y + off_old[1] - off_new[1]).into()));
+            changes.push((ConfigPath::CameraZ, (cam_z + off_old[2] - off_new[2]).into()));
         }
+        let _ = self.config_manager.update_batch(
+            changes,
+            crate::config::manager::FLY_CAMERA_HISTORY_DESC.to_string(),
+        );
     }
 
     /// Per-frame fly-camera integration. Reads `fly_keys_held` and
@@ -577,15 +573,16 @@ impl App {
         let new_x = cfg.camera_x + delta[0];
         let new_y = cfg.camera_y + delta[1];
         let new_z = cfg.camera_z + delta[2];
-        let _ = self
-            .config_manager
-            .update_param(ConfigPath::CameraX, new_x.into());
-        let _ = self
-            .config_manager
-            .update_param(ConfigPath::CameraY, new_y.into());
-        let _ = self
-            .config_manager
-            .update_param(ConfigPath::CameraZ, new_z.into());
+        // Single batch with the fly-camera history marker — coalesces
+        // with the rest of the fly gesture (see apply_fly_mouse_look).
+        let _ = self.config_manager.update_batch(
+            vec![
+                (ConfigPath::CameraX, new_x.into()),
+                (ConfigPath::CameraY, new_y.into()),
+                (ConfigPath::CameraZ, new_z.into()),
+            ],
+            crate::config::manager::FLY_CAMERA_HISTORY_DESC.to_string(),
+        );
     }
 }
 
