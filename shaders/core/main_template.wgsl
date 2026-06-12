@@ -52,6 +52,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var color = vec3<f32>(1.0, 1.0, 1.0);
     var color_index = 0.0;  // For palette mode
 
+    // Fuse (burn-in) countdown: plot only when 0. Starts at the
+    // configured burn-in and is RESET by the bad-value respawn below
+    // (JWF re-fuses re-randomized points the same way), so a respawned
+    // point re-converges onto the attractor before contributing.
+    var fuse = params.burn_in;
+
 {{#if PATH_TRACKING}}
     // Path tracking for PathMap mode
     // Stores first 32 iterations losslessly (4 bits per transform, supports up to 16 transforms)
@@ -178,6 +184,65 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
 {{/if}}
 
+        // flam3/JWF-style bad-value recovery, in two tiers:
+        //
+        // X/Y divergence → full respawn + re-fuse, like JWF's
+        // validateState() → preFuseIter() (x, y ∈ [-1, 1], z = 0).
+        // The magnitude check (rather than NaN compares, which WGSL
+        // compilers may assume away) catches growth before it reaches
+        // f32 infinity and poisons everything downstream.
+{{#if RENDER_3D}}
+        //
+        // Z divergence → SATURATE at ±1e32 instead of respawning.
+        // Z compounds legitimately through always-z variations under
+        // preserve_z=true (JWF-rando25: edisc at weight 15 multiplies
+        // z by 15 per pass — f32 would hit the threshold every ~35
+        // iterations, but JWF's f64 cruises ~260 iterations before
+        // its Inf-triggered respawn, so respawning that often starves
+        // the attractor visibly). Saturation keeps the X/Y dynamics
+        // identical to JWF's long-lived points, and every consumer
+        // treats a saturated z exactly like JWF treats Inf: flat
+        // views never read it (zero camera-matrix coefficient times
+        // a FINITE huge value is 0, not the NaN that Inf produced),
+        // and pitched views reject the sample at the bounds check.
+        // Non-finite z (NaN from 0·∞ inside a variation) falls to 0,
+        // approximating JWF's eventual respawn for those points.
+        let z_sat = clamp(current.z, -1e32, 1e32);
+        current.z = select(0.0, z_sat, abs(z_sat) <= 1e32);
+        // JWF's f64 does eventually reach actual Inf and respawn the
+        // point — for explosive growth that's roughly a couple
+        // hundred iterations into the divergence. A point parked on
+        // our saturation rail would otherwise live (and stay
+        // invisible in pitched views) forever; emulate JWF's
+        // amortized respawn cycle with a 1/256 per-iteration chance
+        // while saturated.
+        var z_railed_respawn = false;
+        if (abs(current.z) >= 1e32) {
+            z_railed_respawn = rng_nextf(&rng) < 0.00390625;
+        }
+{{else}}
+        let z_railed_respawn = false;
+{{/if}}
+        let bad_value = z_railed_respawn ||
+                        !(abs(current.x) <= 1e32) ||
+                        !(abs(current.y) <= 1e32);
+        if (bad_value) {
+{{#if RENDER_3D}}
+            current = vec3<f32>(
+                rng_nextf(&rng) * 2.0 - 1.0,
+                rng_nextf(&rng) * 2.0 - 1.0,
+                0.0
+            );
+{{else}}
+            current = vec2<f32>(
+                rng_nextf(&rng) * 2.0 - 1.0,
+                rng_nextf(&rng) * 2.0 - 1.0
+            );
+{{/if}}
+            fuse = params.burn_in;
+            continue;
+        }
+
         // After Linked chain: current = P_linked (feeds forward as
         // next iteration's input). Speed and color flow use P_linked.
         let speed = length(current - old_pos);
@@ -213,7 +278,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let needs_path_tracking = (COLOR_MODE == 2u) || (params.num_path_filters > 0u);
         if (needs_path_tracking) {
             // For FirstAfterBurnIn mode (1), only track path after burn-in
-            let should_track = (params.path_capture_mode != 1u) || (i >= params.burn_in);
+            // (fuse == 0 — also re-armed by the bad-value respawn)
+            let should_track = (params.path_capture_mode != 1u) || (fuse == 0u);
             if (should_track) {
                 if (params.path_tracking_mode == 0u) {
                     // First mode: store first 32 iterations, then stop writing to path array
@@ -242,8 +308,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
 {{/if}}
 
-        // Skip burn-in iterations
-        if (i >= params.burn_in) {
+        // Skip burn-in / re-fuse iterations (the respawn above resets
+        // the countdown so recovering points don't plot mid-flight)
+        if (fuse > 0u) {
+            fuse = fuse - 1u;
+        } else {
 {{#if HAS_ATTACHMENTS}}
             // FINAL CHAIN — pure plot-time filter. Each Final's variations
             // and affine reshape what gets plotted but DON'T feed forward.

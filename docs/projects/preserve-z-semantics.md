@@ -72,6 +72,37 @@ gated.
   a flame renders flat where JWF has depth, the culprit is most likely
   an unaudited always-z variation — check its source and add the flag.
 
+## Bad-value recovery (companion mechanism)
+
+JWF tolerates divergent points: `validateState()` re-randomizes any
+Inf/NaN point via `preFuseIter()` (x, y ∈ [-1, 1], z = 0) and the plot
+path skips NaN samples. We previously had NO recovery — a divergent
+point NaN-poisoned itself permanently (`0·Inf = NaN` in the camera
+transform), observed as missing attractor regions on
+`output/JWF-rando25.flame` at preserve_z=true (edisc at weight 15
+multiplies z by ×15 per pass; f32 overflows in ~40 iterations).
+
+The iteration loop in `main_template.wgsl` now does (per iteration):
+
+- **X/Y magnitude > 1e32** → full respawn + re-fuse (burn-in counter
+  rearmed so the recovering point doesn't plot mid-flight). Magnitude
+  checks rather than NaN compares — WGSL compilers may assume
+  NaN-free math.
+- **Z magnitude > 1e32 (3D only)** → SATURATE at ±1e32 instead of
+  respawning. f32 hits the threshold ~7× sooner than JWF's f64
+  reaches Inf; respawning that often visibly starves the attractor.
+  A finite-huge z behaves exactly like JWF's Inf at every consumer
+  (flat views: zero matrix coefficient × finite = 0, not NaN;
+  pitched views: sample rejected at bounds). Non-finite z falls to 0.
+- **While z sits on the rail** → 1/256 per-iteration respawn chance,
+  emulating JWF's amortized respawn cycle (their f64 takes a couple
+  hundred iterations of explosive growth to actually reach Inf).
+
+Verified on JWF-rando25: preserve_z on/off now render the same (~1%
+density asymmetry from differing respawn rates, same as JWF's own
+on/off asymmetry in principle), where previously preserve_z=on lost
+whole sections.
+
 ## Verification
 
 - `output/JWF-rando2.flame` renders pixel-identical to JWildfire at
