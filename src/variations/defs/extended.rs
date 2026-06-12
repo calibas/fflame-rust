@@ -866,6 +866,7 @@ fn variation_curl3D(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 ///
 /// # Authors
 /// - Scott Draves
+/// - Andreas Maschke
 pub static RADIAL_BLUR: VariationDef = VariationDef {
     name: "radial_blur",
     aliases: &[],
