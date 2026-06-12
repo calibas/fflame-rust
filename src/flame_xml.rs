@@ -663,9 +663,22 @@ fn parse_xform_element(
                 // Try to parse as variation or variation parameter
                 if let Ok(parsed_value) = value.parse::<f32>() {
                     // First, try direct variation lookup (e.g., "julian", "spherical")
-                    if registry.get(key).is_some() {
+                    if let Some(info) = registry.get(key) {
                         if parsed_value != 0.0 {
-                            transform.variations.insert(key.to_string(), parsed_value);
+                            // Store under the CANONICAL name — `key` may be a
+                            // foreign alias (e.g. JWF `linear3D` → our
+                            // `linear`). The rest of the pipeline (per-flame
+                            // local index map, GPU weight upload, UI) only
+                            // knows canonical names; an alias key passes
+                            // `registry.get()` here but is silently dropped
+                            // at shader build. Sum rather than overwrite so a
+                            // flame carrying both `linear` and `linear3D`
+                            // keeps both contributions (JWF treats them as
+                            // separate variations whose outputs add).
+                            *transform
+                                .variations
+                                .entry(info.name.clone())
+                                .or_insert(0.0) += parsed_value;
                         }
                     } else if key.contains('_') {
                         // Try to parse as variation parameter (e.g., "julian_power", "blob_high")
@@ -785,9 +798,15 @@ fn parse_finalxform_element(
                 // Try to parse as variation or variation parameter
                 if let Ok(parsed_value) = value.parse::<f32>() {
                     // First, try direct variation lookup
-                    if registry.get(key).is_some() {
+                    if let Some(info) = registry.get(key) {
                         if parsed_value != 0.0 {
-                            transform.variations.insert(key.to_string(), parsed_value);
+                            // Canonical name + summed merge — same
+                            // alias-canonicalization as the xform parser
+                            // above (JWF `linear3D` → our `linear`).
+                            *transform
+                                .variations
+                                .entry(info.name.clone())
+                                .or_insert(0.0) += parsed_value;
                         }
                     } else if key.contains('_') {
                         // Try to parse as variation parameter
@@ -850,7 +869,10 @@ fn find_variation_and_param(key: &str, registry: &crate::variations::VariationRe
 
             // Validate that this parameter exists for this variation
             if var_info.parameters.iter().any(|p| p.name == param_name) {
-                return Some((potential_var, param_name));
+                // Return the CANONICAL variation name — `potential_var`
+                // may be a foreign alias, and `set_variation_param`
+                // keys must match the canonical `variations` entry.
+                return Some((var_info.name.clone(), param_name));
             }
         }
     }
@@ -1900,6 +1922,55 @@ mod tests {
         assert_eq!(no_bank_cfg.camera_bank, 0.0);
         let no_bank_xml = write_flame_xml(no_bank_cfg);
         assert!(!no_bank_xml.contains("cam_roll="), "identity bank must not be written: {}", no_bank_xml);
+    }
+
+    #[test]
+    fn test_variation_alias_canonicalization() {
+        // JWF writes `linear3D`; our canonical def is `linear` (with
+        // "linear3D" as an alias). The import must store the weight
+        // under the CANONICAL name: the per-flame local index map is
+        // built from canonical registry names only, so an alias key
+        // passes the import lookup but is silently dropped at shader
+        // build — observed as renders matching JWF-minus-linear3D.
+        let xml = r#"
+<flames name="t">
+<flame name="Alias" size="800 600" center="0 0" scale="200">
+   <xform weight="1" color="0" linear3D="0.8" spherical="0.2" coefs="1 0 0 1 0 0" opacity="1" />
+</flame>
+</flames>"#;
+        let cfg = &parse_flame_xml(xml).expect("parse must succeed")[0];
+        let vars = &cfg.flame.transforms[0].variations;
+        assert!(
+            !vars.contains_key("linear3D"),
+            "alias key must not be stored: {vars:?}"
+        );
+        let w = vars.get("linear").copied().expect("canonical key present");
+        assert!((w - 0.8).abs() < 1e-6, "linear weight = {w}");
+
+        // The canonicalized weight must actually reach the shader's
+        // local index map (the original failure point).
+        let id_map = cfg.flame.get_id_mapping();
+        assert!(
+            id_map.contains_key("linear"),
+            "linear missing from shader id map: {id_map:?}"
+        );
+
+        // Alias + canonical on the same xform sum their weights (JWF
+        // treats them as separate variations whose outputs add; in
+        // our single-def model that's a summed weight).
+        let xml_both = r#"
+<flames name="t">
+<flame name="Both" size="800 600" center="0 0" scale="200">
+   <xform weight="1" color="0" linear="0.25" linear3D="0.5" coefs="1 0 0 1 0 0" opacity="1" />
+</flame>
+</flames>"#;
+        let cfg = &parse_flame_xml(xml_both).expect("parse must succeed")[0];
+        let w = cfg.flame.transforms[0]
+            .variations
+            .get("linear")
+            .copied()
+            .expect("merged canonical key present");
+        assert!((w - 0.75).abs() < 1e-6, "summed linear weight = {w}");
     }
 
     #[test]

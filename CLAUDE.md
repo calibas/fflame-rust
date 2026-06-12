@@ -65,7 +65,6 @@
 - Shell within VSCode: Git Bash (MSYS2 MinGW64)
 - Use forward slashes for paths
 - Avoid `/dev/null` (creates literal files on Windows)
-- NO `sed` EVER! It's never worked out well.
 - **Use relative paths for file edits** (e.g., `src/ui/mod.rs` not `c:\projects\fflame-rust\src\ui\mod.rs`) - helps avoid "file unexpectedly modified" errors from IDE/linter race conditions
 - One-shot codemod scripts go in `scripts/`, not temp folders outside the repo
 
