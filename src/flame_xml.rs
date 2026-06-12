@@ -682,6 +682,7 @@ fn parse_xform_element(
 
     // Apply collected parameters after all variations are known
     for (var_name, param_name, value) in pending_params {
+        let value = variation_param_from_xml(&var_name, &param_name, value);
         transform.set_variation_param(&var_name, &param_name, value);
     }
 
@@ -801,10 +802,35 @@ fn parse_finalxform_element(
 
     // Apply collected parameters after all variations are known
     for (var_name, param_name, value) in pending_params {
+        let value = variation_param_from_xml(&var_name, &param_name, value);
         transform.set_variation_param(&var_name, &param_name, value);
     }
 
     Ok((transform, color_index))
+}
+
+/// Per-parameter unit conversion: .flame XML representation → our
+/// internal value. flam3/Apo/JWF sometimes store parameters in units
+/// that differ from our UI semantics; converting at the boundary keeps
+/// on-disk .flame values meaning the same thing in every app.
+///
+/// Currently only radial_blur's angle: flam3/JWF store half-turn units
+/// (`spin = sin(a·π/2)`, 1.0 = pure spin, JWF default 0.5 = balanced);
+/// our parameter is degrees with `spin = sin(deg·π/360)`, so
+/// `degrees = xml_value × 180`.
+fn variation_param_from_xml(var_name: &str, param_name: &str, value: f32) -> f32 {
+    match (var_name, param_name) {
+        ("radial_blur", "angle") => value * 180.0,
+        _ => value,
+    }
+}
+
+/// Inverse of [`variation_param_from_xml`] for export.
+fn variation_param_to_xml(var_name: &str, param_name: &str, value: f32) -> f32 {
+    match (var_name, param_name) {
+        ("radial_blur", "angle") => value / 180.0,
+        _ => value,
+    }
 }
 
 /// Try to split an attribute key into variation name and parameter name
@@ -1370,7 +1396,8 @@ fn write_xform(
         if !is_registered {
             continue;
         }
-        out.push_str(&format!(" {}_{}=\"{}\"", var_name, param_name, fmt_f32(value)));
+        let xml_value = variation_param_to_xml(var_name, param_name, value);
+        out.push_str(&format!(" {}_{}=\"{}\"", var_name, param_name, fmt_f32(xml_value)));
     }
 
     if let Some(row) = chaos_row {
@@ -1873,6 +1900,38 @@ mod tests {
         assert_eq!(no_bank_cfg.camera_bank, 0.0);
         let no_bank_xml = write_flame_xml(no_bank_cfg);
         assert!(!no_bank_xml.contains("cam_roll="), "identity bank must not be written: {}", no_bank_xml);
+    }
+
+    #[test]
+    fn test_radial_blur_angle_unit_conversion() {
+        // flam3/JWF store radial_blur's angle in half-turn units
+        // (0.5 = balanced, 1.0 = pure spin); ours is degrees with the
+        // same effective formula (spin = sin(deg·π/360)), so the XML
+        // boundary converts ×180 on import, ÷180 on export.
+        let xml = r#"
+<flames name="t">
+<flame name="RB" size="800 600" center="0 0" scale="200">
+   <xform weight="1" color="0" radial_blur="0.7" radial_blur_angle="0.5" coefs="1 0 0 1 0 0" opacity="1" />
+</flame>
+</flames>"#;
+        let cfg = &parse_flame_xml(xml).expect("parse must succeed")[0];
+        let xform = &cfg.flame.transforms[0];
+        let angle = xform
+            .variation_params
+            .get("radial_blur.angle")
+            .copied()
+            .expect("angle param imported");
+        assert!(
+            (angle - 90.0).abs() < 1e-3,
+            "JWF 0.5 half-turns should import as 90 degrees, got {angle}"
+        );
+
+        // Export converts back to half-turn units.
+        let exported = write_flame_xml(cfg);
+        assert!(
+            exported.contains("radial_blur_angle=\"0.5\""),
+            "expected half-turn units on export: {exported}"
+        );
     }
 
     #[test]

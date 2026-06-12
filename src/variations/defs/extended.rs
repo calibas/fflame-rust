@@ -851,8 +851,18 @@ fn variation_curl3D(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 };
 
 /// Adds randomness in both rotation (spin) and scale (zoom) around the
-/// origin. The angle slider controls the mix — 0 degrees = pure zoom, 90
-/// degrees = pure spin, 45 degrees = balanced.
+/// origin. The angle slider controls the mix — 0° = pure zoom blur,
+/// 90° = balanced, 180° = pure rotational blur.
+///
+/// flam3 / JWildfire store this parameter in half-turn units
+/// (`spin = sin(angle · π/2)`, so 1.0 = pure spin, JWF default 0.5 =
+/// balanced) — our degrees relate by `degrees = jwf_value × 180`,
+/// converted at the .flame XML boundary (see `flame_xml.rs`).
+///
+/// Weight semantics follow JWF's `RadialBlurFunc.transform`: `pAmount`
+/// scales spin/zoom only, while the `ra` rotation term and the `−1` in
+/// `rz` stay unscaled. The WGSL bakes the weight in and pre-divides by
+/// it to cancel the dispatcher's outer multiply (idisc pattern).
 ///
 /// # Authors
 /// - Scott Draves
@@ -864,7 +874,7 @@ pub static RADIAL_BLUR: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     features: &[Feature::NeedsRng],
     parameters: &[
-        param!("angle", "Angle", angle, 0.0, "Spin/zoom balance. 0 degrees = pure zoom blur, 90 degrees = pure rotational blur, 45 degrees = balanced mix."),
+        param!("angle", "Angle", angle, 0.0, "Spin/zoom balance. 0 degrees = pure zoom blur, 180 degrees = pure rotational blur, 90 degrees = balanced mix."),
     ],
     // 2 derived values at slots 1..3:
     //   1: spin_var  (sin(angle_deg · π/360))
@@ -872,7 +882,8 @@ pub static RADIAL_BLUR: VariationDef = VariationDef {
     init_param_count: 2,
     wgsl_init: Some(r#"
 fn init_radial_blur(user: array<f32, 1>) -> array<f32, 2> {
-    let half_angle_rad = user[0] * 3.14159265358979 / 360.0;  // (deg·π/180)·0.5
+    // deg·π/360 = (deg/180)·(π/2) — JWF's angle·π/2 with angle = deg/180.
+    let half_angle_rad = user[0] * 3.14159265358979 / 360.0;
     var out: array<f32, 2>;
     out[0] = sin(half_angle_rad);  // spin_var
     out[1] = cos(half_angle_rad);  // zoom_var
@@ -883,35 +894,44 @@ fn init_radial_blur(user: array<f32, 1>) -> array<f32, 2> {
     wgsl_state_init: None,
     wgsl_2d: r#"
 fn variation_radial_blur(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
-    let spin_var = get_param(xform_id, variation_id, 1u);
-    let zoom_var = get_param(xform_id, variation_id, 2u);
+    // JWF bakes the variation weight INTO spin/zoom while ra and the
+    // −1 in rz stay unscaled; the dispatch site multiplies our return
+    // value by the weight, so compute the JWF result and pre-divide.
+    let w = transforms[xform_id].variations[variation_id];
+    let inv_w = 1.0 / select(w, 1e-30, abs(w) < 1e-30);
+    let spin = w * get_param(xform_id, variation_id, 1u);
+    let zoom = w * get_param(xform_id, variation_id, 2u);
 
     let rnd_g = rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) - 2.0;
 
     let ra = sqrt(p.x * p.x + p.y * p.y);
-    let angle_out = atan2(p.y, p.x) + spin_var * rnd_g;
-    let rz = zoom_var * rnd_g - 1.0;
+    let alpha = atan2(p.y, p.x) + spin * rnd_g;
+    let rz = zoom * rnd_g - 1.0;
 
     return vec2<f32>(
-        ra * cos(angle_out) + rz * p.x,
-        ra * sin(angle_out) + rz * p.y
+        (ra * cos(alpha) + rz * p.x) * inv_w,
+        (ra * sin(alpha) + rz * p.y) * inv_w
     );
 }
 "#,
     wgsl_3d: r#"
 fn variation_radial_blur(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
-    let spin_var = get_param(xform_id, variation_id, 1u);
-    let zoom_var = get_param(xform_id, variation_id, 2u);
+    let w = transforms[xform_id].variations[variation_id];
+    let inv_w = 1.0 / select(w, 1e-30, abs(w) < 1e-30);
+    let spin = w * get_param(xform_id, variation_id, 1u);
+    let zoom = w * get_param(xform_id, variation_id, 2u);
 
     let rnd_g = rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) - 2.0;
 
     let ra = sqrt(p.x * p.x + p.y * p.y);
-    let angle_out = atan2(p.y, p.x) + spin_var * rnd_g;
-    let rz = zoom_var * rnd_g - 1.0;
+    let alpha = atan2(p.y, p.x) + spin * rnd_g;
+    let rz = zoom * rnd_g - 1.0;
 
+    // JWF preserve-z adds pAmount·z; the dispatcher's outer weight
+    // supplies that on the unscaled p.z.
     return vec3<f32>(
-        ra * cos(angle_out) + rz * p.x,
-        ra * sin(angle_out) + rz * p.y,
+        (ra * cos(alpha) + rz * p.x) * inv_w,
+        (ra * sin(alpha) + rz * p.y) * inv_w,
         p.z
     );
 }
