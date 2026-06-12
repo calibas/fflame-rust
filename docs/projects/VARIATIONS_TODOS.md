@@ -399,6 +399,27 @@ Z output. The remaining `writes_color: false` compromises in
 `truchet`, `truchet2`, `waveblur_wf` follow the same pattern;
 see the *Direct-color (DC) infrastructure* section below.)
 
+### Skipped direct-color writes — restore like swirl3D_wf (2026-06-12)
+
+`swirl3D_wf`'s skipped `pVarTP.color` write turned out to be a real
+rendering bug (JWF-rando3: palette stripes tracking Z were missing
+entirely). The original "writes_color-model conflict" rationale
+doesn't hold for unconditional writes: `Feature::WritesColor` + a
+`*vc` write models JWF exactly, and `direct_color` defaults to 1.0 so
+imported JWF flames (which carry no `pluginColor` attribute) get
+JWF's replace-the-color semantics. Restore the remaining skipped
+color writes the same way, checking each Java source for whether the
+write is unconditional or flag-gated (gated ones need the conditional
+modeled too, not skipped):
+
+- `spirograph3D` (apo_misc17.rs) — the original batch-60 compromise;
+  write is CONDITIONAL on a flag param
+- `apo_misc21.rs`, `apo_misc22.rs` — see module docs for which defs
+- `iconattractor_misc.rs`
+- `sosa_attractors2.rs`, `sosa_attractors4.rs`
+- plus the `writes_color: false` dc_* / truchet / waveblur_wf list
+  above
+
 ---
 
 ## Out of scope (defer to other branches)

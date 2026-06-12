@@ -165,38 +165,56 @@ fn variation_spherical3D_wf(p: vec3<f32>, xform_id: u32, variation_id: u32) -> v
 /// output `sin(6·cos(rad) − n·ang)` that introduces a sinusoidal Z
 /// modulation parameterized by `n`. Matches JWildfire's `Swirl3DWFFunc`
 /// (uses `getPrecalcAtanYX()` = `atan2(y, x)`).
+///
+/// Also a direct-color variation: JWF writes `pVarTP.color =
+/// |sin(6·cos(rad) − n·ang)|` UNCONDITIONALLY — the same value as the
+/// Z output, which is why its palette stripes track Z position. The
+/// write was originally skipped citing the batch-60 spirograph3D
+/// compromise, but that compromise concerned CONDITIONAL color
+/// writes; an unconditional `*vc` write is exactly what
+/// `Feature::WritesColor` models, and `direct_color` defaults to 1.0
+/// so JWF's replace-the-color semantics hold for imported flames
+/// (JWF .flame files carry no pluginColor attribute).
 pub static SWIRL3D_WF: VariationDef = VariationDef {
     name: "swirl3D_wf",
     aliases: &[],
     display_name: "Swirl 3D WF",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[Feature::AlwaysZ],
+    features: &[Feature::AlwaysZ, Feature::WritesColor],
     parameters: &[
-        param!("n", "N", unlimited_float, 0.0, -10.0, 10.0, "Angular multiplier on the Z-output sine: `sin(6·cos(rad) − n·ang)`."),
+        param!("n", "N", unlimited_float, 0.0, -10.0, 10.0, "Angular multiplier on the Z-output sine: `sin(6·cos(rad) − n·ang)`. Also drives the direct-color stripes (color = |z output|)."),
     ],
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
     wgsl_2d: r#"
-fn variation_swirl3D_wf(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
-    let small = 1e-30;
-    let rad = sqrt(p.x * p.x + p.y * p.y) + small;
-    let ang = atan2(p.y, p.x);
-    return vec2<f32>(rad * cos(ang), rad * sin(ang));
-}
-"#,
-    wgsl_3d: r#"
-fn variation_swirl3D_wf(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
+fn variation_swirl3D_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, vc: ptr<function, f32>) -> vec2<f32> {
     let n = get_param(xform_id, variation_id, 0u);
     let small = 1e-30;
     let rad = sqrt(p.x * p.x + p.y * p.y) + small;
     let ang = atan2(p.y, p.x);
+    // JWF writes color unconditionally — |z output| (the z itself is
+    // dropped in 2D mode, but the color stripe survives).
+    *vc = abs(sin(6.0 * cos(rad) - n * ang));
+    return vec2<f32>(rad * cos(ang), rad * sin(ang));
+}
+"#,
+    wgsl_3d: r#"
+fn variation_swirl3D_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, vc: ptr<function, f32>) -> vec3<f32> {
+    let n = get_param(xform_id, variation_id, 0u);
+    let small = 1e-30;
+    let rad = sqrt(p.x * p.x + p.y * p.y) + small;
+    let ang = atan2(p.y, p.x);
+    let z_out = sin(6.0 * cos(rad) - n * ang);
+    // JWF writes color unconditionally — |z output|, which is why
+    // the palette stripes correspond to Z position.
+    *vc = abs(z_out);
     return vec3<f32>(
         rad * cos(ang),
         rad * sin(ang),
-        sin(6.0 * cos(rad) - n * ang),
+        z_out,
     );
 }
 "#,
