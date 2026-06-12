@@ -109,7 +109,7 @@ pub static TANGENT3D: VariationDef = VariationDef {
     display_name: "Tangent 3D",
     category: VariationCategory::Depth3D,
     phase: VariationPhase::Normal,
-    features: &[],
+    features: &[Feature::AlwaysZ],
     parameters: &[],
     init_param_count: 0,
     wgsl_init: None,
@@ -321,7 +321,7 @@ pub static HELIX: VariationDef = VariationDef {
     display_name: "Helix",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[],
+    features: &[Feature::AlwaysZ],
     parameters: &[
         VariationParamDef { name: "frequency", display_name: "Frequency", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("How many full turns the helix makes per unit of Z.") },
@@ -365,7 +365,7 @@ pub static HELICOID: VariationDef = VariationDef {
     display_name: "Helicoid",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[],
+    features: &[Feature::AlwaysZ],
     parameters: &[
         VariationParamDef { name: "frequency", display_name: "Frequency", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("How fast the (x, y) plane rotates as Z increases. Larger = tighter spiral.") },
@@ -514,7 +514,7 @@ pub static PIE3D: VariationDef = VariationDef {
     display_name: "Pie 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[Feature::NeedsRng],
+    features: &[Feature::NeedsRng, Feature::AlwaysZ],
     parameters: &[
         VariationParamDef { name: "slices", display_name: "Slices", param_type: ParamType::Float,
                             default_value: 7.0, min_value: Some(1.0), max_value: Some(64.0), description: Some("Number of pie wedges (1-64).") },

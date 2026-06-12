@@ -41,7 +41,7 @@ pub static OCTAPOL: VariationDef = VariationDef {
     display_name: "Octapol",
     category: VariationCategory::Plugin,
     phase: VariationPhase::Normal,
-    features: &[Feature::NeedsAccum],
+    features: &[Feature::NeedsAccum, Feature::AlwaysZ],
     parameters: &[
         param!("polarweight", "Polar Weight", unlimited_float, 0.0, -5.0, 5.0, "Blend toward polar coordinates inside the center circle. 0 = pass-through; larger magnitudes warp circle content onto the (φ, r) plane, scaled by log((r/rad)²) so the effect strengthens toward the center."),
         param!("radius", "Radius", unlimited_float, 1.0, -3.0, 3.0, "Center-circle size factor. Effective radius is 0.7071 · s · |radius|; 0 disables the polar core entirely."),

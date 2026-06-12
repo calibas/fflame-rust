@@ -126,7 +126,7 @@ pub static OVOID3D: VariationDef = VariationDef {
     display_name: "Ovoid 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[],
+    features: &[Feature::AlwaysZ],
     parameters: &[
         param!("x", "X scale", unlimited_float, 1.0, -10.0, 10.0, "X-axis scale on the inverted output."),
         param!("y", "Y scale", unlimited_float, 1.0, -10.0, 10.0, "Y-axis scale."),

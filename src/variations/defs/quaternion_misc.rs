@@ -33,7 +33,7 @@
 //! Source: `output/jwildfire-vars/output/quaternion.cpp` (Java embedded).
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -60,7 +60,7 @@ pub static QUATERNION: VariationDef = VariationDef {
     display_name: "Quaternion",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[],
+    features: &[Feature::AlwaysZ],
     parameters: &[
         // cosq (default pow=1, others=1)
         param!("cosqpow", "Cosq Pow", unlimited_float, 1.0, -10.0, 10.0, "cosq: subfunction weight (quaternion-extended cosine). 0 disables this branch entirely; non-zero activates and scales its contribution to the accumulated output."),

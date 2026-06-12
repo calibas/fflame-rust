@@ -104,7 +104,7 @@ pub static SVF: VariationDef = VariationDef {
     display_name: "SVF",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[],
+    features: &[Feature::AlwaysZ],
     parameters: &[
         param!("n", "N", unlimited_float, 2.0, -50.0, 50.0, "Frequency multiplier on Y in the inner `cos(n·y)` term."),
     ],

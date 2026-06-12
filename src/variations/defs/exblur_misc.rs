@@ -39,7 +39,7 @@ pub static EXBLUR: VariationDef = VariationDef {
     display_name: "Ex Blur",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[Feature::NeedsRng],
+    features: &[Feature::NeedsRng, Feature::AlwaysZ],
     parameters: &[
         param!("dist", "Dist", unlimited_float, 0.5, -10.0, 10.0, "Power exponent on the squared-distance scaling. Controls how the blur intensity grows with distance from the origin."),
         param!("r", "R", unlimited_float, 0.0, -10.0, 10.0, "Scaling factor on the perpendicular jitter."),

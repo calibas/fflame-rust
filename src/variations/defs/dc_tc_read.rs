@@ -60,7 +60,7 @@ pub static DC_ZTRANSL: VariationDef = VariationDef {
     display_name: "DC Z Translation",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[Feature::NeedsTransform, Feature::WritesColor],
+    features: &[Feature::NeedsTransform, Feature::WritesColor, Feature::AlwaysZ],
     parameters: &[
         param!("x0", "X0", unlimited_float, 0.0, 0.0, 1.0, "Lower edge of the color-register input range. (Swapped with `x1` in init if `x0 > x1`.)"),
         param!("x1", "X1", unlimited_float, 1.0, 0.0, 1.0, "Upper edge of the color-register input range. Determines the normalization denominator `x1 − x0`."),
@@ -205,7 +205,7 @@ pub static COLORSCALE_WF: VariationDef = VariationDef {
     display_name: "Color Scale WF",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[Feature::NeedsTransform, Feature::WritesColor],
+    features: &[Feature::NeedsTransform, Feature::WritesColor, Feature::AlwaysZ],
     parameters: &[
         param!("scale_x", "Scale X", unlimited_float, 0.0, -10.0, 10.0, "X output scale: contribution to result.x is `w · scale_x · p.x`."),
         param!("scale_y", "Scale Y", unlimited_float, 0.0, -10.0, 10.0, "Y output scale."),
@@ -265,7 +265,7 @@ pub static POST_COLORSCALE_WF: VariationDef = VariationDef {
     display_name: "Post Color Scale WF",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Post,
-    features: &[Feature::NeedsTransform, Feature::WritesColor],
+    features: &[Feature::NeedsTransform, Feature::WritesColor, Feature::AlwaysZ],
     parameters: &[
         param!("scale_x", "Scale X", unlimited_float, 0.0, -10.0, 10.0, "X scale: `p.x · (1 + w · scale_x)`."),
         param!("scale_y", "Scale Y", unlimited_float, 0.0, -10.0, 10.0, "Y scale."),

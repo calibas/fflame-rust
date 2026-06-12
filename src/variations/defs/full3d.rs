@@ -3,7 +3,7 @@
 //! Variations that create true 3D structures by modifying all three coordinates.
 
 use crate::variations::{
-    definition::VariationDef,
+    definition::{Feature, VariationDef},
     VariationCategory, VariationPhase,
 };
 
@@ -16,7 +16,7 @@ pub static HEMISPHERE: VariationDef = VariationDef {
     display_name: "Hemisphere",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[],
+    features: &[Feature::AlwaysZ],
     parameters: &[],
     init_param_count: 0,
     wgsl_init: None,

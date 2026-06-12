@@ -32,7 +32,7 @@
 //! Source: `output/jwildfire-vars/output/bubblet3d.cpp`.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -55,7 +55,7 @@ pub static BUBBLE_T3D: VariationDef = VariationDef {
     display_name: "Bubble T3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[],
+    features: &[Feature::AlwaysZ],
     parameters: &[
         param!("number_of_stripes", "Number of Stripes", int, 0.0, -50.0, 50.0, "Number of angular stripe sectors around the XY plane. 0 disables stripes entirely. Negative value inverts the stripe pattern (swap drawn vs blanked sectors)."),
         param!("ratio_of_stripes", "Ratio of Stripes", unlimited_float, 1.0, 0.01, 1.99, "Width fraction of the drawn stripe within each sector, clamped to [0.01, 1.99]. 1.0 = stripes and gaps are equal width."),

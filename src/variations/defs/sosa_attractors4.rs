@@ -184,7 +184,7 @@ pub static CROWN_JS: VariationDef = VariationDef {
     display_name: "Crown (JS)",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[Feature::NeedsRng],
+    features: &[Feature::NeedsRng, Feature::AlwaysZ],
     parameters: &[
         param!("a", "A", unlimited_float, 5.0, -10.0, 10.0, "Base of the exponential growth (`a^k` in the iteration). Default 5."),
         param!("b", "B", unlimited_float, 0.6309297535714574, -10.0, 10.0, "Power decay rate (`|a|^(b·k)` in the denominator). Default log(2)/log(3) ≈ 0.631."),

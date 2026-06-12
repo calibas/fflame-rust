@@ -201,7 +201,7 @@ pub static POST_JULIA3DQ: VariationDef = VariationDef {
     display_name: "Post Julia3DQ",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Post,
-    features: &[Feature::NeedsRng, Feature::NeedsTransform],
+    features: &[Feature::NeedsRng, Feature::NeedsTransform, Feature::AlwaysZ],
     parameters: &[
         param!("power", "Power", int, 3.0, -50.0, 50.0, "Number of Julia branches."),
         param!("divisor", "Divisor", int, 2.0, -50.0, 50.0, "Rational-power divisor."),

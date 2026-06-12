@@ -3,7 +3,7 @@
 //! These are the fundamental variations from the original fractal flame algorithm.
 
 use crate::variations::{
-    definition::VariationDef,
+    definition::{Feature, VariationDef},
     VariationCategory, VariationPhase,
 };
 
@@ -15,11 +15,12 @@ use crate::variations::{
 /// - Scott Draves
 pub static LINEAR: VariationDef = VariationDef {
     name: "linear",
-    // Apophysis 7X and JWildfire have a separate `linear3D` variation;
-    // our `linear` handles both 2D and 3D from the same definition.
-    // Without this alias, `linear3D="…"` attributes get silently dropped
-    // on .flame XML import.
-    aliases: &["linear3D"],
+    // `linear3D` is a SEPARATE def (registered at the end of the
+    // list): JWF gives the two different z semantics — plain `linear`
+    // passes z only under preserve_z (LinearFunc.java's gated
+    // `if (isPreserveZCoordinate())` block) while `linear3D` writes z
+    // unconditionally. One def can't carry both.
+    aliases: &[],
     display_name: "Linear",
     category: VariationCategory::Basic2D,
     phase: VariationPhase::Normal,
@@ -36,6 +37,39 @@ fn variation_linear(p: vec2<f32>) -> vec2<f32> {
 "#,
     wgsl_3d: r#"
 fn variation_linear(p: vec3<f32>) -> vec3<f32> {
+    return p;
+}
+"#,
+};
+
+/// JWildfire / Apophysis 7X `linear3D` — identity transform that also
+/// carries Z unconditionally (`Linear3DFunc.java`: `pVarTP.z +=
+/// pAmount * pAffineTP.z`, no preserve_z gate). This is what lets Z
+/// compound across chaos-game iterations in 3D flames; see
+/// `Feature::AlwaysZ`. Body is identical to `linear` — the dispatch
+/// metadata is the whole difference.
+///
+/// # Authors
+/// - Scott Draves
+pub static LINEAR3D: VariationDef = VariationDef {
+    name: "linear3D",
+    aliases: &[],
+    display_name: "Linear 3D",
+    category: VariationCategory::Depth3D,
+    phase: VariationPhase::Normal,
+    features: &[Feature::AlwaysZ],
+    parameters: &[],
+    init_param_count: 0,
+    wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    wgsl_2d: r#"
+fn variation_linear3D(p: vec2<f32>) -> vec2<f32> {
+    return p;
+}
+"#,
+    wgsl_3d: r#"
+fn variation_linear3D(p: vec3<f32>) -> vec3<f32> {
     return p;
 }
 "#,

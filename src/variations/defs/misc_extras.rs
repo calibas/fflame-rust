@@ -45,7 +45,7 @@ pub static HO: VariationDef = VariationDef {
     display_name: "HO",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[],
+    features: &[Feature::AlwaysZ],
     parameters: &[
         param!("xpow", "X Power", unlimited_float, 3.0, -10.0, 10.0, "Exponent applied to `cos(x)·cos(y)` in the X output."),
         param!("ypow", "Y Power", unlimited_float, 3.0, -10.0, 10.0, "Exponent applied to `sin(x)·cos(y)` in the Y output."),

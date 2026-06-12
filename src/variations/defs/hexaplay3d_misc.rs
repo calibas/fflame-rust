@@ -46,7 +46,7 @@ pub static HEXAPLAY_3D: VariationDef = VariationDef {
     display_name: "Hexaplay 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[Feature::NeedsRng, Feature::NeedsTransform, Feature::NeedsAccum],
+    features: &[Feature::NeedsRng, Feature::NeedsTransform, Feature::NeedsAccum, Feature::AlwaysZ],
     parameters: &[
         param!("majp", "Major Plane", unlimited_float, 1.0, -10.0, 10.0, "Major-plane threshold for Z behavior. `|majp| ≤ 1` = all points on a single Z plane (no Z split). `|majp| > 1` = points split into two planes separated by `±(|majp| - 1) · 0.5` along Z; sign picked randomly per iteration. Unused in 2D mode (Z param)."),
         param!("scale", "Scale", unlimited_float, 0.25, -10.0, 10.0, "Input-blend scale. Internally pre-multiplied by 0.5; the X/Y output is `(accum · (scale - 1) + p · scale) / weight + vertex_offset`."),

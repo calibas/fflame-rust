@@ -57,7 +57,7 @@ pub static LOQ: VariationDef = VariationDef {
     display_name: "Loq",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[],
+    features: &[Feature::AlwaysZ],
     parameters: &[
         param!("base", "Base", unlimited_float, 2.7182818284590452, 1.01, 100.0, "Log base for the X-output normalization. Defaults to e."),
     ],
@@ -122,7 +122,7 @@ pub static SPIROGRAPH3D: VariationDef = VariationDef {
     display_name: "Spirograph 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[Feature::NeedsRng],
+    features: &[Feature::NeedsRng, Feature::AlwaysZ],
     parameters: &[
         param!("a", "A", unlimited_float, 1.0, -10.0, 10.0, "Outer wheel radius."),
         param!("b", "B", unlimited_float, -0.3, -10.0, 10.0, "Inner wheel radius (signed; negative produces an internal spirograph)."),

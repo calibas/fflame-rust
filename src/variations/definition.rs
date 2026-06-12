@@ -58,6 +58,32 @@ pub enum Feature {
     /// the shader builder passes the current weighted-sum value.
     /// Effective only in normal and post phases.
     NeedsAccum,
+
+    /// The variation's JWF source writes `pVarTP.z` UNCONDITIONALLY
+    /// (true-3D variations: Julia3DFunc, ZConeFunc, Linear3DFunc, …).
+    /// In a 3D shader its z contribution is kept under both
+    /// `preserve_z` settings — this is what lets z compound across
+    /// iterations the way JWF does.
+    ///
+    /// Absent (the default), the variation is treated as JWF's
+    /// standard gated pattern — `if (isPreserveZCoordinate())
+    /// pVarTP.z += pAmount·z` — and the 3D dispatch site zeroes the
+    /// z component of its contribution when `preserve_z = false`.
+    /// Our 3D bodies return `p.z` passthrough, which is exactly the
+    /// gated add when kept and exactly JWF's skip when zeroed.
+    ///
+    /// Classified by `scripts/audit_z_write_semantics.py` against
+    /// `output/variation-jwf-source/*.java`; cite the source when
+    /// setting this by hand. Mutually exclusive with [`Self::NeverZ`].
+    AlwaysZ,
+
+    /// The variation's JWF source never writes `pVarTP.z` — not even
+    /// the gated passthrough. Its z contribution is zeroed under BOTH
+    /// `preserve_z` settings. NOTE: deliberately NOT auto-applied by
+    /// the audit script — our hand-written 3D bodies sometimes extend
+    /// 2D variations on purpose, so enforcement needs per-def review.
+    /// Mutually exclusive with [`Self::AlwaysZ`].
+    NeverZ,
 }
 
 /// Static definition of a variation

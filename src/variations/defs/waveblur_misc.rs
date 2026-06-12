@@ -40,7 +40,7 @@ pub static WAVEBLUR_WF: VariationDef = VariationDef {
     display_name: "Wave Blur WF",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[Feature::NeedsRng, Feature::NeedsTransform, Feature::WritesColor],
+    features: &[Feature::NeedsRng, Feature::NeedsTransform, Feature::WritesColor, Feature::AlwaysZ],
     parameters: &[
         param!("count", "Count", int, 5.0, 1.0, 100.0, "Maximum integer multiplier of π in the wave-radius formula (≥ 1)."),
         param!("amplitude_z", "Amplitude Z", unlimited_float, 0.5, -10.0, 10.0, "Z-axis wave amplitude (3D only). 0 zeroes the Z output."),

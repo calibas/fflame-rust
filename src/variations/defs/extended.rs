@@ -17,7 +17,7 @@ pub static ZTRANSLATE: VariationDef = VariationDef {
     display_name: "ZTranslate",
     category: VariationCategory::Depth3D,
     phase: VariationPhase::Normal,
-    features: &[],
+    features: &[Feature::AlwaysZ],
     parameters: &[],
     init_param_count: 0,
     wgsl_init: None,
@@ -52,7 +52,7 @@ pub static JULIA3D: VariationDef = VariationDef {
     display_name: "Julia3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[Feature::NeedsRng],
+    features: &[Feature::NeedsRng, Feature::AlwaysZ],
     parameters: &[
         param!("power", "Power", unlimited_int, 2.0, -10.0, 10.0, "Number of branches in the 3D Julia output. Higher = more arms; negative values flip the rotation."),
     ],
@@ -111,7 +111,7 @@ pub static FALLOFF2: VariationDef = VariationDef {
     display_name: "Falloff2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    features: &[Feature::NeedsRng],
+    features: &[Feature::NeedsRng, Feature::AlwaysZ],
     parameters: &[
         param!("scatter", "Scatter", unlimited_float, 1.0, 0.000001, 10.0, "Maximum random scatter applied at full strength."),
         param!("mindist", "Min Distance", unlimited_float, 0.5, 0.0, 10.0, "Distance from the center where the falloff kicks in. Points inside this radius get full strength scatter."),
@@ -624,7 +624,7 @@ pub static JULIASCOPE_3DB: VariationDef = VariationDef {
     display_name: "JuliaScope 3Db",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[Feature::NeedsRng],
+    features: &[Feature::NeedsRng, Feature::AlwaysZ],
     parameters: &[
         param!("power", "Power", unlimited_int, 3.0, -20.0, 20.0, "Number of mirror branches. Higher = more reflections; negative values invert the rotation. `0` no-ops the variation to avoid divide-by-zero in the angle dispatch."),
         param!("dist", "Distance", unlimited_float, 1.0, -10.0, 10.0, "Radial scaling factor. Combined with `power` into `cPower = dist / power × 0.5`, which sets the exponent on the radial term."),
@@ -729,7 +729,7 @@ pub static JULIA3DZ: VariationDef = VariationDef {
     display_name: "Julia3Dz",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[Feature::NeedsRng],
+    features: &[Feature::NeedsRng, Feature::AlwaysZ],
     parameters: &[
         param!("power", "Power", unlimited_int, 2.0, -20.0, 20.0, "Number of Julia branches in the 3D output. Higher = more arms."),
     ],
@@ -802,7 +802,7 @@ pub static CURL3D: VariationDef = VariationDef {
     display_name: "Curl3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[],
+    features: &[Feature::AlwaysZ],
     parameters: &[
         param!("cx", "CX", unlimited_float, 0.0, -5.0, 5.0, "Twist strength along the X axis."),
         param!("cy", "CY", unlimited_float, 0.0, -5.0, 5.0, "Twist strength along the Y axis."),

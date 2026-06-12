@@ -122,7 +122,7 @@ pub static POST_ZTRANSLATE_WF: VariationDef = VariationDef {
     display_name: "Post Z-Translate WF",
     category: VariationCategory::Depth3D,
     phase: VariationPhase::Post,
-    features: &[Feature::NeedsTransform],
+    features: &[Feature::NeedsTransform, Feature::AlwaysZ],
     parameters: &[],
     init_param_count: 0,
     wgsl_init: None,
@@ -156,7 +156,7 @@ pub static POST_MIRROR_WF: VariationDef = VariationDef {
     display_name: "Post Mirror WF",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Post,
-    features: &[Feature::NeedsRng],
+    features: &[Feature::NeedsRng, Feature::AlwaysZ],
     parameters: &[
         param!("xaxis", "X Axis", bool, true, "Enable the X-axis mirror branch."),
         param!("yaxis", "Y Axis", bool, false, "Enable the Y-axis mirror branch."),

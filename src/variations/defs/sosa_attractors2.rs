@@ -116,7 +116,7 @@ pub static LORENZ_JS: VariationDef = VariationDef {
     display_name: "Lorenz (JS)",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[],
+    features: &[Feature::AlwaysZ],
     parameters: &[
         param!("a", "A", unlimited_float, 10.0, -100.0, 100.0, "Lorenz parameter `a` (Prandtl number; classic value 10)."),
         param!("b", "B", unlimited_float, 28.0, -100.0, 100.0, "Lorenz parameter `b` (Rayleigh number; classic value 28)."),

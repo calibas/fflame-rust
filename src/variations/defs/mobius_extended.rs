@@ -189,7 +189,7 @@ pub static MOBIQ: VariationDef = VariationDef {
     display_name: "Mobiq",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[],
+    features: &[Feature::AlwaysZ],
     parameters: &[
         param!("qat", "qa.t", unlimited_float, 1.0, -10.0, 10.0, "T (scalar) component of quaternion A (numerator multiplier)."),
         param!("qax", "qa.x", unlimited_float, 0.0, -10.0, 10.0, "X (i) component of quaternion A (numerator multiplier)."),

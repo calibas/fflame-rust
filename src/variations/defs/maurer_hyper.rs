@@ -313,7 +313,7 @@ pub static HYPERCROP: VariationDef = VariationDef {
     display_name: "Hypercrop",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    features: &[],
+    features: &[Feature::AlwaysZ],
     parameters: &[
         param!("n", "N", int, 4.0, 3.0, 50.0, "Number of n-gon sides (≥ 3)."),
         param!("rad", "Radius", unlimited_float, 1.0, 0.0, 10.0, "Radius of the corner-cropping disc, relative to the n-gon corner radius."),

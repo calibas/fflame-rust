@@ -1926,51 +1926,77 @@ mod tests {
 
     #[test]
     fn test_variation_alias_canonicalization() {
-        // JWF writes `linear3D`; our canonical def is `linear` (with
-        // "linear3D" as an alias). The import must store the weight
-        // under the CANONICAL name: the per-flame local index map is
-        // built from canonical registry names only, so an alias key
-        // passes the import lookup but is silently dropped at shader
-        // build — observed as renders matching JWF-minus-linear3D.
+        // Aliased variation attributes must be stored under the
+        // CANONICAL name: the per-flame local index map is built from
+        // canonical registry names only, so an alias key passes the
+        // import lookup but is silently dropped at shader build —
+        // observed originally as renders matching
+        // JWF-minus-the-variation. `cylinder_apo` aliases `cylinder`.
         let xml = r#"
 <flames name="t">
 <flame name="Alias" size="800 600" center="0 0" scale="200">
-   <xform weight="1" color="0" linear3D="0.8" spherical="0.2" coefs="1 0 0 1 0 0" opacity="1" />
+   <xform weight="1" color="0" cylinder_apo="0.8" spherical="0.2" coefs="1 0 0 1 0 0" opacity="1" />
 </flame>
 </flames>"#;
         let cfg = &parse_flame_xml(xml).expect("parse must succeed")[0];
         let vars = &cfg.flame.transforms[0].variations;
         assert!(
-            !vars.contains_key("linear3D"),
+            !vars.contains_key("cylinder_apo"),
             "alias key must not be stored: {vars:?}"
         );
-        let w = vars.get("linear").copied().expect("canonical key present");
-        assert!((w - 0.8).abs() < 1e-6, "linear weight = {w}");
+        let w = vars.get("cylinder").copied().expect("canonical key present");
+        assert!((w - 0.8).abs() < 1e-6, "cylinder weight = {w}");
 
         // The canonicalized weight must actually reach the shader's
         // local index map (the original failure point).
         let id_map = cfg.flame.get_id_mapping();
         assert!(
-            id_map.contains_key("linear"),
-            "linear missing from shader id map: {id_map:?}"
+            id_map.contains_key("cylinder"),
+            "cylinder missing from shader id map: {id_map:?}"
         );
 
-        // Alias + canonical on the same xform sum their weights (JWF
-        // treats them as separate variations whose outputs add; in
-        // our single-def model that's a summed weight).
+        // Alias + canonical on the same xform sum their weights (the
+        // foreign app treats them as separate variations whose
+        // outputs add; in our merged-def model that's a summed
+        // weight).
         let xml_both = r#"
 <flames name="t">
 <flame name="Both" size="800 600" center="0 0" scale="200">
-   <xform weight="1" color="0" linear="0.25" linear3D="0.5" coefs="1 0 0 1 0 0" opacity="1" />
+   <xform weight="1" color="0" cylinder="0.25" cylinder_apo="0.5" coefs="1 0 0 1 0 0" opacity="1" />
 </flame>
 </flames>"#;
         let cfg = &parse_flame_xml(xml_both).expect("parse must succeed")[0];
         let w = cfg.flame.transforms[0]
             .variations
-            .get("linear")
+            .get("cylinder")
             .copied()
             .expect("merged canonical key present");
-        assert!((w - 0.75).abs() < 1e-6, "summed linear weight = {w}");
+        assert!((w - 0.75).abs() < 1e-6, "summed cylinder weight = {w}");
+    }
+
+    #[test]
+    fn test_linear3d_imports_as_own_variation() {
+        // `linear3D` used to be an alias of `linear`; it is now its
+        // own def because JWF gives them different z semantics
+        // (linear3D writes z unconditionally — Feature::AlwaysZ —
+        // while linear gates z on preserve_z). Both must import as
+        // separate entries and both must reach the shader id map.
+        let xml = r#"
+<flames name="t">
+<flame name="L3D" size="800 600" center="0 0" scale="200">
+   <xform weight="1" color="0" linear="0.25" linear3D="0.5" coefs="1 0 0 1 0 0" opacity="1" />
+</flame>
+</flames>"#;
+        let cfg = &parse_flame_xml(xml).expect("parse must succeed")[0];
+        let vars = &cfg.flame.transforms[0].variations;
+        let lin = vars.get("linear").copied().expect("linear present");
+        let lin3d = vars.get("linear3D").copied().expect("linear3D present");
+        assert!((lin - 0.25).abs() < 1e-6, "linear weight = {lin}");
+        assert!((lin3d - 0.5).abs() < 1e-6, "linear3D weight = {lin3d}");
+
+        let id_map = cfg.flame.get_id_mapping();
+        assert!(id_map.contains_key("linear"), "linear in id map");
+        assert!(id_map.contains_key("linear3D"), "linear3D in id map");
     }
 
     #[test]

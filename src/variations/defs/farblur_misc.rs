@@ -48,7 +48,7 @@ pub static FARBLUR: VariationDef = VariationDef {
     display_name: "Far Blur",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[Feature::NeedsRng, Feature::NeedsAccum],
+    features: &[Feature::NeedsRng, Feature::NeedsAccum, Feature::AlwaysZ],
     parameters: &[
         param!("x", "X Scale", unlimited_float, 1.0, -10.0, 10.0, "X-axis blur scale. Multiplies the X component of the random spherical offset."),
         param!("y", "Y Scale", unlimited_float, 1.0, -10.0, 10.0, "Y-axis blur scale."),

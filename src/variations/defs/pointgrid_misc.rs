@@ -153,7 +153,7 @@ pub static POINTGRID3D_WF: VariationDef = VariationDef {
     display_name: "Point Grid 3D WF",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[Feature::NeedsRng],
+    features: &[Feature::NeedsRng, Feature::AlwaysZ],
     parameters: &[
         param!("xmin", "X Min", unlimited_float, -3.0, -100.0, 100.0, "Left edge of the grid region on the X axis."),
         param!("xmax", "X Max", unlimited_float, 3.0, -100.0, 100.0, "Right edge of the grid region on the X axis."),

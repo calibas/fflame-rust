@@ -173,7 +173,7 @@ pub static JULIAN3DX: VariationDef = VariationDef {
     display_name: "JuliaN 3D X",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[Feature::NeedsRng, Feature::NeedsTransform],
+    features: &[Feature::NeedsRng, Feature::NeedsTransform, Feature::AlwaysZ],
     parameters: &[
         param!("power", "Power", int, 0.0, -100.0, 100.0, "Number of angular branches. 0 produces zero output."),
         param!("dist", "Distance", unlimited_float, 1.0, -100.0, 100.0, "Radial-power exponent — `cN = (dist/power − 1)/2`."),

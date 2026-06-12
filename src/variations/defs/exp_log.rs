@@ -163,7 +163,7 @@ pub static LOG_TILE2: VariationDef = VariationDef {
     display_name: "Log Tile2",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    features: &[Feature::NeedsRng],
+    features: &[Feature::NeedsRng, Feature::AlwaysZ],
     parameters: &[
         VariationParamDef { name: "spreadx", display_name: "Spread X", param_type: ParamType::UnlimitedFloat,
                             default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("X-axis tile spacing. The random integer from the log-of-uniform draw is multiplied by this value.") },
@@ -219,7 +219,7 @@ pub static TILE_LOG: VariationDef = VariationDef {
     display_name: "Tile Log",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    features: &[Feature::NeedsRng],
+    features: &[Feature::NeedsRng, Feature::AlwaysZ],
     parameters: &[
         VariationParamDef { name: "spread", display_name: "Spread", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Tile spacing along X. The random integer from the log-of-uniform draw is multiplied by this value.") },

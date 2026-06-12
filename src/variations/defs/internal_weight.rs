@@ -127,7 +127,7 @@ pub static LOONIE_3D: VariationDef = VariationDef {
     display_name: "Loonie 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[Feature::NeedsTransform],
+    features: &[Feature::NeedsTransform, Feature::AlwaysZ],
     parameters: &[],
     init_param_count: 0,
     wgsl_init: None,

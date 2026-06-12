@@ -277,7 +277,7 @@ pub static OCTAGON: VariationDef = VariationDef {
     display_name: "Octagon",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[],
+    features: &[Feature::AlwaysZ],
     parameters: &[
         param!("x", "X", unlimited_float, 0.0, -10.0, 10.0, "X-axis sign-shift amount added at the end (signed by `sign(x)`)."),
         param!("y", "Y", unlimited_float, 0.0, -10.0, 10.0, "Y-axis sign-shift amount."),

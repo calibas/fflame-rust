@@ -40,7 +40,7 @@ pub static CURL_SP: VariationDef = VariationDef {
     display_name: "Curl SP",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[Feature::NeedsTransform],
+    features: &[Feature::NeedsTransform, Feature::AlwaysZ],
     parameters: &[
         param!("pow", "Power", unlimited_float, 1.0, -10.0, 10.0, "Sign-preserving power exponent applied to each input axis."),
         param!("c1", "C1", unlimited_float, -0.01, -10.0, 10.0, "Linear-term coefficient in the curl warp."),

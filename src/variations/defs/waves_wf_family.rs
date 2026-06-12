@@ -30,7 +30,7 @@
 //!   - `output/jwildfire-vars/output/dinis_surface_wf.cpp`
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -299,7 +299,7 @@ pub static DINIS_SURFACE_WF: VariationDef = VariationDef {
     display_name: "Dini's Surface WF",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[],
+    features: &[Feature::AlwaysZ],
     parameters: &[
         param!("a", "A", unlimited_float, 0.8, -10.0, 10.0, "Radial scale of the surface (controls XY radius and Z magnitude)."),
         param!("b", "B", unlimited_float, 0.2, -10.0, 10.0, "Helical twist coefficient — multiplies the input U to add a linear helical Z offset."),
