@@ -11,9 +11,9 @@
 //!     factors cleanly. Full3D.
 //!
 //!   - swirl3D_wf: 3D swirl with z-modulation. 1 user param
-//!     `n`. No init. Body factors cleanly; cpp also writes color (TC),
-//!     skipped here per `writes_color`-model conflict (compromise
-//!     established in batch 60 for spirograph3D).
+//!     `n`. No init. Body factors cleanly; direct-color write
+//!     `*vc = |sin(6·cos(rad) − n·ang)|` (= |z output|, restored
+//!     2026-06-12 — JWF-rando3's Z-tracking palette stripes).
 //!
 //! Sources:
 //!   - `output/jwildfire-vars/output/cannabiscurve_wf.cpp`

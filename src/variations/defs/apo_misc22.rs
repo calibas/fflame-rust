@@ -6,13 +6,16 @@
 //!     transform's affine. 2 user params (origin, iterations;
 //!     iterations is unused in body — kept to match cpp). Body factors
 //!     cleanly through outer multiplier; reads `xf.a/b/c/d/e/f` for the
-//!     affine transform. RNG (2 calls/iter for ±1 sign choices). cpp's
-//!     direct-color writes (TC) skipped per writes_color compromise.
+//!     affine transform. RNG (2 calls/iter for ±1 sign choices).
+//!     Direct-color: blends `*vc` toward the cell parity weighted by
+//!     `H = 0.1·origin` (note Java's int-XOR quirk: x0^y0 of ±1 ints
+//!     is 0 or −2, not 0/1).
 //!
 //!   - post_point_symmetry_wf: post-phase N-fold rotational
-//!     symmetry around (centre_x, centre_y). 3 user params (centre_x,
-//!     centre_y, order); cpp's colorshift omitted per writes_color
-//!     compromise. Computes the per-iteration rotation angle on-the-fly
+//!     symmetry around (centre_x, centre_y). 4 user params (centre_x,
+//!     centre_y, order, colorshift); each symmetry copy shifts the
+//!     color register by `idx·colorshift`.
+//!     Computes the per-iteration rotation angle on-the-fly
 //!     instead of caching `_sina[16]`/`_cosa[16]` (cpp's fixed table
 //!     would overflow our 16-slot budget). RNG (1 call/iter to pick
 //!     the rotation index in [0, order)).
@@ -44,15 +47,20 @@ use crate::param;
 /// cell offset, then passes through the transform's pre-affine `(a·x + b·y
 /// + e, c·x + d·y + f)`. Produces a recursive Sierpinski-carpet-style
 /// scatter pattern when combined with self-similar transforms.
+///
+/// Direct-color: blends the previous color register toward the random cell
+/// parity, weighted by `H = 0.1·origin` (Java: `color = fmod(|color·0.5·(1
+/// + h) + x0_xor_y0·(1 − h)·0.5|, 1)` where `x0_xor_y0` is the *integer*
+/// XOR of the two ±1 cell signs — 0 when equal, −2 when different).
 pub static DC_CARPET: VariationDef = VariationDef {
     name: "dc_carpet",
     aliases: &[],
     display_name: "DC Carpet",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    features: &[Feature::NeedsRng, Feature::NeedsTransform],
+    features: &[Feature::NeedsRng, Feature::NeedsTransform, Feature::WritesColor],
     parameters: &[
-        param!("origin", "Origin", unlimited_float, 1.0, -10.0, 10.0, "Unused in the body — preserved as a parameter for cpp parity and preset compatibility."),
+        param!("origin", "Origin", unlimited_float, 1.0, -10.0, 10.0, "Color-blend strength: `H = 0.1·origin` weights how strongly the random cell parity pulls the color register. Visible color requires the transform's Direct Color slider > 0."),
         param!("iterations", "Iterations", int, 5.0, 1.0, 100.0, "Unused in the body — preserved as a parameter for cpp parity."),
     ],
     init_param_count: 0,
@@ -70,7 +78,7 @@ fn dc_carpet_rndsign(rng: ptr<function, RngState>) -> f32 {
     return 1.0;
 }
 
-fn variation_dc_carpet(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
+fn variation_dc_carpet(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec2<f32> {
     let xf = transforms[xform_id];
     let x0 = dc_carpet_rndsign(rng);
     let y0 = dc_carpet_rndsign(rng);
@@ -78,6 +86,14 @@ fn variation_dc_carpet(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<
     let fy = abs(p.y) - trunc(abs(p.y));
     let x = dc_carpet_signum(p.x) * fx + x0;
     let y = dc_carpet_signum(p.y) * fy + y0;
+
+    // Java: int x0^y0 of ±1 values — 0 when equal, -2 when different.
+    let xor_f = select(-2.0, 0.0, x0 == y0);
+    let h_cap = 0.1 * get_param(xform_id, variation_id, 0u);
+    let h = -h_cap + (1.0 - xor_f) * h_cap;
+    let craw = abs(*vc * 0.5 * (1.0 + h) + xor_f * (1.0 - h) * 0.5);
+    *vc = craw - floor(craw);
+
     return vec2<f32>(xf.a * x + xf.b * y + xf.e, xf.c * x + xf.d * y + xf.f);
 }
 "#,
@@ -92,7 +108,7 @@ fn dc_carpet_rndsign(rng: ptr<function, RngState>) -> f32 {
     return 1.0;
 }
 
-fn variation_dc_carpet(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
+fn variation_dc_carpet(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec3<f32> {
     let xf = transforms[xform_id];
     let x0 = dc_carpet_rndsign(rng);
     let y0 = dc_carpet_rndsign(rng);
@@ -100,6 +116,14 @@ fn variation_dc_carpet(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
     let fy = abs(p.y) - trunc(abs(p.y));
     let x = dc_carpet_signum(p.x) * fx + x0;
     let y = dc_carpet_signum(p.y) * fy + y0;
+
+    // Java: int x0^y0 of ±1 values — 0 when equal, -2 when different.
+    let xor_f = select(-2.0, 0.0, x0 == y0);
+    let h_cap = 0.1 * get_param(xform_id, variation_id, 0u);
+    let h = -h_cap + (1.0 - xor_f) * h_cap;
+    let craw = abs(*vc * 0.5 * (1.0 + h) + xor_f * (1.0 - h) * 0.5);
+    *vc = craw - floor(craw);
+
     return vec3<f32>(xf.a * x + xf.b * y + xf.e, xf.c * x + xf.d * y + xf.f, p.z);
 }
 "#,
@@ -119,21 +143,23 @@ pub static POST_POINT_SYMMETRY_WF: VariationDef = VariationDef {
     display_name: "Post Point Symmetry WF",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Post,
-    features: &[Feature::NeedsRng, Feature::NeedsTransform],
+    features: &[Feature::NeedsRng, Feature::NeedsTransform, Feature::WritesColor],
     parameters: &[
         param!("centre_x", "Centre X", unlimited_float, 0.25, -10.0, 10.0, "X center of the rotational symmetry."),
         param!("centre_y", "Centre Y", unlimited_float, 0.5, -10.0, 10.0, "Y center of the rotational symmetry."),
         param!("order", "Order", int, 3.0, 1.0, 16.0, "Number of rotational-symmetry orders (≥ 1). 3 = 3-fold rotation, 4 = 4-fold, etc."),
+        param!("colorshift", "Color Shift", unlimited_float, 0.0, -1.0, 1.0, "Color-register shift per symmetry copy: `color = fmod(color + idx·colorshift, 1)` where `idx` is the randomly chosen rotation index. Visible color requires the transform's Direct Color slider > 0."),
     ],
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
     wgsl_2d: r#"
-fn variation_post_point_symmetry_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
+fn variation_post_point_symmetry_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec2<f32> {
     let cx = get_param(xform_id, variation_id, 0u);
     let cy = get_param(xform_id, variation_id, 1u);
     let order = max(i32(get_param(xform_id, variation_id, 2u)), 1);
+    let colorshift = get_param(xform_id, variation_id, 3u);
     let order_f = f32(order);
     let w = transforms[xform_id].variations[variation_id];
     let two_pi = 6.28318530717959;
@@ -145,14 +171,20 @@ fn variation_post_point_symmetry_wf(p: vec2<f32>, xform_id: u32, variation_id: u
     let angle = f32(idx_clamped) * two_pi / order_f;
     let cosa = cos(angle);
     let sina = sin(angle);
+
+    // Java: pVarTP.color = fmod(pVarTP.color + idx * colorshift, 1.0)
+    let craw = *vc + f32(idx_clamped) * colorshift;
+    *vc = craw - trunc(craw);
+
     return vec2<f32>(cx + dx * cosa + dy * sina, cy + dy * cosa - dx * sina);
 }
 "#,
     wgsl_3d: r#"
-fn variation_post_point_symmetry_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
+fn variation_post_point_symmetry_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec3<f32> {
     let cx = get_param(xform_id, variation_id, 0u);
     let cy = get_param(xform_id, variation_id, 1u);
     let order = max(i32(get_param(xform_id, variation_id, 2u)), 1);
+    let colorshift = get_param(xform_id, variation_id, 3u);
     let order_f = f32(order);
     let w = transforms[xform_id].variations[variation_id];
     let two_pi = 6.28318530717959;
@@ -164,6 +196,11 @@ fn variation_post_point_symmetry_wf(p: vec3<f32>, xform_id: u32, variation_id: u
     let angle = f32(idx_clamped) * two_pi / order_f;
     let cosa = cos(angle);
     let sina = sin(angle);
+
+    // Java: pVarTP.color = fmod(pVarTP.color + idx * colorshift, 1.0)
+    let craw = *vc + f32(idx_clamped) * colorshift;
+    *vc = craw - trunc(craw);
+
     return vec3<f32>(cx + dx * cosa + dy * sina, cy + dy * cosa - dx * sina, p.z);
 }
 "#,

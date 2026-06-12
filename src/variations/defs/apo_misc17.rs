@@ -16,13 +16,10 @@
 //!                                                4-sum-Gaussian, ±width
 //!                                                binary). Clean factor
 //!                                                through outer.
-//!                                                cpp's `direct_color`
-//!                                                flag dropped — adding
-//!                                                conditional `vc`
-//!                                                writes complicates
-//!                                                the writes_color
-//!                                                model; can be added
-//!                                                later if needed
+//!                                                `direct_color` flag
+//!                                                gates a conditional
+//!                                                `*vc = fmod(t/2π, 1)`
+//!                                                write (JWF default 0)
 //!
 //! Sources: each variation's `.cpp` file in
 //! `output/jwildfire-vars/output/`.
@@ -122,7 +119,7 @@ pub static SPIROGRAPH3D: VariationDef = VariationDef {
     display_name: "Spirograph 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[Feature::NeedsRng, Feature::AlwaysZ],
+    features: &[Feature::NeedsRng, Feature::AlwaysZ, Feature::WritesColor],
     parameters: &[
         param!("a", "A", unlimited_float, 1.0, -10.0, 10.0, "Outer wheel radius."),
         param!("b", "B", unlimited_float, -0.3, -10.0, 10.0, "Inner wheel radius (signed; negative produces an internal spirograph)."),
@@ -131,13 +128,14 @@ pub static SPIROGRAPH3D: VariationDef = VariationDef {
         param!("tmax", "T Max", unlimited_float, 1000.0, -10000.0, 10000.0, "Maximum value of the random parameter `t`."),
         param!("width", "Width", unlimited_float, 0.0, -10.0, 10.0, "Per-axis jitter magnitude (interpretation depends on `mode`)."),
         param!("mode", "Mode", enum, 0, &["Uniform", "Phased Sin", "Independent", "Gaussian", "X Only"], "Random jitter pattern applied to the width offset."),
+        param!("direct_color", "Direct Color", bool, false, "When on, writes `fmod(t / 2π, 1)` to the color register so the palette follows the curve parameter `t`. Visible color requires the transform's Direct Color slider > 0."),
     ],
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
     wgsl_2d: r#"
-fn variation_spirograph3D(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
+fn variation_spirograph3D(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec2<f32> {
     let a = get_param(xform_id, variation_id, 0u);
     let b = get_param(xform_id, variation_id, 1u);
     let c_p = get_param(xform_id, variation_id, 2u);
@@ -173,11 +171,20 @@ fn variation_spirograph3D(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: p
     let abdb = ab / safe_b;
     let x1 = ab * cos(t) - c_p * cos(abdb * t);
     let y1 = ab * sin(t) - c_p * sin(abdb * t);
+
+    // Java: if (direct_color != 0) pVarTP.color = fmod(t / M_2PI, 1).
+    // Java's fmod is truncated (keeps the dividend's sign) — t can be
+    // negative when tmin < 0, so use trunc, not floor.
+    if (i32(get_param(xform_id, variation_id, 7u)) != 0) {
+        let craw = t / two_pi;
+        *vc = craw - trunc(craw);
+    }
+
     return vec2<f32>(x1 + w1, y1 + w2);
 }
 "#,
     wgsl_3d: r#"
-fn variation_spirograph3D(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
+fn variation_spirograph3D(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec3<f32> {
     let a = get_param(xform_id, variation_id, 0u);
     let b = get_param(xform_id, variation_id, 1u);
     let c_p = get_param(xform_id, variation_id, 2u);
@@ -218,6 +225,15 @@ fn variation_spirograph3D(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: p
     let x1 = ab * cos(t) - c_p * cos(abdb * t);
     let y1 = ab * sin(t) - c_p * sin(abdb * t);
     let z1 = c_p * sin(abdb * t);
+
+    // Java: if (direct_color != 0) pVarTP.color = fmod(t / M_2PI, 1).
+    // Java's fmod is truncated (keeps the dividend's sign) — t can be
+    // negative when tmin < 0, so use trunc, not floor.
+    if (i32(get_param(xform_id, variation_id, 7u)) != 0) {
+        let craw = t / two_pi;
+        *vc = craw - trunc(craw);
+    }
+
     return vec3<f32>(x1 + w1, y1 + w2, z1 + w3);
 }
 "#,
