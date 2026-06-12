@@ -43,7 +43,7 @@ pub static LAZYSENSEN: VariationDef = VariationDef {
     display_name: "Lazy Sensen",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[],
+    features: &[Feature::AlwaysZ],
     parameters: &[
         param!("scale_x", "Scale X", unlimited_float, 1.0, -10.0, 10.0, "X-axis stripe scale. 0 disables the X flip; the stripe width is `1/|scale_x|`."),
         param!("scale_y", "Scale Y", unlimited_float, 1.0, -10.0, 10.0, "Y-axis stripe scale."),
@@ -130,7 +130,7 @@ pub static SPHERECROP: VariationDef = VariationDef {
     display_name: "Sphere Crop",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[Feature::NeedsRng, Feature::NeedsTransform],
+    features: &[Feature::NeedsRng, Feature::NeedsTransform, Feature::AlwaysZ],
     parameters: &[
         param!("radius", "Radius", unlimited_float, 1.0, -10.0, 10.0, "Sphere radius."),
         param!("x", "X", unlimited_float, 0.0, -10.0, 10.0, "X center of the sphere."),

@@ -468,7 +468,7 @@ pub static POST_CURL3D: VariationDef = VariationDef {
     display_name: "Post Curl 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Post,
-    features: &[],
+    features: &[Feature::AlwaysZ],
     parameters: &[
         param!("cx", "CX", unlimited_float, 0.0, -5.0, 5.0, "Twist strength along the X axis."),
         param!("cy", "CY", unlimited_float, 0.0, -5.0, 5.0, "Twist strength along the Y axis."),

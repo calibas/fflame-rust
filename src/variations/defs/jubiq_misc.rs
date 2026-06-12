@@ -49,7 +49,7 @@ pub static JUBIQ: VariationDef = VariationDef {
     display_name: "Jubiq",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[Feature::NeedsRng],
+    features: &[Feature::NeedsRng, Feature::AlwaysZ],
     parameters: &[
         param!("power", "Power", int, 1.0, -50.0, 50.0, "Julia angular branch count (integer). 0 collapses the variation to the origin. Otherwise: picks one of `|power|` equally-spaced angles per iteration and divides the polar angle by `power`."),
         param!("dist", "Distance", unlimited_float, 1.0, -10.0, 10.0, "Radial exponent multiplier. Combines with `power` to set the radial power as `0.5 · dist / power` (negative `dist` flips the radial sense)."),

@@ -194,7 +194,7 @@ pub static BUBBLE_WF: VariationDef = VariationDef {
     display_name: "Bubble WF",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[Feature::NeedsRng],
+    features: &[Feature::NeedsRng, Feature::AlwaysZ],
     parameters: &[],
     init_param_count: 0,
     wgsl_init: None,
@@ -245,7 +245,7 @@ pub static PLANE_WF: VariationDef = VariationDef {
     display_name: "Plane WF",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[Feature::NeedsRng, Feature::WritesColor],
+    features: &[Feature::NeedsRng, Feature::WritesColor, Feature::AlwaysZ],
     parameters: &[
         param!("position", "Position", unlimited_float, 3.0, -100.0, 100.0, "Fixed coordinate along the axis the plane is perpendicular to. For axis=XY the plane sits at z=position; for YZ at x=position; for ZX at y=position."),
         param!("size", "Size", unlimited_float, 10.0, -100.0, 100.0, "Plane edge length. The two free axes get `(random − 0.5) × size` so positive `size` scatters in a square of side `size` centered on the axis."),
@@ -374,7 +374,7 @@ pub static CHECKERBOARD_WF: VariationDef = VariationDef {
     display_name: "Checkerboard WF",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[Feature::NeedsRng, Feature::WritesColor],
+    features: &[Feature::NeedsRng, Feature::WritesColor, Feature::AlwaysZ],
     parameters: &[
         // Param order matches Java's `paramNames` so `.flame` files
         // round-trip cleanly. The cpp port had them in declaration

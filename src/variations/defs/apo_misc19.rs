@@ -52,7 +52,7 @@ pub static MOBIUS_STRIP: VariationDef = VariationDef {
     display_name: "Mobius Strip",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[Feature::NeedsTransform],
+    features: &[Feature::NeedsTransform, Feature::AlwaysZ],
     parameters: &[
         param!("radius", "Radius", unlimited_float, 1.0, -10.0, 10.0, "Strip's central-circle radius."),
         param!("width", "Width", unlimited_float, 1.0, -10.0, 10.0, "Strip width."),

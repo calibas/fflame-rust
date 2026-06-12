@@ -337,7 +337,7 @@ pub static LINE: VariationDef = VariationDef {
     display_name: "Line",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[Feature::NeedsRng, Feature::NeedsTransform],
+    features: &[Feature::NeedsRng, Feature::NeedsTransform, Feature::AlwaysZ],
     parameters: &[
         param!("delta", "Delta", unlimited_float, 0.0, -10.0, 10.0, "Azimuthal angle of the line direction (in units of π)."),
         param!("phi", "Phi", unlimited_float, 0.0, -10.0, 10.0, "Polar angle of the line direction (in units of π). When `δ = φ = 0`, the line projects onto the X axis."),

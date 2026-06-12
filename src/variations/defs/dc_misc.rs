@@ -54,7 +54,7 @@ pub static DC_CYLINDER: VariationDef = VariationDef {
     display_name: "DC Cylinder",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[Feature::NeedsRng, Feature::NeedsTransform, Feature::WritesColor],
+    features: &[Feature::NeedsRng, Feature::NeedsTransform, Feature::WritesColor, Feature::AlwaysZ],
     parameters: &[
         param!("offset", "Offset", unlimited_float, 0.0, -10.0, 10.0, "Color-projection offset. Init precomputes `offset · π` for parity (unused) and the raw `offset` is added to the projection."),
         param!("angle", "Angle", unlimited_float, 0.0, -10.0, 10.0, "Color-projection rotation angle (radians). Init precomputes `cos(angle)` and `sin(angle)`."),
@@ -173,7 +173,7 @@ pub static DC_CYLINDER2: VariationDef = VariationDef {
     display_name: "DC Cylinder 2",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[Feature::NeedsRng, Feature::NeedsTransform, Feature::WritesColor],
+    features: &[Feature::NeedsRng, Feature::NeedsTransform, Feature::WritesColor, Feature::AlwaysZ],
     parameters: &[
         param!("offset", "Offset", unlimited_float, 0.0, -10.0, 10.0, "Color-projection offset. Init precomputes `offset · π` for parity (unused) and the raw `offset` is added to the projection."),
         param!("angle", "Angle", unlimited_float, 0.0, -10.0, 10.0, "Color-projection rotation angle (radians). Init precomputes `cos(angle)` and `sin(angle)`."),

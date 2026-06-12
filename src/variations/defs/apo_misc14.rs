@@ -265,7 +265,7 @@ pub static POINCARE3D: VariationDef = VariationDef {
     display_name: "Poincare 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[],
+    features: &[Feature::AlwaysZ],
     parameters: &[
         param!("r", "R", unlimited_float, 0.0, -10.0, 10.0, "Center distance from origin (radius of the inversion center)."),
         param!("a", "A", unlimited_float, 0.0, -10.0, 10.0, "Azimuthal angle of the inversion center (in units of π/2)."),

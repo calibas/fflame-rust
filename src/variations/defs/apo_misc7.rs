@@ -194,7 +194,7 @@ pub static ESTIQ: VariationDef = VariationDef {
     display_name: "Estiq",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[],
+    features: &[Feature::AlwaysZ],
     parameters: &[],
     init_param_count: 0,
     wgsl_init: None,

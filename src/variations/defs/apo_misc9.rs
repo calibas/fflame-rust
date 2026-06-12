@@ -272,7 +272,7 @@ pub static FLOWER_DB: VariationDef = VariationDef {
     display_name: "Flower DB",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[Feature::NeedsTransform],
+    features: &[Feature::NeedsTransform, Feature::AlwaysZ],
     parameters: &[
         param!("petals", "Petals", unlimited_float, 6.0, -50.0, 50.0, "Number of petal lobes (angular frequency of the sin modulator)."),
         param!("petal_split", "Petal Split", unlimited_float, 0.0, -10.0, 10.0, "Frequency multiplier on the inner cosine that creates per-petal sub-divisions."),

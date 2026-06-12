@@ -384,7 +384,7 @@ pub static HYPERTILE3D: VariationDef = VariationDef {
     display_name: "Hypertile 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[],
+    features: &[Feature::AlwaysZ],
     parameters: &[
         param!("p", "P", int, 3.0, 3.0, 50.0, "First Schläfli symbol — number of sides per tile (3 = triangle, 4 = square, 5 = pentagon, etc.)."),
         param!("q", "Q", int, 7.0, 3.0, 50.0, "Second Schläfli symbol — number of tiles meeting at each vertex. For a valid hyperbolic tiling, `(p − 2)(q − 2) > 4`."),
@@ -500,7 +500,7 @@ pub static HYPERTILE3D1: VariationDef = VariationDef {
     display_name: "Hypertile 3D 1",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[Feature::NeedsRng],
+    features: &[Feature::NeedsRng, Feature::AlwaysZ],
     parameters: &[
         param!("p", "P", int, 3.0, 3.0, 50.0, "First Schläfli symbol — number of sides per tile (3 = triangle, 4 = square, 5 = pentagon, etc.)."),
         param!("q", "Q", int, 7.0, 3.0, 50.0, "Second Schläfli symbol — number of tiles meeting at each vertex. For a valid hyperbolic tiling, `(p − 2)(q − 2) > 4`."),
@@ -620,7 +620,7 @@ pub static HYPERTILE3D2: VariationDef = VariationDef {
     display_name: "Hypertile 3D 2",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[Feature::NeedsRng],
+    features: &[Feature::NeedsRng, Feature::AlwaysZ],
     parameters: &[
         param!("p", "P", int, 3.0, 3.0, 50.0, "First Schläfli symbol — number of sides per tile (3 = triangle, 4 = square, 5 = pentagon, etc.)."),
         param!("q", "Q", int, 7.0, 3.0, 50.0, "Second Schläfli symbol — number of tiles meeting at each vertex. For a valid hyperbolic tiling, `(p − 2)(q − 2) > 4`."),

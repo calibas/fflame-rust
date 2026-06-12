@@ -97,7 +97,7 @@ pub static SPHERICAL3D_WF: VariationDef = VariationDef {
     display_name: "Spherical 3D WF",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[],
+    features: &[Feature::AlwaysZ],
     parameters: &[
         param!("invert", "Invert", int, 0.0, 0.0, 1.0, "1 = flip the sign of the output (inverts through the origin); 0 = standard direction."),
         param!("exponent", "Exponent", unlimited_float, 2.0, -10.0, 10.0, "Radial-inversion exponent. 2 = standard spherical (`r⁻²`); higher = stronger inverse; lower = weaker."),
@@ -171,7 +171,7 @@ pub static SWIRL3D_WF: VariationDef = VariationDef {
     display_name: "Swirl 3D WF",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[],
+    features: &[Feature::AlwaysZ],
     parameters: &[
         param!("n", "N", unlimited_float, 0.0, -10.0, 10.0, "Angular multiplier on the Z-output sine: `sin(6·cos(rad) − n·ang)`."),
     ],

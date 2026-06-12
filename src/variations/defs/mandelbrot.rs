@@ -51,7 +51,7 @@ pub static MANDELBROT: VariationDef = VariationDef {
     display_name: "Mandelbrot",
     category: VariationCategory::Plugin,
     phase: VariationPhase::Normal,
-    features: &[Feature::NeedsRng],
+    features: &[Feature::NeedsRng, Feature::AlwaysZ],
     init_param_count: 0,
     wgsl_init: None,
     state_count: 3,

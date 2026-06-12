@@ -166,7 +166,7 @@ pub static BLOB3D: VariationDef = VariationDef {
     display_name: "Blob 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[],
+    features: &[Feature::AlwaysZ],
     parameters: &[
         param!("low", "Low", unlimited_float, 0.3, -5.0, 5.0, "Inner radius — how close the bumps recede in the troughs."),
         param!("high", "High", unlimited_float, 1.2, -5.0, 5.0, "Outer radius — how far the bumps reach at their peaks."),

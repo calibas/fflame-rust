@@ -40,7 +40,7 @@ pub static POST_AXIS_SYMMETRY_WF: VariationDef = VariationDef {
     display_name: "Post Axis Symmetry WF",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Post,
-    features: &[Feature::NeedsRng, Feature::NeedsTransform],
+    features: &[Feature::NeedsRng, Feature::NeedsTransform, Feature::AlwaysZ],
     parameters: &[
         param!("axis", "Axis", enum, 0, &["X", "Y", "Z"], "Axis of symmetry to mirror across. Z is 3D-only."),
         param!("centre_x", "Centre X", unlimited_float, 0.25, -10.0, 10.0, "X coordinate of the symmetry plane center."),

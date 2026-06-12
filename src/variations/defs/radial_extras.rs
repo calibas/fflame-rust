@@ -43,7 +43,7 @@ pub static ONION: VariationDef = VariationDef {
     display_name: "Onion",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[Feature::NeedsTransform],
+    features: &[Feature::NeedsTransform, Feature::AlwaysZ],
     parameters: &[
         param!("centre_x", "Centre X", unlimited_float, 0.0, -5.0, 5.0, "X coordinate of the sphere center."),
         param!("centre_y", "Centre Y", unlimited_float, 0.0, -5.0, 5.0, "Y coordinate of the sphere center."),

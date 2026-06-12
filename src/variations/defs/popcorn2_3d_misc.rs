@@ -46,7 +46,7 @@ pub static POPCORN2_3D: VariationDef = VariationDef {
     display_name: "Popcorn2 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[Feature::NeedsTransform],
+    features: &[Feature::NeedsTransform, Feature::AlwaysZ],
     parameters: &[
         param!("popcorn2_3D_x", "X", unlimited_float, 0.1, -10.0, 10.0, "X-axis sine amplitude (multiplies `sin(tan(c · y))` in the X output)."),
         param!("popcorn2_3D_y", "Y", unlimited_float, 0.1, -10.0, 10.0, "Y-axis sine amplitude (multiplies `sin(tan(c · x))` in the Y output)."),

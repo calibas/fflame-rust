@@ -131,7 +131,7 @@ pub static TAURUS: VariationDef = VariationDef {
     display_name: "Taurus",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[Feature::NeedsTransform],
+    features: &[Feature::NeedsTransform, Feature::AlwaysZ],
     parameters: &[
         param!("r", "R", unlimited_float, 3.0, -10.0, 10.0, "Torus radius."),
         param!("n", "N", unlimited_float, 5.0, -20.0, 20.0, "Number of cosine-modulation cycles around the torus."),

@@ -285,14 +285,18 @@ pub struct ShaderConstants {
     /// cache's constants-changed check.
     pub has_post_symmetry: bool,
 
-    /// Whether to flatten `current.z = 0.0` at the end of each chaos-
-    /// game iteration. Derived: `render_3d && !flame.preserve_z`.
-    /// Drives `FLATTEN_Z_PER_ITER` — when false (the 2D case, or 3D
-    /// with `preserve_z=true`), the assignment is compile-stripped.
-    /// Matches JWildfire's `preserve_z` semantics: false (their
-    /// default) flattens Z, preventing explosion from variations
-    /// that scale `p.z` by amounts > 1 (e.g. spherical at high
-    /// weight) which can poison the camera transform via `0·∞ = NaN`.
+    /// JWF `preserve_z = false` z-semantics flag. Derived:
+    /// `render_3d && !flame.preserve_z`. Now drives per-variation z
+    /// GATING in `build_apply_variations_3d`: 2D-origin variations'
+    /// contributions get their z component zeroed at the dispatch
+    /// site (JWF skips their gated `pVarTP.z += pAmount·z`), while
+    /// the `ALWAYS_Z_VARIATIONS` set (linear3D, zcone, …) keeps z —
+    /// preserving JWF's z compounding across iterations. The old
+    /// blanket end-of-iteration flatten this flag used to drive is
+    /// subsumed (all-gated xforms sum to z = 0) and also covered the
+    /// NaN-explosion concern: gated variations contribute no z at
+    /// all, so z-scaling 2D variations can't diverge. Field name kept
+    /// for the shader-cache constants-changed check.
     pub flatten_z_per_iter: bool,
 
     /// Per-flame `array<u32, N>` length for the AttachmentList struct.
@@ -1218,10 +1222,17 @@ impl ShaderBuilder {
         // the loop and all its math compile out, so the only cost of
         // having the feature is the 8 bytes of padding in GpuParams.
         processor.set("HAS_POST_SYMMETRY", constants.has_post_symmetry);
-        // FLATTEN_Z_PER_ITER inserts a single `current.z = 0.0;` line
-        // at the end of each iteration's body. When false (2D mode,
-        // or 3D with preserve_z=true) the line is compile-stripped.
-        processor.set("FLATTEN_Z_PER_ITER", constants.flatten_z_per_iter);
+        // FLATTEN_Z_PER_ITER used to insert a blanket `current.z = 0.0;`
+        // at the end of each iteration under preserve_z=false. That
+        // destroyed the z compounding JWF gets through unconditional
+        // z-writers (linear3D's `z += amount·z` across iterations).
+        // Superseded by per-variation z gating in
+        // build_apply_variations_3d (see ALWAYS_Z_VARIATIONS there):
+        // gated 2D-origin variations now contribute z = 0 directly,
+        // which subsumes the flatten — when no always-z variation is
+        // active, the summed z is 0 exactly as the flatten produced.
+        // The template block is kept but never enabled.
+        processor.set("FLATTEN_Z_PER_ITER", false);
         // OUTPUT_HISTOGRAM_DIRECT gates which output strategy the shader
         // uses for plot-time accumulation:
         //   true  — atomicAdd into a single full-resolution histogram
@@ -1271,7 +1282,10 @@ impl ShaderBuilder {
         // 7. Generate apply_variations with fixed registry indices
         // Pass inlined transforms for dead code elimination if available
         if render_3d {
-            shader.push_str(&self.build_apply_variations_3d(&active, constants.inlined_transforms.as_ref(), has_dc, has_rgb, false));
+            // `flatten_z_per_iter` (render_3d && !preserve_z) now drives
+            // per-variation z gating at the dispatch sites instead of a
+            // blanket end-of-iteration flatten.
+            shader.push_str(&self.build_apply_variations_3d(&active, constants.inlined_transforms.as_ref(), has_dc, has_rgb, false, constants.flatten_z_per_iter));
         } else {
             shader.push_str(&self.build_apply_variations_2d(&active, constants.inlined_transforms.as_ref(), has_dc, has_rgb, false));
         }
@@ -1289,7 +1303,7 @@ impl ShaderBuilder {
             name == "subflame_wf" || name == "pre_subflame_wf");
         if has_subflame {
             if render_3d {
-                shader.push_str(&self.build_apply_variations_3d(&active, constants.inlined_transforms.as_ref(), has_dc, has_rgb, true));
+                shader.push_str(&self.build_apply_variations_3d(&active, constants.inlined_transforms.as_ref(), has_dc, has_rgb, true, constants.flatten_z_per_iter));
             } else {
                 shader.push_str(&self.build_apply_variations_2d(&active, constants.inlined_transforms.as_ref(), has_dc, has_rgb, true));
             }
@@ -1608,8 +1622,10 @@ impl ShaderBuilder {
         has_dc: bool,
         has_rgb: bool,
         is_subflame: bool,
+        gate_2d_z: bool,
     ) -> String {
         use crate::variations::VariationPhase;
+
 
         // When inlined, we generate per-transform specialized code.
         // Subflame mode forces buffer reads — synthetic xform_ids fall outside
@@ -1694,7 +1710,6 @@ impl ShaderBuilder {
         code.push_str("    var result = vec3<f32>(0.0, 0.0, 0.0);\n\n");
 
         for (name, idx, info) in &normal_variations {
-            let _ = name;
             // Standard variation with function call. (zcone, zscale,
             // ztranslate previously had hand-inlined special cases here;
             // they were removed because the WGSL function bodies
@@ -1720,6 +1735,26 @@ impl ShaderBuilder {
             }
             let call = format!("{}({})", info.wgsl_function, args);
 
+            // JWF z semantics, driven by per-variation metadata (see
+            // Feature::AlwaysZ / Feature::NeverZ docs):
+            //   - AlwaysZ (true-3D, unconditional `pVarTP.z` writes):
+            //     keep z under both preserve_z settings — this is
+            //     what lets z compound across iterations like JWF.
+            //   - NeverZ (source never touches z): zero z always.
+            //   - default (gated `if (isPreserveZCoordinate())`):
+            //     zero z when preserve_z = false (gate_2d_z).
+            // This replaces the old blanket per-iteration flatten,
+            // which also killed the z compounding JWF gets through
+            // unconditional z-writers like linear3D / julia3D.
+            let _ = name;
+            let zero_z = info.has_feature(Feature::NeverZ)
+                || (gate_2d_z && !info.has_feature(Feature::AlwaysZ));
+            let contrib = if zero_z {
+                format!("vec3<f32>(({}).xy, 0.0)", call)
+            } else {
+                call.clone()
+            };
+
             // Use inlined weights when available
             if use_inlined {
                 code.push_str(&format!(
@@ -1730,7 +1765,7 @@ impl ShaderBuilder {
                      \x20           result += w * {};\n\
                      \x20       }}\n\
                      \x20   }}\n\n",
-                    idx, info.display_name, idx, call
+                    idx, info.display_name, idx, contrib
                 ));
             } else {
                 code.push_str(&format!(
@@ -1738,7 +1773,7 @@ impl ShaderBuilder {
                      \x20   if (xform.variations[{}] != 0.0) {{\n\
                      \x20       result += xform.variations[{}] * {};\n\
                      \x20   }}\n\n",
-                    idx, info.display_name, idx, idx, call
+                    idx, info.display_name, idx, idx, contrib
                 ));
             }
         }

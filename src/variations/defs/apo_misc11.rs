@@ -161,7 +161,7 @@ pub static SPH3D: VariationDef = VariationDef {
     display_name: "Sph 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[],
+    features: &[Feature::AlwaysZ],
     parameters: &[
         param!("x", "X scale", unlimited_float, 1.0, -10.0, 10.0, "X-axis scale on the inverse-distance denominator."),
         param!("y", "Y scale", unlimited_float, 1.0, -10.0, 10.0, "Y-axis scale."),
@@ -283,7 +283,7 @@ pub static SPHERE_NJA: VariationDef = VariationDef {
     display_name: "Sphere NJA",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[Feature::NeedsTransform],
+    features: &[Feature::NeedsTransform, Feature::AlwaysZ],
     parameters: &[
         param!("circle_a", "Circle A", unlimited_float, 1.0, -10.0, 10.0, "Declared in the upstream source but unused in the body. Preserved as a parameter for preset compatibility."),
         param!("circle_b", "Circle B", unlimited_float, 1.0, -10.0, 10.0, "Declared but unused (same as `circle_a`)."),

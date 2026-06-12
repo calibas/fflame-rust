@@ -51,7 +51,7 @@ pub static SEASHELL3D: VariationDef = VariationDef {
     display_name: "Seashell 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[Feature::NeedsRng],
+    features: &[Feature::NeedsRng, Feature::AlwaysZ],
     parameters: &[
         param!("a", "Final Radius", unlimited_float, 2.0, -10.0, 10.0, "Final-spiral radius (outer-edge radius coefficient)."),
         param!("b", "Height", unlimited_float, 6.0, -20.0, 20.0, "Height ramp coefficient on Z."),
@@ -138,7 +138,7 @@ pub static HYPERSHIFT2: VariationDef = VariationDef {
     display_name: "Hyper Shift 2",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[Feature::NeedsRng],
+    features: &[Feature::NeedsRng, Feature::AlwaysZ],
     parameters: &[
         param!("p", "P", int, 3.0, 2.0, 50.0, "Polygon side count — the {p, q} tiling has regular `p`-gon faces."),
         param!("q", "Q", int, 7.0, 2.0, 50.0, "Vertices per polygon — `q` of them meet at each vertex of the tiling."),

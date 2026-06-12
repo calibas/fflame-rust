@@ -998,4 +998,9 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     // octagon-with-polar-core; miss branches clobber the accumulator
     // per JWF semantics.
     &OCTAPOL,
+    // linear3D — split from `linear` (which used to alias it) because
+    // JWF gives them different z semantics: linear3D writes z
+    // unconditionally (Feature::AlwaysZ), linear gates z on
+    // preserve_z. Same identity body.
+    &LINEAR3D,
 ];

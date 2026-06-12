@@ -27,7 +27,7 @@
 //! (Java-recovered; cpp PluginVarCalc empty unported_stub).
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -66,7 +66,7 @@ pub static GRIDOUT_3D: VariationDef = VariationDef {
     display_name: "Gridout 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[],
+    features: &[Feature::AlwaysZ],
     parameters: &[
         param!("xx", "X Gate", unlimited_float, 1.0, -10.0, 10.0, "X gate scale: input `x` is rounded then multiplied by `xx` before the region comparison. Setting to 0 collapses all regions onto `x = 0` (only the y-half decision still applies)."),
         param!("yy", "Y Gate", unlimited_float, 1.0, -10.0, 10.0, "Y gate scale: input `y` is rounded then multiplied by `yy` before the region comparison. Setting to 0 collapses all regions onto `y = 0` (only the x-sign decision still applies)."),

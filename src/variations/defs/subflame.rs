@@ -59,7 +59,7 @@ pub static SUBFLAME_WF: VariationDef = VariationDef {
     display_name: "Subflame",
     category: VariationCategory::Plugin,
     phase: VariationPhase::Normal,
-    features: &[Feature::NeedsRng, Feature::WritesColor],
+    features: &[Feature::NeedsRng, Feature::WritesColor, Feature::AlwaysZ],
     parameters: &[
         // The subflame index — selects which entry of
         // `FractalConfig.subflames` this variation reads its IFS from.

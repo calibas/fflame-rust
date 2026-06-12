@@ -127,7 +127,7 @@ pub static ERF3D: VariationDef = VariationDef {
     display_name: "Erf 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[],
+    features: &[Feature::AlwaysZ],
     parameters: &[],
     init_param_count: 0,
     wgsl_init: None,

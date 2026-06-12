@@ -20,7 +20,7 @@
 //! Source: `output/jwildfire-vars/output/affine3d.cpp`.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -40,7 +40,7 @@ pub static AFFINE3D: VariationDef = VariationDef {
     display_name: "Affine 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[],
+    features: &[Feature::AlwaysZ],
     parameters: &[
         param!("translateX", "Translate X", unlimited_float, 0.0, -10.0, 10.0, "X-axis translation (added to the final output)."),
         param!("translateY", "Translate Y", unlimited_float, 0.0, -10.0, 10.0, "Y-axis translation."),

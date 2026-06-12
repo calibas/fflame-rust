@@ -301,7 +301,7 @@ pub static CROP3D: VariationDef = VariationDef {
     display_name: "Crop 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[Feature::NeedsRng],
+    features: &[Feature::NeedsRng, Feature::AlwaysZ],
     parameters: &[
         param!("left", "Left", unlimited_float, -1.0, -10.0, 10.0, "Left bound of the cropping box (X axis)."),
         param!("top", "Top", unlimited_float, -1.0, -10.0, 10.0, "Top bound (Y axis)."),

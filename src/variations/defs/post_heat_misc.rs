@@ -40,7 +40,7 @@ pub static POST_HEAT: VariationDef = VariationDef {
     display_name: "Post Heat",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Post,
-    features: &[Feature::NeedsTransform],
+    features: &[Feature::NeedsTransform, Feature::AlwaysZ],
     parameters: &[
         param!("theta_period", "Theta Period", unlimited_float, 0.0, -100.0, 100.0, "Period of the θ (azimuthal angle) sine perturbation. 0 disables theta perturbation."),
         param!("theta_phase", "Theta Phase", unlimited_float, 0.0, -10.0, 10.0, "Phase offset on the θ sine."),

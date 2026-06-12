@@ -137,7 +137,7 @@ pub static DC_BUBBLE: VariationDef = VariationDef {
     display_name: "DC Bubble",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    features: &[Feature::NeedsTransform, Feature::WritesColor],
+    features: &[Feature::NeedsTransform, Feature::WritesColor, Feature::AlwaysZ],
     parameters: &[
         param!("centerx", "Center X", unlimited_float, 0.0, -2.0, 2.0, "X coordinate of the radial color center."),
         param!("centery", "Center Y", unlimited_float, 0.0, -2.0, 2.0, "Y coordinate of the radial color center."),

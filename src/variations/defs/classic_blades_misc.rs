@@ -190,7 +190,7 @@ pub static BLADE3D: VariationDef = VariationDef {
     display_name: "Blade 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[Feature::NeedsRng, Feature::NeedsTransform],
+    features: &[Feature::NeedsRng, Feature::NeedsTransform, Feature::AlwaysZ],
     parameters: &[],
     init_param_count: 0,
     wgsl_init: None,

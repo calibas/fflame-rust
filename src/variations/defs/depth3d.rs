@@ -4,7 +4,7 @@
 //! They are only used in 3D rendering mode.
 
 use crate::variations::{
-    definition::VariationDef,
+    definition::{Feature, VariationDef},
     VariationCategory, VariationPhase,
 };
 
@@ -17,7 +17,7 @@ pub static ZCONE: VariationDef = VariationDef {
     display_name: "ZCone",
     category: VariationCategory::Depth3D,
     phase: VariationPhase::Normal,
-    features: &[],
+    features: &[Feature::AlwaysZ],
     parameters: &[],
     init_param_count: 0,
     wgsl_init: None,
@@ -52,7 +52,7 @@ pub static FLATTEN: VariationDef = VariationDef {
     category: VariationCategory::Depth3D,
     // NOTE: Flatten is treated as POST despite being index 1 (Apophysis XForm.pas)
     phase: VariationPhase::Post,
-    features: &[],
+    features: &[Feature::AlwaysZ],
     parameters: &[],
     init_param_count: 0,
     wgsl_init: None,
@@ -83,7 +83,7 @@ pub static ZSCALE: VariationDef = VariationDef {
     display_name: "ZScale",
     category: VariationCategory::Depth3D,
     phase: VariationPhase::Normal,
-    features: &[],
+    features: &[Feature::AlwaysZ],
     parameters: &[],
     init_param_count: 0,
     wgsl_init: None,

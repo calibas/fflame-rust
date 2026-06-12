@@ -273,7 +273,7 @@ Structural actions (transform add/delete, config import/export, preset loading) 
        display_name: "My Var",
        category: VariationCategory::Plugin,
        phase: VariationPhase::Normal,      // or Pre / Post
-       features: &[],                      // NeedsRng, NeedsTransform, NeedsAccum, WritesColor, WritesRgb
+       features: &[],                      // NeedsRng, NeedsTransform, NeedsAccum, WritesColor, WritesRgb, AlwaysZ, NeverZ
        parameters: &[
            param!("power", "Power", float, 2.0, -10.0, 10.0, "Tooltip text."),
        ],
@@ -294,6 +294,7 @@ Structural actions (transform add/delete, config import/export, preset loading) 
    - helper functions must be name-prefixed (`fn myvar_helper(...)`) to avoid collisions
 4. Port faithfully from the JWF/Apo source (keep quirks; cite the source file in the module docs); the variation auto-appears in the UI under its category
 5. If the foreign app stores a parameter in different units, add a conversion pair in `flame_xml.rs` (`variation_param_from_xml` / `_to_xml` — see radial_blur)
+6. **Z semantics**: if the JWF source writes `pVarTP.z` UNCONDITIONALLY (no `isPreserveZCoordinate()` gate), add `Feature::AlwaysZ` — otherwise its z contribution is zeroed under `preserve_z = false`. `scripts/audit_z_write_semantics.py` classifies automatically from `output/variation-jwf-source/`. See `docs/projects/preserve-z-semantics.md`.
 
 ### Adding a New Palette
 **Option 1: Code-based** — add to `src/scene/palette.rs` + `PaletteLibrary::new()`
