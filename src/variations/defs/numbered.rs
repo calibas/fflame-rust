@@ -439,23 +439,56 @@ fn init_juliaq(user: array<f32, 2>) -> array<f32, 3> {
     state_count: 0,
     wgsl_state_init: None,
     wgsl_2d: r#"
+fn juliaq_branch(power_param: f32, rng: ptr<function, RngState>) -> f32 {
+    // JWF: random_int31 * (2π/power), reduced mod 2π inside f64
+    // cos/sin — equivalent to a DISCRETE branch (n mod power). In f32
+    // the huge intermediate angle (~2e9, ulp ≈ 256 radians) destroys
+    // the reduction, smearing the branches into noise. Compute
+    // n mod power exactly via 16-bit chunks instead (see
+    // juliac_branch for the derivation).
+    let m = max(power_param, 1.0);
+    let n = rng_next(rng) & 0x7FFFFFFFu;
+    let n_hi = f32(n >> 16u);
+    let n_lo = f32(n & 0xFFFFu);
+    let r16 = 65536.0 - m * floor(65536.0 / m);
+    let t1 = n_hi * r16;
+    let t2 = t1 - m * floor(t1 / m);
+    let t3 = n_lo - m * floor(n_lo / m);
+    let s = t2 + t3;
+    return s - m * floor(s / m);
+}
+
 fn variation_juliaq(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
+    let power_param = get_param(xform_id, variation_id, 0u);
     let inv_power = get_param(xform_id, variation_id, 2u);
     let inv_power_2pi = get_param(xform_id, variation_id, 3u);
     let half_inv_power = get_param(xform_id, variation_id, 4u);
-    let rand_int = f32(i32(rng_next(rng) & 0x7FFFFFFFu));
-    let a = atan2(p.y, p.x) * inv_power + rand_int * inv_power_2pi;
+    let a = atan2(p.y, p.x) * inv_power + juliaq_branch(power_param, rng) * inv_power_2pi;
     let r = pow(max(p.x * p.x + p.y * p.y, 1e-30), half_inv_power);
     return vec2<f32>(r * cos(a), r * sin(a));
 }
 "#,
     wgsl_3d: r#"
+fn juliaq_branch(power_param: f32, rng: ptr<function, RngState>) -> f32 {
+    // See 2D body — exact n mod power via 16-bit chunks.
+    let m = max(power_param, 1.0);
+    let n = rng_next(rng) & 0x7FFFFFFFu;
+    let n_hi = f32(n >> 16u);
+    let n_lo = f32(n & 0xFFFFu);
+    let r16 = 65536.0 - m * floor(65536.0 / m);
+    let t1 = n_hi * r16;
+    let t2 = t1 - m * floor(t1 / m);
+    let t3 = n_lo - m * floor(n_lo / m);
+    let s = t2 + t3;
+    return s - m * floor(s / m);
+}
+
 fn variation_juliaq(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
+    let power_param = get_param(xform_id, variation_id, 0u);
     let inv_power = get_param(xform_id, variation_id, 2u);
     let inv_power_2pi = get_param(xform_id, variation_id, 3u);
     let half_inv_power = get_param(xform_id, variation_id, 4u);
-    let rand_int = f32(i32(rng_next(rng) & 0x7FFFFFFFu));
-    let a = atan2(p.y, p.x) * inv_power + rand_int * inv_power_2pi;
+    let a = atan2(p.y, p.x) * inv_power + juliaq_branch(power_param, rng) * inv_power_2pi;
     let r = pow(max(p.x * p.x + p.y * p.y, 1e-30), half_inv_power);
     return vec3<f32>(r * cos(a), r * sin(a), p.z);
 }
@@ -512,12 +545,28 @@ fn init_julia3Dq(user: array<f32, 2>) -> array<f32, 4> {
     state_count: 0,
     wgsl_state_init: None,
     wgsl_2d: r#"
+fn julia3dq_branch(power_param: f32, rng: ptr<function, RngState>) -> f32 {
+    // Exact n mod power via 16-bit chunks — see juliac_branch for the
+    // derivation. Replaces random_int31 · (2π/power), whose f32 angle
+    // reduction smeared the discrete branches into noise.
+    let m = max(power_param, 1.0);
+    let n = rng_next(rng) & 0x7FFFFFFFu;
+    let n_hi = f32(n >> 16u);
+    let n_lo = f32(n & 0xFFFFu);
+    let r16 = 65536.0 - m * floor(65536.0 / m);
+    let t1 = n_hi * r16;
+    let t2 = t1 - m * floor(t1 / m);
+    let t3 = n_lo - m * floor(n_lo / m);
+    let s = t2 + t3;
+    return s - m * floor(s / m);
+}
+
 fn variation_julia3Dq(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
+    let power_param = get_param(xform_id, variation_id, 0u);
     let inv_power = get_param(xform_id, variation_id, 2u);
     let inv_power_2pi = get_param(xform_id, variation_id, 3u);
     let half_inv_power = get_param(xform_id, variation_id, 4u);
-    let rand_int = f32(i32(rng_next(rng) & 0x7FFFFFFFu));
-    let a = atan2(p.y, p.x) * inv_power + rand_int * inv_power_2pi;
+    let a = atan2(p.y, p.x) * inv_power + julia3dq_branch(power_param, rng) * inv_power_2pi;
     let r2d = max(p.x * p.x + p.y * p.y, 1e-30);
     let r_pow = pow(r2d, half_inv_power);
     let r = r_pow * sqrt(r2d);
@@ -525,13 +574,27 @@ fn variation_julia3Dq(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
 }
 "#,
     wgsl_3d: r#"
+fn julia3dq_branch(power_param: f32, rng: ptr<function, RngState>) -> f32 {
+    // See 2D body — exact n mod power via 16-bit chunks.
+    let m = max(power_param, 1.0);
+    let n = rng_next(rng) & 0x7FFFFFFFu;
+    let n_hi = f32(n >> 16u);
+    let n_lo = f32(n & 0xFFFFu);
+    let r16 = 65536.0 - m * floor(65536.0 / m);
+    let t1 = n_hi * r16;
+    let t2 = t1 - m * floor(t1 / m);
+    let t3 = n_lo - m * floor(n_lo / m);
+    let s = t2 + t3;
+    return s - m * floor(s / m);
+}
+
 fn variation_julia3Dq(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
+    let power_param = get_param(xform_id, variation_id, 0u);
     let inv_power = get_param(xform_id, variation_id, 2u);
     let inv_power_2pi = get_param(xform_id, variation_id, 3u);
     let half_inv_power = get_param(xform_id, variation_id, 4u);
     let abs_inv_power = get_param(xform_id, variation_id, 5u);
-    let rand_int = f32(i32(rng_next(rng) & 0x7FFFFFFFu));
-    let a = atan2(p.y, p.x) * inv_power + rand_int * inv_power_2pi;
+    let a = atan2(p.y, p.x) * inv_power + julia3dq_branch(power_param, rng) * inv_power_2pi;
     let z_arg = p.z * abs_inv_power;
     let r2d = max(p.x * p.x + p.y * p.y, 1e-30);
     let r_pow = pow(max(r2d + z_arg * z_arg, 1e-30), half_inv_power);
@@ -591,14 +654,37 @@ fn init_juliac(user: array<f32, 3>) -> array<f32, 2> {
     state_count: 0,
     wgsl_state_init: None,
     wgsl_2d: r#"
+fn juliac_branch(re_param: f32, rng: ptr<function, RngState>) -> f32 {
+    // JWF: fmod(random_int31, re). For integer `re` this is a
+    // DISCRETE branch index in {0 .. re-1} — the crisp N roots of the
+    // complex power; the only blur JWF shows is the slight per-branch
+    // radius ghosting from `im`. A naive f32 port destroys this twice
+    // over: a 2^31-scale integer loses its low bits in f32 (24-bit
+    // mantissa), turning the fmod into catastrophic-cancellation
+    // noise (a CONTINUOUS angular smear — visible halos), and the
+    // original port modded by 1/re instead of re. Compute the modulo
+    // in 16-bit chunks (n = hi·2^16 + lo, each exact in f32, using
+    // a·b mod m ≡ a·(b mod m) mod m) so the result is exact for any
+    // sane `re` (intermediates stay integer-exact for |re| ≲ 500).
+    let m = max(abs(re_param), 1e-6);
+    let n = rng_next(rng) & 0x7FFFFFFFu;
+    let n_hi = f32(n >> 16u);                    // < 2^15, exact
+    let n_lo = f32(n & 0xFFFFu);                 // < 2^16, exact
+    let r16 = 65536.0 - m * floor(65536.0 / m);  // 2^16 mod m
+    let t1 = n_hi * r16;
+    let t2 = t1 - m * floor(t1 / m);             // (hi·2^16) mod m
+    let t3 = n_lo - m * floor(n_lo / m);         // lo mod m
+    let s = t2 + t3;
+    return s - m * floor(s / m);
+}
+
 fn variation_juliac(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let two_pi = 6.28318530717959;
+    let re_param = get_param(xform_id, variation_id, 0u);
     let dist = get_param(xform_id, variation_id, 2u);
     let re_recip = get_param(xform_id, variation_id, 3u);
     let im_scaled = get_param(xform_id, variation_id, 4u);
-    let rand_int = f32(i32(rng_next(rng) & 0x7FFFFFFFu));
-    // (rand_int mod re_recip) — using fract/floor since re_recip can be huge
-    let arg = atan2(p.y, p.x) + (rand_int - floor(rand_int / max(abs(re_recip), 1e-30)) * re_recip) * two_pi;
+    let arg = atan2(p.y, p.x) + juliac_branch(re_param, rng) * two_pi;
     let lnmod = dist * 0.5 * log(max(p.x * p.x + p.y * p.y, 1e-30));
     let a = arg * re_recip + lnmod * im_scaled;
     let mod2 = exp(lnmod * re_recip - arg * im_scaled);
@@ -606,13 +692,28 @@ fn variation_juliac(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
 }
 "#,
     wgsl_3d: r#"
+fn juliac_branch(re_param: f32, rng: ptr<function, RngState>) -> f32 {
+    // See the 2D body for the precision rationale (16-bit chunked
+    // fmod replicating JWF's fmod(random_int31, re) exactly).
+    let m = max(abs(re_param), 1e-6);
+    let n = rng_next(rng) & 0x7FFFFFFFu;
+    let n_hi = f32(n >> 16u);
+    let n_lo = f32(n & 0xFFFFu);
+    let r16 = 65536.0 - m * floor(65536.0 / m);
+    let t1 = n_hi * r16;
+    let t2 = t1 - m * floor(t1 / m);
+    let t3 = n_lo - m * floor(n_lo / m);
+    let s = t2 + t3;
+    return s - m * floor(s / m);
+}
+
 fn variation_juliac(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let two_pi = 6.28318530717959;
+    let re_param = get_param(xform_id, variation_id, 0u);
     let dist = get_param(xform_id, variation_id, 2u);
     let re_recip = get_param(xform_id, variation_id, 3u);
     let im_scaled = get_param(xform_id, variation_id, 4u);
-    let rand_int = f32(i32(rng_next(rng) & 0x7FFFFFFFu));
-    let arg = atan2(p.y, p.x) + (rand_int - floor(rand_int / max(abs(re_recip), 1e-30)) * re_recip) * two_pi;
+    let arg = atan2(p.y, p.x) + juliac_branch(re_param, rng) * two_pi;
     let lnmod = dist * 0.5 * log(max(p.x * p.x + p.y * p.y, 1e-30));
     let a = arg * re_recip + lnmod * im_scaled;
     let mod2 = exp(lnmod * re_recip - arg * im_scaled);
