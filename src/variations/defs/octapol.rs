@@ -1,33 +1,33 @@
-//! `octapol` — octagon-with-polar-core shape warp (Georg K., 2011-ish).
-//!
-//! The input (pre-scaled by 0.15) is tested against three zones built
-//! from `s` and `t`:
-//!
-//!   1. A center circle of radius `0.7071·s·|radius|`: points inside
-//!      are blended toward polar coordinates `(φ, r)` by
-//!      `log((r/rad)²) · polarweight` — the "pol" half of the name.
-//!   2. Four corner triangles of an octagon outline (vertices A..L
-//!      derived from `s`/`t`): points inside pass through and get
-//!      doubled by the trailing add.
-//!   3. Everything else: the running variation accumulator is
-//!      CLOBBERED to zero before the trailing add — verbatim JWF
-//!      behavior (`pVarTP.x = pVarTP.y = 0`), which wipes prior
-//!      variations' contributions on this xform. Reproduced via
-//!      `Feature::NeedsAccum` + returning `(x, y) − accum/w` so the
-//!      dispatcher's `accum += w·f` lands on exactly `amount·(x, y)`.
-//!
-//! Port quirk kept faithfully: the Java also tests four axis-aligned
-//! rects (H–K, J–D, A–J, K–E), but their corner arguments are inverted
-//! for positive `s`/`t` (e.g. requires `p.y ≥ s/2` AND `p.y ≤ −s/2`),
-//! so they can never hit and only the triangles contribute. We port
-//! them as-is so negative `s`/`t` values — where some flip back into
-//! validity — behave identically to JWildfire.
-//!
-//! Source:
-//! [`output/variation-jwf-source/OctapolFunc.java`](../../../output/variation-jwf-source/OctapolFunc.java).
-//!
-//! # Authors
-//! - Georg K. (xyrus02)
+/// `octapol` — octagon-with-polar-core shape warp (Georg K., 2011-ish).
+///
+/// The input (pre-scaled by 0.15) is tested against three zones built
+/// from `s` and `t`:
+///
+///   1. A center circle of radius `0.7071·s·|radius|`: points inside
+///      are blended toward polar coordinates `(φ, r)` by
+///      `log((r/rad)²) · polarweight` — the "pol" half of the name.
+///   2. Four corner triangles of an octagon outline (vertices A..L
+///      derived from `s`/`t`): points inside pass through and get
+///      doubled by the trailing add.
+///   3. Everything else: the running variation accumulator is
+///      CLOBBERED to zero before the trailing add — verbatim JWF
+///      behavior (`pVarTP.x = pVarTP.y = 0`), which wipes prior
+///      variations' contributions on this xform. Reproduced via
+///      `Feature::NeedsAccum` + returning `(x, y) − accum/w` so the
+///      dispatcher's `accum += w·f` lands on exactly `amount·(x, y)`.
+///
+/// Port quirk kept faithfully: the Java also tests four axis-aligned
+/// rects (H–K, J–D, A–J, K–E), but their corner arguments are inverted
+/// for positive `s`/`t` (e.g. requires `p.y ≥ s/2` AND `p.y ≤ −s/2`),
+/// so they can never hit and only the triangles contribute. We port
+/// them as-is so negative `s`/`t` values — where some flip back into
+/// validity — behave identically to JWildfire.
+///
+/// Source:
+/// [`output/variation-jwf-source/OctapolFunc.java`](../../../output/variation-jwf-source/OctapolFunc.java).
+///
+/// # Authors
+/// - Xyrus02
 
 use crate::variations::{
     definition::{Feature, VariationDef, VariationParamDef},
