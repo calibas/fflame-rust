@@ -14,8 +14,9 @@
 //!     default log(2)/log(3)) recovered from Java. RNG (1 call/iter
 //!     for the t parameter). Full3D — z output is mag²² of the
 //!     accumulated complex value. Note cpp has a porter typo
-//!     `y = wt.real()`; Java's `y = wt.im` is restored. cpp's TC
-//!     color write skipped per writes_color compromise.
+//!     `y = wt.real()`; Java's `y = wt.im` is restored. Direct-color
+//!     from the accumulated output (needs_accum: Java reads pVarTP
+//!     after its `+=`).
 //!
 //! Sources:
 //!   - `output/jwildfire-vars/output/hadamard_js.cpp`
@@ -184,7 +185,7 @@ pub static CROWN_JS: VariationDef = VariationDef {
     display_name: "Crown (JS)",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[Feature::NeedsRng, Feature::AlwaysZ],
+    features: &[Feature::NeedsRng, Feature::AlwaysZ, Feature::NeedsAccum, Feature::WritesColor],
     parameters: &[
         param!("a", "A", unlimited_float, 5.0, -10.0, 10.0, "Base of the exponential growth (`a^k` in the iteration). Default 5."),
         param!("b", "B", unlimited_float, 0.6309297535714574, -10.0, 10.0, "Power decay rate (`|a|^(b·k)` in the denominator). Default log(2)/log(3) ≈ 0.631."),
@@ -194,7 +195,7 @@ pub static CROWN_JS: VariationDef = VariationDef {
     state_count: 0,
     wgsl_state_init: None,
     wgsl_2d: r#"
-fn variation_crown_js(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
+fn variation_crown_js(p: vec2<f32>, accum: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec2<f32> {
     let a = get_param(xform_id, variation_id, 0u);
     let b = get_param(xform_id, variation_id, 1u);
     let pi = 3.14159265358979;
@@ -214,11 +215,21 @@ fn variation_crown_js(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
         pow_a_k = pow_a_k * a;
         sign_k = -sign_k;
     }
+
+    // Java: pVarTP.color = fmod(fabs(sqr(pVarTP.x) + sqr(pVarTP.y)), 1)
+    // — pVarTP is read AFTER this variation's `+=`, so it's the running
+    // sum plus our contribution.
+    let w = transforms[xform_id].variations[variation_id];
+    let fpx = accum.x + w * wt_re;
+    let fpy = accum.y + w * wt_im;
+    let craw = abs(fpx * fpx + fpy * fpy);
+    *vc = craw - floor(craw);
+
     return vec2<f32>(wt_re, wt_im);
 }
 "#,
     wgsl_3d: r#"
-fn variation_crown_js(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
+fn variation_crown_js(p: vec3<f32>, accum: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec3<f32> {
     let a = get_param(xform_id, variation_id, 0u);
     let b = get_param(xform_id, variation_id, 1u);
     let pi = 3.14159265358979;
@@ -240,6 +251,16 @@ fn variation_crown_js(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
     }
     let mag2 = wt_re * wt_re + wt_im * wt_im;
     let z = mag2 * mag2;
+
+    // Java: pVarTP.color = fmod(fabs(sqr(pVarTP.x) + sqr(pVarTP.y)), 1)
+    // — pVarTP is read AFTER this variation's `+=`, so it's the running
+    // sum plus our contribution.
+    let w = transforms[xform_id].variations[variation_id];
+    let fpx = accum.x + w * wt_re;
+    let fpy = accum.y + w * wt_im;
+    let craw = abs(fpx * fpx + fpy * fpy);
+    *vc = craw - floor(craw);
+
     return vec3<f32>(wt_re, wt_im, z);
 }
 "#,

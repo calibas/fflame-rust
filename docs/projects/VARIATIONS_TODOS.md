@@ -394,31 +394,45 @@ round-trip cleanly:
 (`dc_carpet3D`'s previously-parity-only `color_a..color_f`,
 `scale_z`, `reset_z`, and `origin` are now all live as of the
 2026-05-29 full port — they drive the color mix and color-coupled
-Z output. The remaining `writes_color: false` compromises in
-`dc_cube`, `dc_cylinder`, `dc_cylinder2`, `dc_triangle`,
-`truchet`, `truchet2`, `waveblur_wf` follow the same pattern;
-see the *Direct-color (DC) infrastructure* section below.)
+Z output.)
 
-### Skipped direct-color writes — restore like swirl3D_wf (2026-06-12)
+### Skipped direct-color writes — DONE (2026-06-12)
 
 `swirl3D_wf`'s skipped `pVarTP.color` write turned out to be a real
 rendering bug (JWF-rando3: palette stripes tracking Z were missing
 entirely). The original "writes_color-model conflict" rationale
-doesn't hold for unconditional writes: `Feature::WritesColor` + a
-`*vc` write models JWF exactly, and `direct_color` defaults to 1.0 so
-imported JWF flames (which carry no `pluginColor` attribute) get
-JWF's replace-the-color semantics. Restore the remaining skipped
-color writes the same way, checking each Java source for whether the
-write is unconditional or flag-gated (gated ones need the conditional
-modeled too, not skipped):
+doesn't hold: `Feature::WritesColor` + a `*vc` write models JWF
+exactly — `vc` initializes to the speed-blended `c_base` (= JWF's
+`pVarTP.color` when variations run), so replacement writes (`*vc =
+x`), shift writes (`*vc = fmod(*vc + s, 1)`), and blend writes all
+map 1:1; `direct_color` defaults to 1.0 so imported JWF flames (no
+`pluginColor` attribute) get JWF's replace-the-color semantics.
 
-- `spirograph3D` (apo_misc17.rs) — the original batch-60 compromise;
-  write is CONDITIONAL on a flag param
-- `apo_misc21.rs`, `apo_misc22.rs` — see module docs for which defs
-- `iconattractor_misc.rs`
-- `sosa_attractors2.rs`, `sosa_attractors4.rs`
-- plus the `writes_color: false` dc_* / truchet / waveblur_wf list
-  above
+All skipped writes were restored, each verified against its Java
+source:
+
+- `swirl3D_wf` — unconditional `|sin(6·cos(rad) − n·ang)|` (commit
+  377afd8, user-verified vs JWF on JWF-rando3)
+- `spirograph3D` — gated by a new `direct_color` int param (JWF
+  default 0): `fmod(t/2π, 1)`
+- `post_mirror_wf` — new `x/y/zcolorshift` params; each firing
+  mirror branch shifts `*vc` (the Z branch also runs in 2D for
+  RNG/color parity, matching JWF)
+- `post_point_symmetry_wf` — new `colorshift` param; `*vc = fmod(*vc
+  + idx·colorshift, 1)`
+- `dc_carpet` — `origin` is now live (`H = 0.1·origin` color blend);
+  note Java's int-XOR quirk: `x0 ^ y0` of ±1 ints is 0 or −2
+- `iconattractor_js` — `centerx/centery/scale` now live; color from
+  its own weighted output (Java REPLACES pVarTP, so no accum needed)
+- `lorenz_js`, `crown_js` — `Feature::NeedsAccum`: Java reads pVarTP
+  AFTER its `+=`, so color uses `accum + w·out`
+- `dc_cube`, `dc_cylinder`, `dc_cylinder2`, `dc_triangle`, `truchet`,
+  `waveblur_wf` — already restored in earlier passes (the old list
+  here was stale); `truchet2` has NO color write in JWF at all
+
+Faithfulness note on fmod: Java's `fmod(a, 1)` is truncated (keeps
+the dividend's sign), so ports use `x - trunc(x)` where the Java has
+no `fabs`, and `|x| - floor(|x|)` where it does.
 
 ---
 

@@ -14,10 +14,11 @@
 //!
 //!   - post_mirror_wf: post-phase axis mirroring with
 //!     independent 50% chance per axis. 8 spatial user params (xaxis,
-//!     yaxis, zaxis, xshift, yshift, zshift, xscale, yscale). cpp also
-//!     includes color-shift params; skipped per writes_color-model
-//!     compromise. RNG (3 calls per iteration). Each enabled axis
-//!     independently flips the corresponding output coordinate.
+//!     yaxis, zaxis, xshift, yshift, zshift, xscale, yscale) + 3
+//!     color-shift params (x/y/zcolorshift) — each firing branch
+//!     shifts the color register (`*vc = fmod(*vc + shift, 1)`).
+//!     RNG (3 calls per iteration). Each enabled axis independently
+//!     flips the corresponding output coordinate.
 //!
 //! Sources:
 //!   - `output/jwildfire-vars/output/heart_wf.cpp`
@@ -149,32 +150,38 @@ fn variation_post_ztranslate_wf(p: vec3<f32>, xform_id: u32, variation_id: u32) 
 /// `zaxis`), with 50% probability per iteration flips the corresponding
 /// output coordinate via `coord = −scale · (coord + shift)`. Each axis's
 /// RNG draw is independent, so multiple axes can flip in the same
-/// iteration.
+/// iteration. Each firing branch also shifts the color register by the
+/// corresponding `*colorshift` (Java: `pVarTP.color = fmod(pVarTP.color +
+/// shift, 1)`), letting mirrored copies take different palette regions.
 pub static POST_MIRROR_WF: VariationDef = VariationDef {
     name: "post_mirror_wf",
     aliases: &[],
     display_name: "Post Mirror WF",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Post,
-    features: &[Feature::NeedsRng, Feature::AlwaysZ],
+    features: &[Feature::NeedsRng, Feature::AlwaysZ, Feature::WritesColor],
     parameters: &[
         param!("xaxis", "X Axis", bool, true, "Enable the X-axis mirror branch."),
         param!("yaxis", "Y Axis", bool, false, "Enable the Y-axis mirror branch."),
-        param!("zaxis", "Z Axis", bool, false, "Enable the Z-axis mirror branch. 3D only."),
+        param!("zaxis", "Z Axis", bool, false, "Enable the Z-axis mirror branch. 3D only (the color shift still applies in 2D)."),
         param!("xshift", "X Shift", unlimited_float, 0.0, -10.0, 10.0, "X mirror offset — applied as `-scale·(x + xshift)` when the X branch fires."),
         param!("yshift", "Y Shift", unlimited_float, 0.0, -10.0, 10.0, "Y mirror offset."),
         param!("zshift", "Z Shift", unlimited_float, 0.0, -10.0, 10.0, "Z mirror offset."),
         param!("xscale", "X Scale", unlimited_float, 1.0, -10.0, 10.0, "X output scale (applied in both the X-branch and Y-branch paths)."),
         param!("yscale", "Y Scale", unlimited_float, 1.0, -10.0, 10.0, "Y output scale (applied in both branch paths)."),
+        param!("xcolorshift", "X Color Shift", unlimited_float, 0.0, -1.0, 1.0, "Color-register shift applied when the X mirror branch fires. Visible color requires the transform's Direct Color slider > 0."),
+        param!("ycolorshift", "Y Color Shift", unlimited_float, 0.0, -1.0, 1.0, "Color-register shift applied when the Y mirror branch fires."),
+        param!("zcolorshift", "Z Color Shift", unlimited_float, 0.0, -1.0, 1.0, "Color-register shift applied when the Z mirror branch fires."),
     ],
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
     wgsl_2d: r#"
-fn variation_post_mirror_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
+fn variation_post_mirror_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec2<f32> {
     let xaxis = i32(get_param(xform_id, variation_id, 0u));
     let yaxis = i32(get_param(xform_id, variation_id, 1u));
+    let zaxis = i32(get_param(xform_id, variation_id, 2u));
     let xshift = get_param(xform_id, variation_id, 3u);
     let yshift = get_param(xform_id, variation_id, 4u);
     let xscale = get_param(xform_id, variation_id, 6u);
@@ -185,16 +192,26 @@ fn variation_post_mirror_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, rng:
     if (xaxis > 0 && rng_nextf(rng) < 0.5) {
         x = xscale * (-x - xshift);
         y = yscale * y;
+        let craw = *vc + get_param(xform_id, variation_id, 8u);
+        *vc = craw - trunc(craw);
     }
     if (yaxis > 0 && rng_nextf(rng) < 0.5) {
         x = xscale * x;
         y = yscale * (-y - yshift);
+        let craw = *vc + get_param(xform_id, variation_id, 9u);
+        *vc = craw - trunc(craw);
+    }
+    // JWF runs the Z branch (RNG draw + color shift) even when the
+    // spatial z output is irrelevant — keep it for RNG/color parity.
+    if (zaxis > 0 && rng_nextf(rng) < 0.5) {
+        let craw = *vc + get_param(xform_id, variation_id, 10u);
+        *vc = craw - trunc(craw);
     }
     return vec2<f32>(x, y);
 }
 "#,
     wgsl_3d: r#"
-fn variation_post_mirror_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
+fn variation_post_mirror_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec3<f32> {
     let xaxis = i32(get_param(xform_id, variation_id, 0u));
     let yaxis = i32(get_param(xform_id, variation_id, 1u));
     let zaxis = i32(get_param(xform_id, variation_id, 2u));
@@ -210,13 +227,19 @@ fn variation_post_mirror_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, rng:
     if (xaxis > 0 && rng_nextf(rng) < 0.5) {
         x = xscale * (-x - xshift);
         y = yscale * y;
+        let craw = *vc + get_param(xform_id, variation_id, 8u);
+        *vc = craw - trunc(craw);
     }
     if (yaxis > 0 && rng_nextf(rng) < 0.5) {
         x = xscale * x;
         y = yscale * (-y - yshift);
+        let craw = *vc + get_param(xform_id, variation_id, 9u);
+        *vc = craw - trunc(craw);
     }
     if (zaxis > 0 && rng_nextf(rng) < 0.5) {
         z = -z - zshift;
+        let craw = *vc + get_param(xform_id, variation_id, 10u);
+        *vc = craw - trunc(craw);
     }
     return vec3<f32>(x, y, z);
 }

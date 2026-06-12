@@ -8,11 +8,8 @@
 //!
 //! 4 user params:
 //!   - preset_id (int 0-16)
-//!   - centerx, centery (color register inputs — unused since we
-//!     skip the TC color write per writes_color compromise; kept to
-//!     match cpp interface)
-//!   - scale (used only for the color register; 1 init slot
-//!     `_bdcs = 1/scale` is preserved to match cpp interface)
+//!   - centerx, centery (color register centers)
+//!   - scale (color register scale; 1 init slot `_bdcs = 1/scale`)
 //!
 //! Body computes the symmetric icon attractor:
 //!   p   = a · |z|² + l + b · Re(z^degree)
@@ -24,12 +21,15 @@
 //! a runtime-bounded WGSL loop with explicit cap.
 //!
 //! Body factors cleanly through outer multiplier (cpp uses VVAR
-//! consistently). cpp's TC color write skipped.
+//! consistently). Direct-color: Java writes `pVarTP.color =
+//! fmod(|bdcs·((px + centerx)² + (py + centery)²)|, 1)` where px/py is
+//! the variation's own weighted output (Java REPLACES pVarTP rather
+//! than accumulating, so its pVarTP.x there is exactly `w·nx`).
 //!
 //! Source: `output/jwildfire-vars/output/iconattractor_js.cpp`.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -49,12 +49,12 @@ pub static ICONATTRACTOR_JS: VariationDef = VariationDef {
     display_name: "Icon Attractor (JS)",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    features: &[],
+    features: &[Feature::WritesColor],
     parameters: &[
         param!("preset_id", "Preset ID", int, 0.0, 0.0, 16.0, "Which Field & Golubitsky preset to use (0-16). Each corresponds to a different symmetric icon attractor shape from the original book."),
-        param!("centerx", "Center X", unlimited_float, 0.0, -10.0, 10.0, "Color register X center — unused since the color write is dropped. Preserved as a parameter for cpp parity."),
-        param!("centery", "Center Y", unlimited_float, 0.0, -10.0, 10.0, "Color register Y center — unused since the color write is dropped. Preserved as a parameter for cpp parity."),
-        param!("scale", "Scale", unlimited_float, 5.0, -100.0, 100.0, "Color register scale — unused since the color write is dropped. Init still precomputes `1/scale` to match cpp's `_bdcs`. Preserved as a parameter for cpp parity."),
+        param!("centerx", "Center X", unlimited_float, 0.0, -10.0, 10.0, "Color register X center — offsets the squared-distance color formula. Visible color requires the transform's Direct Color slider > 0."),
+        param!("centery", "Center Y", unlimited_float, 0.0, -10.0, 10.0, "Color register Y center — offsets the squared-distance color formula."),
+        param!("scale", "Scale", unlimited_float, 5.0, -100.0, 100.0, "Color register scale — the color formula multiplies the squared distance by `1/scale` (precomputed at init as `_bdcs`)."),
     ],
     init_param_count: 1,
     wgsl_init: Some(r#"
@@ -104,7 +104,7 @@ fn ic_preset(id: i32) -> array<f32, 6> {
     return out;
 }
 
-fn variation_iconattractor_js(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
+fn variation_iconattractor_js(p: vec2<f32>, xform_id: u32, variation_id: u32, vc: ptr<function, f32>) -> vec2<f32> {
     let preset_id = i32(get_param(xform_id, variation_id, 0u));
     let preset = ic_preset(preset_id);
     let degree = i32(preset[0]);
@@ -132,6 +132,19 @@ fn variation_iconattractor_js(p: vec2<f32>, xform_id: u32, variation_id: u32) ->
 
     let nx = pp * p.x + g * zreal - o * p.y;
     let ny = pp * p.y - g * zimag + o * p.x;
+
+    // Java: pVarTP.color = fmod(fabs(bdcs*(sqr(pVarTP.x + centerx) +
+    // sqr(pVarTP.y + centery))), 1) — Java REPLACES pVarTP with the
+    // weighted output, so pVarTP.x there is exactly w·nx.
+    let centerx = get_param(xform_id, variation_id, 1u);
+    let centery = get_param(xform_id, variation_id, 2u);
+    let bdcs = get_param(xform_id, variation_id, 4u);
+    let w = transforms[xform_id].variations[variation_id];
+    let fpx = w * nx + centerx;
+    let fpy = w * ny + centery;
+    let craw = abs(bdcs * (fpx * fpx + fpy * fpy));
+    *vc = craw - floor(craw);
+
     return vec2<f32>(nx, ny);
 }
 "#,
@@ -171,7 +184,7 @@ fn ic_preset(id: i32) -> array<f32, 6> {
     return out;
 }
 
-fn variation_iconattractor_js(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
+fn variation_iconattractor_js(p: vec3<f32>, xform_id: u32, variation_id: u32, vc: ptr<function, f32>) -> vec3<f32> {
     let preset_id = i32(get_param(xform_id, variation_id, 0u));
     let preset = ic_preset(preset_id);
     let degree = i32(preset[0]);
@@ -199,6 +212,19 @@ fn variation_iconattractor_js(p: vec3<f32>, xform_id: u32, variation_id: u32) ->
 
     let nx = pp * p.x + g * zreal - o * p.y;
     let ny = pp * p.y - g * zimag + o * p.x;
+
+    // Java: pVarTP.color = fmod(fabs(bdcs*(sqr(pVarTP.x + centerx) +
+    // sqr(pVarTP.y + centery))), 1) — Java REPLACES pVarTP with the
+    // weighted output, so pVarTP.x there is exactly w·nx.
+    let centerx = get_param(xform_id, variation_id, 1u);
+    let centery = get_param(xform_id, variation_id, 2u);
+    let bdcs = get_param(xform_id, variation_id, 4u);
+    let w = transforms[xform_id].variations[variation_id];
+    let fpx = w * nx + centerx;
+    let fpy = w * ny + centery;
+    let craw = abs(bdcs * (fpx * fpx + fpy * fpy));
+    *vc = craw - floor(craw);
+
     return vec3<f32>(nx, ny, p.z);
 }
 "#,

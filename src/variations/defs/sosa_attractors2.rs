@@ -11,8 +11,9 @@
 //!   - lorenz_js: Lorenz attractor Euler-step IFS. 7 user params
 //!     (a, b, c, h, centerx, centery, scale) recovered from Java
 //!     setParameter (cpp APO_VARIABLES had only 3). 1 init slot
-//!     `_bdcs = 1/scale`. Full3D. cpp's TC color write skipped per
-//!     writes_color compromise. Body factors cleanly.
+//!     `_bdcs = 1/scale`. Full3D. Direct-color from the accumulated
+//!     output (needs_accum: Java reads pVarTP after its `+=`).
+//!     Body factors cleanly.
 //!
 //!   - woggle_js (Sosa, based on Paul Bourke's Woggle): N-tile fold
 //!     attractor. 1 user param `m` (Java-recovered, default 2,
@@ -116,15 +117,15 @@ pub static LORENZ_JS: VariationDef = VariationDef {
     display_name: "Lorenz (JS)",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
-    features: &[Feature::AlwaysZ],
+    features: &[Feature::AlwaysZ, Feature::NeedsAccum, Feature::WritesColor],
     parameters: &[
         param!("a", "A", unlimited_float, 10.0, -100.0, 100.0, "Lorenz parameter `a` (Prandtl number; classic value 10)."),
         param!("b", "B", unlimited_float, 28.0, -100.0, 100.0, "Lorenz parameter `b` (Rayleigh number; classic value 28)."),
         param!("c", "C", unlimited_float, 1.66, -100.0, 100.0, "Lorenz parameter `c` (geometric ratio; classic value 8/3 ≈ 2.67)."),
         param!("h", "H (step)", unlimited_float, 0.00001, -1.0, 1.0, "Euler integration step size."),
-        param!("centerx", "Center X", unlimited_float, 0.0, -10.0, 10.0, "Unused in body — preserved as a parameter for cpp parity."),
-        param!("centery", "Center Y", unlimited_float, 0.0, -10.0, 10.0, "Unused in body — preserved as a parameter for cpp parity."),
-        param!("scale", "Scale", unlimited_float, 1000.0, -10000.0, 10000.0, "Unused in body — preserved as a parameter for cpp parity (init slot `1/scale` is computed but never read)."),
+        param!("centerx", "Center X", unlimited_float, 0.0, -10.0, 10.0, "Color register X center — offsets the squared-distance color formula. Visible color requires the transform's Direct Color slider > 0."),
+        param!("centery", "Center Y", unlimited_float, 0.0, -10.0, 10.0, "Color register Y center — offsets the squared-distance color formula."),
+        param!("scale", "Scale", unlimited_float, 1000.0, -10000.0, 10000.0, "Color register scale — the color formula multiplies the squared distance by `1/scale` (precomputed at init as `_bdcs`)."),
     ],
     init_param_count: 1,
     wgsl_init: Some(r#"
@@ -139,18 +140,31 @@ fn init_lorenz_js(user: array<f32, 7>) -> array<f32, 1> {
     state_count: 0,
     wgsl_state_init: None,
     wgsl_2d: r#"
-fn variation_lorenz_js(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
+fn variation_lorenz_js(p: vec2<f32>, accum: vec2<f32>, xform_id: u32, variation_id: u32, vc: ptr<function, f32>) -> vec2<f32> {
     let a = get_param(xform_id, variation_id, 0u);
     let b = get_param(xform_id, variation_id, 1u);
     let c = get_param(xform_id, variation_id, 2u);
     let h = get_param(xform_id, variation_id, 3u);
     let x = p.x + h * a * (p.y - p.x);
     let y = p.y + h * (p.x * b - p.y);
+
+    // Java: pVarTP.color = fmod(fabs(bdcs*(sqr(pVarTP.x + centerx) +
+    // sqr(pVarTP.y + centery))), 1) — pVarTP is read AFTER this
+    // variation's `+=`, so it's the running sum plus our contribution.
+    let centerx = get_param(xform_id, variation_id, 4u);
+    let centery = get_param(xform_id, variation_id, 5u);
+    let bdcs = get_param(xform_id, variation_id, 7u);
+    let w = transforms[xform_id].variations[variation_id];
+    let fpx = accum.x + w * x + centerx;
+    let fpy = accum.y + w * y + centery;
+    let craw = abs(bdcs * (fpx * fpx + fpy * fpy));
+    *vc = craw - floor(craw);
+
     return vec2<f32>(x, y);
 }
 "#,
     wgsl_3d: r#"
-fn variation_lorenz_js(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
+fn variation_lorenz_js(p: vec3<f32>, accum: vec3<f32>, xform_id: u32, variation_id: u32, vc: ptr<function, f32>) -> vec3<f32> {
     let a = get_param(xform_id, variation_id, 0u);
     let b = get_param(xform_id, variation_id, 1u);
     let c = get_param(xform_id, variation_id, 2u);
@@ -158,6 +172,19 @@ fn variation_lorenz_js(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
     let x = p.x + h * a * (p.y - p.x);
     let y = p.y + h * (p.x * (b - p.z) - p.y);
     let z = p.z + h * (p.x * p.y - c * p.z);
+
+    // Java: pVarTP.color = fmod(fabs(bdcs*(sqr(pVarTP.x + centerx) +
+    // sqr(pVarTP.y + centery))), 1) — pVarTP is read AFTER this
+    // variation's `+=`, so it's the running sum plus our contribution.
+    let centerx = get_param(xform_id, variation_id, 4u);
+    let centery = get_param(xform_id, variation_id, 5u);
+    let bdcs = get_param(xform_id, variation_id, 7u);
+    let w = transforms[xform_id].variations[variation_id];
+    let fpx = accum.x + w * x + centerx;
+    let fpy = accum.y + w * y + centery;
+    let craw = abs(bdcs * (fpx * fpx + fpy * fpy));
+    *vc = craw - floor(craw);
+
     return vec3<f32>(x, y, z);
 }
 "#,
