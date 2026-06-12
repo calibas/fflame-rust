@@ -146,6 +146,7 @@ mod szubieta;
 mod glsl_fractals;
 mod glsl_tilings;
 mod glsl_fields;
+mod octapol;
 
 pub use basic::*;
 pub use advanced::*;
@@ -288,6 +289,7 @@ pub use szubieta::*;
 pub use glsl_fractals::*;
 pub use glsl_tilings::*;
 pub use glsl_fields::*;
+pub use octapol::*;
 
 use super::definition::VariationDef;
 
@@ -992,4 +994,8 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &GLSL_FRACTALDOTS,
     &GLSL_STARSFIELD,
     &GLSL_GRID3D,
+    // octapol (4 user + 2 init, needs_accum) — Georg K. (xyrus02)
+    // octagon-with-polar-core; miss branches clobber the accumulator
+    // per JWF semantics.
+    &OCTAPOL,
 ];
