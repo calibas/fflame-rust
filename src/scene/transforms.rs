@@ -693,6 +693,34 @@ impl Transform {
         self.d = y[1] - o[1];
     }
 
+    // === JWF PLANE-AFFINE TRIANGLE EDITOR METHODS ===
+
+    /// Convert a JWildfire plane-affine coefficient array (`yz_coefs`,
+    /// `zx_coefs`, or their post variants — positional order
+    /// `[00, 01, 10, 11, 20, 21]` = our `[a, c, b, d, e, f]`) to an
+    /// Apophysis-convention editor triangle. Same formulas as
+    /// [`Self::to_triangle_apophysis`], so the triangle editor behaves
+    /// identically on every plane.
+    pub fn plane_to_triangle_apophysis(coefs: &[f32; 6]) -> ([f32; 2], [f32; 2], [f32; 2]) {
+        let (a, c, b, d, e, f) = (coefs[0], coefs[1], coefs[2], coefs[3], coefs[4], coefs[5]);
+        let display_f = -f;
+        let o = [e, display_f];
+        let x = [e + a, display_f - c];
+        let y = [e - b, display_f + d];
+        (o, x, y)
+    }
+
+    /// Inverse of [`Self::plane_to_triangle_apophysis`] — write an
+    /// editor triangle back into a plane-affine coefficient array.
+    pub fn plane_from_triangle_apophysis(coefs: &mut [f32; 6], o: [f32; 2], x: [f32; 2], y: [f32; 2]) {
+        coefs[4] = o[0];                // e (20)
+        coefs[5] = -o[1];               // f (21)
+        coefs[0] = x[0] - o[0];         // a (00)
+        coefs[1] = o[1] - x[1];         // c (01)
+        coefs[2] = o[0] - y[0];         // b (10)
+        coefs[3] = y[1] - o[1];         // d (11)
+    }
+
     // === POST-AFFINE TRIANGLE EDITOR METHODS ===
 
     /// Convert post-affine coefficients to triangle using Apophysis sign convention

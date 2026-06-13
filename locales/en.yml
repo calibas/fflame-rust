@@ -809,6 +809,12 @@ triangle_editor:
   affine_pre: "Affine"
   affine_post: "Post-Affine"
 
+  # Edit plane selector (3D mode only)
+  plane_label: "Plane:"
+  tooltip_plane_xy: "Edit the classic XY affine (Apophysis a-f coefficients)"
+  tooltip_plane_yz: "Edit the YZ plane affine (JWildfire yzCoefs) - rotates/scales within the Y-Z plane, i.e. around the X axis"
+  tooltip_plane_zx: "Edit the ZX plane affine (JWildfire zxCoefs) - rotates/scales within the X-Z plane, i.e. around the Y axis"
+
   # Tabs
   triangle_coords_tab: "Triangle Coords"
   affine_coeffs_tab: "Affine Coeffs"
