@@ -147,6 +147,7 @@ mod glsl_fractals;
 mod glsl_tilings;
 mod glsl_fields;
 mod octapol;
+mod yplot3d_wf;
 
 pub use basic::*;
 pub use advanced::*;
@@ -290,6 +291,7 @@ pub use glsl_fractals::*;
 pub use glsl_tilings::*;
 pub use glsl_fields::*;
 pub use octapol::*;
+pub use yplot3d_wf::*;
 
 use super::definition::VariationDef;
 
@@ -1003,4 +1005,7 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     // unconditionally (Feature::AlwaysZ), linear gates z on
     // preserve_z. Same identity body.
     &LINEAR3D,
+    // yplot3d_wf — 3D surface plot, preset-only port (7 baked
+    // formulas; JWF's runtime-compiled custom formulas unsupported).
+    &YPLOT3D_WF,
 ];
