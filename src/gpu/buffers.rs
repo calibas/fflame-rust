@@ -231,7 +231,11 @@ impl GpuTransform {
             post_e: xform.post_e,
             post_f: xform.post_f,
             post_g: xform.post_g,
-            post_enabled: if xform.post_affine_enabled { 1.0 } else { 0.0 },
+            // has_post_step, not post_affine_enabled: JWF gates the
+            // YZ/ZX post planes independently of the XY post, so a
+            // transform with only `zxPost` must still run the step
+            // (the XY part is identity then).
+            post_enabled: if xform.has_post_step() { 1.0 } else { 0.0 },
             variations: xform.to_fixed_array(local_map),
             color: xform.color,
             color_speed: xform.color_speed,
