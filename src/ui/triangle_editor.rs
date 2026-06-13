@@ -32,6 +32,37 @@ impl Default for AffineTarget {
     }
 }
 
+/// Which JWildfire editor plane the triangle is viewing/editing.
+/// XY is the classic Apophysis affine (`a..f` / `post_a..f`); YZ and
+/// ZX edit the JWF plane-affine arrays (`yz_coefs` / `zx_coefs` and
+/// their post variants). Only selectable in 3D render mode — the
+/// planes have no effect in 2D.
+#[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
+enum EditPlane {
+    Xy,
+    Yz,
+    Zx,
+}
+
+impl Default for EditPlane {
+    fn default() -> Self {
+        EditPlane::Xy
+    }
+}
+
+impl EditPlane {
+    /// Axis names for the canvas (horizontal, vertical). Per JWF's
+    /// convention the ZX plane's "first axis" is X (XForm.java applies
+    /// `zxCoeff00` to x in the x-output), so ZX shows X horizontal.
+    fn axis_labels(self) -> (&'static str, &'static str) {
+        match self {
+            EditPlane::Xy => ("X", "Y"),
+            EditPlane::Yz => ("Y", "Z"),
+            EditPlane::Zx => ("X", "Z"),
+        }
+    }
+}
+
 /// Core triangle editor rendering (shared by window and panel)
 fn render_triangle_editor_core(
     ui: &mut egui::Ui,
@@ -164,10 +195,12 @@ fn render_triangle_editor_core(
                 ui.label(egui::RichText::new(mode_desc.as_ref()).italics().small());
             }
 
-            // Pre/Post affine toggle - only show when selected transform has post-affine enabled
+            // Pre/Post affine toggle - shown when the selected transform's
+            // post step runs (XY post enabled OR a non-identity YZ/ZX post
+            // plane — see Transform::has_post_step).
             let selected_has_post_affine = selected_transform
                 .get(flame)
-                .map(|t| t.post_affine_enabled)
+                .map(|t| t.has_post_step())
                 .unwrap_or(false);
 
             let mut affine_target = ui.ctx().data_mut(|d| {
@@ -196,6 +229,34 @@ fn render_triangle_editor_core(
                 });
             }
 
+            // Plane selector (XY / YZ / ZX) — 3D render mode only. The
+            // YZ/ZX planes edit JWildfire's plane-affine arrays, which
+            // only take effect in the 3D pipeline.
+            let is_3d = flame.render_mode == crate::scene::transforms::RenderMode::ThreeD;
+            let mut edit_plane = ui.ctx().data_mut(|d| {
+                d.get_persisted::<EditPlane>(egui::Id::new("triangle_editor_edit_plane"))
+                    .unwrap_or_default()
+            });
+            if !is_3d {
+                edit_plane = EditPlane::Xy;
+            } else {
+                ui.horizontal(|ui| {
+                    ui.label(t!("triangle_editor.plane_label"));
+                    let old_plane = edit_plane;
+                    ui.selectable_value(&mut edit_plane, EditPlane::Xy, "XY")
+                        .on_hover_text(t!("triangle_editor.tooltip_plane_xy"));
+                    ui.selectable_value(&mut edit_plane, EditPlane::Yz, "YZ")
+                        .on_hover_text(t!("triangle_editor.tooltip_plane_yz"));
+                    ui.selectable_value(&mut edit_plane, EditPlane::Zx, "ZX")
+                        .on_hover_text(t!("triangle_editor.tooltip_plane_zx"));
+                    if edit_plane != old_plane {
+                        ui.ctx().data_mut(|d| {
+                            d.insert_persisted(egui::Id::new("triangle_editor_edit_plane"), edit_plane);
+                        });
+                    }
+                });
+            }
+
             ui.separator();
 
             // Canvas for drawing triangles (smaller in compact mode to avoid scroll conflicts)
@@ -206,10 +267,15 @@ fn render_triangle_editor_core(
             let rect = response.rect;
 
             // Calculate dynamic bounds from the selected transform's vertices
+            // (in the active edit plane).
             let mut max_extent = 2.0f32; // Minimum bounds
             let selected_xform = selected_transform.get(flame);
             if let Some(transform) = selected_xform {
-                let (o, x, y) = transform.to_triangle_apophysis();
+                let (o, x, y) = match edit_plane {
+                    EditPlane::Xy => transform.to_triangle_apophysis(),
+                    EditPlane::Yz => crate::scene::transforms::Transform::plane_to_triangle_apophysis(&transform.yz_coefs),
+                    EditPlane::Zx => crate::scene::transforms::Transform::plane_to_triangle_apophysis(&transform.zx_coefs),
+                };
                 max_extent = max_extent
                     .max(o[0].abs())
                     .max(o[1].abs())
@@ -217,8 +283,12 @@ fn render_triangle_editor_core(
                     .max(x[1].abs())
                     .max(y[0].abs())
                     .max(y[1].abs());
-                if transform.post_affine_enabled {
-                    let (po, px, py) = transform.post_to_triangle_apophysis();
+                if transform.has_post_step() {
+                    let (po, px, py) = match edit_plane {
+                        EditPlane::Xy => transform.post_to_triangle_apophysis(),
+                        EditPlane::Yz => crate::scene::transforms::Transform::plane_to_triangle_apophysis(&transform.yz_post_coefs),
+                        EditPlane::Zx => crate::scene::transforms::Transform::plane_to_triangle_apophysis(&transform.zx_post_coefs),
+                    };
                     max_extent = max_extent
                         .max(po[0].abs()).max(po[1].abs())
                         .max(px[0].abs()).max(px[1].abs())
@@ -284,6 +354,20 @@ fn render_triangle_editor_core(
             let y_axis_end = to_canvas([0.0, world_max]);
             painter.line_segment([y_axis_start, y_axis_end], Stroke::new(1.0, axis_color));
 
+            // Axis labels for the active edit plane (X/Y, Y/Z, X/Z) so
+            // it's always clear which plane the canvas is showing.
+            let (h_label, v_label) = edit_plane.axis_labels();
+            painter.text(
+                Pos2::new(x_axis_end.x - 10.0, x_axis_end.y + 12.0),
+                egui::Align2::CENTER_CENTER, h_label,
+                egui::FontId::proportional(12.0), axis_color,
+            );
+            painter.text(
+                Pos2::new(y_axis_end.x + 12.0, y_axis_end.y + 10.0),
+                egui::Align2::CENTER_CENTER, v_label,
+                egui::FontId::proportional(12.0), axis_color,
+            );
+
             // === INTERACTION: Mouse dragging with different modes ===
             #[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
             enum DragTarget {
@@ -305,27 +389,78 @@ fn render_triangle_editor_core(
                     .unwrap_or(None)
             });
 
+            // Triangle accessors for the active (target, plane) selection.
+            // `tri_pre`/`tri_post` are also used by the canvas drawing pass
+            // so everything on screen lives in the same plane.
+            let tri_pre = |t: &crate::scene::transforms::Transform| match edit_plane {
+                EditPlane::Xy => t.to_triangle_apophysis(),
+                EditPlane::Yz => crate::scene::transforms::Transform::plane_to_triangle_apophysis(&t.yz_coefs),
+                EditPlane::Zx => crate::scene::transforms::Transform::plane_to_triangle_apophysis(&t.zx_coefs),
+            };
+            let tri_post = |t: &crate::scene::transforms::Transform| match edit_plane {
+                EditPlane::Xy => t.post_to_triangle_apophysis(),
+                EditPlane::Yz => crate::scene::transforms::Transform::plane_to_triangle_apophysis(&t.yz_post_coefs),
+                EditPlane::Zx => crate::scene::transforms::Transform::plane_to_triangle_apophysis(&t.zx_post_coefs),
+            };
+            let get_tri = |t: &crate::scene::transforms::Transform| match affine_target {
+                AffineTarget::Pre => tri_pre(t),
+                AffineTarget::Post => tri_post(t),
+            };
+            let set_tri = |t: &mut crate::scene::transforms::Transform, o: [f32; 2], x: [f32; 2], y: [f32; 2]| {
+                match (affine_target, edit_plane) {
+                    (AffineTarget::Pre, EditPlane::Xy) => t.from_triangle_apophysis(o, x, y),
+                    (AffineTarget::Post, EditPlane::Xy) => t.post_from_triangle_apophysis(o, x, y),
+                    (AffineTarget::Pre, EditPlane::Yz) => crate::scene::transforms::Transform::plane_from_triangle_apophysis(&mut t.yz_coefs, o, x, y),
+                    (AffineTarget::Pre, EditPlane::Zx) => crate::scene::transforms::Transform::plane_from_triangle_apophysis(&mut t.zx_coefs, o, x, y),
+                    (AffineTarget::Post, EditPlane::Yz) => crate::scene::transforms::Transform::plane_from_triangle_apophysis(&mut t.yz_post_coefs, o, x, y),
+                    (AffineTarget::Post, EditPlane::Zx) => crate::scene::transforms::Transform::plane_from_triangle_apophysis(&mut t.zx_post_coefs, o, x, y),
+                }
+            };
+
             // Helper to build a batch of affine ConfigPaths for the
-            // selected transform, dispatching to the right pool via
-            // `selected_transform.affine_path()` / `post_affine_path()`.
+            // selected transform, dispatching on pool (via TransformRef),
+            // pre/post target, and edit plane. XY uses the classic
+            // AffineParam paths; YZ/ZX use the position-indexed plane
+            // paths (positions 0..6 in JWF's 00/01/10/11/20/21 order).
             let make_affine_changes = |xform: &crate::scene::transforms::Transform| -> Vec<(ConfigPath, crate::config::ConfigValue)> {
                 let xref = selected_transform;
-                let path = |p: AffineParam| match affine_target {
-                    AffineTarget::Pre => xref.affine_path(p),
-                    AffineTarget::Post => xref.post_affine_path(p),
-                };
-                let (a, b, c, d, e, f) = match affine_target {
-                    AffineTarget::Pre => (xform.a, xform.b, xform.c, xform.d, xform.e, xform.f),
-                    AffineTarget::Post => (xform.post_a, xform.post_b, xform.post_c, xform.post_d, xform.post_e, xform.post_f),
-                };
-                vec![
-                    (path(AffineParam::A), a.into()),
-                    (path(AffineParam::B), b.into()),
-                    (path(AffineParam::C), c.into()),
-                    (path(AffineParam::D), d.into()),
-                    (path(AffineParam::E), e.into()),
-                    (path(AffineParam::F), f.into()),
-                ]
+                match edit_plane {
+                    EditPlane::Xy => {
+                        let path = |p: AffineParam| match affine_target {
+                            AffineTarget::Pre => xref.affine_path(p),
+                            AffineTarget::Post => xref.post_affine_path(p),
+                        };
+                        let (a, b, c, d, e, f) = match affine_target {
+                            AffineTarget::Pre => (xform.a, xform.b, xform.c, xform.d, xform.e, xform.f),
+                            AffineTarget::Post => (xform.post_a, xform.post_b, xform.post_c, xform.post_d, xform.post_e, xform.post_f),
+                        };
+                        vec![
+                            (path(AffineParam::A), a.into()),
+                            (path(AffineParam::B), b.into()),
+                            (path(AffineParam::C), c.into()),
+                            (path(AffineParam::D), d.into()),
+                            (path(AffineParam::E), e.into()),
+                            (path(AffineParam::F), f.into()),
+                        ]
+                    }
+                    EditPlane::Yz | EditPlane::Zx => {
+                        let arr = match (affine_target, edit_plane) {
+                            (AffineTarget::Pre, EditPlane::Yz) => xform.yz_coefs,
+                            (AffineTarget::Pre, EditPlane::Zx) => xform.zx_coefs,
+                            (AffineTarget::Post, EditPlane::Yz) => xform.yz_post_coefs,
+                            (AffineTarget::Post, EditPlane::Zx) => xform.zx_post_coefs,
+                            (_, EditPlane::Xy) => unreachable!(),
+                        };
+                        let path = |pos: u8| match (affine_target, edit_plane) {
+                            (AffineTarget::Pre, EditPlane::Yz) => xref.yz_coefs_path(pos),
+                            (AffineTarget::Pre, EditPlane::Zx) => xref.zx_coefs_path(pos),
+                            (AffineTarget::Post, EditPlane::Yz) => xref.yz_post_coefs_path(pos),
+                            (AffineTarget::Post, EditPlane::Zx) => xref.zx_post_coefs_path(pos),
+                            (_, EditPlane::Xy) => unreachable!(),
+                        };
+                        (0..6u8).map(|i| (path(i), arr[i as usize].into())).collect()
+                    }
+                }
             };
 
             // Helper to sync the local transform copy back from the
@@ -345,10 +480,7 @@ fn render_triangle_editor_core(
             let transform_mut = selected_transform.get_mut(flame);
 
             if let Some(transform) = transform_mut {
-                let (mut o, mut x, mut y) = match affine_target {
-                    AffineTarget::Pre => transform.to_triangle_apophysis(),
-                    AffineTarget::Post => transform.post_to_triangle_apophysis(),
-                };
+                let (mut o, mut x, mut y) = get_tri(transform);
 
                 let o_pos = to_canvas(o);
                 let x_pos = to_canvas(x);
@@ -394,10 +526,7 @@ fn render_triangle_editor_core(
                                 }
 
                                 // Apply triangle changes via update_batch
-                                match affine_target {
-                                    AffineTarget::Pre => transform.from_triangle_apophysis(o, x, y),
-                                    AffineTarget::Post => transform.post_from_triangle_apophysis(o, x, y),
-                                }
+                                set_tri(transform, o, x, y);
                                 let changes = make_affine_changes(transform);
                                 if let Ok(update_type) = config_manager.update_batch(changes, "history.action.triangle_edit_move".to_string()) {
                                     // Sync transform from active_config for live preview
@@ -433,10 +562,7 @@ fn render_triangle_editor_core(
                                 y[1] += world_delta[1];
 
                                 // Apply triangle changes via update_batch
-                                match affine_target {
-                                    AffineTarget::Pre => transform.from_triangle_apophysis(o, x, y),
-                                    AffineTarget::Post => transform.post_from_triangle_apophysis(o, x, y),
-                                }
+                                set_tri(transform, o, x, y);
                                 let changes = make_affine_changes(transform);
                                 if let Ok(update_type) = config_manager.update_batch(changes, "history.action.triangle_edit_translate".to_string()) {
                                     sync_transform(transform, config_manager);
@@ -487,10 +613,7 @@ fn render_triangle_editor_core(
                                 y = [o[0] + y_rot[0], o[1] + y_rot[1]];
 
                                 // Apply triangle changes via update_batch
-                                match affine_target {
-                                    AffineTarget::Pre => transform.from_triangle_apophysis(o, x, y),
-                                    AffineTarget::Post => transform.post_from_triangle_apophysis(o, x, y),
-                                }
+                                set_tri(transform, o, x, y);
                                 let changes = make_affine_changes(transform);
                                 if let Ok(update_type) = config_manager.update_batch(changes, "history.action.triangle_edit_rotate".to_string()) {
                                     sync_transform(transform, config_manager);
@@ -549,10 +672,7 @@ fn render_triangle_editor_core(
                                         y = [o[0] + y_vec[0] * scale_factor, o[1] + y_vec[1] * scale_factor];
 
                                         // Apply triangle changes via update_batch
-                                        match affine_target {
-                                            AffineTarget::Pre => transform.from_triangle_apophysis(o, x, y),
-                                            AffineTarget::Post => transform.post_from_triangle_apophysis(o, x, y),
-                                        }
+                                        set_tri(transform, o, x, y);
                                         let changes = make_affine_changes(transform);
                                         if let Ok(update_type) = config_manager.update_batch(changes, "history.action.triangle_edit_scale".to_string()) {
                                             sync_transform(transform, config_manager);
@@ -602,7 +722,10 @@ fn render_triangle_editor_core(
                                   transform: &crate::scene::transforms::Transform,
                                   base_color: Color32,
                                   is_selected: bool| {
-                let (o, x, y) = transform.to_triangle_apophysis();
+                // Drawn in the active edit plane so the canvas is a
+                // consistent projection (mixing planes would be
+                // geometrically meaningless).
+                let (o, x, y) = tri_pre(transform);
                 let o_pos = to_canvas(o);
                 let x_pos = to_canvas(x);
                 let y_pos = to_canvas(y);
@@ -648,8 +771,17 @@ fn render_triangle_editor_core(
                                     transform: &crate::scene::transforms::Transform,
                                     base_color: Color32,
                                     is_active_post: bool| {
-                if !transform.post_affine_enabled { return; }
-                let (o, x, y) = transform.post_to_triangle_apophysis();
+                // Visible when this plane's post actually does something
+                // (XY: the enable flag; YZ/ZX: non-identity array), or
+                // when it's the active editing target (so a fresh
+                // identity plane can still be grabbed and shaped).
+                let post_visible = match edit_plane {
+                    EditPlane::Xy => transform.post_affine_enabled,
+                    EditPlane::Yz => !transform.is_yz_post_identity(),
+                    EditPlane::Zx => !transform.is_zx_post_identity(),
+                };
+                if !post_visible && !is_active_post { return; }
+                let (o, x, y) = tri_post(transform);
                 let o_pos = to_canvas(o);
                 let x_pos = to_canvas(x);
                 let y_pos = to_canvas(y);
@@ -733,14 +865,10 @@ fn render_triangle_editor_core(
             if let Some(transform) = transform_for_coords {
                 // --- Quick action buttons (directly under canvas) ---
                 {
-                    // Helper macro to get current triangle based on affine target
+                    // Helper macro to get current triangle based on affine
+                    // target + edit plane
                     macro_rules! get_triangle {
-                        ($t:expr) => {
-                            match affine_target {
-                                AffineTarget::Pre => $t.to_triangle_apophysis(),
-                                AffineTarget::Post => $t.post_to_triangle_apophysis(),
-                            }
-                        };
+                        ($t:expr) => { get_tri($t) };
                     }
 
                     // Helper closure to apply triangle changes via ConfigManager
@@ -748,10 +876,7 @@ fn render_triangle_editor_core(
                                                        o: [f32; 2], x: [f32; 2], y: [f32; 2],
                                                        description: &str| {
                         let mut temp = transform_ref.clone();
-                        match affine_target {
-                            AffineTarget::Pre => temp.from_triangle_apophysis(o, x, y),
-                            AffineTarget::Post => temp.post_from_triangle_apophysis(o, x, y),
-                        }
+                        set_tri(&mut temp, o, x, y);
                         let changes = make_affine_changes(&temp);
                         config_manager.update_batch(changes, description.to_string())
                     };
@@ -882,10 +1007,7 @@ fn render_triangle_editor_core(
 
                 match coord_tab {
                     CoordTab::TriangleCoords => {
-                        let (mut o, mut x, mut y) = match affine_target {
-                            AffineTarget::Pre => transform.to_triangle_apophysis(),
-                            AffineTarget::Post => transform.post_to_triangle_apophysis(),
-                        };
+                        let (mut o, mut x, mut y) = get_tri(transform);
 
                         let mut coords_changed = false;
                         let mut dragging = false;
@@ -893,24 +1015,24 @@ fn render_triangle_editor_core(
 
                         ui.horizontal(|ui| {
                             ui.label(t!("triangle_editor.point_x")).on_hover_text(t!("triangle_editor.tooltip_point_x"));
-                            let x0_resp = ui.add(super::VkbDragValue::new(&mut x[0]).speed(0.01).prefix(format!("{} ", t!("triangle_editor.coord_x"))));
-                            let x1_resp = ui.add(super::VkbDragValue::new(&mut x[1]).speed(0.01).prefix(format!("{} ", t!("triangle_editor.coord_y"))));
+                            let x0_resp = ui.add(super::VkbDragValue::new(&mut x[0]).speed(0.01).prefix(format!("{}: ", h_label.to_lowercase())));
+                            let x1_resp = ui.add(super::VkbDragValue::new(&mut x[1]).speed(0.01).prefix(format!("{}: ", v_label.to_lowercase())));
                             coords_changed |= x0_resp.changed() || x1_resp.changed();
                             dragging |= x0_resp.dragged() || x1_resp.dragged();
                             drag_stopped |= x0_resp.drag_stopped() || x1_resp.drag_stopped();
                         });
                         ui.horizontal(|ui| {
                             ui.label(t!("triangle_editor.point_y")).on_hover_text(t!("triangle_editor.tooltip_point_y"));
-                            let y0_resp = ui.add(super::VkbDragValue::new(&mut y[0]).speed(0.01).prefix(format!("{} ", t!("triangle_editor.coord_x"))));
-                            let y1_resp = ui.add(super::VkbDragValue::new(&mut y[1]).speed(0.01).prefix(format!("{} ", t!("triangle_editor.coord_y"))));
+                            let y0_resp = ui.add(super::VkbDragValue::new(&mut y[0]).speed(0.01).prefix(format!("{}: ", h_label.to_lowercase())));
+                            let y1_resp = ui.add(super::VkbDragValue::new(&mut y[1]).speed(0.01).prefix(format!("{}: ", v_label.to_lowercase())));
                             coords_changed |= y0_resp.changed() || y1_resp.changed();
                             dragging |= y0_resp.dragged() || y1_resp.dragged();
                             drag_stopped |= y0_resp.drag_stopped() || y1_resp.drag_stopped();
                         });
                         ui.horizontal(|ui| {
                             ui.label(t!("triangle_editor.point_o")).on_hover_text(t!("triangle_editor.tooltip_point_o"));
-                            let o0_resp = ui.add(super::VkbDragValue::new(&mut o[0]).speed(0.01).prefix(format!("{} ", t!("triangle_editor.coord_x"))));
-                            let o1_resp = ui.add(super::VkbDragValue::new(&mut o[1]).speed(0.01).prefix(format!("{} ", t!("triangle_editor.coord_y"))));
+                            let o0_resp = ui.add(super::VkbDragValue::new(&mut o[0]).speed(0.01).prefix(format!("{}: ", h_label.to_lowercase())));
+                            let o1_resp = ui.add(super::VkbDragValue::new(&mut o[1]).speed(0.01).prefix(format!("{}: ", v_label.to_lowercase())));
                             coords_changed |= o0_resp.changed() || o1_resp.changed();
                             dragging |= o0_resp.dragged() || o1_resp.dragged();
                             drag_stopped |= o0_resp.drag_stopped() || o1_resp.drag_stopped();
@@ -918,10 +1040,7 @@ fn render_triangle_editor_core(
 
                         if coords_changed {
                             let mut temp_transform = transform.clone();
-                            match affine_target {
-                                AffineTarget::Pre => temp_transform.from_triangle_apophysis(o, x, y),
-                                AffineTarget::Post => temp_transform.post_from_triangle_apophysis(o, x, y),
-                            }
+                            set_tri(&mut temp_transform, o, x, y);
                             let changes = make_affine_changes(&temp_transform);
                             if let Ok(update) = config_manager.update_batch(
                                 changes,
@@ -936,15 +1055,47 @@ fn render_triangle_editor_core(
                         let mut drag_stopped = false;
 
                         let make_coeff_path = |param: AffineParam| -> ConfigPath {
-                            match affine_target {
-                                AffineTarget::Pre => selected_transform.affine_path(param),
-                                AffineTarget::Post => selected_transform.post_affine_path(param),
+                            match edit_plane {
+                                EditPlane::Xy => match affine_target {
+                                    AffineTarget::Pre => selected_transform.affine_path(param),
+                                    AffineTarget::Post => selected_transform.post_affine_path(param),
+                                },
+                                EditPlane::Yz | EditPlane::Zx => {
+                                    // Plane array positions are JWF's
+                                    // 00/01/10/11/20/21 order = a,c,b,d,e,f.
+                                    let pos: u8 = match param {
+                                        AffineParam::A => 0,
+                                        AffineParam::C => 1,
+                                        AffineParam::B => 2,
+                                        AffineParam::D => 3,
+                                        AffineParam::E => 4,
+                                        AffineParam::F | AffineParam::G => 5,
+                                    };
+                                    match (affine_target, edit_plane) {
+                                        (AffineTarget::Pre, EditPlane::Yz) => selected_transform.yz_coefs_path(pos),
+                                        (AffineTarget::Pre, EditPlane::Zx) => selected_transform.zx_coefs_path(pos),
+                                        (AffineTarget::Post, EditPlane::Yz) => selected_transform.yz_post_coefs_path(pos),
+                                        (AffineTarget::Post, EditPlane::Zx) => selected_transform.zx_post_coefs_path(pos),
+                                        (_, EditPlane::Xy) => unreachable!(),
+                                    }
+                                }
                             }
                         };
 
-                        let (mut val_a, mut val_b, mut val_c, mut val_d, mut val_e, mut val_f) = match affine_target {
-                            AffineTarget::Pre => (transform.a, transform.b, transform.c, transform.d, transform.e, transform.f),
-                            AffineTarget::Post => (transform.post_a, transform.post_b, transform.post_c, transform.post_d, transform.post_e, transform.post_f),
+                        let (mut val_a, mut val_b, mut val_c, mut val_d, mut val_e, mut val_f) = match (affine_target, edit_plane) {
+                            (AffineTarget::Pre, EditPlane::Xy) => (transform.a, transform.b, transform.c, transform.d, transform.e, transform.f),
+                            (AffineTarget::Post, EditPlane::Xy) => (transform.post_a, transform.post_b, transform.post_c, transform.post_d, transform.post_e, transform.post_f),
+                            (target, plane) => {
+                                let arr = match (target, plane) {
+                                    (AffineTarget::Pre, EditPlane::Yz) => transform.yz_coefs,
+                                    (AffineTarget::Pre, EditPlane::Zx) => transform.zx_coefs,
+                                    (AffineTarget::Post, EditPlane::Yz) => transform.yz_post_coefs,
+                                    (AffineTarget::Post, EditPlane::Zx) => transform.zx_post_coefs,
+                                    (_, EditPlane::Xy) => unreachable!(),
+                                };
+                                // [00, 01, 10, 11, 20, 21] = [a, c, b, d, e, f]
+                                (arr[0], arr[2], arr[1], arr[3], arr[4], arr[5])
+                            }
                         };
 
                         // Apophysis displays b, c, f with opposite sign
