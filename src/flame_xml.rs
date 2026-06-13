@@ -1802,6 +1802,19 @@ mod tests {
         let r1 = &reimport[0].flame.transforms[1];
         assert_eq!(r1.yz_post_coefs, [1.5, 0.0, 0.0, 1.5, 0.0, 0.0]);
         assert_eq!(r1.zx_post_coefs, [1.2, 0.3, -0.3, 1.2, 0.1, -0.1]);
+
+        // Gating regression (JWF-rando4-rotated): xform 1 carries
+        // yzPost/zxPost but NO `post=` attribute. JWF gates the three
+        // post planes independently, so the post step must still run —
+        // post_affine_enabled stays false (no XY post) but
+        // has_post_step() and the flame-level shader gate must be true.
+        // This used to be gated on post_affine_enabled alone, which
+        // silently dropped plane-only posts (seen as a missing ~44°
+        // Y-axis rotation).
+        assert!(!x1.post_affine_enabled, "no post= attr → XY post stays disabled");
+        assert!(x1.has_post_step(), "plane-only post must still run the post step");
+        assert!(!x0.has_post_step(), "pre-only planes don't enable the post step");
+        assert!(flame.has_post_affine(), "flame-level post gate must see plane-only posts");
     }
 
     #[test]

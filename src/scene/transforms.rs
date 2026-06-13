@@ -505,6 +505,23 @@ impl Transform {
         self.zx_post_coefs == IDENTITY_PLANE_COEFS
     }
 
+    /// True when this transform's post-affine step must run: either the
+    /// XY post is enabled (`post_affine_enabled`, set by the `post=`
+    /// XML attribute / UI toggle) or a YZ/ZX post plane is non-identity.
+    ///
+    /// JWildfire gates the three post planes INDEPENDENTLY
+    /// (`hasXYPostCoeffs` / `hasYZPostCoeffs` / `hasZXPostCoeffs` in
+    /// XForm.java) — a flame can carry `zxPost` with no `post=`
+    /// attribute at all, and the ZX post still applies. Gating the
+    /// whole step on `post_affine_enabled` alone silently dropped such
+    /// planes (observed as a ~44° Y-axis rotation missing on
+    /// JWF-rando4-rotated). When this fires with the XY post disabled,
+    /// the XY coefficients are at their identity defaults so the XY
+    /// part of the step is a no-op.
+    pub fn has_post_step(&self) -> bool {
+        self.post_affine_enabled || !self.is_yz_post_identity() || !self.is_zx_post_identity()
+    }
+
     /// Create a new transform with identity affine matrix and a fresh
     /// session-local ID. Use this from editor code paths; use
     /// `Transform::default()` (which leaves `id == 0`) for code that
@@ -1837,11 +1854,14 @@ impl Flame {
         all_variations
     }
 
-    /// Check if any transform (in any pool) has post-affine enabled.
+    /// Check if any transform (in any pool) needs the post-affine step —
+    /// XY post enabled OR a non-identity YZ/ZX post plane (JWildfire
+    /// gates the three post planes independently; see
+    /// `Transform::has_post_step`).
     pub fn has_post_affine(&self) -> bool {
-        self.transforms.iter().any(|t| t.post_affine_enabled)
-            || self.linked_transforms.iter().any(|t| t.post_affine_enabled)
-            || self.final_transforms.iter().any(|t| t.post_affine_enabled)
+        self.transforms.iter().any(|t| t.has_post_step())
+            || self.linked_transforms.iter().any(|t| t.has_post_step())
+            || self.final_transforms.iter().any(|t| t.has_post_step())
     }
 
     /// True when the flame has any Linked or Final pool members.
