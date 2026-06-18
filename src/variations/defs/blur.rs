@@ -92,28 +92,37 @@ pub static PRE_BLUR: VariationDef = VariationDef {
     display_name: "Pre-Blur",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Pre,
-    features: &[Feature::NeedsRng],
+    // NeedsTransform so the body can read its own variation weight: JWF
+    // scales the blur offset by the amount (`rndG = pAmount · (…)`), and the
+    // pre-phase dispatcher applies no weight of its own (`temp = f(temp)`),
+    // so the weight must be applied here.
+    features: &[Feature::NeedsRng, Feature::NeedsTransform],
     parameters: &[],
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
+    // Faithful to JWildfire's PreBlurFunc GPU code:
+    //   rndG = pAmount · (R+R+R+R+R+R − 3)   ← SIX uniforms (Gaussian via
+    //                                          central limit), scaled by weight
+    //   rndA = R · 2π;  x += rndG·cos(rndA);  y += rndG·sin(rndA)
+    // Our previous port used FOUR uniforms − 2 and dropped the weight, so the
+    // blur was both narrower and weight-invariant (any non-zero weight behaved
+    // like JWF's 1.0).
     wgsl_2d: r#"
-fn variation_pre_blur(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
-    // Apophysis: Pre-phase Gaussian blur applied before variations
-    // FTx += r * cos(θ), FTy += r * sin(θ)
-    let theta = rng_nextf(rng) * 6.28318530718;  // 2π
-    let r = rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) - 2.0;
-    return vec2<f32>(p.x + r * cos(theta), p.y + r * sin(theta));
+fn variation_pre_blur(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
+    let w = transforms[xform_id].variations[variation_id];
+    let rnd_g = w * (rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) - 3.0);
+    let rnd_a = rng_nextf(rng) * 6.28318530717959;  // 2π
+    return vec2<f32>(p.x + rnd_g * cos(rnd_a), p.y + rnd_g * sin(rnd_a));
 }
 "#,
     wgsl_3d: r#"
-fn variation_pre_blur(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
-    // Apophysis: Pre-phase Gaussian blur applied before variations
-    // FTx += r * cos(θ), FTy += r * sin(θ), FTz unchanged
-    let theta = rng_nextf(rng) * 6.28318530718;  // 2π
-    let r = rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) - 2.0;
-    return vec3<f32>(p.x + r * cos(theta), p.y + r * sin(theta), p.z);
+fn variation_pre_blur(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
+    let w = transforms[xform_id].variations[variation_id];
+    let rnd_g = w * (rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) - 3.0);
+    let rnd_a = rng_nextf(rng) * 6.28318530717959;  // 2π
+    return vec3<f32>(p.x + rnd_g * cos(rnd_a), p.y + rnd_g * sin(rnd_a), p.z);
 }
 "#,
 };
