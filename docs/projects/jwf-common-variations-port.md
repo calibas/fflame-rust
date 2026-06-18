@@ -10,6 +10,47 @@ these silently drops the variation on import.
 Source list: [`output/jwildfire-script-vars.txt`](../../output/jwildfire-script-vars.txt)
 (191 entries). Diff against our registry: `python scripts/diff_jwf_list.py`.
 
+## Part 2 Candidates:
+sunflower - new variation (JWF-rando5.flame)
+dla_wf - new variation (JWF-rando26.flame)
+combimirror - new variation (JWF-rando7.flame)
+shredlin - different rendering, also check English name Shred Lin (JWF-rando14.flame)
+linearT & linearT3D - Check English name, I think it's Linear T, not Line Art
+dc_mandelbox2D - new variation (JWF-rando17.flame)
+sym_ng11 - new variation (JWF-rando19.flame)
+pre_blur - blur effect much stronger than JWF, JWF has visible detail that's lost in ours. (JWF-rando21.flame)
+dc_hexes_wf - new variation (JWF-rando27.flame)
+mobius_dragon_3D - new variation (JWF-rando28.flame)
+JWF-rando32-simplified - something's different with the rendering between our app and JWF
+Support for <jwf-flame> see JWF-rando34.flame. Used for saving layers, which we currently don't support.
+
+Moving camera X/Y/Z not working for video exports?
+
+### Part 2 triage (2026-06-18)
+
+Source + registry survey of the candidates above. Run from
+`output/variation-jwf-source/*.java` and `output/jwildfire-vars/`.
+
+| Candidate | Verdict | Notes |
+|---|---|---|
+| `combimirror` | ✅ PORTED (pending JWF A/B) | Clean replace-style 3D mirror + RNG + per-branch color shifts. idisc weight cancellation. `src/variations/defs/combimirror.rs`. |
+| `linearT` / `linearT3D` | ✅ FIXED | Display name was "Line Art" — a misreading of "linearT". It's a power-curve linear (`sgn(x)·|x|^powX`, JWF `LinearTFunc`, alt params `lT_*`). Renamed to "Linear T" / "Linear T 3D". |
+| `sunflower` | ◻ PORTABLE (next) | `DrawFunc` primitive variation. Reducible to per-call math like `szubieta`: deterministic Ngon build from index `i`, random pick, then plot a point via the **nBlur** polygon sampler (`DrawFunc.randXY`/`plotPolygon`). Needs the full nBlur sampler ported (~40 lines WGSL) — szubieta used a simplified edge-interp; sunflower wants the real one for JWF parity. |
+| `dc_mandelbox2D` | ◻ PORTABLE (moderate) | `DC_BaseFunc` + 20-iter mandelbox escape → RGB. Gradient mode 0 = direct RGB (`WritesRgb`), mode 2 = greyscale→pal. **Mode 1 (nearest-palette) needs palette-texture read in the variation — likely blocked**; ship modes 0/2, document mode 1 as falling back. |
+| `dc_hexes_wf` | ◻ PORTABLE (moderate) | Extends `HexesFunc`. cpp present (146 lines). Needs the base `HexesFunc` math read first. |
+| `mobius_dragon_3D` | ◻ PORTABLE (hard) | Möbius/reciprocal feedback loop (≤24 iters, mutates local affine), log-tile spread, replace-style assign, magnitude coloring, RNG-heavy. idisc + NeedsTransform + WritesColor + AlwaysZ. Faithful but fiddly RNG order. |
+| `dla_wf` | ⛔ BLOCKED | Diffusion-limited-aggregation **simulation** (default 800×800 grid, 6000 walk iterations) cached at init, then samples random accumulated points. Path-dependent — no closed form, not reducible to per-call math. Needs a CPU-precompute → GPU-sample-buffer framework we don't have (same class as colormap/displacement images). Defer. |
+| `sym_ng11` | ⛔ NO SOURCE | No local `.java`/`.cpp`. Would need a fetch from JWildfire master (or hand-port from the running app). Source-hunt first. |
+| `shredlin` | 🔍 RENDER MISMATCH | Already ported (`misc_extras4.rs`, "Shred Lin"). User reports different rendering — needs a source re-check + A/B, not a new port. |
+| `pre_blur` | 🔍 RENDER MISMATCH | Already ported (`blur.rs`). User reports our blur is much stronger than JWF (JWF keeps visible detail). Needs investigation of the blur magnitude/formula. |
+| `JWF-rando32-simplified` | 🔍 RENDER MISMATCH | Unknown variation(s) — needs the flame to identify what differs. |
+| `<jwf-flame>` layers | 🧱 FEATURE | Multi-layer `.flame` container (JWF-rando34). We don't model layers. Separate feature, not a variation port. |
+| camera X/Y/Z in video export | 🐛 BUG | Separate from variations — `cam_pos_*` animation not applied in video export path. Investigate `src/animation/` export. |
+
+**Suggested order:** combimirror (done) → sunflower → dc_hexes_wf →
+dc_mandelbox2D → mobius_dragon_3D. Blocked/feature items
+(dla_wf, sym_ng11, layers, camera-export bug) tracked separately.
+
 ## Status
 
 - **Total**: 190

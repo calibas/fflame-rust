@@ -146,7 +146,10 @@ fn variation_oscilloscope2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> ve
 pub static LINEART: VariationDef = VariationDef {
     name: "linearT",
     aliases: &[],
-    display_name: "Line Art",
+    // "Linear T" — power-curve linear variant `sgn(x)·|x|^powX` (JWF
+    // `LinearTFunc`, alt params `lT_powX`/`lT_powY`). Previously
+    // mislabeled "Line Art" from misreading "linearT".
+    display_name: "Linear T",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
     features: &[],

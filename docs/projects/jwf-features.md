@@ -120,6 +120,53 @@ The deferred items are loosely coupled — the zoom math is the heaviest single 
 
 ## Deferred (not urgent)
 
+### `<var>_fx_priority` — per-variation priority / phase ordering
+
+**Status**: Not implemented. Silently ignored on import (we don't parse
+`*_fx_priority` at all — confirmed by grep over `src/flame_xml.rs`).
+
+**JWF XML attribute** (per variation, e.g. `combimirror_fx_priority="-1"`):
+an integer that controls the order variations are applied *within* a
+single transform. JWildfire sorts a transform's variations by priority
+into phases:
+
+- **priority < 0 ("pre")** — applied first, sequentially: each pre
+  variation transforms the working point and its output feeds the next
+  step (a chain, not a sum).
+- **priority 0 ("normal")** — the standard flam3 behavior: each is
+  evaluated on the affine point and the results are *summed*.
+- **priority > 0 ("post")** — applied last, sequentially, on the summed
+  normal result.
+
+We model phase **per variation *definition*** (`VariationPhase::Pre /
+Normal / Post`) but not **per *instance***. So a flame that puts a
+normally-`Normal` variation at priority −1 (or a normally-`Pre`
+variation at 0) is mis-ordered on import.
+
+**How it surfaced** (`output/JWF-rando7.flame`, 2026-06-18): the flame
+has `combimirror_fx_priority="-1"` — combimirror runs as a *pre* chain
+step in JWF, but we summed it as a normal variation. combimirror is
+replace-style with a tiny weight (0.018), so running it in the wrong
+phase changed the spatial composition, which in palette mode shows up
+as a **color** difference (points land in different palette regions —
+combimirror's own `*colorshift` params are all 0 here, so this is *not*
+a direct-color bug; the variation's color write was verified faithful
+to `CombimirrorFunc.java` and is a no-op at shift 0). Re-exporting
+through our app drops `fx_priority`, so JWF then reproduces our
+normal-phase interpretation and the two match — which is exactly why
+`JWF-rando7-reexported2.flame` matches but the original doesn't.
+
+Note `pre_blur_fx_priority="-1"` in the same flame is *not* a problem:
+`pre_blur`'s definition phase is already `Pre`, so it coincidentally
+lands in the right phase.
+
+**What it would take**: parse `<var>_fx_priority` into a per-instance
+`i32` on the transform's variation entry; in the shader builder, order
+and phase-assign variations by their *instance* priority (falling back
+to the definition phase when the attribute is absent) instead of the
+static `VariationPhase`. Touches the variation dispatch and the
+param/weight packing. Round-trip the attribute on export.
+
 ### Per-transform `color_type` — color-flow mode selector
 
 **Status**: Not implemented. Silently ignored on import. We always use Apophysis-standard `DIFFUSION` semantics for every transform regardless of what the source XML says.
