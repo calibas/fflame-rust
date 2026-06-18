@@ -117,13 +117,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         var vc: f32 = c_base;
 {{/if}}
 {{#if HAS_RGB}}
-        // Direct-RGB register, sentinel-init to black. A variation with
-        // `Feature::WritesRgb` opts in and is expected to overwrite *vrc;
-        // if it doesn't (or no Final variation reaches the plot site
-        // with vrc set), the unmodified black is what gets blended via
-        // direct_color at plot time. See the `Feature::WritesRgb` doc
-        // for the contract.
-        var vrc: vec3<f32> = vec3<f32>(0.0);
+        // Direct-RGB register, sentinel-init to an out-of-gamut value so the
+        // plot can tell "a WritesRgb variation actually wrote a colour this
+        // iteration" from "this iteration's transform has no WritesRgb
+        // variation". Without that distinction the RGB override at plot time
+        // blends the unwritten register into EVERY transform's colour —
+        // blacking out the non-RGB transforms of a mixed flame (JWF gates
+        // this per-point via `pVarTP.rgbColor`). Real WritesRgb colours are
+        // bounded (cos/sin-based, ≈[-1.2, 1.2]); -1e30 can't collide.
+        var vrc: vec3<f32> = vec3<f32>(-1.0e30);
 {{/if}}
 
         // Apply NORMAL transform: affine + variations + post-affine.
@@ -394,7 +396,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             // it as the palette-index DC path: 0 keeps the existing color,
             // 1 fully replaces with vrc, in-between mixes. Path-map mode
             // (COLOR_MODE == 2) keeps the default white init regardless.
-            base_final_color = mix(base_final_color, vrc, xform.direct_color);
+            // Gate on the sentinel: only override when a WritesRgb variation
+            // actually wrote a colour this iteration, so transforms with no
+            // RGB variation keep their palette colour instead of going black.
+            if (vrc.x > -1.0e29) {
+                base_final_color = mix(base_final_color, vrc, xform.direct_color);
+            }
 {{/if}}
 
             for (var sym_k: u32 = 0u; sym_k < sym_count; sym_k = sym_k + 1u) {
