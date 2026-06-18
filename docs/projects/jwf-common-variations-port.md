@@ -42,7 +42,7 @@ Source + registry survey of the candidates above. Run from
 | `dla_wf` | ⛔ BLOCKED | Diffusion-limited-aggregation **simulation** (default 800×800 grid, 6000 walk iterations) cached at init, then samples random accumulated points. Path-dependent — no closed form, not reducible to per-call math. Needs a CPU-precompute → GPU-sample-buffer framework we don't have (same class as colormap/displacement images). Defer. |
 | `sym_ng11` | ⛔ NO SOURCE | No local `.java`/`.cpp`. Would need a fetch from JWildfire master (or hand-port from the running app). Source-hunt first. |
 | `shredlin` | 🔍 RENDER MISMATCH | Already ported (`misc_extras4.rs`, "Shred Lin"). User reports different rendering — needs a source re-check + A/B, not a new port. |
-| `pre_blur` | 🔍 RENDER MISMATCH | Already ported (`blur.rs`). User reports our blur is much stronger than JWF (JWF keeps visible detail). Needs investigation of the blur magnitude/formula. |
+| `pre_blur` | ✅ FIXED | Two bugs vs `PreBlurFunc`: summed FOUR uniforms − 2 (JWF: SIX − 3, wider Gaussian) and **dropped the weight entirely** (JWF scales the offset by the amount; the pre-phase dispatcher applies no weight, so any non-zero weight behaved like 1.0). Now reads its weight via `NeedsTransform` and uses six uniforms. `pre_blur3D` (apo_misc15) checked — already correct. |
 | `JWF-rando32-simplified` | 🔍 RENDER MISMATCH | Unknown variation(s) — needs the flame to identify what differs. |
 | `<jwf-flame>` layers | 🧱 FEATURE | Multi-layer `.flame` container (JWF-rando34). We don't model layers. Separate feature, not a variation port. |
 | camera X/Y/Z in video export | 🐛 BUG | Separate from variations — `cam_pos_*` animation not applied in video export path. Investigate `src/animation/` export. |
