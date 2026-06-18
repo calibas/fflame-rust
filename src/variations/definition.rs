@@ -49,6 +49,15 @@ pub enum Feature {
     /// `glsl_*` family of variations (JWildfire's shadertoy-style
     /// procedural shapes), which compute RGB directly from a
     /// per-pixel algorithm.
+    ///
+    /// The RGB override is gated per-iteration: `vrc` is sentinel-init
+    /// to an out-of-gamut value (`-1e30`), and the plot only applies
+    /// the override when a WritesRgb variation actually wrote a colour
+    /// this iteration. So in a mixed flame the transforms that have no
+    /// WritesRgb variation keep their palette colour instead of being
+    /// blended toward the unwritten register (JWildfire gates this
+    /// per-point via `pVarTP.rgbColor`). A WritesRgb variation MUST
+    /// write a normal-range colour (components well within ±1e29).
     WritesRgb,
 
     /// Variation reads the running variation-accumulator (Apophysis

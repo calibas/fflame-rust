@@ -155,6 +155,7 @@ mod polarplot3d_wf;
 mod combimirror;
 mod sunflower;
 mod dc_hexes_wf;
+mod dc_mandelbox2d;
 
 pub use basic::*;
 pub use advanced::*;
@@ -306,6 +307,7 @@ pub use polarplot3d_wf::*;
 pub use combimirror::*;
 pub use sunflower::*;
 pub use dc_hexes_wf::*;
+pub use dc_mandelbox2d::*;
 
 use super::definition::VariationDef;
 
@@ -1040,4 +1042,8 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     // dc_hexes_wf — hexagonal Voronoi cell warp with Voronoi-distance
     // direct color (slobo777's Hexes / thargor6). Deterministic.
     &DC_HEXES_WF,
+    // dc_mandelbox2D — 20-iter Mandelbox escape coloring (Jesus Sosa,
+    // DC_BaseFunc). Shares the iteration with glsl_mandelbox2D but is a
+    // distinct variation (zoom/ColorOnly sampling, DC color/Z model).
+    &DC_MANDELBOX2D,
 ];
