@@ -152,6 +152,7 @@ mod yplot2d_wf;
 mod parplot2d_wf;
 mod polarplot2d_wf;
 mod polarplot3d_wf;
+mod combimirror;
 
 pub use basic::*;
 pub use advanced::*;
@@ -300,6 +301,7 @@ pub use yplot2d_wf::*;
 pub use parplot2d_wf::*;
 pub use polarplot2d_wf::*;
 pub use polarplot3d_wf::*;
+pub use combimirror::*;
 
 use super::definition::VariationDef;
 
@@ -1024,4 +1026,8 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &PARPLOT2D_WF,
     &POLARPLOT2D_WF,
     &POLARPLOT3D_WF,
+    // combimirror — combined V/H/Z/point mirror with per-branch color
+    // shifts (Thomas Michels). Replace-style normal variation; idisc
+    // weight cancellation.
+    &COMBIMIRROR,
 ];

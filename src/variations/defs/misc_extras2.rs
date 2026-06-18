@@ -245,7 +245,9 @@ fn variation_mcarpet(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 pub static LINEART3D: VariationDef = VariationDef {
     name: "linearT3D",
     aliases: &[],
-    display_name: "Line Art 3D",
+    // "Linear T 3D" — 3D power-curve linear variant (JWF `LinearT3DFunc`).
+    // Previously mislabeled "Line Art 3D" from misreading "linearT".
+    display_name: "Linear T 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Normal,
     features: &[Feature::AlwaysZ],
