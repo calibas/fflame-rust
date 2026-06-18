@@ -154,6 +154,7 @@ mod polarplot2d_wf;
 mod polarplot3d_wf;
 mod combimirror;
 mod sunflower;
+mod dc_hexes_wf;
 
 pub use basic::*;
 pub use advanced::*;
@@ -304,6 +305,7 @@ pub use polarplot2d_wf::*;
 pub use polarplot3d_wf::*;
 pub use combimirror::*;
 pub use sunflower::*;
+pub use dc_hexes_wf::*;
 
 use super::definition::VariationDef;
 
@@ -1035,4 +1037,7 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     // sunflower — phyllotaxis spiral of regular polygons (Jesus Sosa);
     // DrawFunc reduced to per-call math + the nBlur polygon sampler.
     &SUNFLOWER,
+    // dc_hexes_wf — hexagonal Voronoi cell warp with Voronoi-distance
+    // direct color (slobo777's Hexes / thargor6). Deterministic.
+    &DC_HEXES_WF,
 ];
