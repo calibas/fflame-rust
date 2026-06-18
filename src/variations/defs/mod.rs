@@ -153,6 +153,7 @@ mod parplot2d_wf;
 mod polarplot2d_wf;
 mod polarplot3d_wf;
 mod combimirror;
+mod sunflower;
 
 pub use basic::*;
 pub use advanced::*;
@@ -302,6 +303,7 @@ pub use parplot2d_wf::*;
 pub use polarplot2d_wf::*;
 pub use polarplot3d_wf::*;
 pub use combimirror::*;
+pub use sunflower::*;
 
 use super::definition::VariationDef;
 
@@ -1030,4 +1032,7 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     // shifts (Thomas Michels). Replace-style normal variation; idisc
     // weight cancellation.
     &COMBIMIRROR,
+    // sunflower — phyllotaxis spiral of regular polygons (Jesus Sosa);
+    // DrawFunc reduced to per-call math + the nBlur polygon sampler.
+    &SUNFLOWER,
 ];
