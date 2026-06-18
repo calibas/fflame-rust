@@ -156,6 +156,7 @@ mod combimirror;
 mod sunflower;
 mod dc_hexes_wf;
 mod dc_mandelbox2d;
+mod mobius_dragon_3d;
 
 pub use basic::*;
 pub use advanced::*;
@@ -308,6 +309,7 @@ pub use combimirror::*;
 pub use sunflower::*;
 pub use dc_hexes_wf::*;
 pub use dc_mandelbox2d::*;
+pub use mobius_dragon_3d::*;
 
 use super::definition::VariationDef;
 
@@ -1046,4 +1048,7 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     // DC_BaseFunc). Shares the iteration with glsl_mandelbox2D but is a
     // distinct variation (zoom/ColorOnly sampling, DC color/Z model).
     &DC_MANDELBOX2D,
+    // mobius_dragon_3D — Möbius/reciprocal feedback + Log_tile spread
+    // (Whittaker Courtney). Replace-style; idisc weight cancellation.
+    &MOBIUS_DRAGON_3D,
 ];
