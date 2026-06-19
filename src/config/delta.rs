@@ -104,6 +104,10 @@ pub enum ConfigPath {
     /// (raw priority `<0` pre / `0` main / `>0` post). Stored sparsely in
     /// `Transform::variation_priorities` — see `docs/projects/jwf-features.md`.
     TransformVariationPriority { index: usize, variation: String },
+    /// The transform's variation dispatch order (`variation_order`). Carries
+    /// the whole ordered name list; used by the UI reorder controls. See
+    /// `Transform::variation_order`.
+    TransformVariationOrder { index: usize },
     /// Post-affine enabled flag for a transform
     TransformPostAffineEnabled { index: usize },
     /// Post-affine transformation parameter for a transform
@@ -163,6 +167,8 @@ pub enum ConfigPath {
     },
     /// fx_priority phase override — Linked pool counterpart.
     LinkedTransformVariationPriority { index: usize, variation: String },
+    /// Variation order — Linked pool counterpart.
+    LinkedTransformVariationOrder { index: usize },
     // High-level pre-affine ops on a linked-pool transform.
     LinkedTransformOriginX { index: usize },
     LinkedTransformOriginY { index: usize },
@@ -202,6 +208,8 @@ pub enum ConfigPath {
     },
     /// fx_priority phase override — Final pool counterpart.
     FinalTransformVariationPriority { index: usize, variation: String },
+    /// Variation order — Final pool counterpart.
+    FinalTransformVariationOrder { index: usize },
     // High-level pre-affine ops on a final-pool transform.
     FinalTransformOriginX { index: usize },
     FinalTransformOriginY { index: usize },
@@ -409,6 +417,14 @@ impl TransformRef {
         }
     }
 
+    pub fn variation_order_path(&self) -> ConfigPath {
+        match self {
+            TransformRef::Normal(i) => ConfigPath::TransformVariationOrder { index: *i },
+            TransformRef::Linked(i) => ConfigPath::LinkedTransformVariationOrder { index: *i },
+            TransformRef::Final(i) => ConfigPath::FinalTransformVariationOrder { index: *i },
+        }
+    }
+
     pub fn variation_param_path(&self, variation: String, param: String) -> ConfigPath {
         match self {
             TransformRef::Normal(i) => ConfigPath::TransformVariationParam {
@@ -557,6 +573,11 @@ impl Display for ConfigPath {
             }
             ConfigPath::TransformVariationPriority { index, variation } => {
                 write!(f, "Transform {} → {} phase", index + 1, variation)
+            }
+            ConfigPath::TransformVariationOrder { index }
+            | ConfigPath::LinkedTransformVariationOrder { index }
+            | ConfigPath::FinalTransformVariationOrder { index } => {
+                write!(f, "Transform {} → Variation Order", index + 1)
             }
             ConfigPath::TransformVariationParam {
                 index,
@@ -948,6 +969,12 @@ impl ConfigPath {
                     ("variation", variation.clone()),
                 ],
             ),
+            ConfigPath::TransformVariationOrder { index }
+            | ConfigPath::LinkedTransformVariationOrder { index }
+            | ConfigPath::FinalTransformVariationOrder { index } => I18nKey::with_params(
+                "history.param.transform_variation_order",
+                vec![("index", (index + 1).to_string())],
+            ),
             ConfigPath::TransformVariationParam { index, variation, param } => I18nKey::with_params(
                 "history.param.transform_variation_param",
                 vec![
@@ -1241,6 +1268,8 @@ pub enum ConfigValue {
     UInt64(u64),
     Bool(bool),
     String(String),
+    /// Ordered list of strings — used for `variation_order` reordering.
+    StringList(Vec<String>),
     Vec2(f32, f32),  // For pan coordinates and other 2D values
     ColorRgb([f32; 3]),
     ToneMapMode(ToneMapMode),
@@ -1274,6 +1303,7 @@ impl ConfigValue {
             (ConfigValue::UInt64(a), ConfigValue::UInt64(b)) => a == b,
             (ConfigValue::Bool(a), ConfigValue::Bool(b)) => a == b,
             (ConfigValue::String(a), ConfigValue::String(b)) => a == b,
+            (ConfigValue::StringList(a), ConfigValue::StringList(b)) => a == b,
             (ConfigValue::ToneMapMode(a), ConfigValue::ToneMapMode(b)) => a == b,
             (ConfigValue::HighlightMode(a), ConfigValue::HighlightMode(b)) => a == b,
             (ConfigValue::ColorMode(a), ConfigValue::ColorMode(b)) => a == b,
@@ -1295,6 +1325,7 @@ impl Display for ConfigValue {
             ConfigValue::UInt64(v) => write!(f, "{}", v),
             ConfigValue::Bool(v) => write!(f, "{}", v),
             ConfigValue::String(v) => write!(f, "{}", v),
+            ConfigValue::StringList(v) => write!(f, "[{}]", v.join(", ")),
             ConfigValue::Vec2(x, y) => write!(f, "({:.3}, {:.3})", x, y),
             ConfigValue::ColorRgb([r, g, b]) => {
                 write!(f, "RGB({:.2}, {:.2}, {:.2})", r, g, b)
@@ -1357,6 +1388,12 @@ impl From<bool> for ConfigValue {
 impl From<String> for ConfigValue {
     fn from(v: String) -> Self {
         ConfigValue::String(v)
+    }
+}
+
+impl From<Vec<String>> for ConfigValue {
+    fn from(v: Vec<String>) -> Self {
+        ConfigValue::StringList(v)
     }
 }
 
@@ -2053,6 +2090,9 @@ impl ConfigPath {
             | ConfigPath::TransformVariationPriority { .. }
             | ConfigPath::LinkedTransformVariationPriority { .. }
             | ConfigPath::FinalTransformVariationPriority { .. }
+            | ConfigPath::TransformVariationOrder { .. }
+            | ConfigPath::LinkedTransformVariationOrder { .. }
+            | ConfigPath::FinalTransformVariationOrder { .. }
             | ConfigPath::TransformOriginX { .. }
             | ConfigPath::TransformOriginY { .. }
             | ConfigPath::TransformRotation { .. }
@@ -2219,6 +2259,15 @@ impl ConfigPath {
             }
             ConfigPath::TransformVariationPriority { index, variation } => {
                 format!("Transform.{}.VariationPriority.{}", index, variation)
+            }
+            ConfigPath::TransformVariationOrder { index } => {
+                format!("Transform.{}.VariationOrder", index)
+            }
+            ConfigPath::LinkedTransformVariationOrder { index } => {
+                format!("LinkedTransform.{}.VariationOrder", index)
+            }
+            ConfigPath::FinalTransformVariationOrder { index } => {
+                format!("FinalTransform.{}.VariationOrder", index)
             }
             ConfigPath::TransformVariationParam { index, variation, param } => {
                 format!("Transform.{}.VariationParam.{}.{}", index, variation, param)
@@ -3058,7 +3107,11 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         // and .flame import/export.)
         ConfigPath::TransformVariationPriority { .. }
         | ConfigPath::LinkedTransformVariationPriority { .. }
-        | ConfigPath::FinalTransformVariationPriority { .. } => None,
+        | ConfigPath::FinalTransformVariationPriority { .. }
+        // Variation order is a structural reorder, not a continuous param.
+        | ConfigPath::TransformVariationOrder { .. }
+        | ConfigPath::LinkedTransformVariationOrder { .. }
+        | ConfigPath::FinalTransformVariationOrder { .. } => None,
     }
 }
 

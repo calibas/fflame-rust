@@ -589,9 +589,16 @@ fn render_enabled_variation(
     current_weight: f32,
     movable: bool,
     current_bucket: PhaseBucket,
-) -> (UpdateType, bool) {
+    // Position of this variation within its phase section, for the
+    // reorder controls (enable Up unless first, Down unless last).
+    section_pos: usize,
+    section_len: usize,
+) -> (UpdateType, bool, Option<isize>) {
     let mut max_update = UpdateType::None;
     let mut delete_requested = false;
+    // Reorder request: -1 = move up, +1 = move down (within the section).
+    // Applied by the caller, which knows the section's variation names.
+    let mut reorder: Option<isize> = None;
 
     let registry = global_registry();
     let var_info = registry.get(variation_name);
@@ -627,12 +634,13 @@ fn render_enabled_variation(
             delete_requested = true;
         }
 
-        // Phase selector — only for `Any` variations (the ones that honour
-        // fx_priority). Locked Pre/Normal/Post variations have no button.
-        // The button is just "P" (the section the variation lives in already
-        // shows its current phase); clicking it opens the Pre/Main/Post menu.
-        if movable {
-            ui.menu_button("P", |ui| {
+        // Variation Settings — a gear button opening phase selection (for
+        // `Any` variations) and reorder controls (for every variation).
+        // Shown for all variations since reordering is universal.
+        ui.menu_button("⚙", |ui| {
+            // Phase (Pre / Main / Post) — only for movable (`Any`) variations.
+            if movable {
+                ui.label(t!("variations.phase_label"));
                 for bucket in [PhaseBucket::Pre, PhaseBucket::Main, PhaseBucket::Post] {
                     if ui
                         .selectable_label(bucket == current_bucket, bucket.label())
@@ -649,10 +657,25 @@ fn render_enabled_variation(
                         ui.close_menu();
                     }
                 }
-            })
-            .response
-            .on_hover_text(t!("variations.phase_tooltip"));
-        }
+                ui.separator();
+            }
+            // Reorder within the phase section (affects dispatch order).
+            ui.label(t!("variations.reorder"));
+            ui.add_enabled_ui(section_pos > 0, |ui| {
+                if ui.button(t!("variations.move_up")).clicked() {
+                    reorder = Some(-1);
+                    ui.close_menu();
+                }
+            });
+            ui.add_enabled_ui(section_pos + 1 < section_len, |ui| {
+                if ui.button(t!("variations.move_down")).clicked() {
+                    reorder = Some(1);
+                    ui.close_menu();
+                }
+            });
+        })
+        .response
+        .on_hover_text(t!("variations.settings_tooltip"));
     });
 
     // Show parameters if variation has them
@@ -674,7 +697,7 @@ fn render_enabled_variation(
         }
     }
 
-    (max_update, delete_requested)
+    (max_update, delete_requested, reorder)
 }
 
 /// Render the variations section for a transform.
@@ -690,6 +713,15 @@ fn render_variations_section(
     let mut max_update = UpdateType::None;
     let mut variation_to_delete: Option<String> = None;
     let mut variation_to_add: Option<String> = None;
+    // Pending reorder: (variation, partner-to-swap-with). Applied after the
+    // render loop so it doesn't alias the `config_manager` borrow.
+    let mut reorder_swap: Option<(String, String)> = None;
+
+    // The transform's effective variation order — drives within-section
+    // display order (last applied at the bottom) and the reorder swaps.
+    let registry = global_registry();
+    let order = transform.ordered_variation_names(&registry);
+    let order_pos = |name: &str| order.iter().position(|n| n == name).unwrap_or(usize::MAX);
 
     // Bucket each enabled variation into its phase section (Pre / Main /
     // Post). Locked variations sit in their fixed phase; `Any` variations
@@ -705,8 +737,10 @@ fn render_variations_section(
         };
         sections[slot].push((name.clone(), *weight, movable, bucket));
     }
+    // Order each section by the transform's variation order (not
+    // alphabetically), so the last-applied variation sits at the bottom.
     for section in &mut sections {
-        section.sort_by(|a, b| a.0.cmp(&b.0));
+        section.sort_by_key(|(name, ..)| order_pos(name));
     }
 
     if sections.iter().all(|s| s.is_empty()) {
@@ -724,8 +758,9 @@ fn render_variations_section(
                 continue;
             }
             ui.label(t!(headers[slot]));
-            for (name, weight, movable, bucket) in section {
-                let (update, delete) = render_enabled_variation(
+            let section_len = section.len();
+            for (pos, (name, weight, movable, bucket)) in section.iter().enumerate() {
+                let (update, delete, reorder) = render_enabled_variation(
                     ui,
                     config_manager,
                     xref,
@@ -733,11 +768,37 @@ fn render_variations_section(
                     *weight,
                     *movable,
                     *bucket,
+                    pos,
+                    section_len,
                 );
                 max_update = max_update.max(update);
                 if delete {
                     variation_to_delete = Some(name.clone());
                 }
+                if let Some(dir) = reorder {
+                    // Swap with the adjacent variation in the same section.
+                    let partner = (pos as isize + dir) as usize;
+                    if partner < section_len {
+                        reorder_swap = Some((name.clone(), section[partner].0.clone()));
+                    }
+                }
+            }
+        }
+    }
+
+    // Apply a pending reorder by swapping the two names in the full
+    // effective order and writing it back as the new variation_order.
+    if let Some((a, b)) = reorder_swap {
+        let mut new_order = order.clone();
+        if let (Some(ia), Some(ib)) = (
+            new_order.iter().position(|n| n == &a),
+            new_order.iter().position(|n| n == &b),
+        ) {
+            new_order.swap(ia, ib);
+            if let Ok(update_type) =
+                config_manager.update_param(xref.variation_order_path(), new_order.into())
+            {
+                max_update = max_update.max(update_type);
             }
         }
     }
