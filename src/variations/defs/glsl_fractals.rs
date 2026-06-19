@@ -56,7 +56,7 @@ pub static GLSL_MANDELBOX2D: VariationDef = VariationDef {
     display_name: "GLSL MandelBox2D",
     category: VariationCategory::Plugin,
     phase: VariationPhase::Any,
-    features: &[Feature::NeedsRng, Feature::WritesRgb],
+    features: &[Feature::NeedsRng, Feature::WritesRgb, Feature::NeverZ],
     parameters: &[
         param!("density_pixels", "Density Pixels", unlimited_int, 1000000.0, 100.0, 10000000.0, "Discrete grid resolution for sampling. Higher = smoother continuous output; lower = visible pixelation. JWildfire's 'Density Pixels' slider; clamped at runtime to `[100, 10000000]`."),
         param!("seed", "Seed", unlimited_int, 10000.0, 0.0, 10000.0, "JWildfire CPU-only: seeds a Java `Random` and assigns `time = rand(0, 10000)` as a side effect. **Not honored on GPU** — set `time` directly. Value accepted for round-trip."),
@@ -158,7 +158,7 @@ pub static GLSL_KALISET: VariationDef = VariationDef {
     display_name: "GLSL KaliSet",
     category: VariationCategory::Plugin,
     phase: VariationPhase::Any,
-    features: &[Feature::NeedsRng, Feature::WritesRgb],
+    features: &[Feature::NeedsRng, Feature::WritesRgb, Feature::NeverZ],
     parameters: &[
         param!("density_pixels", "Density Pixels", unlimited_int, 1000000.0, 100.0, 10000000.0, "Discrete grid resolution for sampling. See module-level doc for shared semantics."),
         param!("seed", "Seed", unlimited_int, 10000.0, 0.0, 10000.0, "JWildfire CPU-only — accepted for round-trip; set `time` directly."),
@@ -273,7 +273,7 @@ pub static GLSL_KALISET2: VariationDef = VariationDef {
     display_name: "GLSL KaliSet 2",
     category: VariationCategory::Plugin,
     phase: VariationPhase::Any,
-    features: &[Feature::NeedsRng, Feature::WritesRgb],
+    features: &[Feature::NeedsRng, Feature::WritesRgb, Feature::NeverZ],
     parameters: &[
         param!("density_pixels", "Density Pixels", unlimited_int, 1000000.0, 100.0, 10000000.0, "Discrete grid resolution. See module-level doc."),
         param!("seed", "Seed", unlimited_int, 5000.0, 0.0, 10000.0, "JWildfire CPU-only — set `time` directly."),
@@ -407,7 +407,7 @@ pub static GLSL_APOLLONIAN: VariationDef = VariationDef {
     display_name: "GLSL Apollonian",
     category: VariationCategory::Plugin,
     phase: VariationPhase::Any,
-    features: &[Feature::NeedsRng, Feature::WritesRgb],
+    features: &[Feature::NeedsRng, Feature::WritesRgb, Feature::NeverZ],
     parameters: &[
         param!("density_pixels", "Density Pixels", unlimited_int, 1000000.0, 100.0, 10000000.0, "Discrete grid resolution."),
         param!("seed", "Seed", unlimited_int, 10000.0, 0.0, 10000.0, "JWildfire CPU-only — set `time` directly."),

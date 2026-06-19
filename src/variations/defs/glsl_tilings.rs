@@ -50,7 +50,7 @@ pub static GLSL_KALEIDOSCOPIC: VariationDef = VariationDef {
     display_name: "GLSL Kaleidoscopic",
     category: VariationCategory::Plugin,
     phase: VariationPhase::Any,
-    features: &[Feature::NeedsRng, Feature::WritesRgb],
+    features: &[Feature::NeedsRng, Feature::WritesRgb, Feature::NeverZ],
     parameters: &[
         param!("density_pixels", "Density Pixels", unlimited_int, 1000000.0, 100.0, 10000000.0, "Discrete grid resolution. See module-level doc."),
         param!("seed", "Seed", unlimited_int, 10000.0, 0.0, 10000.0, "JWildfire CPU-only — set `time` directly."),
@@ -178,7 +178,7 @@ pub static GLSL_KALEIDOCOMPLEX: VariationDef = VariationDef {
     display_name: "GLSL KaleidoComplex",
     category: VariationCategory::Plugin,
     phase: VariationPhase::Any,
-    features: &[Feature::NeedsRng, Feature::WritesRgb],
+    features: &[Feature::NeedsRng, Feature::WritesRgb, Feature::NeverZ],
     parameters: &[
         param!("density_pixels", "Density Pixels", unlimited_int, 1000000.0, 100.0, 10000000.0, "Discrete grid resolution."),
         param!("seed", "Seed", unlimited_int, 10000.0, 0.0, 10000.0, "JWildfire CPU-only — set `time` directly."),
@@ -358,7 +358,7 @@ pub static GLSL_HYPERBOLICTILE: VariationDef = VariationDef {
     display_name: "GLSL Hyperbolic Tile",
     category: VariationCategory::Plugin,
     phase: VariationPhase::Any,
-    features: &[Feature::NeedsRng, Feature::WritesRgb],
+    features: &[Feature::NeedsRng, Feature::WritesRgb, Feature::NeverZ],
     parameters: &[
         param!("density_pixels", "Density Pixels", unlimited_int, 1000000.0, 100.0, 10000000.0, "Discrete grid resolution."),
         param!("gradient", "Gradient", unlimited_int, 0.0, 0.0, 1.0, "JWildfire color output mode. **Only mode 0 honored.** This variation produces grayscale output regardless of palette."),
@@ -537,7 +537,7 @@ pub static GLSL_MANDALA: VariationDef = VariationDef {
     display_name: "GLSL Mandala",
     category: VariationCategory::Plugin,
     phase: VariationPhase::Any,
-    features: &[Feature::NeedsRng, Feature::WritesRgb],
+    features: &[Feature::NeedsRng, Feature::WritesRgb, Feature::NeverZ],
     parameters: &[
         param!("density_pixels", "Density Pixels", unlimited_int, 1000000.0, 100.0, 10000000.0, "Discrete grid resolution."),
         param!("m_x", "mX", unlimited_float, 0.025, -1.0, 1.0, "Z-component scalar fed into the per-fold iteration as the initial depth (`p.z = mx · v`)."),
@@ -713,7 +713,7 @@ pub static GLSL_SQUARES: VariationDef = VariationDef {
     display_name: "GLSL Squares",
     category: VariationCategory::Plugin,
     phase: VariationPhase::Any,
-    features: &[Feature::NeedsRng, Feature::WritesRgb],
+    features: &[Feature::NeedsRng, Feature::WritesRgb, Feature::NeverZ],
     parameters: &[
         param!("density_pixels", "Density Pixels", unlimited_int, 1000000.0, 100.0, 10000000.0, "Discrete grid resolution."),
         param!("seed", "Seed", unlimited_int, 5000.0, 0.0, 10000.0, "JWildfire CPU-only — set `time` directly."),
@@ -841,7 +841,7 @@ pub static GLSL_HOSHI: VariationDef = VariationDef {
     display_name: "GLSL Hoshi",
     category: VariationCategory::Plugin,
     phase: VariationPhase::Any,
-    features: &[Feature::NeedsRng, Feature::WritesRgb],
+    features: &[Feature::NeedsRng, Feature::WritesRgb, Feature::NeverZ],
     parameters: &[
         param!("density_pixels", "Density Pixels", unlimited_int, 1000000.0, 100.0, 10000000.0, "Discrete grid resolution."),
         param!("seed", "Seed", unlimited_int, 100000.0, 0.0, 1000000.0, "JWildfire CPU-only — set `time` directly."),

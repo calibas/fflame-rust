@@ -60,7 +60,7 @@ pub static GLSL_ACRILIC: VariationDef = VariationDef {
     display_name: "GLSL Acrilic",
     category: VariationCategory::Plugin,
     phase: VariationPhase::Any,
-    features: &[Feature::NeedsRng, Feature::WritesRgb],
+    features: &[Feature::NeedsRng, Feature::WritesRgb, Feature::NeverZ],
     parameters: &[
         param!("density_pixels", "Density Pixels", unlimited_int, 1000000.0, 100.0, 10000000.0, "Discrete grid resolution. See module-level doc."),
         param!("seed", "Seed", unlimited_int, 10000.0, 0.0, 10000.0, "JWildfire CPU-only — set `time` directly."),
@@ -186,7 +186,7 @@ pub static GLSL_CIRCLESBLUE: VariationDef = VariationDef {
     display_name: "GLSL CirclesBlue",
     category: VariationCategory::Plugin,
     phase: VariationPhase::Any,
-    features: &[Feature::NeedsRng, Feature::WritesRgb],
+    features: &[Feature::NeedsRng, Feature::WritesRgb, Feature::NeverZ],
     parameters: &[
         param!("density_pixels", "Density Pixels", unlimited_int, 1000000.0, 100.0, 10000000.0, "Discrete grid resolution."),
         param!("seed", "Seed", unlimited_int, 10000.0, 0.0, 10000.0, "JWildfire CPU-only — set `time` directly."),
@@ -292,7 +292,7 @@ pub static GLSL_CIRCUITS: VariationDef = VariationDef {
     display_name: "GLSL Circuits",
     category: VariationCategory::Plugin,
     phase: VariationPhase::Any,
-    features: &[Feature::NeedsRng, Feature::WritesRgb],
+    features: &[Feature::NeedsRng, Feature::WritesRgb, Feature::NeverZ],
     parameters: &[
         param!("density_pixels", "Density Pixels", unlimited_int, 1000000.0, 100.0, 10000000.0, "Discrete grid resolution."),
         param!("time", "Time", unlimited_float, 0.0, -10000.0, 10000.0, "Animation parameter. Drives the per-iteration rotation matrices and the circuit phase."),
@@ -514,7 +514,7 @@ pub static GLSL_FRACTALDOTS: VariationDef = VariationDef {
     display_name: "GLSL FractalDots",
     category: VariationCategory::Plugin,
     phase: VariationPhase::Any,
-    features: &[Feature::NeedsRng, Feature::WritesRgb],
+    features: &[Feature::NeedsRng, Feature::WritesRgb, Feature::NeverZ],
     parameters: &[
         param!("density_pixels", "Density Pixels", unlimited_int, 1000000.0, 100.0, 10000000.0, "Discrete grid resolution."),
         param!("iterations", "Iterations", unlimited_int, 9.0, 1.0, 20.0, "Soft early-exit threshold for the inner loop. The loop runs at most `max_iterations` times but breaks when `i > iterations`. **GPU-clamped to ≤ 20**."),
@@ -636,7 +636,7 @@ pub static GLSL_STARSFIELD: VariationDef = VariationDef {
     display_name: "GLSL StarsField",
     category: VariationCategory::Plugin,
     phase: VariationPhase::Any,
-    features: &[Feature::NeedsRng, Feature::WritesRgb],
+    features: &[Feature::NeedsRng, Feature::WritesRgb, Feature::NeverZ],
     parameters: &[
         param!("density_pixels", "Density Pixels", unlimited_int, 1000000.0, 100.0, 10000000.0, "Discrete grid resolution."),
         param!("seed", "Seed", unlimited_int, 10000.0, 0.0, 10000.0, "JWildfire CPU-only — set `time` directly."),
@@ -819,7 +819,7 @@ pub static GLSL_GRID3D: VariationDef = VariationDef {
     display_name: "GLSL Grid 3D",
     category: VariationCategory::Plugin,
     phase: VariationPhase::Any,
-    features: &[Feature::NeedsRng, Feature::WritesRgb],
+    features: &[Feature::NeedsRng, Feature::WritesRgb, Feature::NeverZ],
     parameters: &[
         param!("density_pixels", "Density Pixels", unlimited_int, 1000000.0, 100.0, 10000000.0, "Discrete grid resolution."),
         param!("seed", "Seed", unlimited_int, 10000.0, 0.0, 10000.0, "JWildfire CPU-only — set `time` directly."),
