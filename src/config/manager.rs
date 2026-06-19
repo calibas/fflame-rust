@@ -1698,6 +1698,10 @@ impl ConfigManager {
                 let xform = flame.transforms.get(*index).ok_or(ConfigError::InvalidIndex)?;
                 Ok(Self::variation_priority_value(xform, variation))
             }
+            ConfigPath::TransformVariationOrder { index } => {
+                let xform = flame.transforms.get(*index).ok_or(ConfigError::InvalidIndex)?;
+                Ok(ConfigValue::StringList(xform.variation_order.clone()))
+            }
             ConfigPath::TransformVariationParam {
                 index,
                 variation,
@@ -1894,6 +1898,10 @@ impl ConfigManager {
                 let xform = flame.linked_transforms.get(*index).ok_or(ConfigError::InvalidIndex)?;
                 Ok(Self::variation_priority_value(xform, variation))
             }
+            ConfigPath::LinkedTransformVariationOrder { index } => {
+                let xform = flame.linked_transforms.get(*index).ok_or(ConfigError::InvalidIndex)?;
+                Ok(ConfigValue::StringList(xform.variation_order.clone()))
+            }
             ConfigPath::LinkedTransformVariationParam { index, variation, param } => {
                 let xform = flame.linked_transforms.get(*index)
                     .ok_or(ConfigError::InvalidIndex)?;
@@ -1954,6 +1962,10 @@ impl ConfigManager {
             ConfigPath::FinalTransformVariationPriority { index, variation } => {
                 let xform = flame.final_transforms.get(*index).ok_or(ConfigError::InvalidIndex)?;
                 Ok(Self::variation_priority_value(xform, variation))
+            }
+            ConfigPath::FinalTransformVariationOrder { index } => {
+                let xform = flame.final_transforms.get(*index).ok_or(ConfigError::InvalidIndex)?;
+                Ok(ConfigValue::StringList(xform.variation_order.clone()))
             }
             ConfigPath::FinalTransformVariationParam { index, variation, param } => {
                 let xform = flame.final_transforms.get(*index)
@@ -2440,6 +2452,10 @@ impl ConfigManager {
                 let xform = self.normal_transform_mut(*index)?;
                 Self::apply_variation_priority(xform, variation, value)?;
             }
+            ConfigPath::TransformVariationOrder { index } => {
+                let xform = self.normal_transform_mut(*index)?;
+                xform.variation_order = value.try_into()?;
+            }
             ConfigPath::TransformVariationParam { index, variation, param } => {
                 let xform = self.normal_transform_mut(*index)?;
                 Self::apply_variation_param(xform, variation, param, value)?;
@@ -2637,6 +2653,10 @@ impl ConfigManager {
                 let xform = self.linked_transform_mut(*index)?;
                 Self::apply_variation_priority(xform, variation, value)?;
             }
+            ConfigPath::LinkedTransformVariationOrder { index } => {
+                let xform = self.linked_transform_mut(*index)?;
+                xform.variation_order = value.try_into()?;
+            }
             ConfigPath::LinkedTransformVariationParam { index, variation, param } => {
                 let xform = self.linked_transform_mut(*index)?;
                 Self::apply_variation_param(xform, variation, param, value)?;
@@ -2695,6 +2715,10 @@ impl ConfigManager {
             ConfigPath::FinalTransformVariationPriority { index, variation } => {
                 let xform = self.final_transform_mut(*index)?;
                 Self::apply_variation_priority(xform, variation, value)?;
+            }
+            ConfigPath::FinalTransformVariationOrder { index } => {
+                let xform = self.final_transform_mut(*index)?;
+                xform.variation_order = value.try_into()?;
             }
             ConfigPath::FinalTransformVariationParam { index, variation, param } => {
                 let xform = self.final_transform_mut(*index)?;
@@ -3405,6 +3429,16 @@ impl TryFrom<ConfigValue> for i32 {
     }
 }
 
+impl TryFrom<ConfigValue> for Vec<String> {
+    type Error = ConfigError;
+    fn try_from(v: ConfigValue) -> Result<Self, Self::Error> {
+        match v {
+            ConfigValue::StringList(s) => Ok(s),
+            _ => Err(ConfigError::TypeMismatch),
+        }
+    }
+}
+
 impl TryFrom<ConfigValue> for u32 {
     type Error = ConfigError;
     fn try_from(v: ConfigValue) -> Result<Self, Self::Error> {
@@ -3568,6 +3602,38 @@ mod tests {
             .set_value(&ConfigPath::Exposure, 2.0.into())
             .unwrap();
         assert_eq!(manager.current.exposure, 2.0);
+    }
+
+    #[test]
+    fn test_variation_order_path_get_set() {
+        use crate::scene::transforms::{Flame, Transform};
+        let mut config = FractalConfig::default();
+        let mut flame = Flame::new();
+        let mut t = Transform::new();
+        t.set_variation("linear", 1.0); // order: [linear]
+        t.set_variation("spherical", 0.5); // order: [linear, spherical]
+        flame.transforms = vec![t];
+        config.flame = flame;
+        let mut manager = ConfigManager::new(config);
+
+        let path = ConfigPath::TransformVariationOrder { index: 0 };
+        let got = manager.get_value(&path).unwrap();
+        assert!(got.approx_eq(&ConfigValue::StringList(vec![
+            "linear".to_string(),
+            "spherical".to_string()
+        ])));
+
+        // Reorder (swap) and confirm it lands on the transform.
+        manager
+            .set_value(
+                &path,
+                ConfigValue::StringList(vec!["spherical".to_string(), "linear".to_string()]),
+            )
+            .unwrap();
+        assert_eq!(
+            manager.current.flame.transforms[0].variation_order,
+            vec!["spherical".to_string(), "linear".to_string()]
+        );
     }
 
     #[test]
