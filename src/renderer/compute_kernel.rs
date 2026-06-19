@@ -435,6 +435,18 @@ impl FlameRenderer {
             // No inlining for incremental updates (would trigger too many shader rebuilds)
             inlined_transforms: None,
             cumulative_weights: None,
+            // fx_priority phase overrides are baked per-flame (the
+            // interactive shader can't read per-transform priorities at
+            // runtime); resolve them with the same local index map the
+            // buffer populator uses.
+            variation_priorities: {
+                let registry = crate::variations::global_registry();
+                let id_map = crate::scene::transforms::compute_local_index_map(
+                    flame.extract_active_variations().into_keys(),
+                    &registry,
+                );
+                crate::shader_builder_v2::collect_phase_overrides(flame, &registry, &id_map)
+            },
         }
     }
 

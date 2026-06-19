@@ -82,6 +82,32 @@ pub enum VariationPhase {
     /// Execute after all normal variations
     /// NOTE: Flatten is treated as post despite being index 1!
     Post,
+
+    /// Phase-agnostic: the variation may be assigned to any phase per
+    /// instance via JWildfire's `fx_priority` (see
+    /// [`crate::scene::transforms::Transform::variation_priorities`]).
+    /// This is the **opt-in** marker — `Pre`/`Normal`/`Post` variations
+    /// stay locked to their phase and ignore `fx_priority`; only `Any`
+    /// variations honour it. With no override the variation defaults to
+    /// the **normal** bucket. The combine form when moved to pre/post is
+    /// chosen by [`crate::variations::definition::Feature::Replace`].
+    /// See `docs/projects/jwf-features.md`.
+    Any,
+}
+
+impl VariationPhase {
+    /// The JWildfire `fx_priority` integer a variation runs at in its
+    /// natural (no-override) phase: `Pre`→−1, `Normal`/`Any`→0, `Post`→1.
+    /// Used on import to decide whether a parsed `fx_priority` is an
+    /// actual override worth storing (sparse model) and at shader-build
+    /// time as the default bucket.
+    pub fn natural_priority(&self) -> i32 {
+        match self {
+            VariationPhase::Pre => -1,
+            VariationPhase::Normal | VariationPhase::Any => 0,
+            VariationPhase::Post => 1,
+        }
+    }
 }
 
 /// Variation metadata and registration
