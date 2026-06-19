@@ -416,8 +416,7 @@ impl ShaderConstants {
         // table aligns with `xform.variations[var_idx]` in the apply_variations
         // shader code.
         let id_map = crate::scene::transforms::compute_local_index_map(
-            flame.extract_active_variations().into_keys(),
-            registry,
+            flame.active_variation_names_ordered(registry),
         );
 
         // Inline all transforms
@@ -697,13 +696,17 @@ impl ShaderBuilder {
     /// (harmless: nothing reads them in this shader).
     fn active_with_local_indices(
         &self,
-        active_variations: &HashMap<String, f32>,
+        flame: &crate::scene::transforms::Flame,
         render_3d: bool,
     ) -> Vec<(String, u32)> {
         use crate::variations::VariationCategory;
+        // Local index map follows the flame's variation order (see
+        // `Flame::active_variation_names_ordered`) so the dispatch emission
+        // order matches JWildfire's per-xform order. Every other site that
+        // builds this map (GPU buffer packing, init shader) derives it the
+        // same way, keeping weight/param slots consistent.
         let local_map = crate::scene::transforms::compute_local_index_map(
-            active_variations.keys().cloned(),
-            &self.registry,
+            flame.active_variation_names_ordered(&self.registry),
         );
         // Iterate registry order so output is deterministic
         self.registry.names().iter()
@@ -966,13 +969,15 @@ impl ShaderBuilder {
     pub fn build_init_shader(
         &self,
         flame: &crate::scene::transforms::Flame,
-        active_variations: &HashMap<String, f32>,
+        // Kept for call-site symmetry with build_from_template; the local
+        // index map now derives from the flame's variation order, so the
+        // active-set HashMap is no longer needed here.
+        _active_variations: &HashMap<String, f32>,
     ) -> Option<String> {
         use std::collections::HashSet;
 
         let local_map = crate::scene::transforms::compute_local_index_map(
-            active_variations.keys().cloned(),
-            &self.registry,
+            flame.active_variation_names_ordered(&self.registry),
         );
 
         // Build name → packed offset lookup once — same layout the main
@@ -1252,14 +1257,16 @@ impl ShaderBuilder {
     pub fn build_from_template(
         &self,
         flame: &crate::scene::transforms::Flame,
-        active_variations: &HashMap<String, f32>,
+        // No longer used: the local index map now derives from the flame's
+        // variation order. Kept so existing call sites stay unchanged.
+        _active_variations: &HashMap<String, f32>,
         render_3d: bool,
         path_features_enabled: bool,
         xaos_enabled: bool,
         output_histogram_direct: bool,
         constants: &ShaderConstants,
     ) -> String {
-        let active = self.active_with_local_indices(active_variations, render_3d);
+        let active = self.active_with_local_indices(flame, render_3d);
 
         // Compute has_dc once: drives both the apply_variations signature
         // (with vs without `vc` param) and the HAS_DC template condition.

@@ -220,8 +220,7 @@ impl ShaderCache {
             // uses so var indices line up with `xform.variations[idx]`.
             let registry = crate::variations::global_registry();
             let id_map = crate::scene::transforms::compute_local_index_map(
-                config.flame.extract_active_variations().into_keys(),
-                &registry,
+                config.flame.active_variation_names_ordered(&registry),
             );
             ShaderConstants {
                 num_transforms,

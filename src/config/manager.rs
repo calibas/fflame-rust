@@ -2071,9 +2071,12 @@ impl ConfigManager {
     ) -> Result<(), ConfigError> {
         let weight: f32 = value.try_into()?;
         if weight.is_nan() {
-            xform.variations.remove(variation);
+            // `remove_variation` also drops the name from `variation_order`.
+            xform.remove_variation(variation);
         } else {
-            xform.variations.insert(variation.to_string(), weight);
+            // `set_variation` records the name in `variation_order` on first
+            // add, so UI-built flames dispatch in add order.
+            xform.set_variation(variation, weight);
         }
         Ok(())
     }

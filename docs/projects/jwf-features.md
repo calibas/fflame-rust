@@ -251,17 +251,42 @@ replace variation is unchanged (`result += w·body` from `result = 0`
 equals `result = w·body`), so single-variation flames render identically;
 only multi-variation normal xforms change.
 
-Caveat — *order*: every normal variation reads the fixed affine input, so
-accumulate variations commute (order-independent). A replace, though,
-discards everything emitted before it, so JWF's result is *(last replace)
-+ (accumulates after it)*. Our `Transform.variations` is an unordered
-map, so we can't reconstruct JWF's intra-xform order; we apply replaces
-last. This is exact for the common "one replace, added last" case (e.g.
-shredlin in JWF-rando14, where it clobbers `poincare3D` — confirmed
-matching JWF) but won't match a flame that deliberately places an
-accumulate *after* a replace. (`NeedsAccum` variations, which read the
-running sum, are excluded from `Any` and are the only order-sensitive
-accumulates.)
+### Variation order preservation
+
+The dispatch now emits a flame's variations in **import order** (and UI
+add order), not registry order — because the running accumulator
+(`pVarTP`) is read by `NeedsAccum` variations (roundspher3D, …) and
+clobbered by `Replace` variations, so the order they run in changes the
+result. JWildfire applies variations in each xform's list order; our
+`Transform.variations` is an unordered `HashMap`, so a parallel
+`Transform::variation_order: Vec<String>` hint records it (XML attribute
+order on import, add order in the UI, round-tripped through `.fflame`/
+`.flame`). `compute_local_index_map` assigns local indices in that order
+(via `Flame::active_variation_names_ordered`); every map site (GPU
+packing, shader emission, init shader) derives it the same way so slots
+stay consistent.
+
+Fixed JWF-rando40 (roundspher3D before waves2: roundspher3D reads
+`cos(f)` instead of waves2's accumulated z — confirmed matching JWF).
+Old `.fflame` files without `variation_order` fall back to registry order
+(the pre-feature behavior), and accumulate-only flames are unaffected
+either way (they commute).
+
+**Limitations.** (1) A variation gets **one** local index per flame, so
+we can't represent *different* orders for the same variation pair across
+xforms (JWF can — its order is per-xform). The per-flame order
+(first-appearance walking the xforms) fixes the common case; a flame that
+orders the same pair differently in two xforms stays approximate. (2) No
+duplicate variations in one xform yet (would need a per-instance model —
+see the "duplicates require an instance list" note); a duplicate name is
+still summed on import.
+
+Caveat — *replace order*: a replace discards everything emitted before
+it, so JWF's result is *(last replace) + (accumulates after it)*. We
+emit replaces **last** within the normal bucket, which is exact for the
+common "one replace, added last" case (shredlin clobbering `poincare3D`
+in JWF-rando14 — confirmed) but won't match a flame that deliberately
+places an accumulate *after* a replace.
 
 **Storage model (confirmed):** a third name-keyed map on `Transform`,
 parallel to `variations`/`variation_params`:

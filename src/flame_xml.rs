@@ -715,6 +715,12 @@ fn parse_xform_element(
                             // flame carrying both `linear` and `linear3D`
                             // keeps both contributions (JWF treats them as
                             // separate variations whose outputs add).
+                            // Record import order (XML attribute order) the
+                            // first time we see this variation, so the
+                            // dispatch matches JWildfire's per-xform order.
+                            if !transform.variations.contains_key(&info.name) {
+                                transform.variation_order.push(info.name.clone());
+                            }
                             *transform
                                 .variations
                                 .entry(info.name.clone())
@@ -852,6 +858,10 @@ fn parse_finalxform_element(
                             // Canonical name + summed merge — same
                             // alias-canonicalization as the xform parser
                             // above (JWF `linear3D` → our `linear`).
+                            // Record import order (see the xform parser).
+                            if !transform.variations.contains_key(&info.name) {
+                                transform.variation_order.push(info.name.clone());
+                            }
                             *transform
                                 .variations
                                 .entry(info.name.clone())
@@ -1434,8 +1444,22 @@ fn write_xform(
         out.push_str(&format!(" pluginColor=\"{}\"", fmt_f32(xform.direct_color)));
     }
 
-    // Variations — sorted for deterministic output.
-    let mut variation_names: Vec<&String> = xform.variations.keys().collect();
+    // Variations — emit in the transform's recorded order
+    // (`variation_order`) so the dispatch order survives a `.flame`
+    // round-trip (JWildfire applies variations in xform-list order); then
+    // any active variations not in the hint, sorted, for determinism.
+    let mut emitted_vars: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for name in &xform.variation_order {
+        if let Some(weight) = xform.variations.get(name) {
+            out.push_str(&format!(" {}=\"{}\"", name, fmt_f32(*weight)));
+            emitted_vars.insert(name.as_str());
+        }
+    }
+    let mut variation_names: Vec<&String> = xform
+        .variations
+        .keys()
+        .filter(|n| !emitted_vars.contains(n.as_str()))
+        .collect();
     variation_names.sort();
     for name in &variation_names {
         let weight = xform.variations[*name];
@@ -1647,6 +1671,30 @@ mod tests {
         assert_eq!(xform.d, 0.34284);      // parts[3]
         assert_eq!(xform.e, 1.5);          // parts[4]
         assert_eq!(xform.f, 2.5);          // parts[5]
+    }
+
+    #[test]
+    fn test_variation_order_captured_from_xml() {
+        // Variation order must follow XML attribute order so the dispatch
+        // matches JWildfire's per-xform order (matters for NeedsAccum /
+        // Replace variations). roundspher3D-then-waves2 vs the reverse must
+        // produce opposite `variation_order`.
+        let mk = |attrs: &str| {
+            let xml = format!(
+                r#"<flames name="t"><flame name="O" size="100 100" center="0 0" scale="50">
+                   <xform weight="1" color="0.5" {} coefs="1 0 0 1 0 0"/></flame></flames>"#,
+                attrs
+            );
+            parse_flame_xml(&xml).expect("parse").remove(0).flame.transforms[0].variation_order.clone()
+        };
+        assert_eq!(
+            mk(r#"roundspher3D="0.5" waves2="0.9""#),
+            vec!["roundspher3D".to_string(), "waves2".to_string()],
+        );
+        assert_eq!(
+            mk(r#"waves2="0.9" roundspher3D="0.5""#),
+            vec!["waves2".to_string(), "roundspher3D".to_string()],
+        );
     }
 
     #[test]
