@@ -43,7 +43,7 @@ pub static TRUCHET2: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Truchet 2",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("exponent1", "Exponent 1", unlimited_float, 1.0, -1.0, 3.0, "Lp-norm exponent at the left edge of each cell."),

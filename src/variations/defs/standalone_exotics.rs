@@ -53,7 +53,7 @@ pub static KALEIDOSCOPE: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Kaleidoscope",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsTransform],
     parameters: &[
         param!("pull", "Pull", unlimited_float, 0.0, -5.0, 5.0, "Y-axis pull strength — pulls the upper and lower halves apart."),
@@ -130,7 +130,7 @@ pub static TAURUS: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Taurus",
     category: VariationCategory::Full3D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsTransform, Feature::AlwaysZ],
     parameters: &[
         param!("r", "R", unlimited_float, 3.0, -10.0, 10.0, "Torus radius."),
@@ -204,7 +204,7 @@ pub static HOLE2: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Hole 2",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("a", "A", unlimited_float, 1.0, -10.0, 10.0, "Power for the angle-derived scaling factor."),

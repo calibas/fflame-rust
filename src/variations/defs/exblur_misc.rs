@@ -38,7 +38,7 @@ pub static EXBLUR: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Ex Blur",
     category: VariationCategory::Full3D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::AlwaysZ],
     parameters: &[
         param!("dist", "Dist", unlimited_float, 0.5, -10.0, 10.0, "Power exponent on the squared-distance scaling. Controls how the blur intensity grows with distance from the origin."),

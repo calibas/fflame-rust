@@ -58,7 +58,7 @@ pub static DC_MANDELBOX2D: VariationDef = VariationDef {
     aliases: &[],
     display_name: "DC MandelBox2D",
     category: VariationCategory::Plugin,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::NeedsTransform, Feature::WritesRgb, Feature::AlwaysZ],
     parameters: &[
         param!("zoom", "Zoom", unlimited_float, 7.0, 0.1, 50.0, "Scale applied to the sample before the Mandelbox iteration. Higher zoom shows finer escape structure."),

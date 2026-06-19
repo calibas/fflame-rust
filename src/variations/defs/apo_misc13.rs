@@ -68,7 +68,7 @@ pub static Q_ODE: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Q ODE",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsTransform],
     parameters: &[
         param!("q_ode01", "Q ODE 01", unlimited_float, 0.0, -10.0, 10.0, "Constant term on X output."),
@@ -158,8 +158,8 @@ pub static RIPPLE: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Ripple",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
-    features: &[],
+    phase: VariationPhase::Any,
+    features: &[Feature::Replace],
     parameters: &[
         param!("frequency", "Frequency", unlimited_float, 2.0, -10.0, 10.0, "Spatial frequency of the cosine wave (scaled by 5 internally)."),
         param!("velocity", "Velocity", unlimited_float, 1.0, -10.0, 10.0, "Phase velocity multiplier (× the internal `phase·2π − π` term)."),
@@ -294,7 +294,7 @@ pub static SCRY2: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Scry 2",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsTransform],
     parameters: &[
         param!("sides", "Sides", int, 4.0, 1.0, 50.0, "Polygon side count."),

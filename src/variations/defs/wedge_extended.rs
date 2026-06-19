@@ -45,7 +45,7 @@ pub static WEDGE_JULIA: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Wedge Julia",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("power", "Power", unlimited_float, 7.0, -20.0, 20.0, "Number of Julia branches. Higher = more arms."),
@@ -142,7 +142,7 @@ pub static WEDGE_SPH: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Wedge Sph",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("angle", "Angle", unlimited_float, 0.2, -10.0, 10.0, "Wedge sector rotation, in radians."),

@@ -21,7 +21,7 @@ pub static SYM_NG1: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Sym NG1",
     category: VariationCategory::Plugin,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("stepx", "stepx", unlimited_float, 0.5, -100.0, 100.0, "Network-symmetry parameter (see JWildfire SymNetG1)."),
@@ -72,7 +72,7 @@ pub static SYM_NG2: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Sym NG2",
     category: VariationCategory::Plugin,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("stepx", "stepx", unlimited_float, 2.0, -100.0, 100.0, "Network-symmetry parameter (see JWildfire SymNetG2)."),
@@ -123,7 +123,7 @@ pub static SYM_NG3: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Sym NG3",
     category: VariationCategory::Plugin,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("sepx", "sepx", unlimited_float, 0.5, -100.0, 100.0, "Network-symmetry parameter (see JWildfire SymNetG3)."),
@@ -177,7 +177,7 @@ pub static SYM_NG4: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Sym NG4",
     category: VariationCategory::Plugin,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("sepx", "sepx", unlimited_float, 0.0, -100.0, 100.0, "Network-symmetry parameter (see JWildfire SymNetG4)."),
@@ -246,7 +246,7 @@ pub static SYM_NG5: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Sym NG5",
     category: VariationCategory::Plugin,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("sepx", "sepx", unlimited_float, 0.0, -100.0, 100.0, "Network-symmetry parameter (see JWildfire SymNetG5)."),
@@ -304,7 +304,7 @@ pub static SYM_NG6: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Sym NG6",
     category: VariationCategory::Plugin,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("sepy", "sepy", unlimited_float, 0.1, -100.0, 100.0, "Network-symmetry parameter (see JWildfire SymNetG6)."),
@@ -362,7 +362,7 @@ pub static SYM_NG7: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Sym NG7",
     category: VariationCategory::Plugin,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("sepx", "sepx", unlimited_float, 0.0, -100.0, 100.0, "Network-symmetry parameter (see JWildfire SymNetG7)."),
@@ -413,7 +413,7 @@ pub static SYM_NG8: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Sym NG8",
     category: VariationCategory::Plugin,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("sepx", "sepx", unlimited_float, 0.0, -100.0, 100.0, "Network-symmetry parameter (see JWildfire SymNetG8)."),
@@ -482,7 +482,7 @@ pub static SYM_NG9: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Sym NG9",
     category: VariationCategory::Plugin,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("sepx", "sepx", unlimited_float, 0.0, -100.0, 100.0, "Network-symmetry parameter (see JWildfire SymNetG9)."),
@@ -537,7 +537,7 @@ pub static SYM_NG10: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Sym NG10",
     category: VariationCategory::Plugin,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("space", "space", unlimited_float, 0.0, -100.0, 100.0, "Network-symmetry parameter (see JWildfire SymNetG10)."),
@@ -595,7 +595,7 @@ pub static SYM_NG11: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Sym NG11",
     category: VariationCategory::Plugin,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("space", "space", unlimited_float, 0.0, -100.0, 100.0, "Network-symmetry parameter (see JWildfire SymNetG11)."),
@@ -667,7 +667,7 @@ pub static SYM_NG12: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Sym NG12",
     category: VariationCategory::Plugin,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("space", "space", unlimited_float, 0.0, -100.0, 100.0, "Network-symmetry parameter (see JWildfire SymNetG12)."),
@@ -733,7 +733,7 @@ pub static SYM_NG13: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Sym NG13",
     category: VariationCategory::Plugin,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("radius", "radius", unlimited_float, 0.0, -100.0, 100.0, "Network-symmetry parameter (see JWildfire SymNetG13)."),
@@ -803,7 +803,7 @@ pub static SYM_NG14: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Sym NG14",
     category: VariationCategory::Plugin,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("radius", "radius", unlimited_float, 0.0, -100.0, 100.0, "Network-symmetry parameter (see JWildfire SymNetG14)."),
@@ -885,7 +885,7 @@ pub static SYM_NG15: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Sym NG15",
     category: VariationCategory::Plugin,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("radius", "radius", unlimited_float, 0.0, -100.0, 100.0, "Network-symmetry parameter (see JWildfire SymNetG15)."),
@@ -967,7 +967,7 @@ pub static SYM_NG16: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Sym NG16",
     category: VariationCategory::Plugin,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("radius", "radius", unlimited_float, 0.0, -100.0, 100.0, "Network-symmetry parameter (see JWildfire SymNetG16)."),
@@ -1047,7 +1047,7 @@ pub static SYM_NG17: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Sym NG17",
     category: VariationCategory::Plugin,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("radius", "radius", unlimited_float, 0.0, -100.0, 100.0, "Network-symmetry parameter (see JWildfire SymNetG17)."),

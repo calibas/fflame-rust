@@ -18,7 +18,7 @@ pub static POLAR: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Polar",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[],
     init_param_count: 0,
@@ -51,7 +51,7 @@ pub static HANDKERCHIEF: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Handkerchief",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[],
     init_param_count: 0,
@@ -84,7 +84,7 @@ pub static HEART: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Heart",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[],
     init_param_count: 0,
@@ -120,7 +120,7 @@ pub static DISC: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Disc",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[],
     init_param_count: 0,
@@ -157,7 +157,7 @@ pub static SPIRAL: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Spiral",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[],
     init_param_count: 0,
@@ -199,7 +199,7 @@ pub static HYPERBOLIC: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Hyperbolic",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[],
     init_param_count: 0,
@@ -230,7 +230,7 @@ pub static DIAMOND: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Diamond",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[],
     init_param_count: 0,
@@ -263,7 +263,7 @@ pub static EX: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Ex",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[],
     init_param_count: 0,
@@ -305,7 +305,7 @@ pub static JULIA: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Julia",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[],
     init_param_count: 0,
@@ -344,7 +344,7 @@ pub static BENT: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Bent",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[],
     init_param_count: 0,
@@ -390,7 +390,7 @@ pub static WAVES: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Waves",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsTransform],
     parameters: &[],
     init_param_count: 0,
@@ -431,7 +431,7 @@ pub static JULIAN: VariationDef = VariationDef {
     aliases: &[],
     display_name: "JuliaN",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         VariationParamDef {
@@ -510,7 +510,7 @@ pub static BLOB: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Blob",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         VariationParamDef {
@@ -585,7 +585,7 @@ pub static EYEFISH: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Eyefish",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[],
     init_param_count: 0,
@@ -618,7 +618,7 @@ pub static BUBBLE: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Bubble",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::AlwaysZ],
     parameters: &[],
     init_param_count: 0,
@@ -660,7 +660,7 @@ pub static CYLINDER: VariationDef = VariationDef {
     aliases: &["cylinder_apo"],
     display_name: "Cylinder",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[],
     init_param_count: 0,
@@ -690,7 +690,7 @@ pub static NOISE: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Noise",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[],
     init_param_count: 0,
@@ -723,7 +723,7 @@ pub static BLUR: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Blur",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[],
     init_param_count: 0,
@@ -756,7 +756,7 @@ pub static GAUSSIAN_BLUR: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Gaussian Blur",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[],
     init_param_count: 0,
@@ -791,7 +791,7 @@ pub static POLAR2: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Polar2",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[],
     init_param_count: 0,
@@ -828,7 +828,7 @@ pub static CROSS: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Cross",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[],
     init_param_count: 0,
@@ -863,7 +863,7 @@ pub static LOONIE: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Loonie",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[],
     init_param_count: 0,
@@ -904,7 +904,7 @@ pub static SCRY: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Scry",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[],
     init_param_count: 0,
@@ -1025,7 +1025,7 @@ pub static FOCI: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Foci",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[],
     init_param_count: 0,
@@ -1068,7 +1068,7 @@ pub static ELLIPTIC: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Elliptic",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[],
     init_param_count: 0,
@@ -1120,7 +1120,7 @@ pub static WAVES2: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Waves2",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         VariationParamDef {
@@ -1219,7 +1219,7 @@ pub static LOG: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Log",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         VariationParamDef {
@@ -1270,7 +1270,7 @@ pub static ESCHER: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Escher",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         VariationParamDef {
@@ -1332,7 +1332,7 @@ pub static BIPOLAR: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Bipolar",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         VariationParamDef {
@@ -1409,7 +1409,7 @@ pub static LAZYSUSAN: VariationDef = VariationDef {
     aliases: &[],
     display_name: "LazySusan",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         VariationParamDef {
@@ -1512,7 +1512,7 @@ pub static RINGS2: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Rings2",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         VariationParamDef {
@@ -1560,7 +1560,7 @@ pub static FAN2: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Fan2",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         VariationParamDef {
@@ -1634,7 +1634,7 @@ pub static PDJ: VariationDef = VariationDef {
     aliases: &[],
     display_name: "PDJ",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         VariationParamDef {
@@ -1715,7 +1715,7 @@ pub static CURL: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Curl",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         VariationParamDef {
@@ -1780,7 +1780,7 @@ pub static RECTANGLES: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Rectangles",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         VariationParamDef {
@@ -1839,7 +1839,7 @@ pub static SPLITS: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Splits",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         VariationParamDef {
@@ -1898,7 +1898,7 @@ pub static NGON: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Ngon",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         VariationParamDef {
@@ -1991,7 +1991,7 @@ pub static AUGER: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Auger",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         VariationParamDef {
@@ -2081,7 +2081,7 @@ pub static CPOW: VariationDef = VariationDef {
     aliases: &[],
     display_name: "CPow",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         VariationParamDef {

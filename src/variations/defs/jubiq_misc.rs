@@ -48,7 +48,7 @@ pub static JUBIQ: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Jubiq",
     category: VariationCategory::Full3D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::AlwaysZ],
     parameters: &[
         param!("power", "Power", int, 1.0, -50.0, 50.0, "Julia angular branch count (integer). 0 collapses the variation to the origin. Otherwise: picks one of `|power|` equally-spaced angles per iteration and divides the polar angle by `power`."),

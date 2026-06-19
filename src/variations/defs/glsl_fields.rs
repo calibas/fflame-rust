@@ -59,7 +59,7 @@ pub static GLSL_ACRILIC: VariationDef = VariationDef {
     aliases: &[],
     display_name: "GLSL Acrilic",
     category: VariationCategory::Plugin,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::WritesRgb],
     parameters: &[
         param!("density_pixels", "Density Pixels", unlimited_int, 1000000.0, 100.0, 10000000.0, "Discrete grid resolution. See module-level doc."),
@@ -185,7 +185,7 @@ pub static GLSL_CIRCLESBLUE: VariationDef = VariationDef {
     aliases: &[],
     display_name: "GLSL CirclesBlue",
     category: VariationCategory::Plugin,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::WritesRgb],
     parameters: &[
         param!("density_pixels", "Density Pixels", unlimited_int, 1000000.0, 100.0, 10000000.0, "Discrete grid resolution."),
@@ -291,7 +291,7 @@ pub static GLSL_CIRCUITS: VariationDef = VariationDef {
     aliases: &[],
     display_name: "GLSL Circuits",
     category: VariationCategory::Plugin,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::WritesRgb],
     parameters: &[
         param!("density_pixels", "Density Pixels", unlimited_int, 1000000.0, 100.0, 10000000.0, "Discrete grid resolution."),
@@ -513,7 +513,7 @@ pub static GLSL_FRACTALDOTS: VariationDef = VariationDef {
     aliases: &[],
     display_name: "GLSL FractalDots",
     category: VariationCategory::Plugin,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::WritesRgb],
     parameters: &[
         param!("density_pixels", "Density Pixels", unlimited_int, 1000000.0, 100.0, 10000000.0, "Discrete grid resolution."),
@@ -635,7 +635,7 @@ pub static GLSL_STARSFIELD: VariationDef = VariationDef {
     aliases: &[],
     display_name: "GLSL StarsField",
     category: VariationCategory::Plugin,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::WritesRgb],
     parameters: &[
         param!("density_pixels", "Density Pixels", unlimited_int, 1000000.0, 100.0, 10000000.0, "Discrete grid resolution."),
@@ -818,7 +818,7 @@ pub static GLSL_GRID3D: VariationDef = VariationDef {
     aliases: &[],
     display_name: "GLSL Grid 3D",
     category: VariationCategory::Plugin,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::WritesRgb],
     parameters: &[
         param!("density_pixels", "Density Pixels", unlimited_int, 1000000.0, 100.0, 10000000.0, "Discrete grid resolution."),

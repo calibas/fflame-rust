@@ -2057,6 +2057,73 @@ mod tests {
     }
 
     #[test]
+    fn fx_priority_any_no_override_is_codegen_noop() {
+        // The bulk Normal->Any migration must not change any existing
+        // render: an Any variation with NO fx_priority override emits the
+        // exact same normal-phase line as a plain Normal variation —
+        // standard weighted-sum, no "MOVED", no xform_id gate.
+        let builder = test_builder();
+        let active = vec![("blur".to_string(), 0u32)];
+        let no_overrides: BTreeMap<u32, BTreeMap<u32, i32>> = BTreeMap::new();
+
+        let code = builder.build_apply_variations_2d(&active, None, 1, &no_overrides, false, false, false);
+        assert!(
+            code.contains("result += xform.variations[0] * variation_blur(temp"),
+            "expected the standard normal weighted-sum emission; got:\n{}", code
+        );
+        assert!(!code.contains("MOVED"), "no override ⇒ nothing should be moved");
+        assert!(!code.contains("Phase 1: Pre-variations"),
+            "no override ⇒ no pre bucket for an Any var");
+    }
+
+    #[test]
+    fn fx_priority_accumulate_var_moved_to_pre_adds() {
+        // blur is an accumulate variation (not Feature::Replace). Moved to
+        // pre it must ADD its weighted output (JWF EnforcedPre for an
+        // accumulate var: pAffineT += w*f — i.e. blur ≈ pre_blur), not
+        // replace.
+        let builder = test_builder();
+        let active = vec![("blur".to_string(), 0u32)];
+        let mut overrides: BTreeMap<u32, BTreeMap<u32, i32>> = BTreeMap::new();
+        overrides.entry(0).or_default().insert(0, -1);
+
+        let code = builder.build_apply_variations_2d(&active, None, 1, &overrides, false, false, false);
+        assert!(
+            code.contains("temp = temp + xform.variations[0] * variation_blur(temp"),
+            "accumulate var moved to pre must add; got:\n{}", code
+        );
+        // combimirror IS Replace, so for contrast its moved-pre form assigns.
+        let active_c = vec![("combimirror".to_string(), 0u32)];
+        let code_c = builder.build_apply_variations_2d(&active_c, None, 1, &overrides, false, false, false);
+        assert!(
+            code_c.contains("temp = xform.variations[0] * variation_combimirror(temp"),
+            "replace var moved to pre must assign; got:\n{}", code_c
+        );
+    }
+
+    #[test]
+    fn fx_priority_two_vars_same_priority_chain() {
+        // Two Any variations both pushed to pre (priority -1) land in the
+        // pre bucket together, ungated (each is single-bucket across the
+        // flame), and are emitted in index order so each updates `temp`
+        // in turn (JWF re-snapshots each Enforced step = a chain).
+        let builder = test_builder();
+        let active = vec![("blur".to_string(), 0u32), ("bubble".to_string(), 1u32)];
+        let mut overrides: BTreeMap<u32, BTreeMap<u32, i32>> = BTreeMap::new();
+        overrides.entry(0).or_default().insert(0, -1);
+        overrides.entry(1).or_default().insert(0, -1);
+
+        let (pre, normal, post) =
+            builder.resolve_phase_buckets(&active, 1, &overrides, false);
+        assert_eq!(pre.len(), 2, "both in pre");
+        assert!(normal.is_empty() && post.is_empty());
+        assert!(pre.iter().all(|p| p.gate.is_none()), "single bucket each ⇒ ungated");
+        // Emitted in ascending index order (chain order).
+        assert_eq!(pre[0].idx, 0);
+        assert_eq!(pre[1].idx, 1);
+    }
+
+    #[test]
     fn fx_priority_mixed_phases_gate_by_xform_id() {
         // Same Any variation assigned pre on transform 0 and normal on
         // transform 1 ⇒ two placements, each gated by xform_id.

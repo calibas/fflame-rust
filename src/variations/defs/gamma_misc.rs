@@ -63,7 +63,7 @@ pub static GAMMA: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Gamma",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[],
     init_param_count: 0,

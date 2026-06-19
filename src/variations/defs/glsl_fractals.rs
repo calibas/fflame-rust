@@ -55,7 +55,7 @@ pub static GLSL_MANDELBOX2D: VariationDef = VariationDef {
     aliases: &[],
     display_name: "GLSL MandelBox2D",
     category: VariationCategory::Plugin,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::WritesRgb],
     parameters: &[
         param!("density_pixels", "Density Pixels", unlimited_int, 1000000.0, 100.0, 10000000.0, "Discrete grid resolution for sampling. Higher = smoother continuous output; lower = visible pixelation. JWildfire's 'Density Pixels' slider; clamped at runtime to `[100, 10000000]`."),
@@ -157,7 +157,7 @@ pub static GLSL_KALISET: VariationDef = VariationDef {
     aliases: &[],
     display_name: "GLSL KaliSet",
     category: VariationCategory::Plugin,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::WritesRgb],
     parameters: &[
         param!("density_pixels", "Density Pixels", unlimited_int, 1000000.0, 100.0, 10000000.0, "Discrete grid resolution for sampling. See module-level doc for shared semantics."),
@@ -272,7 +272,7 @@ pub static GLSL_KALISET2: VariationDef = VariationDef {
     aliases: &[],
     display_name: "GLSL KaliSet 2",
     category: VariationCategory::Plugin,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::WritesRgb],
     parameters: &[
         param!("density_pixels", "Density Pixels", unlimited_int, 1000000.0, 100.0, 10000000.0, "Discrete grid resolution. See module-level doc."),
@@ -406,7 +406,7 @@ pub static GLSL_APOLLONIAN: VariationDef = VariationDef {
     aliases: &[],
     display_name: "GLSL Apollonian",
     category: VariationCategory::Plugin,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::WritesRgb],
     parameters: &[
         param!("density_pixels", "Density Pixels", unlimited_int, 1000000.0, 100.0, 10000000.0, "Discrete grid resolution."),

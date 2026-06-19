@@ -45,7 +45,7 @@ pub static SUPER_SHAPE: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Super Shape",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("rnd", "RND", unlimited_float, 3.0, -10.0, 10.0, "Mix between random sampling and the input radius. 0 = pure input radius, 1 = uniform random."),
@@ -117,7 +117,7 @@ pub static HENON: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Henon",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("a", "A", unlimited_float, 0.5, -10.0, 10.0, "Quadratic coefficient — controls the strength of the parabolic fold."),
@@ -169,7 +169,7 @@ pub static APOLLONY: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Apollony",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[],
     init_param_count: 0,

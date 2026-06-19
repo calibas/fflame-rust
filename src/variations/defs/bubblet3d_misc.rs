@@ -54,7 +54,7 @@ pub static BUBBLE_T3D: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Bubble T3D",
     category: VariationCategory::Full3D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::AlwaysZ],
     parameters: &[
         param!("number_of_stripes", "Number of Stripes", int, 0.0, -50.0, 50.0, "Number of angular stripe sectors around the XY plane. 0 disables stripes entirely. Negative value inverts the stripe pattern (swap drawn vs blanked sectors)."),

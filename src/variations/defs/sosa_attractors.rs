@@ -54,7 +54,7 @@ pub static CLIFFORD_JS: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Clifford (JS)",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("a", "A", unlimited_float, -1.4, -10.0, 10.0, "Clifford attractor parameter `a` (in `sin(a·y) + c·cos(a·x)`)."),
@@ -105,8 +105,8 @@ pub static SVENSSON_JS: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Svensson (JS)",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
-    features: &[],
+    phase: VariationPhase::Any,
+    features: &[Feature::Replace],
     parameters: &[
         param!("a", "A", unlimited_float, 1.4, -10.0, 10.0, "Svensson attractor parameter `a` (X-axis sin/cos frequency)."),
         param!("b", "B", unlimited_float, 1.56, -10.0, 10.0, "Svensson attractor parameter `b` (Y-axis sin/cos frequency)."),
@@ -157,7 +157,7 @@ pub static SATTRACTOR_JS: VariationDef = VariationDef {
     aliases: &[],
     display_name: "S-Attractor (JS)",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("m", "M", int, 10.0, 1.0, 12.0, "Number of vertex angles (1-12). Each iteration samples one of `m` evenly-spaced angles around the unit circle."),

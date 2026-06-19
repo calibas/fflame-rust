@@ -41,7 +41,7 @@ pub static LACE_JS: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Lace (JS)",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[],
     init_param_count: 0,
@@ -126,7 +126,7 @@ pub static WALLPAPER_JS: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Wallpaper (JS)",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::NeedsTransform],
     parameters: &[
         param!("a", "A", unlimited_float, 1.156, -10.0, 10.0, "Wallpaper parameter `a` — Y-output offset (`y' = a − x`)."),

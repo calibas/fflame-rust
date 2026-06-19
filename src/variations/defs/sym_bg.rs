@@ -21,7 +21,7 @@ pub static SYM_BG1: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Sym BG1",
     category: VariationCategory::Plugin,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("stepx", "stepx", unlimited_float, 0.0, -100.0, 100.0, "Band-symmetry parameter (see JWildfire SymBandG1)."),
@@ -72,7 +72,7 @@ pub static SYM_BG2: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Sym BG2",
     category: VariationCategory::Plugin,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("stepx", "stepx", unlimited_float, 0.0, -100.0, 100.0, "Band-symmetry parameter (see JWildfire SymBandG2)."),
@@ -123,7 +123,7 @@ pub static SYM_BG3: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Sym BG3",
     category: VariationCategory::Plugin,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("stepx", "stepx", unlimited_float, 0.0, -100.0, 100.0, "Band-symmetry parameter (see JWildfire SymBandG3)."),
@@ -174,7 +174,7 @@ pub static SYM_BG4: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Sym BG4",
     category: VariationCategory::Plugin,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("stepx", "stepx", unlimited_float, 0.0, -100.0, 100.0, "Band-symmetry parameter (see JWildfire SymBandG4)."),
@@ -225,7 +225,7 @@ pub static SYM_BG5: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Sym BG5",
     category: VariationCategory::Plugin,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("stepx", "stepx", unlimited_float, 0.0, -100.0, 100.0, "Band-symmetry parameter (see JWildfire SymBandG5)."),
@@ -276,7 +276,7 @@ pub static SYM_BG6: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Sym BG6",
     category: VariationCategory::Plugin,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("stepx", "stepx", unlimited_float, 0.0, -100.0, 100.0, "Band-symmetry parameter (see JWildfire SymBandG6)."),
@@ -331,7 +331,7 @@ pub static SYM_BG7: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Sym BG7",
     category: VariationCategory::Plugin,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("stepx", "stepx", unlimited_float, 0.0, -100.0, 100.0, "Band-symmetry parameter (see JWildfire SymBandG7)."),

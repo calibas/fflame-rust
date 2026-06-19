@@ -50,7 +50,7 @@ pub static RHODONEA: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Rhodonea",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::NeedsTransform],
     parameters: &[
         param!("knumer", "K Numer", unlimited_float, 3.0, -50.0, 50.0, "Rose-curve `k = knumer/kdenom` numerator. Integer `k` produces `k` petals (even) or `2k` petals (odd); rational `k` produces nested petal patterns with `cycles_to_close = kdenom` cycles."),

@@ -39,7 +39,7 @@ pub static AFFINE3D: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Affine 3D",
     category: VariationCategory::Full3D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::AlwaysZ],
     parameters: &[
         param!("translateX", "Translate X", unlimited_float, 0.0, -10.0, 10.0, "X-axis translation (added to the final output)."),

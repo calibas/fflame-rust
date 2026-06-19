@@ -43,7 +43,7 @@ pub static SIERCARPET_JS: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Siercarpet (JS)",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("m", "M", int, 3.0, 3.0, 12.0, "Number of arms in the cross (3-12). Each iteration picks one of `2m` vertex-or-midpoint positions around the circle."),

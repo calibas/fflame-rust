@@ -42,7 +42,7 @@ pub static ONION: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Onion",
     category: VariationCategory::Full3D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsTransform, Feature::AlwaysZ],
     parameters: &[
         param!("centre_x", "Centre X", unlimited_float, 0.0, -5.0, 5.0, "X coordinate of the sphere center."),
@@ -146,7 +146,7 @@ pub static TARGET_SP: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Target Sp",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsTransform],
     parameters: &[
         param!("twist", "Twist", unlimited_float, 0.0, -5.0, 5.0, "Rotation applied to alternating spiral arms, in half-turns."),

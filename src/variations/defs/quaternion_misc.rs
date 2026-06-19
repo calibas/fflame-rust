@@ -59,7 +59,7 @@ pub static QUATERNION: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Quaternion",
     category: VariationCategory::Full3D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::AlwaysZ],
     parameters: &[
         // cosq (default pow=1, others=1)

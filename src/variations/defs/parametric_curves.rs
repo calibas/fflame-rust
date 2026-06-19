@@ -54,7 +54,7 @@ pub static SPIROGRAPH: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Spirograph",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("a", "A", unlimited_float, 3.0, -10.0, 10.0, "Outer-wheel radius."),
@@ -138,7 +138,7 @@ pub static LISSAJOUS: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Lissajous",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("tmin", "T Min", unlimited_float, -3.14159265, -100.0, 100.0, "Minimum value of the random parameter `t`."),
@@ -214,7 +214,7 @@ pub static VOGEL: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Vogel",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("n", "N", int, 20.0, 1.0, 1000.0, "Number of seed positions (1-1000). Larger = more points around the spiral."),
@@ -300,8 +300,8 @@ pub static CROP3D: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Crop 3D",
     category: VariationCategory::Full3D,
-    phase: VariationPhase::Normal,
-    features: &[Feature::NeedsRng, Feature::AlwaysZ],
+    phase: VariationPhase::Any,
+    features: &[Feature::NeedsRng, Feature::AlwaysZ, Feature::Replace],
     parameters: &[
         param!("left", "Left", unlimited_float, -1.0, -10.0, 10.0, "Left bound of the cropping box (X axis)."),
         param!("top", "Top", unlimited_float, -1.0, -10.0, 10.0, "Top bound (Y axis)."),

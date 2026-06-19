@@ -38,7 +38,7 @@ pub static TARGET: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Target",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         VariationParamDef { name: "even", display_name: "Even", param_type: ParamType::Angle,
@@ -129,7 +129,7 @@ pub static YIN_YANG: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Yin Yang",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         VariationParamDef { name: "radius", display_name: "Radius", param_type: ParamType::Float,

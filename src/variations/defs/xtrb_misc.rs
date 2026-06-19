@@ -48,7 +48,7 @@ pub static XTRB: VariationDef = VariationDef {
     aliases: &[],
     display_name: "XTrB (TriBorders)",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("xtrb_power", "Power", int, 2.0, 1.0, 50.0, "Julia-N branch count (integer). Each iteration picks one of `|power|` equally-spaced angles from the projected coordinate, scaling the polar angle by `1/power`."),

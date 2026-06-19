@@ -55,7 +55,7 @@ pub static DC_LINEAR: VariationDef = VariationDef {
     aliases: &[],
     display_name: "DC Linear",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsTransform, Feature::WritesColor],
     parameters: &[
         param!("offset", "Offset", unlimited_float, 0.0, -10.0, 10.0, "Offset added to the projected coordinate before computing color."),
@@ -136,7 +136,7 @@ pub static DC_BUBBLE: VariationDef = VariationDef {
     aliases: &[],
     display_name: "DC Bubble",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsTransform, Feature::WritesColor, Feature::AlwaysZ],
     parameters: &[
         param!("centerx", "Center X", unlimited_float, 0.0, -2.0, 2.0, "X coordinate of the radial color center."),
