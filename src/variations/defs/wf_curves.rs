@@ -48,7 +48,7 @@ pub static EPISPIRAL_WF: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Epispiral WF",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("waves", "Waves", unlimited_float, 4.0, -50.0, 50.0, "Number of petals (frequency of the cosine denominator)."),
@@ -95,7 +95,7 @@ pub static CLOVERLEAF_WF: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Cloverleaf WF",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("filled", "Filled", bool, true, "1 = fill the curve interior by randomizing the radius per iteration; 0 = trace only the curve outline."),
@@ -140,7 +140,7 @@ pub static ROSE_WF: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Rose WF",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("amp", "Amplitude", unlimited_float, 0.5, -10.0, 10.0, "Radial amplitude (multiplies the cosine)."),
@@ -193,7 +193,7 @@ pub static BUBBLE_WF: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Bubble WF",
     category: VariationCategory::Full3D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::AlwaysZ],
     parameters: &[],
     init_param_count: 0,
@@ -244,7 +244,7 @@ pub static PLANE_WF: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Plane WF",
     category: VariationCategory::Full3D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::WritesColor, Feature::AlwaysZ],
     parameters: &[
         param!("position", "Position", unlimited_float, 3.0, -100.0, 100.0, "Fixed coordinate along the axis the plane is perpendicular to. For axis=XY the plane sits at z=position; for YZ at x=position; for ZX at y=position."),
@@ -373,7 +373,7 @@ pub static CHECKERBOARD_WF: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Checkerboard WF",
     category: VariationCategory::Full3D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::WritesColor, Feature::AlwaysZ],
     parameters: &[
         // Param order matches Java's `paramNames` so `.flame` files

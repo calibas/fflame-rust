@@ -38,7 +38,7 @@ pub static ROSONI: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Rosoni",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("maxiter", "Max Iter", int, 25.0, 1.0, 100.0, "Number of rotation iterations (each rotates by `2π/maxiter`)."),

@@ -39,7 +39,7 @@ pub static GLYNNSSHAPE: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Glynn S-Shape",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("radius", "Radius", unlimited_float, 1.0, -10.0, 10.0, "Outer cutoff radius. Points inside use the super-shape curve; outside use the Glynn power-warp."),

@@ -39,7 +39,7 @@ pub static WAVEBLUR_WF: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Wave Blur WF",
     category: VariationCategory::Full3D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::NeedsTransform, Feature::WritesColor, Feature::AlwaysZ],
     parameters: &[
         param!("count", "Count", int, 5.0, 1.0, 100.0, "Maximum integer multiplier of π in the wave-radius formula (≥ 1)."),

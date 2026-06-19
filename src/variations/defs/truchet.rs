@@ -62,7 +62,7 @@ pub static TRUCHET_FILL: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Truchet Fill",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsTransform],
     parameters: &[
         param!("exponent", "Exponent", unlimited_float, 2.0, 0.001, 2.0,
@@ -282,7 +282,7 @@ pub static ARCTRUCHET: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Arctruchet",
     category: VariationCategory::Plugin,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         // Cell-tilt PRNG seed. We feed it into a per-call hash of

@@ -41,7 +41,7 @@ pub static CANNABISCURVE_WF: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Cannabis Curve WF",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("filled", "Filled", bool, true, "When on, fill the curve interior by randomizing the radius per iteration. When off, trace only the outline."),
@@ -96,7 +96,7 @@ pub static SPHERICAL3D_WF: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Spherical 3D WF",
     category: VariationCategory::Full3D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::AlwaysZ],
     parameters: &[
         param!("invert", "Invert", int, 0.0, 0.0, 1.0, "1 = flip the sign of the output (inverts through the origin); 0 = standard direction."),
@@ -180,7 +180,7 @@ pub static SWIRL3D_WF: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Swirl 3D WF",
     category: VariationCategory::Full3D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::AlwaysZ, Feature::WritesColor],
     parameters: &[
         param!("n", "N", unlimited_float, 0.0, -10.0, 10.0, "Angular multiplier on the Z-output sine: `sin(6·cos(rad) − n·ang)`. Also drives the direct-color stripes (color = |z output|)."),

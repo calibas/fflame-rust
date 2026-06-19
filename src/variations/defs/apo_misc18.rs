@@ -42,7 +42,7 @@ pub static LAZYSENSEN: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Lazy Sensen",
     category: VariationCategory::Full3D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::AlwaysZ],
     parameters: &[
         param!("scale_x", "Scale X", unlimited_float, 1.0, -10.0, 10.0, "X-axis stripe scale. 0 disables the X flip; the stripe width is `1/|scale_x|`."),
@@ -129,7 +129,7 @@ pub static SPHERECROP: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Sphere Crop",
     category: VariationCategory::Full3D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::NeedsTransform, Feature::AlwaysZ],
     parameters: &[
         param!("radius", "Radius", unlimited_float, 1.0, -10.0, 10.0, "Sphere radius."),
@@ -236,7 +236,7 @@ pub static XHEART_BLUR_WF: VariationDef = VariationDef {
     aliases: &[],
     display_name: "X-Heart Blur WF",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("angle", "Angle", unlimited_float, 0.0, -10.0, 10.0, "Rotation angle of the heart shape (scaled by π/8 internally and offset from π/4)."),

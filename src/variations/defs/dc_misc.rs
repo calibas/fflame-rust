@@ -53,7 +53,7 @@ pub static DC_CYLINDER: VariationDef = VariationDef {
     aliases: &[],
     display_name: "DC Cylinder",
     category: VariationCategory::Full3D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::NeedsTransform, Feature::WritesColor, Feature::AlwaysZ],
     parameters: &[
         param!("offset", "Offset", unlimited_float, 0.0, -10.0, 10.0, "Color-projection offset. Init precomputes `offset · π` for parity (unused) and the raw `offset` is added to the projection."),
@@ -172,7 +172,7 @@ pub static DC_CYLINDER2: VariationDef = VariationDef {
     aliases: &[],
     display_name: "DC Cylinder 2",
     category: VariationCategory::Full3D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::NeedsTransform, Feature::WritesColor, Feature::AlwaysZ],
     parameters: &[
         param!("offset", "Offset", unlimited_float, 0.0, -10.0, 10.0, "Color-projection offset. Init precomputes `offset · π` for parity (unused) and the raw `offset` is added to the projection."),
@@ -285,7 +285,7 @@ pub static DC_TRIANGLE: VariationDef = VariationDef {
     aliases: &[],
     display_name: "DC Triangle",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::NeedsTransform, Feature::WritesColor],
     parameters: &[
         param!("scatter_area", "Scatter Area", unlimited_float, 0.0, -1.0, 1.0, "Random scatter amount applied to points outside the triangle. Clamped to `[-1, 1]` internally."),

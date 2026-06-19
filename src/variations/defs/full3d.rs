@@ -15,7 +15,7 @@ pub static HEMISPHERE: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Hemisphere",
     category: VariationCategory::Full3D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::AlwaysZ],
     parameters: &[],
     init_param_count: 0,

@@ -50,7 +50,7 @@ pub static BIPOLAR2: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Bipolar 2",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("shift", "Shift", unlimited_float, 0.0, -2.0, 2.0, "Vertical offset added to the bipolar angle output."),
@@ -165,7 +165,7 @@ pub static BLOB3D: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Blob 3D",
     category: VariationCategory::Full3D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::AlwaysZ],
     parameters: &[
         param!("low", "Low", unlimited_float, 0.3, -5.0, 5.0, "Inner radius — how close the bumps recede in the troughs."),
@@ -218,7 +218,7 @@ pub static CIRCULAR2: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Circular 2",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("angle", "Angle", angle, 90.0, "Maximum rotation per iteration (degrees)."),

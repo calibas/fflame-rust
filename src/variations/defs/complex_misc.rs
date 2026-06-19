@@ -53,7 +53,7 @@ pub static COMPLEX: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Complex",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("cospow", "Cos Pow", unlimited_float, 1.0, -10.0, 10.0, "cos: subfunction weight (complex cosine of `x + iy`). 0 disables this branch entirely; non-zero activates and scales its contribution to the accumulated output."),

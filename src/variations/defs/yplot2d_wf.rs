@@ -42,7 +42,7 @@ pub static YPLOT2D_WF: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Y-Plot 2D WF",
     category: VariationCategory::Full3D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::AlwaysZ, Feature::WritesColor],
     parameters: &[
         param!("preset_id", "Preset ID", int, 0.0, -1.0, 13.0, "Which baked formula preset to plot (0-13). JWF's default is a random preset; ours is 0 for determinism. -1 means a custom JWF formula we can't evaluate — renders as y = 0."),

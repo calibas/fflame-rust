@@ -130,7 +130,7 @@ pub static WAVES2B: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Waves2 B",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("freqx", "Freq X", unlimited_float, 2.0, -10.0, 10.0, "Frequency of the wave applied to the X axis (driven by Y)."),

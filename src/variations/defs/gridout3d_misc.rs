@@ -65,7 +65,7 @@ pub static GRIDOUT_3D: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Gridout 3D",
     category: VariationCategory::Full3D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::AlwaysZ],
     parameters: &[
         param!("xx", "X Gate", unlimited_float, 1.0, -10.0, 10.0, "X gate scale: input `x` is rounded then multiplied by `xx` before the region comparison. Setting to 0 collapses all regions onto `x = 0` (only the y-half decision still applies)."),

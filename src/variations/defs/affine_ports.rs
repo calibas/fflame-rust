@@ -34,7 +34,7 @@ pub static POPCORN: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Popcorn",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsTransform],
     parameters: &[],
     init_param_count: 0,

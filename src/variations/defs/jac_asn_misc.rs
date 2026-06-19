@@ -51,7 +51,7 @@ pub static JAC_ASN: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Jac asn",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsTransform],
     parameters: &[
         param!("jac_asn_kr", "Modulus Real", unlimited_float, 0.5, -10.0, 10.0, "Real part of the elliptic modulus k. Together with `jac_asn_ki` defines the complex modulus used by the Jacobi inverse."),

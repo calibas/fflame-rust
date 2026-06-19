@@ -30,7 +30,7 @@ pub static EXP: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Exp",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[],
     init_param_count: 0,
@@ -79,7 +79,7 @@ pub static LOG_DB: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Log DB",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         VariationParamDef { name: "base", display_name: "Base", param_type: ParamType::UnlimitedFloat,
@@ -162,7 +162,7 @@ pub static LOG_TILE2: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Log Tile2",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::AlwaysZ],
     parameters: &[
         VariationParamDef { name: "spreadx", display_name: "Spread X", param_type: ParamType::UnlimitedFloat,
@@ -218,7 +218,7 @@ pub static TILE_LOG: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Tile Log",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::AlwaysZ],
     parameters: &[
         VariationParamDef { name: "spread", display_name: "Spread", param_type: ParamType::UnlimitedFloat,

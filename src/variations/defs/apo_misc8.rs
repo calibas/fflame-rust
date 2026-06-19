@@ -45,7 +45,7 @@
 //!     Java setParameter.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
+    definition::{Feature, VariationDef, VariationParamDef},
     ParamType, VariationCategory, VariationPhase,
 };
 use crate::param;
@@ -72,7 +72,7 @@ pub static CSC_SQUARED: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Csc Squared",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("csc_div", "Csc Div", unlimited_float, 1.0, -10.0, 10.0, "Numerator of the csc fraction."),
@@ -152,8 +152,8 @@ pub static HYPERBOLICELLIPSE: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Hyperbolic Ellipse",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
-    features: &[],
+    phase: VariationPhase::Any,
+    features: &[Feature::Replace],
     parameters: &[
         param!("a", "A", unlimited_float, 1.0, -10.0, 10.0, "Frequency multiplier on Y in the cos/sin arguments."),
     ],
@@ -197,7 +197,7 @@ pub static LAYERED_SPIRAL: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Layered Spiral",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("radius", "Radius", unlimited_float, 1.0, -10.0, 10.0, "Radial scale on the spiral magnitude."),
@@ -249,7 +249,7 @@ pub static ATAN2_SPIRALS: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Atan2 Spirals",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("r_mult", "R Mult", unlimited_float, 1.5, -10.0, 10.0, "Multiplier on the first atan2's numerator (r-term)."),
@@ -356,7 +356,7 @@ pub static GRIDOUT2: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Grid Out 2",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("a", "A", unlimited_float, 1.0, -10.0, 10.0, "X-axis shift magnitude."),

@@ -49,7 +49,7 @@ pub static SUNFLOWER: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Sunflower",
     category: VariationCategory::Plugin,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::WritesColor],
     parameters: &[
         param!("nPoints", "Points", int, 500.0, 10.0, 1000.0, "Number of polygons (florets) on the spiral. More points fill the disc more densely."),

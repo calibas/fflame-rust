@@ -48,7 +48,7 @@ pub static POINTGRID_WF: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Point Grid WF",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("xmin", "X Min", unlimited_float, -3.0, -100.0, 100.0, "Left edge of the grid region on the X axis."),
@@ -152,7 +152,7 @@ pub static POINTGRID3D_WF: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Point Grid 3D WF",
     category: VariationCategory::Full3D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::AlwaysZ],
     parameters: &[
         param!("xmin", "X Min", unlimited_float, -3.0, -100.0, 100.0, "Left edge of the grid region on the X axis."),
@@ -269,7 +269,7 @@ pub static APOCARPET_JS: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Apocarpet (JS)",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[],
     init_param_count: 0,

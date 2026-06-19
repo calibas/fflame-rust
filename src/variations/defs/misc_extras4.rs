@@ -54,8 +54,8 @@ pub static ANAMORPHCYL: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Anamorph Cyl",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
-    features: &[],
+    phase: VariationPhase::Any,
+    features: &[Feature::Replace],
     parameters: &[
         param!("a", "A", unlimited_float, 1.0, -10.0, 10.0, "Radial scale (multiplies the entire output magnitude)."),
         param!("b", "B", unlimited_float, 1.3, -10.0, 10.0, "Y offset added before the radial multiplication."),
@@ -103,7 +103,7 @@ pub static SVF: VariationDef = VariationDef {
     aliases: &[],
     display_name: "SVF",
     category: VariationCategory::Full3D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::AlwaysZ],
     parameters: &[
         param!("n", "N", unlimited_float, 2.0, -50.0, 50.0, "Frequency multiplier on Y in the inner `cos(n·y)` term."),
@@ -151,8 +151,8 @@ pub static SHREDLIN: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Shred Lin",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
-    features: &[],
+    phase: VariationPhase::Any,
+    features: &[Feature::Replace],
     parameters: &[
         param!("xdistance", "X distance", unlimited_float, 1.0, -10.0, 10.0, "X-axis tile size."),
         param!("xwidth", "X width", unlimited_float, 0.5, -10.0, 10.0, "X-axis intra-tile compression. 1 = no shred; 0 = collapse to tile center."),
@@ -225,7 +225,7 @@ pub static SHREDRAD: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Shred Rad",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("n", "N", unlimited_float, 4.0, 0.001, 100.0, "Number of angular wedges."),
@@ -302,7 +302,7 @@ pub static XHEART: VariationDef = VariationDef {
     aliases: &[],
     display_name: "X Heart",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("angle", "Angle", unlimited_float, 0.0, -10.0, 10.0, "Rotation angle of the heart shape (scaled by π/8 internally and offset from π/4)."),
@@ -388,7 +388,7 @@ pub static STWIN: VariationDef = VariationDef {
     aliases: &[],
     display_name: "STwin",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsTransform],
     parameters: &[
         param!("distort", "Distort", unlimited_float, 1.0, -10.0, 10.0, "Frequency multiplier on the sin term (× 2π internally)."),
@@ -466,7 +466,7 @@ pub static WHORL: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Whorl",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsTransform],
     parameters: &[
         param!("inside", "Inside", unlimited_float, 0.1, -10.0, 10.0, "Angular-shift coefficient applied where `r < w`."),
@@ -531,7 +531,7 @@ pub static DEVIL_WARP: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Devil Warp",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsTransform],
     parameters: &[
         param!("a", "A", unlimited_float, 2.0, -10.0, 10.0, "x² weight in the second power term."),
