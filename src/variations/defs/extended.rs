@@ -530,70 +530,46 @@ pub static JULIASCOPE: VariationDef = VariationDef {
     wgsl_state_init: None,
     wgsl_2d: r#"
 fn variation_juliascope(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
-    // Apophysis JuliaScope variation
+    // JWildfire JuliaScopeFunc.transformFunction (the only path JWF uses;
+    // the power=±1/±2 special cases are commented out in the source).
+    // One random branch index `rnd` in [0, |power|): even branches ADD
+    // atan2, odd branches SUBTRACT it (the "scope" mirror — this is what
+    // distinguishes juliascope from julian). The SAME `rnd` supplies both
+    // the 2*pi*rnd offset and its parity, so only ONE draw is taken.
     const PI: f32 = 3.14159265359;
 
     let power = i32(get_param(xform_id, variation_id, 0u));
     let dist = get_param(xform_id, variation_id, 1u);
 
     let r2 = dot(p, p);
-
-    let rnd = rng_nextf(rng);
-    let t = (atan2(p.y, p.x) + 2.0 * PI * f32(i32(abs(f32(power)) * rnd))) / f32(power);
-
-    let sign = select(-1.0, 1.0, (i32(abs(f32(power)) * rng_nextf(rng)) & 1) == 0);
-
-    if (power == 1) {
-        let r_out = pow(r2, dist * 0.5);
-        return vec2<f32>(r_out * cos(t) * sign, r_out * sin(t) * sign);
-    } else if (power == -1) {
-        let r_out = pow(r2, dist * 0.5);
-        return vec2<f32>(r_out * cos(t) * sign, r_out * sin(t) * sign);
-    } else if (power == 2) {
-        let r_out = pow(r2, dist * 0.25);
-        return vec2<f32>(r_out * cos(t) * sign, r_out * sin(t) * sign);
-    } else if (power == -2) {
-        let r_out = pow(r2, dist * 0.25);
-        return vec2<f32>(r_out * cos(t) * sign, r_out * sin(t) * sign);
-    } else {
-        let cn = dist / f32(power) * 0.5;
-        let r_out = pow(r2, cn);
-        return vec2<f32>(r_out * cos(t) * sign, r_out * sin(t) * sign);
-    }
+    let absp = abs(power);
+    let rnd = i32(f32(absp) * rng_nextf(rng));
+    let phi = atan2(p.y, p.x);
+    // even rnd -> +phi, odd rnd -> -phi
+    let a = (2.0 * PI * f32(rnd) + select(-phi, phi, (rnd & 1) == 0)) / f32(power);
+    let cn = dist / f32(power) * 0.5;
+    let r = pow(r2, cn);
+    return vec2<f32>(r * cos(a), r * sin(a));
 }
 "#,
     wgsl_3d: r#"
 fn variation_juliascope(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
-    // Apophysis JuliaScope: 3D (Z passes through)
+    // JuliaScope 3D — Z passes through; XY identical to the 2D body. See
+    // that one for the JWF transformFunction derivation.
     const PI: f32 = 3.14159265359;
 
     let power = i32(get_param(xform_id, variation_id, 0u));
     let dist = get_param(xform_id, variation_id, 1u);
 
     let r2 = p.x * p.x + p.y * p.y;
-
-    let rnd = rng_nextf(rng);
-    let t = (atan2(p.y, p.x) + 2.0 * PI * f32(i32(abs(f32(power)) * rnd))) / f32(power);
-
-    let sign = select(-1.0, 1.0, (i32(abs(f32(power)) * rng_nextf(rng)) & 1) == 0);
-
-    if (power == 1) {
-        let r_out = pow(r2, dist * 0.5);
-        return vec3<f32>(r_out * cos(t) * sign, r_out * sin(t) * sign, p.z);
-    } else if (power == -1) {
-        let r_out = pow(r2, dist * 0.5);
-        return vec3<f32>(r_out * cos(t) * sign, r_out * sin(t) * sign, p.z);
-    } else if (power == 2) {
-        let r_out = pow(r2, dist * 0.25);
-        return vec3<f32>(r_out * cos(t) * sign, r_out * sin(t) * sign, p.z);
-    } else if (power == -2) {
-        let r_out = pow(r2, dist * 0.25);
-        return vec3<f32>(r_out * cos(t) * sign, r_out * sin(t) * sign, p.z);
-    } else {
-        let cn = dist / f32(power) * 0.5;
-        let r_out = pow(r2, cn);
-        return vec3<f32>(r_out * cos(t) * sign, r_out * sin(t) * sign, p.z);
-    }
+    let absp = abs(power);
+    let rnd = i32(f32(absp) * rng_nextf(rng));
+    let phi = atan2(p.y, p.x);
+    // even rnd -> +phi, odd rnd -> -phi
+    let a = (2.0 * PI * f32(rnd) + select(-phi, phi, (rnd & 1) == 0)) / f32(power);
+    let cn = dist / f32(power) * 0.5;
+    let r = pow(r2, cn);
+    return vec3<f32>(r * cos(a), r * sin(a), p.z);
 }
 "#,
 };
