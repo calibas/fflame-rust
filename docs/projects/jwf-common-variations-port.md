@@ -24,7 +24,7 @@ mobius_dragon_3D - new variation (JWF-rando28.flame) ✅
 JWF-rando32-simplified - something's different with the rendering between our app and JWF ✅ (juliascope bug — scope mirror applied as output ±1 instead of negating atan2 inside the angle, + a spurious 2nd RNG draw; fixed to match JWF transformFunction)
 Support for <jwf-flame> see JWF-rando34.flame. Used for saving layers, which we currently don't support. ✅
 
-Moving camera X/Y/Z not working for video exports?
+Moving camera X/Y/Z not working for video exports? ✅ (apply_config_value was missing CameraX/CameraY arms — only Z was applied; fixed + a cluster of other dropped FractalConfig-level params)
 
 ### Part 2 triage (2026-06-18)
 
@@ -45,7 +45,7 @@ Source + registry survey of the candidates above. Run from
 | `pre_blur` | ✅ FIXED | Two bugs vs `PreBlurFunc`: summed FOUR uniforms − 2 (JWF: SIX − 3, wider Gaussian) and **dropped the weight entirely** (JWF scales the offset by the amount; the pre-phase dispatcher applies no weight, so any non-zero weight behaved like 1.0). Now reads its weight via `NeedsTransform` and uses six uniforms. `pre_blur3D` (apo_misc15) checked — already correct. |
 | `JWF-rando32-simplified` | 🔍 RENDER MISMATCH | Unknown variation(s) — needs the flame to identify what differs. |
 | `<jwf-flame>` layers | 🧱 FEATURE | Multi-layer `.flame` container (JWF-rando34). We don't model layers. Separate feature, not a variation port. |
-| camera X/Y/Z in video export | 🐛 BUG | Separate from variations — `cam_pos_*` animation not applied in video export path. Investigate `src/animation/` export. |
+| camera X/Y/Z in video export | ✅ FIXED | `apply_config_value` (the per-frame apply in `src/animation/export.rs`, separate from `ConfigManager::set_value`) was missing direct arms for CameraX/CameraY (only CameraZ + rotations were handled), so they fell through the `_` catch-all and were dropped — animated fine in the live timeline, gone in the rendered video. Single-PNG export was unaffected (reads `config.camera_*` directly). Fixed + added the rest of the dropped FractalConfig-level cluster (DoF, fog, filter, blend, white level, alpha blend, levels, tonemap/highlight modes). Commit 636c068. |
 
 **Suggested order:** combimirror (done) → sunflower → dc_hexes_wf →
 dc_mandelbox2D → mobius_dragon_3D. Blocked/feature items
