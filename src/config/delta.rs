@@ -100,6 +100,10 @@ pub enum ConfigPath {
         variation: String,
         param: String,
     },
+    /// JWildfire `fx_priority` phase override for an `Any`-phase variation
+    /// (raw priority `<0` pre / `0` main / `>0` post). Stored sparsely in
+    /// `Transform::variation_priorities` — see `docs/projects/jwf-features.md`.
+    TransformVariationPriority { index: usize, variation: String },
     /// Post-affine enabled flag for a transform
     TransformPostAffineEnabled { index: usize },
     /// Post-affine transformation parameter for a transform
@@ -157,6 +161,8 @@ pub enum ConfigPath {
         variation: String,
         param: String,
     },
+    /// fx_priority phase override — Linked pool counterpart.
+    LinkedTransformVariationPriority { index: usize, variation: String },
     // High-level pre-affine ops on a linked-pool transform.
     LinkedTransformOriginX { index: usize },
     LinkedTransformOriginY { index: usize },
@@ -194,6 +200,8 @@ pub enum ConfigPath {
         variation: String,
         param: String,
     },
+    /// fx_priority phase override — Final pool counterpart.
+    FinalTransformVariationPriority { index: usize, variation: String },
     // High-level pre-affine ops on a final-pool transform.
     FinalTransformOriginX { index: usize },
     FinalTransformOriginY { index: usize },
@@ -393,6 +401,14 @@ impl TransformRef {
         }
     }
 
+    pub fn variation_priority_path(&self, variation: String) -> ConfigPath {
+        match self {
+            TransformRef::Normal(i) => ConfigPath::TransformVariationPriority { index: *i, variation },
+            TransformRef::Linked(i) => ConfigPath::LinkedTransformVariationPriority { index: *i, variation },
+            TransformRef::Final(i) => ConfigPath::FinalTransformVariationPriority { index: *i, variation },
+        }
+    }
+
     pub fn variation_param_path(&self, variation: String, param: String) -> ConfigPath {
         match self {
             TransformRef::Normal(i) => ConfigPath::TransformVariationParam {
@@ -539,6 +555,9 @@ impl Display for ConfigPath {
             ConfigPath::TransformVariation { index, variation } => {
                 write!(f, "Transform {} → {} variation", index + 1, variation)
             }
+            ConfigPath::TransformVariationPriority { index, variation } => {
+                write!(f, "Transform {} → {} phase", index + 1, variation)
+            }
             ConfigPath::TransformVariationParam {
                 index,
                 variation,
@@ -620,6 +639,9 @@ impl Display for ConfigPath {
             ConfigPath::LinkedTransformVariation { index, variation } => {
                 write!(f, "Linked Transform {} → {} variation", index + 1, variation)
             }
+            ConfigPath::LinkedTransformVariationPriority { index, variation } => {
+                write!(f, "Linked Transform {} → {} phase", index + 1, variation)
+            }
             ConfigPath::LinkedTransformVariationParam { index, variation, param } => {
                 write!(f, "Linked Transform {} → {} → {}", index + 1, variation, param)
             }
@@ -672,6 +694,9 @@ impl Display for ConfigPath {
             }
             ConfigPath::FinalTransformVariation { index, variation } => {
                 write!(f, "Final Transform {} → {} variation", index + 1, variation)
+            }
+            ConfigPath::FinalTransformVariationPriority { index, variation } => {
+                write!(f, "Final Transform {} → {} phase", index + 1, variation)
             }
             ConfigPath::FinalTransformVariationParam { index, variation, param } => {
                 write!(f, "Final Transform {} → {} → {}", index + 1, variation, param)
@@ -909,6 +934,15 @@ impl ConfigPath {
             ),
             ConfigPath::TransformVariation { index, variation } => I18nKey::with_params(
                 "history.param.transform_variation",
+                vec![
+                    ("index", (index + 1).to_string()),
+                    ("variation", variation.clone()),
+                ],
+            ),
+            ConfigPath::TransformVariationPriority { index, variation }
+            | ConfigPath::LinkedTransformVariationPriority { index, variation }
+            | ConfigPath::FinalTransformVariationPriority { index, variation } => I18nKey::with_params(
+                "history.param.transform_variation_priority",
                 vec![
                     ("index", (index + 1).to_string()),
                     ("variation", variation.clone()),
@@ -2016,6 +2050,9 @@ impl ConfigPath {
             | ConfigPath::TransformZxPostCoefs { .. }
             | ConfigPath::TransformVariation { .. }
             | ConfigPath::TransformVariationParam { .. }
+            | ConfigPath::TransformVariationPriority { .. }
+            | ConfigPath::LinkedTransformVariationPriority { .. }
+            | ConfigPath::FinalTransformVariationPriority { .. }
             | ConfigPath::TransformOriginX { .. }
             | ConfigPath::TransformOriginY { .. }
             | ConfigPath::TransformRotation { .. }
@@ -2180,6 +2217,9 @@ impl ConfigPath {
             ConfigPath::TransformVariation { index, variation } => {
                 format!("Transform.{}.Variation.{}", index, variation)
             }
+            ConfigPath::TransformVariationPriority { index, variation } => {
+                format!("Transform.{}.VariationPriority.{}", index, variation)
+            }
             ConfigPath::TransformVariationParam { index, variation, param } => {
                 format!("Transform.{}.VariationParam.{}.{}", index, variation, param)
             }
@@ -2233,6 +2273,9 @@ impl ConfigPath {
             ConfigPath::LinkedTransformVariation { index, variation } => {
                 format!("LinkedTransform.{}.Variation.{}", index, variation)
             }
+            ConfigPath::LinkedTransformVariationPriority { index, variation } => {
+                format!("LinkedTransform.{}.VariationPriority.{}", index, variation)
+            }
             ConfigPath::LinkedTransformVariationParam { index, variation, param } => {
                 format!("LinkedTransform.{}.VariationParam.{}.{}", index, variation, param)
             }
@@ -2273,6 +2316,9 @@ impl ConfigPath {
             }
             ConfigPath::FinalTransformVariation { index, variation } => {
                 format!("FinalTransform.{}.Variation.{}", index, variation)
+            }
+            ConfigPath::FinalTransformVariationPriority { index, variation } => {
+                format!("FinalTransform.{}.VariationPriority.{}", index, variation)
             }
             ConfigPath::FinalTransformVariationParam { index, variation, param } => {
                 format!("FinalTransform.{}.VariationParam.{}.{}", index, variation, param)
@@ -3005,6 +3051,14 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::RemoveColorEffect { .. }
         | ConfigPath::AddDensityEffect { .. }
         | ConfigPath::RemoveDensityEffect { .. } => None,
+
+        // fx_priority phase overrides are intentionally NOT animatable —
+        // moving a variation between phases is a structural choice, not a
+        // continuous parameter. (They still round-trip through undo/redo
+        // and .flame import/export.)
+        ConfigPath::TransformVariationPriority { .. }
+        | ConfigPath::LinkedTransformVariationPriority { .. }
+        | ConfigPath::FinalTransformVariationPriority { .. } => None,
     }
 }
 
