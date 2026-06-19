@@ -160,12 +160,114 @@ Note `pre_blur_fx_priority="-1"` in the same flame is *not* a problem:
 `pre_blur`'s definition phase is already `Pre`, so it coincidentally
 lands in the right phase.
 
-**What it would take**: parse `<var>_fx_priority` into a per-instance
-`i32` on the transform's variation entry; in the shader builder, order
-and phase-assign variations by their *instance* priority (falling back
-to the definition phase when the attribute is absent) instead of the
-static `VariationPhase`. Touches the variation dispatch and the
-param/weight packing. Round-trip the attribute on export.
+**Verified JWF dispatch model** (from `XForm.createTransformations` +
+the `*VariationTransformationStep` classes, fetched 2026-06-18):
+
+Every variation step calls `variation.transform(ctx, xform, inPt, outPt)`;
+the variation reads `inPt` and accumulates/replaces into `outPt`. By
+convention normal-style variations write `outPt`; some pre-style ones
+(e.g. `pre_blur`) write `inPt` directly. The phase is controlled by
+*which points are passed*:
+
+| step | call | meaning |
+|---|---|---|
+| `VariationTransformationStep` (normal) | `transform(pAffineT, pVarT)` | read affine, **sum** into accumulator |
+| `PreVariationTransformationStep` | `transform(pAffineT, pVarT)`; `pAffineT.invalidate()` | natural-pre vars write `pAffineT` → perturb the affine point; pre vars **chain** |
+| `PostVariationTransformationStep` | `transform(pAffineT, pVarT)` | runs after normal, on `pVarT` |
+| `EnforcedPreVariationTransformationStep` | `tmp = pAffineT; transform(tmp, pAffineT)` | the var's output lands in `pAffineT` → a normal var's write acts *pre* |
+| `EnforcedVariationTransformationStep` (normal) | `tmp = pVarT; transform(tmp, pVarT)` | input is the accumulator snapshot |
+| `EnforcedPostVariationTransformationStep` | `tmp = pVarT; transform(tmp, pVarT)` | same, after normal |
+
+Bucketing is by instance-priority **sign**: `< 0` pre, `== 0` normal,
+`> 0` post. The special values `== 2` (→ pre) and `== -2` (→ post) are
+the "inv" prepost family (`pre_*`/`post_*` inverse pairs) — out of scope
+here. Within a bucket: **pre/post chain** (each reads the working point
+as updated by the previous step), **normal sums** (all read the same
+affine input). That matches our existing model (`temp = f(temp)` for
+pre/post, `result += w·f(temp)` for normal).
+
+The `Enforced*` step (used when the instance bucket differs from the
+variation's *own* default priority) is just an argument remap, and it
+maps cleanly onto our dispatch — no per-variation body changes needed.
+**Confirmed**: forcing combimirror (normal-default) to pre via
+`temp = w · combimirror_body(temp)` (the existing idisc body, dispatch
+supplies `w`, the idisc divide cancels) makes `output/JWF-rando7.flame`
+match JWF (user-verified A/B, 2026-06-18).
+
+**Key insight — the accumulate emission is uniform.** Reusing a variation's
+existing (normal) body in the pre bucket needs *no per-variation work* for
+the common case, because JWF's `EnforcedPre` for an **accumulate** variation
+is `pAffineT += w·f(affineCopy)` — it *adds* the weighted contribution to the
+working point, which is exactly what `pre_blur` does. So for any accumulate
+variation the pre emission is the single shared form `temp = temp + w·body(temp)`.
+Verified: `blur → pre` = `temp + w·(random disc)` (a blur perturbation =
+pre_blur); `linear → pre` JWF gives `(1+w)·affine`, ours `temp + w·linear(temp)`
+= `(1+w)·temp`. So the *hundreds* of accumulate variations are movable for
+free; only the replace-style minority needs a different emission. (Confirmed
+the inverse too: you can't fold both into one emission — making the
+accumulate form correct for combimirror would break its normal-phase result.)
+
+**Design — two orthogonal axes, both reusing existing concepts (no lock flag):**
+
+1. **`VariationPhase::Any`** — *where it can run*. Opt-in movability. A
+   variation tagged `Any` honors `fx_priority`; `Pre`/`Normal`/`Post`
+   stay **locked** (priority ignored). "Locked" is just "not `Any`" — no
+   separate flag. An `Any` variation defaults to the normal bucket when
+   `fx_priority` is absent.
+2. **`Feature::Replace`** (new) — *how it combines its output*: the
+   variation assigns the point (`pVarTP.x = …`) instead of accumulating
+   (`+=`). Intrinsic and phase-independent; lives as a feature, not in
+   the phase enum. Only affects the pre/post emission (assign vs add);
+   `Normal` is unchanged. Sourced from the JWF `=` vs `+=` classification
+   (≈622 accumulate / 133 replace / 19 mixed across local sources;
+   confirm against our port's idisc usage).
+
+Dispatch, reading the two axes independently:
+
+| bucket | accumulate (default) | `Feature::Replace` |
+|---|---|---|
+| normal | `result += w·body(temp)` | `result += w·body(temp)` (idisc → replace-when-sole; unchanged from today) |
+| pre | `temp = temp + w·body(temp)` | `temp = w·body(temp)` |
+| post | `result = result + w·body(result)` | `result = w·body(result)` |
+
+Normal is identical for both axes, so nothing about current renders
+changes — the combine-mode only kicks in when a variation is actually
+*moved*. **Multiple variations at the same non-default priority** falls
+out for free: emit the bucket's vars in order, each updating `temp` (pre)
+or `result` (post) — JWF re-snapshots each Enforced step, i.e. chains,
+which is what sequential emission does. **Pre-default var pushed to
+normal** (`EnforcedNormal`) is the degenerate case — JWF passes the
+accumulator snapshot as the *input*, and pre-style bodies write their
+input arg, so e.g. `pre_blur` in normal is a **no-op** in JWF; we get the
+same by leaving naturally-`Pre`/`Post` variations locked (not `Any`).
+
+**Bonus from `Replace`-as-a-feature:** it also documents the
+assign-semantics our **normal** dispatch currently only *approximates*
+(combimirror "replaces" today only because it's usually the sole
+variation; in a multi-variation normal xform we sum instead of assign).
+With the feature present, a later change could make the normal dispatch
+honor true replace — out of scope here, but the feature framing is what
+makes it reachable.
+
+**Implementation steps:**
+1. `flame_xml`: parse/round-trip `<var>_fx_priority` as a per-instance
+   `i32` alongside the variation weight (write when non-default).
+2. Add `VariationPhase::Any` and `Feature::Replace`.
+3. Shader builder: for `Any` variations, bucket by instance priority sign
+   and emit per the table; everything else unchanged.
+4. Migrate (two independent, scriptable passes over the def files):
+   - set `VariationPhase::Any` on movable `Normal` variations — **exclude
+     `NeedsAccum`, stateful (`state_count > 0`), and any without local
+     JWF source → manual review queue** (these are the ones likely to
+     misbehave when moved).
+   - set `Feature::Replace` on the verified replace-style variations
+     (JWF `=`-only list, idisc-confirmed; the ≈31 in-registry candidates
+     are: anamorphcyl, combimirror, crop, ennepers, hyperbolicellipse,
+     hypershift2, ripple, shredlin, sintrange, squirrel, svensson_js,
+     tile_reverse, … minus the already-`Post` `post_*` entries and the
+     grep false-positives like julian/juliascope — verify each).
+5. Tests: rando7 (combimirror → pre), a synthetic accumulate→pre
+   (blur ≈ pre_blur), and a 2-var-same-priority chain.
 
 ### Per-transform `color_type` — color-flow mode selector
 
