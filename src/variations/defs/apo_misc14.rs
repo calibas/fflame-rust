@@ -63,7 +63,7 @@ pub static WAVES2_RADIAL: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Waves2 Radial",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("w2r_scalex", "Scale X", unlimited_float, 0.1, -10.0, 10.0, "X-axis sine amplitude."),
@@ -146,7 +146,7 @@ pub static SPLIPTIC_BS: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Spliptic BS",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::NeedsTransform],
     parameters: &[
         param!("x", "X", unlimited_float, 0.05, -10.0, 10.0, "X-axis constant offset. Sign added when input x ≥ 0, subtracted when input x < 0."),
@@ -264,7 +264,7 @@ pub static POINCARE3D: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Poincare 3D",
     category: VariationCategory::Full3D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::AlwaysZ],
     parameters: &[
         param!("r", "R", unlimited_float, 0.0, -10.0, 10.0, "Center distance from origin (radius of the inversion center)."),

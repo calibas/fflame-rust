@@ -172,7 +172,7 @@ pub static JULIAN3DX: VariationDef = VariationDef {
     aliases: &[],
     display_name: "JuliaN 3D X",
     category: VariationCategory::Full3D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::NeedsTransform, Feature::AlwaysZ],
     parameters: &[
         param!("power", "Power", int, 0.0, -100.0, 100.0, "Number of angular branches. 0 produces zero output."),

@@ -33,7 +33,7 @@ pub static EXTRUDE: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Extrude",
     category: VariationCategory::Depth3D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::NeedsTransform, Feature::AlwaysZ],
     parameters: &[
         param!("root_face", "Root Face", unlimited_float, 0.5, -10.0, 10.0, "Probability threshold for the `root face` branch — values below it set Z to the (clamped) weight; values above set Z to `weight · rand`."),

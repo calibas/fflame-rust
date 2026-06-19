@@ -55,7 +55,7 @@ pub static Z_VARIATION: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Z (Faber)",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("hypergon", "Hypergon", unlimited_float, 0.0, -10.0, 10.0, "Weight of the hypergon (regular-polygon) shape's contribution to the per-angle radius blender. 0 disables this shape."),
@@ -256,7 +256,7 @@ pub static W_VARIATION: VariationDef = VariationDef {
     aliases: &[],
     display_name: "W (Faber)",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("angle", "Angle", unlimited_float, 0.0, -10.0, 10.0, "Rotation angle (radians) applied to the input angle before the radial rebake. The output direction is `a + angle` (wrapped into `[-π, π]`)."),

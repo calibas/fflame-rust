@@ -58,7 +58,7 @@ pub static OSCILLOSCOPE2: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Oscilloscope 2",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("separation", "Separation", unlimited_float, 1.0, -10.0, 10.0, "Vertical offset of the band threshold."),
@@ -151,7 +151,7 @@ pub static LINEART: VariationDef = VariationDef {
     // mislabeled "Line Art" from misreading "linearT".
     display_name: "Linear T",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("powX", "Power X", unlimited_float, 1.2, -10.0, 10.0, "X-axis power exponent."),
@@ -208,7 +208,7 @@ pub static PHOENIX_JULIA: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Phoenix Julia",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("power", "Power", unlimited_float, 3.0, -50.0, 50.0, "Number of angular branches — `floor(rand · power)` picks the branch each iteration."),
@@ -295,7 +295,7 @@ pub static POW_BLOCK: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Pow Block",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("numerator", "Numerator", unlimited_float, 3.0, -50.0, 50.0, "Output-angle multiplier and effective power numerator."),

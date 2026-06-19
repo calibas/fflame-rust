@@ -16,7 +16,7 @@ pub static ZTRANSLATE: VariationDef = VariationDef {
     aliases: &[],
     display_name: "ZTranslate",
     category: VariationCategory::Depth3D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::AlwaysZ],
     parameters: &[],
     init_param_count: 0,
@@ -51,7 +51,7 @@ pub static JULIA3D: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Julia3D",
     category: VariationCategory::Full3D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::AlwaysZ],
     parameters: &[
         param!("power", "Power", unlimited_int, 2.0, -10.0, 10.0, "Number of branches in the 3D Julia output. Higher = more arms; negative values flip the rotation."),
@@ -110,7 +110,7 @@ pub static FALLOFF2: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Falloff2",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::AlwaysZ],
     parameters: &[
         param!("scatter", "Scatter", unlimited_float, 1.0, 0.000001, 10.0, "Maximum random scatter applied at full strength."),
@@ -254,7 +254,7 @@ pub static WEDGE: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Wedge",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("angle", "Angle", angle, 90.0, "Wedge angle in degrees — how wide each pie slice is before compression."),
@@ -332,7 +332,7 @@ pub static EPISPIRAL: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Epispiral",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("n", "N", unlimited_float, 6.0, -20.0, 20.0, "Number of lobes in the spiral pattern."),
@@ -387,7 +387,7 @@ pub static BWRAPS: VariationDef = VariationDef {
     aliases: &[],
     display_name: "BWraps",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("cellsize", "Cell Size", unlimited_float, 1.0, -10.0, 10.0, "Width of each grid cell — the plane is divided into cells of this size, each becoming a bubble."),
@@ -518,7 +518,7 @@ pub static JULIASCOPE: VariationDef = VariationDef {
     aliases: &[],
     display_name: "JuliaScope",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("power", "Power", unlimited_int, 2.0, -20.0, 20.0, "Number of mirror branches. Higher = more reflections; negative values invert the rotation."),
@@ -623,7 +623,7 @@ pub static JULIASCOPE_3DB: VariationDef = VariationDef {
     aliases: &[],
     display_name: "JuliaScope 3Db",
     category: VariationCategory::Full3D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::AlwaysZ],
     parameters: &[
         param!("power", "Power", unlimited_int, 3.0, -20.0, 20.0, "Number of mirror branches. Higher = more reflections; negative values invert the rotation. `0` no-ops the variation to avoid divide-by-zero in the angle dispatch."),
@@ -728,7 +728,7 @@ pub static JULIA3DZ: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Julia3Dz",
     category: VariationCategory::Full3D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::AlwaysZ],
     parameters: &[
         param!("power", "Power", unlimited_int, 2.0, -20.0, 20.0, "Number of Julia branches in the 3D output. Higher = more arms."),
@@ -801,7 +801,7 @@ pub static CURL3D: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Curl3D",
     category: VariationCategory::Full3D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::AlwaysZ],
     parameters: &[
         param!("cx", "CX", unlimited_float, 0.0, -5.0, 5.0, "Twist strength along the X axis."),
@@ -872,7 +872,7 @@ pub static RADIAL_BLUR: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Radial Blur",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("angle", "Angle", angle, 0.0, "Spin/zoom balance. 0 degrees = pure zoom blur, 180 degrees = pure rotational blur, 90 degrees = balanced mix."),
@@ -947,7 +947,7 @@ pub static BLUR_CIRCLE: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Blur Circle",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[],
     init_param_count: 0,
@@ -1037,7 +1037,7 @@ pub static BLUR_ZOOM: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Blur Zoom",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("length", "Length", unlimited_float, 0.0, -5.0, 5.0, "Maximum zoom distance. Larger values streak points further outward from the center."),
@@ -1088,7 +1088,7 @@ pub static BLUR_PIXELIZE: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Blur Pixelize",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("size", "Size", unlimited_float, 0.1, 0.0000001, 10.0, "Pixel cell size. Smaller = finer grid; larger = chunkier pixels."),
@@ -1145,7 +1145,7 @@ pub static SEPARATION: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Separation",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("x", "X", unlimited_float, 1.0, -20.0, 20.0, "How far to push points away from the X axis on either side."),
@@ -1216,7 +1216,7 @@ pub static MOBIUS: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Mobius",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("re_a", "Re A", unlimited_float, 0.1, -1.0, 1.0, "Real component of complex coefficient A in `(Az + B)/(Cz + D)`."),
@@ -1297,8 +1297,8 @@ pub static CROP: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Crop",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
-    features: &[Feature::NeedsRng],
+    phase: VariationPhase::Any,
+    features: &[Feature::NeedsRng, Feature::Replace],
     parameters: &[
         param!("left", "Left", unlimited_float, -1.0, -5.0, 5.0, "Left edge of the rectangle the points are constrained to."),
         param!("top", "Top", unlimited_float, -1.0, -5.0, 5.0, "Top edge of the rectangle."),

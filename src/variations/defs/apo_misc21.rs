@@ -45,7 +45,7 @@ pub static HEART_WF: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Heart WF",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("scale_x", "Scale X", unlimited_float, 1.0, -10.0, 10.0, "X output scale factor (multiplies the final X output)."),

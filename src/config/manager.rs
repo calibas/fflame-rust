@@ -1694,6 +1694,10 @@ impl ConfigManager {
                 let weight = xform.variations.get(variation).copied().unwrap_or(0.0);
                 Ok(weight.into())
             }
+            ConfigPath::TransformVariationPriority { index, variation } => {
+                let xform = flame.transforms.get(*index).ok_or(ConfigError::InvalidIndex)?;
+                Ok(Self::variation_priority_value(xform, variation))
+            }
             ConfigPath::TransformVariationParam {
                 index,
                 variation,
@@ -1886,6 +1890,10 @@ impl ConfigManager {
                     .ok_or(ConfigError::InvalidIndex)?;
                 Ok(xform.variations.get(variation).copied().unwrap_or(0.0).into())
             }
+            ConfigPath::LinkedTransformVariationPriority { index, variation } => {
+                let xform = flame.linked_transforms.get(*index).ok_or(ConfigError::InvalidIndex)?;
+                Ok(Self::variation_priority_value(xform, variation))
+            }
             ConfigPath::LinkedTransformVariationParam { index, variation, param } => {
                 let xform = flame.linked_transforms.get(*index)
                     .ok_or(ConfigError::InvalidIndex)?;
@@ -1942,6 +1950,10 @@ impl ConfigManager {
                 let xform = flame.final_transforms.get(*index)
                     .ok_or(ConfigError::InvalidIndex)?;
                 Ok(xform.variations.get(variation).copied().unwrap_or(0.0).into())
+            }
+            ConfigPath::FinalTransformVariationPriority { index, variation } => {
+                let xform = flame.final_transforms.get(*index).ok_or(ConfigError::InvalidIndex)?;
+                Ok(Self::variation_priority_value(xform, variation))
             }
             ConfigPath::FinalTransformVariationParam { index, variation, param } => {
                 let xform = flame.final_transforms.get(*index)
@@ -2064,6 +2076,44 @@ impl ConfigManager {
             xform.variations.insert(variation.to_string(), weight);
         }
         Ok(())
+    }
+
+    /// Apply a variation fx_priority (phase) change to a single transform,
+    /// regardless of pool. Stored sparsely: a priority equal to the
+    /// variation def's natural-phase priority removes the override (the
+    /// `Any` default is main/0), any other value inserts it. See
+    /// `Transform::variation_priorities`.
+    fn apply_variation_priority(
+        xform: &mut crate::scene::transforms::Transform,
+        variation: &str,
+        value: ConfigValue,
+    ) -> Result<(), ConfigError> {
+        let prio: i32 = value.try_into()?;
+        let natural = crate::variations::global_registry()
+            .get(variation)
+            .map(|i| i.phase.natural_priority())
+            .unwrap_or(0);
+        if prio == natural {
+            xform.variation_priorities.remove(variation);
+        } else {
+            xform.variation_priorities.insert(variation.to_string(), prio);
+        }
+        Ok(())
+    }
+
+    /// Read the effective fx_priority of a variation on a transform: the
+    /// stored override, or the variation def's natural-phase priority when
+    /// unset (the sparse-storage default). Used by `get_value` for undo.
+    fn variation_priority_value(
+        xform: &crate::scene::transforms::Transform,
+        variation: &str,
+    ) -> ConfigValue {
+        let natural = crate::variations::global_registry()
+            .get(variation)
+            .map(|i| i.phase.natural_priority())
+            .unwrap_or(0);
+        let prio = xform.variation_priorities.get(variation).copied().unwrap_or(natural);
+        ConfigValue::Int(prio)
     }
 
     /// Apply a variation-parameter change to a single transform, regardless
@@ -2383,6 +2433,10 @@ impl ConfigManager {
                 let xform = self.normal_transform_mut(*index)?;
                 Self::apply_variation_weight(xform, variation, value)?;
             }
+            ConfigPath::TransformVariationPriority { index, variation } => {
+                let xform = self.normal_transform_mut(*index)?;
+                Self::apply_variation_priority(xform, variation, value)?;
+            }
             ConfigPath::TransformVariationParam { index, variation, param } => {
                 let xform = self.normal_transform_mut(*index)?;
                 Self::apply_variation_param(xform, variation, param, value)?;
@@ -2576,6 +2630,10 @@ impl ConfigManager {
                 let xform = self.linked_transform_mut(*index)?;
                 Self::apply_variation_weight(xform, variation, value)?;
             }
+            ConfigPath::LinkedTransformVariationPriority { index, variation } => {
+                let xform = self.linked_transform_mut(*index)?;
+                Self::apply_variation_priority(xform, variation, value)?;
+            }
             ConfigPath::LinkedTransformVariationParam { index, variation, param } => {
                 let xform = self.linked_transform_mut(*index)?;
                 Self::apply_variation_param(xform, variation, param, value)?;
@@ -2630,6 +2688,10 @@ impl ConfigManager {
             ConfigPath::FinalTransformVariation { index, variation } => {
                 let xform = self.final_transform_mut(*index)?;
                 Self::apply_variation_weight(xform, variation, value)?;
+            }
+            ConfigPath::FinalTransformVariationPriority { index, variation } => {
+                let xform = self.final_transform_mut(*index)?;
+                Self::apply_variation_priority(xform, variation, value)?;
             }
             ConfigPath::FinalTransformVariationParam { index, variation, param } => {
                 let xform = self.final_transform_mut(*index)?;

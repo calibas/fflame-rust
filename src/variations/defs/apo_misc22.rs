@@ -57,7 +57,7 @@ pub static DC_CARPET: VariationDef = VariationDef {
     aliases: &[],
     display_name: "DC Carpet",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::NeedsTransform, Feature::WritesColor],
     parameters: &[
         param!("origin", "Origin", unlimited_float, 1.0, -10.0, 10.0, "Color-blend strength: `H = 0.1·origin` weights how strongly the random cell parity pulls the color register. Visible color requires the transform's Direct Color slider > 0."),
@@ -224,7 +224,7 @@ pub static CPOW3_WF: VariationDef = VariationDef {
     aliases: &[],
     display_name: "CPow3 WF",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("r", "R", unlimited_float, 1.0, -10.0, 10.0, "Complex-power magnitude."),

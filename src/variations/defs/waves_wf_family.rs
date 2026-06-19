@@ -85,7 +85,7 @@ pub static WAVES2_WF: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Waves 2 WF",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("scalex", "Scale X", unlimited_float, 0.25, -10.0, 10.0, "X-axis wave amplitude."),
@@ -152,7 +152,7 @@ pub static WAVES3_WF: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Waves 3 WF",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("scalex", "Scale X", unlimited_float, 0.25, -10.0, 10.0, "X-axis wave amplitude."),
@@ -224,7 +224,7 @@ pub static WAVES4_WF: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Waves 4 WF",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("scalex", "Scale X", unlimited_float, 0.25, -10.0, 10.0, "X-axis wave amplitude."),
@@ -298,7 +298,7 @@ pub static DINIS_SURFACE_WF: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Dini's Surface WF",
     category: VariationCategory::Full3D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::AlwaysZ],
     parameters: &[
         param!("a", "A", unlimited_float, 0.8, -10.0, 10.0, "Radial scale of the surface (controls XY radius and Z magnitude)."),

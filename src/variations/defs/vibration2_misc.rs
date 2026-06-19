@@ -46,7 +46,7 @@ pub static VIBRATION2: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Vibration 2",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("dir", "Direction", unlimited_float, 0.0, -10.0, 10.0, "Wave 1: direction angle (radians) along which the wave propagates. The input is projected onto this direction before phase computation."),

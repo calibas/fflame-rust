@@ -36,7 +36,7 @@ pub static CIRCLECROP: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Circle Crop",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::NeedsTransform],
     parameters: &[
         param!("radius", "Radius", unlimited_float, 1.0, -10.0, 10.0, "Crop circle radius."),

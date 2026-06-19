@@ -38,7 +38,7 @@ pub static ONION2: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Onion 2",
     category: VariationCategory::Full3D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsTransform, Feature::AlwaysZ],
     parameters: &[
         param!("meeting_pt", "Meeting Pt", unlimited_float, 0.5, -10.0, 10.0, "Where the circle and exponential curves meet (in radians)."),

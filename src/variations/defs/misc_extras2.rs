@@ -42,7 +42,7 @@ pub static COLLIDEOSCOPE: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Collideoscope",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("a", "A", unlimited_float, 0.2, -10.0, 10.0, "Per-sector angular offset — the parity-based mirror is shifted by ±a."),
@@ -138,7 +138,7 @@ pub static BENT2: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Bent 2",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("x", "X scale", unlimited_float, 1.0, -10.0, 10.0, "X-axis scale applied where x < 0. Positive x passes through unchanged."),
@@ -186,7 +186,7 @@ pub static MCARPET: VariationDef = VariationDef {
     aliases: &[],
     display_name: "MCarpet",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("x", "X scale", unlimited_float, 1.0, -10.0, 10.0, "X-axis bubble scale."),
@@ -249,7 +249,7 @@ pub static LINEART3D: VariationDef = VariationDef {
     // Previously mislabeled "Line Art 3D" from misreading "linearT".
     display_name: "Linear T 3D",
     category: VariationCategory::Full3D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::AlwaysZ],
     parameters: &[
         param!("powX", "Power X", unlimited_float, 1.2, -10.0, 10.0, "X-axis power exponent."),
@@ -311,7 +311,7 @@ pub static OSCILLOSCOPE: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Oscilloscope",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("separation", "Separation", unlimited_float, 1.0, -10.0, 10.0, "Vertical offset of the band threshold, added to the cosine envelope."),
@@ -394,7 +394,7 @@ pub static FIBONACCI2: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Fibonacci 2",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("sc", "Scale", unlimited_float, 1.0, -10.0, 10.0, "Output magnitude scale."),

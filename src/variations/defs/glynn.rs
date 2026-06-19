@@ -58,7 +58,7 @@ pub static GLYNNIA: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Glynnia",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[],
     init_param_count: 0,
@@ -142,7 +142,7 @@ pub static GLYNNIA3: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Glynnia 3",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("rscale", "R scale", unlimited_float, 1.0, -10.0, 10.0, "Radial scaling on the input distance."),
@@ -251,7 +251,7 @@ pub static GLYNN_SIM1: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Glynn Sim 1",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("radius", "Radius", unlimited_float, 1.0, -5.0, 5.0, "Main Glynn-set inversion radius."),
@@ -391,7 +391,7 @@ pub static GLYNN_SIM2: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Glynn Sim 2",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("radius", "Radius", unlimited_float, 1.0, -5.0, 5.0, "Main Glynn-set inversion radius."),
@@ -501,7 +501,7 @@ pub static GLYNN_SIM3: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Glynn Sim 3",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("radius", "Radius", unlimited_float, 1.0, -5.0, 5.0, "Main Glynn-set inversion radius."),

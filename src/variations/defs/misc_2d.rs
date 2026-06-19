@@ -43,7 +43,7 @@ pub static SPLIT: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Split",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("xsize", "X size", unlimited_float, 0.4, -10.0, 10.0, "X-axis frequency of the mirror-flip cosine."),
@@ -100,8 +100,8 @@ pub static SQUIRREL: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Squirrel",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
-    features: &[],
+    phase: VariationPhase::Any,
+    features: &[Feature::Replace],
     parameters: &[
         param!("a", "A", unlimited_float, 1.0, -10.0, 10.0, "X² weight in the radius term."),
         param!("b", "B", unlimited_float, 1.0, -10.0, 10.0, "Y² weight in the radius term."),
@@ -150,7 +150,7 @@ pub static STRIPES: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Stripes",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("space", "Space", unlimited_float, 0.2, -5.0, 5.0, "Compression factor for X within each stripe — 1 collapses to integer values, 0 disables compression."),
@@ -206,7 +206,7 @@ pub static SHIFT: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Shift",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("shift_x", "Shift X", unlimited_float, 0.0, -10.0, 10.0, "X-axis shift amount (in the rotated frame)."),
@@ -279,7 +279,7 @@ pub static PRESSURE_WAVE: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Pressure Wave",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("x_freq", "X freq", unlimited_float, 1.0, -50.0, 50.0, "X-axis sine frequency. Amplitude scales as `1 / (2π·freq)`; 0 degenerates to `sin(x)`."),
@@ -354,7 +354,7 @@ pub static SPHERICALN: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Spherical N",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("power", "Power", unlimited_float, 1.0, -50.0, 50.0, "Number of angular branches — `⌊|power|⌋` determines the spoke count, and each iteration picks one at random."),
@@ -412,7 +412,7 @@ pub static SPLIGON: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Spligon",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("sides", "Sides", unlimited_float, 3.0, 1.0, 50.0, "Number of polygon spokes."),
@@ -491,7 +491,7 @@ pub static TILE_HLP: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Tile HLP",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::NeedsTransform],
     parameters: &[
         param!("width", "Width", unlimited_float, 1.0, -10.0, 10.0, "Stripe width along X. Smaller width = more, narrower stripes."),

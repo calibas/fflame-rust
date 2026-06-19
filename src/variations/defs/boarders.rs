@@ -50,7 +50,7 @@ pub static BOARDERS: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Boarders",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[],
     init_param_count: 0,
@@ -148,7 +148,7 @@ pub static BOARDERS2: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Boarders 2",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("c", "C", unlimited_float, 0.4, -5.0, 5.0, "Cell scale factor — how much the in-cell offset shrinks toward the cell center."),
@@ -390,7 +390,7 @@ pub static SPLITBRDR: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Split Brdr",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::NeedsTransform],
     parameters: &[
         param!("x", "X", unlimited_float, 0.25, -5.0, 5.0, "Border push offset in one direction."),

@@ -59,7 +59,7 @@ pub static DC_ZTRANSL: VariationDef = VariationDef {
     aliases: &[],
     display_name: "DC Z Translation",
     category: VariationCategory::Full3D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsTransform, Feature::WritesColor, Feature::AlwaysZ],
     parameters: &[
         param!("x0", "X0", unlimited_float, 0.0, 0.0, 1.0, "Lower edge of the color-register input range. (Swapped with `x1` in init if `x0 > x1`.)"),
@@ -204,7 +204,7 @@ pub static COLORSCALE_WF: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Color Scale WF",
     category: VariationCategory::Full3D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsTransform, Feature::WritesColor, Feature::AlwaysZ],
     parameters: &[
         param!("scale_x", "Scale X", unlimited_float, 0.0, -10.0, 10.0, "X output scale: contribution to result.x is `w · scale_x · p.x`."),

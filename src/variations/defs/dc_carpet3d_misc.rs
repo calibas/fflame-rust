@@ -53,7 +53,7 @@ pub static DC_CARPET3D: VariationDef = VariationDef {
     aliases: &[],
     display_name: "DC Carpet 3D",
     category: VariationCategory::Full3D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::NeedsTransform, Feature::WritesColor],
     parameters: &[
         param!("origin", "Origin", unlimited_float, 0.5, -10.0, 10.0, "Scales the per-iteration color-mix amplitude (precomputed as `H = 0.1 · origin`)."),

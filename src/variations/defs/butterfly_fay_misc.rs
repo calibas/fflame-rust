@@ -49,7 +49,7 @@ pub static BUTTERFLY_FAY: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Butterfly Fay",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("cycles", "Cycles", unlimited_float, 0.0, -100.0, 100.0, "Number of butterfly-curve cycles per full input rotation. 0 falls back to π² internally."),

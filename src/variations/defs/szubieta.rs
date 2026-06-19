@@ -35,7 +35,7 @@ pub static SZUBIETA: VariationDef = VariationDef {
     aliases: &[],
     display_name: "SZubieta",
     category: VariationCategory::Plugin,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::WritesColor],
     init_param_count: 0,
     wgsl_init: None,

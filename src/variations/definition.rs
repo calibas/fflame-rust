@@ -93,6 +93,22 @@ pub enum Feature {
     /// 2D variations on purpose, so enforcement needs per-def review.
     /// Mutually exclusive with [`Self::AlwaysZ`].
     NeverZ,
+
+    /// The variation **replaces** the working point rather than
+    /// accumulating into it: its JWildfire source assigns `pVarTP.x = …`
+    /// (not `+=`). Intrinsic to the variation and independent of its
+    /// phase. It only changes the *combine* form of the pre/post
+    /// emission when the variation is moved off its natural phase via
+    /// `fx_priority` (see [`VariationPhase::Any`]):
+    ///   - pre:  accumulate `temp = temp + w·body(temp)` vs Replace `temp = w·body(temp)`
+    ///   - post: accumulate `result = result + w·body(result)` vs Replace `result = w·body(result)`
+    /// The normal-phase dispatch is unchanged either way (replace-style
+    /// normal variations already use the idisc pattern — read their own
+    /// weight and pre-divide so the dispatcher's `result += w·body`
+    /// cancels to the assigned value when they're the sole variation).
+    /// Sourced from the JWF `=` vs `+=` classification; see
+    /// `docs/projects/jwf-features.md`.
+    Replace,
 }
 
 /// Static definition of a variation

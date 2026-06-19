@@ -249,25 +249,79 @@ With the feature present, a later change could make the normal dispatch
 honor true replace — out of scope here, but the feature framing is what
 makes it reachable.
 
+**Storage model (confirmed):** a third name-keyed map on `Transform`,
+parallel to `variations`/`variation_params`:
+```rust
+#[serde(default, skip_serializing_if = "HashMap::is_empty")]
+pub variation_priorities: HashMap<String, i32>,   // canonical name -> JWF priority
+```
+- **Sparse override:** an entry exists only when the instance priority
+  *differs* from the variation def's default-phase priority
+  (`Pre`→−1, `Normal`→0, `Post`→1). Plain normal vars store nothing;
+  most transforms keep an empty map.
+- **`i32`** holds the raw JWF priority (preserves the `±2` "inv" specials);
+  dispatch buckets by sign at build time.
+- Keyed by **canonical** name (same alias handling as `variations`);
+  one priority per variation name per transform (matches the existing
+  one-weight-per-name model — same pre-existing dup-name limitation).
+- `serde(default, skip_serializing_if = empty)` ⇒ old `.fflame` files
+  load unchanged; new files only write the field when overrides exist.
+
 **Implementation steps:**
-1. `flame_xml`: parse/round-trip `<var>_fx_priority` as a per-instance
-   `i32` alongside the variation weight (write when non-default).
+1. Add `variation_priorities` to `Transform` (field above) + the
+   constructors/`Default`/custom deserializer; `flame_xml`
+   parse/round-trip `<var>_fx_priority` (store only when ≠ def default).
 2. Add `VariationPhase::Any` and `Feature::Replace`.
 3. Shader builder: for `Any` variations, bucket by instance priority sign
    and emit per the table; everything else unchanged.
-4. Migrate (two independent, scriptable passes over the def files):
-   - set `VariationPhase::Any` on movable `Normal` variations — **exclude
-     `NeedsAccum`, stateful (`state_count > 0`), and any without local
-     JWF source → manual review queue** (these are the ones likely to
-     misbehave when moved).
-   - set `Feature::Replace` on the verified replace-style variations
-     (JWF `=`-only list, idisc-confirmed; the ≈31 in-registry candidates
-     are: anamorphcyl, combimirror, crop, ennepers, hyperbolicellipse,
-     hypershift2, ripple, shredlin, sintrange, squirrel, svensson_js,
-     tile_reverse, … minus the already-`Post` `post_*` entries and the
-     grep false-positives like julian/juliascope — verify each).
+4. Migrate (`scripts/migrate_fx_priority_phases.py`, dry-run by default,
+   `--apply` to write; re-runnable). Two independent passes over the def
+   files:
+   - **Pass 1 (`Any`)** — set `VariationPhase::Any` on every `Normal`
+     variation that is **mechanically safe to move**:
+     `¬NeedsAccum ∧ state_count == 0`. `NeedsAccum` *must* be excluded —
+     its function signature carries an `accum` arg the pre emission
+     doesn't pass (a moved NeedsAccum var would fail to compile); stateful
+     vars are excluded for safety. Everything excluded stays `Normal`
+     (locked) and lands in the printed **review queue**. (The earlier
+     "must have local JWF source" gate is dropped — source availability
+     governs the *Replace* classification below, not movability; a clean
+     accumulate `Normal` var moves faithfully whether or not we have its
+     Java. Best-effort + A/B against JWF as users actually move them; a
+     no-op until a flame sets `fx_priority`.)
+   - **Pass 2 (`Replace`)** — classify each variation's local JWF source
+     by `pVarTP.{x,y,z}` write op: all-`=` ⇒ replace ⇒ add
+     `Feature::Replace`; all-`+=` ⇒ accumulate (nothing); mixed/no-source
+     ⇒ review queue (left accumulate). `Replace` is inert in the normal
+     phase, so a misclassification only affects a variation once it's
+     actually moved (then it's A/B-visible). combimirror is already done
+     by hand as the reference.
 5. Tests: rando7 (combimirror → pre), a synthetic accumulate→pre
    (blur ≈ pre_blur), and a 2-var-same-priority chain.
+
+**Migration applied** (`scripts/migrate_fx_priority_phases.py --apply`):
+- **509 variations → `Any`** (movable). combimirror is hand-done
+  (reference); the other 508 by Pass 1.
+- **17 variations → `Feature::Replace`**: anamorphcyl, combimirror, crop,
+  crop3D, ennepers, hyperbolicellipse, hypershift2, iconattractor_js,
+  mobius_dragon_3D, rays1/2/3, ripple, shredlin, sintrange, squirrel,
+  svensson_js, tile_reverse.
+- **Pass 1 review queue (stay `Normal`, locked — not movable):**
+  - `NeedsAccum` (11): crown_js, cubic3D, cubicLattice_3D, farblur,
+    hexaplay3D, hexnix3D, lorenz_js, macmillan, octapol, roundspher3D,
+    scry_3D.
+  - stateful `state_count > 0` (4): curliecue2, klein_group, mandelbrot,
+    subflame_wf.
+- **Pass 2 review queue (stay accumulate when moved):** mixed JWF source
+  (circlecrop, julia3D, julia3Dz, rhodonea, spherecrop, synth,
+  wallpaper_js — note julian/juliascope correctly classify as accumulate:
+  `pVarTP.x = pVarTP.x + …`); no local JWF source (CircleTrans1, arcsech,
+  bwraps, crackle, exp2, parplot2d_wf, polarplot2d_wf, polarplot3d_wf,
+  yplot2d_wf, yplot3d_wf). Revisit these if a user reports a moved-phase
+  mismatch vs JWF.
+- The bulk `Any` flip is a verified **codegen no-op** for existing
+  renders (an `Any` var with no `fx_priority` override resolves to the
+  normal bucket with byte-identical emission; covered by a test).
 
 ### Per-transform `color_type` — color-flow mode selector
 

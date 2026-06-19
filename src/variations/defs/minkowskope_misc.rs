@@ -40,7 +40,7 @@ pub static MINKOWSKOPE: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Minkowskope",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("separation", "Separation", unlimited_float, 0.5, -10.0, 10.0, "Vertical offset of the band threshold."),

@@ -45,7 +45,7 @@ pub static HARMONOGRAPH_JS: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Harmonograph (Sosa)",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("seed", "Seed", int, 1234.0, 0.0, 999999.0, "Declared but unused in this port — upstream cpp re-seeds `GOODRAND` per Prepare; we use the per-thread RNG instead. Kept in the parameter list for cpp/Java interface parity."),

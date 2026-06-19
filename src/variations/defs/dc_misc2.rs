@@ -42,7 +42,7 @@ pub static DC_CUBE: VariationDef = VariationDef {
     aliases: &[],
     display_name: "DC Cube",
     category: VariationCategory::Full3D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::WritesColor, Feature::AlwaysZ],
     parameters: &[
         // x/y/z kept at slots 0..2 so existing saved flames preserve their

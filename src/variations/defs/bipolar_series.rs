@@ -48,7 +48,7 @@ pub static BCOLLIDE: VariationDef = VariationDef {
     aliases: &[],
     display_name: "BCollide",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("num", "N", int, 1.0, 1.0, 50.0, "Number of σ wedges. Higher = finer tiling."),
@@ -124,7 +124,7 @@ pub static BMOD: VariationDef = VariationDef {
     aliases: &[],
     display_name: "BMod",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("radius", "Radius", unlimited_float, 1.0, -10.0, 10.0, "Half-width of the τ band to mod-wrap."),
@@ -189,7 +189,7 @@ pub static BSWIRL: VariationDef = VariationDef {
     aliases: &[],
     display_name: "BSwirl",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("in_p", "In", unlimited_float, 0.0, -10.0, 10.0, "Reciprocal-τ swirl coefficient — adds `in/τ` to σ."),
@@ -250,7 +250,7 @@ pub static BARYCENTROID: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Barycentroid",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("a", "V0.x", unlimited_float, 1.0, -10.0, 10.0, "V0 X coordinate (first triangle vertex)."),
@@ -339,7 +339,7 @@ pub static ECOLLIDE: VariationDef = VariationDef {
     aliases: &[],
     display_name: "ECollide",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("num", "N", int, 1.0, 1.0, 50.0, "Number of ν wedges."),
@@ -420,7 +420,7 @@ pub static EMOD: VariationDef = VariationDef {
     aliases: &[],
     display_name: "EMod",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("radius", "Radius", unlimited_float, 1.0, -10.0, 10.0, "Half-width of the μ band to mod-wrap."),
@@ -496,7 +496,7 @@ pub static ESWIRL: VariationDef = VariationDef {
     aliases: &[],
     display_name: "ESwirl",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("in_p", "In", unlimited_float, 1.2, -10.0, 10.0, "Reciprocal-μ swirl coefficient — adds `in/μ` to ν."),
@@ -556,7 +556,7 @@ pub static ESCALE: VariationDef = VariationDef {
     aliases: &[],
     display_name: "EScale",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("scale", "Scale", unlimited_float, 1.0, -10.0, 10.0, "Multiplicative scale on μ; also scales the ν mod-wrap window."),
@@ -633,7 +633,7 @@ pub static EPUSH: VariationDef = VariationDef {
     aliases: &[],
     display_name: "EPush",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("push", "Push", unlimited_float, 0.0, -10.0, 10.0, "Additive offset on μ."),
@@ -698,7 +698,7 @@ pub static EROTATE: VariationDef = VariationDef {
     aliases: &[],
     display_name: "ERotate",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("rotate", "Rotate", unlimited_float, 0.0, -10.0, 10.0, "Angular shift on ν, in radians."),

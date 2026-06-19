@@ -57,7 +57,7 @@ pub static SYNTH: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Synth",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         // Globals (slots 0..4)

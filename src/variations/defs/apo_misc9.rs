@@ -66,7 +66,7 @@ pub static EJULIA: VariationDef = VariationDef {
     aliases: &[],
     display_name: "E-Julia",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("power", "Power", int, 2.0, -100.0, 100.0, "Number of angular branches. Negative values invert the input through the unit circle first."),
@@ -167,7 +167,7 @@ pub static EMOTION: VariationDef = VariationDef {
     aliases: &[],
     display_name: "E-Motion",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("move", "Move", unlimited_float, 0.0, -10.0, 10.0, "Additive offset on μ (sign chosen by the sign of ν)."),
@@ -271,7 +271,7 @@ pub static FLOWER_DB: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Flower DB",
     category: VariationCategory::Full3D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsTransform, Feature::AlwaysZ],
     parameters: &[
         param!("petals", "Petals", unlimited_float, 6.0, -50.0, 50.0, "Number of petal lobes (angular frequency of the sin modulator)."),
@@ -356,7 +356,7 @@ pub static JULIAN2: VariationDef = VariationDef {
     aliases: &[],
     display_name: "JuliaN 2",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("power", "Power", int, 0.0, -100.0, 100.0, "Number of angular branches. 0 produces zero output."),

@@ -65,7 +65,7 @@ pub static CORNERS: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Corners",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsTransform],
     parameters: &[
         param!("xwidth", "X Width", unlimited_float, 1.0, -10.0, 10.0, "Constant X offset added per quadrant (signed by the input's X sign)."),
@@ -167,7 +167,7 @@ pub static MODULUS: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Modulus",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("x", "X", unlimited_float, 0.2, -10.0, 10.0, "X-axis half-width — points outside ±x get mod-wrapped back inside."),
@@ -276,7 +276,7 @@ pub static OCTAGON: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Octagon",
     category: VariationCategory::Full3D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::AlwaysZ],
     parameters: &[
         param!("x", "X", unlimited_float, 0.0, -10.0, 10.0, "X-axis sign-shift amount added at the end (signed by `sign(x)`)."),
@@ -374,7 +374,7 @@ pub static CIRCUS: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Circus",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("scale", "Scale", unlimited_float, 1.0, 0.001, 10.0, "Inner-disc (`r ≤ 1`) scaling factor. Outside the disc, the reciprocal `1/scale` is used."),
@@ -434,7 +434,7 @@ pub static CIRCLIZE: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Circlize",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsTransform],
     parameters: &[
         param!("hole", "Hole", unlimited_float, 0.4, -10.0, 10.0, "Center-hole radial offset. Larger values produce a bigger central gap."),
@@ -515,7 +515,7 @@ pub static CIRCLIZE2: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Circlize 2",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("hole", "Hole", unlimited_float, 0.0, -10.0, 10.0, "Center-hole radial offset (folded into the weighted radius)."),
@@ -590,7 +590,7 @@ pub static ATAN_VAR: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Atan",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("mode", "Mode", enum, 0, &["Y Only", "X Only", "Both"], "Which axes get the arctangent transform."),
@@ -661,7 +661,7 @@ pub static MURL: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Murl",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("c", "C", unlimited_float, 0.1, -10.0, 10.0, "Möbius coefficient. Rescaled internally by `1/(power−1)` when `power ≠ 1`."),

@@ -53,8 +53,8 @@ pub static MOBIUS_DRAGON_3D: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Mobius Dragon 3D",
     category: VariationCategory::Full3D,
-    phase: VariationPhase::Normal,
-    features: &[Feature::NeedsRng, Feature::NeedsTransform, Feature::WritesColor, Feature::AlwaysZ],
+    phase: VariationPhase::Any,
+    features: &[Feature::NeedsRng, Feature::NeedsTransform, Feature::WritesColor, Feature::AlwaysZ, Feature::Replace],
     parameters: &[
         param!("re", "Re", unlimited_float, 1.0, -10.0, 10.0, "Real part of the complex divisor `(re, im)` applied each iteration."),
         param!("im", "Im", unlimited_float, 0.0, -10.0, 10.0, "Imaginary part of the complex divisor."),

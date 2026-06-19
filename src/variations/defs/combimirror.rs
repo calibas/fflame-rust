@@ -39,8 +39,14 @@ pub static COMBIMIRROR: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Combimirror",
     category: VariationCategory::Full3D,
-    phase: VariationPhase::Normal,
-    features: &[Feature::NeedsRng, Feature::NeedsTransform, Feature::WritesColor, Feature::AlwaysZ],
+    // Phase-agnostic: honors JWildfire `fx_priority` (e.g. JWF-rando7 puts
+    // combimirror in the pre phase via `combimirror_fx_priority="-1"`).
+    // Default bucket is normal. `Feature::Replace` makes the moved-pre/post
+    // emission assign (`temp = w·body`) rather than accumulate; combined
+    // with the idisc body (returns the JWF value pre-divided by w) this is
+    // exact in normal (replace-when-sole) and pre (`w·(jwf/w) = jwf`).
+    phase: VariationPhase::Any,
+    features: &[Feature::NeedsRng, Feature::NeedsTransform, Feature::WritesColor, Feature::AlwaysZ, Feature::Replace],
     parameters: &[
         param!("vmirror", "V Mirror", unlimited_float, 1.0, 0.0, 2.0, "Vertical-mirror probability (fires when a random < vmirror/2). Negates X about `vmove`."),
         param!("vmove", "V Move", unlimited_float, 0.05, -10.0, 10.0, "X offset added after the vertical mirror: `x → -x + vmove`."),

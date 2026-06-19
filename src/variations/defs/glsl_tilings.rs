@@ -49,7 +49,7 @@ pub static GLSL_KALEIDOSCOPIC: VariationDef = VariationDef {
     aliases: &[],
     display_name: "GLSL Kaleidoscopic",
     category: VariationCategory::Plugin,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::WritesRgb],
     parameters: &[
         param!("density_pixels", "Density Pixels", unlimited_int, 1000000.0, 100.0, 10000000.0, "Discrete grid resolution. See module-level doc."),
@@ -177,7 +177,7 @@ pub static GLSL_KALEIDOCOMPLEX: VariationDef = VariationDef {
     aliases: &[],
     display_name: "GLSL KaleidoComplex",
     category: VariationCategory::Plugin,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::WritesRgb],
     parameters: &[
         param!("density_pixels", "Density Pixels", unlimited_int, 1000000.0, 100.0, 10000000.0, "Discrete grid resolution."),
@@ -357,7 +357,7 @@ pub static GLSL_HYPERBOLICTILE: VariationDef = VariationDef {
     aliases: &[],
     display_name: "GLSL Hyperbolic Tile",
     category: VariationCategory::Plugin,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::WritesRgb],
     parameters: &[
         param!("density_pixels", "Density Pixels", unlimited_int, 1000000.0, 100.0, 10000000.0, "Discrete grid resolution."),
@@ -536,7 +536,7 @@ pub static GLSL_MANDALA: VariationDef = VariationDef {
     aliases: &[],
     display_name: "GLSL Mandala",
     category: VariationCategory::Plugin,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::WritesRgb],
     parameters: &[
         param!("density_pixels", "Density Pixels", unlimited_int, 1000000.0, 100.0, 10000000.0, "Discrete grid resolution."),
@@ -712,7 +712,7 @@ pub static GLSL_SQUARES: VariationDef = VariationDef {
     aliases: &[],
     display_name: "GLSL Squares",
     category: VariationCategory::Plugin,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::WritesRgb],
     parameters: &[
         param!("density_pixels", "Density Pixels", unlimited_int, 1000000.0, 100.0, 10000000.0, "Discrete grid resolution."),
@@ -840,7 +840,7 @@ pub static GLSL_HOSHI: VariationDef = VariationDef {
     aliases: &[],
     display_name: "GLSL Hoshi",
     category: VariationCategory::Plugin,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::WritesRgb],
     parameters: &[
         param!("density_pixels", "Density Pixels", unlimited_int, 1000000.0, 100.0, 10000000.0, "Discrete grid resolution."),

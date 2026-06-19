@@ -1,9 +1,69 @@
 use crate::scene::transforms::{Flame, RenderMode};
-use crate::variations::{VariationCategory, global_registry};
+use crate::variations::{VariationCategory, VariationPhase, global_registry};
 use crate::config::{ConfigManager, ConfigPath, UpdateType, AffineParam, TransformRef};
 use super::variation_params::render_variation_params;
 use egui::Color32;
 use rust_i18n::t;
+
+/// Which phase section a variation instance is displayed/run in.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PhaseBucket {
+    Pre,
+    Main,
+    Post,
+}
+
+impl PhaseBucket {
+    /// The JWildfire `fx_priority` value used when assigning a variation to
+    /// this bucket from the UI (canonical ±1 / 0; the dispatch buckets by
+    /// sign so ±1 is sufficient).
+    fn priority(self) -> i32 {
+        match self {
+            PhaseBucket::Pre => -1,
+            PhaseBucket::Main => 0,
+            PhaseBucket::Post => 1,
+        }
+    }
+
+    fn label(self) -> std::borrow::Cow<'static, str> {
+        match self {
+            PhaseBucket::Pre => t!("variations.phase_pre"),
+            PhaseBucket::Main => t!("variations.phase_main"),
+            PhaseBucket::Post => t!("variations.phase_post"),
+        }
+    }
+}
+
+/// Effective phase info for a variation instance on a transform:
+/// `(is_movable, bucket)`. `is_movable` is true only for `Any`-phase
+/// variations (the ones that honour `fx_priority`); for locked
+/// `Pre`/`Normal`/`Post` defs the bucket comes from their fixed phase.
+/// For `Any` vars the bucket is read from the stored override (default
+/// main/0 when unset).
+fn variation_phase_info(
+    transform: &crate::scene::transforms::Transform,
+    variation_name: &str,
+) -> (bool, PhaseBucket) {
+    let registry = global_registry();
+    let def_phase = registry
+        .get(variation_name)
+        .map(|i| i.phase.clone())
+        .unwrap_or(VariationPhase::Normal);
+    let natural = def_phase.natural_priority();
+    let eff = transform
+        .variation_priorities
+        .get(variation_name)
+        .copied()
+        .unwrap_or(natural);
+    let bucket = if eff < 0 {
+        PhaseBucket::Pre
+    } else if eff > 0 {
+        PhaseBucket::Post
+    } else {
+        PhaseBucket::Main
+    };
+    (def_phase == VariationPhase::Any, bucket)
+}
 
 /// Get a distinct color for each transform index (matches Triangle Editor)
 fn get_transform_color(index: usize) -> Color32 {
@@ -527,6 +587,8 @@ fn render_enabled_variation(
     xref: TransformRef,
     variation_name: &str,
     current_weight: f32,
+    movable: bool,
+    current_bucket: PhaseBucket,
 ) -> (UpdateType, bool) {
     let mut max_update = UpdateType::None;
     let mut delete_requested = false;
@@ -563,6 +625,33 @@ fn render_enabled_variation(
         // Delete button
         if ui.small_button(t!("variations.remove")).on_hover_text(t!("tooltips.remove_variation")).clicked() {
             delete_requested = true;
+        }
+
+        // Phase selector — only for `Any` variations (the ones that honour
+        // fx_priority). Locked Pre/Normal/Post variations have no button.
+        // The button is just "P" (the section the variation lives in already
+        // shows its current phase); clicking it opens the Pre/Main/Post menu.
+        if movable {
+            ui.menu_button("P", |ui| {
+                for bucket in [PhaseBucket::Pre, PhaseBucket::Main, PhaseBucket::Post] {
+                    if ui
+                        .selectable_label(bucket == current_bucket, bucket.label())
+                        .clicked()
+                    {
+                        if bucket != current_bucket {
+                            let path = xref.variation_priority_path(variation_name.to_string());
+                            if let Ok(update_type) =
+                                config_manager.update_param(path, bucket.priority().into())
+                            {
+                                max_update = max_update.max(update_type);
+                            }
+                        }
+                        ui.close_menu();
+                    }
+                }
+            })
+            .response
+            .on_hover_text(t!("variations.phase_tooltip"));
         }
     });
 
@@ -602,28 +691,53 @@ fn render_variations_section(
     let mut variation_to_delete: Option<String> = None;
     let mut variation_to_add: Option<String> = None;
 
-    ui.label(t!("transform.variations"));
+    // Bucket each enabled variation into its phase section (Pre / Main /
+    // Post). Locked variations sit in their fixed phase; `Any` variations
+    // follow their fx_priority override (default main).
+    let mut sections: [Vec<(String, f32, bool, PhaseBucket)>; 3] =
+        [Vec::new(), Vec::new(), Vec::new()];
+    for (name, weight) in transform.variations.iter() {
+        let (movable, bucket) = variation_phase_info(transform, name);
+        let slot = match bucket {
+            PhaseBucket::Pre => 0,
+            PhaseBucket::Main => 1,
+            PhaseBucket::Post => 2,
+        };
+        sections[slot].push((name.clone(), *weight, movable, bucket));
+    }
+    for section in &mut sections {
+        section.sort_by(|a, b| a.0.cmp(&b.0));
+    }
 
-    // Get enabled variations sorted by name for consistent display
-    let mut enabled: Vec<(String, f32)> = transform.variations.iter()
-        .map(|(k, v)| (k.clone(), *v))
-        .collect();
-    enabled.sort_by(|a, b| a.0.cmp(&b.0));
-
-    if enabled.is_empty() {
+    if sections.iter().all(|s| s.is_empty()) {
+        ui.label(t!("transform.variations"));
         ui.label(egui::RichText::new(t!("transform.no_variations")).italics().weak());
     } else {
-        for (name, weight) in &enabled {
-            let (update, delete) = render_enabled_variation(
-                ui,
-                config_manager,
-                xref,
-                name,
-                *weight,
-            );
-            max_update = max_update.max(update);
-            if delete {
-                variation_to_delete = Some(name.clone());
+        // Render each non-empty section under its own header.
+        let headers = [
+            "transform.variations_pre",
+            "transform.variations_main",
+            "transform.variations_post",
+        ];
+        for (slot, section) in sections.iter().enumerate() {
+            if section.is_empty() {
+                continue;
+            }
+            ui.label(t!(headers[slot]));
+            for (name, weight, movable, bucket) in section {
+                let (update, delete) = render_enabled_variation(
+                    ui,
+                    config_manager,
+                    xref,
+                    name,
+                    *weight,
+                    *movable,
+                    *bucket,
+                );
+                max_update = max_update.max(update);
+                if delete {
+                    variation_to_delete = Some(name.clone());
+                }
             }
         }
     }
