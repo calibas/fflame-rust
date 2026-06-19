@@ -442,8 +442,7 @@ impl FlameRenderer {
             variation_priorities: {
                 let registry = crate::variations::global_registry();
                 let id_map = crate::scene::transforms::compute_local_index_map(
-                    flame.extract_active_variations().into_keys(),
-                    &registry,
+                    flame.active_variation_names_ordered(&registry),
                 );
                 crate::shader_builder_v2::collect_phase_overrides(flame, &registry, &id_map)
             },

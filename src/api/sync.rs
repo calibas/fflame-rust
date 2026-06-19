@@ -248,6 +248,9 @@ fn transform_from_api(resp: &TransformResponse) -> Transform {
         // fx_priority overrides aren't carried by the API contract yet;
         // default to empty (every variation runs in its natural phase).
         variation_priorities: std::collections::HashMap::new(),
+        // Variation order hint not carried by the API contract; empty =>
+        // registry-order fallback (the pre-feature behavior).
+        variation_order: Vec::new(),
         post_affine_enabled: resp.post_affine_enabled,
         post_a: resp.post_a,
         post_b: resp.post_b,

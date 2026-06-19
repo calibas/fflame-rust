@@ -276,8 +276,7 @@ impl GpuTransform {
     /// inherits from the normal that fired).
     pub fn from_flame(flame: &Flame, registry: &crate::variations::VariationRegistry) -> Vec<Self> {
         let local_map = crate::scene::transforms::compute_local_index_map(
-            flame.extract_active_variations().into_keys(),
-            registry,
+            flame.active_variation_names_ordered(registry),
         );
         let solo_idx = flame.solo_transform;
 
@@ -572,8 +571,7 @@ impl GpuVariationParams {
         registry: &crate::variations::VariationRegistry,
     ) -> Vec<Self> {
         let local_map = crate::scene::transforms::compute_local_index_map(
-            flame.extract_active_variations().into_keys(),
-            registry,
+            flame.active_variation_names_ordered(registry),
         );
         // Soft cap check: warn if total slot footprint approaches the buffer.
         let total_slots = crate::scene::transforms::total_packed_slots(&local_map, registry);
@@ -1697,8 +1695,7 @@ impl FlameBuffers {
         // local_map is shared across parent and subflame xforms via
         // `extract_active_variations`.
         let local_map = crate::scene::transforms::compute_local_index_map(
-            flame.extract_active_variations().into_keys(),
-            &registry,
+            flame.active_variation_names_ordered(&registry),
         );
         let mut subflame_xforms_packed = 0usize;
         for sf in &flame.subflames {
@@ -1874,8 +1871,7 @@ impl FlameBuffers {
         // subflame xform's variations get the same per-variation
         // packed offsets the parent's do.
         let local_map = crate::scene::transforms::compute_local_index_map(
-            flame.extract_active_variations().into_keys(),
-            &registry,
+            flame.active_variation_names_ordered(&registry),
         );
         // Soft cap: warn if the per-xform packed footprint exceeds the
         // fixed slot count. Same check `GpuVariationParams::from_flame`

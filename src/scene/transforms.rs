@@ -40,20 +40,26 @@ pub const MAX_VARIATIONS_PER_FLAME: usize = 100;
 /// mapping to keep buffer slots and shader code in agreement.
 pub fn compute_local_index_map<I, S>(
     active_names: I,
-    registry: &VariationRegistry,
 ) -> HashMap<String, u32>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
 {
-    let active_set: std::collections::HashSet<String> =
-        active_names.into_iter().map(|s| s.as_ref().to_string()).collect();
-    let mut active_in_order: Vec<String> = registry
-        .names()
-        .iter()
-        .filter(|name| active_set.contains(*name))
-        .cloned()
-        .collect();
+    // Assign local indices in the ORDER the names arrive (deduped, first
+    // occurrence wins). Callers pass a flame-ordered list
+    // (`Flame::active_variation_names_ordered`) so the dispatch emission
+    // order matches JWildfire's per-xform variation order — which matters
+    // for `NeedsAccum` / `Replace` variations that read/clobber the
+    // running accumulator. The GPU buffer populator uses this same map, so
+    // weight/param slots stay consistent with the shader.
+    let mut active_in_order: Vec<String> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for s in active_names {
+        let name = s.as_ref().to_string();
+        if seen.insert(name.clone()) {
+            active_in_order.push(name);
+        }
+    }
     if active_in_order.len() > MAX_VARIATIONS_PER_FLAME {
         log::warn!(
             "Flame has {} active variations; truncating to {}. Dropped: {:?}",
@@ -338,6 +344,23 @@ pub struct Transform {
     /// Example: "julian.power" -> 3.0
     pub variation_params: HashMap<String, f32>,
 
+    /// Canonical-name order of this transform's variations — a *hint* used
+    /// to drive the per-flame dispatch order so it matches JWildfire's
+    /// per-xform variation list order. This matters because the running
+    /// accumulator (`pVarTP`) is read by `NeedsAccum` variations
+    /// (roundspher3D, …) and clobbered by `Replace` variations, so the
+    /// order they're applied in changes the result. `variations` is an
+    /// unordered map, so the order is captured here on import (XML
+    /// attribute order) and on UI add/remove.
+    ///
+    /// Best-effort: any active variation NOT listed here is appended in
+    /// registry order (the pre-feature behavior), so old `.fflame` files
+    /// (no `variation_order`) render exactly as before. Entries that are
+    /// no longer active are ignored. One canonical name per transform
+    /// (no duplicates — see `docs/projects/jwf-features.md`). Serialized
+    /// only when non-empty (see the manual `Serialize`/`Deserialize`).
+    pub variation_order: Vec<String>,
+
     /// Per-variation phase override (JWildfire `<var>_fx_priority`), keyed
     /// by canonical variation name — same key space as `variations`. The
     /// `i32` is the raw JWF priority (`<0` pre, `0` normal, `>0` post;
@@ -458,6 +481,7 @@ impl Default for Transform {
             weight: 1.0,
             variations: HashMap::new(),
             variation_params: HashMap::new(),
+            variation_order: Vec::new(),
             variation_priorities: HashMap::new(),
             color: 0.5,        // Mid-palette position (neutral default)
             color_speed: 0.0,  // Apophysis default: 50/50 blend
@@ -551,12 +575,39 @@ impl Transform {
         // Always insert/update the weight - don't auto-remove at zero
         // This allows variations to remain visible in UI at weight 0
         // Use remove_variation() to explicitly remove a variation
-        self.variations.insert(name.to_string(), weight);
+        if self.variations.insert(name.to_string(), weight).is_none() {
+            // First time this variation is added — record its order so the
+            // dispatch matches add order (see `variation_order`).
+            self.variation_order.push(name.to_string());
+        }
     }
 
     /// Remove a variation from this transform
     pub fn remove_variation(&mut self, name: &str) {
         self.variations.remove(name);
+        self.variation_order.retain(|n| n != name);
+    }
+
+    /// This transform's active variation names in dispatch order: the
+    /// `variation_order` hint first (only entries still active), then any
+    /// remaining active variations in registry order. The registry-order
+    /// tail is the stable fallback for flames/edits that didn't record an
+    /// order, so old `.fflame` files render exactly as before. See
+    /// [`Self::variation_order`].
+    pub fn ordered_variation_names(&self, registry: &VariationRegistry) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for name in &self.variation_order {
+            if self.variations.contains_key(name) && seen.insert(name.clone()) {
+                out.push(name.clone());
+            }
+        }
+        for name in registry.names() {
+            if self.variations.contains_key(name) && seen.insert(name.clone()) {
+                out.push(name.clone());
+            }
+        }
+        out
     }
 
     /// Get a variation weight by name
@@ -1048,6 +1099,7 @@ impl Serialize for Transform {
         let has_linked = !self.linked_attachments.is_empty();
         let has_final = !self.final_attachments.is_empty();
         let has_priorities = !self.variation_priorities.is_empty();
+        let has_var_order = !self.variation_order.is_empty();
         let field_count = 13
             + if has_direct_color { 1 } else { 0 }
             + if has_post { 8 } else { 0 }
@@ -1057,7 +1109,8 @@ impl Serialize for Transform {
             + if has_zx_post { 1 } else { 0 }
             + if has_linked { 1 } else { 0 }
             + if has_final { 1 } else { 0 }
-            + if has_priorities { 1 } else { 0 };
+            + if has_priorities { 1 } else { 0 }
+            + if has_var_order { 1 } else { 0 };
 
         let mut state = serializer.serialize_struct("Transform", field_count)?;
         state.serialize_field("a", &self.a)?;
@@ -1073,6 +1126,11 @@ impl Serialize for Transform {
         // Only serialize fx_priority overrides when present (keeps .fflame clean)
         if has_priorities {
             state.serialize_field("variation_priorities", &priorities_sorted)?;
+        }
+        // Variation order hint — preserved as a list (NOT sorted), since the
+        // order is the whole point. Only when non-empty.
+        if has_var_order {
+            state.serialize_field("variation_order", &self.variation_order)?;
         }
         state.serialize_field("color", &self.color)?;
         state.serialize_field("color_speed", &self.color_speed)?;
@@ -1128,6 +1186,7 @@ impl<'de> Deserialize<'de> for Transform {
         #[serde(field_identifier, rename_all = "snake_case")]
         enum Field {
             A, B, C, D, E, F, G, Weight, Variations, VariationParams, VariationPriorities,
+            VariationOrder,
             Color, ColorSpeed, Opacity,
             DirectColor,
             PostAffineEnabled, PostA, PostB, PostC, PostD, PostE, PostF, PostG,
@@ -1159,6 +1218,7 @@ impl<'de> Deserialize<'de> for Transform {
                 let mut variations = None;
                 let mut variation_params = None;
                 let mut variation_priorities: Option<HashMap<String, i32>> = None;
+                let mut variation_order: Option<Vec<String>> = None;
                 let mut color = None;
                 let mut color_speed = None;
                 let mut opacity = None;
@@ -1240,6 +1300,9 @@ impl<'de> Deserialize<'de> for Transform {
                         Field::VariationPriorities => {
                             variation_priorities = Some(map.next_value()?);
                         }
+                        Field::VariationOrder => {
+                            variation_order = Some(map.next_value()?);
+                        }
                         Field::Color => {
                             // Handle both old format [f32; 3] and new format f32
                             let value: serde_json::Value = map.next_value()?;
@@ -1295,6 +1358,7 @@ impl<'de> Deserialize<'de> for Transform {
                     variations: variations.ok_or_else(|| de::Error::missing_field("variations"))?,
                     variation_params: variation_params.unwrap_or_else(HashMap::new), // Default to empty if missing
                     variation_priorities: variation_priorities.unwrap_or_default(), // Absent in old files
+                    variation_order: variation_order.unwrap_or_default(), // Absent in old files
                     color: color.ok_or_else(|| de::Error::missing_field("color"))?,
                     color_speed: color_speed.unwrap_or(0.0), // Default to 0.0 for backward compatibility
                     opacity: opacity.unwrap_or(1.0), // Default to 1.0 for backward compatibility
@@ -1323,7 +1387,7 @@ impl<'de> Deserialize<'de> for Transform {
             }
         }
 
-        const FIELDS: &[&str] = &["a", "b", "c", "d", "e", "f", "g", "weight", "variations", "variation_params", "variation_priorities", "color", "color_speed", "opacity", "direct_color", "post_affine_enabled", "post_a", "post_b", "post_c", "post_d", "post_e", "post_f", "post_g", "yz_coefs", "zx_coefs", "yz_post_coefs", "zx_post_coefs", "linked_attachments", "final_attachments"];
+        const FIELDS: &[&str] = &["a", "b", "c", "d", "e", "f", "g", "weight", "variations", "variation_params", "variation_priorities", "variation_order", "color", "color_speed", "opacity", "direct_color", "post_affine_enabled", "post_a", "post_b", "post_c", "post_d", "post_e", "post_f", "post_g", "yz_coefs", "zx_coefs", "yz_post_coefs", "zx_post_coefs", "linked_attachments", "final_attachments"];
         deserializer.deserialize_struct("Transform", FIELDS, TransformVisitor)
     }
 }
@@ -1341,6 +1405,47 @@ mod tests {
         assert_eq!(xform.get_variation("linear"), 0.5);
         assert_eq!(xform.get_variation("swirl"), 0.3);
         assert_eq!(xform.get_variation("nonexistent"), 0.0);
+    }
+
+    #[test]
+    fn test_compute_local_index_map_preserves_order() {
+        // Indices follow the input order (deduped, first-occurrence), so the
+        // dispatch emission order matches the flame's variation order.
+        let m = compute_local_index_map(
+            ["roundspher3D", "waves2", "linear", "waves2"].iter().copied(),
+        );
+        assert_eq!(m["roundspher3D"], 0);
+        assert_eq!(m["waves2"], 1);
+        assert_eq!(m["linear"], 2);
+        assert_eq!(m.len(), 3, "duplicate name deduped");
+    }
+
+    #[test]
+    fn test_set_remove_variation_maintains_order() {
+        let mut xform = Transform::new();
+        xform.set_variation("spherical", 1.0);
+        xform.set_variation("linear", 0.5);
+        xform.set_variation("spherical", 0.7); // re-set must NOT duplicate
+        assert_eq!(xform.variation_order, vec!["spherical".to_string(), "linear".to_string()]);
+        xform.remove_variation("spherical");
+        assert_eq!(xform.variation_order, vec!["linear".to_string()]);
+    }
+
+    #[test]
+    fn test_ordered_variation_names_hint_then_registry_fallback() {
+        // The variation_order hint comes first; any active variation not in
+        // the hint is appended in registry order (stable fallback).
+        let registry = crate::variations::global_registry();
+        let mut xform = Transform::new();
+        // Insert directly so variation_order stays empty for "spherical".
+        xform.variations.insert("spherical".to_string(), 1.0);
+        xform.set_variation("waves2", 0.9); // tracked in variation_order
+        let ordered = xform.ordered_variation_names(&registry);
+        assert_eq!(ordered.first().map(String::as_str), Some("waves2"),
+            "hinted variation comes first");
+        assert!(ordered.contains(&"spherical".to_string()),
+            "untracked active variation still included via registry fallback");
+        assert_eq!(ordered.len(), 2);
     }
 
     #[test]
@@ -1876,6 +1981,36 @@ impl Flame {
     /// the weight first crosses the threshold. Adding a variation to
     /// the flame's transform list is the explicit signal to include it
     /// in the shader; if it's truly unused, the user can remove it.
+    /// The flame's active variation names in a canonical dispatch order:
+    /// walk the transform pools (normal → linked → final → subflames) in
+    /// order, and within each transform use its `ordered_variation_names`,
+    /// collecting first appearances. Feeds `compute_local_index_map` so the
+    /// per-flame shader emits variations in (as close as possible to)
+    /// JWildfire's per-xform order — see `Transform::variation_order`.
+    pub fn active_variation_names_ordered(&self, registry: &VariationRegistry) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut absorb = |t: &Transform| {
+            for name in t.ordered_variation_names(registry) {
+                if seen.insert(name.clone()) {
+                    out.push(name);
+                }
+            }
+        };
+        for t in &self.transforms { absorb(t); }
+        for t in &self.linked_transforms { absorb(t); }
+        for t in &self.final_transforms { absorb(t); }
+        drop(absorb);
+        for sf in &self.subflames {
+            for name in sf.active_variation_names_ordered(registry) {
+                if seen.insert(name.clone()) {
+                    out.push(name);
+                }
+            }
+        }
+        out
+    }
+
     pub fn extract_active_variations(&self) -> HashMap<String, f32> {
         let mut all_variations = HashMap::new();
         let absorb = |t: &Transform, all: &mut HashMap<String, f32>| {
@@ -1949,14 +2084,11 @@ impl Flame {
     }
 
     /// Get runtime ID mapping for active variations.
-    /// Delegates to `compute_local_index_map` for stable registry-order assignment
-    /// and the per-flame cap.
+    /// Delegates to `compute_local_index_map` using the flame's variation
+    /// order (`active_variation_names_ordered`) and the per-flame cap.
     pub fn get_id_mapping(&self) -> HashMap<String, u32> {
         let registry = crate::variations::global_registry();
-        compute_local_index_map(
-            self.extract_active_variations().into_keys(),
-            &registry,
-        )
+        compute_local_index_map(self.active_variation_names_ordered(&registry))
     }
 
     /// Calculate cumulative weights for transform selection
