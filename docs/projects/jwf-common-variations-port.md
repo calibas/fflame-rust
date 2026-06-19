@@ -21,7 +21,7 @@ sym_ng11 - new variation (JWF-rando19.flame) ✅
 pre_blur - blur effect much stronger than JWF, JWF has visible detail that's lost in ours. (JWF-rando21.flame) ✅
 dc_hexes_wf - new variation (JWF-rando27.flame) ✅
 mobius_dragon_3D - new variation (JWF-rando28.flame) ✅
-JWF-rando32-simplified - something's different with the rendering between our app and JWF
+JWF-rando32-simplified - something's different with the rendering between our app and JWF ✅ (juliascope bug — scope mirror applied as output ±1 instead of negating atan2 inside the angle, + a spurious 2nd RNG draw; fixed to match JWF transformFunction)
 Support for <jwf-flame> see JWF-rando34.flame. Used for saving layers, which we currently don't support. ✅
 
 Moving camera X/Y/Z not working for video exports?
