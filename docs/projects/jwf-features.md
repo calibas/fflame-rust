@@ -241,13 +241,27 @@ accumulator snapshot as the *input*, and pre-style bodies write their
 input arg, so e.g. `pre_blur` in normal is a **no-op** in JWF; we get the
 same by leaving naturally-`Pre`/`Post` variations locked (not `Any`).
 
-**Bonus from `Replace`-as-a-feature:** it also documents the
-assign-semantics our **normal** dispatch currently only *approximates*
-(combimirror "replaces" today only because it's usually the sole
-variation; in a multi-variation normal xform we sum instead of assign).
-With the feature present, a later change could make the normal dispatch
-honor true replace — out of scope here, but the feature framing is what
-makes it reachable.
+**Normal-phase replace (implemented).** `Feature::Replace` is honored in
+the **normal** phase too, not just when a variation is moved to pre/post.
+`resolve_phase_buckets` emits the normal bucket as *accumulate variations
+first* (`result += w·body`) *then replace variations last* (`result =
+w·body`), so a replace variation overwrites the running sum — matching
+JWF, where `pVarTP.x =` clobbers prior `+=` contributions. A **sole**
+replace variation is unchanged (`result += w·body` from `result = 0`
+equals `result = w·body`), so single-variation flames render identically;
+only multi-variation normal xforms change.
+
+Caveat — *order*: every normal variation reads the fixed affine input, so
+accumulate variations commute (order-independent). A replace, though,
+discards everything emitted before it, so JWF's result is *(last replace)
++ (accumulates after it)*. Our `Transform.variations` is an unordered
+map, so we can't reconstruct JWF's intra-xform order; we apply replaces
+last. This is exact for the common "one replace, added last" case (e.g.
+shredlin in JWF-rando14, where it clobbers `poincare3D` — confirmed
+matching JWF) but won't match a flame that deliberately places an
+accumulate *after* a replace. (`NeedsAccum` variations, which read the
+running sum, are excluded from `Any` and are the only order-sensitive
+accumulates.)
 
 **Storage model (confirmed):** a third name-keyed map on `Transform`,
 parallel to `variations`/`variation_params`:

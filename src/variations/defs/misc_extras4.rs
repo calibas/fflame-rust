@@ -149,7 +149,7 @@ fn variation_svf(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
 pub static SHREDLIN: VariationDef = VariationDef {
     name: "shredlin",
     aliases: &[],
-    display_name: "Shred Lin",
+    display_name: "Shredlin",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Any,
     features: &[Feature::Replace],
@@ -223,7 +223,7 @@ fn variation_shredlin(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
 pub static SHREDRAD: VariationDef = VariationDef {
     name: "shredrad",
     aliases: &[],
-    display_name: "Shred Rad",
+    display_name: "Shredrad",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Any,
     features: &[],
