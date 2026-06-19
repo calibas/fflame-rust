@@ -159,6 +159,7 @@ mod dc_mandelbox2d;
 mod mobius_dragon_3d;
 mod sym_ng;
 mod sym_bg;
+mod prose3d;
 
 pub use basic::*;
 pub use advanced::*;
@@ -314,6 +315,7 @@ pub use dc_mandelbox2d::*;
 pub use mobius_dragon_3d::*;
 pub use sym_ng::*;
 pub use sym_bg::*;
+pub use prose3d::*;
 
 use super::definition::VariationDef;
 
@@ -1083,4 +1085,5 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &SYM_BG5,
     &SYM_BG6,
     &SYM_BG7,
+    &PROSE3D,
 ];
