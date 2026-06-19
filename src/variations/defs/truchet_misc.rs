@@ -49,7 +49,7 @@ pub static TRUCHET: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Truchet",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsTransform, Feature::WritesColor],
     parameters: &[
         param!("extended", "Extended", bool, false, "When on, use the slow iterated-LCG hash for tile-type selection (more cells produce distinct patterns). When off, the fast single-step LCG."),

@@ -571,6 +571,8 @@ fn parse_xform_element(
 
     // Storage for variation parameters (applied after all attributes parsed)
     let mut pending_params: Vec<(String, String, f32)> = Vec::new(); // (var_name, param_name, value)
+    // fx_priority overrides, applied after all variations are known.
+    let mut pending_priorities: Vec<(String, i32)> = Vec::new();
 
     for attr in element.attributes() {
         let attr = attr?;
@@ -660,6 +662,13 @@ fn parse_xform_element(
                 // JWF book-keeping for subflame sequences — not modeled.
             }
             _ => {
+                // JWildfire per-variation phase override `<var>_fx_priority`.
+                // Intercept before the variation-param path so it isn't
+                // mistaken for a parameter named "fx_priority".
+                if let Some(pair) = parse_fx_priority(key, value, &registry) {
+                    pending_priorities.push(pair);
+                    continue;
+                }
                 // Try to parse as variation or variation parameter
                 if let Ok(parsed_value) = value.parse::<f32>() {
                     // First, try direct variation lookup (e.g., "julian", "spherical")
@@ -698,6 +707,8 @@ fn parse_xform_element(
         let value = variation_param_from_xml(&var_name, &param_name, value);
         transform.set_variation_param(&var_name, &param_name, value);
     }
+    // Apply fx_priority overrides (sparse; needs the full variation set).
+    apply_fx_priorities(&mut transform, pending_priorities, &registry);
 
     // Recurse into the JWF subflame_wf_flame payload, if any. We
     // require `subflame_wf` to be active on this xform so we don't
@@ -740,6 +751,8 @@ fn parse_finalxform_element(
 
     // Storage for variation parameters (applied after all attributes parsed)
     let mut pending_params: Vec<(String, String, f32)> = Vec::new();
+    // fx_priority overrides, applied after all variations are known.
+    let mut pending_priorities: Vec<(String, i32)> = Vec::new();
 
     for attr in element.attributes() {
         let attr = attr?;
@@ -795,6 +808,11 @@ fn parse_finalxform_element(
             "yzPost"  => parse_plane_coefs(value, &mut transform.yz_post_coefs),
             "zxPost"  => parse_plane_coefs(value, &mut transform.zx_post_coefs),
             _ => {
+                // JWildfire per-variation phase override `<var>_fx_priority`.
+                if let Some(pair) = parse_fx_priority(key, value, &registry) {
+                    pending_priorities.push(pair);
+                    continue;
+                }
                 // Try to parse as variation or variation parameter
                 if let Ok(parsed_value) = value.parse::<f32>() {
                     // First, try direct variation lookup
@@ -824,8 +842,51 @@ fn parse_finalxform_element(
         let value = variation_param_from_xml(&var_name, &param_name, value);
         transform.set_variation_param(&var_name, &param_name, value);
     }
+    // Apply fx_priority overrides (sparse; needs the full variation set).
+    apply_fx_priorities(&mut transform, pending_priorities, &registry);
 
     Ok((transform, color_index))
+}
+
+/// Parse a JWildfire `<var>_fx_priority` attribute. Returns
+/// `Some((canonical_name, priority))` when `key` is an fx_priority
+/// attribute for a known variation and `value` parses as a number, else
+/// `None`. The `i32` is the raw JWF priority; the caller stores it
+/// sparsely (only when it actually overrides the variation's natural
+/// phase) after all variations on the xform are known.
+fn parse_fx_priority(
+    key: &str,
+    value: &str,
+    registry: &crate::variations::VariationRegistry,
+) -> Option<(String, i32)> {
+    let var_key = key.strip_suffix("_fx_priority")?;
+    let info = registry.get(var_key)?;
+    // JWF writes integers ("-1", "0", "2"); tolerate a stray ".0".
+    let prio = value.parse::<f32>().ok()?.round() as i32;
+    Some((info.name.clone(), prio))
+}
+
+/// Store collected fx_priority overrides on `transform`, keeping only the
+/// ones that (a) belong to a variation actually active on this xform and
+/// (b) differ from that variation def's natural-phase priority — the
+/// sparse-override model (see `Transform::variation_priorities`).
+fn apply_fx_priorities(
+    transform: &mut Transform,
+    pending: Vec<(String, i32)>,
+    registry: &crate::variations::VariationRegistry,
+) {
+    for (name, prio) in pending {
+        if !transform.variations.contains_key(&name) {
+            continue; // priority for an inactive variation — ignore
+        }
+        let natural = registry
+            .get(&name)
+            .map(|i| i.phase.natural_priority())
+            .unwrap_or(0);
+        if prio != natural {
+            transform.variation_priorities.insert(name, prio);
+        }
+    }
 }
 
 /// Per-parameter unit conversion: .flame XML representation → our
@@ -1350,6 +1411,19 @@ fn write_xform(
         out.push_str(&format!(" {}=\"{}\"", name, fmt_f32(weight)));
     }
 
+    // Per-variation phase overrides (JWildfire `<var>_fx_priority`).
+    // Sparse: `variation_priorities` only holds genuine overrides, and
+    // we emit only those whose variation is active on this xform. JWF
+    // writes the integer priority; Apophysis ignores unknown attributes.
+    let mut priority_names: Vec<&String> = xform.variation_priorities.keys().collect();
+    priority_names.sort();
+    for name in &priority_names {
+        if !xform.variations.contains_key(*name) {
+            continue; // override for a removed variation — don't emit
+        }
+        out.push_str(&format!(" {}_fx_priority=\"{}\"", name, xform.variation_priorities[*name]));
+    }
+
     // Coefs: importer parses "a c b d e f" (column-major), so we
     // serialize in that exact order.
     out.push_str(&format!(
@@ -1542,6 +1616,58 @@ mod tests {
         assert_eq!(xform.d, 0.34284);      // parts[3]
         assert_eq!(xform.e, 1.5);          // parts[4]
         assert_eq!(xform.f, 2.5);          // parts[5]
+    }
+
+    #[test]
+    fn test_fx_priority_import_sparse_override() {
+        // combimirror is an `Any` variation (natural priority 0); a stored
+        // fx_priority="-1" is a genuine override and must be kept.
+        // pre_blur is natively Pre (natural -1); fx_priority="-1" equals its
+        // natural phase, so it is NOT stored (sparse model). The other
+        // variations at priority 0 store nothing.
+        let xml = r#"
+<flames name="test">
+<flame name="FX Priority Test" size="800 600" center="0 0" scale="200">
+   <xform weight="1" color="0.5" linear="1" combimirror="0.5" combimirror_fx_priority="-1"
+          pre_blur="2" pre_blur_fx_priority="-1" bubble="0.3" bubble_fx_priority="0"
+          coefs="1 0 0 1 0 0" opacity="1" />
+</flame>
+</flames>
+        "#;
+
+        let config = &parse_flame_xml(xml).expect("parse")[0];
+        let xform = &config.flame.transforms[0];
+
+        // Only the genuine override survives.
+        assert_eq!(xform.variation_priorities.get("combimirror"), Some(&-1));
+        assert_eq!(xform.variation_priorities.get("pre_blur"), None,
+            "pre_blur fx_priority equals its natural phase — not an override");
+        assert_eq!(xform.variation_priorities.get("bubble"), None,
+            "priority 0 on a normal-default var is not an override");
+        assert_eq!(xform.variation_priorities.len(), 1);
+    }
+
+    #[test]
+    fn test_fx_priority_roundtrip() {
+        // An override survives export → re-import unchanged.
+        let xml = r#"
+<flames name="test">
+<flame name="RT" size="800 600" center="0 0" scale="200">
+   <xform weight="1" color="0.5" combimirror="0.5" combimirror_fx_priority="-1"
+          coefs="1 0 0 1 0 0" opacity="1" />
+</flame>
+</flames>
+        "#;
+        let config = parse_flame_xml(xml).expect("parse").remove(0);
+        let exported = write_flame_xml(&config);
+        assert!(exported.contains("combimirror_fx_priority=\"-1\""),
+            "export must write the override; got:\n{}", exported);
+
+        let reimported = &parse_flame_xml(&exported).expect("re-parse")[0];
+        assert_eq!(
+            reimported.flame.transforms[0].variation_priorities.get("combimirror"),
+            Some(&-1)
+        );
     }
 
     #[test]

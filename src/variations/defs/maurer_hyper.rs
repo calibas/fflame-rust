@@ -67,7 +67,7 @@ pub static MAURER_ROSE: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Maurer Rose",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("kn", "K Numerator", unlimited_float, 2.0, -50.0, 50.0, "K numerator — the rose's petal ratio is `kn/kd`."),
@@ -312,7 +312,7 @@ pub static HYPERCROP: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Hypercrop",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::AlwaysZ],
     parameters: &[
         param!("n", "N", int, 4.0, 3.0, 50.0, "Number of n-gon sides (≥ 3)."),

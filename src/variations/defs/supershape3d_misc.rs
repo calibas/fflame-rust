@@ -47,7 +47,7 @@ pub static SUPERSHAPE_3D: VariationDef = VariationDef {
     aliases: &[],
     display_name: "SuperShape 3D",
     category: VariationCategory::Full3D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::AlwaysZ],
     parameters: &[
         param!("rho", "Rho", unlimited_float, 9.9, -100.0, 100.0, "Angular range (radians) for uniform random sampling of the ρ axis. Larger values sweep through more of the shape per iteration; default 9.9 (~3π)."),

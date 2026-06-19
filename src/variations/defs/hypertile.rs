@@ -78,7 +78,7 @@ pub static HYPERTILE: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Hypertile",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("p", "P", int, 3.0, 3.0, 50.0, "First Schläfli symbol — number of sides per tile (3 = triangle, 4 = square, 5 = pentagon, etc.)."),
@@ -169,7 +169,7 @@ pub static HYPERTILE1: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Hypertile 1",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("p", "P", int, 3.0, 3.0, 50.0, "First Schläfli symbol — number of sides per tile (3 = triangle, 4 = square, 5 = pentagon, etc.)."),
@@ -279,7 +279,7 @@ pub static HYPERTILE2: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Hypertile 2",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("p", "P", int, 3.0, 3.0, 50.0, "First Schläfli symbol — number of sides per tile (3 = triangle, 4 = square, 5 = pentagon, etc.)."),
@@ -383,7 +383,7 @@ pub static HYPERTILE3D: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Hypertile 3D",
     category: VariationCategory::Full3D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::AlwaysZ],
     parameters: &[
         param!("p", "P", int, 3.0, 3.0, 50.0, "First Schläfli symbol — number of sides per tile (3 = triangle, 4 = square, 5 = pentagon, etc.)."),
@@ -499,7 +499,7 @@ pub static HYPERTILE3D1: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Hypertile 3D 1",
     category: VariationCategory::Full3D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::AlwaysZ],
     parameters: &[
         param!("p", "P", int, 3.0, 3.0, 50.0, "First Schläfli symbol — number of sides per tile (3 = triangle, 4 = square, 5 = pentagon, etc.)."),
@@ -619,7 +619,7 @@ pub static HYPERTILE3D2: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Hypertile 3D 2",
     category: VariationCategory::Full3D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::AlwaysZ],
     parameters: &[
         param!("p", "P", int, 3.0, 3.0, 50.0, "First Schläfli symbol — number of sides per tile (3 = triangle, 4 = square, 5 = pentagon, etc.)."),

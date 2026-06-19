@@ -338,6 +338,17 @@ pub struct Transform {
     /// Example: "julian.power" -> 3.0
     pub variation_params: HashMap<String, f32>,
 
+    /// Per-variation phase override (JWildfire `<var>_fx_priority`), keyed
+    /// by canonical variation name — same key space as `variations`. The
+    /// `i32` is the raw JWF priority (`<0` pre, `0` normal, `>0` post;
+    /// `±2` = the prepost-"inv" family); dispatch buckets by sign at
+    /// shader-build time. **Sparse override:** an entry exists only when
+    /// the value differs from the variation def's natural-phase priority
+    /// (`Pre`→−1 / `Normal`→0 / `Post`→1), and is honored only for
+    /// variations whose def phase is `VariationPhase::Any`. Empty for
+    /// nearly every transform. See `docs/projects/jwf-features.md`.
+    pub variation_priorities: HashMap<String, i32>,
+
     /// Color palette position (0.0 to 1.0)
     /// Represents position in the palette for color coordinate evolution.
     /// NOTE: Ignored for final transforms.
@@ -447,6 +458,7 @@ impl Default for Transform {
             weight: 1.0,
             variations: HashMap::new(),
             variation_params: HashMap::new(),
+            variation_priorities: HashMap::new(),
             color: 0.5,        // Mid-palette position (neutral default)
             color_speed: 0.0,  // Apophysis default: 50/50 blend
             opacity: 1.0,      // Apophysis default: always visible
@@ -1022,6 +1034,7 @@ impl Serialize for Transform {
         // (HashMap iteration order is random, breaking content-addressable caching)
         let variations_sorted: BTreeMap<_, _> = self.variations.iter().collect();
         let params_sorted: BTreeMap<_, _> = self.variation_params.iter().collect();
+        let priorities_sorted: BTreeMap<_, _> = self.variation_priorities.iter().collect();
 
         // Count fields: 13 base + 1 if direct_color != 0 + up to 8 post-affine
         // + up to 4 plane-affine arrays (yz/zx pre and post, only when
@@ -1034,6 +1047,7 @@ impl Serialize for Transform {
         let has_zx_post = !self.is_zx_post_identity();
         let has_linked = !self.linked_attachments.is_empty();
         let has_final = !self.final_attachments.is_empty();
+        let has_priorities = !self.variation_priorities.is_empty();
         let field_count = 13
             + if has_direct_color { 1 } else { 0 }
             + if has_post { 8 } else { 0 }
@@ -1042,7 +1056,8 @@ impl Serialize for Transform {
             + if has_yz_post { 1 } else { 0 }
             + if has_zx_post { 1 } else { 0 }
             + if has_linked { 1 } else { 0 }
-            + if has_final { 1 } else { 0 };
+            + if has_final { 1 } else { 0 }
+            + if has_priorities { 1 } else { 0 };
 
         let mut state = serializer.serialize_struct("Transform", field_count)?;
         state.serialize_field("a", &self.a)?;
@@ -1055,6 +1070,10 @@ impl Serialize for Transform {
         state.serialize_field("weight", &self.weight)?;
         state.serialize_field("variations", &variations_sorted)?;
         state.serialize_field("variation_params", &params_sorted)?;
+        // Only serialize fx_priority overrides when present (keeps .fflame clean)
+        if has_priorities {
+            state.serialize_field("variation_priorities", &priorities_sorted)?;
+        }
         state.serialize_field("color", &self.color)?;
         state.serialize_field("color_speed", &self.color_speed)?;
         state.serialize_field("opacity", &self.opacity)?;
@@ -1108,7 +1127,8 @@ impl<'de> Deserialize<'de> for Transform {
         #[derive(Deserialize)]
         #[serde(field_identifier, rename_all = "snake_case")]
         enum Field {
-            A, B, C, D, E, F, G, Weight, Variations, VariationParams, Color, ColorSpeed, Opacity,
+            A, B, C, D, E, F, G, Weight, Variations, VariationParams, VariationPriorities,
+            Color, ColorSpeed, Opacity,
             DirectColor,
             PostAffineEnabled, PostA, PostB, PostC, PostD, PostE, PostF, PostG,
             YzCoefs, ZxCoefs, YzPostCoefs, ZxPostCoefs,
@@ -1138,6 +1158,7 @@ impl<'de> Deserialize<'de> for Transform {
                 let mut weight = None;
                 let mut variations = None;
                 let mut variation_params = None;
+                let mut variation_priorities: Option<HashMap<String, i32>> = None;
                 let mut color = None;
                 let mut color_speed = None;
                 let mut opacity = None;
@@ -1216,6 +1237,9 @@ impl<'de> Deserialize<'de> for Transform {
                         Field::VariationParams => {
                             variation_params = Some(map.next_value()?);
                         }
+                        Field::VariationPriorities => {
+                            variation_priorities = Some(map.next_value()?);
+                        }
                         Field::Color => {
                             // Handle both old format [f32; 3] and new format f32
                             let value: serde_json::Value = map.next_value()?;
@@ -1270,6 +1294,7 @@ impl<'de> Deserialize<'de> for Transform {
                     weight: weight.ok_or_else(|| de::Error::missing_field("weight"))?,
                     variations: variations.ok_or_else(|| de::Error::missing_field("variations"))?,
                     variation_params: variation_params.unwrap_or_else(HashMap::new), // Default to empty if missing
+                    variation_priorities: variation_priorities.unwrap_or_default(), // Absent in old files
                     color: color.ok_or_else(|| de::Error::missing_field("color"))?,
                     color_speed: color_speed.unwrap_or(0.0), // Default to 0.0 for backward compatibility
                     opacity: opacity.unwrap_or(1.0), // Default to 1.0 for backward compatibility
@@ -1298,7 +1323,7 @@ impl<'de> Deserialize<'de> for Transform {
             }
         }
 
-        const FIELDS: &[&str] = &["a", "b", "c", "d", "e", "f", "g", "weight", "variations", "variation_params", "color", "color_speed", "opacity", "direct_color", "post_affine_enabled", "post_a", "post_b", "post_c", "post_d", "post_e", "post_f", "post_g", "yz_coefs", "zx_coefs", "yz_post_coefs", "zx_post_coefs", "linked_attachments", "final_attachments"];
+        const FIELDS: &[&str] = &["a", "b", "c", "d", "e", "f", "g", "weight", "variations", "variation_params", "variation_priorities", "color", "color_speed", "opacity", "direct_color", "post_affine_enabled", "post_a", "post_b", "post_c", "post_d", "post_e", "post_f", "post_g", "yz_coefs", "zx_coefs", "yz_post_coefs", "zx_post_coefs", "linked_attachments", "final_attachments"];
         deserializer.deserialize_struct("Transform", FIELDS, TransformVisitor)
     }
 }

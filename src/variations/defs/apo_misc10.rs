@@ -54,7 +54,7 @@ pub static MASK: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Mask",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("xshift", "X shift", unlimited_float, 0.0, -10.0, 10.0, "Additive offset on X before the sin term."),
@@ -125,7 +125,7 @@ pub static OVOID3D: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Ovoid 3D",
     category: VariationCategory::Full3D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::AlwaysZ],
     parameters: &[
         param!("x", "X scale", unlimited_float, 1.0, -10.0, 10.0, "X-axis scale on the inverted output."),
@@ -184,7 +184,7 @@ pub static MURL2: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Murl 2",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsTransform],
     parameters: &[
         param!("c", "C", unlimited_float, 0.1, -10.0, 10.0, "Möbius coefficient — controls the strength of the Möbius distortion."),
@@ -293,7 +293,7 @@ pub static MINKQM: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Mink QM",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("a", "A", unlimited_float, 1.0, -10.0, 10.0, "Initial denominator `q` of the SB-tree recursion."),

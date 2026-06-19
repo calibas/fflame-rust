@@ -47,7 +47,7 @@ pub static CIRCLE_RAND: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Circle Rand",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("Sc", "Scale", unlimited_float, 1.0, -10.0, 10.0, "Cell size — each cell occupies a `2·Sc × 2·Sc` region."),
@@ -155,7 +155,7 @@ pub static CIRCLE_TRANS1: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Circle Trans 1",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("Sc", "Scale", unlimited_float, 1.0, -10.0, 10.0, "Cell size — each cell occupies a `2·Sc × 2·Sc` region."),

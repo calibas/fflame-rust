@@ -58,7 +58,7 @@ pub static DISC3: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Disc 3",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("a", "A", unlimited_float, 1.0, -10.0, 10.0, "Sin amplitude scale on the X output."),
@@ -133,7 +133,7 @@ pub static PROJECTIVE: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Projective",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("a", "A", unlimited_float, 0.0, -10.0, 10.0, "Denominator X coefficient."),
@@ -221,7 +221,7 @@ pub static TQMIRROR: VariationDef = VariationDef {
     aliases: &[],
     display_name: "TQ Mirror",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsTransform],
     parameters: &[
         param!("a", "A", unlimited_float, 1.0, -10.0, 10.0, "Y threshold for the central-region diagonal-mirror branch."),
@@ -337,7 +337,7 @@ pub static INTERSECTION: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Intersection",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::NeedsTransform],
     parameters: &[
         param!("xwidth", "X Width", unlimited_float, 5.0, -50.0, 50.0, "Row-branch X-shift magnitude (multiplied by `log(rand)`)."),

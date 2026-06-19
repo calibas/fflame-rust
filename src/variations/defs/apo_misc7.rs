@@ -67,7 +67,7 @@ pub static ASTERIA: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Asteria",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::NeedsTransform],
     parameters: &[
         param!("alpha", "Alpha", unlimited_float, 0.0, -10.0, 10.0, "Rotation angle (× π) applied before and inverted after the asteria branch's square-root bend."),
@@ -193,7 +193,7 @@ pub static ESTIQ: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Estiq",
     category: VariationCategory::Full3D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::AlwaysZ],
     parameters: &[],
     init_param_count: 0,
@@ -247,7 +247,7 @@ pub static FDISC: VariationDef = VariationDef {
     aliases: &[],
     display_name: "F-Disc",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("ashift", "A shift", unlimited_float, 1.0, -10.0, 10.0, "Radial denominator offset added to `sqrt(x² + y²)`."),
@@ -341,7 +341,7 @@ pub static BTRANSFORM: VariationDef = VariationDef {
     aliases: &[],
     display_name: "B-Transform",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("rotate", "Rotate", unlimited_float, 0.0, -10.0, 10.0, "Additive rotation on the bipolar σ coordinate."),
@@ -449,7 +449,7 @@ pub static NPOLAR: VariationDef = VariationDef {
     aliases: &[],
     display_name: "N-Polar",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::NeedsTransform],
     parameters: &[
         param!("parity", "Parity", int, 0.0, -100.0, 100.0, "Parity selector. `|parity| mod 2` chooses the branch (even = log-polar mid-step, odd = cartesian); the value itself also flips the sign of the even-branch's radial magnitude."),

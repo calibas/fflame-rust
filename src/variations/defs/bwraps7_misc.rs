@@ -37,7 +37,7 @@ pub static BWRAPS7: VariationDef = VariationDef {
     aliases: &[],
     display_name: "BWraps 7",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("cellsize", "Cell Size", unlimited_float, 1.0, -10.0, 10.0, "Grid cell size."),

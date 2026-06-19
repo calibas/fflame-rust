@@ -50,7 +50,7 @@ pub static SINEBLUR: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Sine Blur",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("power", "Power", unlimited_float, 1.0, 0.0, 10.0, "Density power. 1.0 gives uniform-on-disc; higher values concentrate density near the edge."),
@@ -118,7 +118,7 @@ pub static STARBLUR: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Star Blur",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("power", "Power", int, 5.0, 2.0, 50.0, "Number of star points."),
@@ -215,7 +215,7 @@ pub static R_CIRCLEBLUR: VariationDef = VariationDef {
     aliases: &[],
     display_name: "R Circle Blur",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("n", "N", unlimited_float, 1.0, 0.1, 50.0, "Band width — radius is truncated modulo this value."),

@@ -36,7 +36,7 @@ pub static PLUSRECIP: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Plus Recip",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("ar", "A Real", unlimited_float, 4.0, -10.0, 10.0, "Real part of the complex constant `a` in `k = z + sqrt(z² - a)`. Controls the location of the branch cut."),

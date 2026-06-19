@@ -45,7 +45,7 @@ pub static JAC_SN: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Jac SN",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("jac_sn_k", "K", unlimited_float, 0.5, -1.0, 1.0, "Elliptic modulus k. Ranges over [−1, 1]; 0 reduces to circular trig, ±1 reduces to hyperbolic."),
@@ -250,7 +250,7 @@ pub static JAC_CN: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Jac CN",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("jac_cn_k", "K", unlimited_float, 0.5, -1.0, 1.0, "Elliptic modulus k. Ranges over [−1, 1]; 0 reduces to circular trig, ±1 reduces to hyperbolic."),
@@ -455,7 +455,7 @@ pub static JAC_DN: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Jac DN",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("jac_dn_k", "K", unlimited_float, 0.5, -1.0, 1.0, "Elliptic modulus k. Ranges over [−1, 1]; 0 reduces to circular trig, ±1 reduces to hyperbolic."),

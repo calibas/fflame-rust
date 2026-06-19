@@ -50,7 +50,7 @@ pub static DC_HEXES_WF: VariationDef = VariationDef {
     aliases: &[],
     display_name: "DC Hexes WF",
     category: VariationCategory::Plugin,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::WritesColor],
     parameters: &[
         param!("cellsize", "Cell Size", unlimited_float, 1.0, 0.0, 10.0, "Hex cell size. 0 disables the spatial warp entirely (Z still passes through)."),

@@ -51,7 +51,7 @@ pub static LAZYJESS: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Lazy Jess",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsTransform],
     parameters: &[
         param!("n", "N", int, 4.0, 2.0, 50.0, "Polygon vertex count. The n = 2 special case uses a line-segment test instead of a true polygon."),
@@ -251,7 +251,7 @@ pub static LAZYTRAVIS: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Lazy Travis",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsTransform],
     parameters: &[
         param!("spin_in", "Spin In", unlimited_float, 1.0, -10.0, 10.0, "Inner-square angular offset along the perimeter (multiplied by 4 internally; one unit = one full lap of the square)."),

@@ -51,7 +51,7 @@ pub static MOBIUS_STRIP: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Mobius Strip",
     category: VariationCategory::Full3D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsTransform, Feature::AlwaysZ],
     parameters: &[
         param!("radius", "Radius", unlimited_float, 1.0, -10.0, 10.0, "Strip's central-circle radius."),
@@ -258,7 +258,7 @@ pub static CIRCLE_LINEAR: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Circle Linear",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("Sc", "Scale", unlimited_float, 1.0, -10.0, 10.0, "Cell size — each cell occupies a `2·Sc × 2·Sc` region."),

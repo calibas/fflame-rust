@@ -44,7 +44,7 @@ pub static HO: VariationDef = VariationDef {
     aliases: &[],
     display_name: "HO",
     category: VariationCategory::Full3D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::AlwaysZ],
     parameters: &[
         param!("xpow", "X Power", unlimited_float, 3.0, -10.0, 10.0, "Exponent applied to `cos(x)·cos(y)` in the X output."),
@@ -128,7 +128,7 @@ pub static CHUNK: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Chunk",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsTransform],
     parameters: &[
         param!("a", "A", unlimited_float, 1.0, -10.0, 10.0, "x² coefficient."),
@@ -217,7 +217,7 @@ pub static PTRANSFORM: VariationDef = VariationDef {
     aliases: &[],
     display_name: "P Transform",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("rotate", "Rotate", unlimited_float, 0.0, -10.0, 10.0, "Angular rotation added to θ, in radians."),
@@ -285,7 +285,7 @@ pub static RATIONAL3: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Rational 3",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("a", "A", unlimited_float, 0.5, -10.0, 10.0, "Numerator coefficient on the `x³ − 3xy²` term."),
@@ -388,8 +388,8 @@ pub static TILE_REVERSE: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Tile Reverse",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
-    features: &[Feature::NeedsRng],
+    phase: VariationPhase::Any,
+    features: &[Feature::NeedsRng, Feature::Replace],
     parameters: &[
         param!("space", "Space", unlimited_float, 1.0, -10.0, 10.0, "Tile offset along the active axis."),
         param!("reversal", "Reversal", unlimited_float, 1.0, -10.0, 10.0, "When equal to 1.0, the active axis is also mirrored. Any other value passes through unchanged."),
@@ -457,7 +457,7 @@ pub static ORTHO: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Ortho",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("in_p", "In", unlimited_float, 0.0, -10.0, 10.0, "Branch-selector multiplier for the inside-disc Möbius transform."),

@@ -46,7 +46,7 @@ pub static DC_PERLIN: VariationDef = VariationDef {
     aliases: &[],
     display_name: "DC Perlin",
     category: VariationCategory::Plugin,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::WritesColor],
     init_param_count: 0,
     wgsl_init: None,

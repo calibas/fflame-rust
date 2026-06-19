@@ -48,8 +48,8 @@ pub static ICONATTRACTOR_JS: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Icon Attractor (JS)",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
-    features: &[Feature::WritesColor],
+    phase: VariationPhase::Any,
+    features: &[Feature::WritesColor, Feature::Replace],
     parameters: &[
         param!("preset_id", "Preset ID", int, 0.0, 0.0, 16.0, "Which Field & Golubitsky preset to use (0-16). Each corresponds to a different symmetric icon attractor shape from the original book."),
         param!("centerx", "Center X", unlimited_float, 0.0, -10.0, 10.0, "Color register X center — offsets the squared-distance color formula. Visible color requires the transform's Direct Color slider > 0."),

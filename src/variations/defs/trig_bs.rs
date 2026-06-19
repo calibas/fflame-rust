@@ -39,7 +39,7 @@ pub static SIN2_BS: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Sin2 BS",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         VariationParamDef { name: "x1", display_name: "X1", param_type: ParamType::UnlimitedFloat,
@@ -92,7 +92,7 @@ pub static COS2_BS: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Cos2 BS",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         VariationParamDef { name: "x1", display_name: "X1", param_type: ParamType::UnlimitedFloat,
@@ -148,7 +148,7 @@ pub static TAN2_BS: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Tan2 BS",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         VariationParamDef { name: "x1", display_name: "X1", param_type: ParamType::UnlimitedFloat,
@@ -205,7 +205,7 @@ pub static SEC2_BS: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Sec2 BS",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         VariationParamDef { name: "x1", display_name: "X1", param_type: ParamType::UnlimitedFloat,
@@ -262,7 +262,7 @@ pub static CSC2_BS: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Csc2 BS",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         VariationParamDef { name: "x1", display_name: "X1", param_type: ParamType::UnlimitedFloat,
@@ -321,7 +321,7 @@ pub static COT2_BS: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Cot2 BS",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         VariationParamDef { name: "x1", display_name: "X1", param_type: ParamType::UnlimitedFloat,
@@ -381,7 +381,7 @@ pub static SINH2_BS: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Sinh2 BS",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         VariationParamDef { name: "x1", display_name: "X1", param_type: ParamType::UnlimitedFloat,
@@ -434,7 +434,7 @@ pub static COSH2_BS: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Cosh2 BS",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         VariationParamDef { name: "x1", display_name: "X1", param_type: ParamType::UnlimitedFloat,
@@ -489,7 +489,7 @@ pub static TANH2_BS: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Tanh2 BS",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         VariationParamDef { name: "x1", display_name: "X1", param_type: ParamType::UnlimitedFloat,
@@ -548,7 +548,7 @@ pub static COTH2_BS: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Coth2 BS",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         VariationParamDef { name: "x1", display_name: "X1", param_type: ParamType::UnlimitedFloat,
@@ -610,7 +610,7 @@ pub static SECH2_BS: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Sech2 BS",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         VariationParamDef { name: "x1", display_name: "X1", param_type: ParamType::UnlimitedFloat,
@@ -667,7 +667,7 @@ pub static CSCH2_BS: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Csch2 BS",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         VariationParamDef { name: "x1", display_name: "X1", param_type: ParamType::UnlimitedFloat,
@@ -728,7 +728,7 @@ pub static EXP2_BS: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Exp2 BS",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         VariationParamDef { name: "x1", display_name: "X1", param_type: ParamType::UnlimitedFloat,

@@ -245,6 +245,9 @@ fn transform_from_api(resp: &TransformResponse) -> Transform {
         direct_color: resp.direct_color,
         variations: resp.variations.clone(),
         variation_params: resp.variation_params.clone(),
+        // fx_priority overrides aren't carried by the API contract yet;
+        // default to empty (every variation runs in its natural phase).
+        variation_priorities: std::collections::HashMap::new(),
         post_affine_enabled: resp.post_affine_enabled,
         post_a: resp.post_a,
         post_b: resp.post_b,

@@ -56,7 +56,7 @@ pub static CPOW2: VariationDef = VariationDef {
     aliases: &[],
     display_name: "CPow2",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         VariationParamDef { name: "r", display_name: "R", param_type: ParamType::UnlimitedFloat,
@@ -182,7 +182,7 @@ pub static CPOW3: VariationDef = VariationDef {
     aliases: &[],
     display_name: "CPow3",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         VariationParamDef { name: "r", display_name: "R", param_type: ParamType::UnlimitedFloat,
@@ -295,7 +295,7 @@ pub static DISC2: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Disc2",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         VariationParamDef { name: "rot", display_name: "Rot", param_type: ParamType::UnlimitedFloat,

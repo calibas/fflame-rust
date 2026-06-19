@@ -59,7 +59,7 @@ pub static MOBIUSN: VariationDef = VariationDef {
     aliases: &[],
     display_name: "MobiusN",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("re_a", "Re A", unlimited_float, 1.0, -10.0, 10.0, "Real part of complex coefficient A (numerator multiplier)."),
@@ -188,7 +188,7 @@ pub static MOBIQ: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Mobiq",
     category: VariationCategory::Full3D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::AlwaysZ],
     parameters: &[
         param!("qat", "qa.t", unlimited_float, 1.0, -10.0, 10.0, "T (scalar) component of quaternion A (numerator multiplier)."),

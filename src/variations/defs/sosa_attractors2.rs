@@ -49,7 +49,7 @@ pub static THREEPOINT_JS: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Three Point IFS (JS)",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[],
     init_param_count: 0,
@@ -206,7 +206,7 @@ pub static WOGGLE_JS: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Woggle (JS)",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("m", "M", int, 2.0, 2.0, 12.0, "Number of tiles (2-12). Each iteration samples one of `m` evenly-spaced angles."),

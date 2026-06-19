@@ -36,7 +36,7 @@ pub static GLYNNLISSA: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Glynn Lissa",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("radius", "Radius", unlimited_float, 1.0, -10.0, 10.0, "Outer cutoff radius. Points inside use the inner curve; outside use the Glynn power-warp."),

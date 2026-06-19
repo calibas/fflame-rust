@@ -56,7 +56,7 @@ pub static BSPLIT: VariationDef = VariationDef {
     aliases: &[],
     display_name: "BSplit",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("x", "X shift", unlimited_float, 0.0, -10.0, 10.0, "X-axis shift added before the trig terms."),
@@ -114,7 +114,7 @@ pub static CYLINDER2: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Cylinder 2",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[],
     init_param_count: 0,
@@ -160,7 +160,7 @@ pub static ECLIPSE: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Eclipse",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsTransform],
     parameters: &[
         param!("shift", "Shift", float, 0.0, -2.0, 2.0, "Horizontal shift applied to points inside the eclipse region, scaled by the variation's weight."),
@@ -225,7 +225,7 @@ pub static LOZI: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Lozi",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("a", "A", unlimited_float, 0.5, -10.0, 10.0, "Coefficient on `|x|` — controls the fold strength."),
@@ -266,7 +266,7 @@ pub static PULSE: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Pulse",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[],
     parameters: &[
         param!("freqx", "Freq X", unlimited_float, 2.0, -50.0, 50.0, "X-axis sine frequency."),
@@ -328,7 +328,7 @@ pub static HYPERSHIFT: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Hypershift",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    phase: VariationPhase::Any,
     features: &[Feature::NeedsTransform],
     parameters: &[
         param!("shift", "Shift", unlimited_float, 2.0, -10.0, 10.0, "Horizontal shift applied after the first inversion. Also scales the overall transformation strength via `1 − shift²`."),
