@@ -94,6 +94,9 @@ impl ShaderCache {
             attachment_cap: flame.attachment_cap() as u32,
             inlined_transforms: None,
             cumulative_weights: None,
+            // Bootstrap constants before config load; real fx_priority
+            // overrides are filled in by `constants_from_config`.
+            variation_priorities: std::collections::BTreeMap::new(),
         };
         let render_mode = flame.render_mode;
 
@@ -210,6 +213,16 @@ impl ShaderCache {
             // Interactive mode - no inlining to avoid constant shader rebuilds
             // Ensure at least 1 transform to prevent shader overflow (NUM_TRANSFORMS - 1u)
             let num_transforms = config.flame.transforms.len().max(1) as u32;
+            // fx_priority phase overrides still need resolving even in the
+            // non-inlined path — they're baked into the per-flame dispatch
+            // (the interactive shader can't read per-transform priorities at
+            // runtime). Needs the same local index map the buffer populator
+            // uses so var indices line up with `xform.variations[idx]`.
+            let registry = crate::variations::global_registry();
+            let id_map = crate::scene::transforms::compute_local_index_map(
+                config.flame.extract_active_variations().into_keys(),
+                &registry,
+            );
             ShaderConstants {
                 num_transforms,
                 color_mode: config.color_mode as u32,
@@ -221,6 +234,9 @@ impl ShaderCache {
                 attachment_cap: config.flame.attachment_cap() as u32,
                 inlined_transforms: None,
                 cumulative_weights: None,
+                variation_priorities: crate::shader_builder_v2::collect_phase_overrides(
+                    &config.flame, &registry, &id_map,
+                ),
             }
         }
     }

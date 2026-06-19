@@ -313,6 +313,21 @@ pub struct ShaderConstants {
     /// Precomputed cumulative weights for transform selection
     /// Eliminates the weight accumulation loops in select_transform
     pub cumulative_weights: Option<Vec<f32>>,
+
+    /// Per-variation `fx_priority` phase overrides for `Any` variations
+    /// (JWildfire per-transform phase assignment). Outer key = local
+    /// variation index (matches `xform.variations[idx]`); inner map =
+    /// transform index → raw JWF priority. Only `Any`-phase variations
+    /// carrying a genuine override on at least one transform appear here
+    /// (the sparse model — see
+    /// `Transform::variation_priorities`). The shader builder resolves
+    /// each `Any` variation's per-transform bucket from this and bakes
+    /// the placement into the dispatch; because it's part of the
+    /// `PartialEq` derive, editing a priority invalidates the cached
+    /// shader and forces a rebuild (priority edits are rare, unlike
+    /// weight drags, so a rebuild is acceptable). Empty for the vast
+    /// majority of flames. See `docs/projects/jwf-features.md`.
+    pub variation_priorities: std::collections::BTreeMap<u32, std::collections::BTreeMap<u32, i32>>,
 }
 
 impl Default for ShaderConstants {
@@ -327,8 +342,60 @@ impl Default for ShaderConstants {
             attachment_cap: 1,
             inlined_transforms: None,
             cumulative_weights: None,
+            variation_priorities: std::collections::BTreeMap::new(),
         }
     }
+}
+
+/// Collect per-transform `fx_priority` overrides into the
+/// `local_var_idx → (transform_idx → priority)` shape `ShaderConstants`
+/// carries. Only variations whose definition phase is
+/// [`VariationPhase::Any`] are honored — `Pre`/`Normal`/`Post` stay
+/// locked to their phase and their stored priority (if any) is ignored.
+/// `id_map` is the per-flame local index map (variation name → slot).
+pub fn collect_phase_overrides(
+    flame: &crate::scene::transforms::Flame,
+    registry: &crate::variations::VariationRegistry,
+    id_map: &std::collections::HashMap<String, u32>,
+) -> std::collections::BTreeMap<u32, std::collections::BTreeMap<u32, i32>> {
+    use crate::variations::VariationPhase;
+    let mut out: std::collections::BTreeMap<u32, std::collections::BTreeMap<u32, i32>> =
+        std::collections::BTreeMap::new();
+    for (t_idx, xform) in flame.transforms.iter().enumerate() {
+        for (name, &prio) in &xform.variation_priorities {
+            let Some(info) = registry.get(name) else { continue };
+            if info.phase != VariationPhase::Any {
+                continue; // only Any variations honor fx_priority
+            }
+            let Some(&local) = id_map.get(name) else { continue };
+            out.entry(local).or_default().insert(t_idx as u32, prio);
+        }
+    }
+    out
+}
+
+/// One variation's placement in a single phase bucket of the per-flame
+/// dispatch. A non-`Any` variation produces exactly one `Placed` in its
+/// natural bucket (`gate: None`, `moved: false`) — identical to the
+/// pre-fx_priority codegen. An `Any` variation produces one `Placed` per
+/// bucket it lands in across the flame's transforms.
+struct Placed<'a> {
+    name: String,
+    /// Local variation index (matches `xform.variations[idx]`).
+    idx: u32,
+    info: &'a crate::variations::VariationInfo,
+    /// Extra WGSL condition ANDed into the activation `if` — `Some` only
+    /// when an `Any` variation spans multiple phases across transforms,
+    /// restricting this emission to the transforms that assigned it here
+    /// (`(xform_id == 0u || xform_id == 3u)`). `None` ⇒ always on once
+    /// the weight is non-zero.
+    gate: Option<String>,
+    /// True for an `Any` variation placed off its natural (normal) phase,
+    /// i.e. into pre or post. Such an instance must apply its weight in
+    /// the emission (native pre/post variations bake the weight inside
+    /// their body; moved normal-style variations do not) and honor
+    /// [`Feature::Replace`] for the assign-vs-accumulate form.
+    moved: bool,
 }
 
 impl ShaderConstants {
@@ -482,6 +549,7 @@ impl ShaderConstants {
             attachment_cap: flame.attachment_cap() as u32,
             inlined_transforms: Some(inlined),
             cumulative_weights: Some(cumulative),
+            variation_priorities: collect_phase_overrides(flame, registry, &id_map),
         }
     }
 }
@@ -1285,9 +1353,9 @@ impl ShaderBuilder {
             // `flatten_z_per_iter` (render_3d && !preserve_z) now drives
             // per-variation z gating at the dispatch sites instead of a
             // blanket end-of-iteration flatten.
-            shader.push_str(&self.build_apply_variations_3d(&active, constants.inlined_transforms.as_ref(), has_dc, has_rgb, false, constants.flatten_z_per_iter));
+            shader.push_str(&self.build_apply_variations_3d(&active, constants.inlined_transforms.as_ref(), constants.num_transforms, &constants.variation_priorities, has_dc, has_rgb, false, constants.flatten_z_per_iter));
         } else {
-            shader.push_str(&self.build_apply_variations_2d(&active, constants.inlined_transforms.as_ref(), has_dc, has_rgb, false));
+            shader.push_str(&self.build_apply_variations_2d(&active, constants.inlined_transforms.as_ref(), constants.num_transforms, &constants.variation_priorities, has_dc, has_rgb, false));
         }
         shader.push('\n');
 
@@ -1303,9 +1371,9 @@ impl ShaderBuilder {
             name == "subflame_wf" || name == "pre_subflame_wf");
         if has_subflame {
             if render_3d {
-                shader.push_str(&self.build_apply_variations_3d(&active, constants.inlined_transforms.as_ref(), has_dc, has_rgb, true, constants.flatten_z_per_iter));
+                shader.push_str(&self.build_apply_variations_3d(&active, constants.inlined_transforms.as_ref(), constants.num_transforms, &constants.variation_priorities, has_dc, has_rgb, true, constants.flatten_z_per_iter));
             } else {
-                shader.push_str(&self.build_apply_variations_2d(&active, constants.inlined_transforms.as_ref(), has_dc, has_rgb, true));
+                shader.push_str(&self.build_apply_variations_2d(&active, constants.inlined_transforms.as_ref(), constants.num_transforms, &constants.variation_priorities, has_dc, has_rgb, true));
             }
             shader.push('\n');
             let subflame_src = include_str!("../shaders/core/subflame.wgsl");
@@ -1414,14 +1482,95 @@ impl ShaderBuilder {
     /// the right semantics. Inlined transforms are also disabled in subflame
     /// mode since subflame xforms use synthetic xform_ids outside the parent's
     /// inlined range.
+    /// Resolve each active variation into pre/normal/post bucket
+    /// placements, honoring `Any`-variation `fx_priority` overrides.
+    /// Non-`Any` variations land in their static phase exactly as before.
+    /// An `Any` variation is classified per transform (default = normal)
+    /// and emitted into each bucket it's assigned to; when it spans more
+    /// than one bucket across transforms, each placement carries an
+    /// `xform_id` gate so it only runs on the transforms that put it
+    /// there. Shared by the 2D and 3D builders.
+    fn resolve_phase_buckets<'a>(
+        &'a self,
+        active_variations: &[(String, u32)],
+        num_transforms: u32,
+        overrides: &std::collections::BTreeMap<u32, std::collections::BTreeMap<u32, i32>>,
+        is_subflame: bool,
+    ) -> (Vec<Placed<'a>>, Vec<Placed<'a>>, Vec<Placed<'a>>) {
+        use crate::variations::VariationPhase;
+        let mut pre = Vec::new();
+        let mut normal = Vec::new();
+        let mut post = Vec::new();
+
+        for (name, idx) in active_variations {
+            if is_subflame && (name == "subflame_wf" || name == "pre_subflame_wf") {
+                continue;
+            }
+            let Some(info) = self.registry.get(name) else { continue };
+            let mk = |gate, moved| Placed { name: name.clone(), idx: *idx, info, gate, moved };
+            match info.phase {
+                VariationPhase::Pre => pre.push(mk(None, false)),
+                VariationPhase::Normal => normal.push(mk(None, false)),
+                VariationPhase::Post => post.push(mk(None, false)),
+                VariationPhase::Any => {
+                    // Classify every transform's bucket for this variation
+                    // (absent override ⇒ priority 0 ⇒ normal).
+                    let ov = overrides.get(idx);
+                    let (mut pre_t, mut nor_t, mut post_t) = (Vec::new(), Vec::new(), Vec::new());
+                    for t in 0..num_transforms {
+                        let prio = ov.and_then(|m| m.get(&t)).copied().unwrap_or(0);
+                        if prio < 0 {
+                            pre_t.push(t);
+                        } else if prio > 0 {
+                            post_t.push(t);
+                        } else {
+                            nor_t.push(t);
+                        }
+                    }
+                    let used = (!pre_t.is_empty()) as u32
+                        + (!nor_t.is_empty()) as u32
+                        + (!post_t.is_empty()) as u32;
+                    // Single bucket across the whole flame ⇒ no xform_id
+                    // gate needed (the weight check already restricts to
+                    // the using transforms). Multiple ⇒ gate each.
+                    let gate_for = |ts: &[u32]| -> Option<String> {
+                        if used <= 1 {
+                            return None;
+                        }
+                        let conds: Vec<String> =
+                            ts.iter().map(|t| format!("xform_id == {}u", t)).collect();
+                        Some(format!("({})", conds.join(" || ")))
+                    };
+                    if !pre_t.is_empty() {
+                        pre.push(mk(gate_for(&pre_t), true));
+                    }
+                    if !nor_t.is_empty() {
+                        normal.push(mk(gate_for(&nor_t), false));
+                    }
+                    if !post_t.is_empty() {
+                        post.push(mk(gate_for(&post_t), true));
+                    }
+                }
+            }
+        }
+
+        pre.sort_by_key(|p| p.idx);
+        normal.sort_by_key(|p| p.idx);
+        post.sort_by_key(|p| p.idx);
+        (pre, normal, post)
+    }
+
     fn build_apply_variations_2d(
         &self,
         active_variations: &[(String, u32)],
         inlined_transforms: Option<&Vec<InlinedTransform>>,
+        num_transforms: u32,
+        overrides: &std::collections::BTreeMap<u32, std::collections::BTreeMap<u32, i32>>,
         has_dc: bool,
         has_rgb: bool,
         is_subflame: bool,
     ) -> String {
+        #[allow(unused_imports)]
         use crate::variations::VariationPhase;
 
         // When inlined, we generate per-transform specialized code.
@@ -1452,36 +1601,18 @@ impl ShaderBuilder {
         );
         code.push_str(&signature);
 
-        // Separate variations by phase. In subflame mode, exclude subflame_wf
-        // entirely to break the recursive call cycle (see fn doc).
-        let mut pre_variations = Vec::new();
-        let mut normal_variations = Vec::new();
-        let mut post_variations = Vec::new();
-
-        for (name, idx) in active_variations {
-            if is_subflame && (name == "subflame_wf" || name == "pre_subflame_wf") {
-                continue;
-            }
-            if let Some(info) = self.registry.get(name) {
-                match info.phase {
-                    VariationPhase::Pre => pre_variations.push((name.clone(), *idx, info)),
-                    VariationPhase::Normal => normal_variations.push((name.clone(), *idx, info)),
-                    VariationPhase::Post => post_variations.push((name.clone(), *idx, info)),
-                }
-            }
-        }
-
-        // Sort each phase by registry index for determinism
-        pre_variations.sort_by_key(|(_, idx, _)| *idx);
-        normal_variations.sort_by_key(|(_, idx, _)| *idx);
-        post_variations.sort_by_key(|(_, idx, _)| *idx);
+        // Separate variations by phase, honoring Any-variation fx_priority
+        // overrides. In subflame mode, subflame_wf is excluded (see fn doc).
+        let (pre_variations, normal_variations, post_variations) =
+            self.resolve_phase_buckets(active_variations, num_transforms, overrides, is_subflame);
 
         // PHASE 1: Pre-variations - directly modify input coordinates (rare in 2D)
         if !pre_variations.is_empty() {
             code.push_str("    // Phase 1: Pre-variations (modify input)\n");
             code.push_str("    var temp = p;\n\n");
 
-            for (name, idx, info) in &pre_variations {
+            for placed in &pre_variations {
+                let (name, idx, info) = (&placed.name, placed.idx, placed.info);
                 // Pre-variations directly modify temp (NOT weighted sum!)
                 let mut params = String::new();
 
@@ -1504,12 +1635,32 @@ impl ShaderBuilder {
                     params.push_str(", vrc");
                 }
 
+                // Activation: weight non-zero, plus any Any-var xform_id gate.
+                let activate = match &placed.gate {
+                    Some(g) => format!("xform.variations[{}] != 0.0 && {}", idx, g),
+                    None => format!("xform.variations[{}] != 0.0", idx),
+                };
+                // Native pre variations bake their weight inside the body
+                // (`temp = f(temp)`). An Any variation MOVED into pre is a
+                // normal-style body, so apply its weight here and honor
+                // Feature::Replace (assign vs accumulate); see the table in
+                // docs/projects/jwf-features.md.
+                let body = if placed.moved {
+                    let w = format!("xform.variations[{}]", idx);
+                    if info.has_feature(Feature::Replace) {
+                        format!("temp = {} * variation_{}(temp{});", w, name, params)
+                    } else {
+                        format!("temp = temp + {} * variation_{}(temp{});", w, name, params)
+                    }
+                } else {
+                    format!("temp = variation_{}(temp{});", name, params)
+                };
                 code.push_str(&format!(
-                    "    // {}: {} (PRE)\n\
-                     \x20   if (xform.variations[{}] != 0.0) {{\n\
-                     \x20       temp = variation_{}(temp{});\n\
+                    "    // {}: {} (PRE{})\n\
+                     \x20   if ({}) {{\n\
+                     \x20       {}\n\
                      \x20   }}\n\n",
-                    idx, info.display_name, idx, name, params
+                    idx, info.display_name, if placed.moved { " MOVED" } else { "" }, activate, body
                 ));
             }
         } else {
@@ -1523,7 +1674,8 @@ impl ShaderBuilder {
         code.push_str("    // Phase 3: Normal variations (weighted sum from modified input)\n");
         code.push_str("    var result = vec2<f32>(0.0, 0.0);\n\n");
 
-        for (_name, idx, info) in &normal_variations {
+        for placed in &normal_variations {
+            let (idx, info) = (placed.idx, placed.info);
             let mut args = String::from("temp");
             // needs_accum: pass current `result` (= cpp's FPx/FPy) so the
             // variation can read the running accumulator of prior variations.
@@ -1545,6 +1697,8 @@ impl ShaderBuilder {
                 args.push_str(", vrc");
             }
             let call = format!("{}({})", info.wgsl_function, args);
+            // Optional Any-var xform_id gate, ANDed into the weight check.
+            let gate = placed.gate.as_ref().map(|g| format!(" && {}", g)).unwrap_or_default();
 
             // Use inlined weights when available (enables dead code elimination)
             if use_inlined {
@@ -1552,19 +1706,19 @@ impl ShaderBuilder {
                     "    // {}: {} (NORMAL - INLINED)\n\
                      \x20   {{\n\
                      \x20       let w = get_inlined_var_weight(xform_id, {}u);\n\
-                     \x20       if (w != 0.0) {{\n\
+                     \x20       if (w != 0.0{}) {{\n\
                      \x20           result += w * {};\n\
                      \x20       }}\n\
                      \x20   }}\n\n",
-                    idx, info.display_name, idx, call
+                    idx, info.display_name, idx, gate, call
                 ));
             } else {
                 code.push_str(&format!(
                     "    // {}: {} (NORMAL)\n\
-                     \x20   if (xform.variations[{}] != 0.0) {{\n\
+                     \x20   if (xform.variations[{}] != 0.0{}) {{\n\
                      \x20       result += xform.variations[{}] * {};\n\
                      \x20   }}\n\n",
-                    idx, info.display_name, idx, idx, call
+                    idx, info.display_name, idx, gate, idx, call
                 ));
             }
         }
@@ -1573,7 +1727,8 @@ impl ShaderBuilder {
         if !post_variations.is_empty() {
             code.push_str("    // Phase 4: Post-variations (modify output)\n\n");
 
-            for (_name, idx, info) in &post_variations {
+            for placed in &post_variations {
+                let (idx, info) = (placed.idx, placed.info);
                 // Post-variations directly modify result (NOT weighted sum!)
                 let mut params = String::from("result");
                 // needs_accum: in post-phase, cpp's FP* is the variation
@@ -1596,12 +1751,29 @@ impl ShaderBuilder {
                     params.push_str(", vc");
                 }
 
+                let activate = match &placed.gate {
+                    Some(g) => format!("xform.variations[{}] != 0.0 && {}", idx, g),
+                    None => format!("xform.variations[{}] != 0.0", idx),
+                };
+                // Native post variations bake their weight (`result = f(result)`).
+                // An Any variation MOVED into post applies its weight here and
+                // honors Feature::Replace (assign vs accumulate).
+                let body = if placed.moved {
+                    let w = format!("xform.variations[{}]", idx);
+                    if info.has_feature(Feature::Replace) {
+                        format!("result = {} * {}({});", w, info.wgsl_function, params)
+                    } else {
+                        format!("result = result + {} * {}({});", w, info.wgsl_function, params)
+                    }
+                } else {
+                    format!("result = {}({});", info.wgsl_function, params)
+                };
                 code.push_str(&format!(
-                    "    // {}: {} (POST)\n\
-                     \x20   if (xform.variations[{}] != 0.0) {{\n\
-                     \x20       result = {}({});\n\
+                    "    // {}: {} (POST{})\n\
+                     \x20   if ({}) {{\n\
+                     \x20       {}\n\
                      \x20   }}\n\n",
-                    idx, info.display_name, idx, info.wgsl_function, params
+                    idx, info.display_name, if placed.moved { " MOVED" } else { "" }, activate, body
                 ));
             }
         }
@@ -1619,11 +1791,14 @@ impl ShaderBuilder {
         &self,
         active_variations: &[(String, u32)],
         inlined_transforms: Option<&Vec<InlinedTransform>>,
+        num_transforms: u32,
+        overrides: &std::collections::BTreeMap<u32, std::collections::BTreeMap<u32, i32>>,
         has_dc: bool,
         has_rgb: bool,
         is_subflame: bool,
         gate_2d_z: bool,
     ) -> String {
+        #[allow(unused_imports)]
         use crate::variations::VariationPhase;
 
 
@@ -1647,36 +1822,18 @@ impl ShaderBuilder {
         );
         code.push_str(&signature);
 
-        // Separate variations by phase. In subflame mode, exclude subflame_wf
-        // entirely to break the recursive call cycle (see fn doc).
-        let mut pre_variations = Vec::new();
-        let mut normal_variations = Vec::new();
-        let mut post_variations = Vec::new();
-
-        for (name, idx) in active_variations {
-            if is_subflame && (name == "subflame_wf" || name == "pre_subflame_wf") {
-                continue;
-            }
-            if let Some(info) = self.registry.get(name) {
-                match info.phase {
-                    VariationPhase::Pre => pre_variations.push((name.clone(), *idx, info)),
-                    VariationPhase::Normal => normal_variations.push((name.clone(), *idx, info)),
-                    VariationPhase::Post => post_variations.push((name.clone(), *idx, info)),
-                }
-            }
-        }
-
-        // Sort each phase by registry index for determinism
-        pre_variations.sort_by_key(|(_, idx, _)| *idx);
-        normal_variations.sort_by_key(|(_, idx, _)| *idx);
-        post_variations.sort_by_key(|(_, idx, _)| *idx);
+        // Separate variations by phase, honoring Any-variation fx_priority
+        // overrides. In subflame mode, subflame_wf is excluded (see fn doc).
+        let (pre_variations, normal_variations, post_variations) =
+            self.resolve_phase_buckets(active_variations, num_transforms, overrides, is_subflame);
 
         // PHASE 1: Pre-variations - directly modify input coordinates (lines 343-349)
         if !pre_variations.is_empty() {
             code.push_str("    // Phase 1: Pre-variations (modify input)\n");
             code.push_str("    var temp = p;\n\n");
 
-            for (name, idx, info) in &pre_variations {
+            for placed in &pre_variations {
+                let (name, idx, info) = (&placed.name, placed.idx, placed.info);
                 // Pre-variations directly modify temp (NOT weighted sum!)
                 let mut params = String::new();
 
@@ -1690,12 +1847,28 @@ impl ShaderBuilder {
                     params.push_str(", vc");
                 }
 
+                let activate = match &placed.gate {
+                    Some(g) => format!("xform.variations[{}] != 0.0 && {}", idx, g),
+                    None => format!("xform.variations[{}] != 0.0", idx),
+                };
+                // Native pre bakes weight (`temp = f(temp)`); an Any variation
+                // moved into pre applies its weight + honors Feature::Replace.
+                let body = if placed.moved {
+                    let w = format!("xform.variations[{}]", idx);
+                    if info.has_feature(Feature::Replace) {
+                        format!("temp = {} * variation_{}(temp{});", w, name, params)
+                    } else {
+                        format!("temp = temp + {} * variation_{}(temp{});", w, name, params)
+                    }
+                } else {
+                    format!("temp = variation_{}(temp{});", name, params)
+                };
                 code.push_str(&format!(
-                    "    // {}: {} (PRE)\n\
-                     \x20   if (xform.variations[{}] != 0.0) {{\n\
-                     \x20       temp = variation_{}(temp{});\n\
+                    "    // {}: {} (PRE{})\n\
+                     \x20   if ({}) {{\n\
+                     \x20       {}\n\
                      \x20   }}\n\n",
-                    idx, info.display_name, idx, name, params
+                    idx, info.display_name, if placed.moved { " MOVED" } else { "" }, activate, body
                 ));
             }
         } else {
@@ -1709,7 +1882,8 @@ impl ShaderBuilder {
         code.push_str("    // Phase 3: Normal variations (weighted sum from modified input)\n");
         code.push_str("    var result = vec3<f32>(0.0, 0.0, 0.0);\n\n");
 
-        for (name, idx, info) in &normal_variations {
+        for placed in &normal_variations {
+            let (name, idx, info) = (&placed.name, placed.idx, placed.info);
             // Standard variation with function call. (zcone, zscale,
             // ztranslate previously had hand-inlined special cases here;
             // they were removed because the WGSL function bodies
@@ -1754,6 +1928,8 @@ impl ShaderBuilder {
             } else {
                 call.clone()
             };
+            // Optional Any-var xform_id gate, ANDed into the weight check.
+            let gate = placed.gate.as_ref().map(|g| format!(" && {}", g)).unwrap_or_default();
 
             // Use inlined weights when available
             if use_inlined {
@@ -1761,19 +1937,19 @@ impl ShaderBuilder {
                     "    // {}: {} (NORMAL - INLINED)\n\
                      \x20   {{\n\
                      \x20       let w = get_inlined_var_weight(xform_id, {}u);\n\
-                     \x20       if (w != 0.0) {{\n\
+                     \x20       if (w != 0.0{}) {{\n\
                      \x20           result += w * {};\n\
                      \x20       }}\n\
                      \x20   }}\n\n",
-                    idx, info.display_name, idx, contrib
+                    idx, info.display_name, idx, gate, contrib
                 ));
             } else {
                 code.push_str(&format!(
                     "    // {}: {} (NORMAL)\n\
-                     \x20   if (xform.variations[{}] != 0.0) {{\n\
+                     \x20   if (xform.variations[{}] != 0.0{}) {{\n\
                      \x20       result += xform.variations[{}] * {};\n\
                      \x20   }}\n\n",
-                    idx, info.display_name, idx, idx, contrib
+                    idx, info.display_name, idx, gate, idx, contrib
                 ));
             }
         }
@@ -1782,8 +1958,8 @@ impl ShaderBuilder {
         if !post_variations.is_empty() {
             code.push_str("    // Phase 4: Post-variations (modify output)\n\n");
 
-            for (name, idx, info) in &post_variations {
-                let _ = name;
+            for placed in &post_variations {
+                let (idx, info) = (placed.idx, placed.info);
                 // Post-variations directly modify result (NOT weighted sum!).
                 // (flatten previously had a hand-inlined special case here;
                 // it was removed because variation_flatten's body already
@@ -1805,12 +1981,28 @@ impl ShaderBuilder {
                     params.push_str(", vc");
                 }
 
+                let activate = match &placed.gate {
+                    Some(g) => format!("xform.variations[{}] != 0.0 && {}", idx, g),
+                    None => format!("xform.variations[{}] != 0.0", idx),
+                };
+                // Native post bakes weight; an Any variation moved into post
+                // applies its weight + honors Feature::Replace.
+                let body = if placed.moved {
+                    let w = format!("xform.variations[{}]", idx);
+                    if info.has_feature(Feature::Replace) {
+                        format!("result = {} * {}({});", w, info.wgsl_function, params)
+                    } else {
+                        format!("result = result + {} * {}({});", w, info.wgsl_function, params)
+                    }
+                } else {
+                    format!("result = {}({});", info.wgsl_function, params)
+                };
                 code.push_str(&format!(
-                    "    // {}: {} (POST)\n\
-                     \x20   if (xform.variations[{}] != 0.0) {{\n\
-                     \x20       result = {}({});\n\
+                    "    // {}: {} (POST{})\n\
+                     \x20   if ({}) {{\n\
+                     \x20       {}\n\
                      \x20   }}\n\n",
-                    idx, info.display_name, idx, info.wgsl_function, params
+                    idx, info.display_name, if placed.moved { " MOVED" } else { "" }, activate, body
                 ));
             }
         }
@@ -1824,7 +2016,64 @@ impl ShaderBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
+    use std::collections::{BTreeMap, HashMap};
+
+    fn test_builder() -> ShaderBuilder {
+        ShaderBuilder::new((*crate::variations::global_registry()).clone())
+    }
+
+    #[test]
+    fn fx_priority_moves_any_var_to_pre() {
+        // combimirror is an `Any` variation; an fx_priority override of -1
+        // on transform 0 must place it in the PRE bucket as a MOVED
+        // (weight-applied, Replace) instance, with nothing in normal/post.
+        let builder = test_builder();
+        let active = vec![("combimirror".to_string(), 0u32)];
+        let mut overrides: BTreeMap<u32, BTreeMap<u32, i32>> = BTreeMap::new();
+        overrides.entry(0).or_default().insert(0, -1);
+
+        let (pre, normal, post) =
+            builder.resolve_phase_buckets(&active, 1, &overrides, false);
+        assert_eq!(pre.len(), 1, "combimirror should be in pre");
+        assert!(pre[0].moved, "moved into pre");
+        assert!(pre[0].gate.is_none(), "single bucket ⇒ no xform_id gate");
+        assert!(normal.is_empty() && post.is_empty());
+    }
+
+    #[test]
+    fn fx_priority_default_any_var_stays_normal() {
+        // No override ⇒ an Any variation defaults to the normal bucket,
+        // not moved (identical codegen to a plain Normal variation).
+        let builder = test_builder();
+        let active = vec![("combimirror".to_string(), 0u32)];
+        let overrides: BTreeMap<u32, BTreeMap<u32, i32>> = BTreeMap::new();
+
+        let (pre, normal, post) =
+            builder.resolve_phase_buckets(&active, 1, &overrides, false);
+        assert!(pre.is_empty() && post.is_empty());
+        assert_eq!(normal.len(), 1);
+        assert!(!normal[0].moved);
+        assert!(normal[0].gate.is_none());
+    }
+
+    #[test]
+    fn fx_priority_mixed_phases_gate_by_xform_id() {
+        // Same Any variation assigned pre on transform 0 and normal on
+        // transform 1 ⇒ two placements, each gated by xform_id.
+        let builder = test_builder();
+        let active = vec![("combimirror".to_string(), 0u32)];
+        let mut overrides: BTreeMap<u32, BTreeMap<u32, i32>> = BTreeMap::new();
+        overrides.entry(0).or_default().insert(0, -1); // transform 0 → pre
+
+        let (pre, normal, post) =
+            builder.resolve_phase_buckets(&active, 2, &overrides, false);
+        assert_eq!(pre.len(), 1);
+        assert_eq!(normal.len(), 1);
+        assert!(post.is_empty());
+        // Multiple buckets ⇒ both carry an xform_id gate.
+        assert_eq!(pre[0].gate.as_deref(), Some("(xform_id == 0u)"));
+        assert_eq!(normal[0].gate.as_deref(), Some("(xform_id == 1u)"));
+    }
 
     /// OUTPUT_HISTOGRAM_DIRECT toggles the unified template between two
     /// output strategies: direct-histogram (atomicAdd at slot 2) and

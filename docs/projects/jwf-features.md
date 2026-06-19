@@ -249,9 +249,28 @@ With the feature present, a later change could make the normal dispatch
 honor true replace — out of scope here, but the feature framing is what
 makes it reachable.
 
+**Storage model (confirmed):** a third name-keyed map on `Transform`,
+parallel to `variations`/`variation_params`:
+```rust
+#[serde(default, skip_serializing_if = "HashMap::is_empty")]
+pub variation_priorities: HashMap<String, i32>,   // canonical name -> JWF priority
+```
+- **Sparse override:** an entry exists only when the instance priority
+  *differs* from the variation def's default-phase priority
+  (`Pre`→−1, `Normal`→0, `Post`→1). Plain normal vars store nothing;
+  most transforms keep an empty map.
+- **`i32`** holds the raw JWF priority (preserves the `±2` "inv" specials);
+  dispatch buckets by sign at build time.
+- Keyed by **canonical** name (same alias handling as `variations`);
+  one priority per variation name per transform (matches the existing
+  one-weight-per-name model — same pre-existing dup-name limitation).
+- `serde(default, skip_serializing_if = empty)` ⇒ old `.fflame` files
+  load unchanged; new files only write the field when overrides exist.
+
 **Implementation steps:**
-1. `flame_xml`: parse/round-trip `<var>_fx_priority` as a per-instance
-   `i32` alongside the variation weight (write when non-default).
+1. Add `variation_priorities` to `Transform` (field above) + the
+   constructors/`Default`/custom deserializer; `flame_xml`
+   parse/round-trip `<var>_fx_priority` (store only when ≠ def default).
 2. Add `VariationPhase::Any` and `Feature::Replace`.
 3. Shader builder: for `Any` variations, bucket by instance priority sign
    and emit per the table; everything else unchanged.
