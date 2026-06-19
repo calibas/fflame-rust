@@ -727,7 +727,29 @@ fn apply_config_value(
         (ConfigPath::Rotation, ConfigValue::Float(v)) => config.rotation = *v,
         (ConfigPath::CameraRotationX, ConfigValue::Float(v)) => config.camera_rotation_x = *v,
         (ConfigPath::CameraRotationY, ConfigValue::Float(v)) => config.camera_rotation_y = *v,
+        (ConfigPath::CameraBank, ConfigValue::Float(v)) => config.camera_bank = *v,
+        // Camera world-space position. CameraX/CameraY were previously
+        // missing here, so animating them did nothing in video export
+        // (only CameraZ was applied) — they fell through to the `_ => {}`
+        // catch-all below. Single-PNG export was unaffected (it reads
+        // config.camera_x/y/z directly).
+        (ConfigPath::CameraX, ConfigValue::Float(v)) => config.camera_x = *v,
+        (ConfigPath::CameraY, ConfigValue::Float(v)) => config.camera_y = *v,
         (ConfigPath::CameraZ, ConfigValue::Float(v)) => config.camera_z = *v,
+        // Depth effects — animatable but were also missing here, so a
+        // DoF pull or fog change during a flythrough did nothing in the
+        // rendered video.
+        (ConfigPath::DofFocusDistance, ConfigValue::Float(v)) => config.dof_focus_distance = *v,
+        (ConfigPath::DofBlurStrength, ConfigValue::Float(v)) => config.dof_blur_strength = *v,
+        (ConfigPath::FogStrength, ConfigValue::Float(v)) => config.fog_strength = *v,
+        (ConfigPath::FogStart, ConfigValue::Float(v)) => config.fog_start = *v,
+
+        // Filter (density estimation) — FractalConfig-level, were missing.
+        (ConfigPath::FilterRadius, ConfigValue::Float(v)) => config.filter_radius = *v,
+        (ConfigPath::FilterBlurEdges, ConfigValue::Float(v)) => config.filter_blur_edges = *v,
+        // Adaptive-blend accumulation — FractalConfig-level, were missing.
+        (ConfigPath::BlendFactor, ConfigValue::Float(v)) => config.blend_factor = *v,
+        (ConfigPath::UseDynamicBlend, ConfigValue::Bool(v)) => config.use_dynamic_blend = *v,
 
         // Tone mapping
         (ConfigPath::Exposure, ConfigValue::Float(v)) => config.exposure = *v,
@@ -738,6 +760,17 @@ fn apply_config_value(
         (ConfigPath::Saturation, ConfigValue::Float(v)) => config.saturation = *v,
         (ConfigPath::HueShift, ConfigValue::Float(v)) => config.hue_shift = *v,
         (ConfigPath::DensityScale, ConfigValue::Float(v)) => config.density_scale = *v,
+        // The rest of the tonemap chain — also FractalConfig-level and
+        // previously dropped in video export.
+        (ConfigPath::WhiteLevel, ConfigValue::Float(v)) => config.white_level = *v,
+        (ConfigPath::AlphaBlendLow, ConfigValue::Float(v)) => config.alpha_blend_low = *v,
+        (ConfigPath::AlphaBlendHigh, ConfigValue::Float(v)) => config.alpha_blend_high = *v,
+        (ConfigPath::TonemapMode, ConfigValue::ToneMapMode(m)) => config.tonemap_mode = *m,
+        (ConfigPath::HighlightMode, ConfigValue::HighlightMode(m)) => config.highlight_mode = *m,
+        (ConfigPath::LevelsEnabled, ConfigValue::Bool(v)) => config.levels_enabled = *v,
+        (ConfigPath::LevelsLow, ConfigValue::Float(v)) => config.levels_low = *v,
+        (ConfigPath::LevelsHigh, ConfigValue::Float(v)) => config.levels_high = *v,
+        (ConfigPath::LevelsGamma, ConfigValue::Float(v)) => config.levels_gamma = *v,
 
         // Color
         (ConfigPath::PaletteRotation, ConfigValue::Float(v)) => config.palette_rotation = *v,
@@ -2328,6 +2361,79 @@ mod tests {
     /// VariationParam ConfigPath variants must be readable via
     /// `Transform::get_variation_param` (the canonical read path used
     /// by `GpuVariationParams::from_transform` for shader packing).
+    /// Regression test: animated camera world-space position must reach
+    /// the config during video export. `apply_config_value` previously
+    /// handled only `CameraZ` (and the rotations) — `CameraX`/`CameraY`
+    /// fell through the `_ => {}` catch-all, so animating them did nothing
+    /// in the rendered video (they worked in the live timeline because
+    /// that path goes through `ConfigManager::set_value`).
+    #[test]
+    fn test_apply_config_value_camera_position() {
+        let mut config = FractalConfig::default();
+        for (path, field) in [
+            (ConfigPath::CameraX, 1.5_f32),
+            (ConfigPath::CameraY, 2.5),
+            (ConfigPath::CameraZ, 3.5),
+            (ConfigPath::CameraBank, 0.4),
+        ] {
+            apply_config_value(&mut config, EditingTarget::Main, &path, &ConfigValue::Float(field));
+        }
+        assert_eq!(config.camera_x, 1.5, "CameraX track must reach config");
+        assert_eq!(config.camera_y, 2.5, "CameraY track must reach config");
+        assert_eq!(config.camera_z, 3.5);
+        assert_eq!(config.camera_bank, 0.4);
+    }
+
+    /// Regression test for the broader cluster of FractalConfig-level
+    /// animatable params that `apply_config_value` previously dropped in
+    /// video export (depth, filter, blend, white level, alpha blend,
+    /// levels, and the tonemap/highlight mode enums).
+    #[test]
+    fn test_apply_config_value_fractalconfig_cluster() {
+        use crate::scene::tonemap::{HighlightMode, ToneMapMode};
+        let mut config = FractalConfig::default();
+        let f = |p, v| (p, ConfigValue::Float(v));
+        let cases: Vec<(ConfigPath, ConfigValue)> = vec![
+            f(ConfigPath::DofFocusDistance, 1.1),
+            f(ConfigPath::DofBlurStrength, 1.2),
+            f(ConfigPath::FogStrength, 1.3),
+            f(ConfigPath::FogStart, 1.4),
+            f(ConfigPath::FilterRadius, 1.5),
+            f(ConfigPath::FilterBlurEdges, 1.6),
+            f(ConfigPath::BlendFactor, 1.7),
+            f(ConfigPath::WhiteLevel, 1.8),
+            f(ConfigPath::AlphaBlendLow, 1.9),
+            f(ConfigPath::AlphaBlendHigh, 2.0),
+            f(ConfigPath::LevelsLow, 2.1),
+            f(ConfigPath::LevelsHigh, 2.2),
+            f(ConfigPath::LevelsGamma, 2.3),
+            (ConfigPath::UseDynamicBlend, ConfigValue::Bool(true)),
+            (ConfigPath::LevelsEnabled, ConfigValue::Bool(true)),
+            (ConfigPath::TonemapMode, ConfigValue::ToneMapMode(ToneMapMode::Linear)),
+            (ConfigPath::HighlightMode, ConfigValue::HighlightMode(HighlightMode::Clip)),
+        ];
+        for (path, value) in &cases {
+            apply_config_value(&mut config, EditingTarget::Main, path, value);
+        }
+        assert_eq!(config.dof_focus_distance, 1.1);
+        assert_eq!(config.dof_blur_strength, 1.2);
+        assert_eq!(config.fog_strength, 1.3);
+        assert_eq!(config.fog_start, 1.4);
+        assert_eq!(config.filter_radius, 1.5);
+        assert_eq!(config.filter_blur_edges, 1.6);
+        assert_eq!(config.blend_factor, 1.7);
+        assert_eq!(config.white_level, 1.8);
+        assert_eq!(config.alpha_blend_low, 1.9);
+        assert_eq!(config.alpha_blend_high, 2.0);
+        assert_eq!(config.levels_low, 2.1);
+        assert_eq!(config.levels_high, 2.2);
+        assert_eq!(config.levels_gamma, 2.3);
+        assert!(config.use_dynamic_blend);
+        assert!(config.levels_enabled);
+        assert_eq!(config.tonemap_mode, ToneMapMode::Linear);
+        assert_eq!(config.highlight_mode, HighlightMode::Clip);
+    }
+
     #[test]
     fn test_apply_config_value_variation_param_roundtrip() {
         let mut config = FractalConfig::default();
