@@ -1555,7 +1555,15 @@ impl ShaderBuilder {
         }
 
         pre.sort_by_key(|p| p.idx);
-        normal.sort_by_key(|p| p.idx);
+        // Normal phase: accumulate variations first, then Replace variations
+        // (which clobber the running sum). This mirrors JWF, where a
+        // replace-style variation (`pVarTP.x = …`) overwrites whatever the
+        // accumulate variations summed. We can't reconstruct JWF's exact
+        // intra-xform order (our variations are an unordered map), so we
+        // apply replaces last — exact for the common one-replace-added-last
+        // case (e.g. shredlin), with the documented caveat that an
+        // accumulate placed *after* a replace in JWF won't match.
+        normal.sort_by_key(|p| (p.info.has_feature(Feature::Replace), p.idx));
         post.sort_by_key(|p| p.idx);
         (pre, normal, post)
     }
@@ -1699,26 +1707,35 @@ impl ShaderBuilder {
             let call = format!("{}({})", info.wgsl_function, args);
             // Optional Any-var xform_id gate, ANDed into the weight check.
             let gate = placed.gate.as_ref().map(|g| format!(" && {}", g)).unwrap_or_default();
+            // Replace variations OVERWRITE the running sum (JWF `pVarTP.x =`);
+            // accumulate variations add (`+=`). resolve_phase_buckets emits
+            // replaces last, so the assignment clobbers prior accumulates —
+            // matching JWF's replace-last-wins behaviour.
+            let (op, tag) = if info.has_feature(Feature::Replace) {
+                ("=", " REPLACE")
+            } else {
+                ("+=", "")
+            };
 
             // Use inlined weights when available (enables dead code elimination)
             if use_inlined {
                 code.push_str(&format!(
-                    "    // {}: {} (NORMAL - INLINED)\n\
+                    "    // {}: {} (NORMAL{} - INLINED)\n\
                      \x20   {{\n\
                      \x20       let w = get_inlined_var_weight(xform_id, {}u);\n\
                      \x20       if (w != 0.0{}) {{\n\
-                     \x20           result += w * {};\n\
+                     \x20           result {} w * {};\n\
                      \x20       }}\n\
                      \x20   }}\n\n",
-                    idx, info.display_name, idx, gate, call
+                    idx, info.display_name, tag, idx, gate, op, call
                 ));
             } else {
                 code.push_str(&format!(
-                    "    // {}: {} (NORMAL)\n\
+                    "    // {}: {} (NORMAL{})\n\
                      \x20   if (xform.variations[{}] != 0.0{}) {{\n\
-                     \x20       result += xform.variations[{}] * {};\n\
+                     \x20       result {} xform.variations[{}] * {};\n\
                      \x20   }}\n\n",
-                    idx, info.display_name, idx, gate, idx, call
+                    idx, info.display_name, tag, idx, gate, op, idx, call
                 ));
             }
         }
@@ -1930,26 +1947,34 @@ impl ShaderBuilder {
             };
             // Optional Any-var xform_id gate, ANDed into the weight check.
             let gate = placed.gate.as_ref().map(|g| format!(" && {}", g)).unwrap_or_default();
+            // Replace variations overwrite the running sum (emitted last by
+            // resolve_phase_buckets); accumulate variations add. See the 2D
+            // builder for the JWF rationale.
+            let (op, tag) = if info.has_feature(Feature::Replace) {
+                ("=", " REPLACE")
+            } else {
+                ("+=", "")
+            };
 
             // Use inlined weights when available
             if use_inlined {
                 code.push_str(&format!(
-                    "    // {}: {} (NORMAL - INLINED)\n\
+                    "    // {}: {} (NORMAL{} - INLINED)\n\
                      \x20   {{\n\
                      \x20       let w = get_inlined_var_weight(xform_id, {}u);\n\
                      \x20       if (w != 0.0{}) {{\n\
-                     \x20           result += w * {};\n\
+                     \x20           result {} w * {};\n\
                      \x20       }}\n\
                      \x20   }}\n\n",
-                    idx, info.display_name, idx, gate, contrib
+                    idx, info.display_name, tag, idx, gate, op, contrib
                 ));
             } else {
                 code.push_str(&format!(
-                    "    // {}: {} (NORMAL)\n\
+                    "    // {}: {} (NORMAL{})\n\
                      \x20   if (xform.variations[{}] != 0.0{}) {{\n\
-                     \x20       result += xform.variations[{}] * {};\n\
+                     \x20       result {} xform.variations[{}] * {};\n\
                      \x20   }}\n\n",
-                    idx, info.display_name, idx, gate, idx, contrib
+                    idx, info.display_name, tag, idx, gate, op, idx, contrib
                 ));
             }
         }
@@ -2099,6 +2124,47 @@ mod tests {
             code_c.contains("temp = xform.variations[0] * variation_combimirror(temp"),
             "replace var moved to pre must assign; got:\n{}", code_c
         );
+    }
+
+    #[test]
+    fn replace_var_clobbers_in_normal_phase() {
+        // In a multi-variation NORMAL transform, a Replace variation
+        // (shredlin) overwrites the running sum while an accumulate
+        // variation (spherical) adds — and the replace is emitted LAST so
+        // it clobbers, matching JWF's replace-last-wins behaviour.
+        let builder = test_builder();
+        let active = vec![("spherical".to_string(), 0u32), ("shredlin".to_string(), 1u32)];
+        let no_overrides: BTreeMap<u32, BTreeMap<u32, i32>> = BTreeMap::new();
+
+        let code = builder.build_apply_variations_2d(&active, None, 1, &no_overrides, false, false, false);
+        assert!(
+            code.contains("result += xform.variations[0] * variation_spherical(temp"),
+            "accumulate var must add; got:\n{}", code
+        );
+        assert!(
+            code.contains("result = xform.variations[1] * variation_shredlin(temp"),
+            "replace var must assign (clobber); got:\n{}", code
+        );
+        // The replace must be emitted AFTER the accumulate so the
+        // assignment wins.
+        let acc = code.find("variation_spherical").unwrap();
+        let rep = code.find("variation_shredlin").unwrap();
+        assert!(rep > acc, "replace must be emitted after accumulate");
+    }
+
+    #[test]
+    fn sole_replace_var_normal_emission_unchanged() {
+        // A Replace variation that is the ONLY variation in a normal
+        // transform renders identically to before the clobber change:
+        // `result += w*body` from result=0 equals `result = w*body`. So
+        // existing single-variation flames are unaffected.
+        let builder = test_builder();
+        let active = vec![("shredlin".to_string(), 0u32)];
+        let no_overrides: BTreeMap<u32, BTreeMap<u32, i32>> = BTreeMap::new();
+        let code = builder.build_apply_variations_2d(&active, None, 1, &no_overrides, false, false, false);
+        // result starts at vec2(0.0) so the assignment is equivalent to +=.
+        assert!(code.contains("var result = vec2<f32>(0.0, 0.0);"));
+        assert!(code.contains("result = xform.variations[0] * variation_shredlin(temp"));
     }
 
     #[test]

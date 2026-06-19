@@ -11,16 +11,16 @@ Source list: [`output/jwildfire-script-vars.txt`](../../output/jwildfire-script-
 (191 entries). Diff against our registry: `python scripts/diff_jwf_list.py`.
 
 ## Part 2 Candidates:
-sunflower - new variation (JWF-rando5.flame)
+sunflower - new variation (JWF-rando5.flame) ✅
 dla_wf - new variation (JWF-rando26.flame)
-combimirror - new variation (JWF-rando7.flame)
-shredlin - different rendering, also check English name Shred Lin (JWF-rando14.flame)
-linearT & linearT3D - Check English name, I think it's Linear T, not Line Art
-dc_mandelbox2D - new variation (JWF-rando17.flame)
-sym_ng11 - new variation (JWF-rando19.flame)
-pre_blur - blur effect much stronger than JWF, JWF has visible detail that's lost in ours. (JWF-rando21.flame)
-dc_hexes_wf - new variation (JWF-rando27.flame)
-mobius_dragon_3D - new variation (JWF-rando28.flame)
+combimirror - new variation (JWF-rando7.flame) ✅
+shredlin - different rendering, also check English name Shred Lin (JWF-rando14.flame) ✅
+linearT & linearT3D - Check English name, I think it's Linear T, not Line Art ✅
+dc_mandelbox2D - new variation (JWF-rando17.flame) ✅
+sym_ng11 - new variation (JWF-rando19.flame) ✅
+pre_blur - blur effect much stronger than JWF, JWF has visible detail that's lost in ours. (JWF-rando21.flame) ✅
+dc_hexes_wf - new variation (JWF-rando27.flame) ✅
+mobius_dragon_3D - new variation (JWF-rando28.flame) ✅
 JWF-rando32-simplified - something's different with the rendering between our app and JWF
 Support for <jwf-flame> see JWF-rando34.flame. Used for saving layers, which we currently don't support.
 
@@ -41,7 +41,7 @@ Source + registry survey of the candidates above. Run from
 | `mobius_dragon_3D` | ◻ PORTABLE (hard) | Möbius/reciprocal feedback loop (≤24 iters, mutates local affine), log-tile spread, replace-style assign, magnitude coloring, RNG-heavy. idisc + NeedsTransform + WritesColor + AlwaysZ. Faithful but fiddly RNG order. |
 | `dla_wf` | ⛔ BLOCKED | Diffusion-limited-aggregation **simulation** (default 800×800 grid, 6000 walk iterations) cached at init, then samples random accumulated points. Path-dependent — no closed form, not reducible to per-call math. Needs a CPU-precompute → GPU-sample-buffer framework we don't have (same class as colormap/displacement images). Defer. |
 | `sym_ng11` | ⛔ NO SOURCE | No local `.java`/`.cpp`. Would need a fetch from JWildfire master (or hand-port from the running app). Source-hunt first. |
-| `shredlin` | 🔍 RENDER MISMATCH | Already ported (`misc_extras4.rs`, "Shred Lin"). User reports different rendering — needs a source re-check + A/B, not a new port. |
+| `shredlin` | ✅ FIXED (normal-phase replace) | Math was already line-for-line identical to `ShredlinFunc.java`; the mismatch was the **normal-phase combine**. In JWF-rando14 shredlin shares its xform with `poincare3D`: shredlin is a **replace** var (`pVarTP.x =`), poincare3D **accumulates** (`+=`). JWF lets shredlin's replace overwrite the running point (clean spaced grid); we used to **sum** all variations → grid + poincare distortion = overlapping squares. **Fix:** the normal-phase dispatch now honors `Feature::Replace` — accumulate variations emit first (`result += w·body`), then replace variations emit last as `result = w·body` (clobbering). Matches JWF; verified on rando14 (poincare3D is now inert there, exactly as in JWF). Renamed to "Shredlin". See `jwf-features.md` (fx_priority → normal-phase Replace). |
 | `pre_blur` | ✅ FIXED | Two bugs vs `PreBlurFunc`: summed FOUR uniforms − 2 (JWF: SIX − 3, wider Gaussian) and **dropped the weight entirely** (JWF scales the offset by the amount; the pre-phase dispatcher applies no weight, so any non-zero weight behaved like 1.0). Now reads its weight via `NeedsTransform` and uses six uniforms. `pre_blur3D` (apo_misc15) checked — already correct. |
 | `JWF-rando32-simplified` | 🔍 RENDER MISMATCH | Unknown variation(s) — needs the flame to identify what differs. |
 | `<jwf-flame>` layers | 🧱 FEATURE | Multi-layer `.flame` container (JWF-rando34). We don't model layers. Separate feature, not a variation port. |
