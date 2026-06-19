@@ -48,7 +48,14 @@ pub fn parse_flame_xml(xml_content: &str) -> Result<Vec<FractalConfig>> {
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) => {
-                if e.name().as_ref() == b"flame" {
+                // Apophysis/older-JWF use `<flame>`; newer JWildfire saves
+                // a layered `<jwf-flame>` whose flame attributes live on the
+                // root element and whose xforms/palette are nested in
+                // `<layer>` children. We parse the FIRST layer as the flame
+                // and ignore the rest (and `<bgxform>`) — see
+                // parse_flame_element.
+                let n = e.name();
+                if n.as_ref() == b"flame" || n.as_ref() == b"jwf-flame" {
                     let config = parse_flame_element(&mut reader, &e)?;
                     flames.push(config);
                 }
@@ -61,7 +68,7 @@ pub fn parse_flame_xml(xml_content: &str) -> Result<Vec<FractalConfig>> {
     }
 
     if flames.is_empty() {
-        return Err(anyhow::anyhow!("No <flame> elements found in XML"));
+        return Err(anyhow::anyhow!("No <flame> or <jwf-flame> elements found in XML"));
     }
 
     Ok(flames)
@@ -262,27 +269,51 @@ fn parse_flame_element(
     let mut palette = None;
     let mut buf = Vec::new();
 
+    // The loop terminates on the End tag matching this element (`flame`
+    // or `jwf-flame`).
+    let element_name = start_element.name().as_ref().to_vec();
+
+    // Layered `<jwf-flame>` support: xforms/palette live inside `<layer>`
+    // children. We accept only the FIRST layer's content and skip the
+    // rest. `<flame>` (Apophysis) has no layers, so `skip_layer` stays
+    // false and every xform is a direct child as before.
+    let mut layers_seen = 0usize;
+    let mut skip_layer = false;
+
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e) | Event::Empty(e)) => {
                 match e.name().as_ref() {
-                    b"xform" => {
+                    b"layer" => {
+                        // First layer = the flame; later layers ignored.
+                        skip_layer = layers_seen > 0;
+                        layers_seen += 1;
+                    }
+                    // Skip content of non-first layers (and `<bgxform>` is
+                    // never matched here, so it's ignored automatically).
+                    b"xform" if !skip_layer => {
                         let result = parse_xform_element(&e)?;
                         xform_results.push(result);
                     }
-                    b"finalxform" => {
+                    b"finalxform" if !skip_layer => {
                         let (transform, color_index) = parse_finalxform_element(&e)?;
                         final_transforms_with_index.push((transform, color_index));
                     }
-                    b"palette" => {
+                    b"palette" if !skip_layer => {
                         palette = Some(parse_palette_element(reader, &e)?);
                     }
                     _ => {}
                 }
             }
             Ok(Event::End(e)) => {
-                if e.name().as_ref() == b"flame" {
+                let n = e.name();
+                if n.as_ref() == element_name.as_slice() {
                     break;
+                }
+                if n.as_ref() == b"layer" {
+                    // Back at the flame level; a following layer's Start
+                    // will re-evaluate `skip_layer`.
+                    skip_layer = false;
                 }
             }
             Ok(Event::Eof) => break,
@@ -1616,6 +1647,39 @@ mod tests {
         assert_eq!(xform.d, 0.34284);      // parts[3]
         assert_eq!(xform.e, 1.5);          // parts[4]
         assert_eq!(xform.f, 2.5);          // parts[5]
+    }
+
+    #[test]
+    fn test_jwf_flame_layered_first_layer_only() {
+        // Newer JWildfire saves a layered `<jwf-flame>`: flame attributes on
+        // the root, xforms/palette inside `<layer>` children, plus a
+        // `<bgxform>`. We parse the FIRST layer as the flame and ignore the
+        // rest. Here the first layer has linear+spherical; the second layer
+        // (julian) and the bgxform must be ignored.
+        let xml = r#"
+<jwf-flame name="Layered" size="800 600" center="0 0" scale="200" brightness="4">
+  <layer weight="1.0" visible="true">
+    <xform weight="1" color="0.2" linear="1" coefs="1 0 0 1 0 0"/>
+    <xform weight="0.5" color="0.7" spherical="1" coefs="1 0 0 1 0 0"/>
+  </layer>
+  <layer weight="0.5" visible="true">
+    <xform weight="1" color="0.9" julian="1" julian_power="3" coefs="1 0 0 1 0 0"/>
+  </layer>
+  <bgxform weight="1" color="0" linear="1" coefs="1 0 0 1 0 0"/>
+</jwf-flame>
+        "#;
+
+        let config = &parse_flame_xml(xml).expect("parse jwf-flame")[0];
+        assert_eq!(config.flame.name, "Layered");
+        // Only the first layer's two xforms.
+        assert_eq!(config.flame.transforms.len(), 2);
+        let names: std::collections::BTreeSet<_> = config.flame.transforms.iter()
+            .flat_map(|t| t.variations.keys().cloned())
+            .collect();
+        assert!(names.contains("linear") && names.contains("spherical"));
+        assert!(!names.contains("julian"), "second layer must be ignored");
+        // Flame attributes came off the <jwf-flame> root.
+        assert_eq!(config.image_size, (800, 600));
     }
 
     #[test]

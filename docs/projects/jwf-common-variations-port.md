@@ -22,7 +22,7 @@ pre_blur - blur effect much stronger than JWF, JWF has visible detail that's los
 dc_hexes_wf - new variation (JWF-rando27.flame) ✅
 mobius_dragon_3D - new variation (JWF-rando28.flame) ✅
 JWF-rando32-simplified - something's different with the rendering between our app and JWF
-Support for <jwf-flame> see JWF-rando34.flame. Used for saving layers, which we currently don't support.
+Support for <jwf-flame> see JWF-rando34.flame. Used for saving layers, which we currently don't support. ✅
 
 Moving camera X/Y/Z not working for video exports?
 
