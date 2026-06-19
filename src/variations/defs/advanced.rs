@@ -1860,6 +1860,46 @@ pub static SPLITS: VariationDef = VariationDef {
             max_value: Some(2.0),
             description: Some("Vertical gap. Pushes positive-Y and negative-Y points apart by this amount."),
         },
+        // Per-quadrant shears (JWildfire SplitsFunc). Each shifts the OTHER
+        // axis for points on one side: lshear/rshear shift Y for the left
+        // (x<0) / right (x>=0) halves; ushear/dshear shift X for the up
+        // (y>=0) / down (y<0) halves. All default 0 (no shear).
+        VariationParamDef {
+            name: "lshear",
+            display_name: "Left Shear",
+            param_type: ParamType::UnlimitedFloat,
+            default_value: 0.0,
+            min_value: Some(-2.0),
+            max_value: Some(2.0),
+            description: Some("Y shift subtracted from points with x < 0."),
+        },
+        VariationParamDef {
+            name: "rshear",
+            display_name: "Right Shear",
+            param_type: ParamType::UnlimitedFloat,
+            default_value: 0.0,
+            min_value: Some(-2.0),
+            max_value: Some(2.0),
+            description: Some("Y shift added to points with x >= 0."),
+        },
+        VariationParamDef {
+            name: "ushear",
+            display_name: "Up Shear",
+            param_type: ParamType::UnlimitedFloat,
+            default_value: 0.0,
+            min_value: Some(-2.0),
+            max_value: Some(2.0),
+            description: Some("X shift added to points with y >= 0."),
+        },
+        VariationParamDef {
+            name: "dshear",
+            display_name: "Down Shear",
+            param_type: ParamType::UnlimitedFloat,
+            default_value: 0.0,
+            min_value: Some(-2.0),
+            max_value: Some(2.0),
+            description: Some("X shift subtracted from points with y < 0."),
+        },
     ],
     init_param_count: 0,
     wgsl_init: None,
@@ -1869,21 +1909,31 @@ pub static SPLITS: VariationDef = VariationDef {
 fn variation_splits(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let splits_x = get_param(xform_id, variation_id, 0u);
     let splits_y = get_param(xform_id, variation_id, 1u);
-    return vec2<f32>(
-        select(p.x - splits_x, p.x + splits_x, p.x >= 0.0),
-        select(p.y - splits_y, p.y + splits_y, p.y >= 0.0)
-    );
+    let lshear = get_param(xform_id, variation_id, 2u);
+    let rshear = get_param(xform_id, variation_id, 3u);
+    let ushear = get_param(xform_id, variation_id, 4u);
+    let dshear = get_param(xform_id, variation_id, 5u);
+    // Split each axis, then add the cross-axis shear from the other test.
+    let px = select(p.x - splits_x, p.x + splits_x, p.x >= 0.0)
+           + select(-dshear, ushear, p.y >= 0.0);
+    let py = select(p.y - splits_y, p.y + splits_y, p.y >= 0.0)
+           + select(-lshear, rshear, p.x >= 0.0);
+    return vec2<f32>(px, py);
 }
 "#,
     wgsl_3d: r#"
 fn variation_splits(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let splits_x = get_param(xform_id, variation_id, 0u);
     let splits_y = get_param(xform_id, variation_id, 1u);
-    return vec3<f32>(
-        select(p.x - splits_x, p.x + splits_x, p.x >= 0.0),
-        select(p.y - splits_y, p.y + splits_y, p.y >= 0.0),
-        p.z
-    );
+    let lshear = get_param(xform_id, variation_id, 2u);
+    let rshear = get_param(xform_id, variation_id, 3u);
+    let ushear = get_param(xform_id, variation_id, 4u);
+    let dshear = get_param(xform_id, variation_id, 5u);
+    let px = select(p.x - splits_x, p.x + splits_x, p.x >= 0.0)
+           + select(-dshear, ushear, p.y >= 0.0);
+    let py = select(p.y - splits_y, p.y + splits_y, p.y >= 0.0)
+           + select(-lshear, rshear, p.x >= 0.0);
+    return vec3<f32>(px, py, p.z);
 }
 "#,
 };
