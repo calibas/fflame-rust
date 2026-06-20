@@ -932,12 +932,52 @@ pub fn render_transforms_content(
         attachment_edit,
     } = pool_actions;
 
+    // --- Section collapse/expand policy ---
+    // Sections start collapsed on program start and whenever a new fractal
+    // is loaded (tracked via ConfigManager::load_generation), but a
+    // transform added via the "Add" button opens expanded.
+    let pending_open_id = egui::Id::new("transforms_panel_pending_open");
+    let load_gen = config_manager.load_generation();
+    let collapse_all = ui.ctx().data_mut(|d| {
+        let gen_id = egui::Id::new("transforms_panel_load_gen");
+        let last: Option<u64> = d.get_temp(gen_id);
+        if last != Some(load_gen) {
+            d.insert_temp(gen_id, load_gen);
+            true
+        } else {
+            false
+        }
+    });
+    // Take any "open this newly-added member" request (consumed once). A
+    // fresh fractal load overrides a stale request from the previous one.
+    let pending_open: Option<(u8, usize)> = ui.ctx().data_mut(|d| {
+        let v = d.get_temp::<(u8, usize)>(pending_open_id);
+        if v.is_some() {
+            d.remove::<(u8, usize)>(pending_open_id);
+        }
+        v
+    });
+    let pending_open = if collapse_all { None } else { pending_open };
+    // pool: 0 = normal, 1 = linked, 2 = final
+    let open_override = |pool: u8, idx: usize| -> Option<bool> {
+        if collapse_all {
+            Some(false)
+        } else if pending_open == Some((pool, idx)) {
+            Some(true)
+        } else {
+            None
+        }
+    };
+
     ui.heading(format!("Transforms ({})", flame.transforms.len()));
 
     // Add transform button
     ui.horizontal(|ui| {
         if ui.button(t!("transform.add")).clicked() {
             *add_transform = true;
+            // The new transform is appended at the current end; open it.
+            let new_idx = flame.transforms.len();
+            ui.ctx().data_mut(|d| d.insert_temp(pending_open_id, (0u8, new_idx)));
         }
     });
 
@@ -978,7 +1018,8 @@ pub fn render_transforms_content(
                     can_delete: num_normals > 1,
                     header_text: format!("Transform {}", i + 1),
                     header_color: Some(get_transform_color(i)),
-                    default_open: true,
+                    default_open: false,
+                    open_override: open_override(0, i),
                     attachments: Some(NormalAttachmentsView {
                         linked: linked_att,
                         final_: final_att,
@@ -1007,6 +1048,8 @@ pub fn render_transforms_content(
             .clicked()
         {
             *add_linked = true;
+            let new_idx = flame.linked_transforms.len();
+            ui.ctx().data_mut(|d| d.insert_temp(pending_open_id, (1u8, new_idx)));
         }
     });
     ui.separator();
@@ -1033,7 +1076,8 @@ pub fn render_transforms_content(
                     can_delete: true,
                     header_text: format!("Linked {}", i + 1),
                     header_color: None,
-                    default_open: true,
+                    default_open: false,
+                    open_override: open_override(1, i),
                     attachments: None,
                 },
                 solo_transform,
@@ -1056,6 +1100,8 @@ pub fn render_transforms_content(
             .clicked()
         {
             *add_final = true;
+            let new_idx = flame.final_transforms.len();
+            ui.ctx().data_mut(|d| d.insert_temp(pending_open_id, (2u8, new_idx)));
         }
     });
     ui.separator();
@@ -1079,7 +1125,8 @@ pub fn render_transforms_content(
                     can_delete: true,
                     header_text: format!("Final {}", i + 1),
                     header_color: None,
-                    default_open: true,
+                    default_open: false,
+                    open_override: open_override(2, i),
                     attachments: None,
                 },
                 solo_transform,
@@ -1107,6 +1154,11 @@ struct PoolMemberOptions<'a> {
     header_text: String,
     header_color: Option<Color32>,
     default_open: bool,
+    /// Force this member's collapsing section open/closed this frame,
+    /// overriding the persisted egui state. `Some(false)` collapses on
+    /// fractal load/program start; `Some(true)` expands a freshly-added
+    /// transform; `None` leaves the user's persisted state alone.
+    open_override: Option<bool>,
     /// Only meaningful for Normal-pool members — when set, the Advanced
     /// section gains "Linked XForms" and "Final XForms" subsections that
     /// drive the per-normal attachment lists.
@@ -1151,11 +1203,20 @@ fn render_pool_member_block(
 
     let id = ui.make_persistent_id(format!("{}_header_{}", xref.pool_kind(), xref.index()));
     let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, opts.default_open);
+    // Collapse-on-load / expand-new-transform override (see PoolMemberOptions).
+    if let Some(open) = opts.open_override {
+        state.set_open(open);
+    }
 
     let header_response = ui.horizontal(|ui| {
         let _icon_response = state.show_toggle_button(ui, egui::collapsing_header::paint_default_icon);
         let header_text = egui::RichText::new(opts.header_text.clone()).strong().size(14.0);
-        let text_response = ui.label(header_text);
+        // Clickable label: clicking the "Transform N" name toggles the section
+        // (not just the little triangle icon). Sense::click() is required —
+        // a plain ui.label() never reports .clicked().
+        let text_response = ui
+            .add(egui::Label::new(header_text).sense(egui::Sense::click()))
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
         if let Some(color) = opts.header_color {
             let (circle_rect, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
             ui.painter().circle_filled(circle_rect.center(), 5.0, color);
