@@ -1602,6 +1602,12 @@ impl ShaderBuilder {
             let mut params = String::from("xform: Transform, xform_id: u32, p: vec2<f32>, rng: ptr<function, RngState>");
             if has_dc { params.push_str(", vc: ptr<function, f32>"); }
             if has_rgb { params.push_str(", vrc: ptr<function, vec3<f32>>"); }
+            // `hide` (doHide) is a plain bool pointer — trivially cheap, so
+            // it's always present on the main apply_variations (passed from
+            // the loop's per-iteration `should_hide`). In subflame mode it
+            // isn't a param; a discarded local stands in (see below), so
+            // subflame.wgsl stays unchanged. CanHide variations set it.
+            if !is_subflame { params.push_str(", hide: ptr<function, bool>"); }
             format!("fn {}({}) -> vec2<f32> {{\n", fn_name, params)
         };
         let mut code = String::from(
@@ -1615,6 +1621,8 @@ impl ShaderBuilder {
              // set means no inner call references vc, so it's pure overhead.\n",
         );
         code.push_str(&signature);
+        // Subflame stand-in for the `hide` param (no plot in subflames yet).
+        if is_subflame { code.push_str("    var hide_flag: bool = false;\n"); }
 
         // Separate variations by phase, honoring Any-variation fx_priority
         // overrides. In subflame mode, subflame_wf is excluded (see fn doc).
@@ -1648,6 +1656,10 @@ impl ShaderBuilder {
                 // Direct-RGB-writing variations get the vrc pointer.
                 if info.has_feature(Feature::WritesRgb) {
                     params.push_str(", vrc");
+                }
+                // CanHide (cut_*) variations get the doHide pointer.
+                if info.has_feature(Feature::CanHide) {
+                    params.push_str(if is_subflame { ", &hide_flag" } else { ", hide" });
                 }
 
                 // Activation: weight non-zero, plus any Any-var xform_id gate.
@@ -1711,6 +1723,9 @@ impl ShaderBuilder {
             if info.has_feature(Feature::WritesRgb) {
                 args.push_str(", vrc");
             }
+            if info.has_feature(Feature::CanHide) {
+                args.push_str(if is_subflame { ", &hide_flag" } else { ", hide" });
+            }
             let call = format!("{}({})", info.wgsl_function, args);
             // Optional Any-var xform_id gate, ANDed into the weight check.
             let gate = placed.gate.as_ref().map(|g| format!(" && {}", g)).unwrap_or_default();
@@ -1773,6 +1788,9 @@ impl ShaderBuilder {
                 }
                 if info.has_feature(Feature::WritesColor) {
                     params.push_str(", vc");
+                }
+                if info.has_feature(Feature::CanHide) {
+                    params.push_str(if is_subflame { ", &hide_flag" } else { ", hide" });
                 }
 
                 let activate = match &placed.gate {
@@ -1838,6 +1856,8 @@ impl ShaderBuilder {
             let mut params = String::from("xform: Transform, xform_id: u32, p: vec3<f32>, rng: ptr<function, RngState>");
             if has_dc { params.push_str(", vc: ptr<function, f32>"); }
             if has_rgb { params.push_str(", vrc: ptr<function, vec3<f32>>"); }
+            // doHide pointer — see the 2D builder.
+            if !is_subflame { params.push_str(", hide: ptr<function, bool>"); }
             format!("fn {}({}) -> vec3<f32> {{\n", fn_name, params)
         };
         let mut code = String::from(
@@ -1845,6 +1865,7 @@ impl ShaderBuilder {
              // See 2D variant for the meaning of the `vc` and `vrc` pointers.\n",
         );
         code.push_str(&signature);
+        if is_subflame { code.push_str("    var hide_flag: bool = false;\n"); }
 
         // Separate variations by phase, honoring Any-variation fx_priority
         // overrides. In subflame mode, subflame_wf is excluded (see fn doc).
@@ -1869,6 +1890,9 @@ impl ShaderBuilder {
                 }
                 if info.has_feature(Feature::WritesColor) {
                     params.push_str(", vc");
+                }
+                if info.has_feature(Feature::CanHide) {
+                    params.push_str(if is_subflame { ", &hide_flag" } else { ", hide" });
                 }
 
                 let activate = match &placed.gate {
@@ -1930,6 +1954,9 @@ impl ShaderBuilder {
             }
             if info.has_feature(Feature::WritesRgb) {
                 args.push_str(", vrc");
+            }
+            if info.has_feature(Feature::CanHide) {
+                args.push_str(if is_subflame { ", &hide_flag" } else { ", hide" });
             }
             let call = format!("{}({})", info.wgsl_function, args);
 
@@ -2011,6 +2038,9 @@ impl ShaderBuilder {
                 }
                 if info.has_feature(Feature::WritesColor) {
                     params.push_str(", vc");
+                }
+                if info.has_feature(Feature::CanHide) {
+                    params.push_str(if is_subflame { ", &hide_flag" } else { ", hide" });
                 }
 
                 let activate = match &placed.gate {

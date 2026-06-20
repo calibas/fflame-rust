@@ -99,7 +99,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // Opacity check (stochastic transparency)
         // Note: We still apply the transform even when opacity=0 - opacity affects
         // visibility only, not IFS dynamics. Transform must update position for correct chaos game.
-        let should_plot = rng_nextf(&rng) < xform.opacity;
+        var should_plot = rng_nextf(&rng) < xform.opacity;
+
+        // doHide flag (JWildfire's pVarTP.doHide), reset each iteration. The
+        // cut_* family of CanHide variations set it via the `hide` pointer
+        // threaded into apply_variations; a true value suppresses this
+        // iteration's splat (the chaos game still advances). See the
+        // CanHide feature + the gate after the transform chain below.
+        var should_hide = false;
 
 {{#if HAS_DC}}
         // Apophysis 3-step color flow (XForm.pas:312-313, 1067, 1078-1081),
@@ -135,15 +142,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let affine_p = apply_affine(xform, current);
 {{#if HAS_DC}}
 {{#if HAS_RGB}}
-        current = apply_variations(xform, xform_idx, affine_p, &rng, &vc, &vrc);
+        current = apply_variations(xform, xform_idx, affine_p, &rng, &vc, &vrc, &should_hide);
 {{else}}
-        current = apply_variations(xform, xform_idx, affine_p, &rng, &vc);
+        current = apply_variations(xform, xform_idx, affine_p, &rng, &vc, &should_hide);
 {{/if}}
 {{else}}
 {{#if HAS_RGB}}
-        current = apply_variations(xform, xform_idx, affine_p, &rng, &vrc);
+        current = apply_variations(xform, xform_idx, affine_p, &rng, &vrc, &should_hide);
 {{else}}
-        current = apply_variations(xform, xform_idx, affine_p, &rng);
+        current = apply_variations(xform, xform_idx, affine_p, &rng, &should_hide);
 {{/if}}
 {{/if}}
         if (HAS_POST_AFFINE) {
@@ -167,15 +174,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let laff = apply_affine(lxform, current);
 {{#if HAS_DC}}
 {{#if HAS_RGB}}
-            current = apply_variations(lxform, lid, laff, &rng, &vc, &vrc);
+            current = apply_variations(lxform, lid, laff, &rng, &vc, &vrc, &should_hide);
 {{else}}
-            current = apply_variations(lxform, lid, laff, &rng, &vc);
+            current = apply_variations(lxform, lid, laff, &rng, &vc, &should_hide);
 {{/if}}
 {{else}}
 {{#if HAS_RGB}}
-            current = apply_variations(lxform, lid, laff, &rng, &vrc);
+            current = apply_variations(lxform, lid, laff, &rng, &vrc, &should_hide);
 {{else}}
-            current = apply_variations(lxform, lid, laff, &rng);
+            current = apply_variations(lxform, lid, laff, &rng, &should_hide);
 {{/if}}
 {{/if}}
             if (HAS_POST_AFFINE) {
@@ -333,15 +340,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 {{/if}}
 {{#if HAS_DC}}
 {{#if HAS_RGB}}
-                final_pos = apply_variations(fxform, fid, faff, &rng, &final_vc, &final_vrc);
+                final_pos = apply_variations(fxform, fid, faff, &rng, &final_vc, &final_vrc, &should_hide);
 {{else}}
-                final_pos = apply_variations(fxform, fid, faff, &rng, &final_vc);
+                final_pos = apply_variations(fxform, fid, faff, &rng, &final_vc, &should_hide);
 {{/if}}
 {{else}}
 {{#if HAS_RGB}}
-                final_pos = apply_variations(fxform, fid, faff, &rng, &final_vrc);
+                final_pos = apply_variations(fxform, fid, faff, &rng, &final_vrc, &should_hide);
 {{else}}
-                final_pos = apply_variations(fxform, fid, faff, &rng);
+                final_pos = apply_variations(fxform, fid, faff, &rng, &should_hide);
 {{/if}}
 {{/if}}
                 if (HAS_POST_AFFINE) {
@@ -355,6 +362,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             // (== post-Normal) point directly.
             let final_pos = current;
 {{/if}}
+
+            // doHide gate: a CanHide (cut_*) variation anywhere in this
+            // iteration's transform chain marks the point as cut — skip the
+            // splat (all post-symmetry copies included) while the chaos game
+            // continues from final_pos.
+            if (should_hide) {
+                should_plot = false;
+            }
 
             // Post-symmetry — gated entirely by HAS_POST_SYMMETRY.
             // When false, sym_count is 1u and the loop runs exactly
