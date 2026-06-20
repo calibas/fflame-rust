@@ -2,6 +2,7 @@ use crate::scene::transforms::{Flame, RenderMode};
 use crate::variations::{VariationCategory, VariationPhase, global_registry};
 use crate::config::{ConfigManager, ConfigPath, UpdateType, AffineParam, TransformRef};
 use super::variation_params::render_variation_params;
+use super::transform_colors::{normal_color, linked_color, final_color};
 use egui::Color32;
 use rust_i18n::t;
 
@@ -65,20 +66,8 @@ fn variation_phase_info(
     (def_phase == VariationPhase::Any, bucket)
 }
 
-/// Get a distinct color for each transform index (matches Triangle Editor)
-fn get_transform_color(index: usize) -> Color32 {
-    let colors = [
-        Color32::from_rgb(255, 100, 100), // Red
-        Color32::from_rgb(100, 255, 100), // Green
-        Color32::from_rgb(100, 100, 255), // Blue
-        Color32::from_rgb(255, 255, 100), // Yellow
-        Color32::from_rgb(255, 100, 255), // Magenta
-        Color32::from_rgb(100, 255, 255), // Cyan
-        Color32::from_rgb(255, 150, 100), // Orange
-        Color32::from_rgb(150, 100, 255), // Purple
-    ];
-    colors[index % colors.len()]
-}
+// Per-index transform colors are shared with the Triangle Editor — see
+// `super::transform_colors` (normal_color / linked_color / final_color).
 
 /// Render weight control (always visible)
 fn render_weight_control(
@@ -1017,7 +1006,7 @@ pub fn render_transforms_content(
                     show_edit_triangle: true,
                     can_delete: num_normals > 1,
                     header_text: format!("Transform {}", i + 1),
-                    header_color: Some(get_transform_color(i)),
+                    header_color: Some(normal_color(i)),
                     default_open: false,
                     open_override: open_override(0, i),
                     attachments: Some(NormalAttachmentsView {
@@ -1075,7 +1064,7 @@ pub fn render_transforms_content(
                     show_edit_triangle: true,
                     can_delete: true,
                     header_text: format!("Linked {}", i + 1),
-                    header_color: None,
+                    header_color: Some(linked_color(i)),
                     default_open: false,
                     open_override: open_override(1, i),
                     attachments: None,
@@ -1124,7 +1113,7 @@ pub fn render_transforms_content(
                     show_edit_triangle: true,
                     can_delete: true,
                     header_text: format!("Final {}", i + 1),
-                    header_color: None,
+                    header_color: Some(final_color(i)),
                     default_open: false,
                     open_override: open_override(2, i),
                     attachments: None,
@@ -1226,6 +1215,23 @@ fn render_pool_member_block(
 
     if header_response.inner.clicked() {
         state.toggle(ui);
+    }
+
+    // When collapsed, show a compact variation summary under the name
+    // (e.g. "pre_blur, bubble") — smaller, indented, light grey.
+    if !state.is_open() {
+        let registry = crate::variations::global_registry();
+        let names = transform.ordered_variation_names(&registry);
+        if !names.is_empty() {
+            ui.horizontal(|ui| {
+                ui.add_space(35.0);
+                ui.label(
+                    egui::RichText::new(names.join(", "))
+                        .size(11.0)
+                        .color(egui::Color32::from_gray(160)),
+                );
+            });
+        }
     }
 
     state.show_body_indented(&header_response.response, ui, |ui| {
