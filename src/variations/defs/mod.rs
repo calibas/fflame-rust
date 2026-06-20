@@ -166,6 +166,7 @@ mod cut_yuebing;
 mod cut_vasarely;
 mod cut_sincos;
 mod cut_simple;
+mod cut_helper;
 
 pub use basic::*;
 pub use advanced::*;
@@ -328,6 +329,7 @@ pub use cut_yuebing::*;
 pub use cut_vasarely::*;
 pub use cut_sincos::*;
 pub use cut_simple::*;
+pub use cut_helper::*;
 
 use super::definition::VariationDef;
 
@@ -1114,4 +1116,9 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &CUT_SNOWFLAKE,
     &CUT_JIGSAW,
     &CUT_RGRID,
+    &CUT_X,
+    &CUT_METABALLS,
+    &CUT_KALEIDO,
+    &CUT_SPIRAL,
+    &CUT_SWARP,
 ];
