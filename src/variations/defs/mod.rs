@@ -162,6 +162,8 @@ mod sym_bg;
 mod prose3d;
 mod cut_hextruchetflow;
 mod cut_sqcir;
+mod cut_yuebing;
+mod cut_vasarely;
 
 pub use basic::*;
 pub use advanced::*;
@@ -320,6 +322,8 @@ pub use sym_bg::*;
 pub use prose3d::*;
 pub use cut_hextruchetflow::*;
 pub use cut_sqcir::*;
+pub use cut_yuebing::*;
+pub use cut_vasarely::*;
 
 use super::definition::VariationDef;
 
@@ -1092,4 +1096,6 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &PROSE3D,
     &CUT_HEXTRUCHETFLOW,
     &CUT_SQCIR,
+    &CUT_YUEBING,
+    &CUT_VASARELY,
 ];
