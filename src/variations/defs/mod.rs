@@ -165,6 +165,7 @@ mod cut_sqcir;
 mod cut_yuebing;
 mod cut_vasarely;
 mod cut_sincos;
+mod cut_simple;
 
 pub use basic::*;
 pub use advanced::*;
@@ -326,6 +327,7 @@ pub use cut_sqcir::*;
 pub use cut_yuebing::*;
 pub use cut_vasarely::*;
 pub use cut_sincos::*;
+pub use cut_simple::*;
 
 use super::definition::VariationDef;
 
@@ -1101,4 +1103,10 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &CUT_YUEBING,
     &CUT_VASARELY,
     &CUT_SINCOS,
+    &CUT_CHAINS,
+    &CUT_HEXDOTS,
+    &CUT_BOOLEANS,
+    &CUT_SQSPLITS,
+    &CUT_BTREE,
+    &CUT_FRACTAL,
 ];
