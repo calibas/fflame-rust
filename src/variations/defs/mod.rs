@@ -1126,4 +1126,7 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &CUT_APOLLONIAN,
     &CUT_ZIGZAG,
     &CUT_BRICKS,
+    &CUT_WEB,
+    &CUT_FINGERPRINT,
+    &CUT_TILEILLUSION,
 ];
