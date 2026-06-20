@@ -130,7 +130,7 @@ pub static SPHERECROP: VariationDef = VariationDef {
     display_name: "Sphere Crop",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Any,
-    features: &[Feature::NeedsRng, Feature::NeedsTransform, Feature::AlwaysZ],
+    features: &[Feature::NeedsRng, Feature::NeedsTransform, Feature::AlwaysZ, Feature::CanHide],
     parameters: &[
         param!("radius", "Radius", unlimited_float, 1.0, -10.0, 10.0, "Sphere radius."),
         param!("x", "X", unlimited_float, 0.0, -10.0, 10.0, "X center of the sphere."),
@@ -150,7 +150,7 @@ fn init_spherecrop(user: array<f32, 6>) -> array<f32, 1> {
     state_count: 0,
     wgsl_state_init: None,
     wgsl_2d: r#"
-fn variation_spherecrop(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
+fn variation_spherecrop(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, hide: ptr<function, bool>) -> vec2<f32> {
     let cr = get_param(xform_id, variation_id, 0u);
     let x0 = get_param(xform_id, variation_id, 1u);
     let y0 = get_param(xform_id, variation_id, 2u);
@@ -168,6 +168,7 @@ fn variation_spherecrop(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr
     let cr0 = zero == 1;
 
     if (cr0 && esc) {
+        *hide = true;
         return vec2<f32>(0.0, 0.0);
     }
     if (!cr0 && esc) {
@@ -177,7 +178,7 @@ fn variation_spherecrop(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr
 }
 "#,
     wgsl_3d: r#"
-fn variation_spherecrop(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
+fn variation_spherecrop(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, hide: ptr<function, bool>) -> vec3<f32> {
     let cr = get_param(xform_id, variation_id, 0u);
     let x0 = get_param(xform_id, variation_id, 1u);
     let y0 = get_param(xform_id, variation_id, 2u);
@@ -204,6 +205,7 @@ fn variation_spherecrop(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
     let caz = cos(az);
 
     if (cr0 && esc) {
+        *hide = true;
         return vec3<f32>(0.0, 0.0, 0.0);
     }
     if (!cr0 && esc) {
