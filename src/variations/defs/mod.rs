@@ -167,6 +167,7 @@ mod cut_vasarely;
 mod cut_sincos;
 mod cut_simple;
 mod cut_helper;
+mod cut_helper2;
 
 pub use basic::*;
 pub use advanced::*;
@@ -330,6 +331,7 @@ pub use cut_vasarely::*;
 pub use cut_sincos::*;
 pub use cut_simple::*;
 pub use cut_helper::*;
+pub use cut_helper2::*;
 
 use super::definition::VariationDef;
 
@@ -1121,4 +1123,7 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &CUT_KALEIDO,
     &CUT_SPIRAL,
     &CUT_SWARP,
+    &CUT_APOLLONIAN,
+    &CUT_ZIGZAG,
+    &CUT_BRICKS,
 ];
