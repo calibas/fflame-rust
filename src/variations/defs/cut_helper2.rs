@@ -12,6 +12,9 @@
 //!   - cut_apollonian  — Apollonian gasket fold (inversion iteration)
 //!   - cut_zigzag      — mirrored zig-zag stripe tiles
 //!   - cut_bricks      — running-bond brick grid
+//!   - cut_web         — log-polar spider-web grid
+//!   - cut_fingerprint — whorled fingerprint ridges (atan accumulation)
+//!   - cut_tileillusion— sheared wavy-tile checkerboard illusion
 //!
 //! GLSL `mod(a,b)` is inlined as `a − b·floor(a/b)`. `seed` (where present)
 //! is JWF's UI wall-clock hack, declared for `.flame` round-trip only.
@@ -324,6 +327,360 @@ fn variation_cut_bricks(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
     }
     *hide = hidden;
     return vec3<f32>(x - cx, y - cy, p.z);
+}
+"#,
+};
+
+// =============================================================================
+// cut_web
+// =============================================================================
+pub static CUT_WEB: VariationDef = VariationDef {
+    name: "cut_web",
+    aliases: &[],
+    display_name: "Cut Web",
+    category: VariationCategory::Plugin,
+    phase: VariationPhase::Any,
+    features: &[Feature::NeedsRng, Feature::Replace, Feature::CanHide],
+    parameters: &[
+        param!("seed", "Seed", int, 1000.0, 0.0, 1000000.0, "UI-only in JWildfire; ignored by the renderer."),
+        param!("time", "Time", unlimited_float, 0.0, -100.0, 100.0, "Scrolls the log-polar grid radially."),
+        param!("mode", "Mode", enum, 1, &["Affine Input", "Random Point"], "Affine Input samples the incoming point; Random Point samples a fresh uniform point each call."),
+        param!("thick", "Thickness", float, 0.05, 0.0, 0.9, "Web strand thickness."),
+        param!("invert", "Invert", bool, true, "Invert the cut — keep what would be hidden and vice versa."),
+    ],
+    init_param_count: 0,
+    wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    wgsl_2d: r#"
+fn cut_web_eval(p0: vec2<f32>, c: vec2<f32>, strength: f32) -> vec2<f32> {
+    let p = p0 - c;
+    let l = log(length(p));
+    let ang = atan2(p.y, p.x);
+    return vec2<f32>(l, ang) * strength;
+}
+fn cut_web_getColour(p: vec2<f32>, time: f32, thick: f32) -> f32 {
+    const PI: f32 = 3.14159265359;
+    let fac = 10.0 / (2.0 * PI);
+    var ep = cut_web_eval(p, vec2<f32>(0.0, 0.0), 1.0);
+    let d = ep.x * 0.05 * fac;
+    ep = ep + vec2<f32>(-ep.y, ep.x) * 4.0;
+    let arg = ep * fac + time;
+    let modded = arg - 2.0 * floor(arg / 2.0);
+    let xx = abs(modded - 1.0) - thick;
+    let si = smoothstep(vec2<f32>(-0.5 * d), vec2<f32>(0.5 * d), xx);
+    return si.x + si.y;
+}
+fn variation_cut_web(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, hide: ptr<function, bool>) -> vec2<f32> {
+    let time = get_param(xform_id, variation_id, 1u);
+    let mode = i32(get_param(xform_id, variation_id, 2u));
+    let thick = get_param(xform_id, variation_id, 3u);
+    let invert = i32(get_param(xform_id, variation_id, 4u));
+
+    var x: f32;
+    var y: f32;
+    if (mode == 0) { x = p.x; y = p.y; } else { x = 2.0 * rng_nextf(rng) - 1.0; y = 2.0 * rng_nextf(rng) - 1.0; }
+    let u = vec2<f32>(x * 0.5, y * 0.5);
+    let color = cut_web_getColour(u, time, thick);
+
+    var hidden = false;
+    if (invert == 0) {
+        if (color > 0.0) { x = 0.0; y = 0.0; hidden = true; }
+    } else {
+        if (color <= 0.0) { x = 0.0; y = 0.0; hidden = true; }
+    }
+    *hide = hidden;
+    return vec2<f32>(x, y);
+}
+"#,
+    wgsl_3d: r#"
+fn cut_web_eval(p0: vec2<f32>, c: vec2<f32>, strength: f32) -> vec2<f32> {
+    let p = p0 - c;
+    let l = log(length(p));
+    let ang = atan2(p.y, p.x);
+    return vec2<f32>(l, ang) * strength;
+}
+fn cut_web_getColour(p: vec2<f32>, time: f32, thick: f32) -> f32 {
+    const PI: f32 = 3.14159265359;
+    let fac = 10.0 / (2.0 * PI);
+    var ep = cut_web_eval(p, vec2<f32>(0.0, 0.0), 1.0);
+    let d = ep.x * 0.05 * fac;
+    ep = ep + vec2<f32>(-ep.y, ep.x) * 4.0;
+    let arg = ep * fac + time;
+    let modded = arg - 2.0 * floor(arg / 2.0);
+    let xx = abs(modded - 1.0) - thick;
+    let si = smoothstep(vec2<f32>(-0.5 * d), vec2<f32>(0.5 * d), xx);
+    return si.x + si.y;
+}
+fn variation_cut_web(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, hide: ptr<function, bool>) -> vec3<f32> {
+    let time = get_param(xform_id, variation_id, 1u);
+    let mode = i32(get_param(xform_id, variation_id, 2u));
+    let thick = get_param(xform_id, variation_id, 3u);
+    let invert = i32(get_param(xform_id, variation_id, 4u));
+
+    var x: f32;
+    var y: f32;
+    if (mode == 0) { x = p.x; y = p.y; } else { x = 2.0 * rng_nextf(rng) - 1.0; y = 2.0 * rng_nextf(rng) - 1.0; }
+    let u = vec2<f32>(x * 0.5, y * 0.5);
+    let color = cut_web_getColour(u, time, thick);
+
+    var hidden = false;
+    if (invert == 0) {
+        if (color > 0.0) { x = 0.0; y = 0.0; hidden = true; }
+    } else {
+        if (color <= 0.0) { x = 0.0; y = 0.0; hidden = true; }
+    }
+    *hide = hidden;
+    return vec3<f32>(x, y, p.z);
+}
+"#,
+};
+
+// =============================================================================
+// cut_fingerprint
+// =============================================================================
+pub static CUT_FINGERPRINT: VariationDef = VariationDef {
+    name: "cut_fingerprint",
+    aliases: &[],
+    display_name: "Cut FingerPrint",
+    category: VariationCategory::Plugin,
+    phase: VariationPhase::Any,
+    features: &[Feature::NeedsRng, Feature::Replace, Feature::CanHide],
+    parameters: &[
+        param!("seed", "Seed", int, 10000.0, 0.0, 1000000.0, "Selects the ridge whorl pattern (`floor(7·seed)` seeds the hash walk)."),
+        param!("mode", "Mode", enum, 1, &["Affine Input", "Random Point"], "Affine Input samples the incoming point; Random Point samples a fresh uniform point each call."),
+        param!("zoom", "Zoom", float, 20.0, 1.0, 100.0, "Pattern scale: `uv = point·zoom`."),
+        param!("width", "Width", float, 0.8, 0.02, 1.0, "Ridge width fraction."),
+        param!("invert", "Invert", bool, false, "Invert the cut — keep what would be hidden and vice versa."),
+    ],
+    init_param_count: 0,
+    wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    wgsl_2d: r#"
+fn cut_fingerprint_hash2(p0: vec2<f32>) -> vec2<f32> {
+    let p = vec2<f32>(dot(p0, vec2<f32>(63.31, 127.63)), dot(p0, vec2<f32>(395.467, 213.799)));
+    return fract(sin(p) * 43141.59265) * 2.0 - 1.0;
+}
+fn cut_fingerprint_getColor(uv0: vec2<f32>, seed: f32, width: f32) -> f32 {
+    let bounds = smoothstep(9.0, 10.0, length(uv0 * vec2<f32>(0.7, 0.5)));
+    var a = 0.0;
+    var h = vec2<f32>(floor(7.0 * seed), 0.0);
+    for (var i = 0; i < 50; i = i + 1) {
+        let s = sign(h.x);
+        h = cut_fingerprint_hash2(h) * vec2<f32>(15.0, 20.0);
+        a = a + s * atan2(uv0.x - h.x, uv0.y - h.y);
+    }
+    let uv = uv0 + abs(cut_fingerprint_hash2(h));
+    a = a + atan2(uv.y, uv.x);
+    let pp = (1.0 - bounds) * width;
+    let s = min(0.3, pp);
+    let l = length(uv) + 0.319 * a;
+    let m = l - 2.0 * floor(l / 2.0);
+    let v = (1.0 - smoothstep(2.0 - s, 2.0, m)) * smoothstep(pp, pp + s, m);
+    return v;
+}
+fn variation_cut_fingerprint(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, hide: ptr<function, bool>) -> vec2<f32> {
+    let seed = get_param(xform_id, variation_id, 0u);
+    let mode = i32(get_param(xform_id, variation_id, 1u));
+    let zoom = get_param(xform_id, variation_id, 2u);
+    let width = get_param(xform_id, variation_id, 3u);
+    let invert = i32(get_param(xform_id, variation_id, 4u));
+
+    var x: f32;
+    var y: f32;
+    if (mode == 0) { x = p.x; y = p.y; } else { x = rng_nextf(rng) - 0.5; y = rng_nextf(rng) - 0.5; }
+    let uv = vec2<f32>(x, y) * zoom;
+    let color = cut_fingerprint_getColor(uv, seed, width);
+
+    var hidden = false;
+    if (invert == 0) {
+        if (color == 0.0) { x = 0.0; y = 0.0; hidden = true; }
+    } else {
+        if (color > 0.0) { x = 0.0; y = 0.0; hidden = true; }
+    }
+    *hide = hidden;
+    return vec2<f32>(x, y);
+}
+"#,
+    wgsl_3d: r#"
+fn cut_fingerprint_hash2(p0: vec2<f32>) -> vec2<f32> {
+    let p = vec2<f32>(dot(p0, vec2<f32>(63.31, 127.63)), dot(p0, vec2<f32>(395.467, 213.799)));
+    return fract(sin(p) * 43141.59265) * 2.0 - 1.0;
+}
+fn cut_fingerprint_getColor(uv0: vec2<f32>, seed: f32, width: f32) -> f32 {
+    let bounds = smoothstep(9.0, 10.0, length(uv0 * vec2<f32>(0.7, 0.5)));
+    var a = 0.0;
+    var h = vec2<f32>(floor(7.0 * seed), 0.0);
+    for (var i = 0; i < 50; i = i + 1) {
+        let s = sign(h.x);
+        h = cut_fingerprint_hash2(h) * vec2<f32>(15.0, 20.0);
+        a = a + s * atan2(uv0.x - h.x, uv0.y - h.y);
+    }
+    let uv = uv0 + abs(cut_fingerprint_hash2(h));
+    a = a + atan2(uv.y, uv.x);
+    let pp = (1.0 - bounds) * width;
+    let s = min(0.3, pp);
+    let l = length(uv) + 0.319 * a;
+    let m = l - 2.0 * floor(l / 2.0);
+    let v = (1.0 - smoothstep(2.0 - s, 2.0, m)) * smoothstep(pp, pp + s, m);
+    return v;
+}
+fn variation_cut_fingerprint(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, hide: ptr<function, bool>) -> vec3<f32> {
+    let seed = get_param(xform_id, variation_id, 0u);
+    let mode = i32(get_param(xform_id, variation_id, 1u));
+    let zoom = get_param(xform_id, variation_id, 2u);
+    let width = get_param(xform_id, variation_id, 3u);
+    let invert = i32(get_param(xform_id, variation_id, 4u));
+
+    var x: f32;
+    var y: f32;
+    if (mode == 0) { x = p.x; y = p.y; } else { x = rng_nextf(rng) - 0.5; y = rng_nextf(rng) - 0.5; }
+    let uv = vec2<f32>(x, y) * zoom;
+    let color = cut_fingerprint_getColor(uv, seed, width);
+
+    var hidden = false;
+    if (invert == 0) {
+        if (color == 0.0) { x = 0.0; y = 0.0; hidden = true; }
+    } else {
+        if (color > 0.0) { x = 0.0; y = 0.0; hidden = true; }
+    }
+    *hide = hidden;
+    return vec3<f32>(x, y, p.z);
+}
+"#,
+};
+
+// =============================================================================
+// cut_tileillusion
+// =============================================================================
+pub static CUT_TILEILLUSION: VariationDef = VariationDef {
+    name: "cut_tileillusion",
+    aliases: &[],
+    display_name: "Cut TileIllusion",
+    category: VariationCategory::Plugin,
+    phase: VariationPhase::Any,
+    features: &[Feature::NeedsRng, Feature::Replace, Feature::CanHide],
+    parameters: &[
+        param!("time", "Time", unlimited_float, 0.0, -100.0, 100.0, "Horizontal shear offset alternating per row (drives the illusion)."),
+        param!("mode", "Mode", enum, 1, &["Affine Input", "Random Point"], "Affine Input samples the incoming point; Random Point samples a fresh uniform point each call."),
+        param!("zoom", "Zoom", unlimited_float, 15.0, -100.0, 100.0, "Pattern scale: `uv = point·zoom`."),
+        param!("invert", "Invert", bool, false, "Invert the cut — keep what would be hidden and vice versa."),
+    ],
+    init_param_count: 0,
+    wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    wgsl_2d: r#"
+fn cut_tileillusion_f(x: f32) -> f32 {
+    return x + 0.1 * sin(1.6 * x);
+}
+fn cut_tileillusion_solve(x0i: f32, x1i: f32, y: f32) -> f32 {
+    var x0 = x0i;
+    var x1 = x1i;
+    var y0 = cut_tileillusion_f(x0);
+    var y1 = cut_tileillusion_f(x1);
+    if (y1 < y0) {
+        let x2 = x1; x1 = x0; x0 = x2;
+        let y2 = y1; y1 = y0; y0 = y2;
+    }
+    var xn = 0.0;
+    var yn = 0.0;
+    for (var i = 0; i < 20; i = i + 1) {
+        xn = x0 + (x1 - x0) / (y1 - y0) * (y - y0);
+        yn = cut_tileillusion_f(xn);
+        if (yn > y) { x1 = xn; y1 = yn; } else { x0 = xn; y0 = yn; }
+    }
+    return xn;
+}
+fn variation_cut_tileillusion(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, hide: ptr<function, bool>) -> vec2<f32> {
+    let time = get_param(xform_id, variation_id, 0u);
+    let mode = i32(get_param(xform_id, variation_id, 1u));
+    let zoom = get_param(xform_id, variation_id, 2u);
+    let invert = i32(get_param(xform_id, variation_id, 3u));
+
+    var x: f32;
+    var y: f32;
+    if (mode == 0) { x = p.x; y = p.y; } else { x = rng_nextf(rng) - 0.5; y = rng_nextf(rng) - 0.5; }
+    var uv = vec2<f32>(x * zoom, y * zoom);
+    let fuvy = cut_tileillusion_f(uv.y);
+    let y0 = cut_tileillusion_solve(uv.y - 3.0, uv.y, floor(fuvy));
+    let y1 = cut_tileillusion_solve(uv.y, uv.y + 3.0, floor(fuvy) + 1.0);
+    uv.y = fuvy;
+    uv.x = uv.x / (y1 - y0);
+    let fy = floor(uv.y);
+    let s = fy - 2.0 * floor(fy / 2.0);
+    var color = 0.0;
+    if (fract(uv.y) > 0.05) {
+        uv.x = uv.x + time * sign(s - 0.5);
+        let cc = floor(uv.x) + floor(uv.y);
+        color = cc - 2.0 * floor(cc / 2.0);
+    }
+
+    var hidden = false;
+    if (invert == 0) {
+        if (color == 0.0) { x = 0.0; y = 0.0; hidden = true; }
+    } else {
+        if (color > 0.0) { x = 0.0; y = 0.0; hidden = true; }
+    }
+    *hide = hidden;
+    return vec2<f32>(x, y);
+}
+"#,
+    wgsl_3d: r#"
+fn cut_tileillusion_f(x: f32) -> f32 {
+    return x + 0.1 * sin(1.6 * x);
+}
+fn cut_tileillusion_solve(x0i: f32, x1i: f32, y: f32) -> f32 {
+    var x0 = x0i;
+    var x1 = x1i;
+    var y0 = cut_tileillusion_f(x0);
+    var y1 = cut_tileillusion_f(x1);
+    if (y1 < y0) {
+        let x2 = x1; x1 = x0; x0 = x2;
+        let y2 = y1; y1 = y0; y0 = y2;
+    }
+    var xn = 0.0;
+    var yn = 0.0;
+    for (var i = 0; i < 20; i = i + 1) {
+        xn = x0 + (x1 - x0) / (y1 - y0) * (y - y0);
+        yn = cut_tileillusion_f(xn);
+        if (yn > y) { x1 = xn; y1 = yn; } else { x0 = xn; y0 = yn; }
+    }
+    return xn;
+}
+fn variation_cut_tileillusion(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, hide: ptr<function, bool>) -> vec3<f32> {
+    let time = get_param(xform_id, variation_id, 0u);
+    let mode = i32(get_param(xform_id, variation_id, 1u));
+    let zoom = get_param(xform_id, variation_id, 2u);
+    let invert = i32(get_param(xform_id, variation_id, 3u));
+
+    var x: f32;
+    var y: f32;
+    if (mode == 0) { x = p.x; y = p.y; } else { x = rng_nextf(rng) - 0.5; y = rng_nextf(rng) - 0.5; }
+    var uv = vec2<f32>(x * zoom, y * zoom);
+    let fuvy = cut_tileillusion_f(uv.y);
+    let y0 = cut_tileillusion_solve(uv.y - 3.0, uv.y, floor(fuvy));
+    let y1 = cut_tileillusion_solve(uv.y, uv.y + 3.0, floor(fuvy) + 1.0);
+    uv.y = fuvy;
+    uv.x = uv.x / (y1 - y0);
+    let fy = floor(uv.y);
+    let s = fy - 2.0 * floor(fy / 2.0);
+    var color = 0.0;
+    if (fract(uv.y) > 0.05) {
+        uv.x = uv.x + time * sign(s - 0.5);
+        let cc = floor(uv.x) + floor(uv.y);
+        color = cc - 2.0 * floor(cc / 2.0);
+    }
+
+    var hidden = false;
+    if (invert == 0) {
+        if (color == 0.0) { x = 0.0; y = 0.0; hidden = true; }
+    } else {
+        if (color > 0.0) { x = 0.0; y = 0.0; hidden = true; }
+    }
+    *hide = hidden;
+    return vec3<f32>(x, y, p.z);
 }
 "#,
 };
