@@ -109,6 +109,18 @@ pub enum Feature {
     /// Sourced from the JWF `=` vs `+=` classification; see
     /// `docs/projects/jwf-features.md`.
     Replace,
+
+    /// The variation can HIDE the plotted point for an iteration
+    /// (JWildfire's `pVarTP.doHide`). The "cut" family (`cut_*` by Jesus
+    /// Sosa) are procedural stencils: they pass through points in the
+    /// "kept" region of a pattern and hide points in the "cut" region.
+    /// When listed, the generated function signature gains
+    /// `hide: ptr<function, bool>`; the variation sets `*hide = true` to
+    /// suppress this iteration's splat (the chaos game still advances).
+    /// The main loop carries a per-iteration `should_hide` flag and skips
+    /// the plot when any active variation set it. (In subflames the flag
+    /// is a discarded local — hiding inside a subflame is a no-op in v1.)
+    CanHide,
 }
 
 /// Static definition of a variation
