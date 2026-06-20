@@ -315,6 +315,13 @@ pub struct ConfigManager {
     /// for the apply/get machinery (`target_flame[_mut]`) and the UI
     /// panels.
     editing_target: EditingTarget,
+
+    /// Monotonic counter bumped whenever a brand-new config is loaded
+    /// (preset/import/browser via `load_config`). UI panels read this to
+    /// reset per-fractal view state (e.g. collapse the Transforms panel
+    /// sections) on fractal switch without conflating it with in-place
+    /// edits or undo/redo navigation.
+    load_generation: u64,
 }
 
 /// Session state for transform modification (triangle editor, etc.).
@@ -342,7 +349,14 @@ impl ConfigManager {
             modify_session: None,
             animation_mode: false,
             editing_target: EditingTarget::Main,
+            load_generation: 0,
         }
+    }
+
+    /// Monotonic "new fractal loaded" counter — see field docs. Bumps on
+    /// `load_config` (preset/import/browser), not on edits or undo/redo.
+    pub fn load_generation(&self) -> u64 {
+        self.load_generation
     }
 
     // ===== Subflame editing =====
@@ -2981,6 +2995,9 @@ impl ConfigManager {
 
         // Replace current config
         self.current = new_config;
+
+        // Mark a fresh fractal load so per-fractal UI view state resets.
+        self.load_generation = self.load_generation.wrapping_add(1);
 
         // Record full config import action
         let mut action = UpdateAction::none();
