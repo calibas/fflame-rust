@@ -1129,4 +1129,6 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &CUT_WEB,
     &CUT_FINGERPRINT,
     &CUT_TILEILLUSION,
+    &CUT_PATTERN,
+    &CUT_CELTIC,
 ];
