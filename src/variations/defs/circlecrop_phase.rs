@@ -9,10 +9,11 @@
 //!   - 1 init slot: cA = clamp(scatter_area, -1, 1)
 //!
 //! The cpp's "doHide" path (when zero=1 and point is outside cr)
-//! sets `FTx = FTy = 0` to flag the point hidden. Our system has
-//! no doHide flag — we just return (0, 0) at that branch, which
-//! plots at origin instead of hiding. This matches the visual
-//! output for typical use (most points fall inside cr or zero=0).
+//! sets `pVarTP.doHide = true` to suppress the splat. We honor it
+//! via `Feature::CanHide` + the `hide` pointer (`*hide = true`),
+//! so escaped points are genuinely hidden rather than piled at the
+//! origin. The `(0, 0)` return there only feeds the (hidden) point
+//! back into the chaos game and is never plotted.
 //!
 //! Both use `needs_transform: true` to read the per-variation weight
 //! and apply it directly inside the body (pre/post phases have no
@@ -46,7 +47,7 @@ pub static PRE_CIRCLECROP: VariationDef = VariationDef {
     display_name: "Pre Circle Crop",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Pre,
-    features: &[Feature::NeedsRng, Feature::NeedsTransform],
+    features: &[Feature::NeedsRng, Feature::NeedsTransform, Feature::CanHide],
     parameters: &[
         param!("radius", "Radius", unlimited_float, 1.0, -10.0, 10.0, "Crop circle radius."),
         param!("x", "X", unlimited_float, 0.0, -10.0, 10.0, "X center of the crop circle."),
@@ -66,7 +67,7 @@ fn init_pre_circlecrop(user: array<f32, 5>) -> array<f32, 1> {
     state_count: 0,
     wgsl_state_init: None,
     wgsl_2d: r#"
-fn variation_pre_circlecrop(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
+fn variation_pre_circlecrop(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, hide: ptr<function, bool>) -> vec2<f32> {
     let cr = get_param(xform_id, variation_id, 0u);
     let x0 = get_param(xform_id, variation_id, 1u);
     let y0 = get_param(xform_id, variation_id, 2u);
@@ -83,6 +84,7 @@ fn variation_pre_circlecrop(p: vec2<f32>, xform_id: u32, variation_id: u32, rng:
     let cr0 = zero == 1;
 
     if (cr0 && esc) {
+        *hide = true;
         return vec2<f32>(0.0, 0.0);
     }
     if (!cr0 && esc) {
@@ -92,7 +94,7 @@ fn variation_pre_circlecrop(p: vec2<f32>, xform_id: u32, variation_id: u32, rng:
 }
 "#,
     wgsl_3d: r#"
-fn variation_pre_circlecrop(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
+fn variation_pre_circlecrop(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, hide: ptr<function, bool>) -> vec3<f32> {
     let cr = get_param(xform_id, variation_id, 0u);
     let x0 = get_param(xform_id, variation_id, 1u);
     let y0 = get_param(xform_id, variation_id, 2u);
@@ -109,6 +111,7 @@ fn variation_pre_circlecrop(p: vec3<f32>, xform_id: u32, variation_id: u32, rng:
     let cr0 = zero == 1;
 
     if (cr0 && esc) {
+        *hide = true;
         return vec3<f32>(0.0, 0.0, p.z);
     }
     if (!cr0 && esc) {
@@ -137,7 +140,7 @@ pub static POST_CIRCLECROP: VariationDef = VariationDef {
     display_name: "Post Circle Crop",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Post,
-    features: &[Feature::NeedsRng, Feature::NeedsTransform],
+    features: &[Feature::NeedsRng, Feature::NeedsTransform, Feature::CanHide],
     parameters: &[
         param!("radius", "Radius", unlimited_float, 1.0, -10.0, 10.0, "Crop circle radius."),
         param!("x", "X", unlimited_float, 0.0, -10.0, 10.0, "X center of the crop circle."),
@@ -156,7 +159,7 @@ fn init_post_circlecrop(user: array<f32, 5>) -> array<f32, 1> {
     state_count: 0,
     wgsl_state_init: None,
     wgsl_2d: r#"
-fn variation_post_circlecrop(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
+fn variation_post_circlecrop(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, hide: ptr<function, bool>) -> vec2<f32> {
     let cr = get_param(xform_id, variation_id, 0u);
     let x0 = get_param(xform_id, variation_id, 1u);
     let y0 = get_param(xform_id, variation_id, 2u);
@@ -173,6 +176,7 @@ fn variation_post_circlecrop(p: vec2<f32>, xform_id: u32, variation_id: u32, rng
     let cr0 = zero == 1;
 
     if (cr0 && esc) {
+        *hide = true;
         return vec2<f32>(0.0, 0.0);
     }
     if (!cr0 && esc) {
@@ -182,7 +186,7 @@ fn variation_post_circlecrop(p: vec2<f32>, xform_id: u32, variation_id: u32, rng
 }
 "#,
     wgsl_3d: r#"
-fn variation_post_circlecrop(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
+fn variation_post_circlecrop(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, hide: ptr<function, bool>) -> vec3<f32> {
     let cr = get_param(xform_id, variation_id, 0u);
     let x0 = get_param(xform_id, variation_id, 1u);
     let y0 = get_param(xform_id, variation_id, 2u);
@@ -199,6 +203,7 @@ fn variation_post_circlecrop(p: vec3<f32>, xform_id: u32, variation_id: u32, rng
     let cr0 = zero == 1;
 
     if (cr0 && esc) {
+        *hide = true;
         return vec3<f32>(0.0, 0.0, p.z);
     }
     if (!cr0 && esc) {

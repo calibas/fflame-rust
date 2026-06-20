@@ -57,7 +57,7 @@ pub static BSPLIT: VariationDef = VariationDef {
     display_name: "BSplit",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Any,
-    features: &[],
+    features: &[Feature::CanHide],
     parameters: &[
         param!("x", "X shift", unlimited_float, 0.0, -10.0, 10.0, "X-axis shift added before the trig terms."),
         param!("y", "Y shift", unlimited_float, 0.0, -10.0, 10.0, "Y-axis shift added before the trig terms."),
@@ -67,13 +67,18 @@ pub static BSPLIT: VariationDef = VariationDef {
     state_count: 0,
     wgsl_state_init: None,
     wgsl_2d: r#"
-fn variation_bsplit(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
+fn variation_bsplit(p: vec2<f32>, xform_id: u32, variation_id: u32, hide: ptr<function, bool>) -> vec2<f32> {
     let x_shift = get_param(xform_id, variation_id, 0u);
     let y_shift = get_param(xform_id, variation_id, 1u);
     let pi = 3.14159265358979;
     let arg = p.x + x_shift;
     let s = sin(arg);
     if (s == 0.0 || arg == pi) {
+        // JWF: doHide + NO contribution (pVarTP left unchanged). bsplit is
+        // accumulate (result += w*body), so "contribute nothing" is a (0,0)
+        // return — NOT a fall-through, which divides by s==0 and feeds inf
+        // to the accumulator (a respawn, not JWF's leave-and-continue).
+        *hide = true;
         return vec2<f32>(0.0, 0.0);
     }
     let c = cos(arg);
@@ -84,14 +89,14 @@ fn variation_bsplit(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32>
 }
 "#,
     wgsl_3d: r#"
-fn variation_bsplit(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
+fn variation_bsplit(p: vec3<f32>, xform_id: u32, variation_id: u32, hide: ptr<function, bool>) -> vec3<f32> {
     let x_shift = get_param(xform_id, variation_id, 0u);
     let y_shift = get_param(xform_id, variation_id, 1u);
     let pi = 3.14159265358979;
     let arg = p.x + x_shift;
     let s = sin(arg);
     if (s == 0.0 || arg == pi) {
-        return vec3<f32>(0.0, 0.0, p.z);
+        *hide = true;
     }
     let c = cos(arg);
     return vec3<f32>(

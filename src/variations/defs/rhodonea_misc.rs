@@ -51,7 +51,7 @@ pub static RHODONEA: VariationDef = VariationDef {
     display_name: "Rhodonea",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Any,
-    features: &[Feature::NeedsRng, Feature::NeedsTransform],
+    features: &[Feature::NeedsRng, Feature::NeedsTransform, Feature::CanHide],
     parameters: &[
         param!("knumer", "K Numer", unlimited_float, 3.0, -50.0, 50.0, "Rose-curve `k = knumer/kdenom` numerator. Integer `k` produces `k` petals (even) or `2k` petals (odd); rational `k` produces nested petal patterns with `cycles_to_close = kdenom` cycles."),
         param!("kdenom", "K Denom", unlimited_float, 4.0, -50.0, 50.0, "Rose-curve `k = knumer/kdenom` denominator."),
@@ -146,7 +146,7 @@ fn init_rhodonea(user: array<f32, 15>) -> array<f32, 5> {
     state_count: 0,
     wgsl_state_init: None,
     wgsl_2d: r#"
-fn variation_rhodonea(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
+fn variation_rhodonea(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, hide: ptr<function, bool>) -> vec2<f32> {
     let pi = 3.14159265358979;
     let two_pi = 6.28318530717959;
     let radial_offset = get_param(xform_id, variation_id, 2u);
@@ -219,9 +219,10 @@ fn variation_rhodonea(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
             // mask "inside" — pass-through (FPx += FTx, FPy += FTy)
             ox = p.x / safe_w;
             oy = p.y / safe_w;
+        } else if (outer_mode == 6) {
+            // mask "outside" / hide — actually drop the point now.
+            *hide = true;
         }
-        // mode 6 (mask "outside" / hide): contribution stays zero — point
-        // collapses to origin, visually equivalent to hiding.
     } else {
         // Inner modes
         if (inner_mode == 0) {
@@ -255,20 +256,22 @@ fn variation_rhodonea(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
             // mask "outside" — pass-through
             ox = p.x / safe_w;
             oy = p.y / safe_w;
+        } else if (inner_mode == 5) {
+            // mask "inside" / hide — actually drop the point now.
+            *hide = true;
         }
-        // mode 5 (mask "inside" / hide): contribution stays zero.
     }
 
     return vec2<f32>(ox, oy);
 }
 "#,
     wgsl_3d: r#"
-fn variation_rhodonea(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
-    let r2 = variation_rhodonea_2d(p.xy, xform_id, variation_id, rng);
+fn variation_rhodonea(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, hide: ptr<function, bool>) -> vec3<f32> {
+    let r2 = variation_rhodonea_2d(p.xy, xform_id, variation_id, rng, hide);
     return vec3<f32>(r2.x, r2.y, p.z);
 }
 
-fn variation_rhodonea_2d(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
+fn variation_rhodonea_2d(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, hide: ptr<function, bool>) -> vec2<f32> {
     let pi = 3.14159265358979;
     let two_pi = 6.28318530717959;
     let radial_offset = get_param(xform_id, variation_id, 2u);
@@ -329,6 +332,8 @@ fn variation_rhodonea_2d(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: pt
             ox = amt_factor * rinx * x_curve; oy = amt_factor * riny * y_curve;
         } else if (outer_mode == 5) {
             ox = p.x / safe_w; oy = p.y / safe_w;
+        } else if (outer_mode == 6) {
+            *hide = true;
         }
     } else {
         if (inner_mode == 0) { ox = amt_factor * x_curve; oy = amt_factor * y_curve; }
@@ -354,6 +359,8 @@ fn variation_rhodonea_2d(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: pt
             ox = amt_factor * rinx * x_curve; oy = amt_factor * riny * y_curve;
         } else if (inner_mode == 6) {
             ox = p.x / safe_w; oy = p.y / safe_w;
+        } else if (inner_mode == 5) {
+            *hide = true;
         }
     }
 

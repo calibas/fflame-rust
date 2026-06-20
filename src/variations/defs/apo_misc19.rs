@@ -52,7 +52,7 @@ pub static MOBIUS_STRIP: VariationDef = VariationDef {
     display_name: "Mobius Strip",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Any,
-    features: &[Feature::NeedsTransform, Feature::AlwaysZ],
+    features: &[Feature::NeedsTransform, Feature::AlwaysZ, Feature::CanHide],
     parameters: &[
         param!("radius", "Radius", unlimited_float, 1.0, -10.0, 10.0, "Strip's central-circle radius."),
         param!("width", "Width", unlimited_float, 1.0, -10.0, 10.0, "Strip width."),
@@ -80,7 +80,7 @@ fn init_mobius_strip(user: array<f32, 10>) -> array<f32, 4> {
     state_count: 0,
     wgsl_state_init: None,
     wgsl_2d: r#"
-fn variation_mobius_strip(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
+fn variation_mobius_strip(p: vec2<f32>, xform_id: u32, variation_id: u32, hide: ptr<function, bool>) -> vec2<f32> {
     let radius = get_param(xform_id, variation_id, 0u);
     let width = get_param(xform_id, variation_id, 1u);
     let twists = get_param(xform_id, variation_id, 2u);
@@ -106,9 +106,11 @@ fn variation_mobius_strip(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec
     var y = p.y;
 
     if (radial_mode == 2 && (x > xmax || x < xmin)) {
+        *hide = true;
         return vec2<f32>(0.0, 0.0);
     }
     if (width_mode == 2 && (y > ymax || y < ymin)) {
+        *hide = true;
         return vec2<f32>(0.0, 0.0);
     }
     if (radial_mode == 3 && (x > xmax || x < xmin)) {
@@ -159,7 +161,7 @@ fn variation_mobius_strip(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec
 }
 "#,
     wgsl_3d: r#"
-fn variation_mobius_strip(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
+fn variation_mobius_strip(p: vec3<f32>, xform_id: u32, variation_id: u32, hide: ptr<function, bool>) -> vec3<f32> {
     let radius = get_param(xform_id, variation_id, 0u);
     let width = get_param(xform_id, variation_id, 1u);
     let twists = get_param(xform_id, variation_id, 2u);
@@ -185,9 +187,11 @@ fn variation_mobius_strip(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec
     var y = p.y;
 
     if (radial_mode == 2 && (x > xmax || x < xmin)) {
+        *hide = true;
         return vec3<f32>(0.0, 0.0, 0.0);
     }
     if (width_mode == 2 && (y > ymax || y < ymin)) {
+        *hide = true;
         return vec3<f32>(0.0, 0.0, 0.0);
     }
     if (radial_mode == 3 && (x > xmax || x < xmin)) {
