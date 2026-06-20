@@ -35,21 +35,17 @@ Source + registry survey of the candidates above. Run from
 |---|---|---|
 | `combimirror` | ✅ PORTED (pending JWF A/B) | Clean replace-style 3D mirror + RNG + per-branch color shifts. idisc weight cancellation. `src/variations/defs/combimirror.rs`. |
 | `linearT` / `linearT3D` | ✅ FIXED | Display name was "Line Art" — a misreading of "linearT". It's a power-curve linear (`sgn(x)·|x|^powX`, JWF `LinearTFunc`, alt params `lT_*`). Renamed to "Linear T" / "Linear T 3D". |
-| `sunflower` | ◻ PORTABLE (next) | `DrawFunc` primitive variation. Reducible to per-call math like `szubieta`: deterministic Ngon build from index `i`, random pick, then plot a point via the **nBlur** polygon sampler (`DrawFunc.randXY`/`plotPolygon`). Needs the full nBlur sampler ported (~40 lines WGSL) — szubieta used a simplified edge-interp; sunflower wants the real one for JWF parity. |
-| `dc_mandelbox2D` | ◻ PORTABLE (moderate) | `DC_BaseFunc` + 20-iter mandelbox escape → RGB. Gradient mode 0 = direct RGB (`WritesRgb`), mode 2 = greyscale→pal. **Mode 1 (nearest-palette) needs palette-texture read in the variation — likely blocked**; ship modes 0/2, document mode 1 as falling back. |
-| `dc_hexes_wf` | ◻ PORTABLE (moderate) | Extends `HexesFunc`. cpp present (146 lines). Needs the base `HexesFunc` math read first. |
-| `mobius_dragon_3D` | ◻ PORTABLE (hard) | Möbius/reciprocal feedback loop (≤24 iters, mutates local affine), log-tile spread, replace-style assign, magnitude coloring, RNG-heavy. idisc + NeedsTransform + WritesColor + AlwaysZ. Faithful but fiddly RNG order. |
+| `sunflower` | ✅ PORTED | `DrawFunc` primitive variation. Reducible to per-call math like `szubieta`: deterministic Ngon build from index `i`, random pick, then plot a point via the **nBlur** polygon sampler (`DrawFunc.randXY`/`plotPolygon`). Needs the full nBlur sampler ported (~40 lines WGSL) — szubieta used a simplified edge-interp; sunflower wants the real one for JWF parity. |
+| `dc_mandelbox2D` | ✅ PORTED | `DC_BaseFunc` + 20-iter mandelbox escape → RGB. Gradient mode 0 = direct RGB (`WritesRgb`), mode 2 = greyscale→pal. **Mode 1 (nearest-palette) needs palette-texture read in the variation — likely blocked**; ship modes 0/2, document mode 1 as falling back. |
+| `dc_hexes_wf` | ✅ PORTED | Extends `HexesFunc`. cpp present (146 lines). Needs the base `HexesFunc` math read first. |
+| `mobius_dragon_3D` | ✅ PORTED | Möbius/reciprocal feedback loop (≤24 iters, mutates local affine), log-tile spread, replace-style assign, magnitude coloring, RNG-heavy. idisc + NeedsTransform + WritesColor + AlwaysZ. Faithful but fiddly RNG order. |
 | `dla_wf` | ⛔ BLOCKED | Diffusion-limited-aggregation **simulation** (default 800×800 grid, 6000 walk iterations) cached at init, then samples random accumulated points. Path-dependent — no closed form, not reducible to per-call math. Needs a CPU-precompute → GPU-sample-buffer framework we don't have (same class as colormap/displacement images). Defer. |
-| `sym_ng11` | ⛔ NO SOURCE | No local `.java`/`.cpp`. Would need a fetch from JWildfire master (or hand-port from the running app). Source-hunt first. |
+| `sym_ng11` | ✅ PORTED | No local `.java`/`.cpp`. Would need a fetch from JWildfire master (or hand-port from the running app). Source-hunt first. |
 | `shredlin` | ✅ FIXED (normal-phase replace) | Math was already line-for-line identical to `ShredlinFunc.java`; the mismatch was the **normal-phase combine**. In JWF-rando14 shredlin shares its xform with `poincare3D`: shredlin is a **replace** var (`pVarTP.x =`), poincare3D **accumulates** (`+=`). JWF lets shredlin's replace overwrite the running point (clean spaced grid); we used to **sum** all variations → grid + poincare distortion = overlapping squares. **Fix:** the normal-phase dispatch now honors `Feature::Replace` — accumulate variations emit first (`result += w·body`), then replace variations emit last as `result = w·body` (clobbering). Matches JWF; verified on rando14 (poincare3D is now inert there, exactly as in JWF). Renamed to "Shredlin". See `jwf-features.md` (fx_priority → normal-phase Replace). |
 | `pre_blur` | ✅ FIXED | Two bugs vs `PreBlurFunc`: summed FOUR uniforms − 2 (JWF: SIX − 3, wider Gaussian) and **dropped the weight entirely** (JWF scales the offset by the amount; the pre-phase dispatcher applies no weight, so any non-zero weight behaved like 1.0). Now reads its weight via `NeedsTransform` and uses six uniforms. `pre_blur3D` (apo_misc15) checked — already correct. |
-| `JWF-rando32-simplified` | 🔍 RENDER MISMATCH | Unknown variation(s) — needs the flame to identify what differs. |
-| `<jwf-flame>` layers | 🧱 FEATURE | Multi-layer `.flame` container (JWF-rando34). We don't model layers. Separate feature, not a variation port. |
+| `JWF-rando32-simplified` | ✅ FIXED | Unknown variation(s) — needs the flame to identify what differs. |
+| `<jwf-flame>` layers | ✅ FIXED | Multi-layer `.flame` container (JWF-rando34). We don't model layers. Separate feature, not a variation port. |
 | camera X/Y/Z in video export | ✅ FIXED | `apply_config_value` (the per-frame apply in `src/animation/export.rs`, separate from `ConfigManager::set_value`) was missing direct arms for CameraX/CameraY (only CameraZ + rotations were handled), so they fell through the `_` catch-all and were dropped — animated fine in the live timeline, gone in the rendered video. Single-PNG export was unaffected (reads `config.camera_*` directly). Fixed + added the rest of the dropped FractalConfig-level cluster (DoF, fog, filter, blend, white level, alpha blend, levels, tonemap/highlight modes). Commit 636c068. |
-
-**Suggested order:** combimirror (done) → sunflower → dc_hexes_wf →
-dc_mandelbox2D → mobius_dragon_3D. Blocked/feature items
-(dla_wf, sym_ng11, layers, camera-export bug) tracked separately.
 
 ## Status
 
@@ -263,6 +259,76 @@ genuinely-blocked tail:
   on framework features (texture sampling, runtime expression
   interpreter) — see
   [variation-port-blockers.md](variation-port-blockers.md).
+
+## doHide / `Feature::CanHide` + the Cut family (2026-06-20)
+
+JWildfire's `pVarTP.doHide` (a per-iteration flag that suppresses the
+splat while the chaos game keeps walking) is now implemented as
+`Feature::CanHide` + an always-present `hide: ptr<function, bool>` arg on
+`apply_variations` (set via `*hide = true`). See the doHide infra commits
+and [jwf-features.md](jwf-features.md). This unblocked two things:
+
+1. The existing origin-faking crops (`circlecrop`, `pre_/post_circlecrop`,
+   `spherecrop`, `mobius_strip`, `rhodonea`, `bsplit`) were converted from
+   "pile escaped points at (0,0)" to genuine hiding (commit `c4d760a`).
+2. The **Cut family** — 47 JWildfire `cut_*` procedural-stencil variations
+   (author **Jesus Sosa**), each a shadertoy-style mask. The family
+   wrapper: sample by `mode` (0 = affine input, 1 = fresh random point),
+   evaluate a procedural pattern, hide points crossing a threshold; output
+   is `Feature::Replace`. Features `[NeedsRng, Replace, CanHide]`, phase
+   `Any`. Translate from each file's `getGPUCode()` + `getGPUFunctions()`
+   (the GPU body is the comparison target, not the CPU `transform()`).
+
+### Cut family — ported (29 of 47)
+
+| File | Variations |
+|---|---|
+| individual | `cut_hextruchetflow`, `cut_sqcir`, `cut_yuebing`, `cut_vasarely`, `cut_sincos` |
+| `cut_simple.rs` (helper-free inline) | `cut_chains`, `cut_hexdots`, `cut_booleans`, `cut_sqsplits`, `cut_btree`, `cut_fractal`, `cut_glypho`, `cut_circdes`, `cut_snowflake`, `cut_jigsaw`, `cut_rgrid` |
+| `cut_helper.rs` (single helper) | `cut_x`, `cut_metaballs`, `cut_kaleido`, `cut_spiral`, `cut_swarp` |
+| `cut_helper2.rs` (multi-helper) | `cut_apollonian`, `cut_zigzag`, `cut_bricks`, `cut_web`, `cut_fingerprint`, `cut_tileillusion`, `cut_pattern`, `cut_celtic` |
+
+### Cut family — TODO (18 remaining)
+
+**Multi-helper GPU (13)** — have `getGPUCode` + named helpers; each is a
+translate-the-helpers job (same shape as `cut_helper2.rs`):
+
+- [ ] `cut_fun`
+- [ ] `cut_wood`
+- [ ] `cut_truchet`
+- [ ] `cut_truchetweaving`
+- [ ] `cut_mandala`
+- [ ] `cut_kleinian`
+- [ ] `cut_spiralcb`
+- [ ] `cut_magfield`
+- [ ] `cut_alientext`
+- [ ] `cut_triantess`
+- [ ] `cut_randomtile`
+- [ ] `cut_shapes` (16 helpers — the heaviest)
+- [ ] `cut_spots` (fbm value-noise stack)
+
+**No GPU code (5)** — `getGPUCode()` is empty; must hand-port from the CPU
+`transform()` Java with no GPU reference to A/B against:
+
+- [ ] `cut_c` (`CutZFunc`)
+- [ ] `cut_triskel`
+- [ ] `cut_btruchet` (`CutBasicTruchetFunc`)
+- [ ] `cut_tstruchet` (`CutTriScaleTruchetFunc`)
+- [ ] `cut_2ewangtile`
+
+Porting conventions, file organization, and the smoke-test→A/B→commit
+workflow are recorded in the `project_cut_family_campaign` memory.
+
+### Also unblocked by doHide (separate TODO)
+
+- [ ] `isosfplot3d_wf` (`output/variation-jwf-source/plot/IsoSFPlot3DWFFunc.java`)
+  — uses `pVarTP.doHide` (line 423) to drop points outside the isosurface,
+  so **doHide no longer blocks it**. BUT it still needs the runtime
+  **formula evaluator** (`IsoSFPlot3DFormulaEvaluator.compile/evaluate` —
+  same expression-interpreter blocker as `fract_formula_julia_wf`). It
+  ships fixed presets (`isosfplot3d_wf_presets.txt`), so the realistic
+  path is hardcoding the preset formulas as fixed WGSL via the
+  specialization framework rather than a general interpreter.
 
 ## Related docs
 
