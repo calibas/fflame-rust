@@ -79,6 +79,15 @@ pub struct ShaderCache {
     /// slot, leaving the moved transform's params zeroed and collapsing the
     /// fractal to a line. See `compute_init_signature`.
     init_signature: Vec<(u32, String)>,
+
+    /// Ordered list of active variation names (`active_variation_names_ordered`)
+    /// — the order the per-flame local index map assigns local indices in,
+    /// which the shader's packed `get_param` offsets are baked from. The
+    /// `variations_changed` check only compares the key *set*, so reordering
+    /// two variations (same set, different `variation_order`) wouldn't
+    /// rebuild — leaving the shader reading each variation's params at the
+    /// other's old offset (params appear swapped). Comparing this catches it.
+    variation_order_signature: Vec<String>,
 }
 
 impl ShaderCache {
@@ -164,6 +173,8 @@ impl ShaderCache {
 
         let specialization_key = Self::compute_specialization_key(flame, &active_variations);
         let init_signature = Self::compute_init_signature(flame);
+        let variation_order_signature =
+            flame.active_variation_names_ordered(&crate::variations::global_registry());
         Self {
             active_variations,
             path_features_enabled,
@@ -181,6 +192,7 @@ impl ShaderCache {
             init_bind_group_layout,
             specialization_key,
             init_signature,
+            variation_order_signature,
         }
     }
 
@@ -373,9 +385,17 @@ impl ShaderCache {
         let new_init_signature = Self::compute_init_signature(flame);
         let init_changed = new_init_signature != self.init_signature;
 
+        // Detect a variation-ORDER change (same active set, different
+        // local index assignment) — reordering two variations shifts the
+        // packed get_param offsets the shader baked, so without a rebuild
+        // each variation reads the other's params (params appear swapped).
+        let new_variation_order =
+            flame.active_variation_names_ordered(&crate::variations::global_registry());
+        let order_changed = new_variation_order != self.variation_order_signature;
+
         if !variations_changed && !path_features_changed && !xaos_changed
             && !constants_changed && !mode_changed && !registry_changed
-            && !specialization_changed && !init_changed
+            && !specialization_changed && !init_changed && !order_changed
         {
             return false; // No rebuild needed
         }
@@ -480,6 +500,7 @@ impl ShaderCache {
         self.last_registry_version = current_registry_version;
         self.specialization_key = new_specialization_key;
         self.init_signature = new_init_signature;
+        self.variation_order_signature = new_variation_order;
 
         true // Rebuilt
     }
