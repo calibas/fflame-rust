@@ -1,5 +1,5 @@
-# Fractals for All Renderer Tutorials
-Here you can learn the basics of creating fractals with the Fractals for All Renderer (FAR).
+# Fractal Art Editor Tutorials
+Here you can learn the basics of creating fractals with the Fractal Art Editor (FAE).
 
 ## Tutorials
 
