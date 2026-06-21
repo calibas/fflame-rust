@@ -1554,25 +1554,43 @@ impl ShaderBuilder {
                     let used = (!pre_t.is_empty()) as u32
                         + (!nor_t.is_empty()) as u32
                         + (!post_t.is_empty()) as u32;
-                    // Single bucket across the whole flame ⇒ no xform_id
-                    // gate needed (the weight check already restricts to
-                    // the using transforms). Multiple ⇒ gate each.
-                    let gate_for = |ts: &[u32]| -> Option<String> {
-                        if used <= 1 {
-                            return None;
-                        }
-                        let conds: Vec<String> =
-                            ts.iter().map(|t| format!("xform_id == {}u", t)).collect();
-                        Some(format!("({})", conds.join(" || ")))
-                    };
-                    if !pre_t.is_empty() {
-                        pre.push(mk(gate_for(&pre_t), true));
-                    }
-                    if !nor_t.is_empty() {
-                        normal.push(mk(gate_for(&nor_t), false));
-                    }
-                    if !post_t.is_empty() {
-                        post.push(mk(gate_for(&post_t), true));
+                    if used <= 1 {
+                        // One bucket across all normals ⇒ no xform_id gate
+                        // (the weight check already restricts to the using
+                        // transforms, and an ungated bucket also runs for any
+                        // Final/Linked transform that uses the variation).
+                        if !pre_t.is_empty() { pre.push(mk(None, true)); }
+                        if !nor_t.is_empty() { normal.push(mk(None, false)); }
+                        if !post_t.is_empty() { post.push(mk(None, true)); }
+                    } else {
+                        // The variation spans multiple phases across normals,
+                        // so each placement needs an xform_id gate. Pre/Post
+                        // get an explicit allow-list of the normals moved
+                        // there. Normal is the DEFAULT / catch-all bucket:
+                        // every transform NOT explicitly placed in pre or post
+                        // — which includes Final and Linked transforms, whose
+                        // GLOBAL xform_ids never appear in these normals-only
+                        // lists. Without the catch-all, a Final using this
+                        // variation would match no gate and run nothing, and
+                        // the render collapses to a single pixel.
+                        let allow = |ts: &[u32]| -> Option<String> {
+                            let conds: Vec<String> =
+                                ts.iter().map(|t| format!("xform_id == {}u", t)).collect();
+                            Some(format!("({})", conds.join(" || ")))
+                        };
+                        let excluded: Vec<String> = pre_t.iter().chain(post_t.iter())
+                            .map(|t| format!("xform_id != {}u", t))
+                            .collect();
+                        let normal_gate = if excluded.is_empty() {
+                            None
+                        } else {
+                            Some(format!("({})", excluded.join(" && ")))
+                        };
+                        if !pre_t.is_empty() { pre.push(mk(allow(&pre_t), true)); }
+                        // Always emit the catch-all normal placement so
+                        // Finals/Linkeds (and default normals) run the variation.
+                        normal.push(mk(normal_gate, false));
+                        if !post_t.is_empty() { post.push(mk(allow(&post_t), true)); }
                     }
                 }
             }
@@ -2293,9 +2311,12 @@ mod tests {
         assert_eq!(pre.len(), 1);
         assert_eq!(normal.len(), 1);
         assert!(post.is_empty());
-        // Multiple buckets ⇒ both carry an xform_id gate.
+        // Multiple buckets ⇒ gated. Pre is an explicit allow-list; Normal
+        // is the catch-all (everything NOT moved to pre/post), so Finals and
+        // Linkeds — whose global xform_ids aren't in the normals-only lists —
+        // still run the variation. Here that's "anything except xform 0".
         assert_eq!(pre[0].gate.as_deref(), Some("(xform_id == 0u)"));
-        assert_eq!(normal[0].gate.as_deref(), Some("(xform_id == 1u)"));
+        assert_eq!(normal[0].gate.as_deref(), Some("(xform_id != 0u)"));
     }
 
     /// OUTPUT_HISTOGRAM_DIRECT toggles the unified template between two
