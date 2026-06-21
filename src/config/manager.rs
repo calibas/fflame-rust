@@ -734,6 +734,52 @@ impl ConfigManager {
         Ok(update_type)
     }
 
+    /// Remove a variation from a transform in any pool, recording a
+    /// **whole-transform snapshot** so undo restores the variation's
+    /// params, fx_priority and order metadata.
+    ///
+    /// `Transform::remove_variation` scrubs all of that metadata (correctly —
+    /// leaving it orphans it). A plain weight delta (the old NaN-sentinel
+    /// `update_param` path) only captured the weight, so undo recreated the
+    /// variation with default params. The before/after transform snapshot
+    /// carries the full state both ways. Routes to the active editing target
+    /// (main or subflame) like every other transform edit.
+    pub fn remove_variation(
+        &mut self,
+        xref: TransformRef,
+        variation: &str,
+    ) -> Result<UpdateType, ConfigError> {
+        // Snapshot the transform before the scrub.
+        let before = xref
+            .get(self.active_flame())
+            .ok_or(ConfigError::InvalidIndex)?
+            .clone();
+
+        // Apply the removal on the active (editing-target) flame.
+        {
+            let flame = self.active_flame_mut()?;
+            let slot = xref.get_mut(flame).ok_or(ConfigError::InvalidIndex)?;
+            slot.remove_variation(variation);
+        }
+
+        let after = xref
+            .get(self.active_flame())
+            .ok_or(ConfigError::InvalidIndex)?
+            .clone();
+
+        let change = ConfigChange::modify_transform_snapshot(
+            xref.kind(),
+            xref.index(),
+            before,
+            after,
+            format!("Remove {}", variation),
+        );
+        self.push_undo(change);
+        let update_type = UpdateType::IterationReset;
+        self.record_action(update_type);
+        Ok(update_type)
+    }
+
     /// Apply a batch of changes (single undo point)
     ///
     /// Batch changes always create immediate history entries (no coalescing).
@@ -3619,6 +3665,42 @@ mod tests {
             .set_value(&ConfigPath::Exposure, 2.0.into())
             .unwrap();
         assert_eq!(manager.current.exposure, 2.0);
+    }
+
+    #[test]
+    fn test_remove_variation_undo_restores_params() {
+        use crate::scene::transforms::{Flame, Transform};
+        use crate::config::TransformRef;
+        let mut config = FractalConfig::default();
+        let mut flame = Flame::new();
+        let mut t = Transform::new();
+        t.set_variation("linear", 1.0);
+        t.set_variation("squish", 1.0);
+        t.variation_params.insert("squish.power".to_string(), 7.0);
+        t.variation_priorities.insert("squish".to_string(), 1);
+        flame.transforms = vec![t];
+        config.flame = flame;
+        let mut manager = ConfigManager::new(config);
+
+        manager.remove_variation(TransformRef::Normal(0), "squish").unwrap();
+        let xf = &manager.current.flame.transforms[0];
+        assert!(!xf.variations.contains_key("squish"));
+        assert!(!xf.variation_params.contains_key("squish.power"));
+        assert!(!xf.variation_priorities.contains_key("squish"));
+
+        // Undo must bring squish back WITH its params + priority — the
+        // regression was that only the weight came back (default params).
+        manager.undo().unwrap();
+        let xf = &manager.current.flame.transforms[0];
+        assert!(xf.variations.contains_key("squish"));
+        assert_eq!(xf.variation_params.get("squish.power"), Some(&7.0));
+        assert_eq!(xf.variation_priorities.get("squish"), Some(&1));
+
+        // Redo re-scrubs.
+        manager.redo().unwrap();
+        let xf = &manager.current.flame.transforms[0];
+        assert!(!xf.variations.contains_key("squish"));
+        assert!(!xf.variation_params.contains_key("squish.power"));
     }
 
     #[test]
