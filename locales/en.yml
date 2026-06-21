@@ -310,7 +310,7 @@ variations:
   title: "Variations"
   weight: "Weight"
   add: "➕ Add Variation"
-  remove: "🗑"
+  remove: "🗑 Delete"
   phase_tooltip: "Phase — run this variation in the Pre, Main, or Post phase (JWildfire fx_priority)"
   phase_label: "Phase"
   phase_pre: "Pre"

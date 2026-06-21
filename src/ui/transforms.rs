@@ -619,14 +619,9 @@ fn render_enabled_variation(
             let _ = config_manager.force_commit_preview(&path);
         }
 
-        // Delete button
-        if ui.small_button(t!("variations.remove")).on_hover_text(t!("tooltips.remove_variation")).clicked() {
-            delete_requested = true;
-        }
-
         // Variation Settings — a gear button opening phase selection (for
-        // `Any` variations) and reorder controls (for every variation).
-        // Shown for all variations since reordering is universal.
+        // `Any` variations), reorder controls (for every variation), and
+        // Remove.
         ui.menu_button("⚙", |ui| {
             // Phase (Pre / Main / Post) — only for movable (`Any`) variations.
             if movable {
@@ -644,7 +639,7 @@ fn render_enabled_variation(
                                 max_update = max_update.max(update_type);
                             }
                         }
-                        ui.close_menu();
+                        ui.close();
                     }
                 }
                 ui.separator();
@@ -654,15 +649,25 @@ fn render_enabled_variation(
             ui.add_enabled_ui(section_pos > 0, |ui| {
                 if ui.button(t!("variations.move_up")).clicked() {
                     reorder = Some(-1);
-                    ui.close_menu();
+                    ui.close();
                 }
             });
             ui.add_enabled_ui(section_pos + 1 < section_len, |ui| {
                 if ui.button(t!("variations.move_down")).clicked() {
                     reorder = Some(1);
-                    ui.close_menu();
+                    ui.close();
                 }
             });
+
+            // Remove this variation (moved here from the standalone button).
+            ui.separator();
+            if ui.button(egui::RichText::new(t!("variations.remove")).color(Color32::from_rgb(229, 92, 92)))
+                .on_hover_text(t!("tooltips.remove_variation"))
+                .clicked()
+            {
+                delete_requested = true;
+                ui.close();
+            }
         })
         .response
         .on_hover_text(t!("variations.settings_tooltip"));
