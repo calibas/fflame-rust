@@ -226,7 +226,7 @@ pub fn render_track_editor(
         }
         ui.separator();
         let add_button = egui::Button::new(t!("track_editor.add_track"))
-            .fill(egui::Color32::from_rgb(60, 120, 60));
+            .fill(egui::Color32::from_rgb(0, 68, 0));
         if ui.add_enabled(has_animation, add_button).clicked() {
             open_add_track_panel(state);
         }
@@ -718,9 +718,9 @@ fn render_track_editor_panel_content(
     if !is_editing {
         let can_create = !state.new_track_target.is_empty();
 
-        let add_button = egui::Button::new(t!("track_editor.add_track"));
+        let add_button = egui::Button::new(t!("track_editor.confirm"));
         let add_button = if can_create {
-            add_button.fill(egui::Color32::from_rgb(60, 120, 60))
+            add_button.fill(egui::Color32::from_rgb(0, 68, 0))
         } else {
             add_button
         };

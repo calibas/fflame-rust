@@ -1185,6 +1185,7 @@ track_editor:
   select: "Select..."
   add: "Add"
   cancel: "Cancel"
+  confirm: "Confirm"
 
   # Track types display
   keyframes_count: "Keyframes (%{count})"
