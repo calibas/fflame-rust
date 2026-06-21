@@ -193,6 +193,20 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
 {{/if}}
 
+        // A Normal- or Linked-phase CanHide (cut_*) variation removed this
+        // point: the cut_* family returns the origin (0,0) when it hides, and
+        // because they are Replace variations that becomes `current`. Letting
+        // it feed forward makes the chaos game keep re-entering the origin and
+        // pile extremely dense splats at the origin's images. Revert to the
+        // pre-iteration point (so a hiding cut transform is a no-op for the
+        // chaos game) and skip this iteration's splat. Final-phase hides are
+        // applied later and only suppress the splat — they never reach here,
+        // so `current` is untouched (Finals don't feed forward by design).
+        if (should_hide) {
+            current = old_pos;
+            continue;
+        }
+
         // flam3/JWF-style bad-value recovery, in two tiers:
         //
         // X/Y divergence → full respawn + re-fuse, like JWF's
