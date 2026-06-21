@@ -601,7 +601,7 @@ fn render_enabled_variation(
         let mut value = current_weight;
         let response = ui.add(
             super::VkbSlider::new(&mut value, -5.0..=5.0)
-                .text(display_name)
+                .text(egui::RichText::new(display_name).color(Color32::LIGHT_GRAY))
                 .drag_value_speed(0.1)
                 .clamping(egui::SliderClamping::Never)
         );
@@ -661,7 +661,7 @@ fn render_enabled_variation(
 
             // Remove this variation (moved here from the standalone button).
             ui.separator();
-            if ui.button(egui::RichText::new(t!("variations.remove")).color(Color32::from_rgb(229, 92, 92)))
+            if ui.button(egui::RichText::new(t!("variations.remove")).color(Color32::LIGHT_RED))
                 .on_hover_text(t!("tooltips.remove_variation"))
                 .clicked()
             {
@@ -801,7 +801,9 @@ fn render_variations_section(
     ui.add_space(4.0);
 
     // Add Variation button
-    let add_btn = ui.button(t!("variations.add"));
+    let add_btn = ui.add(
+        egui::Button::new(t!("variations.add")).fill(Color32::from_rgb(0, 68, 0)),
+    );
     let focus_search_id = add_variation_popup_id.with("focus_search");
     if add_btn.clicked() {
         egui::Popup::toggle_id(ui.ctx(), add_variation_popup_id);
@@ -981,7 +983,7 @@ pub fn render_transforms_content(
 
     // Add transform button
     ui.horizontal(|ui| {
-        if ui.button(t!("transform.add")).clicked() {
+        if ui.add(egui::Button::new(t!("transform.add")).fill(Color32::from_rgb(0, 68, 0))).clicked() {
             *add_transform = true;
             // The new transform is appended at the current end; open it.
             let new_idx = flame.transforms.len();
@@ -1051,7 +1053,7 @@ pub fn render_transforms_content(
     ui.add_space(8.0);
     ui.heading(format!("Linked Transforms ({})", num_linked));
     ui.horizontal(|ui| {
-        if ui.button(t!("transform.add_linked"))
+        if ui.add(egui::Button::new(t!("transform.add_linked")).fill(Color32::from_rgb(0, 68, 0)))
             .on_hover_text(t!("tooltips.transform_add_linked"))
             .clicked()
         {
@@ -1103,7 +1105,7 @@ pub fn render_transforms_content(
     ui.add_space(8.0);
     ui.heading(format!("Final Transforms ({})", num_finals));
     ui.horizontal(|ui| {
-        if ui.button(t!("transform.add_final"))
+        if ui.add(egui::Button::new(t!("transform.add_final")).fill(Color32::from_rgb(0, 68, 0)))
             .on_hover_text(t!("tooltips.transform_add_final"))
             .clicked()
         {
@@ -1279,7 +1281,7 @@ fn render_pool_member_block(
                     }
 
                     if opts.can_delete {
-                        if ui.button(t!("transform.delete"))
+                        if ui.button(egui::RichText::new(t!("transform.delete")).color(Color32::LIGHT_RED))
                             .on_hover_text(t!("tooltips.transform_delete"))
                             .clicked()
                         {
