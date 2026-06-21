@@ -141,6 +141,23 @@ fn render_color_controls(
         ui.painter().rect_filled(rect, 2.0, color_swatch);
     });
 
+    // Color Speed (Symmetry) — sits directly under Color.
+    let mut temp_speed = transform.color_speed;
+    let response_speed = ui.add(super::VkbSlider::new(&mut temp_speed, -1.0..=1.0).text(t!("transform.color_speed")))
+        .on_hover_text(t!("tooltips.color_speed"));
+    if response_speed.changed() {
+        if let Ok(update_type) = config_manager.update_param(
+            ConfigPath::TransformColorSpeed { index },
+            temp_speed.into()
+        ) {
+            transform.color_speed = config_manager.active_flame().transforms[index].color_speed;
+            max_update = max_update.max(update_type);
+        }
+    }
+    if response_speed.drag_stopped() {
+        let _ = config_manager.force_commit_preview(&ConfigPath::TransformColorSpeed { index });
+    }
+
     max_update
 }
 
@@ -479,7 +496,8 @@ fn render_jwf_plane_sections(
     max_update
 }
 
-/// Render advanced settings (color speed, opacity, solo toggle)
+/// Render advanced settings (opacity, direct color, solo toggle).
+/// Color Speed lives under Color now (see `render_color_controls`).
 fn render_advanced_settings(
     ui: &mut egui::Ui,
     config_manager: &mut ConfigManager,
@@ -513,23 +531,6 @@ fn render_advanced_settings(
     }
 
     ui.add_space(4.0);
-
-    // Color Speed (Symmetry)
-    let mut temp_speed = transform.color_speed;
-    let response_speed = ui.add(super::VkbSlider::new(&mut temp_speed, -1.0..=1.0).text(t!("transform.color_speed")))
-        .on_hover_text(t!("tooltips.color_speed"));
-    if response_speed.changed() {
-        if let Ok(update_type) = config_manager.update_param(
-            ConfigPath::TransformColorSpeed { index },
-            temp_speed.into()
-        ) {
-            transform.color_speed = config_manager.active_flame().transforms[index].color_speed;
-            max_update = max_update.max(update_type);
-        }
-    }
-    if response_speed.drag_stopped() {
-        let _ = config_manager.force_commit_preview(&ConfigPath::TransformColorSpeed { index });
-    }
 
     // Opacity slider
     let mut temp_opacity = transform.opacity;
