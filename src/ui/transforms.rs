@@ -797,8 +797,12 @@ fn render_variations_section(
 
     // Add Variation button
     let add_btn = ui.button(t!("variations.add"));
+    let focus_search_id = add_variation_popup_id.with("focus_search");
     if add_btn.clicked() {
         egui::Popup::toggle_id(ui.ctx(), add_variation_popup_id);
+        // Focus the search box when the popup opens so typing filters
+        // immediately (consumed once inside the popup below).
+        ui.data_mut(|d| d.insert_temp(focus_search_id, true));
     }
 
     // Variation picker popup. `from_response` defaults to "always
@@ -815,10 +819,19 @@ fn render_variations_section(
         // Search filter
         let search_id = ui.id().with("search");
         let mut search_text = ui.data_mut(|d| d.get_temp::<String>(search_id).unwrap_or_default());
+        // One-shot focus request set when the Add button opened the popup.
+        let focus_search = ui.data_mut(|d| {
+            let v = d.get_temp::<bool>(focus_search_id).unwrap_or(false);
+            if v { d.remove::<bool>(focus_search_id); }
+            v
+        });
         ui.horizontal(|ui| {
             ui.label(t!("variations.search"));
             let r = ui.text_edit_singleline(&mut search_text);
             super::vkb_sync(ui, &r, &search_text);
+            if focus_search {
+                r.request_focus();
+            }
         });
         ui.data_mut(|d| d.insert_temp(search_id, search_text.clone()));
 
