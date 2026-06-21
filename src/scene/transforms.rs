@@ -582,10 +582,18 @@ impl Transform {
         }
     }
 
-    /// Remove a variation from this transform
+    /// Remove a variation from this transform, scrubbing all of its
+    /// metadata: the weight, the `variation_order` entry, every
+    /// `"<name>.<param>"` value in `variation_params`, and any
+    /// `variation_priorities` (fx_priority) override. Leaving those behind
+    /// orphans them — e.g. a stale `variation_priorities` entry still feeds
+    /// the phase bucketing and can mis-place the variation on other pools.
     pub fn remove_variation(&mut self, name: &str) {
         self.variations.remove(name);
         self.variation_order.retain(|n| n != name);
+        let prefix = format!("{}.", name);
+        self.variation_params.retain(|k, _| !k.starts_with(&prefix));
+        self.variation_priorities.remove(name);
     }
 
     /// This transform's active variation names in dispatch order: the
@@ -1429,6 +1437,27 @@ mod tests {
         assert_eq!(xform.variation_order, vec!["spherical".to_string(), "linear".to_string()]);
         xform.remove_variation("spherical");
         assert_eq!(xform.variation_order, vec!["linear".to_string()]);
+    }
+
+    #[test]
+    fn test_remove_variation_scrubs_params_and_priorities() {
+        let mut xform = Transform::new();
+        xform.set_variation("squish", 1.0);
+        xform.set_variation("linear", 1.0);
+        xform.variation_params.insert("squish.power".to_string(), 5.0);
+        xform.variation_params.insert("linear.foo".to_string(), 1.0);
+        xform.variation_priorities.insert("squish".to_string(), 1);
+        xform.variation_priorities.insert("linear".to_string(), -1);
+
+        xform.remove_variation("squish");
+
+        // squish's metadata is gone; linear's is untouched.
+        assert!(!xform.variations.contains_key("squish"));
+        assert!(!xform.variation_params.contains_key("squish.power"));
+        assert!(!xform.variation_priorities.contains_key("squish"));
+        assert!(!xform.variation_order.contains(&"squish".to_string()));
+        assert_eq!(xform.variation_params.get("linear.foo"), Some(&1.0));
+        assert_eq!(xform.variation_priorities.get("linear"), Some(&-1));
     }
 
     #[test]
