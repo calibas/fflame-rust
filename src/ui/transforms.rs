@@ -1377,8 +1377,10 @@ fn render_pool_member_block(
                 update = update.max(var_update);
 
                 if let Some(var_name) = var_to_delete {
-                    let path = xref.variation_path(var_name);
-                    if let Ok(u) = config_manager.update_param(path, f32::NAN.into()) {
+                    // Whole-transform snapshot so undo restores the removed
+                    // variation's params/priorities/order (which
+                    // remove_variation scrubs), not just its weight.
+                    if let Ok(u) = config_manager.remove_variation(xref, &var_name) {
                         update = update.max(u);
                     }
                 }
