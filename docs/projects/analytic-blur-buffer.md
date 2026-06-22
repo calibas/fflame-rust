@@ -39,10 +39,22 @@ the single final divide — nothing to get wrong, no muddy-fringe failure
 
 These come from the design discussion and are non-negotiable:
 
-1. **Mean-splat.** The blur buffer receives the transform output with each
-   analytic-blur variation's offset set to its **mean** (the deterministic
-   center — `(0,0)` offset for the origin-centered blurs), carrying the
-   **same color index** a normal splat would. Not the realized noisy point.
+1. **Mean-splat.** The blur buffer receives the transform output with the
+   analytic-blur variation's offset set to its **mean** (`(0,0)` for the
+   origin-centered blurs), carrying the **same color index** a normal splat
+   would. Not the realized noisy point.
+
+   The analytic blur is an *additive* normal-phase term:
+   `Σ w_i·var_i(affine_p)` includes `w_blur·offset`. So
+   `mean_preaffine = realized_preaffine − w_blur·offset`, and after the
+   (linear) post-affine `M_post`:
+   `mean_plot = realized_plot − M_post·(w_blur·offset)`. The shader isolates
+   `w_blur·offset` (the blur variation writes its raw offset to a register),
+   plots the mean to the blur buffer, and advances the orbit with the
+   realized point. **Crucially, the transform's *other* variations may be
+   nonlinear** (`spherical`, …) — they're the deterministic structure the
+   mean-splat already captures; only the additive fuzz's path to the pixel
+   must be linear.
 
 2. **Route, don't duplicate.** A blur-terminated iteration plots to the
    blur buffer **instead of** the main histogram, not in addition. The
@@ -55,14 +67,22 @@ These come from the design discussion and are non-negotiable:
    part of that map — anisotropic if it shears/scales. Build it from the
    affine, not as a fixed disc.
 
-4. **Gate the analytic path (the hard boundary).** Eligible **only** when
-   *every* RNG-using variation in the transform is an input-independent
-   analytic blur, **and** the plot path from its output to the pixel is
-   linear (affine post-affine, affine-or-absent finals, orthographic
-   projection). Any input-dependent fuzz (`radial_blur`, `farblur`,
-   `post_rblur`, `exblur`), any other stochastic variation, or a nonlinear
-   downstream map → **stochastic fallback** to the main histogram. This is
-   an explicit per-transform check, never an assumption.
+4. **Gate the analytic path (the hard boundary).** A transform is eligible
+   **only** when:
+   - it has **exactly one** active analytic-blur variation, in the **normal
+     phase** (so the offset is additive — a pre/post-moved blur would route
+     through other variations and break linearity), and
+   - **no other** active variation uses RNG (any other stochastic term —
+     including input-dependent `radial_blur`/`farblur`/`post_rblur`/`exblur`
+     — breaks the input-independence), and
+   - the **fuzz's path to the pixel is linear**: affine post-affine,
+     affine-or-absent finals, orthographic projection.
+
+   Non-blur companions may be nonlinear (captured by the mean-splat). Any
+   gate failure → **stochastic fallback** to the main histogram. Explicit
+   per-transform check, never an assumption. (The resolution-independent
+   part — one normal-phase blur, no other RNG var — is checked on the
+   `Transform`; the plot-path-linearity part is added by the renderer.)
 
 ## The golden test (gates merge)
 
