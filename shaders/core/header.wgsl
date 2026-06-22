@@ -53,9 +53,12 @@ struct Transform {
     // (the Apophysis path) takes over with zero added cost.
     plane_flags: u32,
 
-    // 3-u32 padding so `array<Transform>` strides at 16-byte
+    // Analytic-blur routing slot (i32; -1 = not eligible). Matches
+    // `GpuTransform::analytic_blur_slot`. See analytic-blur-buffer.md.
+    analytic_blur_slot: i32,
+
+    // 2-u32 padding so `array<Transform>` strides at 16-byte
     // boundaries (std430 alignment). Matches `GpuTransform::_plane_pad`.
-    _plane_pad0: u32,
     _plane_pad1: u32,
     _plane_pad2: u32,
 }

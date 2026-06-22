@@ -130,11 +130,19 @@ pub struct GpuTransform {
     // Computed host-side on upload by comparing each plane to identity.
     pub plane_flags: u32,
 
+    // Analytic-blur routing: index of this transform's mean-splat blur
+    // buffer, or -1 when the transform isn't analytic-blur-eligible. The
+    // plot section routes a blur-terminated iteration to `blur_buffers[slot]`
+    // instead of the main histogram. Repurposed from one `_plane_pad` slot,
+    // so the struct size/alignment is unchanged. See
+    // `docs/projects/analytic-blur-buffer.md`.
+    pub analytic_blur_slot: i32,
+
     // Pad to a 16-byte boundary so `array<GpuTransform>` in std430
     // storage buffers has aligned strides. 24 plane floats (96 B) +
-    // 1 u32 (4 B) = 100 B added to the previous 480 B → 580 B; the
-    // 3-u32 padding takes it to 592 B = 37 × 16.
-    pub _plane_pad: [u32; 3],
+    // 1 u32 (plane_flags) + 1 i32 (analytic_blur_slot) + 2 u32 pad = 112 B
+    // added to the previous 480 B → 592 B = 37 × 16.
+    pub _plane_pad: [u32; 2],
 }
 
 // Manual implementation for bytemuck (arrays of size 50 not auto-derived)
@@ -246,7 +254,11 @@ impl GpuTransform {
             yz_post_coefs: xform.yz_post_coefs,
             zx_post_coefs: xform.zx_post_coefs,
             plane_flags,
-            _plane_pad: [0; 3],
+            // -1 = not analytic-blur-eligible. The host overwrites this per
+            // eligible transform after blur buffers are assigned (see
+            // update_transforms / the analytic-blur slot pass).
+            analytic_blur_slot: -1,
+            _plane_pad: [0; 2],
         }
     }
 
@@ -2227,6 +2239,16 @@ impl FlameBuffers {
 mod tests {
     use super::*;
     use crate::scene::transforms::Transform;
+
+    #[test]
+    fn gpu_transform_std430_size_invariant() {
+        // `array<GpuTransform>` in std430 needs a 16-byte-aligned stride.
+        // The analytic_blur_slot field was carved from existing padding, so
+        // the size must stay 592 (37 x 16).
+        let sz = std::mem::size_of::<GpuTransform>();
+        assert_eq!(sz % 16, 0, "GpuTransform size {sz} not 16-byte aligned");
+        assert_eq!(sz, 592, "GpuTransform size changed: {sz}");
+    }
 
     /// Reads a u32 (little-endian) from `buf` at offset `off`.
     fn rd_u32(buf: &[u8], off: usize) -> u32 {
