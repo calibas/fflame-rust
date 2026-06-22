@@ -30,6 +30,18 @@ Interactive / 2D-direct path only, end-to-end and golden-test-passing.
 - **Per-transform buffers capped at `MAX_BLUR_BUFFERS = 4`** (concatenated
   slices in one buffer; eligible transforms beyond 4 keep slot −1 →
   stochastic). `Transform.analytic_blur_slot` carries the slot to the shader.
+  The slot count is **further capped by a memory budget**
+  (`FlameBuffers::max_blur_slots` = `max_binding / (3·W·H·16)`, since each slot
+  needs three full-res buffers): a multi-blur flame or a high-res render only
+  gets as many analytic slots as fit, the rest falling back to stochastic, so
+  it can't OOM / exceed a binding. Threaded through `from_flame` (slot
+  assignment), `ensure_blur_buffers`, and the renderer's `blur_slots`.
+- **Export coverage:** analytic blur runs on the FlameRenderer export path
+  (when the histogram fits one storage binding — ~4K–11K depending on the
+  GPU). Larger exports route to the tiled/CPU `HighResExporter`, which is
+  sample-emit and doesn't wire analytic blur (Phase 2), so the blur renders
+  stochastically there. Both paths are crash-free; the per-frame dither lives
+  in the upscale pass and therefore applies on the FlameRenderer path only.
 - **Convolution at reduced resolution** (3 stages in `accumulate_pass`, before
   the spatial filter). The blur is low-frequency, so convolving it at full res
   is wasteful — and fatal for perf, since the cost is O(half²)/pixel and a
