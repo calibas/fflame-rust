@@ -30,11 +30,19 @@ Interactive / 2D-direct path only, end-to-end and golden-test-passing.
 - **Per-transform buffers capped at `MAX_BLUR_BUFFERS = 4`** (concatenated
   slices in one buffer; eligible transforms beyond 4 keep slot −1 →
   stochastic). `Transform.analytic_blur_slot` carries the slot to the shader.
-- **Convolution** (`shaders/blur_convolve.wgsl`): one thread per pixel,
-  gathers `Σ_d blur[p−d]·kernel[d]` per slot and **adds** into the main
-  histogram (no atomics — each output pixel is uniquely owned). Runs in
-  `accumulate_pass` before the spatial filter. Blur slices are cleared each
-  batch alongside the histogram.
+- **Convolution at reduced resolution** (3 stages in `accumulate_pass`, before
+  the spatial filter). The blur is low-frequency, so convolving it at full res
+  is wasteful — and fatal for perf, since the cost is O(half²)/pixel and a
+  typical blur's half is 64+px (a 17× slowdown before this was added). So:
+  `blur_downsample.wgsl` sums each D×D cell into a low-res slice →
+  `blur_convolve.wgsl` convolves at low res with a low-res-scale kernel →
+  `blur_upscale.wgsl` bilinearly upsamples + adds into the main histogram
+  (÷D² so density and the colour ratio are preserved end-to-end; no atomics —
+  each output pixel is uniquely owned). D is chosen per view/flame so the
+  low-res kernel half ≈ `TARGET_LOWRES_HALF` (48); cost ∝ 1/D⁴ → negligible at
+  any blur size, over-blur ≈ 1/TARGET ≈ 2%. The full-res splat buffer is
+  cleared each batch alongside the histogram; the two low-res scratch buffers
+  are fully overwritten each pass.
 - **Kernel** (`src/variations/analytic_blur.rs`, `maybe_rebuild_blur_kernels`):
   deterministic CPU Monte-Carlo of the variation's offset sampler mapped by
   `world→pixel linear · weight · M_post`, bilinearly binned, normalized.
@@ -253,14 +261,17 @@ that transform's blur histogram. Same gate, same kernels as interactive.
 
 ---
 
-## Resolution (deferred optimization)
+## Resolution (shipped in v1)
 
-The design's low-res buffer (`D ≈ R/4`, bilinear upscale) is a **perf
-optimization, not correctness**, and we have no supersample / downsample /
-upscale infra today. v1 blurs **full-res** — correct, and it sidesteps the
-D²-energy/brightness bug entirely. The low-res buffer (with the `1/D²`
-intensity-unit carry on upscale, and `D = max(1, R/4)`) is a later phase
-once the analytic path is proven.
+The design originally deferred the low-res buffer as a perf optimization. In
+practice it's **required**: the convolution is O(half²)/pixel/frame and a
+typical blur's half is large, so full-res convolution ran ~17× slower than
+stochastic. v1 therefore convolves at reduced resolution (downsample →
+low-res convolve → bilinear upscale + `1/D²` energy carry), with `D` chosen
+per view/flame from the mapped support rather than a fixed `R/4`. See the
+"v1 as built" convolution bullet. The brightness/energy bookkeeping the
+design flagged is handled by the `÷D²` on upscale (verified: `D=1`
+reproduces the full-res result exactly).
 
 ---
 
@@ -279,10 +290,10 @@ once the analytic path is proven.
 full-image convolve-then-add-per-tile; stochastic fallback above the size
 threshold.
 
-**Phase 3 — coverage + low-res.** More analytic-blur variations
-(`circleblur`, `sineblur`, `blur_circle`, `pre_blur3D`, …); the low-res
-blur buffer optimization with the D² intensity carry; 3D kernel through
-projection Jacobian (depth-varying — currently gated out).
+**Phase 3 — coverage.** More analytic-blur variations (`circleblur`,
+`sineblur`, `blur_circle`, `pre_blur3D`, …); 3D kernel through the projection
+Jacobian (depth-varying — currently gated out). (The low-res blur buffer
+optimization landed early in v1 — see "Resolution".)
 
 ## Open questions / risks
 
