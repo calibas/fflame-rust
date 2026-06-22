@@ -137,10 +137,12 @@ pub struct FlameRenderer {
     // adjust_scale_bind_group removed - pipeline unused
     tonemap_bind_group: BindGroup,
 
-    /// Analytic-blur convolution bind group (in = blur histograms, out = main
-    /// histogram). Recreated whenever the blur buffer is (re)allocated or the
+    /// Analytic-blur convolution-stage bind groups (downsample → convolve →
+    /// upscale). Recreated whenever the blur buffers are (re)allocated or the
     /// histogram is resized. See docs/projects/analytic-blur-buffer.md.
+    blur_downsample_bind_group: BindGroup,
     blur_convolve_bind_group: BindGroup,
+    blur_upscale_bind_group: BindGroup,
     /// Per-slot kernel inputs captured from the flame (weight + post-affine
     /// linear), in the same order as the blur slot assignment. Empty when the
     /// feature is inactive. The pixel-space kernel is rebuilt from these +
@@ -151,6 +153,10 @@ pub struct FlameRenderer {
     blur_kernel_zoom: f32,
     blur_kernel_rotation: f32,
     blur_kernels_dirty: bool,
+    /// Low-res convolution dims for the current kernel build (downsample +
+    /// convolve dispatch sizes). Set by `maybe_rebuild_blur_kernels`.
+    blur_lowres_w: u32,
+    blur_lowres_h: u32,
 
     /// Bind group for the init compute pass. Stable across the renderer's
     /// lifetime — references the variation_params buffer with read_write
@@ -253,7 +259,9 @@ impl FlameRenderer {
         // adjust_scale_bind_group removed - pipeline unused
         let tonemap_bind_group = pipelines.create_tonemap_bind_group(device, &buffers);
         let init_bind_group = pipelines.create_init_bind_group(device, &buffers);
+        let blur_downsample_bind_group = pipelines.create_blur_downsample_bind_group(device, &buffers);
         let blur_convolve_bind_group = pipelines.create_blur_convolve_bind_group(device, &buffers);
+        let blur_upscale_bind_group = pipelines.create_blur_upscale_bind_group(device, &buffers);
 
         // Create fractal output texture (Rgba8Unorm for compatibility with tonemap pipeline)
         let fractal_texture = device.create_texture(&TextureDescriptor {
@@ -291,11 +299,15 @@ impl FlameRenderer {
             histogram_blur_v_bind_group,
             // adjust_scale_bind_group removed
             tonemap_bind_group,
+            blur_downsample_bind_group,
             blur_convolve_bind_group,
+            blur_upscale_bind_group,
             blur_slots: Vec::new(),
             blur_kernel_zoom: f32::NAN,      // force a build on first active frame
             blur_kernel_rotation: f32::NAN,
             blur_kernels_dirty: true,
+            blur_lowres_w: 0,
+            blur_lowres_h: 0,
             init_bind_group,
             init_dirty: true, // Run init once on first frame to populate slots
             fractal_texture,
@@ -365,7 +377,9 @@ impl FlameRenderer {
         // Restore analytic-blur histograms at the new size (buffers were just
         // recreated fresh, so this reallocates from the dummy as needed).
         self.update_blur_buffers(device, flame);
+        self.blur_downsample_bind_group = self.pipelines.create_blur_downsample_bind_group(device, &self.buffers);
         self.blur_convolve_bind_group = self.pipelines.create_blur_convolve_bind_group(device, &self.buffers);
+        self.blur_upscale_bind_group = self.pipelines.create_blur_upscale_bind_group(device, &self.buffers);
 
         // Recreate bind groups (must be after xaos buffer is restored)
         self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
@@ -712,21 +726,47 @@ post_symmetry: (&self.post_symmetry).into(),
         self.buffers.update_accumulate_params(queue, &params);
 
         // Analytic-blur convolution — fold each transform's mean-splat blur
-        // histogram (convolved with its kernel) into the main histogram. Runs
-        // before the spatial filter + accumulate so the convolved blur is
-        // treated exactly like the direct samples already in the histogram.
-        // Gated on a live buffer (count > 0). One thread per pixel.
+        // into the main histogram. Three cheap stages, all before the spatial
+        // filter + accumulate so the convolved blur is treated exactly like the
+        // direct samples already in the histogram:
+        //   1. downsample full-res splats → low-res (the blur is low-frequency,
+        //      so we convolve at reduced resolution — keeps the O(half²)
+        //      convolution cheap regardless of blur radius),
+        //   2. convolve each low-res slice with its kernel,
+        //   3. bilinearly upscale + add into the main histogram (÷D² energy).
+        // Gated on a live buffer (count > 0).
         if self.buffers.blur_buffer_count > 0 {
-            let workgroups_x = (self.width + 7) / 8;
-            let workgroups_y = (self.height + 7) / 8;
-            let mut conv_pass = encoder.begin_compute_pass(&ComputePassDescriptor {
-                label: Some("Analytic Blur Convolve Pass"),
+            let low_x = (self.blur_lowres_w + 7) / 8;
+            let low_y = (self.blur_lowres_h + 7) / 8;
+            let full_x = (self.width + 7) / 8;
+            let full_y = (self.height + 7) / 8;
+
+            let mut ds = encoder.begin_compute_pass(&ComputePassDescriptor {
+                label: Some("Analytic Blur Downsample"),
                 timestamp_writes: None,
             });
-            conv_pass.set_pipeline(&self.pipelines.blur_convolve_pipeline);
-            conv_pass.set_bind_group(0, &self.blur_convolve_bind_group, &[]);
-            conv_pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
-            drop(conv_pass);
+            ds.set_pipeline(&self.pipelines.blur_downsample_pipeline);
+            ds.set_bind_group(0, &self.blur_downsample_bind_group, &[]);
+            ds.dispatch_workgroups(low_x, low_y, 1);
+            drop(ds);
+
+            let mut conv = encoder.begin_compute_pass(&ComputePassDescriptor {
+                label: Some("Analytic Blur Convolve"),
+                timestamp_writes: None,
+            });
+            conv.set_pipeline(&self.pipelines.blur_convolve_pipeline);
+            conv.set_bind_group(0, &self.blur_convolve_bind_group, &[]);
+            conv.dispatch_workgroups(low_x, low_y, 1);
+            drop(conv);
+
+            let mut up = encoder.begin_compute_pass(&ComputePassDescriptor {
+                label: Some("Analytic Blur Upscale"),
+                timestamp_writes: None,
+            });
+            up.set_pipeline(&self.pipelines.blur_upscale_pipeline);
+            up.set_bind_group(0, &self.blur_upscale_bind_group, &[]);
+            up.dispatch_workgroups(full_x, full_y, 1);
+            drop(up);
         }
 
         // Spatial filter — Gaussian blur on the per-batch histogram (Apo's
@@ -985,7 +1025,9 @@ post_symmetry: (&self.post_symmetry).into(),
             self.init_bind_group = self.pipelines.create_init_bind_group(device, &self.buffers);
         }
         if blur_buffers_changed {
-            self.blur_convolve_bind_group = self.pipelines.create_blur_convolve_bind_group(device, &self.buffers);
+            self.blur_downsample_bind_group = self.pipelines.create_blur_downsample_bind_group(device, &self.buffers);
+        self.blur_convolve_bind_group = self.pipelines.create_blur_convolve_bind_group(device, &self.buffers);
+        self.blur_upscale_bind_group = self.pipelines.create_blur_upscale_bind_group(device, &self.buffers);
         }
 
         // 2. Update color mode, path map style, and capture mode
@@ -1161,7 +1203,9 @@ post_symmetry: (&config.flame.post_symmetry).into(),
             self.init_bind_group = self.pipelines.create_init_bind_group(device, &self.buffers);
         }
         if blur_buffers_changed {
-            self.blur_convolve_bind_group = self.pipelines.create_blur_convolve_bind_group(device, &self.buffers);
+            self.blur_downsample_bind_group = self.pipelines.create_blur_downsample_bind_group(device, &self.buffers);
+        self.blur_convolve_bind_group = self.pipelines.create_blur_convolve_bind_group(device, &self.buffers);
+        self.blur_upscale_bind_group = self.pipelines.create_blur_upscale_bind_group(device, &self.buffers);
         }
 
         // Update render mode, perspective, DOF, fog, and background color
@@ -1971,7 +2015,7 @@ post_symmetry: (&self.post_symmetry).into(),
     /// reproduces the stochastic splat by construction. Cheap CPU Monte-Carlo;
     /// runs at most once per view/flame change, never per accumulation frame.
     fn maybe_rebuild_blur_kernels(&mut self, queue: &Queue, zoom: f32, rotation: f32) {
-        use crate::variations::analytic_blur::{build_kernel, MAX_KERNEL_HALF};
+        use crate::variations::analytic_blur::{build_kernel, max_offset_radius, BlurKernel};
         use crate::gpu::buffers::{BlurConvolveParams, MAX_BLUR_BUFFERS};
 
         if self.blur_slots.is_empty() {
@@ -1991,14 +2035,15 @@ post_symmetry: (&self.post_symmetry).into(),
         let (c, sn) = (rotation.cos(), rotation.sin());
         let (jxx, jxy, jyx, jyy) = (scale * c, -scale * sn, scale * sn, scale * c);
 
-        // Deterministic Monte-Carlo (no rand dep → reproducible renders).
-        const SAMPLES: usize = 200_000;
-        let mut weights: Vec<f32> = Vec::new();
-        let mut meta = [[0u32; 4]; MAX_BLUR_BUFFERS as usize];
-
-        for (i, slot) in self.blur_slots.iter().enumerate() {
+        // Per-slot full-res pixel-space linear map = weight · (J · M_post),
+        // row-major [m00, m01, m10, m11]. Also track the largest full-res
+        // support so we can pick a downscale that keeps the low-res kernel
+        // small (the convolution cost is O(half²) — see the perf note in the
+        // design doc).
+        let mut linears: Vec<[f32; 4]> = Vec::with_capacity(self.blur_slots.len());
+        let mut support_max = 0.0f32;
+        for slot in &self.blur_slots {
             let [a, b, cc, d] = slot.m_post;
-            // linear = weight · (J · M_post), row-major [m00, m01, m10, m11].
             let w = slot.weight;
             let linear = [
                 (jxx * a + jxy * cc) * w,
@@ -2006,8 +2051,38 @@ post_symmetry: (&self.post_symmetry).into(),
                 (jyx * a + jyy * cc) * w,
                 (jyx * b + jyy * d) * w,
             ];
-            // Vary the seed per slot so identical kernels aren't byte-identical
-            // sampled (distribution is the same either way).
+            // Spectral norm (largest singular value) of the 2×2 map bounds the
+            // mapped support: support = max_offset_radius · σ_max.
+            let [m00, m01, m10, m11] = linear;
+            let fro = m00 * m00 + m01 * m01 + m10 * m10 + m11 * m11;
+            let det = m00 * m11 - m01 * m10;
+            let sigma_max = (0.5 * (fro + (fro * fro - 4.0 * det * det).max(0.0).sqrt()))
+                .max(0.0)
+                .sqrt();
+            support_max = support_max.max(max_offset_radius(&slot.name) * sigma_max);
+            linears.push(linear);
+        }
+
+        // Downscale so the low-res kernel half lands near TARGET_LOWRES_HALF.
+        const TARGET_LOWRES_HALF: f32 = 48.0;
+        let downscale = ((support_max / TARGET_LOWRES_HALF).ceil() as u32).max(1);
+        let lowres_w = (self.width + downscale - 1) / downscale;
+        let lowres_h = (self.height + downscale - 1) / downscale;
+        self.blur_lowres_w = lowres_w;
+        self.blur_lowres_h = lowres_h;
+
+        // Deterministic Monte-Carlo (no rand dep → reproducible renders).
+        const SAMPLES: usize = 200_000;
+        let mut weights: Vec<f32> = Vec::new();
+        let mut meta = [[0u32; 4]; MAX_BLUR_BUFFERS as usize];
+
+        for (i, slot) in self.blur_slots.iter().enumerate() {
+            // Build at LOW-RES scale: the same offset distribution mapped by
+            // linear ÷ downscale, so the kernel matches the downsampled blur.
+            let inv = 1.0 / downscale as f32;
+            let l = linears[i];
+            let linear_low = [l[0] * inv, l[1] * inv, l[2] * inv, l[3] * inv];
+            // Vary the seed per slot (distribution is the same either way).
             let mut state = 0x9E3779B97F4A7C15u64 ^ ((i as u64).wrapping_mul(0xD1B54A32D192ED03));
             let mut rng = || {
                 state = state
@@ -2015,19 +2090,22 @@ post_symmetry: (&self.post_symmetry).into(),
                     .wrapping_add(1442695040888963407);
                 ((state >> 33) as f32) / ((1u64 << 31) as f32)
             };
-            let kernel = build_kernel(&slot.name, linear, SAMPLES, &mut rng)
-                .unwrap_or(crate::variations::analytic_blur::BlurKernel { half: 0, weights: vec![1.0] });
-            let _ = MAX_KERNEL_HALF; // (clamp already applied inside build_kernel)
+            let kernel = build_kernel(&slot.name, linear_low, SAMPLES, &mut rng)
+                .unwrap_or(BlurKernel { half: 0, weights: vec![1.0] });
 
             meta[i] = [kernel.half, weights.len() as u32, 0, 0];
             weights.extend_from_slice(&kernel.weights);
         }
 
         let params = BlurConvolveParams {
-            width: self.width,
-            height: self.height,
+            full_width: self.width,
+            full_height: self.height,
+            lowres_width: lowres_w,
+            lowres_height: lowres_h,
+            downscale,
             count: self.blur_slots.len() as u32,
-            _pad: 0,
+            _pad0: 0,
+            _pad1: 0,
             meta,
         };
         queue.write_buffer(&self.buffers.blur_convolve_params_buffer, 0, bytemuck::cast_slice(&[params]));

@@ -958,20 +958,26 @@ pub struct HistogramBlurParams {
     pub _pad: [u32; 3],  // pad to 32 bytes for std140 alignment
 }
 
-/// Analytic-blur convolution parameters (matches `ConvolveParams` in
-/// blur_convolve.wgsl). `meta[slot]` packs (half, weight_offset, _, _):
-/// `half` is the kernel half-extent in pixels and `weight_offset` indexes
-/// `blur_kernel_weights_buffer` at the slot's first weight. Only the first
-/// `count` slots are read.
+/// Analytic-blur convolution-stage parameters (shared by the downsample,
+/// convolve, and upscale shaders). The convolution runs at REDUCED resolution
+/// (`lowres = ceil(full / downscale)`) because the blur is low-frequency — this
+/// is what bounds the kernel size (and thus cost). `meta[slot]` packs
+/// (lowres_half, weight_offset, _, _): the kernel half-extent at low-res and
+/// the slot's first weight index into `blur_kernel_weights_buffer`. Only the
+/// first `count` slots are read.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct BlurConvolveParams {
-    pub width: u32,
-    pub height: u32,
+    pub full_width: u32,
+    pub full_height: u32,
+    pub lowres_width: u32,
+    pub lowres_height: u32,
+    pub downscale: u32,
     pub count: u32,
-    pub _pad: u32,
-    /// Per-slot (half, weight_offset, _, _) — std140 array stride is 16 B,
-    /// so each entry is a `vec4<u32>`.
+    pub _pad0: u32,
+    pub _pad1: u32,
+    /// Per-slot (lowres_half, weight_offset, _, _) — std140 array stride is
+    /// 16 B, so each entry is a `vec4<u32>`.
     pub meta: [[u32; 4]; MAX_BLUR_BUFFERS as usize],
 }
 
@@ -1078,6 +1084,13 @@ pub struct FlameBuffers {
     // Number of per-transform blur buffers currently allocated (so a flame
     // edit that changes the eligible-blur count triggers a reallocation).
     pub blur_buffer_count: u32,
+    // Low-res convolution-stage scratch (allocated alongside the full-res blur
+    // buffer, same full-res size so they never need a D-change realloc — only
+    // the low-res prefix is used). `blur_lowres_buffer` = downsample output /
+    // convolve input; `blur_convolved_buffer` = convolve output / upscale
+    // input. None when the feature is inactive.
+    pub blur_lowres_buffer: Option<Buffer>,
+    pub blur_convolved_buffer: Option<Buffer>,
     // Concatenated per-slot convolution-kernel weights (host-built each time
     // the view/flame changes; see FlameRenderer::maybe_rebuild_blur_kernels).
     // Sized for the worst case so it never reallocates. Always present (a
@@ -1554,6 +1567,8 @@ impl FlameBuffers {
             blur_histogram_buffer: None,  // Created on demand when analytic blur is active
             dummy_blur_buffer,
             blur_buffer_count: 0,
+            blur_lowres_buffer: None,
+            blur_convolved_buffer: None,
             blur_kernel_weights_buffer,
             blur_convolve_params_buffer,
             // scale_buffer removed - using params.histogram_color_scale instead
@@ -2322,16 +2337,28 @@ impl FlameBuffers {
         self.xaos_buffer.as_ref().unwrap_or(&self.dummy_xaos_buffer)
     }
 
-    /// Get the analytic-blur histogram buffer for binding (real or dummy).
+    /// Get the analytic-blur full-res splat histogram for binding (real or dummy).
     pub fn get_blur_buffer_for_binding(&self) -> &Buffer {
         self.blur_histogram_buffer.as_ref().unwrap_or(&self.dummy_blur_buffer)
     }
 
-    /// Allocate / resize / drop the per-transform analytic-blur histogram
-    /// buffer to hold `num_blur` concatenated `width×height×4×u32` slices
-    /// (clamped to `MAX_BLUR_BUFFERS`). Returns true when the buffer changed
-    /// — i.e. bind groups must be rebuilt. `num_blur == 0` frees it entirely
-    /// (zero overhead when the feature is unused).
+    /// Get the low-res downsample/convolve scratch for binding (real or dummy).
+    pub fn get_blur_lowres_for_binding(&self) -> &Buffer {
+        self.blur_lowres_buffer.as_ref().unwrap_or(&self.dummy_blur_buffer)
+    }
+
+    /// Get the low-res convolved scratch for binding (real or dummy).
+    pub fn get_blur_convolved_for_binding(&self) -> &Buffer {
+        self.blur_convolved_buffer.as_ref().unwrap_or(&self.dummy_blur_buffer)
+    }
+
+    /// Allocate / resize / drop the per-transform analytic-blur buffers to hold
+    /// `num_blur` concatenated `width×height×4×u32` slices (clamped to
+    /// `MAX_BLUR_BUFFERS`). Three buffers are managed together: the full-res
+    /// splat target plus the low-res downsample / convolve scratch (sized at
+    /// full res too, so a downscale change needs no realloc — only the low-res
+    /// prefix is used). Returns true when the set changed — i.e. bind groups
+    /// must be rebuilt. `num_blur == 0` frees everything (zero overhead).
     pub fn ensure_blur_buffers(&mut self, device: &Device, num_blur: u32) -> bool {
         let want = num_blur.min(MAX_BLUR_BUFFERS);
         if want == 0 {
@@ -2339,8 +2366,10 @@ impl FlameBuffers {
                 return false; // Already dropped.
             }
             self.blur_histogram_buffer = None;
+            self.blur_lowres_buffer = None;
+            self.blur_convolved_buffer = None;
             self.blur_buffer_count = 0;
-            log::info!("Dropping analytic-blur histogram buffer");
+            log::info!("Dropping analytic-blur buffers");
             return true;
         }
         let slice = (self.width as u64) * (self.height as u64) * 4 * std::mem::size_of::<u32>() as u64;
@@ -2352,15 +2381,18 @@ impl FlameBuffers {
             return false;
         }
         log::info!(
-            "Allocating analytic-blur histogram buffer: {} slice(s) {}×{} ({:.1}MB)",
+            "Allocating analytic-blur buffers: {} slice(s) {}×{} ({:.1}MB ×3)",
             want, self.width, self.height, size as f64 / (1024.0 * 1024.0)
         );
-        self.blur_histogram_buffer = Some(device.create_buffer(&BufferDescriptor {
-            label: Some("Blur Histogram Buffer"),
+        let mk = |label: &'static str| device.create_buffer(&BufferDescriptor {
+            label: Some(label),
             size,
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
             mapped_at_creation: false,
-        }));
+        });
+        self.blur_histogram_buffer = Some(mk("Blur Histogram Buffer"));
+        self.blur_lowres_buffer = Some(mk("Blur Lowres Buffer"));
+        self.blur_convolved_buffer = Some(mk("Blur Convolved Buffer"));
         self.blur_buffer_count = want;
         true
     }

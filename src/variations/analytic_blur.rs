@@ -52,6 +52,17 @@ pub fn sample_offset(name: &str, rng: &mut impl FnMut() -> f32) -> Option<(f32, 
 /// convolution cost is `(2*half+1)^2` taps per pixel, so this bounds it.
 pub const MAX_KERNEL_HALF: u32 = 64;
 
+/// Maximum offset radius (variation-output space, weight 1) — the support of
+/// the offset sampler. Used host-side to pick the convolution downscale so the
+/// low-res kernel half stays small. Returns 0 for non-analytic names.
+pub fn max_offset_radius(name: &str) -> f32 {
+    match name {
+        "analytic_blur" => 1.0,           // uniform disc, r ≤ 1
+        "analytic_gaussian_blur" => 2.0,  // Irwin-Hall(4) − 2 ∈ [-2, 2]
+        _ => 0.0,
+    }
+}
+
 /// A normalized 2D convolution kernel: an analytic-blur variation's offset
 /// distribution sampled and pushed through a transform's pixel-space linear
 /// map. Square, `(2*half+1)` on a side, row-major, weights sum to 1.0. A
