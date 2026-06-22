@@ -2063,22 +2063,32 @@ post_symmetry: (&self.post_symmetry).into(),
             linears.push(linear);
         }
 
-        // Downscale so the low-res kernel half lands near TARGET_LOWRES_HALF,
-        // but BOUNDED: the downsample shader runs a D×D per-thread loop, so an
+        // Pick the downscale D from the CONVOLUTION COST, not just the blur
+        // size. The low-res convolution costs ≈ (W/D)(H/D)·(support/D)² ∝
+        // W·H·support²/D⁴ taps. Choosing D to hold that under a fixed budget
+        // means small images / small blurs stay at D=1 (full-res, exact — no
+        // downscale over-blur), while only large images or large blurs (where
+        // full-res would be O(half²)-expensive) get downscaled. This keeps the
+        // accurate path accurate and bounds the cost everywhere. The low-res
+        // kernel half ends up as large as the budget allows → best fidelity
+        // for the chosen D.
+        //
+        // Then BOUND D: the downsample runs a D×D per-thread loop, so an
         // unbounded D (from a very large blur weight) collapses the low-res
         // buffer toward 1×1 and makes a single GPU thread loop millions of
-        // times → a watchdog timeout (TDR) and device-lost crash. Two caps:
+        // times → a watchdog timeout (TDR)/device-lost crash.
         //   - MAX_DOWNSCALE bounds the per-thread loop (D² ≤ 32² = 1024),
-        //   - MIN_LOWRES_DIM keeps enough low-res pixels for parallelism and a
-        //     meaningful upscale.
-        // A blur whose mapped support exceeds D·MAX_KERNEL_HALF is clamped to
-        // that — but such a blur is wider than the image (a uniform wash), so
-        // the clamp is visually lossless.
-        const TARGET_LOWRES_HALF: f32 = 48.0;
+        //   - MIN_LOWRES_DIM keeps enough low-res pixels for parallelism.
+        // A blur whose support exceeds D·MAX_KERNEL_HALF is then kernel-clamped,
+        // but such a blur is wider than the image (a uniform wash) so the clamp
+        // is visually lossless.
+        const CONV_TAP_BUDGET: f64 = 3.0e8;
         const MAX_DOWNSCALE: u32 = 32;
         const MIN_LOWRES_DIM: u32 = 16;
+        let cost = self.width as f64 * self.height as f64 * (support_max as f64).powi(2);
+        let cost_d = (cost / CONV_TAP_BUDGET).powf(0.25);
         let dim_cap = (self.width.min(self.height) / MIN_LOWRES_DIM).max(1);
-        let downscale = ((support_max / TARGET_LOWRES_HALF).ceil() as u32)
+        let downscale = (cost_d.ceil() as u32)
             .max(1)
             .min(MAX_DOWNSCALE)
             .min(dim_cap);
