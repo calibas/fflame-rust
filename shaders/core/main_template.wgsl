@@ -72,6 +72,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var prev_xform_idx = 0u;
 {{/if}}
 
+{{#if HAS_ANALYTIC_BLUR}}
+    // Residual analytic-blur state, persists ACROSS iterations: after a blur
+    // transform fires, the next `residual_remaining` plots are routed through
+    // its blur buffer (slot `residual_slot`) instead of the main histogram, so
+    // the propagated fuzz gets smoothed too. Armed by the blur's own splat.
+    var ab_residual_remaining: u32 = 0u;
+    var ab_residual_slot: i32 = -1;
+{{/if}}
+
     // Per-thread state initialization for stateful variations that need
     // values beyond zero-fill (var<private> thread_state is already zeroed
     // by WGSL spec; this block runs the wgsl_state_init fragments declared
@@ -587,22 +596,51 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     let mean_idx = u32(mean_pixel.y) * params.width + u32(mean_pixel.x);
                     let slot = u32(xform.analytic_blur_slot);
                     let mbase = (slot * params.width * params.height + mean_idx) * 4u;
-                    // Same color_scale + linear color as the main path (2D has
-                    // no fog/density weighting, so weighted_scale == color_scale
-                    // and final_color == base_final_color).
-                    let color_scale = 100.0;
-                    let r_u32 = u32(clamp(base_final_color.r, 0.0, 1.0) * color_scale);
-                    let g_u32 = u32(clamp(base_final_color.g, 0.0, 1.0) * color_scale);
-                    let b_u32 = u32(clamp(base_final_color.b, 0.0, 1.0) * color_scale);
-                    let density_u32 = u32(color_scale);
+                    // `strength` scales the deposited density (and colour
+                    // proportionally, so the recovered colour ratio is
+                    // unchanged): >1 makes the smooth blur dominate overlapping
+                    // regions. 2D has no fog/density weighting, so
+                    // weighted_scale == color_scale·strength.
+                    let scale = 100.0 * xform.analytic_blur_strength;
+                    let r_u32 = u32(clamp(base_final_color.r, 0.0, 1.0) * scale);
+                    let g_u32 = u32(clamp(base_final_color.g, 0.0, 1.0) * scale);
+                    let b_u32 = u32(clamp(base_final_color.b, 0.0, 1.0) * scale);
+                    let density_u32 = u32(scale);
                     atomicAdd(&blur_histograms[mbase + 0u], r_u32);
                     atomicAdd(&blur_histograms[mbase + 1u], g_u32);
                     atomicAdd(&blur_histograms[mbase + 2u], b_u32);
                     atomicAdd(&blur_histograms[mbase + 3u], density_u32);
                 }
+                // Arm residual: the next N plots route through this blur's
+                // buffer too (smoothing propagated fuzz).
+                ab_residual_remaining = xform.analytic_blur_residual;
+                ab_residual_slot = xform.analytic_blur_slot;
                 // Suppress the realized sample from the main histogram —
                 // this transform's energy reaches the image only through the
                 // convolved blur buffer.
+                should_plot = false;
+            } else if (ab_residual_remaining > 0u && ab_residual_slot >= 0 && should_plot) {
+                // Residual: a non-blur plot in the wake of a recent blur. Route
+                // the REALIZED plot (no mean removal — this transform has no
+                // fuzz of its own) through the blur buffer so the convolution
+                // blurs it, smoothing the propagated fuzz. Reuses the blur's
+                // kernel (an approximation of the propagated-fuzz shape).
+                if (pixel.x >= 0 && pixel.x < i32(params.width) &&
+                    pixel.y >= 0 && pixel.y < i32(params.height)) {
+                    let ridx = u32(pixel.y) * params.width + u32(pixel.x);
+                    let rslot = u32(ab_residual_slot);
+                    let rbase = (rslot * params.width * params.height + ridx) * 4u;
+                    let color_scale = 100.0;
+                    let r_u32 = u32(clamp(base_final_color.r, 0.0, 1.0) * color_scale);
+                    let g_u32 = u32(clamp(base_final_color.g, 0.0, 1.0) * color_scale);
+                    let b_u32 = u32(clamp(base_final_color.b, 0.0, 1.0) * color_scale);
+                    let density_u32 = u32(color_scale);
+                    atomicAdd(&blur_histograms[rbase + 0u], r_u32);
+                    atomicAdd(&blur_histograms[rbase + 1u], g_u32);
+                    atomicAdd(&blur_histograms[rbase + 2u], b_u32);
+                    atomicAdd(&blur_histograms[rbase + 3u], density_u32);
+                }
+                ab_residual_remaining = ab_residual_remaining - 1u;
                 should_plot = false;
             }
 {{/if}}

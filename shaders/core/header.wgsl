@@ -57,10 +57,11 @@ struct Transform {
     // `GpuTransform::analytic_blur_slot`. See analytic-blur-buffer.md.
     analytic_blur_slot: i32,
 
-    // 2-u32 padding so `array<Transform>` strides at 16-byte
-    // boundaries (std430 alignment). Matches `GpuTransform::_plane_pad`.
-    _plane_pad1: u32,
-    _plane_pad2: u32,
+    // Analytic-blur routing knobs (matches GpuTransform). `strength` scales
+    // the mean-splat density; `residual` keeps routing the next N plots
+    // through the blur buffer. Carved from the former 2-u32 pad.
+    analytic_blur_strength: f32,
+    analytic_blur_residual: u32,
 }
 
 // Dispatch parameters

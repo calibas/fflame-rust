@@ -144,11 +144,14 @@ pub struct GpuTransform {
     // `docs/projects/analytic-blur-buffer.md`.
     pub analytic_blur_slot: i32,
 
-    // Pad to a 16-byte boundary so `array<GpuTransform>` in std430
-    // storage buffers has aligned strides. 24 plane floats (96 B) +
-    // 1 u32 (plane_flags) + 1 i32 (analytic_blur_slot) + 2 u32 pad = 112 B
-    // added to the previous 480 B → 592 B = 37 × 16.
-    pub _plane_pad: [u32; 2],
+    // Analytic-blur routing knobs (carved from the former 2-u32 pad, so the
+    // struct size/alignment is unchanged). `strength` scales the mean-splat
+    // density (artistic dominance); `residual` keeps routing the next N plots
+    // through the blur buffer to smooth propagated fuzz. Both default to the
+    // no-op (1.0 / 0) and are only read when analytic_blur_slot >= 0.
+    pub analytic_blur_strength: f32,
+    pub analytic_blur_residual: u32,
+    // (former `_plane_pad: [u32; 2]` fully consumed — size still 592 = 37×16.)
 }
 
 // Manual implementation for bytemuck (arrays of size 50 not auto-derived)
@@ -264,7 +267,8 @@ impl GpuTransform {
             // eligible transform after blur buffers are assigned (see
             // update_transforms / the analytic-blur slot pass).
             analytic_blur_slot: -1,
-            _plane_pad: [0; 2],
+            analytic_blur_strength: 1.0,
+            analytic_blur_residual: 0,
         }
     }
 
@@ -324,13 +328,18 @@ impl GpuTransform {
         // Slots 0..MAX_BLUR_BUFFERS map to the first eligible normals; any
         // eligible transforms beyond the cap keep -1 (stochastic fallback).
         if flame.analytic_blur_active(registry) {
-            for (slot, (xform_idx, _name, _w)) in flame
+            for (slot, (xform_idx, name, _w)) in flame
                 .analytic_blur_transforms(registry)
                 .into_iter()
                 .take(MAX_BLUR_BUFFERS as usize)
                 .enumerate()
             {
+                let t = &flame.transforms[xform_idx];
                 gpu_transforms[xform_idx].analytic_blur_slot = slot as i32;
+                gpu_transforms[xform_idx].analytic_blur_strength =
+                    t.get_variation_param(&name, "strength").unwrap_or(1.0).max(0.0);
+                gpu_transforms[xform_idx].analytic_blur_residual =
+                    t.get_variation_param(&name, "residual").unwrap_or(0.0).max(0.0) as u32;
             }
         }
 
