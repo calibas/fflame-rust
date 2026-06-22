@@ -285,6 +285,16 @@ pub struct ShaderConstants {
     /// cache's constants-changed check.
     pub has_post_symmetry: bool,
 
+    /// Whether the analytic-blur feature is active for this flame
+    /// (`Flame::analytic_blur_active`). Drives `HAS_ANALYTIC_BLUR` — when
+    /// false, all mean-splat routing is stripped and the shader is
+    /// byte-identical to a non-blur build. Tracked here so toggling the
+    /// feature (adding/removing an `analytic_*` blur, or a change that
+    /// breaks the linear-plot-path gate) triggers a shader rebuild via the
+    /// cache's constants-changed check. See
+    /// `docs/projects/analytic-blur-buffer.md`.
+    pub has_analytic_blur: bool,
+
     /// JWF `preserve_z = false` z-semantics flag. Derived:
     /// `render_3d && !flame.preserve_z`. Now drives per-variation z
     /// GATING in `build_apply_variations_3d`: 2D-origin variations'
@@ -338,6 +348,7 @@ impl Default for ShaderConstants {
             has_post_affine: false,
             has_attachments: false,
             has_post_symmetry: false,
+            has_analytic_blur: false,
             flatten_z_per_iter: false,
             attachment_cap: 1,
             inlined_transforms: None,
@@ -558,6 +569,7 @@ impl ShaderConstants {
             has_post_affine: flame.has_post_affine(),
             has_attachments: flame.has_attachments(),
             has_post_symmetry: flame.post_symmetry.ty != crate::scene::transforms::PostSymmetryType::None,
+            has_analytic_blur: flame.analytic_blur_active(registry),
             // Per-iteration Z flatten — only meaningful in 3D, and
             // only when preserve_z is false (JWF/Apo default).
             flatten_z_per_iter: matches!(flame.render_mode, crate::scene::transforms::RenderMode::ThreeD)
@@ -1314,6 +1326,10 @@ impl ShaderBuilder {
         // the loop and all its math compile out, so the only cost of
         // having the feature is the 8 bytes of padding in GpuParams.
         processor.set("HAS_POST_SYMMETRY", constants.has_post_symmetry);
+        // HAS_ANALYTIC_BLUR gates the mean-splat routing in main_template's
+        // plot section. False ⇒ byte-identical to a non-blur build. See
+        // docs/projects/analytic-blur-buffer.md.
+        processor.set("HAS_ANALYTIC_BLUR", constants.has_analytic_blur);
         // FLATTEN_Z_PER_ITER used to insert a blanket `current.z = 0.0;`
         // at the end of each iteration under preserve_z=false. That
         // destroyed the z compounding JWF gets through unconditional
@@ -2342,6 +2358,7 @@ mod tests {
             p.set("HAS_DC", false);
             p.set("HAS_ATTACHMENTS", false);
             p.set("HAS_POST_SYMMETRY", false);
+            p.set("HAS_ANALYTIC_BLUR", false);
             p.set("FLATTEN_Z_PER_ITER", false);
             p.set("OUTPUT_HISTOGRAM_DIRECT", output_histogram_direct);
             p
