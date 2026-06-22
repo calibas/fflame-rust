@@ -983,7 +983,11 @@ pub struct BlurConvolveParams {
     pub lowres_height: u32,
     pub downscale: u32,
     pub count: u32,
-    pub _pad0: u32,
+    /// Per-frame dither seed (offset 24 B). The upscale stochastically rounds
+    /// its `density/D²` add using a hash of (pixel, seed); varying the seed
+    /// each frame makes the rounding error average out across accumulation
+    /// frames → smooth, band-free, no residual noise. Written every frame.
+    pub frame_seed: u32,
     pub _pad1: u32,
     /// Per-slot (lowres_half, weight_offset, _, _) — std140 array stride is
     /// 16 B, so each entry is a `vec4<u32>`.

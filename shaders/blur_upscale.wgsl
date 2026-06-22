@@ -26,7 +26,7 @@ struct ConvolveParams {
     lowres_height: u32,
     downscale: u32,
     count: u32,
-    _pad0: u32,
+    frame_seed: u32,
     _pad1: u32,
     slot_meta: array<vec4<u32>, 4>,
 }
@@ -52,6 +52,27 @@ fn w_row(slot_base: u32, x0: i32, y: i32, wx: vec4<f32>) -> vec4<f32> {
          + wx[1] * texel(slot_base, x0,     y)
          + wx[2] * texel(slot_base, x0 + 1, y)
          + wx[3] * texel(slot_base, x0 + 2, y);
+}
+
+// PCG-style integer hash → uniform [0,1). Used to dither the integer round so
+// the small per-pixel density quantization (Δ ≈ 1) becomes per-frame noise
+// that averages out across accumulation instead of banding.
+fn pcg(v_in: u32) -> u32 {
+    var v = v_in * 747796405u + 2891336453u;
+    v = ((v >> ((v >> 28u) + 4u)) ^ v) * 277803737u;
+    return (v >> 22u) ^ v;
+}
+fn dither01(px: u32, py: u32, seed: u32) -> f32 {
+    let h = pcg(px ^ pcg(py ^ pcg(seed)));
+    return f32(h) * (1.0 / 4294967296.0);
+}
+
+// Stochastic round: floor, plus one more if the dither threshold falls under
+// the fractional part. Unbiased (E[sround(v)] = v), so it converges to the
+// true value across frames instead of banding.
+fn sround(v: f32, t: f32) -> u32 {
+    let f = floor(v);
+    return u32(f) + select(0u, 1u, t < (v - f));
 }
 
 // Cubic B-spline basis weights for the four taps at offsets (-1, 0, 1, 2)
@@ -94,9 +115,15 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     let inv = 1.0 / (d * d);
+    // Stochastic round with one per-pixel threshold shared across channels (so
+    // R,G,B,density round coherently and the recovered colour ratio holds).
+    // The rounding error becomes per-frame noise ≈ ±0.5 density that averages
+    // out over accumulation — far smaller than the stochastic blur's noise,
+    // and it kills the quantization banding.
+    let t = dither01(gid.x, gid.y, params.frame_seed);
     let hb = (gid.y * params.full_width + gid.x) * 4u;
-    histogram_out[hb + 0u] = histogram_out[hb + 0u] + u32(max(acc.x, 0.0) * inv + 0.5);
-    histogram_out[hb + 1u] = histogram_out[hb + 1u] + u32(max(acc.y, 0.0) * inv + 0.5);
-    histogram_out[hb + 2u] = histogram_out[hb + 2u] + u32(max(acc.z, 0.0) * inv + 0.5);
-    histogram_out[hb + 3u] = histogram_out[hb + 3u] + u32(max(acc.w, 0.0) * inv + 0.5);
+    histogram_out[hb + 0u] = histogram_out[hb + 0u] + sround(max(acc.x, 0.0) * inv, t);
+    histogram_out[hb + 1u] = histogram_out[hb + 1u] + sround(max(acc.y, 0.0) * inv, t);
+    histogram_out[hb + 2u] = histogram_out[hb + 2u] + sround(max(acc.z, 0.0) * inv, t);
+    histogram_out[hb + 3u] = histogram_out[hb + 3u] + sround(max(acc.w, 0.0) * inv, t);
 }
