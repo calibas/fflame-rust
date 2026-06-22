@@ -157,6 +157,9 @@ pub struct FlameRenderer {
     /// convolve dispatch sizes). Set by `maybe_rebuild_blur_kernels`.
     blur_lowres_w: u32,
     blur_lowres_h: u32,
+    /// Per-frame dither seed for the upscale's stochastic rounding. Advanced
+    /// every frame the convolution runs.
+    blur_frame_seed: u32,
 
     /// Bind group for the init compute pass. Stable across the renderer's
     /// lifetime — references the variation_params buffer with read_write
@@ -308,6 +311,7 @@ impl FlameRenderer {
             blur_kernels_dirty: true,
             blur_lowres_w: 0,
             blur_lowres_h: 0,
+            blur_frame_seed: 0,
             init_bind_group,
             init_dirty: true, // Run init once on first frame to populate slots
             fractal_texture,
@@ -736,6 +740,16 @@ post_symmetry: (&self.post_symmetry).into(),
         //   3. bilinearly upscale + add into the main histogram (÷D² energy).
         // Gated on a live buffer (count > 0).
         if self.buffers.blur_buffer_count > 0 {
+            // Advance the per-frame dither seed (offset 24 B = the `frame_seed`
+            // field) so the upscale's stochastic rounding varies each frame and
+            // averages out across accumulation → band-free, no residual noise.
+            self.blur_frame_seed = self.blur_frame_seed.wrapping_add(0x9E3779B9);
+            queue.write_buffer(
+                &self.buffers.blur_convolve_params_buffer,
+                24,
+                bytemuck::bytes_of(&self.blur_frame_seed),
+            );
+
             let low_x = (self.blur_lowres_w + 7) / 8;
             let low_y = (self.blur_lowres_h + 7) / 8;
             let full_x = (self.width + 7) / 8;
@@ -2130,7 +2144,7 @@ post_symmetry: (&self.post_symmetry).into(),
             lowres_height: lowres_h,
             downscale,
             count: self.blur_slots.len() as u32,
-            _pad0: 0,
+            frame_seed: 0,
             _pad1: 0,
             meta,
         };
