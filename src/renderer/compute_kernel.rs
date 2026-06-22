@@ -2063,9 +2063,25 @@ post_symmetry: (&self.post_symmetry).into(),
             linears.push(linear);
         }
 
-        // Downscale so the low-res kernel half lands near TARGET_LOWRES_HALF.
+        // Downscale so the low-res kernel half lands near TARGET_LOWRES_HALF,
+        // but BOUNDED: the downsample shader runs a D×D per-thread loop, so an
+        // unbounded D (from a very large blur weight) collapses the low-res
+        // buffer toward 1×1 and makes a single GPU thread loop millions of
+        // times → a watchdog timeout (TDR) and device-lost crash. Two caps:
+        //   - MAX_DOWNSCALE bounds the per-thread loop (D² ≤ 32² = 1024),
+        //   - MIN_LOWRES_DIM keeps enough low-res pixels for parallelism and a
+        //     meaningful upscale.
+        // A blur whose mapped support exceeds D·MAX_KERNEL_HALF is clamped to
+        // that — but such a blur is wider than the image (a uniform wash), so
+        // the clamp is visually lossless.
         const TARGET_LOWRES_HALF: f32 = 48.0;
-        let downscale = ((support_max / TARGET_LOWRES_HALF).ceil() as u32).max(1);
+        const MAX_DOWNSCALE: u32 = 32;
+        const MIN_LOWRES_DIM: u32 = 16;
+        let dim_cap = (self.width.min(self.height) / MIN_LOWRES_DIM).max(1);
+        let downscale = ((support_max / TARGET_LOWRES_HALF).ceil() as u32)
+            .max(1)
+            .min(MAX_DOWNSCALE)
+            .min(dim_cap);
         let lowres_w = (self.width + downscale - 1) / downscale;
         let lowres_h = (self.height + downscale - 1) / downscale;
         self.blur_lowres_w = lowres_w;
