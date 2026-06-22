@@ -51,6 +51,15 @@ Interactive / 2D-direct path only, end-to-end and golden-test-passing.
   Rebuilt only when the view (zoom/rotation) or flame changes.
 - **Golden test:** `scripts/verify_analytic_blur.py` (energy + no-bias +
   smoother-than-stochastic) plus the `build_kernel` unit tests.
+- **Knobs** (`analytic_blur` / `analytic_gaussian_blur` params, read into
+  GpuTransform): `strength` (default 1.0) scales the mean-splat density so the
+  smooth blur dominates/masks overlapping transforms; `residual` (default 0)
+  routes the next N plots after a blur through its buffer too, smoothing the
+  propagated fuzz (softer trailing structure, reuses the blur kernel as an
+  approximation). Both default to no-ops. The analytic blur only de-noises the
+  blur transform's own plot (+ N residual plots); other transforms' grain and
+  the IFS structure itself are unaffected — for general grain use the spatial
+  filter (`filter_radius`).
 
 Deferred to later phases: export/tiled sample-emit routing (Phase 2); more
 analytic-blur variations, low-res buffer, and 3D-through-projection (Phase 3).
