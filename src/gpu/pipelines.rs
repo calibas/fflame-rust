@@ -168,6 +168,19 @@ impl FlamePipelines {
                     },
                     count: None,
                 },
+                // Analytic-blur mean-splat histograms (read_write). Always in
+                // the layout; a 1-element dummy is bound when the feature is
+                // inactive. See docs/projects/analytic-blur-buffer.md.
+                BindGroupLayoutEntry {
+                    binding: 13,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -578,6 +591,11 @@ impl FlamePipelines {
                 BindGroupEntry {
                     binding: 12,
                     resource: buffers.subflame_metadata_buffer.as_entire_binding(),
+                },
+                // Analytic-blur histograms (real or dummy).
+                BindGroupEntry {
+                    binding: 13,
+                    resource: buffers.get_blur_buffer_for_binding().as_entire_binding(),
                 },
             ],
         })

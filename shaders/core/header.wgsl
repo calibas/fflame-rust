@@ -266,3 +266,12 @@ struct SubflameMeta {
     _pad1: u32,
 }
 @group(0) @binding(12) var<storage, read> subflame_metadata: array<SubflameMeta>;
+
+// Per-transform analytic-blur mean-splat histograms, concatenated: buffer
+// `b` occupies `[b * width*height*4, (b+1) * width*height*4)` in the same
+// `[Rsum, Gsum, Bsum, density]` 4-u32 layout as the main histogram. A
+// transform with `analytic_blur_slot = b >= 0` routes its mean-splat here
+// instead of the main histogram; a later pass convolves each buffer with
+// its blur kernel and adds it back in. Always bound (a 1-element dummy when
+// the feature is inactive). See docs/projects/analytic-blur-buffer.md.
+@group(0) @binding(13) var<storage, read_write> blur_histograms: array<atomic<u32>>;
