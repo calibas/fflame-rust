@@ -27,6 +27,12 @@ use crate::scene::palette::Palette;
 /// See `docs/projects/per-transform-linked-and-final.md`.
 pub const MAX_TRANSFORMS: usize = 128;
 
+/// Max number of per-transform analytic-blur mean-splat buffers (v1 cap).
+/// A flame with more eligible blur transforms renders the excess
+/// stochastically (their `analytic_blur_slot` stays -1). Each buffer costs
+/// `width×height×4×u32`, so this bounds the analytic-blur memory.
+pub const MAX_BLUR_BUFFERS: u32 = 4;
+
 /// Maximum number of subflames in a single FractalConfig.
 ///
 /// Each subflame is a complete `Flame` definition referenced by index
@@ -1030,6 +1036,16 @@ pub struct FlameBuffers {
     pub xaos_buffer: Option<Buffer>,
     pub dummy_xaos_buffer: Buffer,
 
+    // Analytic-blur per-transform mean-splat histograms, concatenated:
+    // `blur_buffer_count × width × height × 4 × u32`. None when the feature
+    // is inactive (zero overhead — the dummy is bound instead). See
+    // `ensure_blur_buffers` and docs/projects/analytic-blur-buffer.md.
+    pub blur_histogram_buffer: Option<Buffer>,
+    pub dummy_blur_buffer: Buffer,
+    // Number of per-transform blur buffers currently allocated (so a flame
+    // edit that changes the eligible-blur count triggers a reallocation).
+    pub blur_buffer_count: u32,
+
     // Per-pixel scale buffer for adaptive histogram scaling
     // Note: scale_buffer removed - now using params.histogram_color_scale (global uniform)
 
@@ -1303,6 +1319,14 @@ impl FlameBuffers {
             mapped_at_creation: false,
         });
 
+        // Bound at binding 13 when the analytic-blur feature is inactive.
+        let dummy_blur_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Dummy Blur Histogram Buffer"),
+            size: 16,  // 4 atomic<u32>
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         // Note: scale_buffer removed - now using params.histogram_color_scale (global uniform)
 
         // Create palette texture (1D, dynamic size: 256-4096 samples)
@@ -1464,6 +1488,9 @@ impl FlameBuffers {
             dummy_filter_buffer,
             xaos_buffer: None,  // Created on demand when xaos is used
             dummy_xaos_buffer,
+            blur_histogram_buffer: None,  // Created on demand when analytic blur is active
+            dummy_blur_buffer,
+            blur_buffer_count: 0,
             // scale_buffer removed - using params.histogram_color_scale instead
             palette_texture,
             palette_view,
@@ -2222,6 +2249,43 @@ impl FlameBuffers {
     /// Use this when creating bind groups
     pub fn get_xaos_buffer_for_binding(&self) -> &Buffer {
         self.xaos_buffer.as_ref().unwrap_or(&self.dummy_xaos_buffer)
+    }
+
+    /// Get the analytic-blur histogram buffer for binding (real or dummy).
+    pub fn get_blur_buffer_for_binding(&self) -> &Buffer {
+        self.blur_histogram_buffer.as_ref().unwrap_or(&self.dummy_blur_buffer)
+    }
+
+    /// Allocate / resize / drop the per-transform analytic-blur histogram
+    /// buffer to hold `num_blur` concatenated `width×height×4×u32` slices
+    /// (clamped to `MAX_BLUR_BUFFERS`). Returns true when the buffer changed
+    /// — i.e. bind groups must be rebuilt. `num_blur == 0` frees it entirely
+    /// (zero overhead when the feature is unused).
+    pub fn ensure_blur_buffers(&mut self, device: &Device, num_blur: u32) -> bool {
+        let want = num_blur.min(MAX_BLUR_BUFFERS);
+        if want == self.blur_buffer_count {
+            return false; // No change.
+        }
+        if want == 0 {
+            self.blur_histogram_buffer = None;
+            self.blur_buffer_count = 0;
+            log::info!("Dropping analytic-blur histogram buffer");
+            return true;
+        }
+        let slice = (self.width as u64) * (self.height as u64) * 4 * std::mem::size_of::<u32>() as u64;
+        let size = slice * want as u64;
+        log::info!(
+            "Allocating analytic-blur histogram buffer: {} slice(s) {}×{} ({:.1}MB)",
+            want, self.width, self.height, size as f64 / (1024.0 * 1024.0)
+        );
+        self.blur_histogram_buffer = Some(device.create_buffer(&BufferDescriptor {
+            label: Some("Blur Histogram Buffer"),
+            size,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        }));
+        self.blur_buffer_count = want;
+        true
     }
 
     /// Update xaos weights from flame
