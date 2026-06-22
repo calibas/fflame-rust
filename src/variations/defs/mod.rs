@@ -168,6 +168,7 @@ mod cut_sincos;
 mod cut_simple;
 mod cut_helper;
 mod cut_helper2;
+mod analytic_blurs;
 
 pub use basic::*;
 pub use advanced::*;
@@ -332,6 +333,7 @@ pub use cut_sincos::*;
 pub use cut_simple::*;
 pub use cut_helper::*;
 pub use cut_helper2::*;
+pub use analytic_blurs::*;
 
 use super::definition::VariationDef;
 
@@ -1131,4 +1133,6 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &CUT_TILEILLUSION,
     &CUT_PATTERN,
     &CUT_CELTIC,
+    &ANALYTIC_BLUR,
+    &ANALYTIC_GAUSSIAN_BLUR,
 ];

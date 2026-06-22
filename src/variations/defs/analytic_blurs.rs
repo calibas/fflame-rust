@@ -1,0 +1,72 @@
+//! Analytic blur variations (experimental) — opt-in copies of `blur` and
+//! `gaussian_blur` tagged with `Feature::AnalyticBlur`, so a flame can
+//! choose the analytic (mean-splat + convolution) path without changing the
+//! behavior of the stochastic originals.
+//!
+//! The WGSL offset formulas are byte-identical to their parents; the host
+//! kernel sampler in `src/variations/analytic_blur.rs` mirrors them. See
+//! `docs/projects/analytic-blur-buffer.md`.
+
+use crate::variations::{
+    definition::{Feature, VariationDef},
+    VariationCategory, VariationPhase,
+};
+
+/// Analytic counterpart of `blur` (uniform-radius disc). Same fuzz, but
+/// eligible for the analytic blur buffer.
+pub static ANALYTIC_BLUR: VariationDef = VariationDef {
+    name: "analytic_blur",
+    aliases: &[],
+    display_name: "Analytic Blur",
+    category: VariationCategory::Advanced2D,
+    phase: VariationPhase::Any,
+    features: &[Feature::NeedsRng, Feature::AnalyticBlur],
+    parameters: &[],
+    init_param_count: 0,
+    wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    wgsl_2d: r#"
+fn variation_analytic_blur(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
+    let theta = rng_nextf(rng) * 6.28318530718;  // 2π
+    let r = rng_nextf(rng);
+    return vec2<f32>(r * cos(theta), r * sin(theta));
+}
+"#,
+    wgsl_3d: r#"
+fn variation_analytic_blur(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
+    let theta = rng_nextf(rng) * 6.28318530718;
+    let r = rng_nextf(rng);
+    return vec3<f32>(r * cos(theta), r * sin(theta), p.z);
+}
+"#,
+};
+
+/// Analytic counterpart of `gaussian_blur` (Irwin-Hall(4) bell radius).
+pub static ANALYTIC_GAUSSIAN_BLUR: VariationDef = VariationDef {
+    name: "analytic_gaussian_blur",
+    aliases: &[],
+    display_name: "Analytic Gaussian Blur",
+    category: VariationCategory::Advanced2D,
+    phase: VariationPhase::Any,
+    features: &[Feature::NeedsRng, Feature::AnalyticBlur],
+    parameters: &[],
+    init_param_count: 0,
+    wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    wgsl_2d: r#"
+fn variation_analytic_gaussian_blur(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
+    let theta = rng_nextf(rng) * 6.28318530718;  // 2π
+    let r = rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) - 2.0;
+    return vec2<f32>(r * cos(theta), r * sin(theta));
+}
+"#,
+    wgsl_3d: r#"
+fn variation_analytic_gaussian_blur(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
+    let theta = rng_nextf(rng) * 6.28318530718;
+    let r = rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) - 2.0;
+    return vec3<f32>(r * cos(theta), r * sin(theta), p.z);
+}
+"#,
+};
