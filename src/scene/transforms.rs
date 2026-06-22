@@ -618,6 +618,42 @@ impl Transform {
         out
     }
 
+    /// Resolution-independent half of the analytic-blur gate. If this
+    /// transform is eligible, returns its single analytic-blur variation's
+    /// `(name, weight)`. Eligible iff it has **exactly one** active
+    /// (`|w| > eps`) `AnalyticBlur` variation, that variation sits in the
+    /// **normal phase** (no `fx_priority` override moving it to pre/post),
+    /// and **no other** active variation uses RNG. Non-blur companions may be
+    /// nonlinear — they're the deterministic structure the mean-splat
+    /// captures. The plot-path-linearity check (post-affine/finals/projection
+    /// linear) is applied separately by the renderer. See
+    /// `docs/projects/analytic-blur-buffer.md`.
+    pub fn analytic_blur(&self, registry: &VariationRegistry) -> Option<(String, f32)> {
+        use crate::variations::{Feature, analytic_blur::is_analytic_blur};
+        let mut found: Option<(String, f32)> = None;
+        for (name, &w) in &self.variations {
+            if w.abs() < 1e-6 {
+                continue;
+            }
+            let Some(info) = registry.get(name) else { continue };
+            if is_analytic_blur(name) {
+                // Normal phase only: a default (0) priority, not moved to
+                // pre/post via fx_priority. A moved blur would route its
+                // offset through other variations and break linearity.
+                if self.variation_priorities.get(name).copied().unwrap_or(0) != 0 {
+                    return None;
+                }
+                if found.is_some() {
+                    return None; // >1 analytic blur — not eligible in v1
+                }
+                found = Some((name.clone(), w));
+            } else if info.has_feature(Feature::NeedsRng) {
+                return None; // another stochastic variation breaks input-independence
+            }
+        }
+        found
+    }
+
     /// Get a variation weight by name
     pub fn get_variation(&self, name: &str) -> f32 {
         self.variations.get(name).copied().unwrap_or(0.0)
@@ -1461,6 +1497,56 @@ mod tests {
     }
 
     #[test]
+    fn test_analytic_blur_gate() {
+        let registry = crate::variations::global_registry();
+
+        // Eligible: one analytic blur + a (possibly nonlinear) deterministic
+        // companion, no other RNG, normal phase.
+        let mut t = Transform::new();
+        t.set_variation("spherical", 1.0); // nonlinear, deterministic — OK
+        t.set_variation("analytic_blur", 0.2);
+        assert_eq!(
+            t.analytic_blur(&registry),
+            Some(("analytic_blur".to_string(), 0.2)),
+        );
+
+        // Another stochastic variation (the original `blur` uses RNG) → out.
+        let mut t = Transform::new();
+        t.set_variation("analytic_blur", 0.2);
+        t.set_variation("blur", 0.1);
+        assert_eq!(t.analytic_blur(&registry), None);
+
+        // Two analytic blurs → out (v1).
+        let mut t = Transform::new();
+        t.set_variation("analytic_blur", 0.2);
+        t.set_variation("analytic_gaussian_blur", 0.2);
+        assert_eq!(t.analytic_blur(&registry), None);
+
+        // Moved off normal phase (fx_priority) → out.
+        let mut t = Transform::new();
+        t.set_variation("linear", 1.0);
+        t.set_variation("analytic_blur", 0.2);
+        t.variation_priorities.insert("analytic_blur".to_string(), 1);
+        assert_eq!(t.analytic_blur(&registry), None);
+
+        // No analytic blur → out.
+        let mut t = Transform::new();
+        t.set_variation("linear", 1.0);
+        assert_eq!(t.analytic_blur(&registry), None);
+
+        // Flame collector picks out only the eligible normals.
+        let mut flame = Flame::new();
+        let mut a = Transform::new();
+        a.set_variation("linear", 1.0);
+        a.set_variation("analytic_blur", 0.3);
+        let mut b = Transform::new();
+        b.set_variation("linear", 1.0); // not eligible
+        flame.transforms = vec![a, b];
+        let elig = flame.analytic_blur_transforms(&registry);
+        assert_eq!(elig, vec![(0, "analytic_blur".to_string(), 0.3)]);
+    }
+
+    #[test]
     fn test_ordered_variation_names_hint_then_registry_fallback() {
         // The variation_order hint comes first; any active variation not in
         // the hint is appended in registry order (stable fallback).
@@ -2087,6 +2173,23 @@ impl Flame {
     /// both chain loops are stripped from the compiled shader.
     pub fn has_attachments(&self) -> bool {
         !self.linked_transforms.is_empty() || !self.final_transforms.is_empty()
+    }
+
+    /// Normal transforms eligible for the analytic blur path (the
+    /// resolution-independent gate — see [`Transform::analytic_blur`]), each
+    /// as `(normal_index, blur_variation_name, weight)`. **Empty when the
+    /// feature is unused**, so callers gate all analytic-blur allocation /
+    /// shader codegen on `is_empty()` for zero overhead. v1: normals only;
+    /// the renderer applies the plot-path-linearity gate on top.
+    pub fn analytic_blur_transforms(
+        &self,
+        registry: &VariationRegistry,
+    ) -> Vec<(usize, String, f32)> {
+        self.transforms
+            .iter()
+            .enumerate()
+            .filter_map(|(i, t)| t.analytic_blur(registry).map(|(n, w)| (i, n, w)))
+            .collect()
     }
 
     /// Per-flame cap on the AttachmentList struct's per-side array
