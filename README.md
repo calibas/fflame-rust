@@ -1,4 +1,4 @@
-# Fractals for All Renderer [FAR]
+# Fractal Art Editor [FAE]
 GPU-accelerated Fractal Flame Renderer
 
 See our [demo in your browser](https://calibas.github.io/) (limited mobile support, Chrome recommended).
@@ -18,7 +18,7 @@ apt install libasound2-dev
 
 ## Learn
 
-We have a set of [tutorials](./docs/tutorials/README.md) on how to use FAR.
+We have a set of [tutorials](./docs/tutorials/README.md) on how to use FAE.
 
 ## Credits
 Thanks to [Scott Draves](https://flam3.com/) for the Fractal Flame algorithm.

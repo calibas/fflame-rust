@@ -27,6 +27,7 @@ mod target_selector;
 mod tone_mapping;
 pub mod track_editor;
 mod transforms;
+mod transform_colors;
 mod variations;
 mod triangle_editor;
 mod undo_history;

@@ -1091,7 +1091,7 @@ impl App {
             // Reconfigure surface to ensure clean state
             self.gpu.resize(self.gpu.size);
             // Restore window title
-            window.set_title("Fractal Flame");
+            window.set_title("Fractal Art Editor");
             self.was_video_exporting = false;
         }
 

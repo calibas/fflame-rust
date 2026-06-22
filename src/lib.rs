@@ -362,7 +362,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             touch_up_fix.forget();
 
             let attributes = winit::window::Window::default_attributes()
-                .with_title("FAR")
+                .with_title("Fractal Art Editor")
                 .with_canvas(Some(canvas));
 
             #[allow(deprecated)]
@@ -604,7 +604,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let attributes = winit::window::Window::default_attributes()
-            .with_title("FAR")
+            .with_title("Fractal Art Editor")
             .with_inner_size(PhysicalSize::new(1920, 1080))
             .with_min_inner_size(PhysicalSize::new(300, 200));
 
