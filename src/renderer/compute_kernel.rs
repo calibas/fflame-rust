@@ -325,6 +325,9 @@ impl FlameRenderer {
 
         // Restore xaos buffer if flame has xaos weights
         self.update_xaos_buffer(device, queue, flame);
+        // Restore analytic-blur histograms at the new size (buffers were just
+        // recreated fresh, so this reallocates from the dummy as needed).
+        self.update_blur_buffers(device, flame);
 
         // Recreate bind groups (must be after xaos buffer is restored)
         self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
@@ -913,8 +916,10 @@ post_symmetry: (&self.post_symmetry).into(),
 
         // 1b. Update xaos buffer (create/drop as needed)
         let xaos_buffer_changed = self.update_xaos_buffer(device, queue, &config.flame);
-        if xaos_buffer_changed {
-            // Recreate bind group with new xaos buffer
+        // 1c. Update analytic-blur histograms (create/drop as needed)
+        let blur_buffers_changed = self.update_blur_buffers(device, &config.flame);
+        if xaos_buffer_changed || blur_buffers_changed {
+            // Recreate bind group with new xaos / blur buffers
             self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
             self.init_bind_group = self.pipelines.create_init_bind_group(device, &self.buffers);
         }
@@ -1084,8 +1089,10 @@ post_symmetry: (&config.flame.post_symmetry).into(),
 
         // Update xaos buffer (create/drop as needed)
         let xaos_buffer_changed = self.update_xaos_buffer(device, queue, flame);
-        if xaos_buffer_changed {
-            // Recreate bind group with new xaos buffer
+        // Update analytic-blur histograms (create/drop as needed)
+        let blur_buffers_changed = self.update_blur_buffers(device, flame);
+        if xaos_buffer_changed || blur_buffers_changed {
+            // Recreate bind group with new xaos / blur buffers
             self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
             self.init_bind_group = self.pipelines.create_init_bind_group(device, &self.buffers);
         }
@@ -1854,6 +1861,22 @@ post_symmetry: (&self.post_symmetry).into(),
     /// Update xaos buffer based on flame state
     /// Creates, updates, or drops the xaos buffer as needed
     /// Returns true if the buffer was created or dropped (bind group needs rebuild)
+    /// Allocate/drop the analytic-blur mean-splat histograms to match the
+    /// flame's active blur transforms. Returns true if the buffer set
+    /// changed (caller must recreate the compute bind group). When the
+    /// whole-flame gate is off, requests 0 buffers (drops to the dummy).
+    fn update_blur_buffers(&mut self, device: &Device, flame: &crate::scene::transforms::Flame) -> bool {
+        let registry = crate::variations::global_registry();
+        let registry = &*registry;
+        let num_blur = if flame.analytic_blur_active(registry) {
+            (flame.analytic_blur_transforms(registry).len() as u32)
+                .min(crate::gpu::buffers::MAX_BLUR_BUFFERS)
+        } else {
+            0
+        };
+        self.buffers.ensure_blur_buffers(device, num_blur)
+    }
+
     fn update_xaos_buffer(&mut self, device: &Device, queue: &Queue, flame: &crate::scene::transforms::Flame) -> bool {
         let needs_xaos = flame.has_xaos();
         let has_xaos = self.buffers.xaos_enabled();
