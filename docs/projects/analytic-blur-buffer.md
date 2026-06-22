@@ -1,6 +1,51 @@
 # Analytic Blur Buffer (experimental)
 
-Status: **design + in progress** on branch `analytic-blur-buffer`.
+Status: **Phase 1 complete** on branch `analytic-blur-buffer`. The sections
+below are the original design; this status block records what actually
+shipped and where it diverged.
+
+## v1 as built (Phase 1)
+
+Interactive / 2D-direct path only, end-to-end and golden-test-passing.
+
+- **New opt-in variations, not modified originals.** `analytic_blur` and
+  `analytic_gaussian_blur` (`src/variations/defs/analytic_blurs.rs`) are
+  byte-identical copies of `blur` / `gaussian_blur` tagged
+  `Feature::AnalyticBlur`. The stochastic originals are untouched, so a flame
+  opts in by *choosing* the analytic variant. (The design below says "tag
+  `blur`/`gaussian_blur`" — superseded by this.)
+- **Host gate** (`Flame::analytic_blur_active`, `Transform::analytic_blur`):
+  exactly one normal-phase `AnalyticBlur` variation on a transform, no other
+  RNG variation on it; and whole-flame: **2D render mode**, no Linked/Final
+  attachments, no subflames, **no post-symmetry**. Any miss → the feature is
+  entirely off (no codegen, no buffers) and the flame renders stochastically.
+  3D (even orthographic) and post-symmetry are deferred (they break the
+  single-linear-map plot tail / fan one sample into many copies).
+- **Plot routing is direct-mode + 2D only** (`HAS_ANALYTIC_BLUR` block in
+  `main_template.wgsl`): the mean splat = realized output − `M_post·(w·offset)`
+  goes to the transform's blur slice (binding 13), and the realized sample is
+  suppressed from the main histogram. The mean pixel gets its own bounds
+  check. Sample-emit / export stays stochastic (the block is gated to
+  `OUTPUT_HISTOGRAM_DIRECT`; naga strips binding 13 from the export shader).
+- **Per-transform buffers capped at `MAX_BLUR_BUFFERS = 4`** (concatenated
+  slices in one buffer; eligible transforms beyond 4 keep slot −1 →
+  stochastic). `Transform.analytic_blur_slot` carries the slot to the shader.
+- **Convolution** (`shaders/blur_convolve.wgsl`): one thread per pixel,
+  gathers `Σ_d blur[p−d]·kernel[d]` per slot and **adds** into the main
+  histogram (no atomics — each output pixel is uniquely owned). Runs in
+  `accumulate_pass` before the spatial filter. Blur slices are cleared each
+  batch alongside the histogram.
+- **Kernel** (`src/variations/analytic_blur.rs`, `maybe_rebuild_blur_kernels`):
+  deterministic CPU Monte-Carlo of the variation's offset sampler mapped by
+  `world→pixel linear · weight · M_post`, bilinearly binned, normalized.
+  Half-extent **clamped to `MAX_KERNEL_HALF = 64`px** (large full-image blurs
+  truncate — a documented v1 limitation; the convolution is O(half²)/pixel).
+  Rebuilt only when the view (zoom/rotation) or flame changes.
+- **Golden test:** `scripts/verify_analytic_blur.py` (energy + no-bias +
+  smoother-than-stochastic) plus the `build_kernel` unit tests.
+
+Deferred to later phases: export/tiled sample-emit routing (Phase 2); more
+analytic-blur variations, low-res buffer, and 3D-through-projection (Phase 3).
 
 ## The idea
 
@@ -221,13 +266,14 @@ once the analytic path is proven.
 
 ## Phased plan
 
-**Phase 1 — interactive, full-res, `blur` + `gaussian_blur`, golden test.**
-- `Feature::AnalyticBlur` + kernel metadata on `blur`/`gaussian_blur`.
+**Phase 1 — interactive, full-res, golden test. ✅ DONE** (see "v1 as built").
+- `Feature::AnalyticBlur` on new `analytic_blur` / `analytic_gaussian_blur`
+  (copies of the originals — originals untouched).
 - Host eligibility + per-transform pixel-space kernel; `HAS_ANALYTIC_BLUR`
   flag; zero-allocation when no transform eligible.
-- Per-transform blur buffers + mean-splat routing (direct mode only) +
-  convolution-add pass.
-- Golden diff test (analytic vs stochastic within noise). **Must pass.**
+- Per-transform blur buffers (cap 4) + mean-splat routing (2D direct mode
+  only) + convolution-add pass.
+- Golden diff test (analytic vs stochastic within noise). **Passes.**
 
 **Phase 2 — export / tiled.** Sample-emit routing + tagged scatter +
 full-image convolve-then-add-per-tile; stochastic fallback above the size
@@ -254,13 +300,21 @@ projection Jacobian (depth-varying — currently gated out).
 - **Multiple blur transforms.** Each needs its own buffer+kernel; they sum
   independently into the histogram. No cross-talk.
 
-## Touch points (reference)
+## Touch points (reference — as built)
 
-- Feature/metadata: `src/variations/definition.rs`, `src/variations/mod.rs`,
-  `src/variations/defs/advanced.rs` (`blur`, `gaussian_blur`).
-- Codegen + gate + flag: `src/shader_builder_v2.rs`,
-  `shaders/core/main_template.wgsl` (plot section), `shaders/core/header.wgsl`.
-- Buffers + passes: `src/gpu/buffers.rs`, `src/renderer/compute_kernel.rs`,
-  new `shaders/blur_convolve.wgsl`.
-- Export: `src/export/high_res.rs`, `shaders/core/accumulate_samples.wgsl`.
-- Test: a new golden-diff test (analytic vs stochastic).
+- Feature/variations: `src/variations/definition.rs` (`Feature::AnalyticBlur`),
+  `src/variations/defs/analytic_blurs.rs` (the two new variations) + registration
+  in `defs/mod.rs`, `src/variations/analytic_blur.rs` (offset samplers +
+  `build_kernel`).
+- Gate: `Flame::analytic_blur_active` / `Transform::analytic_blur` in
+  `src/scene/transforms.rs`.
+- Codegen + flag: `src/shader_builder_v2.rs` (`has_analytic_blur`,
+  `blur_contribution` capture), `shaders/core/main_template.wgsl` (plot
+  routing), `shaders/core/header.wgsl` (binding 13 + `analytic_blur_slot`).
+- Buffers + passes: `src/gpu/buffers.rs` (blur histograms, kernel/convolve
+  buffers, slot assignment), `src/gpu/pipelines.rs` (convolve pipeline +
+  bind group), `src/renderer/compute_kernel.rs` (allocation, kernel rebuild,
+  convolve dispatch), `shaders/blur_convolve.wgsl`.
+- Export (Phase 2, not yet wired): `src/export/high_res.rs`,
+  `shaders/core/accumulate_samples.wgsl`.
+- Test: `scripts/verify_analytic_blur.py` + `build_kernel` unit tests.
