@@ -546,6 +546,68 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let pixel = world_to_pixel(plot_pos);
 {{/if}}
 
+{{#if HAS_ANALYTIC_BLUR}}
+{{#if OUTPUT_HISTOGRAM_DIRECT}}
+            // Analytic-blur mean-splat routing (2D direct path). When the
+            // selected transform carries an analytic-blur variation (slot >= 0),
+            // the blur is rendered deterministically instead of stochastically:
+            // splat the DETERMINISTIC MEAN of this sample — the realized output
+            // minus the post-affine image of the captured weighted offset
+            // `w·offset` — into the transform's own blur buffer, then suppress
+            // the realized (noisy) sample from the main histogram so the blur
+            // energy isn't double-counted. A host convolution pass later folds
+            // each blur buffer (× its kernel) back into the main histogram.
+            // The kernel is built from the same offset distribution mapped
+            // through the same linear tail, so the convolution reproduces the
+            // stochastic splat by construction. The chaos game still advances
+            // on the realized `current`. 2D-only / no-attachments / no
+            // post-symmetry is guaranteed by the host gate
+            // (analytic_blur_active). See docs/projects/analytic-blur-buffer.md.
+            if (xform.analytic_blur_slot >= 0 && should_plot) {
+                // Post-affine linear image of the captured w·offset. The
+                // offset was captured in pre-post-affine (variation) space;
+                // mapping it through the post-affine linear part puts it in
+                // the same world space as `plot_pos`.
+                var post_bc = blur_contribution;
+                if (HAS_POST_AFFINE) {
+                    if (xform.post_enabled > 0.5) {
+                        post_bc = vec2<f32>(
+                            xform.post_a * blur_contribution.x + xform.post_b * blur_contribution.y,
+                            xform.post_c * blur_contribution.x + xform.post_d * blur_contribution.y,
+                        );
+                    }
+                }
+                let mean_pixel = world_to_pixel(plot_pos - post_bc);
+                // Bound the MEAN pixel (not the realized one): the kernel
+                // convolution spreads density from here, and out-of-bounds
+                // kernel taps are dropped just like out-of-bounds stochastic
+                // samples.
+                if (mean_pixel.x >= 0 && mean_pixel.x < i32(params.width) &&
+                    mean_pixel.y >= 0 && mean_pixel.y < i32(params.height)) {
+                    let mean_idx = u32(mean_pixel.y) * params.width + u32(mean_pixel.x);
+                    let slot = u32(xform.analytic_blur_slot);
+                    let mbase = (slot * params.width * params.height + mean_idx) * 4u;
+                    // Same color_scale + linear color as the main path (2D has
+                    // no fog/density weighting, so weighted_scale == color_scale
+                    // and final_color == base_final_color).
+                    let color_scale = 100.0;
+                    let r_u32 = u32(clamp(base_final_color.r, 0.0, 1.0) * color_scale);
+                    let g_u32 = u32(clamp(base_final_color.g, 0.0, 1.0) * color_scale);
+                    let b_u32 = u32(clamp(base_final_color.b, 0.0, 1.0) * color_scale);
+                    let density_u32 = u32(color_scale);
+                    atomicAdd(&blur_histograms[mbase + 0u], r_u32);
+                    atomicAdd(&blur_histograms[mbase + 1u], g_u32);
+                    atomicAdd(&blur_histograms[mbase + 2u], b_u32);
+                    atomicAdd(&blur_histograms[mbase + 3u], density_u32);
+                }
+                // Suppress the realized sample from the main histogram —
+                // this transform's energy reaches the image only through the
+                // convolved blur buffer.
+                should_plot = false;
+            }
+{{/if}}
+{{/if}}
+
             // Check bounds and opacity (only plot if both pass)
             if (pixel.x >= 0 && pixel.x < i32(params.width) &&
                 pixel.y >= 0 && pixel.y < i32(params.height) && should_plot) {

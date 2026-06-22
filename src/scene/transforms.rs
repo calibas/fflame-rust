@@ -1553,8 +1553,17 @@ mod tests {
         flame.final_transforms = vec![f];
         assert!(!flame.analytic_blur_active(&registry));
         flame.final_transforms.clear();
-        // Perspective (non-orthographic) → inactive (v1).
+        // Post-symmetry fans one sample into multiple copies → inactive (v1).
+        flame.post_symmetry.ty = PostSymmetryType::Point;
+        flame.post_symmetry.order = 3;
+        assert!(!flame.analytic_blur_active(&registry));
+        flame.post_symmetry = PostSymmetry::default();
+        assert!(flame.analytic_blur_active(&registry));
+        // 3D — even orthographic — is deferred in v1.
         flame.render_mode = RenderMode::ThreeD;
+        flame.perspective_strength = 0.0;
+        assert!(!flame.analytic_blur_active(&registry));
+        // Perspective (non-orthographic) → inactive (v1).
         flame.perspective_strength = 0.3;
         assert!(!flame.analytic_blur_active(&registry));
     }
@@ -2207,16 +2216,21 @@ impl Flame {
 
     /// Whole-flame analytic-blur activation gate: are there eligible
     /// transforms **and** is the plot path from a normal transform's output
-    /// to the pixel linear? v1 requires the linear tail — no Linked/Final
-    /// chains (`has_attachments`) and orthographic projection (2D render mode,
-    /// or `perspective_strength == 0`). When false, the feature is entirely
-    /// off: no `HAS_ANALYTIC_BLUR` codegen, no blur buffers, no convolution.
+    /// to the pixel a single linear map? v1 requires the linear tail:
+    /// - **2D render mode** (the projection is the affine `world_to_pixel`).
+    ///   3D — even orthographic — is deferred: depth-density compensation,
+    ///   fog, and the camera projection complicate the mean splat.
+    /// - **no Linked/Final chains** (`has_attachments`) — those re-run
+    ///   variations after the normal transform, so the tail isn't linear.
+    /// - **no subflames** and **no post-symmetry** — both fan one sample out
+    ///   into multiple plot copies, which the single mean splat can't model.
+    /// When false, the feature is entirely off: no `HAS_ANALYTIC_BLUR`
+    /// codegen, no blur buffers, no convolution.
     pub fn analytic_blur_active(&self, registry: &VariationRegistry) -> bool {
-        let orthographic = matches!(self.render_mode, RenderMode::TwoD)
-            || self.perspective_strength == 0.0;
-        orthographic
+        matches!(self.render_mode, RenderMode::TwoD)
             && !self.has_attachments()
             && self.subflames.is_empty()
+            && self.post_symmetry.ty == PostSymmetryType::None
             && !self.analytic_blur_transforms(registry).is_empty()
     }
 
