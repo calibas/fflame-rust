@@ -1999,11 +1999,14 @@ post_symmetry: (&self.post_symmetry).into(),
         // MAX_BLUR_BUFFERS eligible normals). The pixel-space kernel is
         // rebuilt from these + the current view (maybe_rebuild_blur_kernels).
         self.blur_slots.clear();
+        // Match the memory-budget cap the slot assignment / allocation use, so
+        // blur_slots (kernel build) never outnumbers the allocated buffers.
+        let max_slots = self.buffers.max_blur_slots() as usize;
         if flame.analytic_blur_active(registry) {
             for (xform_idx, name, weight) in flame
                 .analytic_blur_transforms(registry)
                 .into_iter()
-                .take(crate::gpu::buffers::MAX_BLUR_BUFFERS as usize)
+                .take(max_slots)
             {
                 let t = &flame.transforms[xform_idx];
                 let m_post = if t.post_affine_enabled {

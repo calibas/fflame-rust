@@ -295,8 +295,11 @@ impl HighResExporter {
             width, height, workgroups, samples_per_dispatch, buffer_size_mb
         );
 
-        // Create transform buffer with solo mode handling
-        let transforms = GpuTransform::from_flame(&config.flame, &global_registry());
+        // Create transform buffer with solo mode handling. The tiled export
+        // path is sample-emit (OUTPUT_HISTOGRAM_DIRECT=false), so analytic-blur
+        // routing is stripped and never reads a slot — pass 0 so every
+        // transform stays at slot -1 (stochastic blur fallback).
+        let transforms = GpuTransform::from_flame(&config.flame, &global_registry(), 0);
 
         let transform_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
             label: Some("Export Transform Buffer"),
