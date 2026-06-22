@@ -68,6 +68,26 @@ pub struct ShaderCache {
     /// specializes contributes one `(name, key)` entry; comparing the whole
     /// `Vec` is the change detector. See `compute_specialization_key`.
     specialization_key: Vec<(String, String)>,
+
+    /// Signature of the (global xform_id, init-bearing variation) pairs the
+    /// init shader bakes (see `build_init_shader`). Changes when a
+    /// structural edit shifts xform_ids — e.g. adding/removing a Linked
+    /// transform pushes Finals to new global ids — even though the
+    /// active-variation set and constants are unchanged. Without comparing
+    /// this, the cache would early-out and the init pipeline would keep
+    /// initializing derived params (e.g. `squish`'s `inv_power`) at the OLD
+    /// slot, leaving the moved transform's params zeroed and collapsing the
+    /// fractal to a line. See `compute_init_signature`.
+    init_signature: Vec<(u32, String)>,
+
+    /// Ordered list of active variation names (`active_variation_names_ordered`)
+    /// — the order the per-flame local index map assigns local indices in,
+    /// which the shader's packed `get_param` offsets are baked from. The
+    /// `variations_changed` check only compares the key *set*, so reordering
+    /// two variations (same set, different `variation_order`) wouldn't
+    /// rebuild — leaving the shader reading each variation's params at the
+    /// other's old offset (params appear swapped). Comparing this catches it.
+    variation_order_signature: Vec<String>,
 }
 
 impl ShaderCache {
@@ -152,6 +172,9 @@ impl ShaderCache {
         );
 
         let specialization_key = Self::compute_specialization_key(flame, &active_variations);
+        let init_signature = Self::compute_init_signature(flame);
+        let variation_order_signature =
+            flame.active_variation_names_ordered(&crate::variations::global_registry());
         Self {
             active_variations,
             path_features_enabled,
@@ -168,7 +191,59 @@ impl ShaderCache {
             init_pair_count,
             init_bind_group_layout,
             specialization_key,
+            init_signature,
+            variation_order_signature,
         }
+    }
+
+    /// Compute the init-pair signature: the sorted list of `(global xform_id,
+    /// variation name)` for every transform whose active variation set
+    /// includes an init-bearing (`wgsl_init`) variation. MUST enumerate
+    /// xform_ids in the same order `build_init_shader` bakes them (normals,
+    /// linkeds, finals, then subflame xforms) so a structural shift is
+    /// detected. Sorted so the unordered `variations` HashMap iteration
+    /// doesn't produce spurious differences.
+    fn compute_init_signature(flame: &crate::scene::transforms::Flame) -> Vec<(u32, String)> {
+        let registry = crate::variations::global_registry();
+        let mut sig: Vec<(u32, String)> = Vec::new();
+        let mut emit = |xform_id: u32, xform: &crate::scene::transforms::Transform| {
+            for (name, weight) in &xform.variations {
+                if weight.abs() < 1e-6 {
+                    continue;
+                }
+                if let Some(info) = registry.get(name) {
+                    if info.wgsl_source_init.is_some() {
+                        sig.push((xform_id, name.clone()));
+                    }
+                }
+            }
+        };
+        let mut next_idx: u32 = 0;
+        for xform in flame.transforms.iter() {
+            emit(next_idx, xform);
+            next_idx += 1;
+        }
+        for xform in flame.linked_transforms.iter() {
+            emit(next_idx, xform);
+            next_idx += 1;
+        }
+        for xform in flame.final_transforms.iter() {
+            emit(next_idx, xform);
+            next_idx += 1;
+        }
+        let mut sub_offset: u32 = 0;
+        for sf in flame.subflames.iter() {
+            for xform in sf.transforms.iter() {
+                emit(crate::scene::transforms::SUBFLAME_XFORM_ID_BASE + sub_offset, xform);
+                sub_offset += 1;
+            }
+            for xform in sf.final_transforms.iter() {
+                emit(crate::scene::transforms::SUBFLAME_XFORM_ID_BASE + sub_offset, xform);
+                sub_offset += 1;
+            }
+        }
+        sig.sort();
+        sig
     }
 
     /// Build the per-flame specialization key. Each entry is `(variation_name,
@@ -301,9 +376,26 @@ impl ShaderCache {
         let new_specialization_key = Self::compute_specialization_key(flame, &needed);
         let specialization_changed = new_specialization_key != self.specialization_key;
 
+        // Detect when a structural edit shifted the init shader's baked
+        // (xform_id, init-variation) pairs without changing the active set
+        // (e.g. adding/removing a Linked transform moves Finals to new
+        // global ids). Otherwise the init pipeline keeps writing derived
+        // params at the old slot — leaving the moved transform's init params
+        // zeroed (squish's inv_power → collapse-to-line).
+        let new_init_signature = Self::compute_init_signature(flame);
+        let init_changed = new_init_signature != self.init_signature;
+
+        // Detect a variation-ORDER change (same active set, different
+        // local index assignment) — reordering two variations shifts the
+        // packed get_param offsets the shader baked, so without a rebuild
+        // each variation reads the other's params (params appear swapped).
+        let new_variation_order =
+            flame.active_variation_names_ordered(&crate::variations::global_registry());
+        let order_changed = new_variation_order != self.variation_order_signature;
+
         if !variations_changed && !path_features_changed && !xaos_changed
             && !constants_changed && !mode_changed && !registry_changed
-            && !specialization_changed
+            && !specialization_changed && !init_changed && !order_changed
         {
             return false; // No rebuild needed
         }
@@ -407,6 +499,8 @@ impl ShaderCache {
         self.current_render_mode = render_mode;
         self.last_registry_version = current_registry_version;
         self.specialization_key = new_specialization_key;
+        self.init_signature = new_init_signature;
+        self.variation_order_signature = new_variation_order;
 
         true // Rebuilt
     }

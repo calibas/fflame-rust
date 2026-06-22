@@ -486,10 +486,21 @@ impl ShaderConstants {
             }
         }
 
-        // Handle final transform if present (inline mode uses pool[0]).
-        if let Some(final_xform) = flame.final_transforms.first() {
+        // Inline the Linked and Final pools too, so INLINED_AFFINE and the
+        // get_inlined_var_* switches are indexed by GLOBAL xform_id in the
+        // same order as the transforms[] buffer and the per-normal
+        // attachment lists: normals, then linkeds, then finals.
+        //
+        // Previously only `final_transforms[0]` was inlined and the Linked
+        // pool was skipped entirely. A flame with any Linked transform (or
+        // more than one Final) then shifted its Finals to global ids past
+        // the end of the inlined array — the shader read an out-of-bounds
+        // zero affine for the Final and collapsed the render to a point/line.
+        // Linked and Final transforms are never weight-selected, so their
+        // inlined `weight` is 0.0 (matches the old Final handling).
+        let mut inline_pool_xform = |xform: &crate::scene::transforms::Transform| {
             let mut var_weights = Vec::new();
-            for (name, &weight) in &final_xform.variations {
+            for (name, &weight) in &xform.variations {
                 if weight.abs() > 1e-6 {
                     if let Some(&idx) = id_map.get(name) {
                         var_weights.push((idx, weight));
@@ -499,7 +510,7 @@ impl ShaderConstants {
             var_weights.sort_by_key(|(idx, _)| *idx);
 
             let mut var_params = Vec::new();
-            for (key, &value) in &final_xform.variation_params {
+            for (key, &value) in &xform.variation_params {
                 if let Some(dot_pos) = key.find('.') {
                     let var_name = &key[..dot_pos];
                     let param_name = &key[dot_pos + 1..];
@@ -519,20 +530,26 @@ impl ShaderConstants {
             var_params.sort_by_key(|((var_idx, slot), _)| (*var_idx, *slot));
 
             inlined.push(InlinedTransform {
-                a: final_xform.a,
-                b: final_xform.b,
-                c: final_xform.c,
-                d: final_xform.d,
-                e: final_xform.e,
-                f: final_xform.f,
-                g: final_xform.g,
-                weight: 0.0, // Final transform not selected by weight
-                color: final_xform.color,
-                color_speed: final_xform.color_speed,
-                opacity: final_xform.opacity,
+                a: xform.a,
+                b: xform.b,
+                c: xform.c,
+                d: xform.d,
+                e: xform.e,
+                f: xform.f,
+                g: xform.g,
+                weight: 0.0, // Linked/Final not selected by weight
+                color: xform.color,
+                color_speed: xform.color_speed,
+                opacity: xform.opacity,
                 variation_weights: var_weights,
                 variation_params: var_params,
             });
+        };
+        for xform in &flame.linked_transforms {
+            inline_pool_xform(xform);
+        }
+        for xform in &flame.final_transforms {
+            inline_pool_xform(xform);
         }
 
         Self {
@@ -1537,25 +1554,43 @@ impl ShaderBuilder {
                     let used = (!pre_t.is_empty()) as u32
                         + (!nor_t.is_empty()) as u32
                         + (!post_t.is_empty()) as u32;
-                    // Single bucket across the whole flame ⇒ no xform_id
-                    // gate needed (the weight check already restricts to
-                    // the using transforms). Multiple ⇒ gate each.
-                    let gate_for = |ts: &[u32]| -> Option<String> {
-                        if used <= 1 {
-                            return None;
-                        }
-                        let conds: Vec<String> =
-                            ts.iter().map(|t| format!("xform_id == {}u", t)).collect();
-                        Some(format!("({})", conds.join(" || ")))
-                    };
-                    if !pre_t.is_empty() {
-                        pre.push(mk(gate_for(&pre_t), true));
-                    }
-                    if !nor_t.is_empty() {
-                        normal.push(mk(gate_for(&nor_t), false));
-                    }
-                    if !post_t.is_empty() {
-                        post.push(mk(gate_for(&post_t), true));
+                    if used <= 1 {
+                        // One bucket across all normals ⇒ no xform_id gate
+                        // (the weight check already restricts to the using
+                        // transforms, and an ungated bucket also runs for any
+                        // Final/Linked transform that uses the variation).
+                        if !pre_t.is_empty() { pre.push(mk(None, true)); }
+                        if !nor_t.is_empty() { normal.push(mk(None, false)); }
+                        if !post_t.is_empty() { post.push(mk(None, true)); }
+                    } else {
+                        // The variation spans multiple phases across normals,
+                        // so each placement needs an xform_id gate. Pre/Post
+                        // get an explicit allow-list of the normals moved
+                        // there. Normal is the DEFAULT / catch-all bucket:
+                        // every transform NOT explicitly placed in pre or post
+                        // — which includes Final and Linked transforms, whose
+                        // GLOBAL xform_ids never appear in these normals-only
+                        // lists. Without the catch-all, a Final using this
+                        // variation would match no gate and run nothing, and
+                        // the render collapses to a single pixel.
+                        let allow = |ts: &[u32]| -> Option<String> {
+                            let conds: Vec<String> =
+                                ts.iter().map(|t| format!("xform_id == {}u", t)).collect();
+                            Some(format!("({})", conds.join(" || ")))
+                        };
+                        let excluded: Vec<String> = pre_t.iter().chain(post_t.iter())
+                            .map(|t| format!("xform_id != {}u", t))
+                            .collect();
+                        let normal_gate = if excluded.is_empty() {
+                            None
+                        } else {
+                            Some(format!("({})", excluded.join(" && ")))
+                        };
+                        if !pre_t.is_empty() { pre.push(mk(allow(&pre_t), true)); }
+                        // Always emit the catch-all normal placement so
+                        // Finals/Linkeds (and default normals) run the variation.
+                        normal.push(mk(normal_gate, false));
+                        if !post_t.is_empty() { post.push(mk(allow(&post_t), true)); }
                     }
                 }
             }
@@ -2084,6 +2119,42 @@ mod tests {
         ShaderBuilder::new((*crate::variations::global_registry()).clone())
     }
 
+    /// Inlined constants (CLI export) must inline ALL three pools in global
+    /// xform_id order — normals, then linkeds, then finals — so
+    /// INLINED_AFFINE / get_inlined_var_* are indexed the same as the
+    /// transforms[] buffer. Regression for the collapse where a flame with a
+    /// Linked transform pushed its Final past the (normals + 1)-sized inlined
+    /// array, reading an out-of-bounds zero affine.
+    #[test]
+    fn inlined_transforms_cover_all_pools_in_global_order() {
+        use crate::scene::transforms::{Flame, Transform};
+        let mut mk = || {
+            let mut t = Transform::new();
+            t.set_variation("linear", 1.0);
+            t
+        };
+        let mut flame = Flame::new();
+        flame.transforms = vec![mk(), mk(), mk()];      // 3 normals
+        flame.linked_transforms = vec![mk()];           // 1 linked
+        flame.final_transforms = vec![mk(), mk()];      // 2 finals
+
+        let registry = crate::variations::global_registry();
+        let constants = ShaderConstants::with_inlined_transforms(&flame, &registry, 0);
+        let inlined = constants
+            .inlined_transforms
+            .expect("inlined transforms present in inline mode");
+        // 3 + 1 + 2 = 6, indexed by global xform_id (finals at 4 and 5).
+        assert_eq!(
+            inlined.len(),
+            flame.transforms.len() + flame.linked_transforms.len() + flame.final_transforms.len(),
+            "inlined array must cover normals + linkeds + finals"
+        );
+        // Normals are weight-selected; linkeds/finals are not (weight 0).
+        assert_eq!(inlined[3].weight, 0.0, "linked is not weight-selected");
+        assert_eq!(inlined[4].weight, 0.0, "final is not weight-selected");
+        assert_eq!(inlined[5].weight, 0.0, "final is not weight-selected");
+    }
+
     #[test]
     fn fx_priority_moves_any_var_to_pre() {
         // combimirror is an `Any` variation; an fx_priority override of -1
@@ -2240,9 +2311,12 @@ mod tests {
         assert_eq!(pre.len(), 1);
         assert_eq!(normal.len(), 1);
         assert!(post.is_empty());
-        // Multiple buckets ⇒ both carry an xform_id gate.
+        // Multiple buckets ⇒ gated. Pre is an explicit allow-list; Normal
+        // is the catch-all (everything NOT moved to pre/post), so Finals and
+        // Linkeds — whose global xform_ids aren't in the normals-only lists —
+        // still run the variation. Here that's "anything except xform 0".
         assert_eq!(pre[0].gate.as_deref(), Some("(xform_id == 0u)"));
-        assert_eq!(normal[0].gate.as_deref(), Some("(xform_id == 1u)"));
+        assert_eq!(normal[0].gate.as_deref(), Some("(xform_id != 0u)"));
     }
 
     /// OUTPUT_HISTOGRAM_DIRECT toggles the unified template between two

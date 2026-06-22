@@ -30,7 +30,7 @@ Similar to before, but with the second color stop. Let's choose a darker green t
 
 ## Palette Library
 
-If you don't want to create your own palette, FAR has hundreds of pre-made ones to choose from. You can open the **Palette Library** from the top Menu under Window, and there's also a button in the Colors panel.
+If you don't want to create your own palette, FAE has hundreds of pre-made ones to choose from. You can open the **Palette Library** from the top Menu under Window, and there's also a button in the Colors panel.
 
 Click the checkbox to enable/disable a pack, and choose a palette to apply to your fractal. You can also use the **Palette Rotation** slider to "rotate" the palette, changing which parts of the palette are applied to the fractal.
 
@@ -42,4 +42,4 @@ If you're used to photo editing software, you may recognize the **Tone Curve** w
 
 The proper tone mapping settings depend on a number of factors, so it's hard to make rules about what's best. If you mess anything up, you can always use Undo or the **Reset to Defaults** button at the bottom of the Colors panel.
 
-* Go Back - [FAR Tutorials](README.md)
+* Go Back - [FAE Tutorials](README.md)

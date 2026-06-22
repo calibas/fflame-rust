@@ -1,5 +1,6 @@
 use crate::scene::transforms::Flame;
 use crate::config::{ConfigManager, ConfigPath, AffineParam, TransformRef, UpdateType};
+use super::transform_colors::{normal_color, linked_color, final_color};
 use egui::{Color32, Pos2, Stroke, Vec2};
 use serde::{Deserialize, Serialize};
 use rust_i18n::t;
@@ -824,37 +825,36 @@ fn render_triangle_editor_core(
                 }
             };
 
-            // Visual style per pool: Normal pools cycle through bright colors,
-            // Linked uses a unified cool tone, Final uses a unified warm tone.
-            let linked_pool_color = Color32::from_rgb(180, 180, 220);
-            let final_pool_color = Color32::from_rgb(220, 200, 160);
+            // Visual style per pool: each pool has its own per-index family
+            // (Normal = bright wheel, Linked = cool, Final = warm). Shared
+            // with the Transforms panel header dots — see `transform_colors`.
 
             // Pre-affine pass for all three pools.
             for (i, transform) in flame.transforms.iter().enumerate() {
                 let is_selected = selected_transform == TransformRef::Normal(i);
-                draw_transform(&painter, transform, get_transform_color(i), is_selected);
+                draw_transform(&painter, transform, normal_color(i), is_selected);
             }
             for (i, transform) in flame.linked_transforms.iter().enumerate() {
                 let is_selected = selected_transform == TransformRef::Linked(i);
-                draw_transform(&painter, transform, linked_pool_color, is_selected);
+                draw_transform(&painter, transform, linked_color(i), is_selected);
             }
             for (i, transform) in flame.final_transforms.iter().enumerate() {
                 let is_selected = selected_transform == TransformRef::Final(i);
-                draw_transform(&painter, transform, final_pool_color, is_selected);
+                draw_transform(&painter, transform, final_color(i), is_selected);
             }
 
             // Post-affine pass for all three pools (only when post-affine is enabled).
             for (i, transform) in flame.transforms.iter().enumerate() {
                 let is_active = selected_transform == TransformRef::Normal(i) && affine_target == AffineTarget::Post;
-                draw_post_affine(&painter, transform, get_transform_color(i), is_active);
+                draw_post_affine(&painter, transform, normal_color(i), is_active);
             }
             for (i, transform) in flame.linked_transforms.iter().enumerate() {
                 let is_active = selected_transform == TransformRef::Linked(i) && affine_target == AffineTarget::Post;
-                draw_post_affine(&painter, transform, linked_pool_color, is_active);
+                draw_post_affine(&painter, transform, linked_color(i), is_active);
             }
             for (i, transform) in flame.final_transforms.iter().enumerate() {
                 let is_active = selected_transform == TransformRef::Final(i) && affine_target == AffineTarget::Post;
-                draw_post_affine(&painter, transform, final_pool_color, is_active);
+                draw_post_affine(&painter, transform, final_color(i), is_active);
             }
 
             ui.separator();
@@ -1204,17 +1204,3 @@ pub fn render_triangle_editor_content(
     render_triangle_editor_core(ui, config_manager, flame)
 }
 
-/// Get a distinct color for each transform index
-fn get_transform_color(index: usize) -> Color32 {
-    let colors = [
-        Color32::from_rgb(255, 100, 100), // Red
-        Color32::from_rgb(100, 255, 100), // Green
-        Color32::from_rgb(100, 100, 255), // Blue
-        Color32::from_rgb(255, 255, 100), // Yellow
-        Color32::from_rgb(255, 100, 255), // Magenta
-        Color32::from_rgb(100, 255, 255), // Cyan
-        Color32::from_rgb(255, 150, 100), // Orange
-        Color32::from_rgb(150, 100, 255), // Purple
-    ];
-    colors[index % colors.len()]
-}

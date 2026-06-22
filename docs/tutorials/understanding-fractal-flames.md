@@ -20,7 +20,7 @@ That's enough theory for now, let's get started on actually making something.
 
 ## Creating a basic Fractal Flame
 
-Load up FAR ([online version here](https://calibas.github.io/)).
+Load up FAE ([online version here](https://calibas.github.io/)).
 
 In the top menu, select File and then New. This will create a new fractal with a single transform. 
 
@@ -28,7 +28,7 @@ Then click the **Add Transform** button at the top of the Transforms panel on th
 
 [<img src="../images/FAR-Tutorial1-1.png">](#)
 
-Now we're going to modify the transformation affines so we get something other than just a square. However, to make things easier, we're not going to modify the affine values directly. FAR has something called a **Triangle Editor**, which displays affines as colored triangles. 
+Now we're going to modify the transformation affines so we get something other than just a square. However, to make things easier, we're not going to modify the affine values directly. FAE has something called a **Triangle Editor**, which displays affines as colored triangles. 
 
 > **Note**: If you make any mistakes, you can always use Ctrl-Z to Undo.  
 
@@ -61,4 +61,4 @@ If your fractal doesn't look like the one above, you can copy over the following
 And that completes this tutorial. You should now have a simple fractal that resembles a fern leaf.
 
 * Continue - [Colors and Tone Mapping](colors-and-tonemapping.md)
-* Go Back - [FAR Tutorials](README.md)
+* Go Back - [FAE Tutorials](README.md)

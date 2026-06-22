@@ -2,6 +2,7 @@ use crate::scene::transforms::{Flame, RenderMode};
 use crate::variations::{VariationCategory, VariationPhase, global_registry};
 use crate::config::{ConfigManager, ConfigPath, UpdateType, AffineParam, TransformRef};
 use super::variation_params::render_variation_params;
+use super::transform_colors::{normal_color, linked_color, final_color};
 use egui::Color32;
 use rust_i18n::t;
 
@@ -65,20 +66,8 @@ fn variation_phase_info(
     (def_phase == VariationPhase::Any, bucket)
 }
 
-/// Get a distinct color for each transform index (matches Triangle Editor)
-fn get_transform_color(index: usize) -> Color32 {
-    let colors = [
-        Color32::from_rgb(255, 100, 100), // Red
-        Color32::from_rgb(100, 255, 100), // Green
-        Color32::from_rgb(100, 100, 255), // Blue
-        Color32::from_rgb(255, 255, 100), // Yellow
-        Color32::from_rgb(255, 100, 255), // Magenta
-        Color32::from_rgb(100, 255, 255), // Cyan
-        Color32::from_rgb(255, 150, 100), // Orange
-        Color32::from_rgb(150, 100, 255), // Purple
-    ];
-    colors[index % colors.len()]
-}
+// Per-index transform colors are shared with the Triangle Editor — see
+// `super::transform_colors` (normal_color / linked_color / final_color).
 
 /// Render weight control (always visible)
 fn render_weight_control(
@@ -151,6 +140,23 @@ fn render_color_controls(
         let (rect, _response) = ui.allocate_exact_size(egui::vec2(20.0, 18.0), egui::Sense::hover());
         ui.painter().rect_filled(rect, 2.0, color_swatch);
     });
+
+    // Color Speed (Symmetry) — sits directly under Color.
+    let mut temp_speed = transform.color_speed;
+    let response_speed = ui.add(super::VkbSlider::new(&mut temp_speed, -1.0..=1.0).text(t!("transform.color_speed")))
+        .on_hover_text(t!("tooltips.color_speed"));
+    if response_speed.changed() {
+        if let Ok(update_type) = config_manager.update_param(
+            ConfigPath::TransformColorSpeed { index },
+            temp_speed.into()
+        ) {
+            transform.color_speed = config_manager.active_flame().transforms[index].color_speed;
+            max_update = max_update.max(update_type);
+        }
+    }
+    if response_speed.drag_stopped() {
+        let _ = config_manager.force_commit_preview(&ConfigPath::TransformColorSpeed { index });
+    }
 
     max_update
 }
@@ -490,7 +496,8 @@ fn render_jwf_plane_sections(
     max_update
 }
 
-/// Render advanced settings (color speed, opacity, solo toggle)
+/// Render advanced settings (opacity, direct color, solo toggle).
+/// Color Speed lives under Color now (see `render_color_controls`).
 fn render_advanced_settings(
     ui: &mut egui::Ui,
     config_manager: &mut ConfigManager,
@@ -524,23 +531,6 @@ fn render_advanced_settings(
     }
 
     ui.add_space(4.0);
-
-    // Color Speed (Symmetry)
-    let mut temp_speed = transform.color_speed;
-    let response_speed = ui.add(super::VkbSlider::new(&mut temp_speed, -1.0..=1.0).text(t!("transform.color_speed")))
-        .on_hover_text(t!("tooltips.color_speed"));
-    if response_speed.changed() {
-        if let Ok(update_type) = config_manager.update_param(
-            ConfigPath::TransformColorSpeed { index },
-            temp_speed.into()
-        ) {
-            transform.color_speed = config_manager.active_flame().transforms[index].color_speed;
-            max_update = max_update.max(update_type);
-        }
-    }
-    if response_speed.drag_stopped() {
-        let _ = config_manager.force_commit_preview(&ConfigPath::TransformColorSpeed { index });
-    }
 
     // Opacity slider
     let mut temp_opacity = transform.opacity;
@@ -611,7 +601,7 @@ fn render_enabled_variation(
         let mut value = current_weight;
         let response = ui.add(
             super::VkbSlider::new(&mut value, -5.0..=5.0)
-                .text(display_name)
+                .text(egui::RichText::new(display_name).color(Color32::LIGHT_GRAY))
                 .drag_value_speed(0.1)
                 .clamping(egui::SliderClamping::Never)
         );
@@ -629,14 +619,9 @@ fn render_enabled_variation(
             let _ = config_manager.force_commit_preview(&path);
         }
 
-        // Delete button
-        if ui.small_button(t!("variations.remove")).on_hover_text(t!("tooltips.remove_variation")).clicked() {
-            delete_requested = true;
-        }
-
         // Variation Settings — a gear button opening phase selection (for
-        // `Any` variations) and reorder controls (for every variation).
-        // Shown for all variations since reordering is universal.
+        // `Any` variations), reorder controls (for every variation), and
+        // Remove.
         ui.menu_button("⚙", |ui| {
             // Phase (Pre / Main / Post) — only for movable (`Any`) variations.
             if movable {
@@ -654,7 +639,7 @@ fn render_enabled_variation(
                                 max_update = max_update.max(update_type);
                             }
                         }
-                        ui.close_menu();
+                        ui.close();
                     }
                 }
                 ui.separator();
@@ -664,15 +649,25 @@ fn render_enabled_variation(
             ui.add_enabled_ui(section_pos > 0, |ui| {
                 if ui.button(t!("variations.move_up")).clicked() {
                     reorder = Some(-1);
-                    ui.close_menu();
+                    ui.close();
                 }
             });
             ui.add_enabled_ui(section_pos + 1 < section_len, |ui| {
                 if ui.button(t!("variations.move_down")).clicked() {
                     reorder = Some(1);
-                    ui.close_menu();
+                    ui.close();
                 }
             });
+
+            // Remove this variation (moved here from the standalone button).
+            ui.separator();
+            if ui.button(egui::RichText::new(t!("variations.remove")).color(Color32::LIGHT_RED))
+                .on_hover_text(t!("tooltips.remove_variation"))
+                .clicked()
+            {
+                delete_requested = true;
+                ui.close();
+            }
         })
         .response
         .on_hover_text(t!("variations.settings_tooltip"));
@@ -806,9 +801,15 @@ fn render_variations_section(
     ui.add_space(4.0);
 
     // Add Variation button
-    let add_btn = ui.button(t!("variations.add"));
+    let add_btn = ui.add(
+        egui::Button::new(t!("variations.add")).fill(Color32::from_rgb(0, 68, 0)),
+    );
+    let focus_search_id = add_variation_popup_id.with("focus_search");
     if add_btn.clicked() {
         egui::Popup::toggle_id(ui.ctx(), add_variation_popup_id);
+        // Focus the search box when the popup opens so typing filters
+        // immediately (consumed once inside the popup below).
+        ui.data_mut(|d| d.insert_temp(focus_search_id, true));
     }
 
     // Variation picker popup. `from_response` defaults to "always
@@ -825,10 +826,19 @@ fn render_variations_section(
         // Search filter
         let search_id = ui.id().with("search");
         let mut search_text = ui.data_mut(|d| d.get_temp::<String>(search_id).unwrap_or_default());
+        // One-shot focus request set when the Add button opened the popup.
+        let focus_search = ui.data_mut(|d| {
+            let v = d.get_temp::<bool>(focus_search_id).unwrap_or(false);
+            if v { d.remove::<bool>(focus_search_id); }
+            v
+        });
         ui.horizontal(|ui| {
             ui.label(t!("variations.search"));
             let r = ui.text_edit_singleline(&mut search_text);
             super::vkb_sync(ui, &r, &search_text);
+            if focus_search {
+                r.request_focus();
+            }
         });
         ui.data_mut(|d| d.insert_temp(search_id, search_text.clone()));
 
@@ -932,12 +942,52 @@ pub fn render_transforms_content(
         attachment_edit,
     } = pool_actions;
 
+    // --- Section collapse/expand policy ---
+    // Sections start collapsed on program start and whenever a new fractal
+    // is loaded (tracked via ConfigManager::load_generation), but a
+    // transform added via the "Add" button opens expanded.
+    let pending_open_id = egui::Id::new("transforms_panel_pending_open");
+    let load_gen = config_manager.load_generation();
+    let collapse_all = ui.ctx().data_mut(|d| {
+        let gen_id = egui::Id::new("transforms_panel_load_gen");
+        let last: Option<u64> = d.get_temp(gen_id);
+        if last != Some(load_gen) {
+            d.insert_temp(gen_id, load_gen);
+            true
+        } else {
+            false
+        }
+    });
+    // Take any "open this newly-added member" request (consumed once). A
+    // fresh fractal load overrides a stale request from the previous one.
+    let pending_open: Option<(u8, usize)> = ui.ctx().data_mut(|d| {
+        let v = d.get_temp::<(u8, usize)>(pending_open_id);
+        if v.is_some() {
+            d.remove::<(u8, usize)>(pending_open_id);
+        }
+        v
+    });
+    let pending_open = if collapse_all { None } else { pending_open };
+    // pool: 0 = normal, 1 = linked, 2 = final
+    let open_override = |pool: u8, idx: usize| -> Option<bool> {
+        if collapse_all {
+            Some(false)
+        } else if pending_open == Some((pool, idx)) {
+            Some(true)
+        } else {
+            None
+        }
+    };
+
     ui.heading(format!("Transforms ({})", flame.transforms.len()));
 
     // Add transform button
     ui.horizontal(|ui| {
-        if ui.button(t!("transform.add")).clicked() {
+        if ui.add(egui::Button::new(t!("transform.add")).fill(Color32::from_rgb(0, 68, 0))).clicked() {
             *add_transform = true;
+            // The new transform is appended at the current end; open it.
+            let new_idx = flame.transforms.len();
+            ui.ctx().data_mut(|d| d.insert_temp(pending_open_id, (0u8, new_idx)));
         }
     });
 
@@ -977,8 +1027,9 @@ pub fn render_transforms_content(
                     show_edit_triangle: true,
                     can_delete: num_normals > 1,
                     header_text: format!("Transform {}", i + 1),
-                    header_color: Some(get_transform_color(i)),
-                    default_open: true,
+                    header_color: Some(normal_color(i)),
+                    default_open: false,
+                    open_override: open_override(0, i),
                     attachments: Some(NormalAttachmentsView {
                         linked: linked_att,
                         final_: final_att,
@@ -1002,11 +1053,13 @@ pub fn render_transforms_content(
     ui.add_space(8.0);
     ui.heading(format!("Linked Transforms ({})", num_linked));
     ui.horizontal(|ui| {
-        if ui.button(t!("transform.add_linked"))
+        if ui.add(egui::Button::new(t!("transform.add_linked")).fill(Color32::from_rgb(0, 68, 0)))
             .on_hover_text(t!("tooltips.transform_add_linked"))
             .clicked()
         {
             *add_linked = true;
+            let new_idx = flame.linked_transforms.len();
+            ui.ctx().data_mut(|d| d.insert_temp(pending_open_id, (1u8, new_idx)));
         }
     });
     ui.separator();
@@ -1032,8 +1085,9 @@ pub fn render_transforms_content(
                     show_edit_triangle: true,
                     can_delete: true,
                     header_text: format!("Linked {}", i + 1),
-                    header_color: None,
-                    default_open: true,
+                    header_color: Some(linked_color(i)),
+                    default_open: false,
+                    open_override: open_override(1, i),
                     attachments: None,
                 },
                 solo_transform,
@@ -1051,11 +1105,13 @@ pub fn render_transforms_content(
     ui.add_space(8.0);
     ui.heading(format!("Final Transforms ({})", num_finals));
     ui.horizontal(|ui| {
-        if ui.button(t!("transform.add_final"))
+        if ui.add(egui::Button::new(t!("transform.add_final")).fill(Color32::from_rgb(0, 68, 0)))
             .on_hover_text(t!("tooltips.transform_add_final"))
             .clicked()
         {
             *add_final = true;
+            let new_idx = flame.final_transforms.len();
+            ui.ctx().data_mut(|d| d.insert_temp(pending_open_id, (2u8, new_idx)));
         }
     });
     ui.separator();
@@ -1078,8 +1134,9 @@ pub fn render_transforms_content(
                     show_edit_triangle: true,
                     can_delete: true,
                     header_text: format!("Final {}", i + 1),
-                    header_color: None,
-                    default_open: true,
+                    header_color: Some(final_color(i)),
+                    default_open: false,
+                    open_override: open_override(2, i),
                     attachments: None,
                 },
                 solo_transform,
@@ -1107,6 +1164,11 @@ struct PoolMemberOptions<'a> {
     header_text: String,
     header_color: Option<Color32>,
     default_open: bool,
+    /// Force this member's collapsing section open/closed this frame,
+    /// overriding the persisted egui state. `Some(false)` collapses on
+    /// fractal load/program start; `Some(true)` expands a freshly-added
+    /// transform; `None` leaves the user's persisted state alone.
+    open_override: Option<bool>,
     /// Only meaningful for Normal-pool members — when set, the Advanced
     /// section gains "Linked XForms" and "Final XForms" subsections that
     /// drive the per-normal attachment lists.
@@ -1151,11 +1213,20 @@ fn render_pool_member_block(
 
     let id = ui.make_persistent_id(format!("{}_header_{}", xref.pool_kind(), xref.index()));
     let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, opts.default_open);
+    // Collapse-on-load / expand-new-transform override (see PoolMemberOptions).
+    if let Some(open) = opts.open_override {
+        state.set_open(open);
+    }
 
     let header_response = ui.horizontal(|ui| {
         let _icon_response = state.show_toggle_button(ui, egui::collapsing_header::paint_default_icon);
         let header_text = egui::RichText::new(opts.header_text.clone()).strong().size(14.0);
-        let text_response = ui.label(header_text);
+        // Clickable label: clicking the "Transform N" name toggles the section
+        // (not just the little triangle icon). Sense::click() is required —
+        // a plain ui.label() never reports .clicked().
+        let text_response = ui
+            .add(egui::Label::new(header_text).sense(egui::Sense::click()))
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
         if let Some(color) = opts.header_color {
             let (circle_rect, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
             ui.painter().circle_filled(circle_rect.center(), 5.0, color);
@@ -1165,6 +1236,23 @@ fn render_pool_member_block(
 
     if header_response.inner.clicked() {
         state.toggle(ui);
+    }
+
+    // When collapsed, show a compact variation summary under the name
+    // (e.g. "pre_blur, bubble") — smaller, indented, light grey.
+    if !state.is_open() {
+        let registry = crate::variations::global_registry();
+        let names = transform.ordered_variation_names(&registry);
+        if !names.is_empty() {
+            ui.horizontal(|ui| {
+                ui.add_space(35.0);
+                ui.label(
+                    egui::RichText::new(names.join(", "))
+                        .size(11.0)
+                        .color(egui::Color32::from_gray(160)),
+                );
+            });
+        }
     }
 
     state.show_body_indented(&header_response.response, ui, |ui| {
@@ -1193,7 +1281,7 @@ fn render_pool_member_block(
                     }
 
                     if opts.can_delete {
-                        if ui.button(t!("transform.delete"))
+                        if ui.button(egui::RichText::new(t!("transform.delete")).color(Color32::LIGHT_RED))
                             .on_hover_text(t!("tooltips.transform_delete"))
                             .clicked()
                         {
@@ -1291,8 +1379,10 @@ fn render_pool_member_block(
                 update = update.max(var_update);
 
                 if let Some(var_name) = var_to_delete {
-                    let path = xref.variation_path(var_name);
-                    if let Ok(u) = config_manager.update_param(path, f32::NAN.into()) {
+                    // Whole-transform snapshot so undo restores the removed
+                    // variation's params/priorities/order (which
+                    // remove_variation scrubs), not just its weight.
+                    if let Ok(u) = config_manager.remove_variation(xref, &var_name) {
                         update = update.max(u);
                     }
                 }
