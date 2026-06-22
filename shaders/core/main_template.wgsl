@@ -108,6 +108,17 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // CanHide feature + the gate after the transform chain below.
         var should_hide = false;
 
+        // Analytic-blur mean-splat accumulator: the selected transform's
+        // analytic-blur variation (if any) writes its weighted offset
+        // `w·offset` here; otherwise it stays zero. Reset each iteration. The
+        // plot routes the deterministic mean to this transform's blur buffer.
+        // See docs/projects/analytic-blur-buffer.md.
+{{#if RENDER_3D}}
+        var blur_contribution = vec3<f32>(0.0, 0.0, 0.0);
+{{else}}
+        var blur_contribution = vec2<f32>(0.0, 0.0);
+{{/if}}
+
 {{#if HAS_DC}}
         // Apophysis 3-step color flow (XForm.pas:312-313, 1067, 1078-1081),
         // emitted only when at least one active variation has writes_color: true:
@@ -142,15 +153,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let affine_p = apply_affine(xform, current);
 {{#if HAS_DC}}
 {{#if HAS_RGB}}
-        current = apply_variations(xform, xform_idx, affine_p, &rng, &vc, &vrc, &should_hide);
+        current = apply_variations(xform, xform_idx, affine_p, &rng, &vc, &vrc, &should_hide, &blur_contribution);
 {{else}}
-        current = apply_variations(xform, xform_idx, affine_p, &rng, &vc, &should_hide);
+        current = apply_variations(xform, xform_idx, affine_p, &rng, &vc, &should_hide, &blur_contribution);
 {{/if}}
 {{else}}
 {{#if HAS_RGB}}
-        current = apply_variations(xform, xform_idx, affine_p, &rng, &vrc, &should_hide);
+        current = apply_variations(xform, xform_idx, affine_p, &rng, &vrc, &should_hide, &blur_contribution);
 {{else}}
-        current = apply_variations(xform, xform_idx, affine_p, &rng, &should_hide);
+        current = apply_variations(xform, xform_idx, affine_p, &rng, &should_hide, &blur_contribution);
 {{/if}}
 {{/if}}
         if (HAS_POST_AFFINE) {
@@ -174,15 +185,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let laff = apply_affine(lxform, current);
 {{#if HAS_DC}}
 {{#if HAS_RGB}}
-            current = apply_variations(lxform, lid, laff, &rng, &vc, &vrc, &should_hide);
+            current = apply_variations(lxform, lid, laff, &rng, &vc, &vrc, &should_hide, &blur_contribution);
 {{else}}
-            current = apply_variations(lxform, lid, laff, &rng, &vc, &should_hide);
+            current = apply_variations(lxform, lid, laff, &rng, &vc, &should_hide, &blur_contribution);
 {{/if}}
 {{else}}
 {{#if HAS_RGB}}
-            current = apply_variations(lxform, lid, laff, &rng, &vrc, &should_hide);
+            current = apply_variations(lxform, lid, laff, &rng, &vrc, &should_hide, &blur_contribution);
 {{else}}
-            current = apply_variations(lxform, lid, laff, &rng, &should_hide);
+            current = apply_variations(lxform, lid, laff, &rng, &should_hide, &blur_contribution);
 {{/if}}
 {{/if}}
             if (HAS_POST_AFFINE) {
@@ -354,15 +365,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 {{/if}}
 {{#if HAS_DC}}
 {{#if HAS_RGB}}
-                final_pos = apply_variations(fxform, fid, faff, &rng, &final_vc, &final_vrc, &should_hide);
+                final_pos = apply_variations(fxform, fid, faff, &rng, &final_vc, &final_vrc, &should_hide, &blur_contribution);
 {{else}}
-                final_pos = apply_variations(fxform, fid, faff, &rng, &final_vc, &should_hide);
+                final_pos = apply_variations(fxform, fid, faff, &rng, &final_vc, &should_hide, &blur_contribution);
 {{/if}}
 {{else}}
 {{#if HAS_RGB}}
-                final_pos = apply_variations(fxform, fid, faff, &rng, &final_vrc, &should_hide);
+                final_pos = apply_variations(fxform, fid, faff, &rng, &final_vrc, &should_hide, &blur_contribution);
 {{else}}
-                final_pos = apply_variations(fxform, fid, faff, &rng, &should_hide);
+                final_pos = apply_variations(fxform, fid, faff, &rng, &should_hide, &blur_contribution);
 {{/if}}
 {{/if}}
                 if (HAS_POST_AFFINE) {

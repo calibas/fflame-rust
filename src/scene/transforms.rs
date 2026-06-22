@@ -2216,6 +2216,7 @@ impl Flame {
             || self.perspective_strength == 0.0;
         orthographic
             && !self.has_attachments()
+            && self.subflames.is_empty()
             && !self.analytic_blur_transforms(registry).is_empty()
     }
 

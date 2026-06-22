@@ -1659,6 +1659,13 @@ impl ShaderBuilder {
             // isn't a param; a discarded local stands in (see below), so
             // subflame.wgsl stays unchanged. CanHide variations set it.
             if !is_subflame { params.push_str(", hide: ptr<function, bool>"); }
+            // `blur_contribution` (analytic-blur mean-splat): the weighted
+            // offset `w·offset` of the transform's analytic-blur variation,
+            // written back so the plot can recover the deterministic mean
+            // (`mean = current − M_post·blur_contribution`). Always present on
+            // the main apply_variations (cheap, mirrors `hide`); absent in
+            // subflame mode, where analytic blurs render stochastically.
+            if !is_subflame { params.push_str(", blur_contribution: ptr<function, vec2<f32>>"); }
             format!("fn {}({}) -> vec2<f32> {{\n", fn_name, params)
         };
         let mut code = String::from(
@@ -1780,6 +1787,33 @@ impl ShaderBuilder {
             let call = format!("{}({})", info.wgsl_function, args);
             // Optional Any-var xform_id gate, ANDed into the weight check.
             let gate = placed.gate.as_ref().map(|g| format!(" && {}", g)).unwrap_or_default();
+
+            // Analytic-blur capture: accumulate the offset normally AND record
+            // `w·offset` so the plot can subtract it for the mean-splat. Only
+            // on the main dispatch (subflames render analytic blurs as plain
+            // additive fuzz — no routing). One analytic blur per eligible
+            // transform (the gate guarantees it), so a plain assign is fine.
+            if info.has_feature(Feature::AnalyticBlur) && !is_subflame {
+                let w_expr = if use_inlined {
+                    format!("get_inlined_var_weight(xform_id, {}u)", idx)
+                } else {
+                    format!("xform.variations[{}]", idx)
+                };
+                code.push_str(&format!(
+                    "    // {}: {} (NORMAL ANALYTIC-BLUR)\n\
+                     \x20   {{\n\
+                     \x20       let w = {};\n\
+                     \x20       if (w != 0.0{}) {{\n\
+                     \x20           let ab_offset = {};\n\
+                     \x20           result = result + w * ab_offset;\n\
+                     \x20           *blur_contribution = w * ab_offset;\n\
+                     \x20       }}\n\
+                     \x20   }}\n\n",
+                    idx, info.display_name, w_expr, gate, call
+                ));
+                continue;
+            }
+
             // Replace variations OVERWRITE the running sum (JWF `pVarTP.x =`);
             // accumulate variations add (`+=`). resolve_phase_buckets emits
             // replaces last, so the assignment clobbers prior accumulates —
@@ -1909,6 +1943,8 @@ impl ShaderBuilder {
             if has_rgb { params.push_str(", vrc: ptr<function, vec3<f32>>"); }
             // doHide pointer — see the 2D builder.
             if !is_subflame { params.push_str(", hide: ptr<function, bool>"); }
+            // Analytic-blur mean-splat offset — see the 2D builder.
+            if !is_subflame { params.push_str(", blur_contribution: ptr<function, vec3<f32>>"); }
             format!("fn {}({}) -> vec3<f32> {{\n", fn_name, params)
         };
         let mut code = String::from(
@@ -2032,6 +2068,31 @@ impl ShaderBuilder {
             };
             // Optional Any-var xform_id gate, ANDed into the weight check.
             let gate = placed.gate.as_ref().map(|g| format!(" && {}", g)).unwrap_or_default();
+
+            // Analytic-blur capture (3D) — mirrors the 2D builder, using the
+            // z-adjusted `contrib` so blur_contribution matches what's added
+            // to `result`. See the 2D builder.
+            if info.has_feature(Feature::AnalyticBlur) && !is_subflame {
+                let w_expr = if use_inlined {
+                    format!("get_inlined_var_weight(xform_id, {}u)", idx)
+                } else {
+                    format!("xform.variations[{}]", idx)
+                };
+                code.push_str(&format!(
+                    "    // {}: {} (NORMAL ANALYTIC-BLUR)\n\
+                     \x20   {{\n\
+                     \x20       let w = {};\n\
+                     \x20       if (w != 0.0{}) {{\n\
+                     \x20           let ab_offset = {};\n\
+                     \x20           result = result + w * ab_offset;\n\
+                     \x20           *blur_contribution = w * ab_offset;\n\
+                     \x20       }}\n\
+                     \x20   }}\n\n",
+                    idx, info.display_name, w_expr, gate, contrib
+                ));
+                continue;
+            }
+
             // Replace variations overwrite the running sum (emitted last by
             // resolve_phase_buckets); accumulate variations add. See the 2D
             // builder for the JWF rationale.
