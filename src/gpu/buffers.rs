@@ -296,7 +296,15 @@ impl GpuTransform {
     /// for non-solo normals; linkeds and finals always run with their
     /// own opacity (currently irrelevant for them since plot opacity
     /// inherits from the normal that fired).
-    pub fn from_flame(flame: &Flame, registry: &crate::variations::VariationRegistry) -> Vec<Self> {
+    /// `max_blur_slots` caps how many eligible transforms get an analytic-blur
+    /// slot (the rest stay at -1 → stochastic). The renderer passes its
+    /// memory-budget cap (`FlameBuffers::max_blur_slots`) so the slot
+    /// assignment never references a buffer that wasn't allocated.
+    pub fn from_flame(
+        flame: &Flame,
+        registry: &crate::variations::VariationRegistry,
+        max_blur_slots: u32,
+    ) -> Vec<Self> {
         let local_map = crate::scene::transforms::compute_local_index_map(
             flame.active_variation_names_ordered(registry),
         );
@@ -331,7 +339,7 @@ impl GpuTransform {
             for (slot, (xform_idx, name, _w)) in flame
                 .analytic_blur_transforms(registry)
                 .into_iter()
-                .take(MAX_BLUR_BUFFERS as usize)
+                .take(max_blur_slots as usize)
                 .enumerate()
             {
                 let t = &flame.transforms[xform_idx];
@@ -1113,6 +1121,11 @@ pub struct FlameBuffers {
     // Convolve params uniform (width, height, slot count, per-slot kernel
     // half-extent + weight offset). Always present.
     pub blur_convolve_params_buffer: Buffer,
+    // Device's max single storage-buffer binding size, captured at creation.
+    // Bounds how many full-res analytic-blur slices (each `W·H·16` bytes ×3
+    // buffers) we can allocate before exceeding a binding / OOMing — see
+    // `max_blur_slots`.
+    pub max_binding_size: u64,
 
     // Per-pixel scale buffer for adaptive histogram scaling
     // Note: scale_buffer removed - now using params.histogram_color_scale (global uniform)
@@ -1584,6 +1597,7 @@ impl FlameBuffers {
             blur_convolved_buffer: None,
             blur_kernel_weights_buffer,
             blur_convolve_params_buffer,
+            max_binding_size: device.limits().max_storage_buffer_binding_size as u64,
             // scale_buffer removed - using params.histogram_color_scale instead
             palette_texture,
             palette_view,
@@ -1820,7 +1834,7 @@ impl FlameBuffers {
 
         // Create transforms with solo mode handling
         let registry = crate::variations::global_registry();
-        let mut gpu_transforms = GpuTransform::from_flame(flame, &registry);
+        let mut gpu_transforms = GpuTransform::from_flame(flame, &registry, self.max_blur_slots());
 
         // Pad parent slack to MAX_TRANSFORMS so subflame slots start
         // at the synthetic-id base (matches variation_params layout).
@@ -2365,6 +2379,25 @@ impl FlameBuffers {
         self.blur_convolved_buffer.as_ref().unwrap_or(&self.dummy_blur_buffer)
     }
 
+    /// How many full-res analytic-blur slices fit within the device's memory
+    /// budget at the current render size. Each active slot needs THREE
+    /// `W·H·16`-byte buffers (splat + low-res scratch ×2, all currently
+    /// full-res-allocated), so we require `3 · slots · slice ≤ max binding`.
+    /// Returns 0 when even one slot would overflow (the render is too large for
+    /// analytic blur) — the slot assignment then leaves every eligible
+    /// transform at slot -1, so they fall back to the stochastic path safely.
+    /// Bounds both the per-binding limit and (conservatively) total VRAM, so a
+    /// big or multi-blur render can't OOM/crash. See
+    /// docs/projects/analytic-blur-buffer.md.
+    pub fn max_blur_slots(&self) -> u32 {
+        let slice = (self.width as u64) * (self.height as u64) * 4 * std::mem::size_of::<u32>() as u64;
+        if slice == 0 {
+            return 0;
+        }
+        let by_memory = (self.max_binding_size / (3 * slice)) as u32;
+        by_memory.min(MAX_BLUR_BUFFERS)
+    }
+
     /// Allocate / resize / drop the per-transform analytic-blur buffers to hold
     /// `num_blur` concatenated `width×height×4×u32` slices (clamped to
     /// `MAX_BLUR_BUFFERS`). Three buffers are managed together: the full-res
@@ -2373,7 +2406,9 @@ impl FlameBuffers {
     /// prefix is used). Returns true when the set changed — i.e. bind groups
     /// must be rebuilt. `num_blur == 0` frees everything (zero overhead).
     pub fn ensure_blur_buffers(&mut self, device: &Device, num_blur: u32) -> bool {
-        let want = num_blur.min(MAX_BLUR_BUFFERS);
+        // Clamp by the memory budget so a large or multi-blur render can't
+        // allocate buffers that exceed a binding / VRAM (would crash).
+        let want = num_blur.min(self.max_blur_slots());
         if want == 0 {
             if self.blur_histogram_buffer.is_none() {
                 return false; // Already dropped.
