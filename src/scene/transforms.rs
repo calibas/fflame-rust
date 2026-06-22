@@ -1544,6 +1544,19 @@ mod tests {
         flame.transforms = vec![a, b];
         let elig = flame.analytic_blur_transforms(&registry);
         assert_eq!(elig, vec![(0, "analytic_blur".to_string(), 0.3)]);
+
+        // Full activation gate: orthographic 2D, no attachments → active.
+        assert!(flame.analytic_blur_active(&registry));
+        // A Final transform makes the plot path non-trivial → inactive (v1).
+        let mut f = Transform::new();
+        f.set_variation("linear", 1.0);
+        flame.final_transforms = vec![f];
+        assert!(!flame.analytic_blur_active(&registry));
+        flame.final_transforms.clear();
+        // Perspective (non-orthographic) → inactive (v1).
+        flame.render_mode = RenderMode::ThreeD;
+        flame.perspective_strength = 0.3;
+        assert!(!flame.analytic_blur_active(&registry));
     }
 
     #[test]
@@ -2190,6 +2203,20 @@ impl Flame {
             .enumerate()
             .filter_map(|(i, t)| t.analytic_blur(registry).map(|(n, w)| (i, n, w)))
             .collect()
+    }
+
+    /// Whole-flame analytic-blur activation gate: are there eligible
+    /// transforms **and** is the plot path from a normal transform's output
+    /// to the pixel linear? v1 requires the linear tail — no Linked/Final
+    /// chains (`has_attachments`) and orthographic projection (2D render mode,
+    /// or `perspective_strength == 0`). When false, the feature is entirely
+    /// off: no `HAS_ANALYTIC_BLUR` codegen, no blur buffers, no convolution.
+    pub fn analytic_blur_active(&self, registry: &VariationRegistry) -> bool {
+        let orthographic = matches!(self.render_mode, RenderMode::TwoD)
+            || self.perspective_strength == 0.0;
+        orthographic
+            && !self.has_attachments()
+            && !self.analytic_blur_transforms(registry).is_empty()
     }
 
     /// Per-flame cap on the AttachmentList struct's per-side array
