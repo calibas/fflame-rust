@@ -318,6 +318,22 @@ impl GpuTransform {
             gpu_transforms.push(Self::from_transform(xform, &local_map));
         }
 
+        // Analytic-blur slot assignment. Only when the whole-flame gate is
+        // satisfied; otherwise every slot stays -1 and the shader routes
+        // these transforms' plots through the normal (stochastic) histogram.
+        // Slots 0..MAX_BLUR_BUFFERS map to the first eligible normals; any
+        // eligible transforms beyond the cap keep -1 (stochastic fallback).
+        if flame.analytic_blur_active(registry) {
+            for (slot, (xform_idx, _name, _w)) in flame
+                .analytic_blur_transforms(registry)
+                .into_iter()
+                .take(MAX_BLUR_BUFFERS as usize)
+                .enumerate()
+            {
+                gpu_transforms[xform_idx].analytic_blur_slot = slot as i32;
+            }
+        }
+
         gpu_transforms
     }
 }
@@ -2263,10 +2279,10 @@ impl FlameBuffers {
     /// (zero overhead when the feature is unused).
     pub fn ensure_blur_buffers(&mut self, device: &Device, num_blur: u32) -> bool {
         let want = num_blur.min(MAX_BLUR_BUFFERS);
-        if want == self.blur_buffer_count {
-            return false; // No change.
-        }
         if want == 0 {
+            if self.blur_histogram_buffer.is_none() {
+                return false; // Already dropped.
+            }
             self.blur_histogram_buffer = None;
             self.blur_buffer_count = 0;
             log::info!("Dropping analytic-blur histogram buffer");
@@ -2274,6 +2290,12 @@ impl FlameBuffers {
         }
         let slice = (self.width as u64) * (self.height as u64) * 4 * std::mem::size_of::<u32>() as u64;
         let size = slice * want as u64;
+        // No change only when both the count AND the byte size match (the
+        // latter catches a histogram resize at an unchanged transform count).
+        let current_size = self.blur_histogram_buffer.as_ref().map(|b| b.size()).unwrap_or(0);
+        if want == self.blur_buffer_count && current_size == size {
+            return false;
+        }
         log::info!(
             "Allocating analytic-blur histogram buffer: {} slice(s) {}×{} ({:.1}MB)",
             want, self.width, self.height, size as f64 / (1024.0 * 1024.0)
