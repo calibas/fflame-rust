@@ -958,6 +958,23 @@ pub struct HistogramBlurParams {
     pub _pad: [u32; 3],  // pad to 32 bytes for std140 alignment
 }
 
+/// Analytic-blur convolution parameters (matches `ConvolveParams` in
+/// blur_convolve.wgsl). `meta[slot]` packs (half, weight_offset, _, _):
+/// `half` is the kernel half-extent in pixels and `weight_offset` indexes
+/// `blur_kernel_weights_buffer` at the slot's first weight. Only the first
+/// `count` slots are read.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct BlurConvolveParams {
+    pub width: u32,
+    pub height: u32,
+    pub count: u32,
+    pub _pad: u32,
+    /// Per-slot (half, weight_offset, _, _) — std140 array stride is 16 B,
+    /// so each entry is a `vec4<u32>`.
+    pub meta: [[u32; 4]; MAX_BLUR_BUFFERS as usize],
+}
+
 /// Accumulation parameters
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -1061,6 +1078,15 @@ pub struct FlameBuffers {
     // Number of per-transform blur buffers currently allocated (so a flame
     // edit that changes the eligible-blur count triggers a reallocation).
     pub blur_buffer_count: u32,
+    // Concatenated per-slot convolution-kernel weights (host-built each time
+    // the view/flame changes; see FlameRenderer::maybe_rebuild_blur_kernels).
+    // Sized for the worst case so it never reallocates. Always present (a
+    // 1-float dummy when the feature is off) so the convolve bind group is
+    // stable.
+    pub blur_kernel_weights_buffer: Buffer,
+    // Convolve params uniform (width, height, slot count, per-slot kernel
+    // half-extent + weight offset). Always present.
+    pub blur_convolve_params_buffer: Buffer,
 
     // Per-pixel scale buffer for adaptive histogram scaling
     // Note: scale_buffer removed - now using params.histogram_color_scale (global uniform)
@@ -1343,6 +1369,27 @@ impl FlameBuffers {
             mapped_at_creation: false,
         });
 
+        // Analytic-blur convolution kernel weights — sized for the worst case
+        // (every slot at the max half-extent) so the host never reallocates
+        // it; only a prefix is uploaded per build. Always present so the
+        // convolve bind group is stable even when the feature is off.
+        let max_kernel_len = {
+            let side = (2 * crate::variations::analytic_blur::MAX_KERNEL_HALF as u64) + 1;
+            side * side * MAX_BLUR_BUFFERS as u64
+        };
+        let blur_kernel_weights_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Blur Kernel Weights Buffer"),
+            size: max_kernel_len * std::mem::size_of::<f32>() as u64,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let blur_convolve_params_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Blur Convolve Params Buffer"),
+            size: std::mem::size_of::<BlurConvolveParams>() as u64,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         // Note: scale_buffer removed - now using params.histogram_color_scale (global uniform)
 
         // Create palette texture (1D, dynamic size: 256-4096 samples)
@@ -1507,6 +1554,8 @@ impl FlameBuffers {
             blur_histogram_buffer: None,  // Created on demand when analytic blur is active
             dummy_blur_buffer,
             blur_buffer_count: 0,
+            blur_kernel_weights_buffer,
+            blur_convolve_params_buffer,
             // scale_buffer removed - using params.histogram_color_scale instead
             palette_texture,
             palette_view,
@@ -1616,6 +1665,12 @@ impl FlameBuffers {
     /// Clear histogram buffer only (before each batch for proper accumulation math)
     pub fn clear_histogram(&self, encoder: &mut CommandEncoder) {
         encoder.clear_buffer(&self.histogram_buffer, 0, None);
+        // Analytic-blur mean-splat histograms are per-batch too: the
+        // convolution folds them into the main histogram each frame, so they
+        // must start each batch empty alongside it.
+        if let Some(ref blur) = self.blur_histogram_buffer {
+            encoder.clear_buffer(blur, 0, None);
+        }
     }
 
     /// Clear path buffer only (on full reset: view change, flame change, etc.)
