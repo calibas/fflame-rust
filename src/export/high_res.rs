@@ -141,6 +141,12 @@ pub struct HighResExporter {
     // the layout. Pruning these bindings is a Phase 2d-or-later cleanup.
     dummy_path_buffer: Buffer,
     dummy_path_filter_buffer: Buffer,
+    // Analytic-blur bindings (13/14) for the now-mode-independent routing.
+    // In Phase 2 step 2a these are a dummy splat buffer + a params buffer with
+    // count=0, so the routing falls back to stochastic; step 2b makes them a
+    // real low-res buffer + nonzero count.
+    blur_splat_buffer: Buffer,
+    blur_convolve_params_buffer: Buffer,
     palette_texture: Texture,
     palette_sampler: Sampler,
 
@@ -332,6 +338,29 @@ impl HighResExporter {
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
+
+        // Analytic-blur bindings (13/14). Step 2a: a dummy splat buffer + a
+        // params buffer zeroed (count=0) so the now-mode-independent routing
+        // falls back to stochastic. Step 2b replaces these with a real low-res
+        // buffer + nonzero count and adds the convolve + CPU upscale.
+        let blur_splat_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Export Blur Splat (dummy)"),
+            size: 16, // 4 × u32
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let blur_convolve_params_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Export Blur Convolve Params"),
+            size: std::mem::size_of::<crate::gpu::buffers::BlurConvolveParams>() as u64,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        // Zero it (count = 0 → routing falls back to stochastic).
+        queue.write_buffer(
+            &blur_convolve_params_buffer,
+            0,
+            bytemuck::bytes_of(&<crate::gpu::buffers::BlurConvolveParams as bytemuck::Zeroable>::zeroed()),
+        );
 
         // Variation params buffer — sized for the worst-case
         // MAX_TRANSFORMS slots so flames whose pool count exceeds the
@@ -706,6 +735,31 @@ impl HighResExporter {
                     },
                     count: None,
                 },
+                // binding 13: analytic-blur low-res splat buffer (used by the
+                // HAS_ANALYTIC_BLUR routing — now mode-independent). Bound to a
+                // real low-res buffer when wired, else a dummy with count=0
+                // params so the routing falls back to stochastic.
+                BindGroupLayoutEntry {
+                    binding: 13,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // binding 14: analytic-blur convolve params (D / lowres / count).
+                BindGroupLayoutEntry {
+                    binding: 14,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -1041,6 +1095,8 @@ impl HighResExporter {
             attachments_buffer,
             dummy_path_buffer,
             dummy_path_filter_buffer,
+            blur_splat_buffer,
+            blur_convolve_params_buffer,
             palette_texture,
             palette_sampler,
             compute_pipeline,
@@ -1148,6 +1204,14 @@ impl HighResExporter {
                 BindGroupEntry {
                     binding: 10,
                     resource: self.attachments_buffer.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 13,
+                    resource: self.blur_splat_buffer.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 14,
+                    resource: self.blur_convolve_params_buffer.as_entire_binding(),
                 },
             ],
         });

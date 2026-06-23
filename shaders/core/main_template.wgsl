@@ -556,16 +556,19 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 {{/if}}
 
 {{#if HAS_ANALYTIC_BLUR}}
-{{#if OUTPUT_HISTOGRAM_DIRECT}}
-            // Analytic-blur mean-splat routing (2D direct path). When the
-            // selected transform carries an analytic-blur variation (slot >= 0),
-            // the blur is rendered deterministically instead of stochastically:
+{{#if RENDER_3D}}{{else}}
+            // Analytic-blur mean-splat routing (2D). When the selected
+            // transform carries an analytic-blur variation (slot < count):
             // splat the DETERMINISTIC MEAN of this sample — the realized output
             // minus the post-affine image of the captured weighted offset
-            // `w·offset` — into the transform's own blur buffer, then suppress
-            // the realized (noisy) sample from the main histogram so the blur
-            // energy isn't double-counted. A host convolution pass later folds
-            // each blur buffer (× its kernel) back into the main histogram.
+            // `w·offset` — into the transform's low-res blur buffer, then
+            // suppress the realized (noisy) sample (`should_plot = false`) so
+            // the blur energy isn't double-counted. A host convolution pass
+            // later folds each blur slice (× its kernel) back in. Mode-
+            // independent: the suppressed sample is dropped from BOTH the direct
+            // histogram add AND the sample-emit write. An exporter that hasn't
+            // wired the blur sets `count = 0`, so `slot < count` fails and the
+            // transform falls back to the stochastic (realized) plot.
             // The kernel is built from the same offset distribution mapped
             // through the same linear tail, so the convolution reproduces the
             // stochastic splat by construction. The chaos game still advances
