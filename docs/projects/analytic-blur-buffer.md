@@ -253,32 +253,78 @@ added in, they run exactly as today.
 
 ---
 
-## Tiled / export integration (the hard part)
+## Phase 2 plan — low-res-native + CPU-histogram inject
 
-The export path (`src/export/high_res.rs`) doesn't atomic-add; it
-**emits `Sample`s** and scatters them into per-tile histograms
-(`accumulate_samples.wgsl`), tiling by horizontal row-strips. Two
-complications the convolution must respect:
+The original "tiled = the hard part" framing (full-image convolution across
+tile seams) was an artifact of the pre-low-res design. With the low-res
+convolution the seam problem evaporates: the convolution runs on a **tiny
+low-res buffer that fits one binding**, and the only full-res touches
+(splat, upscale) are per-pixel-local, so they tile trivially.
 
-1. **Tile boundaries.** A kernel near a tile edge spreads across tiles. So
-   the convolution must operate at **full-image scope** for the blur
-   buffer, *before* the result is added into the (tiled) main histogram —
-   or tiles must overlap by the kernel radius. v1 plan: build the
-   per-transform blur histogram at full image resolution, convolve it
-   full-image, then add each tile's sub-region into that tile's main
-   histogram during the per-tile accumulate.
+Two locked decisions drive the plan:
 
-2. **Size limits.** A full-image blur buffer hits the same storage-binding
-   / buffer-size limits that forced tiling in the first place. v1 plan:
-   analytic blur in the tiled path requires the (per-transform) blur
-   buffer to fit `max_buffer_size`; if it doesn't, **fall back to
-   stochastic blur** for that export (correct, just not accelerated).
-   Document the threshold. (A tiled blur buffer with halo regions is a
-   later phase.)
+1. **Low-res native across the board.** Both the direct (FlameRenderer) and
+   tiled (sample-emit) paths write mean-splats straight into a **low-res**
+   buffer at `mean_pixel ÷ D`. The full-res splat buffer and the downsample
+   pass are **removed entirely** — the splat target *is* the convolution
+   input. (Mean quantization to D px is negligible: the blur is ≈16·D px
+   wide.)
+2. **Shared CPU/GPU upscale math.** The bicubic-B-spline + ÷D² + stochastic
+   dither upscale is ONE algorithm, implemented identically in WGSL
+   (`blur_upscale.wgsl`) and Rust (for the tiled CPU inject), guarded by a
+   unit test that runs both on the same low-res input and asserts they match.
 
-Routing in sample-emit mode: a blur-terminated iteration emits a mean-splat
-`Sample` carrying its target transform index; the scatter pass sends it to
-that transform's blur histogram. Same gate, same kernels as interactive.
+### Step 1 — low-res-native rework (direct path; refactor, no new capability)
+
+- **Buffers**: 2 low-res buffers (atomic splat target + convolved scratch)
+  instead of 1 full-res + 2 low-res. Sized at actual low-res dims
+  (`ceil(W/D)×ceil(H/D)`), reallocated when D changes — D is the discrete
+  cost-based step, so reallocation is rare interactively and **never on
+  exports** (fixed view). Memory drops from ~3×full-res to ~tiny, raising
+  the FlameRenderer resolution ceiling and loosening `max_blur_slots`.
+- **Routing** (`main_template`, direct path): splat the mean at
+  `mean_pixel ÷ D` into the low-res atomic buffer (binding 13, now low-res
+  sized). It reads D + low-res dims from the existing `blur_convolve_params`
+  uniform, bound to the **main** compute bind group at a new binding (14) —
+  chosen over a `GpuParams` field to avoid std140 churn.
+- **Drop** `blur_downsample.wgsl`, its pipeline, bind group, dispatch.
+- **Device ordering (the real friction)**: the low-res splat buffer's size
+  depends on D, which is computed per-frame by `maybe_rebuild_blur_kernels`
+  and consumed by the main dispatch in `compute_pass` — so the buffer must be
+  (re)sized *before* that dispatch. `compute_pass` (or a small prep step)
+  gains `device` access; `maybe_rebuild` ensures the low-res buffers and
+  rebuilds the compute bind group when D changes, ahead of the main dispatch.
+- **Watch**: atomic contention rises (D² fewer splat pixels) — expected fine,
+  perf-check it.
+
+### Step 2 — tiled blur via CPU-histogram inject
+
+Both `ParallelTiles` (GPU tile histogram → read back) and `SerialTiles`
+(CPU sample binning) converge to one CPU `Vec<HistogramPixel>` right before
+`tonemap_gpu` (`high_res.rs`). That convergence is the single inject point.
+
+- **Sample-emit routing** (`main_template`, `OUTPUT_HISTOGRAM_DIRECT=false`):
+  emit a mean-splat `Sample` tagged with its blur slot (+ strength/residual),
+  suppressing the realized sample. The main shader emits the full-res mean
+  pixel; the scatter does the ÷D (so the sample-emit main shader needs no D).
+- **Tagged scatter** (`accumulate_samples.wgsl`): route tagged samples into
+  the low-res blur buffer at `mean_pixel ÷ D` (reads `blur_convolve_params`)
+  instead of the tile histogram.
+- **Exporter** (`high_res.rs`): port the host kernel build
+  (`maybe_rebuild_blur_kernels`); allocate the 2 low-res buffers (tiny); run
+  the GPU low-res convolve; read the convolved buffer back to CPU; **CPU
+  upscale-add** into the `histogram` Vec before tonemap, using the shared
+  upscale math (decision #2). One inject covers both tiled modes; the convolve
+  is on the tiny low-res buffer so there is no tile-seam handling.
+- **Note**: the tiled export convolves once at the end (not per batch), so the
+  dither is a single static pattern — negligible at export sample counts.
+
+### Sequencing
+
+Step 1 first — it unifies the buffer model, proves low-res-native on the
+well-tested direct path, and delivers the memory/ceiling win on its own.
+Step 2 then reuses the same low-res buffers, convolve pass, and shared
+upscale math.
 
 ---
 
@@ -307,9 +353,11 @@ reproduces the full-res result exactly).
   only) + convolution-add pass.
 - Golden diff test (analytic vs stochastic within noise). **Passes.**
 
-**Phase 2 — export / tiled.** Sample-emit routing + tagged scatter +
-full-image convolve-then-add-per-tile; stochastic fallback above the size
-threshold.
+**Phase 2 — export / tiled.** See "Phase 2 plan" above. Step 1: low-res-native
+rework of the direct path (drop the full-res splat buffer + downsample; splat
+straight to low-res; memory + ceiling win). Step 2: tiled blur via a single
+CPU-histogram inject (sample-emit tag + scatter to low-res, GPU low-res
+convolve, CPU upscale-add) covering both ParallelTiles and SerialTiles.
 
 **Phase 3 — coverage.** More analytic-blur variations (`circleblur`,
 `sineblur`, `blur_circle`, `pre_blur3D`, …); 3D kernel through the projection
