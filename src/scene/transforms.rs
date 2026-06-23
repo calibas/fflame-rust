@@ -2214,6 +2214,33 @@ impl Flame {
             .collect()
     }
 
+    /// Per-slot kernel inputs (variation name, weight, post-affine linear) for
+    /// the first `MAX_BLUR_BUFFERS` eligible normals — the input to
+    /// `analytic_blur::compute_blur_setup`. Order matches
+    /// `GpuTransform::from_flame`'s slot assignment. Only meaningful when
+    /// `analytic_blur_active`; empty otherwise.
+    pub fn blur_slots(
+        &self,
+        registry: &VariationRegistry,
+    ) -> Vec<crate::variations::analytic_blur::BlurSlotInfo> {
+        if !self.analytic_blur_active(registry) {
+            return Vec::new();
+        }
+        self.analytic_blur_transforms(registry)
+            .into_iter()
+            .take(crate::gpu::buffers::MAX_BLUR_BUFFERS as usize)
+            .map(|(xform_idx, name, weight)| {
+                let t = &self.transforms[xform_idx];
+                let m_post = if t.post_affine_enabled {
+                    [t.post_a, t.post_b, t.post_c, t.post_d]
+                } else {
+                    [1.0, 0.0, 0.0, 1.0]
+                };
+                crate::variations::analytic_blur::BlurSlotInfo { name, weight, m_post }
+            })
+            .collect()
+    }
+
     /// Whole-flame analytic-blur activation gate: are there eligible
     /// transforms **and** is the plot path from a normal transform's output
     /// to the pixel a single linear map? v1 requires the linear tail:
