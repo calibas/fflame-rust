@@ -39,12 +39,15 @@ Interactive / 2D-direct path only, end-to-end and golden-test-passing.
   OOM/binding crash. Because the buffers are low-res, this cap almost never
   bites (e.g. a 2-blur 6000² render = two 462×462 slices ≈ 13 MB, vs ~3.4 GB
   the old full-res scheme would have needed).
-- **Export coverage:** analytic blur runs on the FlameRenderer export path
-  (when the histogram fits one storage binding). Larger exports route to the
-  tiled/CPU `HighResExporter`, which is sample-emit and doesn't wire analytic
-  blur (Phase 2 step 2), so the blur renders stochastically there. Both paths
-  are crash-free; the per-frame dither lives in the upscale pass (FlameRenderer
-  path only).
+- **Export coverage: both paths.** The FlameRenderer export path (histogram
+  fits one binding) does the GPU convolve + upscale. Larger exports route to
+  the tiled `HighResExporter`, where the routing splats means into a low-res
+  buffer that accumulates across all dispatches; `fold_analytic_blur` then
+  reads it back and convolves + bicubic-upscales it into the CPU histogram Vec
+  that BOTH `ParallelTiles` and `SerialTiles` converge on before tonemap. The
+  CPU fold mirrors the GPU convolve/upscale math (shared `compute_blur_setup`
+  kernels; the GPU's dither is dropped since the f64 histogram needs no
+  de-quantization). Both paths are crash-free.
 - **Convolution at reduced resolution** (2 stages in `accumulate_pass`, before
   the spatial filter — the chaos game already splatted straight to low res):
   `blur_convolve.wgsl` convolves each low-res slice with its low-res-scale
@@ -297,7 +300,7 @@ Two locked decisions drive the plan:
 - **Watch**: atomic contention rises (D² fewer splat pixels) — expected fine,
   perf-check it.
 
-### Step 2 — tiled blur via CPU-histogram inject
+### Step 2 — tiled blur via CPU-histogram inject ✅ DONE
 
 Both `ParallelTiles` (GPU tile histogram → read back) and `SerialTiles`
 (CPU sample binning) converge to one CPU `Vec<HistogramPixel>` right before
@@ -353,7 +356,7 @@ reproduces the full-res result exactly).
   only) + convolution-add pass.
 - Golden diff test (analytic vs stochastic within noise). **Passes.**
 
-**Phase 2 — export / tiled.** See "Phase 2 plan" above. Step 1: low-res-native
+**Phase 2 — export / tiled. ✅ DONE.** See "Phase 2 plan" above. Step 1: low-res-native
 rework of the direct path (drop the full-res splat buffer + downsample; splat
 straight to low-res; memory + ceiling win). Step 2: tiled blur via a single
 CPU-histogram inject (sample-emit tag + scatter to low-res, GPU low-res
