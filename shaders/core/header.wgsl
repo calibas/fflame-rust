@@ -268,11 +268,28 @@ struct SubflameMeta {
 }
 @group(0) @binding(12) var<storage, read> subflame_metadata: array<SubflameMeta>;
 
-// Per-transform analytic-blur mean-splat histograms, concatenated: buffer
-// `b` occupies `[b * width*height*4, (b+1) * width*height*4)` in the same
-// `[Rsum, Gsum, Bsum, density]` 4-u32 layout as the main histogram. A
-// transform with `analytic_blur_slot = b >= 0` routes its mean-splat here
-// instead of the main histogram; a later pass convolves each buffer with
-// its blur kernel and adds it back in. Always bound (a 1-element dummy when
-// the feature is inactive). See docs/projects/analytic-blur-buffer.md.
+// Per-transform analytic-blur mean-splat buffers at LOW resolution,
+// concatenated: slice `b` occupies `[b·lw·lh·4, (b+1)·lw·lh·4)` (lw,lh =
+// blur_convolve_params.lowres_*), same `[Rsum,Gsum,Bsum,density]` 4-u32
+// layout. A transform with `analytic_blur_slot = b` (and `b < count`) routes
+// its mean-splat here at `mean_pixel ÷ D` instead of the main histogram; a
+// later pass convolves each slice with its kernel and upscale-adds it back.
+// Always bound (a 1-element dummy when inactive). See analytic-blur-buffer.md.
 @group(0) @binding(13) var<storage, read_write> blur_histograms: array<atomic<u32>>;
+
+// Analytic-blur convolution params (mirrors `BlurConvolveParams` in
+// gpu/buffers.rs). The chaos-game routing reads `downscale`, `lowres_*`, and
+// `count` to splat into the low-res buffer above. Always bound. Only read in
+// the HAS_ANALYTIC_BLUR routing, so naga strips it when the feature is off.
+struct BlurConvolveParams {
+    full_width: u32,
+    full_height: u32,
+    lowres_width: u32,
+    lowres_height: u32,
+    downscale: u32,
+    count: u32,
+    frame_seed: u32,
+    _pad1: u32,
+    slot_meta: array<vec4<u32>, 4>,
+}
+@group(0) @binding(14) var<uniform> blur_params: BlurConvolveParams;

@@ -296,10 +296,10 @@ impl HighResExporter {
         );
 
         // Create transform buffer with solo mode handling. The tiled export
-        // path is sample-emit (OUTPUT_HISTOGRAM_DIRECT=false), so analytic-blur
-        // routing is stripped and never reads a slot — pass 0 so every
-        // transform stays at slot -1 (stochastic blur fallback).
-        let transforms = GpuTransform::from_flame(&config.flame, &global_registry(), 0);
+        // path is sample-emit (OUTPUT_HISTOGRAM_DIRECT=false) and currently
+        // strips analytic-blur routing, so the assigned slots go unread
+        // (stochastic blur fallback) until Phase 2 step 2 wires this path.
+        let transforms = GpuTransform::from_flame(&config.flame, &global_registry());
 
         let transform_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
             label: Some("Export Transform Buffer"),
