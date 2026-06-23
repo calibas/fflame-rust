@@ -163,6 +163,101 @@ pub fn build_kernel(
     Some(BlurKernel { half, weights })
 }
 
+/// Per-blur-slot kernel inputs captured from a flame: the variation name (→
+/// offset sampler), its chaos-game weight, and the transform's post-affine
+/// linear part (identity when disabled).
+#[derive(Clone, Debug)]
+pub struct BlurSlotInfo {
+    pub name: String,
+    pub weight: f32,
+    pub m_post: [f32; 4],
+}
+
+/// The sized + built analytic-blur convolution for one render: the downscale
+/// `D`, the low-res dims, and per-slot kernels (meta + concatenated weights).
+/// Shared by the interactive renderer and the high-res exporter so both
+/// produce identical setups.
+pub struct BlurSetup {
+    pub downscale: u32,
+    pub lowres_w: u32,
+    pub lowres_h: u32,
+    /// Per-slot `(lowres_half, weight_offset, 0, 0)`.
+    pub meta: Vec<[u32; 4]>,
+    /// Concatenated kernel weights (indexed by `meta[i].1`).
+    pub weights: Vec<f32>,
+}
+
+/// Pick the downscale `D` from the convolution cost (`W·H·support²/D⁴ ≤
+/// budget`) and Monte-Carlo each slot's low-res kernel. Deterministic (no
+/// `rand`). See docs/projects/analytic-blur-buffer.md.
+pub fn compute_blur_setup(
+    width: u32,
+    height: u32,
+    zoom: f32,
+    rotation: f32,
+    slots: &[BlurSlotInfo],
+) -> BlurSetup {
+    // world→pixel linear J = scale·zoom·R(rotation); pan drops out.
+    let scale = (width.min(height) as f32) * 0.25 * zoom;
+    let (c, sn) = (rotation.cos(), rotation.sin());
+    let (jxx, jxy, jyx, jyy) = (scale * c, -scale * sn, scale * sn, scale * c);
+
+    // Per-slot full-res pixel-space linear = weight·(J·M_post); track the
+    // largest mapped support (spectral norm × the offset radius) for D.
+    let mut linears: Vec<[f32; 4]> = Vec::with_capacity(slots.len());
+    let mut support_max = 0.0f32;
+    for slot in slots {
+        let [a, b, cc, d] = slot.m_post;
+        let w = slot.weight;
+        let linear = [
+            (jxx * a + jxy * cc) * w,
+            (jxx * b + jxy * d) * w,
+            (jyx * a + jyy * cc) * w,
+            (jyx * b + jyy * d) * w,
+        ];
+        let [m00, m01, m10, m11] = linear;
+        let fro = m00 * m00 + m01 * m01 + m10 * m10 + m11 * m11;
+        let det = m00 * m11 - m01 * m10;
+        let sigma_max = (0.5 * (fro + (fro * fro - 4.0 * det * det).max(0.0).sqrt()))
+            .max(0.0)
+            .sqrt();
+        support_max = support_max.max(max_offset_radius(&slot.name) * sigma_max);
+        linears.push(linear);
+    }
+
+    const CONV_TAP_BUDGET: f64 = 3.0e8;
+    const MAX_DOWNSCALE: u32 = 32;
+    const MIN_LOWRES_DIM: u32 = 16;
+    let cost = width as f64 * height as f64 * (support_max as f64).powi(2);
+    let cost_d = (cost / CONV_TAP_BUDGET).powf(0.25);
+    let dim_cap = (width.min(height) / MIN_LOWRES_DIM).max(1);
+    let downscale = (cost_d.ceil() as u32).max(1).min(MAX_DOWNSCALE).min(dim_cap);
+    let lowres_w = (width + downscale - 1) / downscale;
+    let lowres_h = (height + downscale - 1) / downscale;
+
+    const SAMPLES: usize = 200_000;
+    let mut weights: Vec<f32> = Vec::new();
+    let mut meta: Vec<[u32; 4]> = Vec::with_capacity(slots.len());
+    for (i, slot) in slots.iter().enumerate() {
+        let inv = 1.0 / downscale as f32;
+        let l = linears[i];
+        let linear_low = [l[0] * inv, l[1] * inv, l[2] * inv, l[3] * inv];
+        let mut state = 0x9E3779B97F4A7C15u64 ^ ((i as u64).wrapping_mul(0xD1B54A32D192ED03));
+        let mut rng = || {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((state >> 33) as f32) / ((1u64 << 31) as f32)
+        };
+        let kernel = build_kernel(&slot.name, linear_low, SAMPLES, &mut rng)
+            .unwrap_or(BlurKernel { half: 0, weights: vec![1.0] });
+        meta.push([kernel.half, weights.len() as u32, 0, 0]);
+        weights.extend_from_slice(&kernel.weights);
+    }
+
+    BlurSetup { downscale, lowres_w, lowres_h, meta, weights }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

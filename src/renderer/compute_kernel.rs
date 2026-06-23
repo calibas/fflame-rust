@@ -110,22 +110,7 @@ impl PathEntry {
     }
 }
 
-/// Manages fractal flame rendering via GPU compute shaders
-/// Per-blur-slot kernel inputs captured from the flame at update time. The
-/// pixel-space convolution kernel = `world→pixel linear · weight · m_post`
-/// applied to the variation's offset distribution; `m_post` and `weight` are
-/// flame-derived (captured here), the world→pixel linear is view-derived
-/// (applied at rebuild time from the current zoom/rotation).
-#[derive(Clone, Debug)]
-struct BlurSlotInfo {
-    /// Analytic-blur variation name (selects the offset sampler).
-    name: String,
-    /// The variation's weight in the chaos game (scales the offset).
-    weight: f32,
-    /// Post-affine linear part `[a, b, c, d]` (row-major), or the identity
-    /// when the transform's post-affine is disabled.
-    m_post: [f32; 4],
-}
+use crate::variations::analytic_blur::BlurSlotInfo;
 
 pub struct FlameRenderer {
     pipelines: FlamePipelines,
@@ -2005,7 +1990,6 @@ post_symmetry: (&self.post_symmetry).into(),
     /// reproduces the stochastic splat by construction. Cheap CPU Monte-Carlo;
     /// runs at most once per view/flame change, never per accumulation frame.
     fn maybe_rebuild_blur_kernels(&mut self, device: &Device, queue: &Queue, zoom: f32, rotation: f32) {
-        use crate::variations::analytic_blur::{build_kernel, max_offset_radius, BlurKernel};
         use crate::gpu::buffers::{BlurConvolveParams, MAX_BLUR_BUFFERS};
 
         if self.blur_slots.is_empty() {
@@ -2022,72 +2006,14 @@ post_symmetry: (&self.post_symmetry).into(),
             return;
         }
 
-        // world→pixel linear part J = scale·zoom·R(rotation). The pan is a
-        // translation and drops out of the Jacobian. Matches world_to_pixel
-        // in utilities.wgsl (center + zoom·R·(p−pan)·scale).
-        let scale = (self.width.min(self.height) as f32) * 0.25 * zoom;
-        let (c, sn) = (rotation.cos(), rotation.sin());
-        let (jxx, jxy, jyx, jyy) = (scale * c, -scale * sn, scale * sn, scale * c);
-
-        // Per-slot full-res pixel-space linear map = weight · (J · M_post),
-        // row-major [m00, m01, m10, m11]. Also track the largest full-res
-        // support so we can pick a downscale that keeps the low-res kernel
-        // small (the convolution cost is O(half²) — see the perf note in the
-        // design doc).
-        let mut linears: Vec<[f32; 4]> = Vec::with_capacity(self.blur_slots.len());
-        let mut support_max = 0.0f32;
-        for slot in &self.blur_slots {
-            let [a, b, cc, d] = slot.m_post;
-            let w = slot.weight;
-            let linear = [
-                (jxx * a + jxy * cc) * w,
-                (jxx * b + jxy * d) * w,
-                (jyx * a + jyy * cc) * w,
-                (jyx * b + jyy * d) * w,
-            ];
-            // Spectral norm (largest singular value) of the 2×2 map bounds the
-            // mapped support: support = max_offset_radius · σ_max.
-            let [m00, m01, m10, m11] = linear;
-            let fro = m00 * m00 + m01 * m01 + m10 * m10 + m11 * m11;
-            let det = m00 * m11 - m01 * m10;
-            let sigma_max = (0.5 * (fro + (fro * fro - 4.0 * det * det).max(0.0).sqrt()))
-                .max(0.0)
-                .sqrt();
-            support_max = support_max.max(max_offset_radius(&slot.name) * sigma_max);
-            linears.push(linear);
-        }
-
-        // Pick the downscale D from the CONVOLUTION COST, not just the blur
-        // size. The low-res convolution costs ≈ (W/D)(H/D)·(support/D)² ∝
-        // W·H·support²/D⁴ taps. Choosing D to hold that under a fixed budget
-        // means small images / small blurs stay at D=1 (full-res, exact — no
-        // downscale over-blur), while only large images or large blurs (where
-        // full-res would be O(half²)-expensive) get downscaled. This keeps the
-        // accurate path accurate and bounds the cost everywhere. The low-res
-        // kernel half ends up as large as the budget allows → best fidelity
-        // for the chosen D.
-        //
-        // Then BOUND D: the downsample runs a D×D per-thread loop, so an
-        // unbounded D (from a very large blur weight) collapses the low-res
-        // buffer toward 1×1 and makes a single GPU thread loop millions of
-        // times → a watchdog timeout (TDR)/device-lost crash.
-        //   - MAX_DOWNSCALE bounds the per-thread loop (D² ≤ 32² = 1024),
-        //   - MIN_LOWRES_DIM keeps enough low-res pixels for parallelism.
-        // A blur whose support exceeds D·MAX_KERNEL_HALF is then kernel-clamped,
-        // but such a blur is wider than the image (a uniform wash) so the clamp
-        // is visually lossless.
-        const CONV_TAP_BUDGET: f64 = 3.0e8;
-        const MAX_DOWNSCALE: u32 = 32;
-        const MIN_LOWRES_DIM: u32 = 16;
-        let cost = self.width as f64 * self.height as f64 * (support_max as f64).powi(2);
-        let cost_d = (cost / CONV_TAP_BUDGET).powf(0.25);
-        let dim_cap = (self.width.min(self.height) / MIN_LOWRES_DIM).max(1);
-        let downscale = (cost_d.ceil() as u32)
-            .max(1)
-            .min(MAX_DOWNSCALE)
-            .min(dim_cap);
-        let lowres_w = (self.width + downscale - 1) / downscale;
-        let lowres_h = (self.height + downscale - 1) / downscale;
+        // Size + build the convolution (shared with the high-res exporter so
+        // both produce identical kernels). See compute_blur_setup.
+        let setup = crate::variations::analytic_blur::compute_blur_setup(
+            self.width, self.height, zoom, rotation, &self.blur_slots,
+        );
+        let lowres_w = setup.lowres_w;
+        let lowres_h = setup.lowres_h;
+        let downscale = setup.downscale;
         self.blur_lowres_w = lowres_w;
         self.blur_lowres_h = lowres_h;
 
@@ -2099,30 +2025,10 @@ post_symmetry: (&self.post_symmetry).into(),
             self.recreate_blur_bind_groups(device);
         }
 
-        // Deterministic Monte-Carlo (no rand dep → reproducible renders).
-        const SAMPLES: usize = 200_000;
-        let mut weights: Vec<f32> = Vec::new();
+        let weights = setup.weights;
         let mut meta = [[0u32; 4]; MAX_BLUR_BUFFERS as usize];
-
-        for (i, slot) in self.blur_slots.iter().enumerate() {
-            // Build at LOW-RES scale: the same offset distribution mapped by
-            // linear ÷ downscale, so the kernel matches the downsampled blur.
-            let inv = 1.0 / downscale as f32;
-            let l = linears[i];
-            let linear_low = [l[0] * inv, l[1] * inv, l[2] * inv, l[3] * inv];
-            // Vary the seed per slot (distribution is the same either way).
-            let mut state = 0x9E3779B97F4A7C15u64 ^ ((i as u64).wrapping_mul(0xD1B54A32D192ED03));
-            let mut rng = || {
-                state = state
-                    .wrapping_mul(6364136223846793005)
-                    .wrapping_add(1442695040888963407);
-                ((state >> 33) as f32) / ((1u64 << 31) as f32)
-            };
-            let kernel = build_kernel(&slot.name, linear_low, SAMPLES, &mut rng)
-                .unwrap_or(BlurKernel { half: 0, weights: vec![1.0] });
-
-            meta[i] = [kernel.half, weights.len() as u32, 0, 0];
-            weights.extend_from_slice(&kernel.weights);
+        for (i, m) in setup.meta.iter().enumerate().take(MAX_BLUR_BUFFERS as usize) {
+            meta[i] = *m;
         }
 
         let params = BlurConvolveParams {
