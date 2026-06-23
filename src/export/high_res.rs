@@ -48,6 +48,21 @@ pub struct HistogramPixel {
     pub count: f64,
 }
 
+/// Cubic B-spline basis weights for the four taps at offsets (-1,0,1,2) around
+/// fractional position `t`. Sum to 1; smooth, no ringing. Identical to
+/// `bspline4` in `blur_upscale.wgsl` (the analytic-blur CPU fold must match the
+/// GPU upscale math). See docs/projects/analytic-blur-buffer.md.
+fn bspline4(t: f32) -> [f32; 4] {
+    let t2 = t * t;
+    let t3 = t2 * t;
+    [
+        (1.0 - 3.0 * t + 3.0 * t2 - t3) / 6.0,
+        (4.0 - 6.0 * t2 + 3.0 * t3) / 6.0,
+        (1.0 + 3.0 * t + 3.0 * t2 - 3.0 * t3) / 6.0,
+        t3 / 6.0,
+    ]
+}
+
 /// Layout describing how the concatenated tile-histogram buffer is
 /// sliced for the ParallelTiles GPU accumulate path. Tiles are
 /// horizontal slices of the full image — `tile_width` always equals
@@ -147,6 +162,10 @@ pub struct HighResExporter {
     // real low-res buffer + nonzero count.
     blur_splat_buffer: Buffer,
     blur_convolve_params_buffer: Buffer,
+    /// Analytic-blur convolution setup (None when the flame isn't analytic).
+    /// The CPU fold at the end of `render` convolves + upscales the low-res
+    /// splat buffer into the histogram using this.
+    blur_setup: Option<crate::variations::analytic_blur::BlurSetup>,
     palette_texture: Texture,
     palette_sampler: Sampler,
 
@@ -339,28 +358,68 @@ impl HighResExporter {
             mapped_at_creation: false,
         });
 
-        // Analytic-blur bindings (13/14). Step 2a: a dummy splat buffer + a
-        // params buffer zeroed (count=0) so the now-mode-independent routing
-        // falls back to stochastic. Step 2b replaces these with a real low-res
-        // buffer + nonzero count and adds the convolve + CPU upscale.
-        let blur_splat_buffer = device.create_buffer(&BufferDescriptor {
-            label: Some("Export Blur Splat (dummy)"),
-            size: 16, // 4 × u32
-            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
+        // Analytic-blur (13/14). When the flame is analytic (always 2D), build
+        // the convolution setup and a REAL low-res splat buffer; the chaos game
+        // splats means into it (mean ÷ D) and the CPU folds it in at the end
+        // (convolve + upscale) using `setup`. Otherwise a 1-element dummy +
+        // count=0 params so the routing falls back to stochastic.
+        let blur_slots = config.flame.blur_slots(&global_registry());
+        let (blur_splat_buffer, blur_setup, blur_count) = if !blur_slots.is_empty() {
+            let setup = crate::variations::analytic_blur::compute_blur_setup(
+                width, height, config.zoom, config.rotation, &blur_slots,
+            );
+            let count = blur_slots.len() as u32;
+            let slice = (setup.lowres_w as u64) * (setup.lowres_h as u64) * 16;
+            let buf = device.create_buffer(&BufferDescriptor {
+                label: Some("Export Blur Splat"),
+                size: slice * count as u64,
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            });
+            log::info!(
+                "Export analytic blur: {} slice(s) {}×{} low-res, D={}",
+                count, setup.lowres_w, setup.lowres_h, setup.downscale
+            );
+            (buf, Some(setup), count)
+        } else {
+            let buf = device.create_buffer(&BufferDescriptor {
+                label: Some("Export Blur Splat (dummy)"),
+                size: 16,
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            });
+            (buf, None, 0)
+        };
         let blur_convolve_params_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Export Blur Convolve Params"),
             size: std::mem::size_of::<crate::gpu::buffers::BlurConvolveParams>() as u64,
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        // Zero it (count = 0 → routing falls back to stochastic).
-        queue.write_buffer(
-            &blur_convolve_params_buffer,
-            0,
-            bytemuck::bytes_of(&<crate::gpu::buffers::BlurConvolveParams as bytemuck::Zeroable>::zeroed()),
-        );
+        {
+            // Params with `count` so the shader routing splats (or, count=0,
+            // falls back to stochastic). Per-slot meta is unused by the shader
+            // routing (it only needs D / lowres / count); the CPU fold reads
+            // meta straight from `blur_setup`.
+            let mut meta = [[0u32; 4]; crate::gpu::buffers::MAX_BLUR_BUFFERS as usize];
+            if let Some(ref s) = blur_setup {
+                for (i, m) in s.meta.iter().enumerate().take(meta.len()) {
+                    meta[i] = *m;
+                }
+            }
+            let params = crate::gpu::buffers::BlurConvolveParams {
+                full_width: width,
+                full_height: height,
+                lowres_width: blur_setup.as_ref().map(|s| s.lowres_w).unwrap_or(0),
+                lowres_height: blur_setup.as_ref().map(|s| s.lowres_h).unwrap_or(0),
+                downscale: blur_setup.as_ref().map(|s| s.downscale).unwrap_or(1),
+                count: blur_count,
+                frame_seed: 0,
+                _pad1: 0,
+                meta,
+            };
+            queue.write_buffer(&blur_convolve_params_buffer, 0, bytemuck::bytes_of(&params));
+        }
 
         // Variation params buffer — sized for the worst-case
         // MAX_TRANSFORMS slots so flames whose pool count exceeds the
@@ -526,22 +585,25 @@ impl HighResExporter {
         // count in `sample_counter_buffer` (binding 6) — a host-side
         // accumulate scatters those into the CPU histogram below.
         //
-        // render_3d=true regardless of the flame's render_mode: high-res
-        // export reuses the 3D code path so configs with 3D variations
-        // (flatten/hemisphere/zcone) render correctly even from a 2D
-        // flame (Z=0 falls through projection unchanged).
+        // render_3d=true by default: the high-res export reuses the 3D code
+        // path so configs with 3D variations (flatten/hemisphere/zcone) render
+        // correctly even from a 2D flame (Z=0 falls through projection
+        // unchanged). EXCEPTION: an analytic-blur flame (always 2D, per the
+        // gate) builds the 2D shader so the 2D-only analytic routing is
+        // included — its blur is folded in by the CPU convolve/upscale below.
         //
         // path_features_enabled=false: PathMap export was lossy via path
         // hashing in the old export shader and is gated out here. Configs
         // exporting in PathMap COLOR_MODE will fall back to the white
         // default initialized in main_template.wgsl. See
         // docs/projects/unified-render-pipeline.md.
+        let analytic_active = config.flame.analytic_blur_active(&global_registry());
         let shader_builder = ShaderBuilder::new(global_registry().clone());
         let constants = crate::shader_cache::ShaderCache::constants_from_config(config);
         let shader_source = shader_builder.build_from_template(
             &config.flame,
             &active_variations,
-            true,                       // render_3d
+            !analytic_active,           // render_3d (2D shader for analytic flames)
             false,                      // path_features_enabled
             config.flame.has_xaos(),    // xaos_enabled
             false,                      // output_histogram_direct → sample-emit
@@ -1097,6 +1159,7 @@ impl HighResExporter {
             dummy_path_filter_buffer,
             blur_splat_buffer,
             blur_convolve_params_buffer,
+            blur_setup,
             palette_texture,
             palette_sampler,
             compute_pipeline,
@@ -1153,6 +1216,16 @@ impl HighResExporter {
             });
             clear_encoder.clear_buffer(hist, 0, None);
             self.queue.submit(std::iter::once(clear_encoder.finish()));
+        }
+
+        // Analytic-blur low-res splat buffer accumulates mean-splats across ALL
+        // dispatches (convolved + upscaled once at the end), so clear it once.
+        if self.blur_setup.is_some() {
+            let mut e = self.device.create_command_encoder(&CommandEncoderDescriptor {
+                label: Some("Export Blur Splat Clear"),
+            });
+            e.clear_buffer(&self.blur_splat_buffer, 0, None);
+            self.queue.submit(std::iter::once(e.finish()));
         }
 
         // Create bind group
@@ -1553,6 +1626,14 @@ post_symmetry: (&config.flame.post_symmetry).into(),
             histogram = self.read_gpu_histogram(color_scale_f).await?;
         }
 
+        // Analytic-blur fold: read the low-res splat buffer back, convolve +
+        // upscale it (the SAME bicubic+dither math as blur_upscale.wgsl) and
+        // ADD into the CPU histogram — serving BOTH tiled strategies through
+        // this one inject point. See docs/projects/analytic-blur-buffer.md.
+        if self.blur_setup.is_some() {
+            self.fold_analytic_blur(&mut histogram, color_scale_f).await?;
+        }
+
         progress.on_accumulating(total_samples_accumulated);
         progress.on_tonemapping();
 
@@ -1682,6 +1763,145 @@ post_symmetry: (&config.flame.post_symmetry).into(),
         drop(data);
         readback.unmap();
         Ok(pixels)
+    }
+
+    /// Read the low-res analytic-blur splat buffer back, convolve it with each
+    /// slot's kernel and bicubic-upscale-add the result into the CPU histogram
+    /// — the tiled-path counterpart of the FlameRenderer's GPU convolve +
+    /// upscale. The math mirrors `blur_convolve.wgsl` + `blur_upscale.wgsl`
+    /// (cubic B-spline, ÷D²); the GPU's stochastic-rounding dither is dropped
+    /// because this f64 histogram has no quantization to dither. Adds into the
+    /// histogram in its `Σcolor` / `Σsamples` units (÷ color_scale).
+    async fn fold_analytic_blur(
+        &self,
+        histogram: &mut [HistogramPixel],
+        color_scale: f32,
+    ) -> Result<(), String> {
+        let setup = match self.blur_setup.as_ref() {
+            Some(s) => s,
+            None => return Ok(()),
+        };
+        let lw = setup.lowres_w as usize;
+        let lh = setup.lowres_h as usize;
+        let d = setup.downscale as i32;
+        let count = setup.meta.len();
+        let plane = lw * lh;
+        if count == 0 || plane == 0 {
+            return Ok(());
+        }
+
+        // ---- read the low-res splat buffer back to CPU ----
+        let bytes = (count * plane * 16) as u64;
+        let readback = self.device.create_buffer(&BufferDescriptor {
+            label: Some("Export Blur Splat Readback"),
+            size: bytes,
+            usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = self.device.create_command_encoder(&CommandEncoderDescriptor {
+            label: Some("Export Blur Splat Readback Encoder"),
+        });
+        encoder.copy_buffer_to_buffer(&self.blur_splat_buffer, 0, &readback, 0, bytes);
+        self.queue.submit(std::iter::once(encoder.finish()));
+        let slice = readback.slice(..);
+        let (tx, rx) = futures::channel::oneshot::channel();
+        slice.map_async(MapMode::Read, move |r| {
+            tx.send(r).ok();
+        });
+        let _ = self.device.poll(PollType::Wait { submission_index: None, timeout: None });
+        rx.await
+            .map_err(|_| "blur splat readback receiver dropped".to_string())?
+            .map_err(|e| format!("Failed to map blur splat: {:?}", e))?;
+        let data = slice.get_mapped_range();
+        let splat: &[u32] = bytemuck::cast_slice(&data);
+
+        // ---- convolve each slot's slice at low res (mirror blur_convolve.wgsl) ----
+        let mut conv = vec![[0f32; 4]; count * plane];
+        for s in 0..count {
+            let half = setup.meta[s][0] as i32;
+            let woff = setup.meta[s][1] as usize;
+            let size = (2 * half + 1) as usize;
+            let base = s * plane;
+            let weights = &setup.weights;
+            conv[base..base + plane]
+                .par_iter_mut()
+                .enumerate()
+                .for_each(|(p, out)| {
+                    let x = (p % lw) as i32;
+                    let y = (p / lw) as i32;
+                    let mut acc = [0f32; 4];
+                    for dy in -half..=half {
+                        let sy = y - dy;
+                        if sy < 0 || sy >= lh as i32 {
+                            continue;
+                        }
+                        let krow = (dy + half) as usize * size;
+                        for dx in -half..=half {
+                            let sx = x - dx;
+                            if sx < 0 || sx >= lw as i32 {
+                                continue;
+                            }
+                            let w = weights[woff + krow + (dx + half) as usize];
+                            if w == 0.0 {
+                                continue;
+                            }
+                            let q = (base + sy as usize * lw + sx as usize) * 4;
+                            acc[0] += w * splat[q] as f32;
+                            acc[1] += w * splat[q + 1] as f32;
+                            acc[2] += w * splat[q + 2] as f32;
+                            acc[3] += w * splat[q + 3] as f32;
+                        }
+                    }
+                    *out = acc;
+                });
+        }
+
+        // ---- bicubic upscale + add (mirror blur_upscale.wgsl; ÷D²; ÷color_scale) ----
+        let w = self.width as usize;
+        let df = d as f32;
+        let inv = 1.0 / (df * df);
+        let cs = color_scale as f64;
+        let conv_ref = &conv;
+        histogram.par_iter_mut().enumerate().for_each(|(p, px)| {
+            let fx = (p % w) as f32;
+            let fy = (p / w) as f32;
+            let gx = (fx + 0.5) / df - 0.5;
+            let gy = (fy + 0.5) / df - 0.5;
+            let x0 = gx.floor() as i32;
+            let y0 = gy.floor() as i32;
+            let wx = bspline4(gx - gx.floor());
+            let wy = bspline4(gy - gy.floor());
+            let mut acc = [0f32; 4];
+            for s in 0..count {
+                let base = s * plane;
+                for j in 0..4usize {
+                    let yy = (y0 - 1 + j as i32).clamp(0, lh as i32 - 1) as usize;
+                    let mut row = [0f32; 4];
+                    for i in 0..4usize {
+                        let xx = (x0 - 1 + i as i32).clamp(0, lw as i32 - 1) as usize;
+                        let t = conv_ref[base + yy * lw + xx];
+                        let wi = wx[i];
+                        row[0] += wi * t[0];
+                        row[1] += wi * t[1];
+                        row[2] += wi * t[2];
+                        row[3] += wi * t[3];
+                    }
+                    let wj = wy[j];
+                    acc[0] += wj * row[0];
+                    acc[1] += wj * row[1];
+                    acc[2] += wj * row[2];
+                    acc[3] += wj * row[3];
+                }
+            }
+            px.r += (acc[0].max(0.0) * inv) as f64 / cs;
+            px.g += (acc[1].max(0.0) * inv) as f64 / cs;
+            px.b += (acc[2].max(0.0) * inv) as f64 / cs;
+            px.count += (acc[3].max(0.0) * inv) as f64 / cs;
+        });
+
+        drop(data);
+        readback.unmap();
+        Ok(())
     }
 
     /// GPU tonemap: histogram → RGBA pixels using GPU shader

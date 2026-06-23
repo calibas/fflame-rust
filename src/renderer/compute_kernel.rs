@@ -1956,27 +1956,10 @@ post_symmetry: (&self.post_symmetry).into(),
         let registry = crate::variations::global_registry();
         let registry = &*registry;
 
-        // Capture per-slot kernel inputs in the SAME order the GPU slot
-        // assignment uses (GpuTransform::from_flame takes the first
-        // MAX_BLUR_BUFFERS eligible normals). Buffer allocation + the actual
-        // count cap happen in maybe_rebuild_blur_kernels (which knows D / the
-        // low-res dims); here we just record the slots and flag a rebuild.
-        self.blur_slots.clear();
-        if flame.analytic_blur_active(registry) {
-            for (xform_idx, name, weight) in flame
-                .analytic_blur_transforms(registry)
-                .into_iter()
-                .take(crate::gpu::buffers::MAX_BLUR_BUFFERS as usize)
-            {
-                let t = &flame.transforms[xform_idx];
-                let m_post = if t.post_affine_enabled {
-                    [t.post_a, t.post_b, t.post_c, t.post_d]
-                } else {
-                    [1.0, 0.0, 0.0, 1.0]
-                };
-                self.blur_slots.push(BlurSlotInfo { name, weight, m_post });
-            }
-        }
+        // Per-slot kernel inputs (same order as GpuTransform::from_flame's slot
+        // assignment). Buffer allocation + the count cap happen in
+        // maybe_rebuild_blur_kernels (which knows D); here we just record them.
+        self.blur_slots = flame.blur_slots(registry);
         // Flame changed → the kernel inputs and slot set may have changed;
         // force a rebuild (maybe_rebuild reallocates + rebinds as needed).
         self.blur_kernels_dirty = true;
