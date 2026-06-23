@@ -520,8 +520,16 @@ impl HighResExporter {
                 reverse: config.palette_reverse,
             }
         };
+        // Use the config's palette size (clamped to the valid range, matching
+        // FlameBuffers), not a hardcoded 256 — an oversampled palette
+        // (size > 256, smoother gradients) otherwise rendered coarser in the
+        // tiled export than in-app. `TonemapParams.palette_size` below already
+        // uses config.palette_size, so the texture must match it.
+        let palette_size = config
+            .palette_size
+            .clamp(crate::gpu::buffers::DEFAULT_PALETTE_SIZE, crate::gpu::buffers::MAX_PALETTE_SIZE);
         let palette_data =
-            crate::scene::palette::render_palette_lookup(palette, &palette_transform, 256);
+            crate::scene::palette::render_palette_lookup(palette, &palette_transform, palette_size as usize);
         let palette_data_u8: Vec<u8> = palette_data
             .iter()
             .map(|&v| (v.clamp(0.0, 1.0) * 255.0) as u8)
@@ -530,7 +538,7 @@ impl HighResExporter {
         let palette_texture = device.create_texture(&TextureDescriptor {
             label: Some("Export Palette Texture"),
             size: Extent3d {
-                width: 256,
+                width: palette_size,
                 height: 1,
                 depth_or_array_layers: 1,
             },
@@ -552,11 +560,11 @@ impl HighResExporter {
             &palette_data_u8,
             TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(256 * 4),
+                bytes_per_row: Some(palette_size * 4),
                 rows_per_image: None,
             },
             Extent3d {
-                width: 256,
+                width: palette_size,
                 height: 1,
                 depth_or_array_layers: 1,
             },
@@ -1663,6 +1671,15 @@ post_symmetry: (&config.flame.post_symmetry).into(),
             self.fold_analytic_blur(&mut histogram, color_scale_f).await?;
         }
 
+        // Free the GPU tile histogram (up to ~2 GB) now that it's all in the
+        // CPU `histogram` Vec — the tonemap + color-effect passes below
+        // allocate their own full-res textures, so releasing this first gives
+        // them headroom at high resolution. Drop + poll so wgpu actually
+        // reclaims the GPU memory before those allocs (a plain drop is
+        // deferred).
+        self.tile_histograms_buffer = None;
+        let _ = self.device.poll(PollType::Wait { submission_index: None, timeout: None });
+
         progress.on_accumulating(total_samples_accumulated);
         progress.on_tonemapping();
 
@@ -2122,6 +2139,15 @@ post_symmetry: (&config.flame.post_symmetry).into(),
             );
         }
 
+        // NOTE: density effects are intentionally NOT applied on the tiled
+        // export path. They run before tonemap on the full-res accumulation
+        // texture and need an EffectChainRunner's two full-res Rgba16Float
+        // ping-pong textures (~2·W·H·8 bytes ≈ 2.3 GB at 12K) ON TOP of the
+        // accumulation/output textures — which OOMs at the resolutions the
+        // tiled path is used for. The FlameRenderer path (in-app + sub-binding
+        // exports) applies them. See docs/projects/... / Known Issues.
+        let tonemap_input_view: &TextureView = &accumulation_view;
+
         // ===== Step 4: Create bind group and output texture =====
         let curve_lut_view = self.curve_lut_texture.create_view(&TextureViewDescriptor::default());
         let palette_view = self.palette_texture.create_view(&TextureViewDescriptor::default());
@@ -2132,7 +2158,7 @@ post_symmetry: (&config.flame.post_symmetry).into(),
             entries: &[
                 BindGroupEntry {
                     binding: 0,
-                    resource: BindingResource::TextureView(&accumulation_view),
+                    resource: BindingResource::TextureView(tonemap_input_view),
                 },
                 BindGroupEntry {
                     binding: 1,
