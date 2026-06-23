@@ -498,9 +498,30 @@ impl HighResExporter {
             mapped_at_creation: false,
         });
 
-        // Create palette texture (palette is always present)
+        // Create palette texture (palette is always present). Apply the FULL
+        // transform pipeline (squeeze / log / rotation / reverse) via
+        // render_palette_lookup — the same source of truth the interactive /
+        // FlameRenderer path uses (Buffers::update_palette). Using the raw
+        // generate_texture_data here made high-res exports ignore palette
+        // squeeze/rotation, showing the full palette instead of the squeezed
+        // colors.
         let palette = &config.palette;
-        let palette_data = palette.generate_texture_data(256);
+        let palette_transform = {
+            use crate::scene::palette::{PaletteTransform, SqueezeMode};
+            let squeeze_factor = match config.palette_squeeze_mode {
+                SqueezeMode::Linear => config.palette_squeeze,
+                SqueezeMode::Geometric => config.palette_squeeze_falloff,
+            };
+            PaletteTransform {
+                squeeze_mode: config.palette_squeeze_mode,
+                squeeze_factor,
+                log_strength: config.palette_log_strength,
+                rotation: config.palette_rotation,
+                reverse: config.palette_reverse,
+            }
+        };
+        let palette_data =
+            crate::scene::palette::render_palette_lookup(palette, &palette_transform, 256);
         let palette_data_u8: Vec<u8> = palette_data
             .iter()
             .map(|&v| (v.clamp(0.0, 1.0) * 255.0) as u8)
