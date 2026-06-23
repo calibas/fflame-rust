@@ -21,40 +21,40 @@ Interactive / 2D-direct path only, end-to-end and golden-test-passing.
   entirely off (no codegen, no buffers) and the flame renders stochastically.
   3D (even orthographic) and post-symmetry are deferred (they break the
   single-linear-map plot tail / fan one sample into many copies).
-- **Plot routing is direct-mode + 2D only** (`HAS_ANALYTIC_BLUR` block in
-  `main_template.wgsl`): the mean splat = realized output − `M_post·(w·offset)`
-  goes to the transform's blur slice (binding 13), and the realized sample is
-  suppressed from the main histogram. The mean pixel gets its own bounds
-  check. Sample-emit / export stays stochastic (the block is gated to
-  `OUTPUT_HISTOGRAM_DIRECT`; naga strips binding 13 from the export shader).
+- **Plot routing is direct-mode + 2D only, LOW-RES native** (`HAS_ANALYTIC_BLUR`
+  block in `main_template.wgsl`): the mean splat = realized output −
+  `M_post·(w·offset)` is binned **at low resolution** (`mean_pixel ÷ D`) into
+  the transform's slice of the low-res splat buffer (binding 13), and the
+  realized sample is suppressed from the main histogram. The routing reads
+  `D` / low-res dims / `count` from `blur_convolve_params` (binding 14). There
+  is **no full-res blur buffer and no downsample pass** — the splat target *is*
+  the convolution input. Sample-emit / export stays stochastic (the block is
+  gated to `OUTPUT_HISTOGRAM_DIRECT`; naga strips bindings 13/14 there).
 - **Per-transform buffers capped at `MAX_BLUR_BUFFERS = 4`** (concatenated
-  slices in one buffer; eligible transforms beyond 4 keep slot −1 →
-  stochastic). `Transform.analytic_blur_slot` carries the slot to the shader.
-  The slot count is **further capped by a memory budget**
-  (`FlameBuffers::max_blur_slots` = `max_binding / (3·W·H·16)`, since each slot
-  needs three full-res buffers): a multi-blur flame or a high-res render only
-  gets as many analytic slots as fit, the rest falling back to stochastic, so
-  it can't OOM / exceed a binding. Threaded through `from_flame` (slot
-  assignment), `ensure_blur_buffers`, and the renderer's `blur_slots`.
+  low-res slices). `Transform.analytic_blur_slot` carries the slot; the shader
+  gates `slot < count`, where `count` is the **actually-allocated** slice count.
+  `ensure_lowres_blur_buffers` caps allocation to `max_binding / (2·lw·lh·16)`
+  (two low-res buffers — tiny), so a multi-blur / high-res render only gets as
+  many analytic slots as fit and the rest fall back to stochastic — no
+  OOM/binding crash. Because the buffers are low-res, this cap almost never
+  bites (e.g. a 2-blur 6000² render = two 462×462 slices ≈ 13 MB, vs ~3.4 GB
+  the old full-res scheme would have needed).
 - **Export coverage:** analytic blur runs on the FlameRenderer export path
-  (when the histogram fits one storage binding — ~4K–11K depending on the
-  GPU). Larger exports route to the tiled/CPU `HighResExporter`, which is
-  sample-emit and doesn't wire analytic blur (Phase 2), so the blur renders
-  stochastically there. Both paths are crash-free; the per-frame dither lives
-  in the upscale pass and therefore applies on the FlameRenderer path only.
-- **Convolution at reduced resolution** (3 stages in `accumulate_pass`, before
-  the spatial filter). The blur is low-frequency, so convolving it at full res
-  is wasteful — and fatal for perf, since the cost is O(half²)/pixel and a
-  typical blur's half is 64+px (a 17× slowdown before this was added). So:
-  `blur_downsample.wgsl` sums each D×D cell into a low-res slice →
-  `blur_convolve.wgsl` convolves at low res with a low-res-scale kernel →
-  `blur_upscale.wgsl` bilinearly upsamples + adds into the main histogram
-  (÷D² so density and the colour ratio are preserved end-to-end; no atomics —
-  each output pixel is uniquely owned). D is chosen per view/flame so the
-  low-res kernel half ≈ `TARGET_LOWRES_HALF` (48); cost ∝ 1/D⁴ → negligible at
-  any blur size, over-blur ≈ 1/TARGET ≈ 2%. The full-res splat buffer is
-  cleared each batch alongside the histogram; the two low-res scratch buffers
-  are fully overwritten each pass.
+  (when the histogram fits one storage binding). Larger exports route to the
+  tiled/CPU `HighResExporter`, which is sample-emit and doesn't wire analytic
+  blur (Phase 2 step 2), so the blur renders stochastically there. Both paths
+  are crash-free; the per-frame dither lives in the upscale pass (FlameRenderer
+  path only).
+- **Convolution at reduced resolution** (2 stages in `accumulate_pass`, before
+  the spatial filter — the chaos game already splatted straight to low res):
+  `blur_convolve.wgsl` convolves each low-res slice with its low-res-scale
+  kernel → `blur_upscale.wgsl` cubic-B-spline upsamples + dithered-adds into
+  the main histogram (÷D² so density and the colour ratio are preserved
+  end-to-end; no atomics — each output pixel is uniquely owned). D is chosen
+  per view/flame from the convolution cost (`W·H·support²/D⁴ ≤ budget`); cost ∝
+  1/D⁴ → negligible at any blur size. The low-res splat buffer is cleared each
+  batch alongside the histogram; the convolved buffer is fully overwritten.
+  The low-res buffers reallocate when D changes (rare; never on exports).
 - **Kernel** (`src/variations/analytic_blur.rs`, `maybe_rebuild_blur_kernels`):
   deterministic CPU Monte-Carlo of the variation's offset sampler mapped by
   `world→pixel linear · weight · M_post`, bilinearly binned, normalized.
@@ -274,7 +274,7 @@ Two locked decisions drive the plan:
    (`blur_upscale.wgsl`) and Rust (for the tiled CPU inject), guarded by a
    unit test that runs both on the same low-res input and asserts they match.
 
-### Step 1 — low-res-native rework (direct path; refactor, no new capability)
+### Step 1 — low-res-native rework (direct path) ✅ DONE
 
 - **Buffers**: 2 low-res buffers (atomic splat target + convolved scratch)
   instead of 1 full-res + 2 low-res. Sized at actual low-res dims

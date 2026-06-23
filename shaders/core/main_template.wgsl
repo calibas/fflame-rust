@@ -572,7 +572,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             // on the realized `current`. 2D-only / no-attachments / no
             // post-symmetry is guaranteed by the host gate
             // (analytic_blur_active). See docs/projects/analytic-blur-buffer.md.
-            if (xform.analytic_blur_slot >= 0 && should_plot) {
+            // `slot < count` gates against the actually-allocated buffer count
+            // (the memory cap may allocate fewer slices than transforms have
+            // slots) — a transform past the cap falls through to the stochastic
+            // plot below.
+            if (xform.analytic_blur_slot >= 0 &&
+                u32(xform.analytic_blur_slot) < blur_params.count && should_plot) {
                 // Post-affine linear image of the captured w·offset. The
                 // offset was captured in pre-post-affine (variation) space;
                 // mapping it through the post-affine linear part puts it in
@@ -587,20 +592,21 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     }
                 }
                 let mean_pixel = world_to_pixel(plot_pos - post_bc);
-                // Bound the MEAN pixel (not the realized one): the kernel
-                // convolution spreads density from here, and out-of-bounds
-                // kernel taps are dropped just like out-of-bounds stochastic
-                // samples.
+                // Splat the MEAN at LOW resolution (mean_pixel ÷ D). Bound the
+                // full-res mean pixel first (so the ÷D index stays in range and
+                // a negative coord doesn't truncate toward 0).
                 if (mean_pixel.x >= 0 && mean_pixel.x < i32(params.width) &&
                     mean_pixel.y >= 0 && mean_pixel.y < i32(params.height)) {
-                    let mean_idx = u32(mean_pixel.y) * params.width + u32(mean_pixel.x);
+                    let d = i32(blur_params.downscale);
+                    let lx = u32(mean_pixel.x / d);
+                    let ly = u32(mean_pixel.y / d);
+                    let plane = blur_params.lowres_width * blur_params.lowres_height;
                     let slot = u32(xform.analytic_blur_slot);
-                    let mbase = (slot * params.width * params.height + mean_idx) * 4u;
+                    let mbase = (slot * plane + ly * blur_params.lowres_width + lx) * 4u;
                     // `strength` scales the deposited density (and colour
                     // proportionally, so the recovered colour ratio is
                     // unchanged): >1 makes the smooth blur dominate overlapping
-                    // regions. 2D has no fog/density weighting, so
-                    // weighted_scale == color_scale·strength.
+                    // regions.
                     let scale = 100.0 * xform.analytic_blur_strength;
                     let r_u32 = u32(clamp(base_final_color.r, 0.0, 1.0) * scale);
                     let g_u32 = u32(clamp(base_final_color.g, 0.0, 1.0) * scale);
@@ -622,14 +628,17 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             } else if (ab_residual_remaining > 0u && ab_residual_slot >= 0 && should_plot) {
                 // Residual: a non-blur plot in the wake of a recent blur. Route
                 // the REALIZED plot (no mean removal — this transform has no
-                // fuzz of its own) through the blur buffer so the convolution
-                // blurs it, smoothing the propagated fuzz. Reuses the blur's
-                // kernel (an approximation of the propagated-fuzz shape).
+                // fuzz of its own) through the blur buffer (at low res) so the
+                // convolution blurs it, smoothing the propagated fuzz. Reuses
+                // the blur's kernel (an approximation of the propagated shape).
                 if (pixel.x >= 0 && pixel.x < i32(params.width) &&
                     pixel.y >= 0 && pixel.y < i32(params.height)) {
-                    let ridx = u32(pixel.y) * params.width + u32(pixel.x);
+                    let d = i32(blur_params.downscale);
+                    let lx = u32(pixel.x / d);
+                    let ly = u32(pixel.y / d);
+                    let plane = blur_params.lowres_width * blur_params.lowres_height;
                     let rslot = u32(ab_residual_slot);
-                    let rbase = (rslot * params.width * params.height + ridx) * 4u;
+                    let rbase = (rslot * plane + ly * blur_params.lowres_width + lx) * 4u;
                     let color_scale = 100.0;
                     let r_u32 = u32(clamp(base_final_color.r, 0.0, 1.0) * color_scale);
                     let g_u32 = u32(clamp(base_final_color.g, 0.0, 1.0) * color_scale);

@@ -296,14 +296,13 @@ impl GpuTransform {
     /// for non-solo normals; linkeds and finals always run with their
     /// own opacity (currently irrelevant for them since plot opacity
     /// inherits from the normal that fired).
-    /// `max_blur_slots` caps how many eligible transforms get an analytic-blur
-    /// slot (the rest stay at -1 → stochastic). The renderer passes its
-    /// memory-budget cap (`FlameBuffers::max_blur_slots`) so the slot
-    /// assignment never references a buffer that wasn't allocated.
+    /// Eligible transforms are assigned analytic-blur slots `0..MAX_BLUR_BUFFERS`
+    /// optimistically; the actual allocated count can be smaller (memory cap in
+    /// `ensure_lowres_blur_buffers`), and the shader gates `slot < count`, so a
+    /// transform whose slot wasn't allocated falls back to the stochastic path.
     pub fn from_flame(
         flame: &Flame,
         registry: &crate::variations::VariationRegistry,
-        max_blur_slots: u32,
     ) -> Vec<Self> {
         let local_map = crate::scene::transforms::compute_local_index_map(
             flame.active_variation_names_ordered(registry),
@@ -339,7 +338,7 @@ impl GpuTransform {
             for (slot, (xform_idx, name, _w)) in flame
                 .analytic_blur_transforms(registry)
                 .into_iter()
-                .take(max_blur_slots as usize)
+                .take(MAX_BLUR_BUFFERS as usize)
                 .enumerate()
             {
                 let t = &flame.transforms[xform_idx];
@@ -1096,22 +1095,26 @@ pub struct FlameBuffers {
     pub xaos_buffer: Option<Buffer>,
     pub dummy_xaos_buffer: Buffer,
 
-    // Analytic-blur per-transform mean-splat histograms, concatenated:
-    // `blur_buffer_count × width × height × 4 × u32`. None when the feature
-    // is inactive (zero overhead — the dummy is bound instead). See
-    // `ensure_blur_buffers` and docs/projects/analytic-blur-buffer.md.
-    pub blur_histogram_buffer: Option<Buffer>,
-    pub dummy_blur_buffer: Buffer,
-    // Number of per-transform blur buffers currently allocated (so a flame
-    // edit that changes the eligible-blur count triggers a reallocation).
-    pub blur_buffer_count: u32,
-    // Low-res convolution-stage scratch (allocated alongside the full-res blur
-    // buffer, same full-res size so they never need a D-change realloc — only
-    // the low-res prefix is used). `blur_lowres_buffer` = downsample output /
-    // convolve input; `blur_convolved_buffer` = convolve output / upscale
-    // input. None when the feature is inactive.
-    pub blur_lowres_buffer: Option<Buffer>,
+    // Analytic-blur per-transform mean-splat buffers, allocated at LOW
+    // resolution (`ceil(W/D)×ceil(H/D) × 4 × u32 × slots`). The chaos game
+    // splats means straight to low res (mean ÷ D) — there is no full-res blur
+    // buffer or downsample pass. Reallocated when the downscale D changes
+    // (rare, discrete steps; never on exports). None when inactive (the dummy
+    // is bound). See `ensure_lowres_blur_buffers` and
+    // docs/projects/analytic-blur-buffer.md.
+    //   blur_splat_buffer     — low-res atomic splat target + convolve input
+    //   blur_convolved_buffer — convolve output / upscale input
+    pub blur_splat_buffer: Option<Buffer>,
     pub blur_convolved_buffer: Option<Buffer>,
+    pub dummy_blur_buffer: Buffer,
+    // Number of blur slices actually ALLOCATED (after the memory cap). The
+    // shader gates `slot < count`, so an eligible transform beyond this falls
+    // back to the stochastic path. 0 when inactive.
+    pub blur_buffer_count: u32,
+    // Low-res dims the current blur buffers were allocated for (so a D change
+    // triggers a realloc). 0 when no buffers.
+    pub blur_lowres_w: u32,
+    pub blur_lowres_h: u32,
     // Concatenated per-slot convolution-kernel weights (host-built each time
     // the view/flame changes; see FlameRenderer::maybe_rebuild_blur_kernels).
     // Sized for the worst case so it never reallocates. Always present (a
@@ -1590,11 +1593,12 @@ impl FlameBuffers {
             dummy_filter_buffer,
             xaos_buffer: None,  // Created on demand when xaos is used
             dummy_xaos_buffer,
-            blur_histogram_buffer: None,  // Created on demand when analytic blur is active
+            blur_splat_buffer: None,  // Created on demand when analytic blur is active
+            blur_convolved_buffer: None,
             dummy_blur_buffer,
             blur_buffer_count: 0,
-            blur_lowres_buffer: None,
-            blur_convolved_buffer: None,
+            blur_lowres_w: 0,
+            blur_lowres_h: 0,
             blur_kernel_weights_buffer,
             blur_convolve_params_buffer,
             max_binding_size: device.limits().max_storage_buffer_binding_size as u64,
@@ -1707,10 +1711,10 @@ impl FlameBuffers {
     /// Clear histogram buffer only (before each batch for proper accumulation math)
     pub fn clear_histogram(&self, encoder: &mut CommandEncoder) {
         encoder.clear_buffer(&self.histogram_buffer, 0, None);
-        // Analytic-blur mean-splat histograms are per-batch too: the
-        // convolution folds them into the main histogram each frame, so they
-        // must start each batch empty alongside it.
-        if let Some(ref blur) = self.blur_histogram_buffer {
+        // Analytic-blur low-res splat buffer is per-batch too: the convolution
+        // folds it into the main histogram each frame, so it must start each
+        // batch empty alongside it.
+        if let Some(ref blur) = self.blur_splat_buffer {
             encoder.clear_buffer(blur, 0, None);
         }
     }
@@ -1834,7 +1838,7 @@ impl FlameBuffers {
 
         // Create transforms with solo mode handling
         let registry = crate::variations::global_registry();
-        let mut gpu_transforms = GpuTransform::from_flame(flame, &registry, self.max_blur_slots());
+        let mut gpu_transforms = GpuTransform::from_flame(flame, &registry);
 
         // Pad parent slack to MAX_TRANSFORMS so subflame slots start
         // at the synthetic-id base (matches variation_params layout).
@@ -2364,14 +2368,9 @@ impl FlameBuffers {
         self.xaos_buffer.as_ref().unwrap_or(&self.dummy_xaos_buffer)
     }
 
-    /// Get the analytic-blur full-res splat histogram for binding (real or dummy).
-    pub fn get_blur_buffer_for_binding(&self) -> &Buffer {
-        self.blur_histogram_buffer.as_ref().unwrap_or(&self.dummy_blur_buffer)
-    }
-
-    /// Get the low-res downsample/convolve scratch for binding (real or dummy).
-    pub fn get_blur_lowres_for_binding(&self) -> &Buffer {
-        self.blur_lowres_buffer.as_ref().unwrap_or(&self.dummy_blur_buffer)
+    /// Get the analytic-blur low-res splat buffer for binding (real or dummy).
+    pub fn get_blur_splat_for_binding(&self) -> &Buffer {
+        self.blur_splat_buffer.as_ref().unwrap_or(&self.dummy_blur_buffer)
     }
 
     /// Get the low-res convolved scratch for binding (real or dummy).
@@ -2379,58 +2378,51 @@ impl FlameBuffers {
         self.blur_convolved_buffer.as_ref().unwrap_or(&self.dummy_blur_buffer)
     }
 
-    /// How many full-res analytic-blur slices fit within the device's memory
-    /// budget at the current render size. Each active slot needs THREE
-    /// `W·H·16`-byte buffers (splat + low-res scratch ×2, all currently
-    /// full-res-allocated), so we require `3 · slots · slice ≤ max binding`.
-    /// Returns 0 when even one slot would overflow (the render is too large for
-    /// analytic blur) — the slot assignment then leaves every eligible
-    /// transform at slot -1, so they fall back to the stochastic path safely.
-    /// Bounds both the per-binding limit and (conservatively) total VRAM, so a
-    /// big or multi-blur render can't OOM/crash. See
-    /// docs/projects/analytic-blur-buffer.md.
-    pub fn max_blur_slots(&self) -> u32 {
-        let slice = (self.width as u64) * (self.height as u64) * 4 * std::mem::size_of::<u32>() as u64;
-        if slice == 0 {
-            return 0;
-        }
-        let by_memory = (self.max_binding_size / (3 * slice)) as u32;
-        by_memory.min(MAX_BLUR_BUFFERS)
-    }
+    /// Allocate / resize / drop the two LOW-RES analytic-blur buffers (splat +
+    /// convolved) for `num_blur` slices at `lowres_w × lowres_h`. Caps the
+    /// allocated count so the two buffers together stay within the device's
+    /// binding budget (each is `lowres_w·lowres_h·16 × slots`; low-res so this
+    /// is tiny except at D=1 / small renders). The shader gates `slot < count`,
+    /// so any eligible transform beyond the allocated count falls back to the
+    /// stochastic path — no crash. Returns true when the buffer set changed
+    /// (bind groups must be rebuilt). `num_blur == 0` frees everything.
+    pub fn ensure_lowres_blur_buffers(
+        &mut self,
+        device: &Device,
+        lowres_w: u32,
+        lowres_h: u32,
+        num_blur: u32,
+    ) -> bool {
+        let slice = (lowres_w as u64) * (lowres_h as u64) * 4 * std::mem::size_of::<u32>() as u64;
+        // Cap so `2 · slots · slice ≤ binding budget` (two low-res buffers).
+        let cap = if slice == 0 { 0 } else { (self.max_binding_size / (2 * slice)) as u32 };
+        let want = num_blur.min(MAX_BLUR_BUFFERS).min(cap);
 
-    /// Allocate / resize / drop the per-transform analytic-blur buffers to hold
-    /// `num_blur` concatenated `width×height×4×u32` slices (clamped to
-    /// `MAX_BLUR_BUFFERS`). Three buffers are managed together: the full-res
-    /// splat target plus the low-res downsample / convolve scratch (sized at
-    /// full res too, so a downscale change needs no realloc — only the low-res
-    /// prefix is used). Returns true when the set changed — i.e. bind groups
-    /// must be rebuilt. `num_blur == 0` frees everything (zero overhead).
-    pub fn ensure_blur_buffers(&mut self, device: &Device, num_blur: u32) -> bool {
-        // Clamp by the memory budget so a large or multi-blur render can't
-        // allocate buffers that exceed a binding / VRAM (would crash).
-        let want = num_blur.min(self.max_blur_slots());
         if want == 0 {
-            if self.blur_histogram_buffer.is_none() {
+            if self.blur_splat_buffer.is_none() {
                 return false; // Already dropped.
             }
-            self.blur_histogram_buffer = None;
-            self.blur_lowres_buffer = None;
+            self.blur_splat_buffer = None;
             self.blur_convolved_buffer = None;
             self.blur_buffer_count = 0;
+            self.blur_lowres_w = 0;
+            self.blur_lowres_h = 0;
             log::info!("Dropping analytic-blur buffers");
             return true;
         }
-        let slice = (self.width as u64) * (self.height as u64) * 4 * std::mem::size_of::<u32>() as u64;
-        let size = slice * want as u64;
-        // No change only when both the count AND the byte size match (the
-        // latter catches a histogram resize at an unchanged transform count).
-        let current_size = self.blur_histogram_buffer.as_ref().map(|b| b.size()).unwrap_or(0);
-        if want == self.blur_buffer_count && current_size == size {
+
+        // No change when count AND low-res dims match.
+        if want == self.blur_buffer_count
+            && lowres_w == self.blur_lowres_w
+            && lowres_h == self.blur_lowres_h
+        {
             return false;
         }
+
+        let size = slice * want as u64;
         log::info!(
-            "Allocating analytic-blur buffers: {} slice(s) {}×{} ({:.1}MB ×3)",
-            want, self.width, self.height, size as f64 / (1024.0 * 1024.0)
+            "Allocating analytic-blur buffers: {} slice(s) {}×{} low-res ({:.2}MB ×2)",
+            want, lowres_w, lowres_h, size as f64 / (1024.0 * 1024.0)
         );
         let mk = |label: &'static str| device.create_buffer(&BufferDescriptor {
             label: Some(label),
@@ -2438,10 +2430,11 @@ impl FlameBuffers {
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
-        self.blur_histogram_buffer = Some(mk("Blur Histogram Buffer"));
-        self.blur_lowres_buffer = Some(mk("Blur Lowres Buffer"));
+        self.blur_splat_buffer = Some(mk("Blur Splat Buffer"));
         self.blur_convolved_buffer = Some(mk("Blur Convolved Buffer"));
         self.blur_buffer_count = want;
+        self.blur_lowres_w = lowres_w;
+        self.blur_lowres_h = lowres_h;
         true
     }
 

@@ -216,6 +216,7 @@ pub async fn render(
         renderer.compute_pass(
             &mut encoder,
             queue,
+            device,
             NUM_WORKGROUPS,
             job.iterations_per_thread,
             job.burn_in,
