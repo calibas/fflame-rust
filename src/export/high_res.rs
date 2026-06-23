@@ -1593,6 +1593,7 @@ post_symmetry: (&config.flame.post_symmetry).into(),
                         }
                     }
 
+                    let cs = color_scale_f as f64;
                     histogram
                         .par_chunks_mut(width_usize)
                         .enumerate()
@@ -1601,14 +1602,21 @@ post_symmetry: (&config.flame.post_symmetry).into(),
                                 let x = sample.x as i32;
                                 if x >= 0 && x < width {
                                     let pixel = &mut row_pixels[x as usize];
-                                    // Weight scales all four channels so the
-                                    // color ratio Σcolor/count is invariant
-                                    // (matches accumulate_samples.wgsl).
-                                    let w = sample.weight as f64;
-                                    pixel.r += sample.r as f64 * w;
-                                    pixel.g += sample.g as f64 * w;
-                                    pixel.b += sample.b as f64 * w;
-                                    pixel.count += w;
+                                    // Replicate the GPU scatter
+                                    // (accumulate_samples.wgsl) EXACTLY so the
+                                    // CPU/SerialTiles path matches ParallelTiles
+                                    // and the in-app/FlameRenderer paths: clamp,
+                                    // scale by color_scale·weight, then TRUNCATE
+                                    // per sample (the GPU's `u32(...)`), then
+                                    // divide back by color_scale. Binning exact
+                                    // f64 here instead made the series export
+                                    // subtly brighter / more saturated than the
+                                    // (truncating) GPU paths.
+                                    let ws = color_scale_f * sample.weight;
+                                    pixel.r += (sample.r.clamp(0.0, 1.0) * ws).floor() as f64 / cs;
+                                    pixel.g += (sample.g.clamp(0.0, 1.0) * ws).floor() as f64 / cs;
+                                    pixel.b += (sample.b.clamp(0.0, 1.0) * ws).floor() as f64 / cs;
+                                    pixel.count += ws.floor() as f64 / cs;
                                 }
                             }
                         });
