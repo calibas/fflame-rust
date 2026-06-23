@@ -1,12 +1,13 @@
 # Analytic Blur Buffer (experimental)
 
-Status: **Phase 1 complete** on branch `analytic-blur-buffer`. The sections
-below are the original design; this status block records what actually
-shipped and where it diverged.
+Status: **Phase 1 + Phase 2 complete** on branch `analytic-blur-buffer`. The
+sections below are the original design; this status block records what
+actually shipped and where it diverged.
 
-## v1 as built (Phase 1)
+## As built (Phases 1 + 2)
 
-Interactive / 2D-direct path only, end-to-end and golden-test-passing.
+Interactive + both export paths (FlameRenderer and tiled), 2D, end-to-end and
+golden-test-passing.
 
 - **New opt-in variations, not modified originals.** `analytic_blur` and
   `analytic_gaussian_blur` (`src/variations/defs/analytic_blurs.rs`) are
@@ -25,11 +26,13 @@ Interactive / 2D-direct path only, end-to-end and golden-test-passing.
   block in `main_template.wgsl`): the mean splat = realized output −
   `M_post·(w·offset)` is binned **at low resolution** (`mean_pixel ÷ D`) into
   the transform's slice of the low-res splat buffer (binding 13), and the
-  realized sample is suppressed from the main histogram. The routing reads
+  realized sample is suppressed (`should_plot = false`, dropping it from BOTH
+  the direct histogram add and the sample-emit write). The routing reads
   `D` / low-res dims / `count` from `blur_convolve_params` (binding 14). There
   is **no full-res blur buffer and no downsample pass** — the splat target *is*
-  the convolution input. Sample-emit / export stays stochastic (the block is
-  gated to `OUTPUT_HISTOGRAM_DIRECT`; naga strips bindings 13/14 there).
+  the convolution input. The routing is mode-independent (gated `!RENDER_3D`),
+  so the same splat feeds both the FlameRenderer and tiled export paths; an
+  exporter with `count = 0` falls back to stochastic.
 - **Per-transform buffers capped at `MAX_BLUR_BUFFERS = 4`** (concatenated
   low-res slices). `Transform.analytic_blur_slot` carries the slot; the shader
   gates `slot < count`, where `count` is the **actually-allocated** slice count.
@@ -76,8 +79,7 @@ Interactive / 2D-direct path only, end-to-end and golden-test-passing.
   the IFS structure itself are unaffected — for general grain use the spatial
   filter (`filter_radius`).
 
-Deferred to later phases: export/tiled sample-emit routing (Phase 2); more
-analytic-blur variations, low-res buffer, and 3D-through-projection (Phase 3).
+Deferred to Phase 3: more analytic-blur variations and 3D-through-projection.
 
 ## The idea
 
