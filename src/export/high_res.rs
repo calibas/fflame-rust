@@ -2045,10 +2045,14 @@ post_symmetry: (&config.flame.post_symmetry).into(),
             burn_in: 20, // Default burn-in for export
             num_transforms: config.flame.transforms.len() as u32,
             palette_size: config.palette_size,
-            // Levels defaults: × mean density (sample_density) units.
-            levels_low: 0.0,
-            levels_high: crate::config::defaults::DEFAULT_LEVELS_HIGH,
-            levels_gamma: crate::config::defaults::DEFAULT_LEVELS_GAMMA,
+            // Levels (× mean density units) — read from the config, matching
+            // FlameRenderer::update_tonemap. Hardcoding defaults here made the
+            // tiled export ignore the flame's Levels and render at different
+            // contrast than the FlameRenderer path. `levels_enabled` below
+            // gates whether they apply at all.
+            levels_low: config.levels_low,
+            levels_high: config.levels_high,
+            levels_gamma: config.levels_gamma,
             highlight_mode: match config.highlight_mode {
                 crate::scene::tonemap::HighlightMode::Clip => 0,
                 crate::scene::tonemap::HighlightMode::MaxNorm => 1,
