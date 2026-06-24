@@ -121,11 +121,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // analytic-blur variation (if any) writes its weighted offset
         // `w·offset` here; otherwise it stays zero. Reset each iteration. The
         // plot routes the deterministic mean to this transform's blur buffer.
+        // Only declared (and threaded into apply_variations) when the feature
+        // is active — a non-blur build is byte-identical to one without it.
         // See docs/projects/analytic-blur-buffer.md.
+{{#if HAS_ANALYTIC_BLUR}}
 {{#if RENDER_3D}}
         var blur_contribution = vec3<f32>(0.0, 0.0, 0.0);
 {{else}}
         var blur_contribution = vec2<f32>(0.0, 0.0);
+{{/if}}
 {{/if}}
 
 {{#if HAS_DC}}
@@ -162,15 +166,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let affine_p = apply_affine(xform, current);
 {{#if HAS_DC}}
 {{#if HAS_RGB}}
-        current = apply_variations(xform, xform_idx, affine_p, &rng, &vc, &vrc, &should_hide, &blur_contribution);
+        current = apply_variations(xform, xform_idx, affine_p, &rng, &vc, &vrc, &should_hide{{#if HAS_ANALYTIC_BLUR}}, &blur_contribution{{/if}});
 {{else}}
-        current = apply_variations(xform, xform_idx, affine_p, &rng, &vc, &should_hide, &blur_contribution);
+        current = apply_variations(xform, xform_idx, affine_p, &rng, &vc, &should_hide{{#if HAS_ANALYTIC_BLUR}}, &blur_contribution{{/if}});
 {{/if}}
 {{else}}
 {{#if HAS_RGB}}
-        current = apply_variations(xform, xform_idx, affine_p, &rng, &vrc, &should_hide, &blur_contribution);
+        current = apply_variations(xform, xform_idx, affine_p, &rng, &vrc, &should_hide{{#if HAS_ANALYTIC_BLUR}}, &blur_contribution{{/if}});
 {{else}}
-        current = apply_variations(xform, xform_idx, affine_p, &rng, &should_hide, &blur_contribution);
+        current = apply_variations(xform, xform_idx, affine_p, &rng, &should_hide{{#if HAS_ANALYTIC_BLUR}}, &blur_contribution{{/if}});
 {{/if}}
 {{/if}}
         if (HAS_POST_AFFINE) {
@@ -194,15 +198,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let laff = apply_affine(lxform, current);
 {{#if HAS_DC}}
 {{#if HAS_RGB}}
-            current = apply_variations(lxform, lid, laff, &rng, &vc, &vrc, &should_hide, &blur_contribution);
+            current = apply_variations(lxform, lid, laff, &rng, &vc, &vrc, &should_hide{{#if HAS_ANALYTIC_BLUR}}, &blur_contribution{{/if}});
 {{else}}
-            current = apply_variations(lxform, lid, laff, &rng, &vc, &should_hide, &blur_contribution);
+            current = apply_variations(lxform, lid, laff, &rng, &vc, &should_hide{{#if HAS_ANALYTIC_BLUR}}, &blur_contribution{{/if}});
 {{/if}}
 {{else}}
 {{#if HAS_RGB}}
-            current = apply_variations(lxform, lid, laff, &rng, &vrc, &should_hide, &blur_contribution);
+            current = apply_variations(lxform, lid, laff, &rng, &vrc, &should_hide{{#if HAS_ANALYTIC_BLUR}}, &blur_contribution{{/if}});
 {{else}}
-            current = apply_variations(lxform, lid, laff, &rng, &should_hide, &blur_contribution);
+            current = apply_variations(lxform, lid, laff, &rng, &should_hide{{#if HAS_ANALYTIC_BLUR}}, &blur_contribution{{/if}});
 {{/if}}
 {{/if}}
             if (HAS_POST_AFFINE) {
@@ -374,15 +378,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 {{/if}}
 {{#if HAS_DC}}
 {{#if HAS_RGB}}
-                final_pos = apply_variations(fxform, fid, faff, &rng, &final_vc, &final_vrc, &should_hide, &blur_contribution);
+                final_pos = apply_variations(fxform, fid, faff, &rng, &final_vc, &final_vrc, &should_hide{{#if HAS_ANALYTIC_BLUR}}, &blur_contribution{{/if}});
 {{else}}
-                final_pos = apply_variations(fxform, fid, faff, &rng, &final_vc, &should_hide, &blur_contribution);
+                final_pos = apply_variations(fxform, fid, faff, &rng, &final_vc, &should_hide{{#if HAS_ANALYTIC_BLUR}}, &blur_contribution{{/if}});
 {{/if}}
 {{else}}
 {{#if HAS_RGB}}
-                final_pos = apply_variations(fxform, fid, faff, &rng, &final_vrc, &should_hide, &blur_contribution);
+                final_pos = apply_variations(fxform, fid, faff, &rng, &final_vrc, &should_hide{{#if HAS_ANALYTIC_BLUR}}, &blur_contribution{{/if}});
 {{else}}
-                final_pos = apply_variations(fxform, fid, faff, &rng, &should_hide, &blur_contribution);
+                final_pos = apply_variations(fxform, fid, faff, &rng, &should_hide{{#if HAS_ANALYTIC_BLUR}}, &blur_contribution{{/if}});
 {{/if}}
 {{/if}}
                 if (HAS_POST_AFFINE) {
