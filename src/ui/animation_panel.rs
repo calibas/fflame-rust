@@ -26,37 +26,9 @@ use rust_i18n::t;
 use crate::animation::{Animation, AnimationController, LoopMode, PlaybackState};
 use crate::animation::export::{VideoCodec, HardwareAccel};
 
-/// Export progress state for UI display
-#[derive(Clone, Default)]
-pub struct ExportProgress {
-    /// Whether export is currently in progress
-    pub is_exporting: bool,
-    /// Current frame being rendered (0-indexed)
-    pub current_frame: u32,
-    /// Total frames to render
-    pub total_frames: u32,
-    /// Time per frame in seconds (for ETA calculation)
-    pub seconds_per_frame: f64,
-    /// Status message
-    pub status: String,
-}
-
-impl ExportProgress {
-    /// Get progress as a fraction (0.0 to 1.0)
-    pub fn progress(&self) -> f32 {
-        if self.total_frames == 0 {
-            0.0
-        } else {
-            self.current_frame as f32 / self.total_frames as f32
-        }
-    }
-
-    /// Get estimated time remaining in seconds
-    pub fn eta_seconds(&self) -> f64 {
-        let remaining_frames = self.total_frames.saturating_sub(self.current_frame);
-        remaining_frames as f64 * self.seconds_per_frame
-    }
-}
+// Video export progress is reported through the unified
+// `crate::ui::ExportStatus` and drawn by the global overlay
+// (`export_status::render_export_overlay`) — no panel-local progress struct.
 
 /// Export settings for animation rendering
 #[derive(Clone)]
@@ -505,28 +477,6 @@ pub fn render_timeline_scrubber(ui: &mut Ui, controller: &mut AnimationControlle
     (seek_changed, seek_drag_stopped, layout)
 }
 
-/// Render export progress (shown only when exporting)
-/// Call this after rendering tracks section, before file controls
-pub fn render_export_progress(ui: &mut Ui, progress: &ExportProgress) {
-    ui.horizontal(|ui| {
-        ui.spinner();
-        ui.label(&progress.status);
-    });
-
-    ui.add(egui::ProgressBar::new(progress.progress())
-        .text(t!("animation_panel.frame_progress",
-            current = progress.current_frame + 1,
-            total = progress.total_frames))
-        .animate(true));
-
-    let eta = progress.eta_seconds();
-    if eta > 0.0 {
-        let eta_min = (eta / 60.0).floor() as u32;
-        let eta_sec = (eta % 60.0).floor() as u32;
-        ui.label(t!("animation_panel.eta", min = eta_min, sec = format!("{:02}", eta_sec)));
-    }
-}
-
 /// Get display label for loop mode
 fn loop_mode_label(mode: LoopMode) -> String {
     match mode {
@@ -549,7 +499,9 @@ pub fn render_export_panel(
     ctx: &egui::Context,
     controller: &AnimationController,
     settings: &mut AnimationExportSettings,
-    progress: &ExportProgress,
+    // Only read on desktop (the wasm branch shows "not available").
+    #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
+    export_active: bool,
     export_panel_state: &mut ExportPanelState,
     #[cfg(not(target_arch = "wasm32"))]
     window: &winit::window::Window,
@@ -567,28 +519,7 @@ pub fn render_export_panel(
         .resizable(true)
         .min_width(400.0)
         .show(ctx, |ui| {
-            // Show progress bar when exporting
-            if progress.is_exporting {
-                ui.horizontal(|ui| {
-                    ui.spinner();
-                    ui.label(&progress.status);
-                });
-
-                ui.add(egui::ProgressBar::new(progress.progress())
-                    .text(t!("animation_panel.frame_progress",
-                        current = progress.current_frame + 1,
-                        total = progress.total_frames))
-                    .animate(true));
-
-                let eta = progress.eta_seconds();
-                if eta > 0.0 {
-                    let eta_min = (eta / 60.0).floor() as u32;
-                    let eta_sec = (eta % 60.0).floor() as u32;
-                    ui.label(t!("animation_panel.eta", min = eta_min, sec = format!("{:02}", eta_sec)));
-                }
-
-                ui.separator();
-            }
+            // Live progress is shown by the global export overlay, not here.
 
             #[cfg(not(target_arch = "wasm32"))]
             {
@@ -602,7 +533,7 @@ pub fn render_export_panel(
                     ui.separator();
                 }
 
-                ui.add_enabled_ui(has_animation && !progress.is_exporting && ffmpeg_available, |ui| {
+                ui.add_enabled_ui(has_animation && !export_active && ffmpeg_available, |ui| {
                     render_export_settings(ui, controller, settings, &mut export_request, window);
                 });
             }

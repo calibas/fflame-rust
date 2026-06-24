@@ -100,38 +100,6 @@ impl TileLayout {
     }
 }
 
-/// Progress callback for high-res export
-pub trait ExportProgress {
-    fn on_dispatch(&mut self, current: u64, total: u64);
-    fn on_accumulating(&mut self, samples: u64);
-    fn on_tonemapping(&mut self);
-    fn on_complete(&mut self);
-}
-
-/// Simple CLI progress reporter
-pub struct CliExportProgress;
-
-impl ExportProgress for CliExportProgress {
-    fn on_dispatch(&mut self, current: u64, total: u64) {
-        let percent = (current as f64 / total as f64) * 100.0;
-        print!("\r  Iterations: {:.1}% ({}/{})", percent, current, total);
-        use std::io::Write;
-        std::io::stdout().flush().ok();
-    }
-
-    fn on_accumulating(&mut self, samples: u64) {
-        println!("\n  Accumulating {} samples...", samples);
-    }
-
-    fn on_tonemapping(&mut self) {
-        println!("  Tonemapping...");
-    }
-
-    fn on_complete(&mut self) {
-        println!("  Export complete!");
-    }
-}
-
 /// High-resolution exporter using CPU histogram
 pub struct HighResExporter {
     device: Device,
@@ -1219,7 +1187,7 @@ impl HighResExporter {
         config: &FractalConfig,
         total_iterations: u64,
         transparent: bool,
-        progress: &mut dyn ExportProgress,
+        reporter: &mut dyn crate::export::ExportReporter,
     ) -> Result<Vec<u8>, String> {
         // Create CPU histogram. The GPU accumulate path leaves this
         // empty until the final readback; the CPU path fills it
@@ -1432,7 +1400,10 @@ impl HighResExporter {
         let mut total_samples_accumulated = 0u64;
 
         for dispatch in 0..num_dispatches {
-            progress.on_dispatch(dispatch + 1, num_dispatches);
+            // Rendering is the bulk of the work; map it to 0..0.9 and reserve
+            // the tail for accumulate/tonemap/encode.
+            let frac = (dispatch + 1) as f32 / num_dispatches as f32 * 0.9;
+            reporter.progress(frac, &format!("Rendering · pass {}/{}", dispatch + 1, num_dispatches));
 
             // Reset sample counter
             self.queue
@@ -1680,8 +1651,8 @@ post_symmetry: (&config.flame.post_symmetry).into(),
         self.tile_histograms_buffer = None;
         let _ = self.device.poll(PollType::Wait { submission_index: None, timeout: None });
 
-        progress.on_accumulating(total_samples_accumulated);
-        progress.on_tonemapping();
+        reporter.progress(0.92, &format!("Accumulating {} samples…", total_samples_accumulated));
+        reporter.progress(0.97, "Tonemapping…");
 
         // Tonemap histogram to RGBA using GPU. The actual iteration
         // count is the loop's ceiling-rounded `num_dispatches × per-dispatch`,
@@ -1690,7 +1661,7 @@ post_symmetry: (&config.flame.post_symmetry).into(),
         let total_iters_dispatched = num_dispatches * iterations_per_dispatch;
         let pixels = self.tonemap_gpu(&histogram, config, transparent, total_iters_dispatched).await?;
 
-        progress.on_complete();
+        reporter.progress(1.0, "Encoding…");
 
         Ok(pixels)
     }
