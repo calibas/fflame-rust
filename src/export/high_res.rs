@@ -931,11 +931,39 @@ impl HighResExporter {
                 );
             }
             crate::export::RenderStrategy::Direct => {
-                log::warn!(
-                    "High-res export: unexpected Direct strategy at {}x{} — \
-                     routing should have sent this to FlameRenderer. Using CPU fallback.",
-                    width, height,
-                );
+                // The full histogram fits one binding. Reached when an in-app
+                // "long render" export is routed here for background progress
+                // without freezing (the synchronous FlameRenderer path is
+                // reserved for quick renders that fit one binding). Render it
+                // as a single GPU tile: far leaner on the export device than
+                // FlameRenderer's full-res path (Rgba16Float accumulator, no
+                // path-tracking buffers), so it fits alongside the live app's
+                // device where render() would OOM. Degenerate ParallelTiles
+                // (one tile spanning the whole image).
+                if total_hist_size <= device_limits.max_buffer_size as u64 {
+                    log::info!(
+                        "High-res export: GPU accumulate (single tile) — {}x{}, {} MB total",
+                        width, height,
+                        total_hist_size / (1024 * 1024),
+                    );
+                    tile_histograms_buffer = Some(device.create_buffer(&BufferDescriptor {
+                        label: Some("Export Single-Tile Histogram"),
+                        size: total_hist_size,
+                        usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
+                        mapped_at_creation: false,
+                    }));
+                    tile_layout = Some(TileLayout {
+                        num_tiles: 1,
+                        tile_height: height,
+                        image_width: width,
+                        image_height: height,
+                    });
+                } else {
+                    log::warn!(
+                        "High-res export: Direct strategy at {}x{} but {} MB > max_buffer — CPU fallback.",
+                        width, height, total_hist_size / (1024 * 1024),
+                    );
+                }
             }
         }
 
