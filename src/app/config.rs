@@ -247,6 +247,14 @@ impl App {
     /// For high-res exports, spawns a background thread with progress updates.
     /// For normal GPU exports, runs synchronously (fast enough).
     #[cfg(not(target_arch = "wasm32"))]
+    /// Renders above this iteration count background-render with a live
+    /// progress overlay instead of blocking the UI synchronously. Tracks render
+    /// time (≈ iteration count), not resolution — per the export UX design. The
+    /// default config is 1e9 iterations (multi-second), so typical exports show
+    /// progress; only deliberately-reduced quick renders stay synchronous.
+    #[cfg(not(target_arch = "wasm32"))]
+    const BACKGROUND_EXPORT_ITER_THRESHOLD: u64 = 250_000_000;
+
     pub fn export_custom_size(&mut self, transparent: bool, config: FractalConfig, _render_time_ms: f64) {
         use crate::renderer::{render, NoProgress, RenderJob};
 
@@ -258,26 +266,35 @@ impl App {
 
         println!("Exporting at custom size: {}×{}", self.export_width, self.export_height);
 
-        // Route based on the device's *actual* storage-buffer-binding
-        // size, not the WebGPU spec floor. The app's device requests
-        // adapter limits at startup (see gpu/device.rs), so on a
-        // typical desktop reporting 2 GB+ bindings, 8K renders
-        // (1 GB histogram) take the fast direct-histogram path
-        // through FlameRenderer instead of falling back to the
-        // CPU-histogram path. The fallback only fires when the
-        // histogram truly exceeds what one storage buffer binding
-        // can hold (e.g. 12K+ on a 2 GB device, 4K+ on WASM's
-        // typical 128 MB limit).
+        // Two independent decisions:
+        //
+        //  1. WHICH ENGINE (correctness/memory): if the histogram fits one
+        //     storage-buffer binding, the direct FlameRenderer path can render
+        //     it; otherwise it must tile through HighResExporter.
+        //  2. SYNC vs BACKGROUND (UX): a long render deserves a live progress
+        //     bar instead of a frozen UI. "Long" tracks ITERATION COUNT (render
+        //     time), not resolution — a low-res high-iteration render is slow
+        //     too. Quick renders stay synchronous (instant, and they match the
+        //     viewport's FlameRenderer engine exactly).
+        //
+        // Background ⇒ HighResExporter on its OWN device: it's far leaner than
+        // FlameRenderer (Rgba16Float accumulator, no path-tracking buffers), so
+        // it fits alongside the live app's device where a second FlameRenderer
+        // would OOM. It renders the whole image as one GPU tile when it fits a
+        // binding, or row-tiles when it doesn't — either way bounded memory +
+        // progress. Synchronous ⇒ the app's own device, blocking briefly.
         let max_binding = self.gpu.device.limits().max_storage_buffer_binding_size as u64;
         let hist_size = crate::export::histogram_size_bytes(self.export_width, self.export_height);
-        if hist_size > max_binding {
+        let long_render = config.max_iterations > Self::BACKGROUND_EXPORT_ITER_THRESHOLD;
+        if hist_size > max_binding || long_render {
             println!(
-                "  Routing through HighResExporter for {}x{} (histogram {} MB > device binding {} MB)",
+                "  Routing through HighResExporter for {}x{} ({} MB histogram, {} iterations{})",
                 self.export_width, self.export_height,
                 hist_size / (1024 * 1024),
-                max_binding / (1024 * 1024)
+                config.max_iterations,
+                if hist_size > max_binding { " — exceeds one binding" } else { " — long render, background + progress" },
             );
-            self.export_high_res_cpu_background(transparent, config);
+            self.export_high_res_background(transparent, config);
             return;
         }
 
@@ -355,9 +372,13 @@ impl App {
         }
     }
 
-    /// High-resolution CPU export in background thread with progress updates
+    /// Background PNG export through HighResExporter on its own headless
+    /// device, with the unified progress overlay. Handles any size: one GPU
+    /// tile when the histogram fits a binding, row-tiled (or CPU histogram)
+    /// when it doesn't. Used for both >binding sizes and long renders that want
+    /// progress without freezing the UI.
     #[cfg(not(target_arch = "wasm32"))]
-    fn export_high_res_cpu_background(&mut self, transparent: bool, config: FractalConfig) {
+    fn export_high_res_background(&mut self, transparent: bool, config: FractalConfig) {
         use crate::export::HighResExporter;
         use crate::ui::{ExportKind, UiReporter};
 
