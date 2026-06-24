@@ -1593,6 +1593,7 @@ async fn render_frame_to_completion(
         renderer.compute_pass(
             &mut encoder,
             queue,
+            device,
             NUM_WORKGROUPS,
             iterations_per_thread,
             20, // burn_in default

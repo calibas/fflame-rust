@@ -53,11 +53,15 @@ struct Transform {
     // (the Apophysis path) takes over with zero added cost.
     plane_flags: u32,
 
-    // 3-u32 padding so `array<Transform>` strides at 16-byte
-    // boundaries (std430 alignment). Matches `GpuTransform::_plane_pad`.
-    _plane_pad0: u32,
-    _plane_pad1: u32,
-    _plane_pad2: u32,
+    // Analytic-blur routing slot (i32; -1 = not eligible). Matches
+    // `GpuTransform::analytic_blur_slot`. See analytic-blur-buffer.md.
+    analytic_blur_slot: i32,
+
+    // Analytic-blur routing knobs (matches GpuTransform). `strength` scales
+    // the mean-splat density; `residual` keeps routing the next N plots
+    // through the blur buffer. Carved from the former 2-u32 pad.
+    analytic_blur_strength: f32,
+    analytic_blur_residual: u32,
 }
 
 // Dispatch parameters
@@ -263,3 +267,29 @@ struct SubflameMeta {
     _pad1: u32,
 }
 @group(0) @binding(12) var<storage, read> subflame_metadata: array<SubflameMeta>;
+
+// Per-transform analytic-blur mean-splat buffers at LOW resolution,
+// concatenated: slice `b` occupies `[b·lw·lh·4, (b+1)·lw·lh·4)` (lw,lh =
+// blur_convolve_params.lowres_*), same `[Rsum,Gsum,Bsum,density]` 4-u32
+// layout. A transform with `analytic_blur_slot = b` (and `b < count`) routes
+// its mean-splat here at `mean_pixel ÷ D` instead of the main histogram; a
+// later pass convolves each slice with its kernel and upscale-adds it back.
+// Always bound (a 1-element dummy when inactive). See analytic-blur-buffer.md.
+@group(0) @binding(13) var<storage, read_write> blur_histograms: array<atomic<u32>>;
+
+// Analytic-blur convolution params (mirrors `BlurConvolveParams` in
+// gpu/buffers.rs). The chaos-game routing reads `downscale`, `lowres_*`, and
+// `count` to splat into the low-res buffer above. Always bound. Only read in
+// the HAS_ANALYTIC_BLUR routing, so naga strips it when the feature is off.
+struct BlurConvolveParams {
+    full_width: u32,
+    full_height: u32,
+    lowres_width: u32,
+    lowres_height: u32,
+    downscale: u32,
+    count: u32,
+    frame_seed: u32,
+    _pad1: u32,
+    slot_meta: array<vec4<u32>, 4>,
+}
+@group(0) @binding(14) var<uniform> blur_params: BlurConvolveParams;

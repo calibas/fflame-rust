@@ -9,6 +9,10 @@ pub struct FlamePipelines {
     pub accumulate_bind_group_layout: BindGroupLayout,
     pub histogram_blur_pipeline: ComputePipeline,
     pub histogram_blur_bind_group_layout: BindGroupLayout,
+    pub blur_convolve_pipeline: ComputePipeline,
+    pub blur_convolve_bind_group_layout: BindGroupLayout,
+    pub blur_upscale_pipeline: ComputePipeline,
+    pub blur_stage_bind_group_layout: BindGroupLayout,
     pub tonemap_pipeline: RenderPipeline,
     pub tonemap_bind_group_layout: BindGroupLayout,
 }
@@ -24,6 +28,16 @@ impl FlamePipelines {
         let histogram_blur_shader = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("Histogram Blur Shader"),
             source: ShaderSource::Wgsl(include_str!("../../shaders/histogram_blur.wgsl").into()),
+        });
+
+        let blur_convolve_shader = device.create_shader_module(ShaderModuleDescriptor {
+            label: Some("Blur Convolve Shader"),
+            source: ShaderSource::Wgsl(include_str!("../../shaders/blur_convolve.wgsl").into()),
+        });
+
+        let blur_upscale_shader = device.create_shader_module(ShaderModuleDescriptor {
+            label: Some("Blur Upscale Shader"),
+            source: ShaderSource::Wgsl(include_str!("../../shaders/blur_upscale.wgsl").into()),
         });
 
         let tonemap_shader = device.create_shader_module(ShaderModuleDescriptor {
@@ -163,6 +177,31 @@ impl FlamePipelines {
                     visibility: ShaderStages::COMPUTE,
                     ty: BindingType::Buffer {
                         ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Analytic-blur mean-splat histograms (read_write). Always in
+                // the layout; a 1-element dummy is bound when the feature is
+                // inactive. See docs/projects/analytic-blur-buffer.md.
+                BindGroupLayoutEntry {
+                    binding: 13,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Analytic-blur convolve params (uniform) — the routing reads
+                // D / lowres dims / count to splat into the low-res buffer.
+                BindGroupLayoutEntry {
+                    binding: 14,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform,
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
@@ -388,6 +427,127 @@ impl FlamePipelines {
             cache: None,
         });
 
+        // Blur-convolve bind group layout (matches blur_convolve.wgsl):
+        //   0 — blur_in        (storage, read-only)
+        //   1 — histogram_out  (storage, read+write)
+        //   2 — ConvolveParams (uniform)
+        //   3 — kernel_weights (storage, read-only)
+        let blur_convolve_bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("Blur Convolve Bind Group Layout"),
+            entries: &[
+                BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+        let blur_convolve_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("Blur Convolve Pipeline Layout"),
+            bind_group_layouts: &[Some(&blur_convolve_bind_group_layout)],
+            immediate_size: 0,
+        });
+
+        let blur_convolve_pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
+            label: Some("Blur Convolve Compute Pipeline"),
+            layout: Some(&blur_convolve_pipeline_layout),
+            module: &blur_convolve_shader,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
+        // Shared 3-binding layout for the downsample and upscale stages:
+        //   0 — input  (storage, read-only)
+        //   1 — output (storage, read+write)
+        //   2 — ConvolveParams (uniform)
+        let blur_stage_bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("Blur Stage Bind Group Layout"),
+            entries: &[
+                BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+        let blur_stage_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("Blur Stage Pipeline Layout"),
+            bind_group_layouts: &[Some(&blur_stage_bind_group_layout)],
+            immediate_size: 0,
+        });
+
+        let blur_upscale_pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
+            label: Some("Blur Upscale Compute Pipeline"),
+            layout: Some(&blur_stage_pipeline_layout),
+            module: &blur_upscale_shader,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
         // Create tonemap render pipeline
         let tonemap_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("Tonemap Pipeline Layout"),
@@ -440,6 +600,10 @@ impl FlamePipelines {
             accumulate_bind_group_layout,
             histogram_blur_pipeline,
             histogram_blur_bind_group_layout,
+            blur_convolve_pipeline,
+            blur_convolve_bind_group_layout,
+            blur_upscale_pipeline,
+            blur_stage_bind_group_layout,
             tonemap_pipeline,
             tonemap_bind_group_layout,
         }
@@ -579,6 +743,16 @@ impl FlamePipelines {
                     binding: 12,
                     resource: buffers.subflame_metadata_buffer.as_entire_binding(),
                 },
+                // Analytic-blur low-res splat buffer (real or dummy).
+                BindGroupEntry {
+                    binding: 13,
+                    resource: buffers.get_blur_splat_for_binding().as_entire_binding(),
+                },
+                // Analytic-blur convolve params (D / lowres dims / count).
+                BindGroupEntry {
+                    binding: 14,
+                    resource: buffers.blur_convolve_params_buffer.as_entire_binding(),
+                },
             ],
         })
     }
@@ -631,6 +805,44 @@ impl FlamePipelines {
                 BindGroupEntry { binding: 0, resource: buffers.histogram_buffer_scratch.as_entire_binding() },
                 BindGroupEntry { binding: 1, resource: buffers.histogram_buffer.as_entire_binding() },
                 BindGroupEntry { binding: 2, resource: buffers.histogram_blur_params_buffer_v.as_entire_binding() },
+            ],
+        })
+    }
+
+    /// Bind group for the analytic-blur convolution pass (at low res): in =
+    /// the low-res splat buffer (the chaos game splatted directly to low res),
+    /// out = low-res convolved scratch, + convolve params + kernel weights.
+    pub fn create_blur_convolve_bind_group(
+        &self,
+        device: &Device,
+        buffers: &super::buffers::FlameBuffers,
+    ) -> BindGroup {
+        device.create_bind_group(&BindGroupDescriptor {
+            label: Some("Blur Convolve Bind Group"),
+            layout: &self.blur_convolve_bind_group_layout,
+            entries: &[
+                BindGroupEntry { binding: 0, resource: buffers.get_blur_splat_for_binding().as_entire_binding() },
+                BindGroupEntry { binding: 1, resource: buffers.get_blur_convolved_for_binding().as_entire_binding() },
+                BindGroupEntry { binding: 2, resource: buffers.blur_convolve_params_buffer.as_entire_binding() },
+                BindGroupEntry { binding: 3, resource: buffers.blur_kernel_weights_buffer.as_entire_binding() },
+            ],
+        })
+    }
+
+    /// Bind group for the analytic-blur upscale + add stage: in = low-res
+    /// convolved scratch, out = the main histogram, + convolve params.
+    pub fn create_blur_upscale_bind_group(
+        &self,
+        device: &Device,
+        buffers: &super::buffers::FlameBuffers,
+    ) -> BindGroup {
+        device.create_bind_group(&BindGroupDescriptor {
+            label: Some("Blur Upscale Bind Group"),
+            layout: &self.blur_stage_bind_group_layout,
+            entries: &[
+                BindGroupEntry { binding: 0, resource: buffers.get_blur_convolved_for_binding().as_entire_binding() },
+                BindGroupEntry { binding: 1, resource: buffers.histogram_buffer.as_entire_binding() },
+                BindGroupEntry { binding: 2, resource: buffers.blur_convolve_params_buffer.as_entire_binding() },
             ],
         })
     }

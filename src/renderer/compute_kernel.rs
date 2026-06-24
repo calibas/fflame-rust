@@ -110,7 +110,8 @@ impl PathEntry {
     }
 }
 
-/// Manages fractal flame rendering via GPU compute shaders
+use crate::variations::analytic_blur::BlurSlotInfo;
+
 pub struct FlameRenderer {
     pipelines: FlamePipelines,
     buffers: FlameBuffers,
@@ -120,6 +121,29 @@ pub struct FlameRenderer {
     histogram_blur_v_bind_group: BindGroup,
     // adjust_scale_bind_group removed - pipeline unused
     tonemap_bind_group: BindGroup,
+
+    /// Analytic-blur convolution-stage bind groups (convolve → upscale).
+    /// Recreated whenever the low-res blur buffers are (re)allocated (which
+    /// happens when the downscale D changes). See analytic-blur-buffer.md.
+    blur_convolve_bind_group: BindGroup,
+    blur_upscale_bind_group: BindGroup,
+    /// Per-slot kernel inputs captured from the flame (weight + post-affine
+    /// linear), in the same order as the blur slot assignment. Empty when the
+    /// feature is inactive. The pixel-space kernel is rebuilt from these +
+    /// the current zoom/rotation (see `maybe_rebuild_blur_kernels`).
+    blur_slots: Vec<BlurSlotInfo>,
+    /// Cache keys for the last kernel build, so the (CPU) Monte-Carlo rebuild
+    /// only runs when the view or flame actually changed.
+    blur_kernel_zoom: f32,
+    blur_kernel_rotation: f32,
+    blur_kernels_dirty: bool,
+    /// Low-res convolution dims for the current kernel build (downsample +
+    /// convolve dispatch sizes). Set by `maybe_rebuild_blur_kernels`.
+    blur_lowres_w: u32,
+    blur_lowres_h: u32,
+    /// Per-frame dither seed for the upscale's stochastic rounding. Advanced
+    /// every frame the convolution runs.
+    blur_frame_seed: u32,
 
     /// Bind group for the init compute pass. Stable across the renderer's
     /// lifetime — references the variation_params buffer with read_write
@@ -222,6 +246,8 @@ impl FlameRenderer {
         // adjust_scale_bind_group removed - pipeline unused
         let tonemap_bind_group = pipelines.create_tonemap_bind_group(device, &buffers);
         let init_bind_group = pipelines.create_init_bind_group(device, &buffers);
+        let blur_convolve_bind_group = pipelines.create_blur_convolve_bind_group(device, &buffers);
+        let blur_upscale_bind_group = pipelines.create_blur_upscale_bind_group(device, &buffers);
 
         // Create fractal output texture (Rgba8Unorm for compatibility with tonemap pipeline)
         let fractal_texture = device.create_texture(&TextureDescriptor {
@@ -259,6 +285,15 @@ impl FlameRenderer {
             histogram_blur_v_bind_group,
             // adjust_scale_bind_group removed
             tonemap_bind_group,
+            blur_convolve_bind_group,
+            blur_upscale_bind_group,
+            blur_slots: Vec::new(),
+            blur_kernel_zoom: f32::NAN,      // force a build on first active frame
+            blur_kernel_rotation: f32::NAN,
+            blur_kernels_dirty: true,
+            blur_lowres_w: 0,
+            blur_lowres_h: 0,
+            blur_frame_seed: 0,
             init_bind_group,
             init_dirty: true, // Run init once on first frame to populate slots
             fractal_texture,
@@ -325,6 +360,12 @@ impl FlameRenderer {
 
         // Restore xaos buffer if flame has xaos weights
         self.update_xaos_buffer(device, queue, flame);
+        // Refresh the blur slot list + bind to the freshly-recreated (dummy)
+        // blur buffers; maybe_rebuild_blur_kernels reallocates at the new size
+        // on the next compute_pass.
+        self.update_blur_buffers(flame);
+        self.blur_convolve_bind_group = self.pipelines.create_blur_convolve_bind_group(device, &self.buffers);
+        self.blur_upscale_bind_group = self.pipelines.create_blur_upscale_bind_group(device, &self.buffers);
 
         // Recreate bind groups (must be after xaos buffer is restored)
         self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
@@ -429,6 +470,7 @@ impl FlameRenderer {
             has_post_affine: flame.has_post_affine(),
             has_attachments: flame.has_attachments(),
             has_post_symmetry: flame.post_symmetry.ty != crate::scene::transforms::PostSymmetryType::None,
+            has_analytic_blur: flame.analytic_blur_active(&crate::variations::global_registry()),
             flatten_z_per_iter: matches!(flame.render_mode, crate::scene::transforms::RenderMode::ThreeD)
                 && !flame.preserve_z,
             attachment_cap: flame.attachment_cap() as u32,
@@ -467,7 +509,7 @@ impl FlameRenderer {
     /// Returns the number of samples generated this frame
     /// - `clear_histogram`: Clear histogram buffer (needed each batch for proper accumulation math)
     /// - `clear_paths`: Clear path buffer (only needed on full reset, not each batch)
-    pub fn compute_pass(&mut self, encoder: &mut CommandEncoder, queue: &Queue, num_workgroups: u32, iterations_per_thread: u32, burn_in: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_bank: f32, camera_x: f32, camera_y: f32, camera_z: f32, speed_factor: f32, clear_histogram: bool, clear_paths: bool) -> u64 {
+    pub fn compute_pass(&mut self, encoder: &mut CommandEncoder, queue: &Queue, device: &Device, num_workgroups: u32, iterations_per_thread: u32, burn_in: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_bank: f32, camera_x: f32, camera_y: f32, camera_z: f32, speed_factor: f32, clear_histogram: bool, clear_paths: bool) -> u64 {
         // Update seed for new random samples each frame
         // projection_type removed - shader now uses perspective_strength directly
         // 0.0 = orthographic (flat), higher values = increasing perspective
@@ -562,6 +604,11 @@ post_symmetry: (&self.post_symmetry).into(),
         if clear_paths {
             self.buffers.clear_paths(encoder);
         }
+
+        // Rebuild analytic-blur kernels + (re)allocate the low-res buffers if
+        // the view (zoom/rotation) or flame changed. MUST run before the main
+        // dispatch below, which splats into the low-res buffer this sizes.
+        self.maybe_rebuild_blur_kernels(device, queue, zoom, rotation);
 
         // Run init dispatch if any active variation has wgsl_init AND params
         // have changed since last dispatch. The init pipeline writes derived
@@ -663,6 +710,51 @@ post_symmetry: (&self.post_symmetry).into(),
         };
 
         self.buffers.update_accumulate_params(queue, &params);
+
+        // Analytic-blur — fold each transform's low-res mean-splat blur into
+        // the main histogram, before the spatial filter + accumulate so the
+        // convolved blur is treated exactly like the direct samples already in
+        // the histogram. Two cheap stages (the chaos game already splatted
+        // straight to low res):
+        //   1. convolve each low-res slice with its kernel,
+        //   2. cubic-upscale + dithered-add into the main histogram (÷D² energy).
+        // Gated on a live buffer (count > 0).
+        if self.buffers.blur_buffer_count > 0 {
+            // Advance the per-frame dither seed (offset 24 B = the `frame_seed`
+            // field) so the upscale's stochastic rounding varies each frame and
+            // averages out across accumulation → band-free, no residual noise.
+            self.blur_frame_seed = self.blur_frame_seed.wrapping_add(0x9E3779B9);
+            queue.write_buffer(
+                &self.buffers.blur_convolve_params_buffer,
+                24,
+                bytemuck::bytes_of(&self.blur_frame_seed),
+            );
+
+            let low_x = (self.blur_lowres_w + 7) / 8;
+            let low_y = (self.blur_lowres_h + 7) / 8;
+            let full_x = (self.width + 7) / 8;
+            let full_y = (self.height + 7) / 8;
+
+            // (No downsample stage — the chaos game splatted means straight to
+            // the low-res buffer, which is the convolve input.)
+            let mut conv = encoder.begin_compute_pass(&ComputePassDescriptor {
+                label: Some("Analytic Blur Convolve"),
+                timestamp_writes: None,
+            });
+            conv.set_pipeline(&self.pipelines.blur_convolve_pipeline);
+            conv.set_bind_group(0, &self.blur_convolve_bind_group, &[]);
+            conv.dispatch_workgroups(low_x, low_y, 1);
+            drop(conv);
+
+            let mut up = encoder.begin_compute_pass(&ComputePassDescriptor {
+                label: Some("Analytic Blur Upscale"),
+                timestamp_writes: None,
+            });
+            up.set_pipeline(&self.pipelines.blur_upscale_pipeline);
+            up.set_bind_group(0, &self.blur_upscale_bind_group, &[]);
+            up.dispatch_workgroups(full_x, full_y, 1);
+            drop(up);
+        }
 
         // Spatial filter — Gaussian blur on the per-batch histogram (Apo's
         // `filter` attribute). Two separable passes (H then V) immediately
@@ -912,6 +1004,9 @@ post_symmetry: (&self.post_symmetry).into(),
 
         // 1b. Update xaos buffer (create/drop as needed)
         let xaos_buffer_changed = self.update_xaos_buffer(device, queue, &config.flame);
+        // 1c. Refresh analytic-blur slot list (buffers (re)allocate in
+        // maybe_rebuild_blur_kernels on the next compute_pass).
+        self.update_blur_buffers(&config.flame);
         if xaos_buffer_changed {
             // Recreate bind group with new xaos buffer
             self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
@@ -1083,6 +1178,9 @@ post_symmetry: (&config.flame.post_symmetry).into(),
 
         // Update xaos buffer (create/drop as needed)
         let xaos_buffer_changed = self.update_xaos_buffer(device, queue, flame);
+        // Refresh analytic-blur slot list (buffers (re)allocate in
+        // maybe_rebuild_blur_kernels on the next compute_pass).
+        self.update_blur_buffers(flame);
         if xaos_buffer_changed {
             // Recreate bind group with new xaos buffer
             self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
@@ -1850,9 +1948,105 @@ post_symmetry: (&self.post_symmetry).into(),
         changed
     }
 
-    /// Update xaos buffer based on flame state
-    /// Creates, updates, or drops the xaos buffer as needed
-    /// Returns true if the buffer was created or dropped (bind group needs rebuild)
+    /// Refresh the analytic-blur slot list from the flame and flag a kernel
+    /// rebuild. The actual low-res buffer (re)allocation + bind-group rebuild
+    /// happen in `maybe_rebuild_blur_kernels` (which knows D), called from
+    /// `compute_pass` before the splat.
+    fn update_blur_buffers(&mut self, flame: &crate::scene::transforms::Flame) {
+        let registry = crate::variations::global_registry();
+        let registry = &*registry;
+
+        // Per-slot kernel inputs (same order as GpuTransform::from_flame's slot
+        // assignment). Buffer allocation + the count cap happen in
+        // maybe_rebuild_blur_kernels (which knows D); here we just record them.
+        self.blur_slots = flame.blur_slots(registry);
+        // Flame changed → the kernel inputs and slot set may have changed;
+        // force a rebuild (maybe_rebuild reallocates + rebinds as needed).
+        self.blur_kernels_dirty = true;
+    }
+
+    /// Rebuild the per-slot analytic-blur convolution kernels and upload them
+    /// (weights + meta) to the GPU, but only when something that affects them
+    /// changed: the flame (`blur_kernels_dirty`) or the view zoom/rotation.
+    /// The kernel is the variation's offset distribution sampled in pixel
+    /// space through `world→pixel linear · weight · post-affine linear`, so it
+    /// reproduces the stochastic splat by construction. Cheap CPU Monte-Carlo;
+    /// runs at most once per view/flame change, never per accumulation frame.
+    fn maybe_rebuild_blur_kernels(&mut self, device: &Device, queue: &Queue, zoom: f32, rotation: f32) {
+        use crate::gpu::buffers::{BlurConvolveParams, MAX_BLUR_BUFFERS};
+
+        if self.blur_slots.is_empty() {
+            // Feature inactive — drop the low-res buffers + rebind to the dummy.
+            if self.buffers.ensure_lowres_blur_buffers(device, 0, 0, 0) {
+                self.recreate_blur_bind_groups(device);
+            }
+            return;
+        }
+        let unchanged = !self.blur_kernels_dirty
+            && self.blur_kernel_zoom == zoom
+            && self.blur_kernel_rotation == rotation;
+        if unchanged {
+            return;
+        }
+
+        // Size + build the convolution (shared with the high-res exporter so
+        // both produce identical kernels). See compute_blur_setup.
+        let setup = crate::variations::analytic_blur::compute_blur_setup(
+            self.width, self.height, zoom, rotation, &self.blur_slots,
+        );
+        let lowres_w = setup.lowres_w;
+        let lowres_h = setup.lowres_h;
+        let downscale = setup.downscale;
+        self.blur_lowres_w = lowres_w;
+        self.blur_lowres_h = lowres_h;
+
+        // (Re)allocate the low-res buffers for these dims + slot count (capped
+        // by the memory budget). MUST happen before the splat dispatch that
+        // writes them. Recreate bind groups when the buffer set changed.
+        let num_slots = self.blur_slots.len() as u32;
+        if self.buffers.ensure_lowres_blur_buffers(device, lowres_w, lowres_h, num_slots) {
+            self.recreate_blur_bind_groups(device);
+        }
+
+        let weights = setup.weights;
+        let mut meta = [[0u32; 4]; MAX_BLUR_BUFFERS as usize];
+        for (i, m) in setup.meta.iter().enumerate().take(MAX_BLUR_BUFFERS as usize) {
+            meta[i] = *m;
+        }
+
+        let params = BlurConvolveParams {
+            full_width: self.width,
+            full_height: self.height,
+            lowres_width: lowres_w,
+            lowres_height: lowres_h,
+            downscale,
+            // The ACTUALLY allocated count (the memory cap may be < num_slots);
+            // the shader gates `slot < count` so over-cap transforms stay
+            // stochastic.
+            count: self.buffers.blur_buffer_count,
+            frame_seed: 0,
+            _pad1: 0,
+            meta,
+        };
+        queue.write_buffer(&self.buffers.blur_convolve_params_buffer, 0, bytemuck::cast_slice(&[params]));
+        if !weights.is_empty() {
+            queue.write_buffer(&self.buffers.blur_kernel_weights_buffer, 0, bytemuck::cast_slice(&weights));
+        }
+
+        self.blur_kernel_zoom = zoom;
+        self.blur_kernel_rotation = rotation;
+        self.blur_kernels_dirty = false;
+    }
+
+    /// Recreate the bind groups that reference the analytic-blur buffers, after
+    /// a (re)allocation: the main compute group (binding 13 splat + 14 params)
+    /// and the convolve/upscale groups.
+    fn recreate_blur_bind_groups(&mut self, device: &Device) {
+        self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
+        self.blur_convolve_bind_group = self.pipelines.create_blur_convolve_bind_group(device, &self.buffers);
+        self.blur_upscale_bind_group = self.pipelines.create_blur_upscale_bind_group(device, &self.buffers);
+    }
+
     fn update_xaos_buffer(&mut self, device: &Device, queue: &Queue, flame: &crate::scene::transforms::Flame) -> bool {
         let needs_xaos = flame.has_xaos();
         let has_xaos = self.buffers.xaos_enabled();
