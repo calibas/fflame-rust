@@ -249,7 +249,6 @@ impl App {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn export_custom_size(&mut self, transparent: bool, config: FractalConfig, _render_time_ms: f64) {
         use crate::renderer::{render, NoProgress, RenderJob};
-        use crate::ui::ExportKind;
 
         // Check if already exporting
         if self.export_status.lock().map(|s| s.active).unwrap_or(false) {
@@ -282,91 +281,78 @@ impl App {
             return;
         }
 
-        // Regular GPU export — runs on a background thread (clones of the main
-        // device/queue are cheap Arc handles) so the UI keeps drawing the
-        // global export overlay instead of freezing through the render.
-        let width = self.export_width;
-        let height = self.export_height;
-        let iterations_per_thread = self.config_manager.system_settings().iterations_per_thread;
-        let burn_in = self.config_manager.system_settings().burn_in;
+        // Regular GPU export — runs SYNCHRONOUSLY on the app's own device.
+        // The direct path allocates full-resolution buffers (gigabytes at 8K+);
+        // doing that on a second background device alongside the live app device
+        // OOMs, and sharing the app device across threads corrupts the surface.
+        // So this fast path blocks briefly instead. Sizes above the binding
+        // limit route to HighResExporter (own device, tiled) above. Only the
+        // completion/error toast is unified here — no live overlay, since the
+        // frame is blocked through the render.
+        let job = RenderJob::new(&config, self.export_width, self.export_height)
+            .with_iterations_per_thread(self.config_manager.system_settings().iterations_per_thread)
+            .with_burn_in(self.config_manager.system_settings().burn_in)
+            .with_transparent(transparent);
 
-        if let Ok(mut s) = self.export_status.lock() {
-            s.begin(ExportKind::Png, format!("Exporting PNG · {width}×{height}"));
-        }
+        let result = pollster::block_on(render(&self.gpu.device, &self.gpu.queue, job, &mut NoProgress));
 
-        let status_arc = Arc::clone(&self.export_status);
-        let window_for_dialog = Arc::clone(&self.window);
-        let device = self.gpu.device.clone();
-        let queue = self.gpu.queue.clone();
+        // None ⇒ user cancelled the save dialog (no toast). Some ⇒ show it.
+        let mut toast: Option<(String, bool)> = None;
+        match result {
+            Ok(output) => {
+                let metadata = crate::png_metadata::PngMetadata::from_app_state(
+                    output.width,
+                    output.height,
+                    output.total_iterations,
+                    output.render_time_ms,
+                    self.config_manager.system_settings().iterations_per_thread,
+                    config.speed_factor,
+                    &config,
+                );
 
-        std::thread::spawn(move || {
-            let job = RenderJob::new(&config, width, height)
-                .with_iterations_per_thread(iterations_per_thread)
-                .with_burn_in(burn_in)
-                .with_transparent(transparent);
-
-            let output = match pollster::block_on(render(&device, &queue, job, &mut NoProgress)) {
-                Ok(o) => o,
-                Err(e) => {
-                    eprintln!("Failed to render: {}", e);
-                    if let Ok(mut s) = status_arc.lock() { s.finish_err(format!("Export failed: {e}")); }
-                    return;
-                }
-            };
-
-            let metadata = crate::png_metadata::PngMetadata::from_app_state(
-                output.width,
-                output.height,
-                output.total_iterations,
-                output.render_time_ms,
-                iterations_per_thread,
-                config.speed_factor,
-                &config,
-            );
-
-            let png_data = match crate::renderer::compute_kernel::encode_png_from_rgba(
-                output.width,
-                output.height,
-                output.rgba_data,
-                Some(metadata),
-            ) {
-                Ok(d) => d,
-                Err(e) => {
-                    eprintln!("Failed to encode PNG: {}", e);
-                    if let Ok(mut s) = status_arc.lock() { s.finish_err(format!("PNG encode failed: {e}")); }
-                    return;
-                }
-            };
-
-            // Pick the destination (blocks this thread, not the UI).
-            let path = rfd::FileDialog::new()
-                .set_parent(window_for_dialog.as_ref())
-                .add_filter("PNG Image", &["png"])
-                .set_file_name("fractal.png")
-                .save_file();
-
-            match path {
-                Some(path) => match std::fs::write(&path, png_data) {
-                    Ok(()) => {
-                        println!("PNG exported to: {} ({}×{}, {:.2}s)",
-                            path.display(), output.width, output.height, output.render_time_ms / 1000.0);
-                        if let Ok(mut s) = status_arc.lock() {
-                            s.finish_ok(format!("PNG saved · {}",
-                                path.file_name().map(|n| n.to_string_lossy().into_owned())
-                                    .unwrap_or_else(|| path.display().to_string())));
+                match crate::renderer::compute_kernel::encode_png_from_rgba(
+                    output.width,
+                    output.height,
+                    output.rgba_data,
+                    Some(metadata),
+                ) {
+                    Ok(png_data) => {
+                        if let Some(path) = rfd::FileDialog::new()
+                            .set_parent(self.window.as_ref())
+                            .add_filter("PNG Image", &["png"])
+                            .set_file_name("fractal.png")
+                            .save_file()
+                        {
+                            match std::fs::write(&path, png_data) {
+                                Ok(()) => {
+                                    println!("PNG exported to: {} ({}×{}, {:.2}s)",
+                                        path.display(), output.width, output.height, output.render_time_ms / 1000.0);
+                                    toast = Some((format!("PNG saved · {}",
+                                        path.file_name().map(|n| n.to_string_lossy().into_owned())
+                                            .unwrap_or_else(|| path.display().to_string())), false));
+                                }
+                                Err(e) => {
+                                    eprintln!("Failed to save PNG: {}", e);
+                                    toast = Some((format!("Save failed: {e}"), true));
+                                }
+                            }
                         }
                     }
                     Err(e) => {
-                        eprintln!("Failed to save PNG: {}", e);
-                        if let Ok(mut s) = status_arc.lock() { s.finish_err(format!("Save failed: {e}")); }
+                        eprintln!("Failed to encode PNG: {}", e);
+                        toast = Some((format!("PNG encode failed: {e}"), true));
                     }
-                },
-                None => {
-                    // User cancelled the save dialog — clear status, no toast.
-                    if let Ok(mut s) = status_arc.lock() { s.active = false; }
                 }
             }
-        });
+            Err(e) => {
+                eprintln!("Failed to render: {}", e);
+                toast = Some((format!("Export failed: {e}"), true));
+            }
+        }
+
+        if let Some((message, is_error)) = toast {
+            self.egui_layer.show_api_notification(&message, is_error);
+        }
     }
 
     /// High-resolution CPU export in background thread with progress updates
