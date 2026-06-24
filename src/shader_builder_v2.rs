@@ -1393,9 +1393,9 @@ impl ShaderBuilder {
             // `flatten_z_per_iter` (render_3d && !preserve_z) now drives
             // per-variation z gating at the dispatch sites instead of a
             // blanket end-of-iteration flatten.
-            shader.push_str(&self.build_apply_variations_3d(&active, constants.inlined_transforms.as_ref(), constants.num_transforms, &constants.variation_priorities, has_dc, has_rgb, false, constants.flatten_z_per_iter));
+            shader.push_str(&self.build_apply_variations_3d(&active, constants.inlined_transforms.as_ref(), constants.num_transforms, &constants.variation_priorities, has_dc, has_rgb, false, constants.flatten_z_per_iter, constants.has_analytic_blur));
         } else {
-            shader.push_str(&self.build_apply_variations_2d(&active, constants.inlined_transforms.as_ref(), constants.num_transforms, &constants.variation_priorities, has_dc, has_rgb, false));
+            shader.push_str(&self.build_apply_variations_2d(&active, constants.inlined_transforms.as_ref(), constants.num_transforms, &constants.variation_priorities, has_dc, has_rgb, false, constants.has_analytic_blur));
         }
         shader.push('\n');
 
@@ -1411,9 +1411,9 @@ impl ShaderBuilder {
             name == "subflame_wf" || name == "pre_subflame_wf");
         if has_subflame {
             if render_3d {
-                shader.push_str(&self.build_apply_variations_3d(&active, constants.inlined_transforms.as_ref(), constants.num_transforms, &constants.variation_priorities, has_dc, has_rgb, true, constants.flatten_z_per_iter));
+                shader.push_str(&self.build_apply_variations_3d(&active, constants.inlined_transforms.as_ref(), constants.num_transforms, &constants.variation_priorities, has_dc, has_rgb, true, constants.flatten_z_per_iter, false));
             } else {
-                shader.push_str(&self.build_apply_variations_2d(&active, constants.inlined_transforms.as_ref(), constants.num_transforms, &constants.variation_priorities, has_dc, has_rgb, true));
+                shader.push_str(&self.build_apply_variations_2d(&active, constants.inlined_transforms.as_ref(), constants.num_transforms, &constants.variation_priorities, has_dc, has_rgb, true, false));
             }
             shader.push('\n');
             let subflame_src = include_str!("../shaders/core/subflame.wgsl");
@@ -1635,6 +1635,7 @@ impl ShaderBuilder {
         has_dc: bool,
         has_rgb: bool,
         is_subflame: bool,
+        has_analytic_blur: bool,
     ) -> String {
         #[allow(unused_imports)]
         use crate::variations::VariationPhase;
@@ -1662,10 +1663,13 @@ impl ShaderBuilder {
             // `blur_contribution` (analytic-blur mean-splat): the weighted
             // offset `w·offset` of the transform's analytic-blur variation,
             // written back so the plot can recover the deterministic mean
-            // (`mean = current − M_post·blur_contribution`). Always present on
-            // the main apply_variations (cheap, mirrors `hide`); absent in
-            // subflame mode, where analytic blurs render stochastically.
-            if !is_subflame { params.push_str(", blur_contribution: ptr<function, vec2<f32>>"); }
+            // (`mean = current − M_post·blur_contribution`). Only present when
+            // the feature is active (gated to keep a non-blur build byte-
+            // identical); absent in subflame mode, where analytic blurs render
+            // stochastically. Must stay in lockstep with the main_template
+            // call-site arg and the capture emit below (all keyed on
+            // has_analytic_blur).
+            if !is_subflame && has_analytic_blur { params.push_str(", blur_contribution: ptr<function, vec2<f32>>"); }
             format!("fn {}({}) -> vec2<f32> {{\n", fn_name, params)
         };
         let mut code = String::from(
@@ -1790,10 +1794,14 @@ impl ShaderBuilder {
 
             // Analytic-blur capture: accumulate the offset normally AND record
             // `w·offset` so the plot can subtract it for the mean-splat. Only
-            // on the main dispatch (subflames render analytic blurs as plain
-            // additive fuzz — no routing). One analytic blur per eligible
-            // transform (the gate guarantees it), so a plain assign is fine.
-            if info.has_feature(Feature::AnalyticBlur) && !is_subflame {
+            // when the feature is active (else `blur_contribution` doesn't
+            // exist — the variation falls through to the normal stochastic
+            // emit, which is the correct rendering when analytic blur is gated
+            // off, e.g. 3D / attachments / post-symmetry). Main dispatch only
+            // (subflames render analytic blurs as plain additive fuzz). One
+            // analytic blur per eligible transform (the gate guarantees it),
+            // so a plain assign is fine.
+            if has_analytic_blur && info.has_feature(Feature::AnalyticBlur) && !is_subflame {
                 let w_expr = if use_inlined {
                     format!("get_inlined_var_weight(xform_id, {}u)", idx)
                 } else {
@@ -1924,6 +1932,7 @@ impl ShaderBuilder {
         has_rgb: bool,
         is_subflame: bool,
         gate_2d_z: bool,
+        has_analytic_blur: bool,
     ) -> String {
         #[allow(unused_imports)]
         use crate::variations::VariationPhase;
@@ -1944,7 +1953,7 @@ impl ShaderBuilder {
             // doHide pointer — see the 2D builder.
             if !is_subflame { params.push_str(", hide: ptr<function, bool>"); }
             // Analytic-blur mean-splat offset — see the 2D builder.
-            if !is_subflame { params.push_str(", blur_contribution: ptr<function, vec3<f32>>"); }
+            if !is_subflame && has_analytic_blur { params.push_str(", blur_contribution: ptr<function, vec3<f32>>"); }
             format!("fn {}({}) -> vec3<f32> {{\n", fn_name, params)
         };
         let mut code = String::from(
@@ -2072,7 +2081,7 @@ impl ShaderBuilder {
             // Analytic-blur capture (3D) — mirrors the 2D builder, using the
             // z-adjusted `contrib` so blur_contribution matches what's added
             // to `result`. See the 2D builder.
-            if info.has_feature(Feature::AnalyticBlur) && !is_subflame {
+            if has_analytic_blur && info.has_feature(Feature::AnalyticBlur) && !is_subflame {
                 let w_expr = if use_inlined {
                     format!("get_inlined_var_weight(xform_id, {}u)", idx)
                 } else {
@@ -2276,7 +2285,7 @@ mod tests {
         let active = vec![("blur".to_string(), 0u32)];
         let no_overrides: BTreeMap<u32, BTreeMap<u32, i32>> = BTreeMap::new();
 
-        let code = builder.build_apply_variations_2d(&active, None, 1, &no_overrides, false, false, false);
+        let code = builder.build_apply_variations_2d(&active, None, 1, &no_overrides, false, false, false, false);
         assert!(
             code.contains("result += xform.variations[0] * variation_blur(temp"),
             "expected the standard normal weighted-sum emission; got:\n{}", code
@@ -2297,14 +2306,14 @@ mod tests {
         let mut overrides: BTreeMap<u32, BTreeMap<u32, i32>> = BTreeMap::new();
         overrides.entry(0).or_default().insert(0, -1);
 
-        let code = builder.build_apply_variations_2d(&active, None, 1, &overrides, false, false, false);
+        let code = builder.build_apply_variations_2d(&active, None, 1, &overrides, false, false, false, false);
         assert!(
             code.contains("temp = temp + xform.variations[0] * variation_blur(temp"),
             "accumulate var moved to pre must add; got:\n{}", code
         );
         // combimirror IS Replace, so for contrast its moved-pre form assigns.
         let active_c = vec![("combimirror".to_string(), 0u32)];
-        let code_c = builder.build_apply_variations_2d(&active_c, None, 1, &overrides, false, false, false);
+        let code_c = builder.build_apply_variations_2d(&active_c, None, 1, &overrides, false, false, false, false);
         assert!(
             code_c.contains("temp = xform.variations[0] * variation_combimirror(temp"),
             "replace var moved to pre must assign; got:\n{}", code_c
@@ -2321,7 +2330,7 @@ mod tests {
         let active = vec![("spherical".to_string(), 0u32), ("shredlin".to_string(), 1u32)];
         let no_overrides: BTreeMap<u32, BTreeMap<u32, i32>> = BTreeMap::new();
 
-        let code = builder.build_apply_variations_2d(&active, None, 1, &no_overrides, false, false, false);
+        let code = builder.build_apply_variations_2d(&active, None, 1, &no_overrides, false, false, false, false);
         assert!(
             code.contains("result += xform.variations[0] * variation_spherical(temp"),
             "accumulate var must add; got:\n{}", code
@@ -2346,7 +2355,7 @@ mod tests {
         let builder = test_builder();
         let active = vec![("shredlin".to_string(), 0u32)];
         let no_overrides: BTreeMap<u32, BTreeMap<u32, i32>> = BTreeMap::new();
-        let code = builder.build_apply_variations_2d(&active, None, 1, &no_overrides, false, false, false);
+        let code = builder.build_apply_variations_2d(&active, None, 1, &no_overrides, false, false, false, false);
         // result starts at vec2(0.0) so the assignment is equivalent to +=.
         assert!(code.contains("var result = vec2<f32>(0.0, 0.0);"));
         assert!(code.contains("result = xform.variations[0] * variation_shredlin(temp"));
