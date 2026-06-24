@@ -370,6 +370,7 @@ Thread-safe atomic u32 accumulation (4×u32 per pixel: R, G, B, density), fixed 
 ## Known Issues
 - No error handling for invalid `.fflame` or `.palette` file imports
 - Transparent PNG export applies tone mapping on CPU from the accumulation buffer (the tonemap shader blends RGB with background before alpha)
+- Density effects are not applied on the tiled export path (`HighResExporter`): the effect chain needs two full-res ping-pong textures (~2.3 GB at 12K) on top of the accumulation/output buffers, which OOMs at the resolutions the tiled path is used for. The FlameRenderer/in-app export below the tiling threshold still applies them.
 - Topic docs under `docs/main/` may lag the code; verify against source when something looks off
 
 ## Mobile Platform Support (Experimental)

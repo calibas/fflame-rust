@@ -72,6 +72,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var prev_xform_idx = 0u;
 {{/if}}
 
+{{#if HAS_ANALYTIC_BLUR}}
+    // Residual analytic-blur state, persists ACROSS iterations: after a blur
+    // transform fires, the next `residual_remaining` plots are routed through
+    // its blur buffer (slot `residual_slot`) instead of the main histogram, so
+    // the propagated fuzz gets smoothed too. Armed by the blur's own splat.
+    var ab_residual_remaining: u32 = 0u;
+    var ab_residual_slot: i32 = -1;
+{{/if}}
+
     // Per-thread state initialization for stateful variations that need
     // values beyond zero-fill (var<private> thread_state is already zeroed
     // by WGSL spec; this block runs the wgsl_state_init fragments declared
@@ -108,6 +117,21 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // CanHide feature + the gate after the transform chain below.
         var should_hide = false;
 
+        // Analytic-blur mean-splat accumulator: the selected transform's
+        // analytic-blur variation (if any) writes its weighted offset
+        // `w·offset` here; otherwise it stays zero. Reset each iteration. The
+        // plot routes the deterministic mean to this transform's blur buffer.
+        // Only declared (and threaded into apply_variations) when the feature
+        // is active — a non-blur build is byte-identical to one without it.
+        // See docs/projects/analytic-blur-buffer.md.
+{{#if HAS_ANALYTIC_BLUR}}
+{{#if RENDER_3D}}
+        var blur_contribution = vec3<f32>(0.0, 0.0, 0.0);
+{{else}}
+        var blur_contribution = vec2<f32>(0.0, 0.0);
+{{/if}}
+{{/if}}
+
 {{#if HAS_DC}}
         // Apophysis 3-step color flow (XForm.pas:312-313, 1067, 1078-1081),
         // emitted only when at least one active variation has writes_color: true:
@@ -142,15 +166,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let affine_p = apply_affine(xform, current);
 {{#if HAS_DC}}
 {{#if HAS_RGB}}
-        current = apply_variations(xform, xform_idx, affine_p, &rng, &vc, &vrc, &should_hide);
+        current = apply_variations(xform, xform_idx, affine_p, &rng, &vc, &vrc, &should_hide{{#if HAS_ANALYTIC_BLUR}}, &blur_contribution{{/if}});
 {{else}}
-        current = apply_variations(xform, xform_idx, affine_p, &rng, &vc, &should_hide);
+        current = apply_variations(xform, xform_idx, affine_p, &rng, &vc, &should_hide{{#if HAS_ANALYTIC_BLUR}}, &blur_contribution{{/if}});
 {{/if}}
 {{else}}
 {{#if HAS_RGB}}
-        current = apply_variations(xform, xform_idx, affine_p, &rng, &vrc, &should_hide);
+        current = apply_variations(xform, xform_idx, affine_p, &rng, &vrc, &should_hide{{#if HAS_ANALYTIC_BLUR}}, &blur_contribution{{/if}});
 {{else}}
-        current = apply_variations(xform, xform_idx, affine_p, &rng, &should_hide);
+        current = apply_variations(xform, xform_idx, affine_p, &rng, &should_hide{{#if HAS_ANALYTIC_BLUR}}, &blur_contribution{{/if}});
 {{/if}}
 {{/if}}
         if (HAS_POST_AFFINE) {
@@ -174,15 +198,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let laff = apply_affine(lxform, current);
 {{#if HAS_DC}}
 {{#if HAS_RGB}}
-            current = apply_variations(lxform, lid, laff, &rng, &vc, &vrc, &should_hide);
+            current = apply_variations(lxform, lid, laff, &rng, &vc, &vrc, &should_hide{{#if HAS_ANALYTIC_BLUR}}, &blur_contribution{{/if}});
 {{else}}
-            current = apply_variations(lxform, lid, laff, &rng, &vc, &should_hide);
+            current = apply_variations(lxform, lid, laff, &rng, &vc, &should_hide{{#if HAS_ANALYTIC_BLUR}}, &blur_contribution{{/if}});
 {{/if}}
 {{else}}
 {{#if HAS_RGB}}
-            current = apply_variations(lxform, lid, laff, &rng, &vrc, &should_hide);
+            current = apply_variations(lxform, lid, laff, &rng, &vrc, &should_hide{{#if HAS_ANALYTIC_BLUR}}, &blur_contribution{{/if}});
 {{else}}
-            current = apply_variations(lxform, lid, laff, &rng, &should_hide);
+            current = apply_variations(lxform, lid, laff, &rng, &should_hide{{#if HAS_ANALYTIC_BLUR}}, &blur_contribution{{/if}});
 {{/if}}
 {{/if}}
             if (HAS_POST_AFFINE) {
@@ -354,15 +378,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 {{/if}}
 {{#if HAS_DC}}
 {{#if HAS_RGB}}
-                final_pos = apply_variations(fxform, fid, faff, &rng, &final_vc, &final_vrc, &should_hide);
+                final_pos = apply_variations(fxform, fid, faff, &rng, &final_vc, &final_vrc, &should_hide{{#if HAS_ANALYTIC_BLUR}}, &blur_contribution{{/if}});
 {{else}}
-                final_pos = apply_variations(fxform, fid, faff, &rng, &final_vc, &should_hide);
+                final_pos = apply_variations(fxform, fid, faff, &rng, &final_vc, &should_hide{{#if HAS_ANALYTIC_BLUR}}, &blur_contribution{{/if}});
 {{/if}}
 {{else}}
 {{#if HAS_RGB}}
-                final_pos = apply_variations(fxform, fid, faff, &rng, &final_vrc, &should_hide);
+                final_pos = apply_variations(fxform, fid, faff, &rng, &final_vrc, &should_hide{{#if HAS_ANALYTIC_BLUR}}, &blur_contribution{{/if}});
 {{else}}
-                final_pos = apply_variations(fxform, fid, faff, &rng, &should_hide);
+                final_pos = apply_variations(fxform, fid, faff, &rng, &should_hide{{#if HAS_ANALYTIC_BLUR}}, &blur_contribution{{/if}});
 {{/if}}
 {{/if}}
                 if (HAS_POST_AFFINE) {
@@ -533,6 +557,109 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             }
 {{else}}
             let pixel = world_to_pixel(plot_pos);
+{{/if}}
+
+{{#if HAS_ANALYTIC_BLUR}}
+{{#if RENDER_3D}}{{else}}
+            // Analytic-blur mean-splat routing (2D). When the selected
+            // transform carries an analytic-blur variation (slot < count):
+            // splat the DETERMINISTIC MEAN of this sample — the realized output
+            // minus the post-affine image of the captured weighted offset
+            // `w·offset` — into the transform's low-res blur buffer, then
+            // suppress the realized (noisy) sample (`should_plot = false`) so
+            // the blur energy isn't double-counted. A host convolution pass
+            // later folds each blur slice (× its kernel) back in. Mode-
+            // independent: the suppressed sample is dropped from BOTH the direct
+            // histogram add AND the sample-emit write. An exporter that hasn't
+            // wired the blur sets `count = 0`, so `slot < count` fails and the
+            // transform falls back to the stochastic (realized) plot.
+            // The kernel is built from the same offset distribution mapped
+            // through the same linear tail, so the convolution reproduces the
+            // stochastic splat by construction. The chaos game still advances
+            // on the realized `current`. 2D-only / no-attachments / no
+            // post-symmetry is guaranteed by the host gate
+            // (analytic_blur_active). See docs/projects/analytic-blur-buffer.md.
+            // `slot < count` gates against the actually-allocated buffer count
+            // (the memory cap may allocate fewer slices than transforms have
+            // slots) — a transform past the cap falls through to the stochastic
+            // plot below.
+            if (xform.analytic_blur_slot >= 0 &&
+                u32(xform.analytic_blur_slot) < blur_params.count && should_plot) {
+                // Post-affine linear image of the captured w·offset. The
+                // offset was captured in pre-post-affine (variation) space;
+                // mapping it through the post-affine linear part puts it in
+                // the same world space as `plot_pos`.
+                var post_bc = blur_contribution;
+                if (HAS_POST_AFFINE) {
+                    if (xform.post_enabled > 0.5) {
+                        post_bc = vec2<f32>(
+                            xform.post_a * blur_contribution.x + xform.post_b * blur_contribution.y,
+                            xform.post_c * blur_contribution.x + xform.post_d * blur_contribution.y,
+                        );
+                    }
+                }
+                let mean_pixel = world_to_pixel(plot_pos - post_bc);
+                // Splat the MEAN at LOW resolution (mean_pixel ÷ D). Bound the
+                // full-res mean pixel first (so the ÷D index stays in range and
+                // a negative coord doesn't truncate toward 0).
+                if (mean_pixel.x >= 0 && mean_pixel.x < i32(params.width) &&
+                    mean_pixel.y >= 0 && mean_pixel.y < i32(params.height)) {
+                    let d = i32(blur_params.downscale);
+                    let lx = u32(mean_pixel.x / d);
+                    let ly = u32(mean_pixel.y / d);
+                    let plane = blur_params.lowres_width * blur_params.lowres_height;
+                    let slot = u32(xform.analytic_blur_slot);
+                    let mbase = (slot * plane + ly * blur_params.lowres_width + lx) * 4u;
+                    // `strength` scales the deposited density (and colour
+                    // proportionally, so the recovered colour ratio is
+                    // unchanged): >1 makes the smooth blur dominate overlapping
+                    // regions.
+                    let scale = 100.0 * xform.analytic_blur_strength;
+                    let r_u32 = u32(clamp(base_final_color.r, 0.0, 1.0) * scale);
+                    let g_u32 = u32(clamp(base_final_color.g, 0.0, 1.0) * scale);
+                    let b_u32 = u32(clamp(base_final_color.b, 0.0, 1.0) * scale);
+                    let density_u32 = u32(scale);
+                    atomicAdd(&blur_histograms[mbase + 0u], r_u32);
+                    atomicAdd(&blur_histograms[mbase + 1u], g_u32);
+                    atomicAdd(&blur_histograms[mbase + 2u], b_u32);
+                    atomicAdd(&blur_histograms[mbase + 3u], density_u32);
+                }
+                // Arm residual: the next N plots route through this blur's
+                // buffer too (smoothing propagated fuzz).
+                ab_residual_remaining = xform.analytic_blur_residual;
+                ab_residual_slot = xform.analytic_blur_slot;
+                // Suppress the realized sample from the main histogram —
+                // this transform's energy reaches the image only through the
+                // convolved blur buffer.
+                should_plot = false;
+            } else if (ab_residual_remaining > 0u && ab_residual_slot >= 0 && should_plot) {
+                // Residual: a non-blur plot in the wake of a recent blur. Route
+                // the REALIZED plot (no mean removal — this transform has no
+                // fuzz of its own) through the blur buffer (at low res) so the
+                // convolution blurs it, smoothing the propagated fuzz. Reuses
+                // the blur's kernel (an approximation of the propagated shape).
+                if (pixel.x >= 0 && pixel.x < i32(params.width) &&
+                    pixel.y >= 0 && pixel.y < i32(params.height)) {
+                    let d = i32(blur_params.downscale);
+                    let lx = u32(pixel.x / d);
+                    let ly = u32(pixel.y / d);
+                    let plane = blur_params.lowres_width * blur_params.lowres_height;
+                    let rslot = u32(ab_residual_slot);
+                    let rbase = (rslot * plane + ly * blur_params.lowres_width + lx) * 4u;
+                    let color_scale = 100.0;
+                    let r_u32 = u32(clamp(base_final_color.r, 0.0, 1.0) * color_scale);
+                    let g_u32 = u32(clamp(base_final_color.g, 0.0, 1.0) * color_scale);
+                    let b_u32 = u32(clamp(base_final_color.b, 0.0, 1.0) * color_scale);
+                    let density_u32 = u32(color_scale);
+                    atomicAdd(&blur_histograms[rbase + 0u], r_u32);
+                    atomicAdd(&blur_histograms[rbase + 1u], g_u32);
+                    atomicAdd(&blur_histograms[rbase + 2u], b_u32);
+                    atomicAdd(&blur_histograms[rbase + 3u], density_u32);
+                }
+                ab_residual_remaining = ab_residual_remaining - 1u;
+                should_plot = false;
+            }
+{{/if}}
 {{/if}}
 
             // Check bounds and opacity (only plot if both pass)

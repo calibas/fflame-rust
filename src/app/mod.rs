@@ -1540,6 +1540,7 @@ impl App {
                         temp_renderer.compute_pass(
                             &mut encoder,
                             &self.gpu.queue,
+                            &self.gpu.device,
                             NUM_WORKGROUPS,
                             iterations_per_thread,
                             20, // burn_in - use default for WASM export
@@ -2009,7 +2010,7 @@ impl App {
                     self.clear_paths_next_frame = false;  // Reset flag after use
                 }
 
-                let samples_this_frame = renderer.compute_pass(&mut render_encoder, &self.gpu.queue, NUM_WORKGROUPS,
+                let samples_this_frame = renderer.compute_pass(&mut render_encoder, &self.gpu.queue, &self.gpu.device, NUM_WORKGROUPS,
                     self.config_manager.system_settings().iterations_per_thread, self.config_manager.system_settings().burn_in,
                     final_config.zoom, final_config.pan_x, final_config.pan_y, final_config.rotation,
                     final_config.camera_rotation_x, final_config.camera_rotation_y, final_config.camera_bank, final_config.camera_x, final_config.camera_y, final_config.camera_z, final_config.speed_factor, clear_histogram, clear_paths);
