@@ -89,7 +89,7 @@ pub fn render_export_content(
     ui.add_enabled_ui(*use_custom_export_size, |ui| {
         ui.horizontal(|ui| {
             ui.label(t!("export.width"));
-            if ui.add(super::VkbDragValue::new(export_width).range(64..=8192).speed(10)).changed() {
+            if ui.add(super::VkbDragValue::new(export_width).range(64..=12000).speed(10)).changed() {
                 let _ = config_manager.update_system_setting(
                     crate::config::ConfigPath::SystemExportWidth,
                     (*export_width).into()
@@ -98,7 +98,7 @@ pub fn render_export_content(
         });
         ui.horizontal(|ui| {
             ui.label(t!("export.height"));
-            if ui.add(super::VkbDragValue::new(export_height).range(64..=8192).speed(10)).changed() {
+            if ui.add(super::VkbDragValue::new(export_height).range(64..=12000).speed(10)).changed() {
                 let _ = config_manager.update_system_setting(
                     crate::config::ConfigPath::SystemExportHeight,
                     (*export_height).into()
