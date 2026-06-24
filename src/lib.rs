@@ -184,7 +184,8 @@ async fn export_animation_async(
     audio: Option<animation::export::AudioExportConfig>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use std::path::Path;
-    use animation::export::{AnimationExportConfig, CliProgressCallback, export_animation, is_ffmpeg_available};
+    use animation::export::{AnimationExportConfig, export_animation, is_ffmpeg_available};
+    use export::ConsoleReporter;
     use animation::Animation;
 
     println!("Fractal Flame Animation Export");
@@ -244,8 +245,9 @@ async fn export_animation_async(
     };
 
     // Run export (pipes directly to FFmpeg)
-    let mut progress = CliProgressCallback::new();
-    let result = export_animation(export_config, &mut progress).await?;
+    let mut reporter = ConsoleReporter;
+    let result = export_animation(export_config, &mut reporter).await?;
+    println!();
 
     println!();
     println!("Animation export complete!");

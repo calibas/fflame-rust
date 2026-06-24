@@ -293,7 +293,11 @@ pub struct PanelContext<'a> {
     // Animation export settings
     pub animation_export_settings: &'a mut super::animation_panel::AnimationExportSettings,
     pub animation_export_requested: &'a mut Option<super::animation_panel::AnimationExportSettings>,
-    pub animation_export_progress: &'a super::animation_panel::ExportProgress,
+
+    // Whether ANY export is running. Disables export buttons; live progress is
+    // shown by the global overlay (`export_status::render_export_overlay`), not
+    // by the panels.
+    pub export_active: bool,
 
     // Export Animation panel state (Phase 5)
     pub export_panel_state: &'a mut super::animation_panel::ExportPanelState,
@@ -315,9 +319,6 @@ pub struct PanelContext<'a> {
     // Path editor state
     pub path_editor_state: &'a mut super::path_editor::PathEditorState,
     pub path_filters_changed: &'a mut Option<Vec<crate::gpu::buffers::GpuPathFilter>>,
-
-    // PNG export progress
-    pub png_export_progress: &'a super::export_panel::PngExportProgress,
 
     // Random generator panel state
     pub random_generator_panel: &'a mut Option<super::random_generator::RandomGeneratorPanel>,
@@ -813,11 +814,8 @@ impl<'a> PanelViewer<'a> {
             *self.context.animation_seek_drag_stopped = true;
         }
 
-        // Export progress (after tracks section)
-        if self.context.animation_export_progress.is_exporting {
-            ui.separator();
-            super::animation_panel::render_export_progress(ui, self.context.animation_export_progress);
-        }
+        // Live export progress is shown by the global overlay
+        // (`export_status::render_export_overlay`), not inline here.
 
         // File controls (after tracks section)
         ui.separator();
@@ -1472,7 +1470,7 @@ impl<'a> PanelViewer<'a> {
             self.context.use_custom_export_size,
             self.context.config_manager,
             *self.context.fractal_viewport_size,
-            self.context.png_export_progress,
+            self.context.export_active,
         );
     }
 

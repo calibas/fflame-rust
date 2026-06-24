@@ -3,6 +3,7 @@ pub mod signal_panel;
 mod config_dialog;
 mod effects_panel;
 mod export_panel;
+pub mod export_status;
 mod font_loader;
 mod formatting;
 pub mod fractal_browser;
@@ -36,7 +37,7 @@ mod view;
 pub mod workspace;
 mod xaos_editor;
 
-pub use export_panel::PngExportProgress;
+pub use export_status::{ExportKind, ExportStatus, UiReporter};
 pub use font_loader::ensure_font_for_locale;
 pub use menu_context::{MenuActions, MenuState};
 pub use palette_editor::PaletteEditor;
@@ -667,8 +668,7 @@ impl EguiLayer {
         export_width: &mut u32,
         export_height: &mut u32,
         use_custom_export_size: &mut bool,
-        animation_export_progress: &animation_panel::ExportProgress,
-        png_export_progress: &export_panel::PngExportProgress,
+        export_status: &export_status::ExportStatus,
         fullscreen_mode: bool,
         audio_manager: &mut crate::audio::AudioManager,
         audio_player: &mut crate::audio::AudioPlayer,
@@ -1093,7 +1093,10 @@ impl EguiLayer {
                         // Animation export settings
                         animation_export_settings: &mut self.animation_export_settings,
                         animation_export_requested: &mut animation_export_requested,
-                        animation_export_progress,
+
+                        // Whether ANY export is running (disables export buttons;
+                        // live progress is shown by the global overlay, not panels)
+                        export_active: export_status.active,
 
                         // Export Animation panel state (Phase 5)
                         export_panel_state: &mut self.export_panel_state,
@@ -1115,9 +1118,6 @@ impl EguiLayer {
                         // Path editor state
                         path_editor_state: &mut self.path_editor_state,
                         path_filters_changed: &mut path_filters_changed,
-
-                        // PNG export progress
-                        png_export_progress,
 
                         // Random generator panel state
                         random_generator_panel: &mut self.random_generator_panel,
@@ -1301,7 +1301,7 @@ impl EguiLayer {
                 ctx,
                 animation_controller,
                 &mut self.animation_export_settings,
-                animation_export_progress,
+                export_status.active,
                 &mut self.export_panel_state,
                 #[cfg(not(target_arch = "wasm32"))]
                 window,
@@ -1322,10 +1322,14 @@ impl EguiLayer {
             // Note: quit_requested is now handled in app.rs event loop for graceful shutdown
         });
 
-        // API notification toast (rendered outside ctx.run to avoid borrow conflicts with self)
+        // API notification toast + export progress overlay (rendered outside
+        // ctx.run to avoid borrow conflicts with self). The overlay sits just
+        // above the toast so a terminal "Saved …" toast can show beneath the
+        // final bar without overlapping.
         {
             let ctx = self.ctx.clone();
             self.render_api_notification(&ctx);
+            export_status::render_export_overlay(&ctx, export_status);
         }
 
         // Open Save Online dialog from animation panel (if requested)

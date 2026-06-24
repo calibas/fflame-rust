@@ -528,116 +528,22 @@ impl From<std::io::Error> for AnimationExportError {
     }
 }
 
-/// Progress callback for export operations
-///
-/// Implement this trait to receive progress updates during export.
-/// Used by both CLI (prints to stdout) and UI (updates progress bar).
-pub trait ExportProgressCallback {
-    /// Called when a frame starts rendering
-    fn on_frame_start(&mut self, frame: u32, total: u32, time: f64);
-
-    /// Called when a frame completes
-    fn on_frame_complete(&mut self, frame: u32, total: u32, elapsed_ms: f64);
-
-    /// Called when export is fully complete
-    fn on_export_complete(&mut self, total_frames: u32, total_time_ms: f64);
-
-    /// Check if export should be cancelled
-    fn is_cancelled(&self) -> bool;
-}
-
-/// Simple CLI progress callback that prints to stdout
-pub struct CliProgressCallback {
-    cancelled: bool,
-}
-
-impl CliProgressCallback {
-    pub fn new() -> Self {
-        Self { cancelled: false }
-    }
-}
-
-impl Default for CliProgressCallback {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl ExportProgressCallback for CliProgressCallback {
-    fn on_frame_start(&mut self, frame: u32, total: u32, time: f64) {
-        print!("\r  Frame {}/{} (anim: {:.2}s)...", frame + 1, total, time);
-        use std::io::Write;
-        std::io::stdout().flush().ok();
-    }
-
-    fn on_frame_complete(&mut self, frame: u32, total: u32, elapsed_ms: f64) {
-        let percent = ((frame + 1) as f64 / total as f64) * 100.0;
-        let remaining = (total - frame - 1) as f64 * elapsed_ms / 1000.0;
-        print!("\r  Frame {}/{} ({:.1}%) - {:.2}s/frame - ETA: {:.0}s    ",
-            frame + 1, total, percent, elapsed_ms / 1000.0, remaining);
-        use std::io::Write;
-        std::io::stdout().flush().ok();
-    }
-
-    fn on_export_complete(&mut self, total_frames: u32, total_time_ms: f64) {
-        println!("\n  Export complete: {} frames in {:.1}s", total_frames, total_time_ms / 1000.0);
-    }
-
-    fn is_cancelled(&self) -> bool {
-        self.cancelled
-    }
-}
-
-/// UI progress callback that updates shared state for display
-///
-/// Used by the GUI to show progress bar during export.
-pub struct UiProgressCallback {
-    progress: std::sync::Arc<std::sync::Mutex<crate::ui::animation_panel::ExportProgress>>,
-    cancelled: bool,
-    last_frame_time_ms: f64,
-}
-
-impl UiProgressCallback {
-    pub fn new(progress: std::sync::Arc<std::sync::Mutex<crate::ui::animation_panel::ExportProgress>>) -> Self {
-        Self {
-            progress,
-            cancelled: false,
-            last_frame_time_ms: 0.0,
-        }
-    }
-}
-
-impl ExportProgressCallback for UiProgressCallback {
-    fn on_frame_start(&mut self, frame: u32, total: u32, time: f64) {
-        if let Ok(mut p) = self.progress.lock() {
-            p.is_exporting = true;
-            p.current_frame = frame;
-            p.total_frames = total;
-            p.status = format!("Rendering frame {} (anim: {:.2}s)", frame + 1, time);
-        }
-    }
-
-    fn on_frame_complete(&mut self, frame: u32, total: u32, elapsed_ms: f64) {
-        self.last_frame_time_ms = elapsed_ms;
-        if let Ok(mut p) = self.progress.lock() {
-            p.current_frame = frame + 1; // Frame is complete, so increment
-            p.total_frames = total;
-            p.seconds_per_frame = elapsed_ms / 1000.0;
-            p.status = format!("Frame {}/{} complete ({:.1}s)", frame + 1, total, elapsed_ms / 1000.0);
-        }
-    }
-
-    fn on_export_complete(&mut self, total_frames: u32, total_time_ms: f64) {
-        if let Ok(mut p) = self.progress.lock() {
-            p.is_exporting = false;
-            p.current_frame = total_frames;
-            p.total_frames = total_frames;
-            p.status = format!("Export complete: {} frames in {:.1}s", total_frames, total_time_ms / 1000.0);
-        }
-    }
-
-    fn is_cancelled(&self) -> bool {
-        self.cancelled
+/// Format the unified progress detail line for a rendered frame, with a rough
+/// ETA derived from the most recent frame's render time. Used by both the CLI
+/// and UI reporters via [`crate::export::ExportReporter`].
+fn frame_progress_detail(frame_done: u32, total: u32, secs_per_frame: f64) -> String {
+    let remaining = total.saturating_sub(frame_done) as f64 * secs_per_frame;
+    let eta = if !remaining.is_finite() || remaining <= 0.0 {
+        "—".to_string()
+    } else if remaining >= 60.0 {
+        format!("{}m {:02}s", (remaining / 60.0) as u64, (remaining % 60.0).round() as u64)
+    } else {
+        format!("{}s", remaining.round() as u64)
+    };
+    if secs_per_frame > 0.0 {
+        format!("Frame {frame_done}/{total} · {secs_per_frame:.2}s/frame · ETA {eta}")
+    } else {
+        format!("Frame {frame_done}/{total}")
     }
 }
 
@@ -1226,7 +1132,7 @@ pub fn print_available_encoders() {
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn export_animation(
     export_config: AnimationExportConfig,
-    progress: &mut dyn ExportProgressCallback,
+    reporter: &mut dyn crate::export::ExportReporter,
 ) -> Result<AnimationExportResult, AnimationExportError> {
     use std::io::Write;
     use std::process::{Command, Stdio};
@@ -1484,7 +1390,7 @@ pub async fn export_animation(
 
     // Render each frame and pipe to FFmpeg
     for frame in 0..total_frames {
-        if progress.is_cancelled() {
+        if reporter.is_cancelled() {
             // Kill FFmpeg process on cancel
             let _ = child.kill();
             return Err(AnimationExportError::Cancelled);
@@ -1493,7 +1399,10 @@ pub async fn export_animation(
         let frame_start = Instant::now();
         let time = export_config.frame_time(frame);
 
-        progress.on_frame_start(frame, total_frames, time);
+        reporter.progress(
+            frame as f32 / total_frames as f32,
+            &format!("Rendering frame {}/{}", frame + 1, total_frames),
+        );
 
         // Evaluate animation at this time (with signal support)
         let values = if has_signals {
@@ -1536,7 +1445,10 @@ pub async fn export_animation(
         }
 
         let frame_elapsed = frame_start.elapsed().as_secs_f64() * 1000.0;
-        progress.on_frame_complete(frame, total_frames, frame_elapsed);
+        reporter.progress(
+            (frame + 1) as f32 / total_frames as f32,
+            &frame_progress_detail(frame + 1, total_frames, frame_elapsed / 1000.0),
+        );
     }
 
     // Close stdin to signal end of input
@@ -1553,8 +1465,6 @@ pub async fn export_animation(
 
     let total_time_ms = total_start.elapsed().as_secs_f64() * 1000.0;
     let avg_frame_time_ms = total_time_ms / total_frames as f64;
-
-    progress.on_export_complete(total_frames, total_time_ms);
 
     Ok(AnimationExportResult {
         total_frames,
@@ -1686,7 +1596,7 @@ impl ExportTimingStats {
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn export_animation_fast(
     export_config: AnimationExportConfig,
-    progress: &mut dyn ExportProgressCallback,
+    reporter: &mut dyn crate::export::ExportReporter,
 ) -> Result<AnimationExportResult, AnimationExportError> {
     use crate::renderer::compute_kernel::FlameRenderer;
     use egui_wgpu::wgpu::{
@@ -1851,7 +1761,7 @@ pub async fn export_animation_fast(
 
     // Process frames sequentially
     for frame in 0..total_frames {
-        if progress.is_cancelled() {
+        if reporter.is_cancelled() {
             drop(frame_tx);
             let _ = writer_handle.join();
             return Err(AnimationExportError::Cancelled);
@@ -1859,7 +1769,10 @@ pub async fn export_animation_fast(
 
         let frame_start = Instant::now();
         let time = export_config.frame_time(frame);
-        progress.on_frame_start(frame, total_frames, time);
+        reporter.progress(
+            frame as f32 / total_frames as f32,
+            &format!("Rendering frame {}/{}", frame + 1, total_frames),
+        );
 
         // Evaluate animation (with signal support)
         let values = if has_signals {
@@ -2032,9 +1945,13 @@ pub async fn export_animation_fast(
             .map_err(|_| AnimationExportError::FfmpegFailed("Writer thread died".to_string()))?;
         timing_stats.channel_send_time_ms += send_start.elapsed().as_secs_f64() * 1000.0;
 
+        let frame_secs = frame_start.elapsed().as_secs_f64();
         timing_stats.frame_count += 1;
-        timing_stats.total_frame_time_ms += frame_start.elapsed().as_secs_f64() * 1000.0;
-        progress.on_frame_complete(frame, total_frames, 0.0);
+        timing_stats.total_frame_time_ms += frame_secs * 1000.0;
+        reporter.progress(
+            (frame + 1) as f32 / total_frames as f32,
+            &frame_progress_detail(frame + 1, total_frames, frame_secs),
+        );
     }
 
     // Signal writer thread to finish
@@ -2058,8 +1975,6 @@ pub async fn export_animation_fast(
 
     // Log timing summary
     timing_stats.log_summary();
-
-    progress.on_export_complete(total_frames, total_time_ms);
 
     Ok(AnimationExportResult {
         total_frames,
