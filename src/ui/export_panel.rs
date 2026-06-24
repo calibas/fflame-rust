@@ -5,31 +5,9 @@
 use rust_i18n::t;
 use crate::config::ConfigManager;
 
-/// Progress state for PNG export (shared between UI and export thread)
-#[derive(Clone, Default)]
-pub struct PngExportProgress {
-    /// Whether export is currently in progress
-    pub is_exporting: bool,
-    /// Current iterations rendered
-    pub current_iterations: u64,
-    /// Total iterations to render
-    pub total_iterations: u64,
-    /// Status message
-    pub status: String,
-}
-
-impl PngExportProgress {
-    /// Get progress as a fraction (0.0 to 1.0)
-    pub fn progress(&self) -> f32 {
-        if self.total_iterations == 0 {
-            0.0
-        } else {
-            (self.current_iterations as f64 / self.total_iterations as f64) as f32
-        }
-    }
-}
-
-/// Render the Export panel content
+/// Render the Export panel content. Live progress is shown by the global
+/// export overlay (`export_status::render_export_overlay`); `export_active`
+/// only gates the buttons so a second export can't be started mid-render.
 pub fn render_export_content(
     ui: &mut egui::Ui,
     png_export_with_background: &mut bool,
@@ -39,27 +17,14 @@ pub fn render_export_content(
     use_custom_export_size: &mut bool,
     config_manager: &mut ConfigManager,
     viewport_size: Option<(u32, u32)>,
-    export_progress: &PngExportProgress,
+    export_active: bool,
 ) {
     ui.heading(t!("export.heading"));
 
     ui.add_space(4.0);
 
-    // Show progress if exporting
-    if export_progress.is_exporting {
-        ui.horizontal(|ui| {
-            ui.spinner();
-            ui.label(&export_progress.status);
-        });
-        let progress = export_progress.progress();
-        ui.add(egui::ProgressBar::new(progress).show_percentage());
-        ui.add_space(4.0);
-        ui.separator();
-        ui.add_space(4.0);
-    }
-
-    // Export buttons (disabled while exporting)
-    ui.add_enabled_ui(!export_progress.is_exporting, |ui| {
+    // Export buttons (disabled while an export is running)
+    ui.add_enabled_ui(!export_active, |ui| {
         ui.horizontal(|ui| {
             if ui.button(t!("export.with_background")).clicked() {
                 *png_export_with_background = true;

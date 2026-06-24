@@ -331,8 +331,7 @@ impl ApiContentState {
 
 use crate::gpu::device::GpuContext;
 use crate::ui::EguiLayer;
-use crate::ui::animation_panel::ExportProgress;
-use crate::ui::PngExportProgress;
+use crate::ui::{ExportStatus, ExportKind, UiReporter};
 use crate::renderer::FlameRenderer;
 use crate::scene::transforms::Flame;
 use crate::scene::palette::{global_palette_library, PaletteLibrary};
@@ -439,11 +438,11 @@ pub struct App {
     pub(super) export_height: u32,
     pub(super) use_custom_export_size: bool,
 
-    // Animation export progress (shared with background export thread)
-    pub(super) animation_export_progress: Arc<Mutex<ExportProgress>>,
-
-    // PNG export progress (shared with background export thread)
-    pub(super) png_export_progress: Arc<Mutex<PngExportProgress>>,
+    // Unified export status — shared with every background export thread (PNG
+    // direct / high-res / video). Drives the global progress overlay and the
+    // terminal toast. Replaces the former per-path progress structs + the
+    // window-title hack.
+    pub(super) export_status: Arc<Mutex<ExportStatus>>,
 
     // Rendering mode state machine (Normal, Animating, Overwrite)
     pub(super) render_mode: RenderModeFSM,
@@ -458,9 +457,6 @@ pub struct App {
 
     // Post-processing effect chain
     pub(super) effect_chain: crate::renderer::effect_chain::EffectChainRunner,
-
-    // Track export state to detect when export finishes (for surface recovery)
-    pub(super) was_video_exporting: bool,
 
     // Fullscreen state (two-stage: window fullscreen, then hide UI)
     pub(super) window_fullscreen: bool,  // Window is in fullscreen mode
@@ -633,8 +629,7 @@ impl App {
             export_width,
             export_height,
             use_custom_export_size: false,  // Default to viewport size
-            animation_export_progress: Arc::new(Mutex::new(ExportProgress::default())),
-            png_export_progress: Arc::new(Mutex::new(PngExportProgress::default())),
+            export_status: Arc::new(Mutex::new(ExportStatus::default())),
             render_mode: RenderModeFSM::new(),
             histogram_frame_counter: 0,
             #[cfg(target_arch = "wasm32")]
@@ -642,7 +637,6 @@ impl App {
             #[cfg(target_arch = "wasm32")]
             histogram_in_flight: false,
             effect_chain,
-            was_video_exporting: false,
             needs_surface_recreate: false,
             window_fullscreen: false,
             ui_hidden: false,
@@ -932,12 +926,9 @@ impl App {
                     let audio_playing = app.audio_player.state() == crate::audio::PlaybackState::Playing;
                     let audio_capturing = app.audio_capture.is_capturing();
 
-                    // Check if video/PNG export is in progress (needs UI updates for progress bar)
-                    let is_exporting = app.animation_export_progress.lock()
-                        .map(|p| p.is_exporting)
-                        .unwrap_or(false)
-                        || app.png_export_progress.lock()
-                        .map(|p| p.is_exporting)
+                    // Check if any export is in progress (needs UI updates for the progress overlay)
+                    let is_exporting = app.export_status.lock()
+                        .map(|s| s.active)
                         .unwrap_or(false);
 
                     // Update present mode based on system settings
@@ -1054,46 +1045,12 @@ impl App {
         // 5. Submit and present
         // ============================================================================
 
-        // Check if video export is in progress
-        let is_video_exporting = self.animation_export_progress.lock()
-            .map(|p| p.is_exporting)
-            .unwrap_or(false);
-
-        // During video export: completely skip rendering to avoid surface corruption
-        // The export uses its own GPU device which interferes with surface acquisition
-        if is_video_exporting {
-            // Update window title with export progress
-            if let Ok(progress) = self.animation_export_progress.lock() {
-                let percent = if progress.total_frames > 0 {
-                    (progress.current_frame * 100) / progress.total_frames
-                } else {
-                    0
-                };
-                let title = format!(
-                    "⏳ Exporting {}/{} ({}%) - Fractal Flame",
-                    progress.current_frame,
-                    progress.total_frames,
-                    percent
-                );
-                window.set_title(&title);
-            }
-            // Sleep to avoid busy-waiting
-            std::thread::sleep(std::time::Duration::from_millis(100));
-            self.was_video_exporting = true;
-            return Ok(());
-        }
-
-        // Detect when video export has just finished
-        if self.was_video_exporting {
-            log::info!("Video export finished, reconfiguring surface...");
-            // Give driver time to release export device
-            std::thread::sleep(std::time::Duration::from_millis(200));
-            // Reconfigure surface to ensure clean state
-            self.gpu.resize(self.gpu.size);
-            // Restore window title
-            window.set_title("Fractal Art Editor");
-            self.was_video_exporting = false;
-        }
+        // Video export runs on a background thread with its own GPU device.
+        // The main loop keeps drawing (egui + last fractal frame) so the global
+        // export overlay stays live; `should_iterate` (below) pauses the main
+        // fractal compute during any export to avoid GPU contention. (Previously
+        // the whole loop was frozen here and progress was written to the window
+        // title — replaced by the unified overlay.)
 
         // Normal rendering: acquire surface texture. wgpu 0.29's
         // `get_current_texture` returns a `CurrentSurfaceTexture`
@@ -1155,16 +1112,23 @@ impl App {
             );
         }
 
-        // Get a snapshot of export progress for UI display
-        // Use ok() + unwrap_or_default() to handle poisoned mutexes gracefully
-        let export_progress = self.animation_export_progress.lock()
-            .ok()
-            .map(|p| p.clone())
-            .unwrap_or_default();
-        let png_export_progress = self.png_export_progress.lock()
-            .ok()
-            .map(|p| p.clone())
-            .unwrap_or_default();
+        // Snapshot the unified export status for the overlay, and drain any
+        // terminal toast queued by a finished export thread into the
+        // notification system. ok() guards a poisoned mutex.
+        let export_status = {
+            let mut status = self.export_status.lock()
+                .ok()
+                .map(|s| s.clone())
+                .unwrap_or_default();
+            if let Some((message, is_error)) = status.toast.take() {
+                self.egui_layer.show_api_notification(&message, is_error);
+                // Clear the drained toast in the shared state too.
+                if let Ok(mut s) = self.export_status.lock() {
+                    s.toast = None;
+                }
+            }
+            status
+        };
 
         // Get signal names for track editor dropdown
         let signal_names: Vec<String> = self.signal_manager.signal_names();
@@ -1195,8 +1159,7 @@ impl App {
             &mut self.export_width,
             &mut self.export_height,
             &mut self.use_custom_export_size,
-            &export_progress,
-            &png_export_progress,
+            &export_status,
             self.ui_hidden,
             &mut self.audio_manager,
             &mut self.audio_player,
@@ -1369,6 +1332,10 @@ impl App {
                 let export_config = self.export_config();
                 let render_time_ms = self.metrics.render_time_ms;
 
+                // Toast outcome for the synchronous viewport-size path (the
+                // custom-size path reports through the unified export status).
+                let mut viewport_toast: Option<(String, bool)> = None;
+
                 // Check if we need custom-size export
                 if self.use_custom_export_size {
                     // Custom-size export: create temporary renderer at export dimensions
@@ -1440,17 +1407,30 @@ impl App {
                                         .set_file_name("fractal.png")
                                         .save_file()
                                     {
-                                        if let Err(e) = std::fs::write(&path, png_data) {
-                                            eprintln!("Failed to save PNG: {}", e);
-                                        } else {
-                                            println!("PNG saved to: {}", path.display());
+                                        match std::fs::write(&path, png_data) {
+                                            Err(e) => {
+                                                eprintln!("Failed to save PNG: {}", e);
+                                                viewport_toast = Some((format!("Save failed: {e}"), true));
+                                            }
+                                            Ok(()) => {
+                                                println!("PNG saved to: {}", path.display());
+                                                viewport_toast = Some((format!("PNG saved · {}",
+                                                    path.file_name().map(|n| n.to_string_lossy().into_owned())
+                                                        .unwrap_or_else(|| path.display().to_string())), false));
+                                            }
                                         }
                                     }
                                 }
-                                Err(e) => eprintln!("Failed to encode PNG: {}", e),
+                                Err(e) => {
+                                    eprintln!("Failed to encode PNG: {}", e);
+                                    viewport_toast = Some((format!("PNG encode failed: {e}"), true));
+                                }
                             }
                         }
-                        Err(e) => eprintln!("Failed to capture pixels: {}", e),
+                        Err(e) => {
+                            eprintln!("Failed to capture pixels: {}", e);
+                            viewport_toast = Some((format!("Export failed: {e}"), true));
+                        }
                     }
 
                     // Reset transparent mode back to normal for display
@@ -1478,6 +1458,12 @@ impl App {
 
                         self.gpu.queue.submit(std::iter::once(encoder.finish()));
                     }
+                }
+
+                // Surface the viewport-export outcome as a toast (renderer
+                // borrow has ended). The custom-size path toasts itself.
+                if let Some((message, is_error)) = viewport_toast {
+                    self.egui_layer.show_api_notification(&message, is_error);
                 }
             }
 
@@ -1824,13 +1810,13 @@ impl App {
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(ref export_settings) = ui_response.animation_export_requested {
             // Check if already exporting (handle poisoned mutex gracefully)
-            let already_exporting = self.animation_export_progress.lock()
-                .map(|p| p.is_exporting)
+            let already_exporting = self.export_status.lock()
+                .map(|s| s.active)
                 .unwrap_or(false);
             if already_exporting {
                 log::warn!("Animation export already in progress");
             } else if let Some(ref animation) = self.animation_controller.animation {
-                use crate::animation::export::{AnimationExportConfig, UiProgressCallback, export_animation_fast, VideoEncodingSettings};
+                use crate::animation::export::{AnimationExportConfig, export_animation_fast, VideoEncodingSettings};
 
                 // Clone config and override max_iterations from export settings
                 let mut config = self.config_manager.active_config().clone();
@@ -1869,39 +1855,42 @@ impl App {
                 println!("  Total frames: {}", export_config.total_frames());
                 println!("  Codec: {} (CRF {})", export_config.video_settings.codec.display_name(), export_config.video_settings.quality);
 
-                // Set initial export progress (handle poisoned mutex gracefully)
-                if let Ok(mut p) = self.animation_export_progress.lock() {
-                    p.is_exporting = true;
-                    p.current_frame = 0;
-                    p.total_frames = export_config.total_frames();
-                    p.seconds_per_frame = 0.0;
-                    p.status = "Starting export...".to_string();
+                // Initialize the unified export status (handle poisoned mutex gracefully)
+                let total_frames = export_config.total_frames();
+                let res_label = format!(
+                    "Exporting video · {}×{} · {} frames",
+                    export_config.width, export_config.height, total_frames
+                );
+                if let Ok(mut s) = self.export_status.lock() {
+                    s.begin(ExportKind::Video, res_label);
                 }
 
-                // Clone progress Arc for the background thread
-                let progress_arc = Arc::clone(&self.animation_export_progress);
+                // Clone the status Arc for the background thread
+                let status_arc = Arc::clone(&self.export_status);
 
                 // Spawn background thread for export
                 std::thread::spawn(move || {
-                    let mut progress = UiProgressCallback::new(Arc::clone(&progress_arc));
+                    let mut reporter = UiReporter::new(Arc::clone(&status_arc));
 
-                    match pollster::block_on(export_animation_fast(export_config, &mut progress)) {
+                    match pollster::block_on(export_animation_fast(export_config, &mut reporter)) {
                         Ok(result) => {
                             println!("\nAnimation export complete!");
                             println!("  {} frames in {:.1}s", result.total_frames, result.total_time_ms / 1000.0);
                             println!("  Output: {}", result.output_path.display());
 
-                            // Mark export complete
-                            if let Ok(mut p) = progress_arc.lock() {
-                                p.is_exporting = false;
-                                p.status = format!("Complete: {}", result.output_path.display());
+                            if let Ok(mut s) = status_arc.lock() {
+                                s.finish_ok(format!(
+                                    "Video saved · {}",
+                                    result.output_path.file_name()
+                                        .map(|n| n.to_string_lossy().into_owned())
+                                        .unwrap_or_else(|| result.output_path.display().to_string())
+                                ));
                             }
                         }
                         Err(e) => {
                             eprintln!("Animation export failed: {}", e);
-                            if let Ok(mut p) = progress_arc.lock() {
-                                p.is_exporting = false;
-                                p.status = format!("Failed: {}", e);
+                            if let Ok(mut s) = status_arc.lock() {
+                                s.finish_err(format!("Video export failed: {e}"));
                             }
                         }
                     }
@@ -1949,15 +1938,13 @@ impl App {
 
             // Check if we should continue iterating
             // During animation playback, always iterate (ignore max_iterations limit)
-            // Skip GPU work during video/PNG export to avoid GPU contention (separate device in background thread)
-            let is_video_exporting = self.animation_export_progress.lock()
-                .map(|p| p.is_exporting)
-                .unwrap_or(false);
-            let is_png_exporting = self.png_export_progress.lock()
-                .map(|p| p.is_exporting)
+            // Skip GPU work during any export to avoid GPU contention (the export
+            // runs on a background thread, often with its own device).
+            let is_exporting = self.export_status.lock()
+                .map(|s| s.active)
                 .unwrap_or(false);
             let max_iterations = Some(final_config.max_iterations);
-            let should_iterate = !self.paused && !is_video_exporting && !is_png_exporting && (
+            let should_iterate = !self.paused && !is_exporting && (
                 is_controller_playing ||
                 // Overwrite mode bypasses the max_iterations gate. With
                 // it gated, a cheap flame that hits max during a long

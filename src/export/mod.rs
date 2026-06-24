@@ -16,6 +16,36 @@ pub use high_res::*;
 
 use egui_wgpu::wgpu::Limits;
 
+/// Unified progress sink for every export path (PNG direct / high-res / video).
+///
+/// Implemented by [`ConsoleReporter`] (CLI/headless, prints to stdout) and by
+/// `UiReporter` (`src/ui/export_status.rs`, drives the in-app overlay + toast).
+/// Replaces the former per-path `ExportProgress` (high-res) and
+/// `ExportProgressCallback` (animation) traits — one shape for all exporters.
+pub trait ExportReporter: Send {
+    /// Report overall progress in `[0, 1]` with a short, human-readable detail
+    /// line (e.g. `"Frame 12/120 · ETA 1m 20s"`, `"Tonemapping…"`).
+    fn progress(&mut self, fraction: f32, detail: &str);
+
+    /// Cooperative cancellation. Long-running exports poll this between units
+    /// of work; returning `true` asks them to stop early. Defaults to `false`
+    /// (cancellation isn't wired for every path yet).
+    fn is_cancelled(&self) -> bool {
+        false
+    }
+}
+
+/// CLI/headless reporter: prints a single rewriting status line to stdout.
+pub struct ConsoleReporter;
+
+impl ExportReporter for ConsoleReporter {
+    fn progress(&mut self, fraction: f32, detail: &str) {
+        use std::io::Write;
+        print!("\r  {:5.1}%  {:<48}", fraction * 100.0, detail);
+        std::io::stdout().flush().ok();
+    }
+}
+
 /// Histogram buffer size in bytes for a full-resolution image: 4 channels
 /// (R, G, B, density) × 4 bytes per u32 = 16 bytes per pixel.
 pub fn histogram_size_bytes(width: u32, height: u32) -> u64 {
