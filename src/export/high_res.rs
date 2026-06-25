@@ -1477,9 +1477,22 @@ impl HighResExporter {
             mapped_at_creation: false,
         });
 
-        // Calculate dispatch parameters using dynamic workgroup count
-        let workgroups_per_dispatch = Self::calculate_workgroups(self.iterations_per_thread) as u32;
-        let iterations_per_dispatch = self.samples_per_dispatch;
+        // Dispatch in FlameRenderer-sized passes (render.rs NUM_WORKGROUPS = 128
+        // workgroups × 64 threads × ipt) so HR dispatches the SAME total
+        // iteration count FR does: both round the target up to a whole pass,
+        // i.e. ceil(target / pass) × pass. The tonemap normalizes brightness by
+        // sample_density = total_iters / pixels and is only *approximately*
+        // iteration-invariant at low density, so a coarser HR overshoot (its
+        // buffer-derived dispatch was 2× FR's pass) made HR systematically
+        // dimmer than FR at low spp — the gap shrank as 1/spp, exactly tracking
+        // the overshoot ratio. The sample buffer (sized for the larger
+        // calculate_workgroups count) comfortably holds one 128-workgroup pass.
+        const FR_PASS_WORKGROUPS: u32 = 128; // mirrors render.rs NUM_WORKGROUPS
+        let workgroups_per_dispatch =
+            FR_PASS_WORKGROUPS.min(Self::calculate_workgroups(self.iterations_per_thread) as u32);
+        let iterations_per_dispatch = workgroups_per_dispatch as u64
+            * Self::THREADS_PER_WORKGROUP
+            * self.iterations_per_thread as u64;
         let num_dispatches =
             (total_iterations + iterations_per_dispatch - 1) / iterations_per_dispatch;
 
