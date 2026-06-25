@@ -558,8 +558,15 @@ impl HighResExporter {
             label: Some("Export Palette Sampler"),
             address_mode_u: AddressMode::ClampToEdge,
             address_mode_v: AddressMode::ClampToEdge,
-            mag_filter: FilterMode::Linear,
-            min_filter: FilterMode::Linear,
+            // NEAREST (not Linear) to match FlameRenderer's palette sampler
+            // (gpu/buffers.rs) and flam3/Apophysis, which floor the colormap
+            // index (`j = (int)(color * cmap_size)`) with no interpolation.
+            // Linear filtering here interpolates between adjacent palette
+            // entries, shifting recovered colors a fraction of a percent per
+            // channel versus the in-app/FlameRenderer path — visible as a
+            // warmth/hue difference in dense regions after tone mapping.
+            mag_filter: FilterMode::Nearest,
+            min_filter: FilterMode::Nearest,
             ..Default::default()
         });
 
