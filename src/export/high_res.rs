@@ -10,7 +10,6 @@
 
 use egui_wgpu::wgpu::util::DeviceExt;
 use egui_wgpu::wgpu::*;
-use half::f16;
 use rayon::prelude::*;
 
 use crate::config::FractalConfig;
@@ -989,12 +988,18 @@ impl HighResExporter {
         let tonemap_bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("Export Tonemap Bind Group Layout"),
             entries: &[
-                // Accumulation texture (sampled)
+                // Accumulation texture (point-fetched via textureLoad). Rgba32Float
+                // so the raw per-pixel density (a hit count that can reach
+                // millions at high iteration counts) survives — Rgba16Float caps
+                // at 65504 and dense pixels overflowed to inf → black "holes".
+                // Rgba32Float is unfilterable (no FLOAT32_FILTERABLE feature), but
+                // the tonemap uses textureLoad, so filtering isn't needed; matches
+                // the FlameRenderer path.
                 BindGroupLayoutEntry {
                     binding: 0,
                     visibility: ShaderStages::FRAGMENT,
                     ty: BindingType::Texture {
-                        sample_type: TextureSampleType::Float { filterable: true },
+                        sample_type: TextureSampleType::Float { filterable: false },
                         view_dimension: TextureViewDimension::D2,
                         multisampled: false,
                     },
@@ -1215,6 +1220,7 @@ impl HighResExporter {
         config: &FractalConfig,
         total_iterations: u64,
         transparent: bool,
+        premultiplied: bool,
         reporter: &mut dyn crate::export::ExportReporter,
     ) -> Result<Vec<u8>, String> {
         // Create CPU histogram. The GPU accumulate path leaves this
@@ -1687,7 +1693,7 @@ post_symmetry: (&config.flame.post_symmetry).into(),
         // not the user-passed target — feed that to the scale-invariant
         // sample_density formula (Phase 8a).
         let total_iters_dispatched = num_dispatches * iterations_per_dispatch;
-        let pixels = self.tonemap_gpu(&histogram, config, transparent, total_iters_dispatched).await?;
+        let pixels = self.tonemap_gpu(&histogram, config, transparent, premultiplied, total_iters_dispatched).await?;
 
         reporter.progress(1.0, "Encoding…");
 
@@ -1961,24 +1967,25 @@ post_symmetry: (&config.flame.post_symmetry).into(),
         histogram: &[HistogramPixel],
         config: &FractalConfig,
         transparent: bool,
+        premultiplied: bool,
         total_iterations: u64,
     ) -> Result<Vec<u8>, String> {
         use crate::config::defaults::{PREFILTER_WHITE, BRIGHT_ADJUST};
 
-        // ===== Step 1: Convert histogram to Rgba16Float format (parallelized) =====
-        // The GPU accumulation buffer stores:
-        // - R, G, B: averaged colors (sum/count)
-        // - A: density as count * 0.01
+        // ===== Step 1: Convert histogram to Rgba32Float format (parallelized) =====
+        // The accumulation texture stores:
+        // - R, G, B: averaged colors (sum/count), ∈ [0,1]
+        // - A: raw per-pixel density (hit count)
         //
-        // Our CPU histogram stores:
-        // - r, g, b: raw sums
-        // - count: raw hit count
-        //
-        // Convert to GPU format: average the colors, scale density
-        // Pre-allocate buffer and write in parallel chunks for efficiency
-        let mut texture_data = vec![0u8; histogram.len() * 8];
+        // Our CPU histogram stores raw sums + raw hit count, so we average the
+        // colors and pass the count through as density. Rgba32Float (not f16):
+        // the density is a raw count that reaches millions on dense pixels at
+        // high iteration counts, far past f16's 65504 ceiling — overflowing it
+        // gave `inf` density that tonemapped to black "holes" in the brightest
+        // areas. Matches the FlameRenderer accumulator. 16 bytes/pixel.
+        let mut texture_data = vec![0u8; histogram.len() * 16];
         texture_data
-            .par_chunks_mut(8)
+            .par_chunks_mut(16)
             .zip(histogram.par_iter())
             .for_each(|(chunk, pixel)| {
                 let (r, g, b, density) = if pixel.count > 0.0 {
@@ -1991,11 +1998,11 @@ post_symmetry: (&config.flame.post_symmetry).into(),
                     (0.0, 0.0, 0.0, 0.0)
                 };
 
-                // Convert to f16 bytes (8 bytes per pixel)
-                chunk[0..2].copy_from_slice(&f16::from_f32(r).to_le_bytes());
-                chunk[2..4].copy_from_slice(&f16::from_f32(g).to_le_bytes());
-                chunk[4..6].copy_from_slice(&f16::from_f32(b).to_le_bytes());
-                chunk[6..8].copy_from_slice(&f16::from_f32(density).to_le_bytes());
+                // f32 bytes (16 bytes per pixel)
+                chunk[0..4].copy_from_slice(&r.to_le_bytes());
+                chunk[4..8].copy_from_slice(&g.to_le_bytes());
+                chunk[8..12].copy_from_slice(&b.to_le_bytes());
+                chunk[12..16].copy_from_slice(&density.to_le_bytes());
             });
 
 
@@ -2010,12 +2017,12 @@ post_symmetry: (&config.flame.post_symmetry).into(),
             mip_level_count: 1,
             sample_count: 1,
             dimension: TextureDimension::D2,
-            format: TextureFormat::Rgba16Float,
+            format: TextureFormat::Rgba32Float,
             usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
             view_formats: &[],
         });
 
-        let bytes_per_row = self.width * 8; // 4 channels × 2 bytes (f16)
+        let bytes_per_row = self.width * 16; // 4 channels × 4 bytes (f32)
         self.queue.write_texture(
             TexelCopyTextureInfo {
                 texture: &accumulation_texture,
@@ -2082,7 +2089,8 @@ post_symmetry: (&config.flame.post_symmetry).into(),
             gamma_threshold: config.gamma_threshold,
             alpha_blend_low: config.alpha_blend_low,
             alpha_blend_high: config.alpha_blend_high,
-            transparent_mode: if transparent { 1 } else { 0 },
+            // 0 = opaque, 1 = straight-alpha reconstruction, 2 = premultiplied.
+            transparent_mode: if !transparent { 0 } else if premultiplied { 2 } else { 1 },
             color_mode: config.color_mode as u32,
             width: self.width,
             height: self.height,
@@ -2104,6 +2112,11 @@ post_symmetry: (&config.flame.post_symmetry).into(),
                 crate::scene::tonemap::HighlightMode::Reinhard => 2,
                 crate::scene::tonemap::HighlightMode::Filmic => 3,
             },
+            // Levels apply identically in transparent and opaque export: they
+            // gate the fractal ALPHA (opacity), and the transparent PNG carries
+            // that same alpha so compositing it over the background reconstructs
+            // the opaque export exactly. Respect the flame's setting in both
+            // modes (matches FlameRenderer::set_transparent_mode after its fix).
             levels_enabled: if config.levels_enabled { 1 } else { 0 },
             _pad_levels: [0; 2],
         };
