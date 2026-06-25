@@ -1220,6 +1220,7 @@ impl HighResExporter {
         config: &FractalConfig,
         total_iterations: u64,
         transparent: bool,
+        premultiplied: bool,
         reporter: &mut dyn crate::export::ExportReporter,
     ) -> Result<Vec<u8>, String> {
         // Create CPU histogram. The GPU accumulate path leaves this
@@ -1692,7 +1693,7 @@ post_symmetry: (&config.flame.post_symmetry).into(),
         // not the user-passed target — feed that to the scale-invariant
         // sample_density formula (Phase 8a).
         let total_iters_dispatched = num_dispatches * iterations_per_dispatch;
-        let pixels = self.tonemap_gpu(&histogram, config, transparent, total_iters_dispatched).await?;
+        let pixels = self.tonemap_gpu(&histogram, config, transparent, premultiplied, total_iters_dispatched).await?;
 
         reporter.progress(1.0, "Encoding…");
 
@@ -1966,6 +1967,7 @@ post_symmetry: (&config.flame.post_symmetry).into(),
         histogram: &[HistogramPixel],
         config: &FractalConfig,
         transparent: bool,
+        premultiplied: bool,
         total_iterations: u64,
     ) -> Result<Vec<u8>, String> {
         use crate::config::defaults::{PREFILTER_WHITE, BRIGHT_ADJUST};
@@ -2087,7 +2089,8 @@ post_symmetry: (&config.flame.post_symmetry).into(),
             gamma_threshold: config.gamma_threshold,
             alpha_blend_low: config.alpha_blend_low,
             alpha_blend_high: config.alpha_blend_high,
-            transparent_mode: if transparent { 1 } else { 0 },
+            // 0 = opaque, 1 = straight-alpha reconstruction, 2 = premultiplied.
+            transparent_mode: if !transparent { 0 } else if premultiplied { 2 } else { 1 },
             color_mode: config.color_mode as u32,
             width: self.width,
             height: self.height,

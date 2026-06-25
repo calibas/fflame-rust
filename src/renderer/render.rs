@@ -30,6 +30,10 @@ pub struct RenderJob<'a> {
 
     /// Transparent background (for PNG export)
     pub transparent: bool,
+
+    /// Use premultiplied alpha for transparent export (vs the default
+    /// straight-alpha reconstruction). Only meaningful when `transparent`.
+    pub premultiplied: bool,
 }
 
 impl<'a> RenderJob<'a> {
@@ -43,6 +47,7 @@ impl<'a> RenderJob<'a> {
             iterations_per_thread: 256,
             burn_in: 20,
             transparent: false,
+            premultiplied: false,
         }
     }
 
@@ -67,6 +72,12 @@ impl<'a> RenderJob<'a> {
     /// Set transparent mode
     pub fn with_transparent(mut self, transparent: bool) -> Self {
         self.transparent = transparent;
+        self
+    }
+
+    /// Use premultiplied alpha (vs straight-alpha reconstruction) for transparent export
+    pub fn with_premultiplied(mut self, premultiplied: bool) -> Self {
+        self.premultiplied = premultiplied;
         self
     }
 }
@@ -278,7 +289,7 @@ pub async fn render(
 
     // Set transparent mode if requested
     if job.transparent {
-        renderer.set_transparent_mode(queue, true, job.config, job.iterations_per_thread);
+        renderer.set_transparent_mode(queue, true, job.premultiplied, job.config, job.iterations_per_thread);
     }
 
     // Create effect chain runner for post-processing effects

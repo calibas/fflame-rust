@@ -1539,7 +1539,7 @@ post_symmetry: (&self.post_symmetry).into(),
 
     /// Set transparent mode for PNG export
     /// When enabled, tonemap shader outputs fractal alpha instead of blending with background
-    pub fn set_transparent_mode(&self, queue: &Queue, transparent: bool, config: &FractalConfig, iterations_per_thread: u32) {
+    pub fn set_transparent_mode(&self, queue: &Queue, transparent: bool, premultiplied: bool, config: &FractalConfig, iterations_per_thread: u32) {
         use crate::config::defaults::*;
 
         let tonemap_mode_u32 = match config.tonemap_mode {
@@ -1593,7 +1593,9 @@ post_symmetry: (&self.post_symmetry).into(),
             gamma_threshold: config.gamma_threshold,
             alpha_blend_low: config.alpha_blend_low,
             alpha_blend_high: config.alpha_blend_high,
-            transparent_mode: if transparent { 1 } else { 0 },
+            // 0 = opaque, 1 = straight-alpha reconstruction (flatten over black),
+            // 2 = premultiplied. See tonemap.wgsl.
+            transparent_mode: if !transparent { 0 } else if premultiplied { 2 } else { 1 },
             color_mode: self.color_mode as u32,
             width: self.width,
             height: self.height,

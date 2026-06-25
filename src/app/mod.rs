@@ -437,6 +437,9 @@ pub struct App {
     pub(super) export_width: u32,
     pub(super) export_height: u32,
     pub(super) use_custom_export_size: bool,
+    /// Transparent PNG export uses premultiplied alpha (vs the default
+    /// straight-alpha flatten-over-black reconstruction). Set in the Export panel.
+    pub(super) png_export_premultiplied: bool,
 
     // Unified export status — shared with every background export thread (PNG
     // direct / high-res / video). Drives the global progress overlay and the
@@ -629,6 +632,7 @@ impl App {
             export_width,
             export_height,
             use_custom_export_size: false,  // Default to viewport size
+            png_export_premultiplied: false,
             export_status: Arc::new(Mutex::new(ExportStatus::default())),
             render_mode: RenderModeFSM::new(),
             histogram_frame_counter: 0,
@@ -1159,6 +1163,7 @@ impl App {
             &mut self.export_width,
             &mut self.export_height,
             &mut self.use_custom_export_size,
+            &mut self.png_export_premultiplied,
             &export_status,
             self.ui_hidden,
             &mut self.audio_manager,
@@ -1339,7 +1344,7 @@ impl App {
                 // Check if we need custom-size export
                 if self.use_custom_export_size {
                     // Custom-size export: create temporary renderer at export dimensions
-                    self.export_custom_size(transparent, export_config, render_time_ms);
+                    self.export_custom_size(transparent, self.png_export_premultiplied, export_config, render_time_ms);
                 } else if let Some(ref mut renderer) = self.flame_renderer {
                     // Viewport-size export: use current renderer
                     let total_iterations = renderer.total_iterations();
@@ -1349,7 +1354,7 @@ impl App {
                     // and then re-run color effects if enabled
                     if transparent {
                         let iterations_per_thread = self.config_manager.system_settings().iterations_per_thread;
-                        renderer.set_transparent_mode(&self.gpu.queue, true, &export_config, iterations_per_thread);
+                        renderer.set_transparent_mode(&self.gpu.queue, true, self.png_export_premultiplied, &export_config, iterations_per_thread);
 
                         // Run tonemap pass with transparent mode
                         let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
@@ -1436,7 +1441,7 @@ impl App {
                     // Reset transparent mode back to normal for display
                     if transparent {
                         let iterations_per_thread = self.config_manager.system_settings().iterations_per_thread;
-                        renderer.set_transparent_mode(&self.gpu.queue, false, &export_config, iterations_per_thread);
+                        renderer.set_transparent_mode(&self.gpu.queue, false, false, &export_config, iterations_per_thread);
 
                         // Run tonemap pass to restore normal display
                         let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
@@ -1577,7 +1582,7 @@ impl App {
 
                     // Set transparent mode if requested
                     if transparent {
-                        temp_renderer.set_transparent_mode(&self.gpu.queue, true, &export_config, iterations_per_thread);
+                        temp_renderer.set_transparent_mode(&self.gpu.queue, true, self.png_export_premultiplied, &export_config, iterations_per_thread);
                     }
 
                     // Final tonemap pass
@@ -1699,7 +1704,7 @@ impl App {
                     // For transparent export, set transparent mode and run tonemap before reading
                     // Also re-run color effects if enabled
                     if transparent {
-                        renderer.set_transparent_mode(&self.gpu.queue, true, &export_config, iterations_per_thread);
+                        renderer.set_transparent_mode(&self.gpu.queue, true, self.png_export_premultiplied, &export_config, iterations_per_thread);
 
                         let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
                             label: Some("Transparent Export Tonemap"),
