@@ -81,10 +81,15 @@ pub async fn export_headless_wasm(
     limits.max_storage_buffers_per_shader_stage =
         adapter_limits.max_storage_buffers_per_shader_stage;
 
+    let mut required_features = egui_wgpu::wgpu::Features::CLEAR_TEXTURE;
+    if adapter.features().contains(egui_wgpu::wgpu::Features::FLOAT32_FILTERABLE) {
+        required_features |= egui_wgpu::wgpu::Features::FLOAT32_FILTERABLE;
+    }
+
     let (device, queue) = adapter
         .request_device(&egui_wgpu::wgpu::DeviceDescriptor {
             label: Some("WASM Headless Device"),
-            required_features: egui_wgpu::wgpu::Features::CLEAR_TEXTURE,
+            required_features,
             required_limits: limits,
             memory_hints: egui_wgpu::wgpu::MemoryHints::Performance,
             experimental_features: Default::default(),
@@ -270,10 +275,18 @@ async fn export_headless_gpu(
     limits.max_storage_buffers_per_shader_stage =
         adapter_limits.max_storage_buffers_per_shader_stage;
 
+    // FLOAT32_FILTERABLE so the density-effect chain can bilinear-sample the
+    // Rgba32Float accumulation (see gpu/device.rs). Requested only when the
+    // adapter supports it.
+    let mut required_features = egui_wgpu::wgpu::Features::CLEAR_TEXTURE;
+    if adapter.features().contains(egui_wgpu::wgpu::Features::FLOAT32_FILTERABLE) {
+        required_features |= egui_wgpu::wgpu::Features::FLOAT32_FILTERABLE;
+    }
+
     let (device, queue) = adapter
         .request_device(&egui_wgpu::wgpu::DeviceDescriptor {
             label: Some("Headless Device"),
-            required_features: egui_wgpu::wgpu::Features::CLEAR_TEXTURE,
+            required_features,
             required_limits: limits,
             memory_hints: egui_wgpu::wgpu::MemoryHints::Performance,
             experimental_features: Default::default(),
