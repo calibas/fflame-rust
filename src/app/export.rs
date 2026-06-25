@@ -6,6 +6,24 @@
 use crate::config::FractalConfig;
 use crate::renderer::{render, NoProgress, RenderJob};
 
+/// Which render engine a headless export should use. `Auto` keeps the normal
+/// size-based routing (FlameRenderer when the histogram fits one storage-buffer
+/// binding, else HighResExporter). The explicit variants force one engine — used
+/// to verify the two paths render identically at the same size. Forcing
+/// `FlameRenderer` above the binding limit will fail to allocate.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub enum ExportEngine {
+    /// Size-based routing (default).
+    Auto,
+    /// Force the interactive FlameRenderer direct-histogram path.
+    #[value(name = "flamerenderer", alias = "flame")]
+    FlameRenderer,
+    /// Force the HighResExporter (tiled / CPU-histogram) path.
+    #[value(name = "highres", alias = "tiled")]
+    HighRes,
+}
+
 /// Headless PNG export - WASM version
 #[cfg(target_arch = "wasm32")]
 pub async fn export_headless_wasm(
@@ -125,12 +143,26 @@ pub async fn export_headless(
     iterations_per_thread: u32,
     transparent: bool,
     premultiplied: bool,
+    engine: ExportEngine,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     let max_binding = probe_max_binding_size().await
         .unwrap_or(128 * 1024 * 1024);
     let hist_size = crate::export::histogram_size_bytes(width, height);
 
-    if hist_size > max_binding {
+    // `Auto` routes by size; explicit variants force one engine (parity testing).
+    let use_highres = match engine {
+        ExportEngine::Auto => hist_size > max_binding,
+        ExportEngine::HighRes => true,
+        ExportEngine::FlameRenderer => false,
+    };
+    if engine == ExportEngine::FlameRenderer && hist_size > max_binding {
+        log::warn!(
+            "--engine flamerenderer forced at {}x{}, but histogram {} MB > binding {} MB — allocation will likely fail.",
+            width, height, hist_size / (1024 * 1024), max_binding / (1024 * 1024)
+        );
+    }
+
+    if use_highres {
         log::info!(
             "Routing through HighResExporter for {}x{} (histogram {} MB > device binding limit {} MB)",
             width, height,
