@@ -2382,6 +2382,20 @@ post_symmetry: (&config.flame.post_symmetry).into(),
 
         self.queue.submit(std::iter::once(encoder.finish()));
 
+        // Free the accumulation texture (≈ W·H·16, ~2.3 GB at 12K) and any
+        // density-effect ping-pong now that tonemap has written `output_view`.
+        // They're dead weight through the color-effect pass below, whose
+        // full-res ping-pong (≈ W·H·8) would otherwise allocate ON TOP of them
+        // and OOM at high resolution (wgpu treats OOM as a fatal panic). Drop
+        // the bind group (it holds Arc refs to the accumulation/density views),
+        // then the textures, then poll so wgpu actually reclaims the VRAM
+        // before the color ping-pong allocates (a plain drop is deferred).
+        drop(tonemap_bind_group);
+        drop(density_chain);
+        drop(accumulation_view);
+        drop(accumulation_texture);
+        let _ = self.device.poll(PollType::Wait { submission_index: None, timeout: None });
+
         // ===== Step 5.5: Run color effects (if enabled) =====
         let has_color_effects = EffectChainRunner::has_enabled_effects(&config.color_effects);
         let mut effect_chain: Option<EffectChainRunner> = None;
