@@ -249,6 +249,8 @@ export:
   heading: "Export PNG"
   with_background: "Export with Background"
   transparent: "Export Transparent"
+  premultiplied_alpha: "Premultiplied alpha"
+  premultiplied_alpha_tooltip: "Transparent export: use premultiplied alpha (for After Effects / Nuke / linear compositing). Off = straight alpha, where flattening over black in an image editor reproduces the opaque export."
   use_custom_size: "Use Custom Export Size"
   width: "Width:"
   height: "Height:"

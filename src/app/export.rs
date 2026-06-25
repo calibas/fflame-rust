@@ -124,6 +124,7 @@ pub async fn export_headless(
     test_category: Option<String>,
     iterations_per_thread: u32,
     transparent: bool,
+    premultiplied: bool,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     let max_binding = probe_max_binding_size().await
         .unwrap_or(128 * 1024 * 1024);
@@ -144,6 +145,7 @@ pub async fn export_headless(
             test_category,
             iterations_per_thread,
             transparent,
+            premultiplied,
         )
         .await;
     }
@@ -162,6 +164,7 @@ pub async fn export_headless(
         test_category,
         iterations_per_thread,
         transparent,
+        premultiplied,
     )
     .await
 }
@@ -197,6 +200,7 @@ async fn export_headless_gpu(
     test_category: Option<String>,
     iterations_per_thread: u32,
     transparent: bool,
+    premultiplied: bool,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     use std::time::Instant;
 
@@ -248,7 +252,8 @@ async fn export_headless_gpu(
     // Use unified render API
     let job = RenderJob::new(config, width, height)
         .with_iterations_per_thread(iterations_per_thread)
-        .with_transparent(transparent);
+        .with_transparent(transparent)
+        .with_premultiplied(premultiplied);
 
     let result = render(&device, &queue, job, &mut NoProgress)
         .await
@@ -299,6 +304,7 @@ async fn export_headless_cpu(
     test_category: Option<String>,
     iterations_per_thread: u32,
     transparent: bool,
+    premultiplied: bool,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     use crate::export::{ConsoleReporter, HighResExporter};
     use std::time::Instant;
@@ -314,7 +320,7 @@ async fn export_headless_cpu(
     // Run export with progress reporting
     let mut reporter = ConsoleReporter;
     let rgba_data = exporter
-        .export(config, total_iterations, transparent, &mut reporter)
+        .export(config, total_iterations, transparent, premultiplied, &mut reporter)
         .await?;
     println!();
 
