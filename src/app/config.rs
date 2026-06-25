@@ -389,17 +389,30 @@ impl App {
         let speed_factor = config.speed_factor;
         let max_iterations = config.max_iterations;
 
-        // Initialize the unified export status.
+        // Pick the destination on the MAIN (UI) thread BEFORE spawning the
+        // render thread. A native save dialog opened from a background thread
+        // can't bring itself to the foreground on Windows even when parented to
+        // the main window (only the foreground thread may), so it would get
+        // stuck behind the app — modal but hidden. Choosing the path up front,
+        // then rendering with progress and auto-saving, keeps the dialog on the
+        // UI thread where it behaves (the synchronous export paths work for the
+        // same reason) and is fine UX for a long background export.
+        let path = match rfd::FileDialog::new()
+            .set_parent(self.window.as_ref())
+            .add_filter("PNG Image", &["png"])
+            .set_file_name("fractal.png")
+            .save_file()
+        {
+            Some(p) => p,
+            None => return, // user cancelled the save dialog — nothing to do
+        };
+
+        // Initialize the unified export status (only after a destination is chosen).
         if let Ok(mut s) = self.export_status.lock() {
             s.begin(ExportKind::Png, format!("Exporting PNG · {width}×{height}"));
         }
 
         let status_arc = Arc::clone(&self.export_status);
-        // Clone the window handle so the dialog opened from the background
-        // thread can parent itself to the main window (without this the save
-        // dialog can appear behind the app window on Windows and freeze
-        // interaction — modal but hidden).
-        let window_for_dialog = Arc::clone(&self.window);
 
         // Spawn background thread
         std::thread::spawn(move || {
@@ -449,32 +462,21 @@ impl App {
                 }
             };
 
-            // Pick the destination (blocks this thread, not the UI).
-            let path = rfd::FileDialog::new()
-                .set_parent(window_for_dialog.as_ref())
-                .add_filter("PNG Image", &["png"])
-                .set_file_name("fractal.png")
-                .save_file();
-
-            match path {
-                Some(path) => match std::fs::write(&path, png_data) {
-                    Ok(()) => {
-                        println!("PNG exported to: {} ({}×{}, {:.2}s)",
-                            path.display(), width, height, total_export_time_ms / 1000.0);
-                        if let Ok(mut s) = status_arc.lock() {
-                            s.finish_ok(format!("PNG saved · {}",
-                                path.file_name().map(|n| n.to_string_lossy().into_owned())
-                                    .unwrap_or_else(|| path.display().to_string())));
-                        }
+            // Destination was chosen on the UI thread before this render
+            // started — just write the encoded PNG to it.
+            match std::fs::write(&path, png_data) {
+                Ok(()) => {
+                    println!("PNG exported to: {} ({}×{}, {:.2}s)",
+                        path.display(), width, height, total_export_time_ms / 1000.0);
+                    if let Ok(mut s) = status_arc.lock() {
+                        s.finish_ok(format!("PNG saved · {}",
+                            path.file_name().map(|n| n.to_string_lossy().into_owned())
+                                .unwrap_or_else(|| path.display().to_string())));
                     }
-                    Err(e) => {
-                        eprintln!("Failed to save PNG: {}", e);
-                        if let Ok(mut s) = status_arc.lock() { s.finish_err(format!("Save failed: {e}")); }
-                    }
-                },
-                None => {
-                    // User cancelled the save dialog — clear status, no toast.
-                    if let Ok(mut s) = status_arc.lock() { s.active = false; }
+                }
+                Err(e) => {
+                    eprintln!("Failed to save PNG: {}", e);
+                    if let Ok(mut s) = status_arc.lock() { s.finish_err(format!("Save failed: {e}")); }
                 }
             }
         });
