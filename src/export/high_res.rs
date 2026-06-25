@@ -267,10 +267,21 @@ impl HighResExporter {
         limits.max_storage_buffers_per_shader_stage =
             adapter_limits.max_storage_buffers_per_shader_stage;
 
+        // Request FLOAT32_FILTERABLE when the adapter advertises it so the
+        // density-effect chain can bilinear-sample the Rgba32Float accumulation
+        // (run_density_effects skips density entirely without it). Mirrors the
+        // FlameRenderer device in gpu/device.rs and the headless device in
+        // app/export.rs — without it, density effects silently no-op on the
+        // tiled export path.
+        let mut required_features = Features::empty();
+        if adapter.features().contains(Features::FLOAT32_FILTERABLE) {
+            required_features |= Features::FLOAT32_FILTERABLE;
+        }
+
         let (device, queue) = adapter
             .request_device(&DeviceDescriptor {
                 label: Some("Export Device"),
-                required_features: Features::empty(),
+                required_features,
                 required_limits: limits,
                 memory_hints: MemoryHints::Performance,
                 experimental_features: Default::default(),
@@ -2002,6 +2013,23 @@ post_symmetry: (&config.flame.post_symmetry).into(),
     /// `total_iterations` is the cumulative iteration count across all
     /// dispatches in this export — used by the scale-invariant
     /// sample_density formula (Phase 8a). See
+    /// Conservative budget for the post-histogram (Phase B) GPU texture set
+    /// when density effects are applied. By this point the histogram buffer has
+    /// been freed (drop+poll in the render loop), so Phase B is the peak. At
+    /// full resolution it allocates the accumulation texture (Rgba32Float,
+    /// 16 B/px) + the density ping-pong pair (2× Rgba16Float, 16 B/px) + the
+    /// tonemap output (Rgba8, 4 B/px) = 36 B/px. ~4 GB lets density effects
+    /// apply through ~10K² exports; beyond that we skip them (the marginal
+    /// ~16 B/px over the always-present accumulation) rather than risk OOM on
+    /// limited-VRAM GPUs. Color effects and the accumulation texture are
+    /// already unconditional, so this gates only the density addition.
+    const DENSITY_EFFECT_PHASE_B_BUDGET_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+
+    /// Whether the Phase-B texture set with density effects fits the budget.
+    fn density_effects_fit(width: u32, height: u32) -> bool {
+        (width as u64) * (height as u64) * 36 <= Self::DENSITY_EFFECT_PHASE_B_BUDGET_BYTES
+    }
+
     /// docs/projects/accumulator-unification.md.
     async fn tonemap_gpu(
         &self,
@@ -2192,14 +2220,59 @@ post_symmetry: (&config.flame.post_symmetry).into(),
             );
         }
 
-        // NOTE: density effects are intentionally NOT applied on the tiled
-        // export path. They run before tonemap on the full-res accumulation
-        // texture and need an EffectChainRunner's two full-res Rgba16Float
-        // ping-pong textures (~2·W·H·8 bytes ≈ 2.3 GB at 12K) ON TOP of the
-        // accumulation/output textures — which OOMs at the resolutions the
-        // tiled path is used for. The FlameRenderer path (in-app + sub-binding
-        // exports) applies them. See docs/projects/... / Known Issues.
-        let tonemap_input_view: &TextureView = &accumulation_view;
+        // ===== Step 3.5: Density effects (Phase B, before tonemap) =====
+        // Apply density effects on the full-res accumulation BEFORE tonemap,
+        // symmetric with the color-effect pass below. The GPU histogram buffer
+        // was freed (drop+poll) before this function, so these full-res
+        // ping-pong textures don't coexist with it. Mirrors the FlameRenderer
+        // path (render.rs): first effect reads the Rgba32Float accumulation
+        // (needs FLOAT32_FILTERABLE — run_density_effects guards that), writes
+        // the Rgba16Float ping-pong, and the result feeds tonemap's binding 0
+        // (textureLoad, so no filtering needed). Guarded by a resolution
+        // ceiling so the extra texture memory doesn't OOM at extreme sizes.
+        let has_density_effects = EffectChainRunner::has_enabled_effects(&config.density_effects);
+        let mut density_chain: Option<EffectChainRunner> = None;
+        if has_density_effects {
+            if Self::density_effects_fit(self.width, self.height) {
+                let mut chain = EffectChainRunner::new(&self.device, self.width, self.height);
+                let mut density_encoder = self.device.create_command_encoder(&CommandEncoderDescriptor {
+                    label: Some("Export Density Effects Encoder"),
+                });
+                chain.reset_slots();
+                let ran = chain.run_density_effects(
+                    &self.device,
+                    &self.queue,
+                    &mut density_encoder,
+                    &accumulation_view,
+                    &config.density_effects,
+                );
+                self.queue.submit(std::iter::once(density_encoder.finish()));
+                if ran {
+                    log::info!(
+                        "High-res export: applied {} density effect(s)",
+                        config.density_effects.iter().filter(|e| e.enabled).count()
+                    );
+                    density_chain = Some(chain);
+                }
+            } else {
+                log::warn!(
+                    "High-res export: skipping density effects at {}x{} — estimated Phase B \
+                     texture memory ({} MB) exceeds the safe budget ({} MB); export continues \
+                     without them to avoid OOM.",
+                    self.width,
+                    self.height,
+                    (self.width as u64 * self.height as u64 * 36) / (1024 * 1024),
+                    Self::DENSITY_EFFECT_PHASE_B_BUDGET_BYTES / (1024 * 1024),
+                );
+            }
+        }
+        // Density output (Rgba16Float) when effects ran, else the raw
+        // accumulation. Held by `density_chain`, which must outlive the tonemap
+        // pass below (it owns the ping-pong textures the bind group samples).
+        let tonemap_input_view: &TextureView = density_chain
+            .as_ref()
+            .and_then(|c| c.get_density_output())
+            .unwrap_or(&accumulation_view);
 
         // ===== Step 4: Create bind group and output texture =====
         let curve_lut_view = self.curve_lut_texture.create_view(&TextureViewDescriptor::default());
