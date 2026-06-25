@@ -493,6 +493,16 @@ impl EffectChainRunner {
         if enabled_effects.is_empty() {
             return false;
         }
+
+        // Density effects bilinear-sample the Rgba32Float accumulation, which
+        // requires FLOAT32_FILTERABLE. The app/export devices request it when
+        // the adapter advertises it (see gpu/device.rs); on an adapter that
+        // lacks it, the bind group would be invalid — skip rather than crash.
+        if !device.features().contains(wgpu::Features::FLOAT32_FILTERABLE) {
+            log::warn!("Skipping density effects: adapter lacks FLOAT32_FILTERABLE (can't filter the Rgba32Float accumulation).");
+            return false;
+        }
+
         log::debug!("Running {} density effects (chain: {}x{})", enabled_effects.len(), self.width, self.height);
 
         // First, ensure all effects are compiled (before taking texture borrow)
