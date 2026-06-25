@@ -255,7 +255,7 @@ impl App {
     #[cfg(not(target_arch = "wasm32"))]
     const BACKGROUND_EXPORT_ITER_THRESHOLD: u64 = 250_000_000;
 
-    pub fn export_custom_size(&mut self, transparent: bool, config: FractalConfig, _render_time_ms: f64) {
+    pub fn export_custom_size(&mut self, transparent: bool, premultiplied: bool, config: FractalConfig, _render_time_ms: f64) {
         use crate::renderer::{render, NoProgress, RenderJob};
 
         // Check if already exporting
@@ -294,7 +294,7 @@ impl App {
                 config.max_iterations,
                 if hist_size > max_binding { " — exceeds one binding" } else { " — long render, background + progress" },
             );
-            self.export_high_res_background(transparent, config);
+            self.export_high_res_background(transparent, premultiplied, config);
             return;
         }
 
@@ -309,7 +309,8 @@ impl App {
         let job = RenderJob::new(&config, self.export_width, self.export_height)
             .with_iterations_per_thread(self.config_manager.system_settings().iterations_per_thread)
             .with_burn_in(self.config_manager.system_settings().burn_in)
-            .with_transparent(transparent);
+            .with_transparent(transparent)
+            .with_premultiplied(premultiplied);
 
         let result = pollster::block_on(render(&self.gpu.device, &self.gpu.queue, job, &mut NoProgress));
 
@@ -378,7 +379,7 @@ impl App {
     /// when it doesn't. Used for both >binding sizes and long renders that want
     /// progress without freezing the UI.
     #[cfg(not(target_arch = "wasm32"))]
-    fn export_high_res_background(&mut self, transparent: bool, config: FractalConfig) {
+    fn export_high_res_background(&mut self, transparent: bool, premultiplied: bool, config: FractalConfig) {
         use crate::export::HighResExporter;
         use crate::ui::{ExportKind, UiReporter};
 
@@ -418,7 +419,7 @@ impl App {
 
             // Run export, reporting into the unified status.
             let mut reporter = UiReporter::new(Arc::clone(&status_arc));
-            let rgba_data = match pollster::block_on(exporter.export(&config, max_iterations, transparent, &mut reporter)) {
+            let rgba_data = match pollster::block_on(exporter.export(&config, max_iterations, transparent, premultiplied, &mut reporter)) {
                 Ok(data) => data,
                 Err(e) => {
                     eprintln!("Failed to export: {}", e);

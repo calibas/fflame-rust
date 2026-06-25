@@ -51,6 +51,10 @@ enum Commands {
         /// Export a transparent PNG (alpha channel) instead of compositing on the background
         #[arg(long)]
         transparent: bool,
+
+        /// For transparent export, use premultiplied alpha (vs the default straight-alpha flatten-over-black reconstruction)
+        #[arg(long)]
+        premultiplied: bool,
     },
 
     /// Export animation to video (pipes directly to ffmpeg, requires ffmpeg in PATH)
@@ -127,9 +131,9 @@ fn main() {
                 // List available FFmpeg encoders
                 fractal_flame_wgpu::animation::export::print_available_encoders();
             }
-            Some(Commands::Export { input, output, width, height, category, iterations_per_thread, dump_shader, transparent }) => {
+            Some(Commands::Export { input, output, width, height, category, iterations_per_thread, dump_shader, transparent, premultiplied }) => {
                 // Run in headless export mode
-                fractal_flame_wgpu::export_mode(&input, &output, width, height, category, iterations_per_thread, dump_shader, transparent);
+                fractal_flame_wgpu::export_mode(&input, &output, width, height, category, iterations_per_thread, dump_shader, transparent, premultiplied);
             }
             Some(Commands::ExportAnimation { config, animation, output, width, height, fps, iterations_per_thread, video_codec, hw_accel, video_quality, audio, audio_offset, audio_fade_in, audio_fade_out, audio_bitrate }) => {
                 // Parse video codec

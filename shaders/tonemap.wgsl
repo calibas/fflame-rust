@@ -739,6 +739,20 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         // the flame is bright, transparent where it's dark).
         let over_black_lin = fractal_color * fractal_alpha;
         let over_black_srgb = pow(max(over_black_lin, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2));
+
+        if (tonemap_params.transparent_mode == 2u) {
+            // PREMULTIPLIED alpha (opt-in): store the over-black colour directly
+            // as the RGB and the fractal's own opacity as alpha. A premultiplied
+            // "over" composite (rgb + bg·(1−a), what AE/Nuke/linear pipelines do
+            // when told the PNG is premultiplied) reconstructs the opaque; a
+            // plain straight flatten would dim it. The correct representation for
+            // additive-glow content in a premultiplied pipeline.
+            return vec4<f32>(over_black_srgb, fractal_alpha);
+        }
+
+        // Mode 1 (default): straight-alpha reconstruction — split so a standard
+        // straight flatten over black (rgb·a) returns the over-black colour. The
+        // coverage alpha = max channel of C keeps the un-multiplied rgb ≤ 1.
         let coverage = max(over_black_srgb.r, max(over_black_srgb.g, over_black_srgb.b));
         let straight_rgb = select(vec3<f32>(0.0), over_black_srgb / coverage, coverage > 0.0);
         return vec4<f32>(straight_rgb, coverage);

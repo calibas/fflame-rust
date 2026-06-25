@@ -15,6 +15,7 @@ pub fn render_export_content(
     export_width: &mut u32,
     export_height: &mut u32,
     use_custom_export_size: &mut bool,
+    png_export_premultiplied: &mut bool,
     config_manager: &mut ConfigManager,
     viewport_size: Option<(u32, u32)>,
     export_active: bool,
@@ -35,6 +36,13 @@ pub fn render_export_content(
             }
         });
     });
+
+    // Transparent-alpha mode. Default (off): straight-alpha reconstruction —
+    // a normal "flatten over black" in an image editor reproduces the opaque
+    // export. On: premultiplied alpha, for After Effects / Nuke / linear
+    // compositing pipelines that interpret premultiplied PNGs.
+    ui.checkbox(png_export_premultiplied, t!("export.premultiplied_alpha"))
+        .on_hover_text(t!("export.premultiplied_alpha_tooltip"));
 
     ui.add_space(4.0);
     ui.separator();
