@@ -13,7 +13,7 @@ use egui_wgpu::wgpu::*;
 use rayon::prelude::*;
 
 use crate::config::FractalConfig;
-use crate::gpu::buffers::{GpuParams, GpuTransform, GpuVariationParams, TonemapParams};
+use crate::gpu::buffers::{GpuParams, GpuVariationParams, TonemapParams};
 use crate::renderer::effect_chain::EffectChainRunner;
 use crate::scene::tonemap::ToneCurve;
 use crate::scene::transforms::RenderMode;
@@ -114,6 +114,7 @@ pub struct HighResExporter {
     variation_params_buffer: Buffer,
     xaos_buffer: Buffer,  // Xaos transition weights (identity if not used)
     attachments_buffer: Buffer,  // Per-normal Linked + Final attachment lists
+    subflame_metadata_buffer: Buffer,  // binding 12: per-subflame metadata
     // Dummy path-tracking buffers — the unified shader's `header.wgsl`
     // declares `path_buffer` (binding 7) and `path_filters` (binding 8)
     // unconditionally, but the export shader builds with
@@ -291,11 +292,25 @@ impl HighResExporter {
         // path is sample-emit (OUTPUT_HISTOGRAM_DIRECT=false) and currently
         // strips analytic-blur routing, so the assigned slots go unread
         // (stochastic blur fallback) until Phase 2 step 2 wires this path.
-        let transforms = GpuTransform::from_flame(&config.flame, &global_registry());
+        // Pack parent + subflame transforms into the unified layout (shared
+        // with the FlameRenderer path) so subflames render identically. The
+        // buffer is sized for MAX_TRANSFORMS_UNIFIED; subflame xforms occupy
+        // [MAX_TRANSFORMS, MAX_TRANSFORMS_UNIFIED).
+        let transforms = crate::gpu::buffers::pack_gpu_transforms(&config.flame);
 
         let transform_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
             label: Some("Export Transform Buffer"),
             contents: bytemuck::cast_slice(&transforms),
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+        });
+
+        // Per-subflame metadata (binding 12). Empty/zeroed when the flame has no
+        // subflames; the shader only reads it when subflame variations are active.
+        let subflame_metas = crate::gpu::buffers::build_subflame_metas(&config.flame.subflames)
+            .map_err(|e| format!("Subflame metadata: {e}"))?;
+        let subflame_metadata_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
+            label: Some("Export Subflame Metadata Buffer"),
+            contents: bytemuck::cast_slice(&subflame_metas),
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
         });
 
@@ -391,8 +406,10 @@ impl HighResExporter {
         // Variation params buffer — sized for the worst-case
         // MAX_TRANSFORMS slots so flames whose pool count exceeds the
         // old 32-slot cap don't overflow the write.
-        let variation_params = GpuVariationParams::from_flame(&config.flame, &global_registry());
-        let variation_params_size = (crate::gpu::buffers::MAX_TRANSFORMS
+        // Parent + subflame variation params, sized for the unified slot space
+        // (MAX_TRANSFORMS_UNIFIED) so subflame slots [MAX_TRANSFORMS..) exist.
+        let variation_params = crate::gpu::buffers::pack_gpu_variation_params(&config.flame);
+        let variation_params_size = (crate::gpu::buffers::MAX_TRANSFORMS_UNIFIED
             * std::mem::size_of::<GpuVariationParams>()) as u64;
         let variation_params_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Export Variation Params Buffer"),
@@ -793,6 +810,18 @@ impl HighResExporter {
                     },
                     count: None,
                 },
+                // binding 12: subflame metadata (array<SubflameMeta>). Binding 11
+                // is intentionally unbound (legacy subflame_transforms, removed).
+                BindGroupLayoutEntry {
+                    binding: 12,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
                 // binding 13: analytic-blur low-res splat buffer (used by the
                 // HAS_ANALYTIC_BLUR routing — now mode-independent). Bound to a
                 // real low-res buffer when wired, else a dummy with count=0
@@ -1185,6 +1214,7 @@ impl HighResExporter {
             variation_params_buffer,
             xaos_buffer,
             attachments_buffer,
+            subflame_metadata_buffer,
             dummy_path_buffer,
             dummy_path_filter_buffer,
             blur_splat_buffer,
@@ -1308,6 +1338,10 @@ impl HighResExporter {
                 BindGroupEntry {
                     binding: 10,
                     resource: self.attachments_buffer.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 12,
+                    resource: self.subflame_metadata_buffer.as_entire_binding(),
                 },
                 BindGroupEntry {
                     binding: 13,
