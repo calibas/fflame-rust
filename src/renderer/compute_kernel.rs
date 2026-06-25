@@ -1601,11 +1601,17 @@ post_symmetry: (&self.post_symmetry).into(),
             burn_in: self.burn_in,
             num_transforms: self.num_transforms,
             palette_size: self.buffers.palette_size(),
-            levels_low: 0.0,
-            levels_high: crate::config::defaults::DEFAULT_LEVELS_HIGH,
-            levels_gamma: 1.0,
+            // Respect the flame's Levels in transparent export exactly as the
+            // opaque/display path does. Levels gate the fractal ALPHA, and the
+            // transparent PNG carries that same alpha, so compositing it over
+            // the background reconstructs the with-background export. Forcing
+            // Levels off here (the old behavior) made a transparent PNG render
+            // differently from the with-background one for the same flame.
+            levels_low: config.levels_low,
+            levels_high: config.levels_high,
+            levels_gamma: config.levels_gamma,
             highlight_mode: self.highlight_mode,
-            levels_enabled: 0,
+            levels_enabled: if config.levels_enabled { 1 } else { 0 },
             _pad_levels: [0; 2],
         };
         self.buffers.update_tonemap_params(queue, &params);

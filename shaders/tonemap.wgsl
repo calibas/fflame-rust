@@ -720,28 +720,39 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     // mean off, not "no-op-ish."
     let fractal_alpha = select(base_alpha, min(base_alpha, leveled_opacity), tonemap_params.levels_enabled != 0u);
 
-    // Transparent mode: output fractal color with alpha for PNG export
-    // Normal mode: composite with background color for display
-    var final_color: vec3<f32>;
-    var final_alpha: f32;
-
     if (tonemap_params.transparent_mode != 0u) {
-        // Transparent export: output fractal color and alpha directly
-        // No background blending - the alpha channel represents transparency
-        final_color = fractal_color;
-        final_alpha = fractal_alpha;
-    } else {
-        // Normal display: composite with background, opaque output.
-        // Background color is supplied as sRGB (matches what the user picks
-        // in the UI); decode to linear before blending in linear space.
-        let bg_linear = srgb_to_linear(tonemap_params.background_color);
-        final_color = bg_linear * (1.0 - fractal_alpha) + fractal_color * fractal_alpha;
-        final_alpha = 1.0;
+        // Transparent export, built so a STANDARD straight-alpha flatten over
+        // black — rgb·a, in sRGB space, what image editors do — reconstructs
+        // the opaque export exactly.
+        //
+        // A fractal flame's brightness lives mostly in a LOW density alpha
+        // (HDR color × small opacity = the look). Both straight alpha
+        // (rgb = color) and premultiplied alpha (rgb = color·a) come out dim
+        // when an editor flattens that over black: straight loses the gamma
+        // (sRGB(color)·a ≠ sRGB(color·a)), premultiplied multiplies by the tiny
+        // alpha twice. So instead we encode the over-black image itself and
+        // re-split it: the opaque-over-black sRGB color is C = sRGB(color·a);
+        // take the coverage alpha = max channel of C (so the un-multiplied rgb
+        // never exceeds 1), and store rgb = C / coverage. Then the editor's
+        // flatten rgb·coverage == C == the opaque pixel, exactly. Over other
+        // backgrounds it composites as ordinary straight alpha (bright where
+        // the flame is bright, transparent where it's dark).
+        let over_black_lin = fractal_color * fractal_alpha;
+        let over_black_srgb = pow(max(over_black_lin, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2));
+        let coverage = max(over_black_srgb.r, max(over_black_srgb.g, over_black_srgb.b));
+        let straight_rgb = select(vec3<f32>(0.0), over_black_srgb / coverage, coverage > 0.0);
+        return vec4<f32>(straight_rgb, coverage);
     }
+
+    // Normal display / opaque export: composite with background, opaque output.
+    // Background color is supplied as sRGB (matches what the user picks in the
+    // UI); decode to linear before blending in linear space.
+    let bg_linear = srgb_to_linear(tonemap_params.background_color);
+    let final_color = bg_linear * (1.0 - fractal_alpha) + fractal_color * fractal_alpha;
 
     // Convert from linear to sRGB for display
     // (Rgba8Unorm is linear, but monitors expect sRGB)
     let srgb_color = pow(final_color, vec3<f32>(1.0 / 2.2));
 
-    return vec4<f32>(srgb_color, final_alpha);
+    return vec4<f32>(srgb_color, 1.0);
 }

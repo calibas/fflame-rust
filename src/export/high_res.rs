@@ -2104,6 +2104,11 @@ post_symmetry: (&config.flame.post_symmetry).into(),
                 crate::scene::tonemap::HighlightMode::Reinhard => 2,
                 crate::scene::tonemap::HighlightMode::Filmic => 3,
             },
+            // Levels apply identically in transparent and opaque export: they
+            // gate the fractal ALPHA (opacity), and the transparent PNG carries
+            // that same alpha so compositing it over the background reconstructs
+            // the opaque export exactly. Respect the flame's setting in both
+            // modes (matches FlameRenderer::set_transparent_mode after its fix).
             levels_enabled: if config.levels_enabled { 1 } else { 0 },
             _pad_levels: [0; 2],
         };
