@@ -255,6 +255,11 @@ impl App {
     #[cfg(not(target_arch = "wasm32"))]
     const BACKGROUND_EXPORT_ITER_THRESHOLD: u64 = 250_000_000;
 
+    // Desktop-only: the body uses pollster/rfd and the gated
+    // `export_high_res_background`/`BACKGROUND_EXPORT_ITER_THRESHOLD`. The sole
+    // caller (app/mod.rs PNG-export handler) is itself wasm-gated, so on WASM
+    // this would only ever be compiled, never called.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn export_custom_size(&mut self, transparent: bool, premultiplied: bool, config: FractalConfig, _render_time_ms: f64) {
         use crate::renderer::{render, NoProgress, RenderJob};
 
