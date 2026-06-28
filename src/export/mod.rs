@@ -117,7 +117,22 @@ pub fn pick_strategy(width: u32, height: u32, limits: &Limits) -> RenderStrategy
     // the rest of the pipeline already speaks. Tile height is chosen
     // so each tile's region fits one storage-buffer binding.
     let bytes_per_row = (width as u64) * 16;
-    let tile_height = (max_binding / bytes_per_row).max(1) as u32;
+    // Each tile's accumulate binding sits at `tile_idx * tile_height *
+    // bytes_per_row`, which must respect `min_storage_buffer_offset_alignment`
+    // (256 on most desktops). Round tile_height DOWN to a multiple of
+    // `row_align` so every tile's byte stride is a multiple of that alignment;
+    // otherwise tile 1+ fails GPU validation (e.g. at 15000² the natural
+    // tile_height 8947 gives a stride of 2_147_280_000, not /256). Reducing
+    // tile_height only makes tiles smaller (still ≤ one binding).
+    fn gcd(a: u64, b: u64) -> u64 {
+        if b == 0 { a } else { gcd(b, a % b) }
+    }
+    let align = (limits.min_storage_buffer_offset_alignment as u64).max(1);
+    let row_align = (align / gcd(bytes_per_row, align)).max(1);
+    let tile_height = {
+        let raw = (max_binding / bytes_per_row).max(1);
+        ((raw / row_align).max(1) * row_align) as u32
+    };
     let tile_width = width;
     let tiles_y = (height + tile_height - 1) / tile_height;
     let tiles_x = 1;
@@ -275,6 +290,38 @@ mod strategy_tests {
                     tile_height,
                     bytes
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn tile_stride_respects_offset_alignment() {
+        // The per-tile accumulate binding sits at
+        // `tile_idx * tile_width * tile_height * 16`; that stride must be a
+        // multiple of `min_storage_buffer_offset_alignment` or tile 1+ fails
+        // GPU validation. Regression for 15000², where the natural tile_height
+        // 8947 gave a stride of 2_147_280_000 (not a multiple of 256).
+        let l = typical_limits();
+        let align = l.min_storage_buffer_offset_alignment as u64;
+        for (w, h) in [
+            (15000, 15000),
+            (12000, 12000),
+            (16000, 16000),
+            (10001, 10001),
+            (4096, 8192),
+        ] {
+            match pick_strategy(w, h, &l) {
+                RenderStrategy::ParallelTiles { tile_width, tile_height, .. }
+                | RenderStrategy::SerialTiles { tile_width, tile_height, .. } => {
+                    let stride = (tile_width as u64) * (tile_height as u64) * 16;
+                    assert_eq!(
+                        stride % align,
+                        0,
+                        "{}×{}: tile stride {} not a multiple of {}",
+                        w, h, stride, align
+                    );
+                }
+                RenderStrategy::Direct => panic!("{}×{} should tile, got Direct", w, h),
             }
         }
     }
