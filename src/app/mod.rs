@@ -1592,82 +1592,69 @@ impl App {
                     temp_renderer.tonemap_pass(&self.gpu.queue, &mut final_encoder);
                     self.gpu.queue.submit(std::iter::once(final_encoder.finish()));
 
-                    // Run color effects if enabled
+                    // Color effects (if any) allocate a full-res ping-pong
+                    // (~512 MB at 8K). On WASM that won't fit alongside the
+                    // renderer's iteration buffers, so we wait for the tonemap's
+                    // GPU work to finish, free those buffers, THEN allocate + run
+                    // the effects — all inside the async task because the GPU
+                    // wait is async. Without this, 8K color exports OOM the
+                    // browser GPU and come back all-black.
                     let has_color_effects = export_config.color_effects.iter().any(|e| e.enabled);
-                    let mut effect_chain: Option<crate::renderer::effect_chain::EffectChainRunner> = None;
-                    let color_effects_ran = if has_color_effects {
-                        log::info!("WASM custom export: Running {} color effect(s)",
-                            export_config.color_effects.iter().filter(|e| e.enabled).count());
 
-                        let mut chain = crate::renderer::effect_chain::EffectChainRunner::new(
-                            &self.gpu.device, export_width, export_height);
-
-                        let mut effect_encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
-                            label: Some("WASM Export Color Effects"),
-                        });
-
-                        chain.reset_slots();
-                        let ran = chain.run_color_effects(
-                            &self.gpu.device,
-                            &self.gpu.queue,
-                            &mut effect_encoder,
-                            temp_renderer.get_fractal_texture_view(),
-                            &export_config.color_effects,
-                        );
-
-                        self.gpu.queue.submit(std::iter::once(effect_encoder.finish()));
-                        effect_chain = Some(chain);
-                        ran
-                    } else {
-                        false
-                    };
-
-                    // Move renderer to heap for async task
+                    // Move renderer to heap + clone Arc handles for the async task.
                     let temp_renderer = Box::new(temp_renderer);
                     let speed_factor = export_config.speed_factor;
-
-                    // Clone Arc handles for the async task
                     let device = self.gpu.device.clone();
                     let queue = self.gpu.queue.clone();
 
-                    // Read from effect chain if effects ran, otherwise from renderer
-                    if color_effects_ran {
-                        if let Some(chain) = effect_chain {
-                            let chain = Box::new(chain);
-                            spawn_local(async move {
-                                match chain.read_color_output_pixels(&device, &queue).await {
-                                    Ok((width, height, rgba_data)) => {
-                                        let metadata = crate::png_metadata::PngMetadata::from_app_state(
-                                            width,
-                                            height,
-                                            total_rendered,
-                                            render_time_ms,
-                                            iterations_per_thread,
-                                            speed_factor,
-                                            &export_config,
-                                        );
+                    if has_color_effects {
+                        spawn_local(async move {
+                            // Wait for the tonemap (and all prior render work) to
+                            // finish, then reclaim the renderer's iteration
+                            // buffers (~3-4 GB at 8K) before the color ping-pong
+                            // allocates — destroy() only frees once the GPU is
+                            // done with the resource, so the wait is required.
+                            {
+                                let (tx, rx) = futures::channel::oneshot::channel();
+                                queue.on_submitted_work_done(move || { let _ = tx.send(()); });
+                                let _ = rx.await;
+                            }
+                            temp_renderer.free_iteration_buffers();
 
-                                        match crate::renderer::compute_kernel::encode_png_from_rgba(width, height, rgba_data, Some(metadata)) {
-                                            Ok(png_data) => {
-                                                match trigger_browser_download(&png_data, "fractal.png", "image/png") {
-                                                    Ok(()) => log::info!("PNG download started: {}×{} in {:.2}s", width, height, render_time_ms / 1000.0),
-                                                    Err(e) => log::error!("Failed to trigger download: {}", e),
-                                                }
-                                            }
-                                            Err(e) => log::error!("Failed to encode PNG: {}", e),
-                                        }
-                                    }
-                                    Err(e) => log::error!("Failed to capture effect pixels: {}", e),
-                                }
-                                // Read done → all GPU work that read the export
-                                // renderer + effect textures has completed. Free
-                                // both synchronously (a plain drop defers GPU
-                                // reclamation to JS GC on WebGPU), so repeated
-                                // large exports don't OOM the device (all-black).
-                                chain.destroy();
-                                temp_renderer.destroy();
+                            let mut chain = crate::renderer::effect_chain::EffectChainRunner::new(
+                                &device, export_width, export_height);
+                            let mut effect_encoder = device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
+                                label: Some("WASM Export Color Effects"),
                             });
-                        }
+                            chain.reset_slots();
+                            chain.run_color_effects(
+                                &device,
+                                &queue,
+                                &mut effect_encoder,
+                                temp_renderer.get_fractal_texture_view(),
+                                &export_config.color_effects,
+                            );
+                            queue.submit(std::iter::once(effect_encoder.finish()));
+
+                            match chain.read_color_output_pixels(&device, &queue).await {
+                                Ok((width, height, rgba_data)) => {
+                                    let metadata = crate::png_metadata::PngMetadata::from_app_state(
+                                        width, height, total_rendered, render_time_ms,
+                                        iterations_per_thread, speed_factor, &export_config,
+                                    );
+                                    match crate::renderer::compute_kernel::encode_png_from_rgba(width, height, rgba_data, Some(metadata)) {
+                                        Ok(png_data) => match trigger_browser_download(&png_data, "fractal.png", "image/png") {
+                                            Ok(()) => log::info!("PNG download started: {}×{} in {:.2}s", width, height, render_time_ms / 1000.0),
+                                            Err(e) => log::error!("Failed to trigger download: {}", e),
+                                        },
+                                        Err(e) => log::error!("Failed to encode PNG: {}", e),
+                                    }
+                                }
+                                Err(e) => log::error!("Failed to capture effect pixels: {}", e),
+                            }
+                            chain.destroy();
+                            temp_renderer.destroy();
+                        });
                     } else {
                         spawn_local(async move {
                             match temp_renderer.read_fractal_pixels(&device, &queue, transparent, background_color).await {
