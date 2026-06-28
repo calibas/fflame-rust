@@ -2164,6 +2164,26 @@ post_symmetry: (&config.flame.post_symmetry).into(),
         }
     }
 
+    /// Create a texture, turning a GPU out-of-memory failure into a recoverable
+    /// `Err` instead of wgpu's default fatal panic. On the background export
+    /// thread that panic would leave the progress overlay stuck "exporting"
+    /// forever; returning an error lets the caller report it and clean up. The
+    /// OutOfMemory error scope captures the failure at the allocation, so we
+    /// bail before the invalid texture triggers follow-on validation errors.
+    /// Used for the large export textures (the realistic OOM sites).
+    async fn try_create_texture(&self, desc: &TextureDescriptor<'_>) -> Result<Texture, String> {
+        let scope = self.device.push_error_scope(ErrorFilter::OutOfMemory);
+        let texture = self.device.create_texture(desc);
+        if let Some(err) = scope.pop().await {
+            return Err(format!(
+                "GPU out of memory allocating '{}' ({:?}) — try a smaller export size.",
+                desc.label.unwrap_or("texture"),
+                err
+            ));
+        }
+        Ok(texture)
+    }
+
     /// Shared tonemap tail: run color effects on the tonemapped output (if any),
     /// then read it back to RGBA8. Color effects are non-local so they always
     /// run on the full output, after any tiling.
@@ -2279,7 +2299,7 @@ post_symmetry: (&config.flame.post_symmetry).into(),
 
         // The one full-resolution GPU resource (color effects + readback need it
         // whole). COPY_DST so each strip's tonemapped rows can be copied in.
-        let output_texture = self.device.create_texture(&TextureDescriptor {
+        let output_texture = self.try_create_texture(&TextureDescriptor {
             label: Some("Export Output Texture (tiled)"),
             size: Extent3d { width: self.width, height: self.height, depth_or_array_layers: 1 },
             mip_level_count: 1,
@@ -2291,7 +2311,7 @@ post_symmetry: (&config.flame.post_symmetry).into(),
                 | TextureUsages::COPY_DST
                 | TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
-        });
+        }).await?;
         let output_view = output_texture.create_view(&TextureViewDescriptor::default());
         let curve_lut_view = self.curve_lut_texture.create_view(&TextureViewDescriptor::default());
         let palette_view = self.palette_texture.create_view(&TextureViewDescriptor::default());
@@ -2314,7 +2334,7 @@ post_symmetry: (&config.flame.post_symmetry).into(),
             let row1 = row0 + (sh as usize) * (self.width as usize);
             let strip_data = Self::build_texture_data(&histogram[row0..row1]);
 
-            let strip_accum = self.device.create_texture(&TextureDescriptor {
+            let strip_accum = self.try_create_texture(&TextureDescriptor {
                 label: Some("Export Strip Accumulation"),
                 size: Extent3d { width: self.width, height: sh, depth_or_array_layers: 1 },
                 mip_level_count: 1,
@@ -2323,7 +2343,7 @@ post_symmetry: (&config.flame.post_symmetry).into(),
                 format: TextureFormat::Rgba32Float,
                 usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
                 view_formats: &[],
-            });
+            }).await?;
             self.queue.write_texture(
                 TexelCopyTextureInfo {
                     texture: &strip_accum,
@@ -2483,7 +2503,7 @@ post_symmetry: (&config.flame.post_symmetry).into(),
 
 
         // ===== Step 2: Create and upload accumulation texture =====
-        let accumulation_texture = self.device.create_texture(&TextureDescriptor {
+        let accumulation_texture = self.try_create_texture(&TextureDescriptor {
             label: Some("Export Accumulation Texture"),
             size: Extent3d {
                 width: self.width,
@@ -2496,7 +2516,7 @@ post_symmetry: (&config.flame.post_symmetry).into(),
             format: TextureFormat::Rgba32Float,
             usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
             view_formats: &[],
-        });
+        }).await?;
 
         let bytes_per_row = self.width * 16; // 4 channels × 4 bytes (f32)
         self.queue.write_texture(
