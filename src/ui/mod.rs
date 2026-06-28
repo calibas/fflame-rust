@@ -1030,6 +1030,7 @@ impl EguiLayer {
                         export_height,
                         use_custom_export_size,
                         png_export_premultiplied,
+                        max_export_dimension: device.limits().max_texture_dimension_2d,
                         palette_editor: &mut self.palette_editor,
                         palette_export_json: &mut palette_export_json,
                         palette_save_file: &mut palette_save_file,
