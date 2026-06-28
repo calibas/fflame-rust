@@ -225,6 +225,12 @@ impl PingPongTextures {
         self.read_index = 1 - self.read_index;
     }
 
+    /// Free both GPU textures synchronously (see `EffectChainRunner::destroy`).
+    fn destroy(&self) {
+        self.texture_a.destroy();
+        self.texture_b.destroy();
+    }
+
     /// Get the current read texture (for copying)
     fn read_texture(&self) -> &Texture {
         if self.read_index == 0 {
@@ -293,6 +299,17 @@ impl EffectChainRunner {
     /// Call this at the start of each frame before running effects
     pub fn reset_slots(&mut self) {
         self.current_slot = 0;
+    }
+
+    /// Explicitly release the ping-pong textures + params buffer. On WebGPU,
+    /// dropping defers reclamation to JS GC; a throwaway per-export chain at
+    /// 8000² holds hundreds of MB (full-res ping-pong pair), so destroy it
+    /// alongside the export renderer so repeated WASM exports don't OOM the
+    /// device. Call after the final pixel read completes.
+    pub fn destroy(&self) {
+        if let Some(t) = &self.density_textures { t.destroy(); }
+        if let Some(t) = &self.color_textures { t.destroy(); }
+        self.params_buffer.destroy();
     }
 
     /// Allocate a slot and return its buffer offset

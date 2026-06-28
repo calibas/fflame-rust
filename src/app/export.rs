@@ -103,9 +103,19 @@ pub async fn export_headless_wasm(
         .with_iterations_per_thread(iterations_per_thread)
         .with_transparent(transparent);
 
-    let result = render(&device, &queue, job, &mut NoProgress)
-        .await
-        .map_err(|e| e.to_string())?;
+    let render_result = render(&device, &queue, job, &mut NoProgress).await;
+
+    // Release ALL of this export's GPU memory immediately. On WebGPU, dropping
+    // the Rust device/buffer handles only defers reclamation to the JS garbage
+    // collector, so the ~2–3 GB an 8K render allocates lingers in the tab's GPU
+    // process. A second large export then can't allocate, fails silently, and
+    // comes out all black. `device.destroy()` frees the device's resources
+    // synchronously. render() already dropped the renderer's buffers and the
+    // pixels are on the CPU in `render_result`, so this is safe here (and runs
+    // on both the success and error paths).
+    device.destroy();
+
+    let result = render_result.map_err(|e| e.to_string())?;
 
     // Build metadata
     let metadata = crate::png_metadata::PngMetadata::from_app_state(
