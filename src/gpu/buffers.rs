@@ -1295,6 +1295,54 @@ pub const DEFAULT_PALETTE_SIZE: u32 = 256;
 pub const MAX_PALETTE_SIZE: u32 = 4096;
 
 impl FlameBuffers {
+    /// Explicitly release every GPU buffer and texture this owns.
+    ///
+    /// On WebGPU, dropping the Rust handles only marks the underlying
+    /// `GPUBuffer`/`GPUTexture` objects for JS garbage collection — the GPU
+    /// memory stays allocated until the browser GCs them, which lags well
+    /// behind back-to-back work. A throwaway export renderer at 8000² holds
+    /// ~4 GB (two Rgba32Float accumulation textures + two u32 histogram
+    /// buffers, plus the rest), so repeated large WASM exports pile gigabytes
+    /// onto the live device until allocation fails — silently, producing
+    /// all-black output. `destroy()` frees each resource synchronously.
+    ///
+    /// Call once when the buffers are no longer in use (all GPU work that
+    /// reads them has completed); the owning `FlameBuffers` should be dropped
+    /// afterward.
+    pub fn destroy(&self) {
+        // Large consumers first.
+        self.accumulation_texture_a.destroy();
+        self.accumulation_texture_b.destroy();
+        self.temp_samples_texture.destroy();
+        self.histogram_buffer.destroy();
+        self.histogram_buffer_scratch.destroy();
+        // Optional / feature buffers.
+        if let Some(b) = &self.path_buffer { b.destroy(); }
+        if let Some(b) = &self.path_filter_buffer { b.destroy(); }
+        if let Some(b) = &self.xaos_buffer { b.destroy(); }
+        if let Some(b) = &self.blur_splat_buffer { b.destroy(); }
+        if let Some(b) = &self.blur_convolved_buffer { b.destroy(); }
+        // Small uniform/param/dummy buffers + 1D LUT textures (KB each, but
+        // tidy them too so nothing is left dangling on the device).
+        self.transform_buffer.destroy();
+        self.variation_params_buffer.destroy();
+        self.attachments_buffer.destroy();
+        self.subflame_metadata_buffer.destroy();
+        self.params_buffer.destroy();
+        self.tonemap_params_buffer.destroy();
+        self.accumulate_params_buffer.destroy();
+        self.histogram_blur_params_buffer_h.destroy();
+        self.histogram_blur_params_buffer_v.destroy();
+        self.dummy_path_buffer.destroy();
+        self.dummy_filter_buffer.destroy();
+        self.dummy_xaos_buffer.destroy();
+        self.dummy_blur_buffer.destroy();
+        self.blur_kernel_weights_buffer.destroy();
+        self.blur_convolve_params_buffer.destroy();
+        self.palette_texture.destroy();
+        self.curve_lut_texture.destroy();
+    }
+
     /// Create new FlameBuffers with default palette size (256)
     pub fn new(device: &Device, queue: &Queue, width: u32, height: u32, flame: &Flame) -> Self {
         Self::with_palette_size(device, queue, width, height, flame, DEFAULT_PALETTE_SIZE)

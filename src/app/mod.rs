@@ -1659,6 +1659,13 @@ impl App {
                                     }
                                     Err(e) => log::error!("Failed to capture effect pixels: {}", e),
                                 }
+                                // Read done → all GPU work that read the export
+                                // renderer + effect textures has completed. Free
+                                // both synchronously (a plain drop defers GPU
+                                // reclamation to JS GC on WebGPU), so repeated
+                                // large exports don't OOM the device (all-black).
+                                chain.destroy();
+                                temp_renderer.destroy();
                             });
                         }
                     } else {
@@ -1687,6 +1694,11 @@ impl App {
                                 }
                                 Err(e) => log::error!("Failed to capture pixels: {}", e),
                             }
+                            // Read done → free the export renderer's GPU memory
+                            // synchronously. On WebGPU a plain drop defers this
+                            // to JS GC, so repeated large exports pile gigabytes
+                            // onto the device and OOM (all-black output).
+                            temp_renderer.destroy();
                         });
                     }
                 } else if let Some(ref mut renderer) = self.flame_renderer {
