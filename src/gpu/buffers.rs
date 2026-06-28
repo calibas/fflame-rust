@@ -1190,10 +1190,6 @@ pub struct FlameBuffers {
     pub accumulation_view_a: TextureView,
     pub accumulation_view_b: TextureView,
 
-    // Temp texture for new samples (written by trajectory shader)
-    pub temp_samples_texture: Texture,
-    pub temp_samples_view: TextureView,
-
     // Histogram storage buffer for atomic color accumulation (within-frame)
     // Layout: [r, g, b, density] × (width × height) as u32 array
     pub histogram_buffer: Buffer,
@@ -1313,7 +1309,6 @@ impl FlameBuffers {
         // Large consumers first.
         self.accumulation_texture_a.destroy();
         self.accumulation_texture_b.destroy();
-        self.temp_samples_texture.destroy();
         self.histogram_buffer.destroy();
         self.histogram_buffer_scratch.destroy();
         // Optional / feature buffers.
@@ -1341,6 +1336,24 @@ impl FlameBuffers {
         self.blur_convolve_params_buffer.destroy();
         self.palette_texture.destroy();
         self.curve_lut_texture.destroy();
+    }
+
+    /// Free only the large per-iteration GPU resources — the histogram buffers,
+    /// the accumulation ping-pong, the sample/path/blur buffers — while keeping
+    /// the small palette/curve/param resources. ~3-4 GB at 8000². Used after
+    /// tonemap on memory-constrained (WASM) exports so a following full-res
+    /// color-effect ping-pong has VRAM headroom: these buffers aren't needed
+    /// once tonemap has written the renderer's fractal texture (which lives on
+    /// FlameRenderer and is left intact). Call ONLY after the tonemap's GPU work
+    /// has completed; the renderer must not iterate or tonemap again after this.
+    pub fn free_iteration_buffers(&self) {
+        self.histogram_buffer.destroy();
+        self.histogram_buffer_scratch.destroy();
+        self.accumulation_texture_a.destroy();
+        self.accumulation_texture_b.destroy();
+        if let Some(b) = &self.path_buffer { b.destroy(); }
+        if let Some(b) = &self.blur_splat_buffer { b.destroy(); }
+        if let Some(b) = &self.blur_convolved_buffer { b.destroy(); }
     }
 
     /// Create new FlameBuffers with default palette size (256)
@@ -1526,9 +1539,6 @@ impl FlameBuffers {
         // Create dual accumulation textures for ping-pong
         let (accumulation_texture_a, accumulation_view_a) = create_accum_texture("Accumulation Texture A");
         let (accumulation_texture_b, accumulation_view_b) = create_accum_texture("Accumulation Texture B");
-
-        // Create temp samples texture (written by trajectory shader)
-        let (temp_samples_texture, temp_samples_view) = create_accum_texture("Temp Samples Texture");
 
         // Create histogram storage buffer for atomic color accumulation
         // Buffer layout: 4× u32 per pixel (unpacked, no bit manipulation needed)
@@ -1764,8 +1774,6 @@ impl FlameBuffers {
             accumulation_texture_b,
             accumulation_view_a,
             accumulation_view_b,
-            temp_samples_texture,
-            temp_samples_view,
             histogram_buffer,
             histogram_buffer_scratch,
             path_buffer,
@@ -1838,7 +1846,6 @@ impl FlameBuffers {
             };
             encoder.clear_texture(&self.accumulation_texture_a, &range);
             encoder.clear_texture(&self.accumulation_texture_b, &range);
-            encoder.clear_texture(&self.temp_samples_texture, &range);
         }
 
         // WASM: Clear textures by rendering black to them
@@ -1847,7 +1854,6 @@ impl FlameBuffers {
         {
             self.clear_texture_wasm(encoder, &self.accumulation_view_a);
             self.clear_texture_wasm(encoder, &self.accumulation_view_b);
-            self.clear_texture_wasm(encoder, &self.temp_samples_view);
         }
 
         // Clear histogram buffer (zero out all pixels)
