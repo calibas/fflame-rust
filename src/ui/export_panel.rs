@@ -5,26 +5,48 @@
 use rust_i18n::t;
 use crate::config::ConfigManager;
 
-/// Maximum total export size, in pixels. The real cost (GPU/CPU memory and
-/// render time) tracks total pixels, not either dimension alone, so the cap is
-/// on the product — both width/height fields share it. Desktop allows 400 MP
-/// (20000²); WASM is far more constrained (browser GPU + single-binding
-/// histogram), so 64 MP (8000²).
-#[cfg(not(target_arch = "wasm32"))]
-const MAX_EXPORT_PIXELS: u64 = 400_000_000;
-#[cfg(target_arch = "wasm32")]
-const MAX_EXPORT_PIXELS: u64 = 64_000_000;
+/// Peak GPU memory the export renderer holds *per output pixel*: histogram
+/// (16 B, u32×4) + accumulation ping-pong (2× Rgba32Float = 32 B) + fractal
+/// output (4 B) = 52 B/px, plus the histogram spatial-filter scratch (16 B)
+/// when the flame uses it (`filter_radius > 0`). Color effects and analytic
+/// blur don't raise the peak — color runs after the iteration buffers are
+/// freed, and the analytic-blur buffers are low-res.
+fn export_bytes_per_pixel(spatial_filter: bool) -> u64 {
+    if spatial_filter { 68 } else { 52 }
+}
+
+/// Maximum total export size in pixels, given the flame's features.
+///
+/// The real cost (GPU memory, render time) tracks total pixels, not either
+/// dimension alone, so the cap is on the product — both width/height fields
+/// share it. On WASM the FlameRenderer holds the whole image in VRAM, so the
+/// cap is a fixed GPU-memory budget ÷ the per-pixel cost, which shrinks when
+/// the spatial filter adds its scratch buffer. The budget (~3.33 GB) is the
+/// confirmed-working peak: 8000² with no spatial filter. On desktop, large
+/// in-app exports tile through HighResExporter with bounded memory, so a fixed
+/// generous cap (400 MP = 20000²) applies regardless of features.
+fn max_export_pixels(spatial_filter: bool) -> u64 {
+    #[cfg(target_arch = "wasm32")]
+    {
+        const EXPORT_GPU_BUDGET_BYTES: u64 = 3_328_000_000;
+        EXPORT_GPU_BUDGET_BYTES / export_bytes_per_pixel(spatial_filter)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = spatial_filter;
+        400_000_000
+    }
+}
 
 /// Minimum export dimension.
 const MIN_EXPORT_DIM: u32 = 64;
 
-/// Clamp `dim` (the just-edited field) so `dim * other` stays within the
-/// megapixel budget, also respecting the per-dimension GPU texture cap. The
-/// other field is left untouched, so editing one shrinks only the one you're
-/// editing.
-fn clamp_to_budget(dim: &mut u32, other: u32, max_dim: u32) {
+/// Clamp `dim` (the just-edited field) so `dim * other` stays within `max_px`,
+/// also respecting the per-dimension GPU texture cap `max_dim`. The other field
+/// is left untouched, so editing one shrinks only the one you're editing.
+fn clamp_to_budget(dim: &mut u32, other: u32, max_dim: u32, max_px: u64) {
     let other = (other as u64).max(1);
-    let max_for_dim = (MAX_EXPORT_PIXELS / other).max(MIN_EXPORT_DIM as u64);
+    let max_for_dim = (max_px / other).max(MIN_EXPORT_DIM as u64);
     let ceil = (max_for_dim.min(max_dim as u64)) as u32;
     *dim = (*dim).clamp(MIN_EXPORT_DIM, ceil.max(MIN_EXPORT_DIM));
 }
@@ -87,17 +109,38 @@ pub fn render_export_content(
     // Custom size options
     ui.checkbox(use_custom_export_size, t!("export.use_custom_size"));
 
-    // Per-axis widget ceiling: the GPU's max texture size (the megapixel budget
+    // Feature-aware pixel budget: the histogram spatial filter (Apophysis
+    // `filter`) adds a full-res scratch buffer, so it lowers the max export
+    // size — most on WASM, where the whole image lives in VRAM.
+    let spatial_filter = config_manager.active_config().filter_radius > 0.0;
+    let max_px = max_export_pixels(spatial_filter);
+    // Per-axis widget ceiling: the GPU's max texture size (the pixel budget
     // constrains the product within it). Guard against a degenerate 0.
     let dim_ceiling = max_export_dimension.max(MIN_EXPORT_DIM);
+
+    // Keep the current size within the (feature-dependent) budget — e.g. when
+    // the flame's spatial filter toggles on and lowers the cap. Shrink
+    // proportionally so the aspect ratio is preserved.
+    let total_px = *export_width as u64 * *export_height as u64;
+    if total_px > max_px {
+        let scale = (max_px as f64 / total_px as f64).sqrt();
+        let w = ((*export_width as f64 * scale) as u32).clamp(MIN_EXPORT_DIM, dim_ceiling);
+        let h = ((*export_height as f64 * scale) as u32).clamp(MIN_EXPORT_DIM, dim_ceiling);
+        if w != *export_width || h != *export_height {
+            *export_width = w;
+            *export_height = h;
+            let _ = config_manager.update_system_setting(crate::config::ConfigPath::SystemExportWidth, (*export_width).into());
+            let _ = config_manager.update_system_setting(crate::config::ConfigPath::SystemExportHeight, (*export_height).into());
+        }
+    }
 
     ui.add_enabled_ui(*use_custom_export_size, |ui| {
         ui.horizontal(|ui| {
             ui.label(t!("export.width"));
             if ui.add(super::VkbDragValue::new(export_width).range(MIN_EXPORT_DIM..=dim_ceiling).speed(10)).changed() {
-                // Shared megapixel budget: shrink the field just edited so the
-                // total stays within MAX_EXPORT_PIXELS (height left as-is).
-                clamp_to_budget(export_width, *export_height, dim_ceiling);
+                // Shared pixel budget: shrink the field just edited so the total
+                // stays within `max_px` (height left as-is).
+                clamp_to_budget(export_width, *export_height, dim_ceiling, max_px);
                 let _ = config_manager.update_system_setting(
                     crate::config::ConfigPath::SystemExportWidth,
                     (*export_width).into()
@@ -107,7 +150,7 @@ pub fn render_export_content(
         ui.horizontal(|ui| {
             ui.label(t!("export.height"));
             if ui.add(super::VkbDragValue::new(export_height).range(MIN_EXPORT_DIM..=dim_ceiling).speed(10)).changed() {
-                clamp_to_budget(export_height, *export_width, dim_ceiling);
+                clamp_to_budget(export_height, *export_width, dim_ceiling, max_px);
                 let _ = config_manager.update_system_setting(
                     crate::config::ConfigPath::SystemExportHeight,
                     (*export_height).into()
@@ -115,11 +158,12 @@ pub fn render_export_content(
             }
         });
 
-        // Megapixel readout — the actual shared limit.
+        // Pixel-budget readout. `max_px` drops when the spatial filter is on.
         let mp = (*export_width as u64 * *export_height as u64) as f64 / 1e6;
-        let max_mp = MAX_EXPORT_PIXELS as f64 / 1e6;
+        let max_mp = max_px as f64 / 1e6;
+        let suffix = if spatial_filter { " (spatial filter)" } else { "" };
         ui.label(
-            egui::RichText::new(format!("{:.1} MP / {:.0} MP max", mp, max_mp))
+            egui::RichText::new(format!("{:.1} MP / {:.0} MP max{}", mp, max_mp, suffix))
                 .small()
                 .color(egui::Color32::GRAY),
         );
@@ -134,26 +178,34 @@ mod tests {
     #[test]
     fn budget_clamp_caps_total_pixels() {
         let max_dim = 32768;
+        let max_px = max_export_pixels(false); // desktop: 400 MP
         // Over budget at this height → width shrinks so the product fits.
         let mut w = 30000;
-        clamp_to_budget(&mut w, 20000, max_dim);
-        assert!((w as u64) * 20000 <= MAX_EXPORT_PIXELS);
+        clamp_to_budget(&mut w, 20000, max_dim, max_px);
+        assert!((w as u64) * 20000 <= max_px);
         assert_eq!(w, 20000); // 400M / 20000
 
         // Wide aspect allowed within the budget, but the GPU axis cap binds first.
         let mut w2 = 60000;
-        clamp_to_budget(&mut w2, 8000, max_dim);
+        clamp_to_budget(&mut w2, 8000, max_dim, max_px);
         assert_eq!(w2, max_dim);
-        assert!((w2 as u64) * 8000 <= MAX_EXPORT_PIXELS);
+        assert!((w2 as u64) * 8000 <= max_px);
 
         // Tiny other dimension: budget allows huge width, GPU cap still bounds it.
         let mut w3 = 1_000_000;
-        clamp_to_budget(&mut w3, MIN_EXPORT_DIM, max_dim);
+        clamp_to_budget(&mut w3, MIN_EXPORT_DIM, max_dim, max_px);
         assert_eq!(w3, max_dim);
 
         // Already within budget → unchanged.
         let mut w4 = 12000;
-        clamp_to_budget(&mut w4, 12000, max_dim);
+        clamp_to_budget(&mut w4, 12000, max_dim, max_px);
         assert_eq!(w4, 12000);
+    }
+
+    #[test]
+    fn spatial_filter_raises_per_pixel_cost() {
+        assert_eq!(export_bytes_per_pixel(false), 52);
+        assert_eq!(export_bytes_per_pixel(true), 68);
+        assert!(export_bytes_per_pixel(true) > export_bytes_per_pixel(false));
     }
 }
