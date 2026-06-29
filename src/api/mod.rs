@@ -181,7 +181,7 @@ impl ApiState {
     ) -> FetchResult<String> {
         let token = self.require_token()?;
 
-        let mut flame_req = sync::config_to_create_request(config, name);
+        let mut flame_req = sync::config_to_create_request(config, name)?;
         flame_req.visibility = visibility;
         let flame_url = build_url(API_BASE_URL, "/api/flames");
         let flame_resp: FlameResponse =
@@ -246,7 +246,7 @@ impl ApiState {
             }
         };
 
-        let mut req = sync::config_to_create_request(config, name);
+        let mut req = sync::config_to_create_request(config, name)?;
         req.visibility = effective_visibility;
 
         let url = build_url(API_BASE_URL, &format!("/api/flames/{}", flame_id));
@@ -275,7 +275,7 @@ impl ApiState {
         let user_id = resp.user_id.clone();
         let animation_count = resp.animation_count;
         let animations = resp.animations.clone();
-        let config = sync::flame_response_to_config(&resp);
+        let config = sync::flame_response_to_config(&resp)?;
         Ok(FlameLoadResult { config, is_public, user_id, animation_count, animations })
     }
 
@@ -417,7 +417,8 @@ impl ApiState {
         let flame_config = resp
             .flame
             .as_ref()
-            .map(sync::flame_response_to_config);
+            .map(sync::flame_response_to_config)
+            .transpose()?;
 
         let mut animation = sync::animation_response_to_animation(&resp);
 

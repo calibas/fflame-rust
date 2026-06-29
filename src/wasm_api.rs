@@ -53,7 +53,7 @@ impl WasmApi {
     /// ```
     #[wasm_bindgen]
     pub fn load_config_json(&mut self, json: &str) -> Result<(), JsValue> {
-        let config: FractalConfig = serde_json::from_str(json)
+        let config = FractalConfig::from_json(json)
             .map_err(|e| JsValue::from_str(&format!("Failed to parse config: {}", e)))?;
 
         self.config = Some(config);

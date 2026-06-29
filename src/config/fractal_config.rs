@@ -4,8 +4,15 @@ use crate::scene::palette::{ColorMode, Palette, PathCaptureMode, PathMapStyle, P
 use crate::scene::tonemap::{HighlightMode, ToneMapMode, ToneCurve};
 use crate::effects::EffectInstance;
 
-/// Current config format version
-pub const CURRENT_CONFIG_VERSION: u32 = 1;
+/// Current config format version.
+///
+/// v2 introduces the cloud "opaque blob" wire format (see
+/// `docs/projects/api-v2.md`): the same JSON a `.fflame` file holds is stored
+/// as a blob, so new config fields need no API/DB change. Both `.fflame` and
+/// cloud loads run through `migrate_value` (version-keyed, on the raw JSON
+/// *before* deserialize) so a version's old field defaults can be restored for
+/// fields that were stripped at save time.
+pub const CURRENT_CONFIG_VERSION: u32 = 2;
 
 /// Complete fractal configuration (excludes runtime-only settings)
 /// All fields except `flame` have defaults for compact serialization
@@ -559,10 +566,11 @@ impl FractalConfig {
         (dx * cos_r - dy * sin_r, dx * sin_r + dy * cos_r)
     }
 
-    /// Export configuration to JSON string with version header
-    /// Omits fields that match defaults for compact output
-    pub fn to_json(&self) -> Result<String, serde_json::Error> {
-        // Serialize to JSON value
+    /// Build the compact, version-headed JSON **value**: defaults stripped,
+    /// `version` first, `flame` next. This is the canonical serialized form
+    /// — `to_json` is just this stringified, and the cloud config blob
+    /// (`api::sync`) is this value minus the palette and root transforms.
+    pub(crate) fn to_json_value(&self) -> Result<serde_json::Value, serde_json::Error> {
         let mut value = serde_json::to_value(self)?;
 
         if let Some(obj) = value.as_object_mut() {
@@ -583,10 +591,16 @@ impl FractalConfig {
                     ordered_obj.insert(k.clone(), v.clone());
                 }
             }
-            serde_json::to_string_pretty(&ordered_obj)
+            Ok(serde_json::Value::Object(ordered_obj))
         } else {
-            serde_json::to_string_pretty(&value)
+            Ok(value)
         }
+    }
+
+    /// Export configuration to JSON string with version header
+    /// Omits fields that match defaults for compact output
+    pub fn to_json(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string_pretty(&self.to_json_value()?)
     }
 
     /// Remove fields from JSON object that match default values
@@ -641,43 +655,11 @@ impl FractalConfig {
         if config.deterministic_rng == defaults.deterministic_rng { obj.remove("deterministic_rng"); }
     }
 
-    /// Import configuration from JSON string with version checking and migration
+    /// Import configuration from a JSON string, with version-keyed migration.
+    /// Both `.fflame` files and cloud config blobs deserialize through here
+    /// (and `from_json_value`), so they share one migration path.
     pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
-        // Parse to check version first
-        let value: serde_json::Value = serde_json::from_str(json)?;
-
-        // Check version if present
-        let version = value.get("version")
-            .and_then(|v| v.as_u64())
-            .map(|v| v as u32)
-            .unwrap_or(0); // Pre-versioning configs are version 0
-
-        if version > CURRENT_CONFIG_VERSION {
-            let msg = format!(
-                "Config version {} is newer than supported version {}. Please update the application.",
-                version, CURRENT_CONFIG_VERSION
-            );
-            return Err(serde_json::Error::io(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                msg
-            )));
-        }
-
-        // Deserialize first (serde defaults will apply)
-        let mut config: Self = serde_json::from_value(value)?;
-
-        // Apply migrations if needed
-        if version < CURRENT_CONFIG_VERSION {
-            config = Self::migrate(config, version)?;
-        }
-
-        // Assign session-local IDs to every Transform / Flame / Effect
-        // that came in without one (i.e. all of them — IDs are
-        // serde-skipped). This makes the deserialized config immediately
-        // usable by the animation rebind machinery.
-        config.fixup_ids();
-
-        Ok(config)
+        Self::from_json_value(serde_json::from_str(json)?)
     }
 
     /// Walk every list-item (transforms in all three pools on Main and
@@ -703,39 +685,51 @@ impl FractalConfig {
         }
     }
 
-    /// Migrate config from old version to current version
-    /// Returns error as serde_json::Error for API consistency
-    fn migrate(mut config: Self, from_version: u32) -> Result<Self, serde_json::Error> {
-        let mut current_version = from_version;
+    /// Version-keyed migration on the raw JSON **value**, run BEFORE
+    /// `from_value`. This is the crucial ordering: a field stripped at save
+    /// time (because it equalled its default at *that* version) is *absent*
+    /// here, so an arm can restore the version's old default with
+    /// `obj.entry("field").or_insert(json!(old_default))`. If we migrated the
+    /// typed struct instead, serde would already have filled the absent field
+    /// with the *current* default and the old value would be unrecoverable.
+    ///
+    /// Each arm upgrades exactly one version; `version` is rewritten to current
+    /// on success. Arms for bumps that change no defaults/shape are empty —
+    /// serde's current default is already correct for every field.
+    fn migrate_value(from_version: u32, value: &mut serde_json::Value) -> Result<(), serde_json::Error> {
+        let obj = match value.as_object_mut() {
+            Some(o) => o,
+            // Non-object: let `from_value` surface the real type error.
+            None => return Ok(()),
+        };
 
-        // Migration chain: apply each migration in sequence
-        while current_version < CURRENT_CONFIG_VERSION {
-            config = match current_version {
-                0 => Self::migrate_v0_to_v1(config),
-                // Future migrations:
-                // 1 => Self::migrate_v1_to_v2(config),
-                // 2 => Self::migrate_v2_to_v3(config),
-                _ => {
-                    let msg = format!("Unknown config version {} during migration", current_version);
+        let mut version = from_version;
+        while version < CURRENT_CONFIG_VERSION {
+            match version {
+                // v0 -> v1: pre-versioning configs. No structural/default
+                // changes; serde defaults handle missing fields.
+                0 => {}
+                // v1 -> v2: opaque-blob format (docs/projects/api-v2.md). No
+                // field defaults changed, so this is a no-op for now. The arm
+                // exists so a *future* default change lands here as an explicit
+                // `obj.entry("field").or_insert(json!(v1_default))` rather than
+                // silently re-rendering old flames at the new default.
+                1 => {}
+                other => {
                     return Err(serde_json::Error::io(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
-                        msg
+                        format!("Unknown config version {} during migration", other),
                     )));
                 }
-            };
-            current_version += 1;
+            }
+            version += 1;
         }
 
-        log::info!("Migrated config from version {} to {}", from_version, CURRENT_CONFIG_VERSION);
-        Ok(config)
-    }
-
-    /// Migrate pre-versioning configs (version 0) to version 1
-    /// These are configs saved before versioning was implemented
-    fn migrate_v0_to_v1(config: Self) -> Self {
-        // No structural changes needed - serde defaults handle missing fields
-        // This migration exists to document that v0 -> v1 is a no-op
-        config
+        obj.insert("version".to_string(), serde_json::json!(CURRENT_CONFIG_VERSION));
+        if from_version < CURRENT_CONFIG_VERSION {
+            log::info!("Migrated config from version {} to {}", from_version, CURRENT_CONFIG_VERSION);
+        }
+        Ok(())
     }
 
     /// Export to JSON file
@@ -783,36 +777,35 @@ impl FractalConfig {
         }
     }
 
-    /// Import a single configuration from JSON value (internal helper)
-    fn from_json_value(value: serde_json::Value) -> Result<Self, serde_json::Error> {
-        // Check version if present
+    /// Import a single configuration from a JSON value, migrating it (on the
+    /// value, before deserialize) to the current version. Shared by `from_json`
+    /// and the array path; the cloud-blob path (`api::sync`) reuses it too,
+    /// which is why it's `pub(crate)`.
+    pub(crate) fn from_json_value(mut value: serde_json::Value) -> Result<Self, serde_json::Error> {
         let version = value.get("version")
             .and_then(|v| v.as_u64())
             .map(|v| v as u32)
-            .unwrap_or(0);
+            .unwrap_or(0); // Pre-versioning configs are version 0.
 
         if version > CURRENT_CONFIG_VERSION {
-            let msg = format!(
-                "Config version {} is newer than supported version {}. Please update the application.",
-                version, CURRENT_CONFIG_VERSION
-            );
             return Err(serde_json::Error::io(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                msg,
+                format!(
+                    "Config version {} is newer than supported version {}. Please update the application.",
+                    version, CURRENT_CONFIG_VERSION
+                ),
             )));
         }
 
-        // Deserialize first (serde defaults will apply)
+        // Migrate on the value (restores version-specific defaults), THEN
+        // deserialize — serde fills any still-absent field with the current
+        // default, correct for every field a migration arm didn't touch.
+        Self::migrate_value(version, &mut value)?;
         let mut config: Self = serde_json::from_value(value)?;
 
-        // Apply migrations if needed
-        if version < CURRENT_CONFIG_VERSION {
-            config = Self::migrate(config, version)?;
-        }
-
-        // Assign session-local IDs (see `fixup_ids` doc).
+        // Assign session-local IDs to every Transform / Flame / Effect that
+        // came in without one (all of them — IDs are serde-skipped).
         config.fixup_ids();
-
         Ok(config)
     }
 
@@ -900,7 +893,37 @@ mod tests {
     fn test_version_included_in_json() {
         let config = FractalConfig::default();
         let json = config.to_json().unwrap();
-        assert!(json.contains("\"version\": 1"));
+        assert!(json.contains(&format!("\"version\": {}", CURRENT_CONFIG_VERSION)));
+    }
+
+    #[test]
+    fn test_enums_serialize_snake_case_read_pascal_case() {
+        use crate::scene::palette::ColorMode;
+        use crate::scene::tonemap::ToneMapMode;
+        use crate::scene::transforms::RenderMode;
+
+        // Emit: the wire/blob form is snake_case (the server casts
+        // `render_mode` straight into a Postgres enum of '2d'/'3d').
+        let mut config = FractalConfig::default();
+        config.flame.render_mode = RenderMode::ThreeD;
+        config.color_mode = ColorMode::PathMap;
+        config.tonemap_mode = ToneMapMode::DensityVisualization;
+        let json = config.to_json().unwrap();
+        assert!(json.contains("\"3d\""), "render_mode must emit \"3d\"");
+        assert!(json.contains("\"path_map\""), "color_mode must emit snake_case");
+        assert!(json.contains("\"density\""), "tonemap_mode must emit \"density\"");
+        assert!(!json.contains("ThreeD") && !json.contains("PathMap"));
+
+        // Read: legacy PascalCase files still load via the serde aliases.
+        let mut legacy = serde_json::to_value(FractalConfig::default()).unwrap();
+        legacy["version"] = serde_json::json!(CURRENT_CONFIG_VERSION);
+        legacy["flame"]["render_mode"] = serde_json::json!("ThreeD");
+        legacy["color_mode"] = serde_json::json!("PathMap");
+        legacy["tonemap_mode"] = serde_json::json!("DensityVisualization");
+        let restored = FractalConfig::from_json_value(legacy).unwrap();
+        assert_eq!(restored.flame.render_mode, RenderMode::ThreeD);
+        assert_eq!(restored.color_mode, ColorMode::PathMap);
+        assert_eq!(restored.tonemap_mode, ToneMapMode::DensityVisualization);
     }
 
     #[test]
