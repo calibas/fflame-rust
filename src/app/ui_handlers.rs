@@ -695,7 +695,7 @@ impl App {
             data.remove_temp::<String>(egui::Id::new("pending_subflame_load_raw"))
         }) {
             if let Some(index) = self.pending_subflame_load_index.take() {
-                match serde_json::from_str::<FractalConfig>(&json) {
+                match FractalConfig::from_json(&json) {
                     Ok(config) => {
                         let mut flame = config.flame;
                         flame.subflames.clear();
@@ -1082,7 +1082,7 @@ impl App {
             if let Some(json) = self.egui_layer.ctx.data_mut(|data| {
                 data.remove_temp::<String>(egui::Id::new("pending_config_load_raw"))
             }) {
-                match serde_json::from_str::<FractalConfig>(&json) {
+                match FractalConfig::from_json(&json) {
                     Ok(config) => {
                         if let Err(e) = self.load_config_with_undo(config, "history.action.load_config".to_string(), None) {
                             log::error!("Failed to load config: {}", e);

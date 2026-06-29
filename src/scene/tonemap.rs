@@ -4,11 +4,15 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ToneMapMode {
     /// Linear tone mapping (simple clamping)
+    #[serde(rename = "linear", alias = "Linear")]
     Linear,
     /// Logarithmic tone mapping (compresses bright areas)
+    #[serde(rename = "logarithmic", alias = "Logarithmic")]
     Logarithmic,
     /// Raw density visualization (shows accumulated density as grayscale)
-    /// Useful for analyzing density distribution and fine detail
+    /// Useful for analyzing density distribution and fine detail.
+    /// The wire/cloud-blob form for this variant is `"density"`.
+    #[serde(rename = "density", alias = "DensityVisualization")]
     DensityVisualization,
 }
 
@@ -27,19 +31,23 @@ pub enum HighlightMode {
     /// Per-channel clamp to [0,1]. Causes hue shift toward CMY/white at high
     /// brightness (orange (1, 0.5, 0) × 5 → (5, 2.5, 0) → clamps to pure
     /// yellow). Matches Apophysis / JWildfire.
+    #[serde(rename = "clip", alias = "Clip")]
     Clip,
     /// Hue-preserving rescale. If `max(r,g,b) > 1`, divide all channels by
     /// the max so the brightest channel lands at 1.0 and the others stay in
     /// ratio. No hue shift; bright pixels desaturate by lowering value
     /// rather than blowing out per-channel.
+    #[serde(rename = "max_norm", alias = "MaxNorm")]
     MaxNorm,
     /// Reinhard luminance-preserving tonemap: `L_mapped = L / (1 + L)` where
     /// L is Rec.709 luminance. Color is scaled by `L_mapped / L`. Smooth
     /// roll-off, slight desaturation in highlights. Soft "photographic" look.
+    #[serde(rename = "reinhard", alias = "Reinhard")]
     Reinhard,
     /// ACES filmic tonemap (Narkowicz approximation): the standard film/HDR
     /// curve used in games and cinema. Slight contrast boost in midtones,
     /// gentle highlight roll-off, hue-preserving.
+    #[serde(rename = "filmic", alias = "Filmic")]
     Filmic,
 }
 

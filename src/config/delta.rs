@@ -2970,114 +2970,64 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
             json.as_str().map(|s| ConfigValue::String(s.to_string()))
         }
 
-        // Enum types (need string parsing)
+        // Enum types: deserialize via serde, which accepts both the canonical
+        // snake_case wire form (`"2d"`, `"path_map"`, ...) and the legacy
+        // PascalCase `alias`es from old config / animation files.
         ConfigPath::TonemapMode => {
-            if let Some(s) = json.as_str() {
-                match s {
-                    "Linear" => Some(ConfigValue::ToneMapMode(ToneMapMode::Linear)),
-                    "Logarithmic" => Some(ConfigValue::ToneMapMode(ToneMapMode::Logarithmic)),
-                    _ => None,
-                }
-            } else {
-                None
-            }
+            serde_json::from_value::<ToneMapMode>(json.clone())
+                .ok()
+                .map(ConfigValue::ToneMapMode)
         }
 
         ConfigPath::HighlightMode => {
-            use crate::scene::tonemap::HighlightMode;
-            if let Some(s) = json.as_str() {
-                match s {
-                    "Clip" => Some(ConfigValue::HighlightMode(HighlightMode::Clip)),
-                    "MaxNorm" => Some(ConfigValue::HighlightMode(HighlightMode::MaxNorm)),
-                    "Reinhard" => Some(ConfigValue::HighlightMode(HighlightMode::Reinhard)),
-                    "Filmic" => Some(ConfigValue::HighlightMode(HighlightMode::Filmic)),
-                    _ => None,
-                }
-            } else {
-                None
-            }
+            serde_json::from_value::<crate::scene::tonemap::HighlightMode>(json.clone())
+                .ok()
+                .map(ConfigValue::HighlightMode)
         }
 
         ConfigPath::ColorMode => {
-            if let Some(s) = json.as_str() {
-                match s {
-                    "Palette" => Some(ConfigValue::ColorMode(ColorMode::Palette)),
-                    "Speed" => Some(ConfigValue::ColorMode(ColorMode::Speed)),
-                    "PathMap" => Some(ConfigValue::ColorMode(ColorMode::PathMap)),
-                    _ => None,
-                }
-            } else {
-                None
-            }
+            serde_json::from_value::<ColorMode>(json.clone())
+                .ok()
+                .map(ConfigValue::ColorMode)
         }
 
         ConfigPath::PaletteSqueezeMode => {
-            if let Some(s) = json.as_str() {
-                use crate::scene::palette::SqueezeMode;
-                match s {
-                    "Linear" => Some(ConfigValue::SqueezeMode(SqueezeMode::Linear)),
-                    "Geometric" => Some(ConfigValue::SqueezeMode(SqueezeMode::Geometric)),
-                    _ => None,
-                }
-            } else {
-                None
-            }
+            serde_json::from_value::<crate::scene::palette::SqueezeMode>(json.clone())
+                .ok()
+                .map(ConfigValue::SqueezeMode)
         }
 
         ConfigPath::PathMapStyle => {
-            if let Some(s) = json.as_str() {
-                match s {
-                    "Prefix" => Some(ConfigValue::PathMapStyle(PathMapStyle::Prefix)),
-                    "Suffix" => Some(ConfigValue::PathMapStyle(PathMapStyle::Suffix)),
-                    "PrefixDistinct" => Some(ConfigValue::PathMapStyle(PathMapStyle::PrefixDistinct)),
-                    "SuffixDistinct" => Some(ConfigValue::PathMapStyle(PathMapStyle::SuffixDistinct)),
-                    // Backward compatibility with old config files
-                    "Similar" => Some(ConfigValue::PathMapStyle(PathMapStyle::Prefix)),
-                    "Distinct" => Some(ConfigValue::PathMapStyle(PathMapStyle::PrefixDistinct)),
-                    "ScrambledPrefix" => Some(ConfigValue::PathMapStyle(PathMapStyle::PrefixDistinct)),
-                    "ScrambledSuffix" => Some(ConfigValue::PathMapStyle(PathMapStyle::SuffixDistinct)),
-                    _ => None,
-                }
-            } else {
-                None
-            }
+            serde_json::from_value::<PathMapStyle>(json.clone())
+                .ok()
+                .or_else(|| {
+                    // Pre-serde legacy style names from very old config files.
+                    json.as_str().and_then(|s| match s {
+                        "Similar" => Some(PathMapStyle::Prefix),
+                        "Distinct" | "ScrambledPrefix" => Some(PathMapStyle::PrefixDistinct),
+                        "ScrambledSuffix" => Some(PathMapStyle::SuffixDistinct),
+                        _ => None,
+                    })
+                })
+                .map(ConfigValue::PathMapStyle)
         }
 
         ConfigPath::PathCaptureMode => {
-            if let Some(s) = json.as_str() {
-                match s {
-                    "FirstHit" => Some(ConfigValue::PathCaptureMode(PathCaptureMode::FirstHit)),
-                    "FirstAfterBurnIn" => Some(ConfigValue::PathCaptureMode(PathCaptureMode::FirstAfterBurnIn)),
-                    "LastHit" => Some(ConfigValue::PathCaptureMode(PathCaptureMode::LastHit)),
-                    _ => None,
-                }
-            } else {
-                None
-            }
+            serde_json::from_value::<PathCaptureMode>(json.clone())
+                .ok()
+                .map(ConfigValue::PathCaptureMode)
         }
 
         ConfigPath::PathTrackingMode => {
-            if let Some(s) = json.as_str() {
-                match s {
-                    "First" => Some(ConfigValue::PathTrackingMode(PathTrackingMode::First)),
-                    "Recent" => Some(ConfigValue::PathTrackingMode(PathTrackingMode::Recent)),
-                    _ => None,
-                }
-            } else {
-                None
-            }
+            serde_json::from_value::<PathTrackingMode>(json.clone())
+                .ok()
+                .map(ConfigValue::PathTrackingMode)
         }
 
         ConfigPath::RenderMode => {
-            if let Some(s) = json.as_str() {
-                match s {
-                    "TwoD" => Some(ConfigValue::RenderMode(RenderMode::TwoD)),
-                    "ThreeD" => Some(ConfigValue::RenderMode(RenderMode::ThreeD)),
-                    _ => None,
-                }
-            } else {
-                None
-            }
+            serde_json::from_value::<RenderMode>(json.clone())
+                .ok()
+                .map(ConfigValue::RenderMode)
         }
 
         // Effect enabled flags (bool)

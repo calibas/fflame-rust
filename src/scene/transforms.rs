@@ -1753,9 +1753,12 @@ mod tests {
 /// Rendering mode for the fractal flame
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RenderMode {
-    /// 2D rendering (traditional fractal flames)
+    /// 2D rendering (traditional fractal flames). Wire/cloud-blob form: `"2d"`
+    /// (the server casts this to the Postgres `render_mode` enum).
+    #[serde(rename = "2d", alias = "TwoD")]
     TwoD,
-    /// 3D rendering with pseudo-3D projection
+    /// 3D rendering with pseudo-3D projection. Wire/cloud-blob form: `"3d"`.
+    #[serde(rename = "3d", alias = "ThreeD")]
     ThreeD,
 }
 
