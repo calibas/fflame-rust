@@ -1,257 +1,194 @@
-# API v2 — catch the wire format up to FractalConfig
+# API v2 — client-side plan
+
+Paired with [docs/projects/api-v2-server.md](api-v2-server.md). That doc owns the
+database schema, read/write paths, validation surface, and migration; this one
+owns the **wire format from the client's side**, the `FractalConfig ↔ request`
+conversion, and the **version-keyed config migration** the client is responsible
+for.
+
+> **Supersedes** the old granular client/server plans. The previous `api-v2.md`
+> (per-field typed schema) and `api-v2-server-side.md` (granular server schema)
+> are both retired — delete `api-v2-server-side.md`.
 
 ## Why
 
-The shipped API ([docs/projects/api-integration.md](api-integration.md))
-serializes `FractalConfig` into a flat typed schema —
-[`CreateFlameRequest`](../../src/api/types.rs) /
-[`FlameResponse`](../../src/api/types.rs) — so the server can index,
-search, and migrate individual fields rather than treat flames as
-opaque blobs. That's the right shape; we keep it for v2.
+The shipped API mirrors every `FractalConfig` field as a wire field + a DB
+column + a `sync.rs` mapping. That's a **drift treadmill**: each config change
+needs three coordinated edits, and the wire format is currently ~15 fields
+behind (`camera_x/y/bank`, `image_size`, the Flame depth/symmetry/`preserve_z`
+set, the Transform `variation_order`/`variation_priorities`/3D-affine set — all
+silently dropped on save, defaulted on load).
 
-What it can't do today: round-trip flames that use anything added to
-`FractalConfig` since the API shipped. The gap accumulated through
-linked transforms, subflames, the tonemap rework, palette pipeline
-extensions, and a few other landings. Saving such a flame to the
-cloud silently drops information; loading defaults the missing
-fields. That's the v2 work: extend the typed schema to cover the
-current `FractalConfig` shape, bump the version, and document
-back-compat behavior on both sides.
+v2 stops the treadmill: the flame config becomes an **opaque JSONB blob that is
+the same JSON a `.fflame` file holds**. One serialization for local files and
+the cloud; new config fields need zero API/DB work.
 
-## Scope decisions (already made)
+## Architecture (client view)
 
-- **Path A — granular typed schema, not a blob.** Server keeps
-  per-field columns so search and server-side migrations stay
-  possible. ([api-integration.md §"Save Format"](api-integration.md)
-  showed the temptation of a `config: Value` blob; rejected because
-  it loses queryability.)
-- **Stable IDs stay session-only.** `Transform.id`, `Flame.id`,
-  `EffectInstance.id` are all `#[serde(skip)]`; the wire format uses
-  array indices, matching `.fflame`. No transport for IDs needed.
-- **Animations stay opaque.** `tracks`/`generators`/`base_config` are
-  already `serde_json::Value` in
-  [`CreateAnimationRequest`](../../src/api/types.rs) and that's
-  correct — animation tracks are highly variable and target by index,
-  and the server doesn't need to introspect them.
-- **Effects don't have per-transform targeting.** The two effect
-  chains (density / color) are global to the flame; the existing
-  `CreateEffectInput { effect_name, params, enabled }` shape is
-  enough.
+A saved flame is, on the wire:
 
-## The gap
+- **`config`** — opaque blob: the whole `FractalConfig` **minus the root flame's
+  transforms and minus the palette**, including the full subflame tree (each
+  subflame carries its own non-transform fields *and* its own inline transform
+  pools). Carries `config_version`.
+- **`transforms[]`** — the **root flame's** transforms only, sent as a
+  flat array of `{ kind, sort_order, variation_names, data }`. These become rows
+  in the server's slim `transforms` table (GIN-indexed `variation_names` powers
+  per-transform search). Subflame transforms stay inside `config`.
+- **`palette`** — inline content-addressable `ApiPalette` (unchanged flow); the
+  server stores `(hash, name)` on the flame row.
+- **`name`, `visibility`** — the only typed flame metadata. **Single `name`** —
+  the old `flame_name`/cloud-title split is gone; `Flame::name` round-trips
+  through `name`.
 
-Fields present in `FractalConfig` /
-[`Flame`](../../src/scene/transforms.rs) / `Transform` that the wire
-format drops today. Each entry: client field → API field (or
-`missing`) → default for back-compat on receive.
+The client sends **no derived metadata**: the server extracts `render_mode` and
+`has_subflames` from two fixed blob keys on save, and derives
+`transform_count`/`variation_names` live from the transforms table at read.
 
-### Flame structure (the structural changes)
+## Wire format
 
-| Client | API today | Plan |
-|---|---|---|
-| `Flame.final_transforms: Vec<Transform>` | `final_transform: Option<CreateTransformInput>` (**singular**) | Rename to plural; `Vec<CreateTransformInput>`. Old clients sending the singular form: server accepts via serde alias and stores as a 1-element pool. |
-| `Flame.linked_transforms: Vec<Transform>` | missing | Add `linked_transforms: Option<Vec<CreateTransformInput>>`. Default `None` ≡ empty pool. |
-| `Transform.linked_attachments: Vec<usize>` | missing | Add to `CreateTransformInput` and `TransformResponse`. Default `[]`. |
-| `Transform.final_attachments: Vec<usize>` | missing | Same. |
-| `Flame.subflames: Vec<Flame>` | missing | Add `subflames: Option<Vec<CreateFlameRequest>>` (recursive). Subflame names default to "Untitled" client-side; the API doesn't need them but should preserve them for round-trip. |
-
-A note on the singular→plural final-transform migration: existing
-flames stored in the DB have a single `final_transform` row. The
-server's v2 migration should treat that as a one-element
-`final_transforms` pool. New flames written by v2 clients land in the
-pool directly. Old clients reading new flames see the *first* final
-in `final_transform` for back-compat — or, since old clients also
-ignore unknown fields, see no final at all. Either is acceptable;
-need to pick one in API implementation.
-
-### Tonemap / color (additive)
-
-| Client | API today | Plan |
-|---|---|---|
-| `highlight_mode: HighlightMode` (`Clip`/`MaxNorm`/`Reinhard`/`Filmic`) | missing | Add enum `ApiHighlightMode` + field. Default `Clip`. |
-| `white_level: f32` | missing | Add field. Default `200.0` (`DEFAULT_WHITE_LEVEL`). |
-| `palette: Palette` (embedded `{ name, stops }`) | `palette_id: Option<String>` only | Add `palette: Option<ApiPalette>` carrying name + stops. **Both fields coexist** — `palette_id` references the library, `palette` carries embedded custom data. If both present, `palette` wins client-side (matches `.fflame` behavior). |
-| `palette_squeeze_mode: SqueezeMode` (`Linear`/`Geometric`) | missing | Add enum + field. Default `Linear`. |
-| `palette_squeeze_falloff: f32` | missing | Add. Default `0.5`. |
-| `palette_log_strength: f32` | missing | Add. Default `0.0`. |
-| `palette_reverse: bool` | missing | Add. Default `false`. |
-
-### Effects
-
-`CreateEffectInput.params: Option<serde_json::Value>` is currently
-opaque on the wire. Client `EffectInstance.params: HashMap<String,
-f32>` is typed. The two are compatible (HashMap serializes to a JSON
-object), but worth making explicit:
-
-| Client | API today | Plan |
-|---|---|---|
-| `EffectInstance.params: HashMap<String, f32>` | `params: Option<serde_json::Value>` | Keep as Value on the wire (effect param schemas are per-effect-type, no point typing centrally), but document the convention: object with string keys and number values. |
-
-Server can extract effect-type-specific indexed columns later if
-search-by-effect-param becomes a thing.
-
-### Other (verify, don't assume gaps)
-
-- `Flame.name` vs top-level `CreateFlameRequest.name` — currently two
-  different concepts. The request's `name` is the cloud-library
-  title; `Flame.name` is the internal name in the .fflame. v2 should
-  preserve `flame.name` separately. Add `flame_name:
-  Option<String>` to the request.
-
-## Wire-format versioning
-
-Add a top-level integer field to `CreateFlameRequest` /
-`FlameResponse`:
-
-```rust
-#[serde(default = "default_config_version")]
-pub config_version: u32,  // 1 or 2
-
-fn default_config_version() -> u32 { 1 }  // server-side default
+```jsonc
+// POST /api/flames  (PUT is the same shape)
+{
+  "name": "My Flame",
+  "visibility": "private",
+  "palette": { "name": "...", "color_data": [/* u32 RGB */] },   // server hashes
+  "config": {
+    "config_version": 2,
+    // every non-transform FractalConfig field, skip-if-default:
+    "zoom": 2.0, "camera_x": 1.5, "image_size": [3840, 2160],
+    "highlight_mode": "max_norm", "preserve_z": true, /* ... */
+    "subflames": [
+      { "render_mode": "2d",
+        "transforms": [/* inline */],
+        "linked_transforms": [], "final_transforms": [],
+        "subflames": [] }      // recursive, depth ≤ 5
+    ]
+  },
+  "transforms": [              // ROOT flame transforms only
+    { "kind": "normal", "sort_order": 0,
+      "variation_names": ["splits", "linear"],   // non-zero weight, client-filtered
+      "data": { "a": 1.0, /* affines, post-affines, weight, color, opacity,
+                  direct_color, variations, variation_params,
+                  linked_attachments, final_attachments, 3D coefs, ... */ } },
+    { "kind": "final", "sort_order": 0, "variation_names": [...], "data": {...} }
+  ]
+}
 ```
 
-Bump [`CURRENT_CONFIG_VERSION`](../../src/config/fractal_config.rs)
-from 1 to 2 client-side. The client writes 2; the server stores it
-on the row. The version is informational — it tells consumers what
-fields to expect. Real schema enforcement still happens via column
-presence + serde defaults.
+`GET /api/flames/{id}` returns this mirrored back plus server-owned fields
+(`id`, `user_id`, timestamps, `thumbnail`, `animations`/counts, `featured_at`,
+`forked_from`).
 
-**Why not Accept-Version headers**: per-endpoint header-based
-versioning works for API URL versioning (`/v1/flames` vs
-`/v2/flames`) but creates separate code paths server-side. An
-integer field on the body keeps a single endpoint and lets old
-clients gracefully degrade.
+### What goes where (root transform split)
 
-## Migration matrix
+`to_api_request(config: &FractalConfig)`:
+1. Run the palette through the existing inline content-addressable flow; remove
+   it from the config value.
+2. Pull `config.flame.transforms` / `linked_transforms` / `final_transforms`
+   (the **root** pools) out into the flat `transforms[]` array, tagging each
+   with `kind` + `sort_order` (array order, per pool) and a client-filtered
+   `variation_names` (non-zero-weight entries). Each transform's full state goes
+   in `data`.
+3. Serialize the rest of `FractalConfig` — including `config.flame.subflames`
+   with their transforms left **inline** — to `config`, with `config_version`.
 
-| Reader | Writer | Behavior |
-|---|---|---|
-| v1 client | v1 server | unchanged (today) |
-| v2 client | v1 server | new fields default to client-side defaults; round-trip *loses* new fields on save until server is updated |
-| v1 client | v2 server | new fields ignored (serde skips unknown); client renders as if they were defaults |
-| v2 client | v2 server | full round-trip ✓ |
+`from_api_response(resp)`:
+1. Deserialize `config` (through the migration hook below) into a
+   `FractalConfig` whose root flame has empty transform pools.
+2. Rebuild the root pools from `transforms[]` (bucket by `kind`, order by
+   `sort_order`).
+3. Reattach the palette from `palette`/`palette_hash`.
 
-Forward-compat works because all new fields are added with
-`#[serde(default)]` and `Option<T>` is used on Create requests.
-Backward-compat works because old clients ignore unknown fields by
-default.
+Subflame transforms need no special handling — they ride inside `config`.
 
-No hard cutover required.
+## Version-keyed config migration (the one new mechanism)
 
-## Implementation order (client side)
+Stripping defaults is already what `.fflame` does
+(`#[serde(skip_serializing_if = default)]` + `#[serde(default = ...)]`), and the
+blob *is* that JSON. The subtlety: serde recovers absent fields with the
+**current code's** default, not the default at the version the blob was written.
+So if a default ever *changes* across a version bump (e.g. `white_level`
+200 → 220), an old blob that omitted the field because it equalled the *old*
+default silently re-renders with the *new* one.
 
-1. **Define new Api* types in [`src/api/types.rs`](../../src/api/types.rs)**:
-   - `ApiHighlightMode`, `ApiSqueezeMode`, `ApiPalette` (name + stops),
-     `ApiColorStop`, `ApiTransform`-with-attachments,
-     `ApiSubflame` (recursive wrapper around the existing flame
-     schema).
-2. **Extend `CreateTransformInput` + `TransformResponse`**: add
-   `linked_attachments`, `final_attachments`. Both `Option<Vec<usize>>`
-   on input, default `[]` on response.
-3. **Extend `CreateFlameRequest` + `FlameResponse`**: add the gap
-   list above plus `config_version` plus `linked_transforms`,
-   `final_transforms` (Vec<>, deprecate singular `final_transform`),
-   `subflames`, `flame_name`. Preserve the old `final_transform`
-   field on the response for back-compat reads.
-4. **Update [`src/api/sync.rs`](../../src/api/sync.rs)** —
-   `to_api_request` and `from_api_response` learn the new fields.
-   The serde defaults already in place on `FractalConfig` cover the
-   missing-on-read case.
-5. **Bump `CURRENT_CONFIG_VERSION` to 2.** Client always emits
-   `config_version: 2`.
-6. **Tests** — at least one round-trip test per new field. Use the
-   existing visual regression baselines (with `highlight_mode =
-   MaxNorm`, with subflames, with a custom palette, etc.) to confirm
-   nothing is silently dropped.
+To honor "recover via the defaults **for the config version**" we read through a
+version-keyed migration:
 
-## API-side checklist (handoff for server work)
+```rust
+// pseudocode — runs on EVERY config read (cloud blob AND local .fflame)
+fn load_config(mut v: serde_json::Value) -> FractalConfig {
+    let version = v.get("config_version").and_then(Value::as_u64).unwrap_or(1) as u32;
+    migrate_config(version, &mut v);   // v..=CURRENT, step by step
+    serde_json::from_value(v)          // serde fills still-absent fields w/ current defaults
+}
 
-Implementation details for the server team. Schema migrations are
-ordered.
+// each bump that CHANGES a default (or shape) adds one arm; fields whose
+// default is unchanged need no entry — serde's current default is already right.
+fn migrate_config(from: u32, v: &mut Value) {
+    if from < 2 { /* v1 → v2: e.g. if white_level absent, set it to the v1 default */ }
+    // if from < 3 { ... }  // future
+    v["config_version"] = json!(CURRENT_CONFIG_VERSION);
+}
+```
 
-1. **`flames` table**: add columns
-   - `config_version INT NOT NULL DEFAULT 1`
-   - `flame_name TEXT` (separate from cloud-library title)
-   - `highlight_mode TEXT NOT NULL DEFAULT 'clip'`
-     (`clip`/`max_norm`/`reinhard`/`filmic`)
-   - `white_level REAL NOT NULL DEFAULT 200.0`
-   - `palette_squeeze_mode TEXT NOT NULL DEFAULT 'linear'`
-   - `palette_squeeze_falloff REAL NOT NULL DEFAULT 0.5`
-   - `palette_log_strength REAL NOT NULL DEFAULT 0.0`
-   - `palette_reverse BOOLEAN NOT NULL DEFAULT false`
-   - `embedded_palette JSONB` (nullable, custom palette data when
-     `palette_id` is NULL)
+- **Bump `CURRENT_CONFIG_VERSION` 1 → 2.** For the v1→v2 step specifically, no
+  defaults change, so the arm is empty for now — we're building the **hook**,
+  not migration entries. The point is that every future default change lands as
+  one arm here instead of silently altering old flames.
+- **This also fixes local `.fflame` loading**, which has the same latent bug
+  today (load goes through the same path).
+- **Forward-compat** (old client reading a *newer* blob) stays best-effort:
+  serde drops unknown fields; the older client renders with what it understands.
+  The migration hook only handles backward (new client, old blob), which is the
+  case that matters.
 
-2. **`transforms` table**: change shape
-   - Add `transform_kind TEXT NOT NULL DEFAULT 'normal'`
-     (`normal`/`linked`/`final`). Migrate existing
-     `is_final_transform = true` rows to `transform_kind = 'final'`,
-     `false` → `'normal'`.
-   - Drop `is_final_transform` after migration (or keep as computed
-     view for back-compat).
-   - Add `linked_attachments JSONB` (array of int) — indexes into
-     the parent flame's `linked_transforms` pool.
-   - Add `final_attachments JSONB` (array of int).
+## Client implementation (this repo)
 
-3. **New `subflames` table** (or denormalized JSONB column on
-   `flames`):
-   - Subflames are recursive `Flame` instances. Easiest first cut:
-     `subflames JSONB` column on `flames` holding the array of
-     nested flame JSON. Indexing into the subflame pool isn't a
-     common query; revisit if it becomes one.
-   - Tradeoff: blob in a relational schema. Acceptable here because
-     subflames are referenced by the `subflame_wf` variation by
-     index, the parent doesn't query into them.
+1. **`src/api/types.rs`** — collapse to the shape above. Keep `ApiPalette`,
+   `ApiRenderMode`, `ApiVisibility`, animation types, variation-catalog types.
+   **Remove** the per-field `CreateFlameRequest`/`FlameResponse` body
+   (`SubflameRequest`, and the `ApiHighlightMode`/`ApiSqueezeMode`/
+   `ApiTransformKind`/`ApiPath*` enums — those now live as strings inside the
+   blob). Add a small `ApiTransformWire { kind, sort_order, variation_names,
+   data: Value }` for the root-transform array.
+2. **`src/api/sync.rs`** — `to_api_request`/`from_api_response` become the
+   palette-strip + root-transform-split + blob (de)serialize described above,
+   threaded through `load_config`/migration. Delete `transform_to_api`,
+   `transform_from_api`, `flame_to_subflame_request`,
+   `flame_from_subflame_response`, and every per-field flame mapping — including
+   all the "API doesn't carry X yet" default sites. The 15-field drift closes
+   for free.
+3. **`migrate_config` hook** + bump `CURRENT_CONFIG_VERSION` to 2. Route local
+   `.fflame` deserialization through the same hook so both paths agree.
+4. **Helpers** — `kind`/`sort_order`/filtered-`variation_names` extraction for
+   the root pools (reuse existing pool/weight accessors).
+5. **Tests**
+   - Round-trip `FractalConfig → request → response → FractalConfig` byte-equal
+     `config` for: a 3D flame (camera_x/y/bank, preserve_z, depth fades),
+     subflames with their own transforms, multiple finals + linked +
+     attachments, post-symmetry, `variation_order`, a custom palette.
+   - Migration: a synthetic v1 blob missing a field whose default we pretend
+     changed → asserts the v1 default is restored, not the current one. Guards
+     the hook itself.
+   - `.fflame` load goes through the same migration (no separate path).
 
-4. **Variations table — `subflame_wf`**: ensure this variation is
-   registered. It exists client-side; the server's variations table
-   should list it as a known variation name.
+## What stays / what we trade
 
-5. **Indexed metadata extraction** (extracted at write time, used by
-   search):
-   - `has_subflames BOOL` — true if `subflames` array non-empty
-   - `has_linked BOOL` — true if `linked_transforms` non-empty
-   - `final_transform_count INT` — array length
-   - All extracted server-side from the JSON on insert/update.
+Storage, search SQL, validation caps (256 KB blob, 16 KB per-transform,
+`MAX_TRANSFORMS*3` rows), the dropped variation/effect registry checks, and the
+DB migration phases are all in [api-v2-server.md](api-v2-server.md). The two
+explicit givebacks: **subflame variations aren't searchable** (root pool only —
+a real regression from today's tree-walk, accepted) and **server-side
+field-level validation is dropped** (the client already validates). In return:
+no migration when a config or per-transform field is added/renamed, free plugin
+variation/effect round-trip, smaller client and server, and one format for local
+and cloud.
 
-6. **API endpoints — no URL changes.** Existing `/api/flames` POST
-   accepts both v1 and v2 bodies. `config_version` is informational
-   for the server; the actual contract is "all v2 fields are
-   `Option<>` in the request, defaults applied at write time."
+## Out of scope
 
-7. **Validation rules**:
-   - `linked_attachments[i]` and `final_attachments[i]` must be in
-     range of the respective pools. Reject with 400 on out-of-range.
-   - `subflames` recursion depth: cap at, say, 4. Reject deeper.
-   - `highlight_mode` must be one of the four valid strings.
-
-8. **Search params** — extend
-   [`SearchFlamesParams`](../../src/api/types.rs) on both sides
-   with optional filters:
-   - `has_subflames: Option<bool>`
-   - `has_linked: Option<bool>`
-   - `highlight_mode: Option<ApiHighlightMode>`
-
-## Open questions
-
-- **Singular `final_transform` deprecation**: keep the old field on
-  responses indefinitely, or sunset after some grace period? I'd
-  lean keep — the cost is one nullable column, the cost of removing
-  is breaking old WASM bundles in the wild.
-- **Palette: embedded vs library reference precedence**: if both
-  `palette_id` and `palette` are present, which wins? Client picks
-  embedded (matches `.fflame`). Worth documenting on the server too.
-- **Subflame storage**: JSONB blob inside `flames` row vs separate
-  `subflames` table with foreign key. Blob is simpler, table is
-  more relational. Pick before implementing.
-
-## Out of scope (v2 doesn't tackle these)
-
-- Real schema versioning beyond `config_version: u32`. If we ever
-  need *breaking* migrations (rename, remove a field), we'll need
-  URL versioning (`/v2/flames`) at that point. Not now.
-- Random generator settings — not in `FractalConfig`, lives on
-  `SystemSettings` (device-local), not synced.
-- Audio analysis settings — same, device-local.
-- Animation track schema versioning — animations are opaque, will
-  evolve independently.
+- Random-generator and audio-analysis settings — device-local
+  (`SystemSettings`), never synced.
+- Animation track schema — already opaque `serde_json::Value`.
+- URL versioning (`/v2/flames`) — only for a future breaking change to the
+  request *envelope*, not the config inside it.
