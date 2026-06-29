@@ -180,7 +180,16 @@ impl GpuContext {
         let adapter_features = adapter.features();
         log::info!("Adapter features: {:?}", adapter_features);
 
-        let required_features = Features::CLEAR_TEXTURE;
+        // FLOAT32_FILTERABLE lets shaders filter (bilinear-sample) Rgba32Float
+        // textures. The density-effect chain bilinear-samples the Rgba32Float
+        // accumulation; without this feature that bind group is invalid and the
+        // effect errors. Requested only when the adapter advertises it (almost
+        // all desktop GPUs do); EffectChainRunner skips density effects when
+        // it's absent rather than crash.
+        let mut required_features = Features::CLEAR_TEXTURE;
+        if adapter_features.contains(Features::FLOAT32_FILTERABLE) {
+            required_features |= Features::FLOAT32_FILTERABLE;
+        }
 
         let (device, queue) = adapter.request_device(
             &DeviceDescriptor {
