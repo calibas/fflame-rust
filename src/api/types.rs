@@ -134,8 +134,8 @@ pub struct ApiVariation {
 /// **opaque blob** — the same JSON a `.fflame` file holds, minus the root
 /// flame's transforms (split into `transforms` below) and minus the palette
 /// (sent inline via `palette`). New config fields need zero API/DB work; the
-/// server stores `config` verbatim and extracts only `render_mode` +
-/// `has_subflames` from two fixed blob keys.
+/// server stores `config` verbatim and extracts only `render_mode` (at
+/// `config.flame.render_mode`) into a typed column for catalog queries.
 #[derive(Debug, Clone, Serialize)]
 pub struct CreateFlameRequest {
     /// Flame name. Single field — the old `flame_name`/cloud-title split is
