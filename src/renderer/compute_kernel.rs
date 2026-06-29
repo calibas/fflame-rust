@@ -1316,6 +1316,27 @@ post_symmetry: (&self.post_symmetry).into(),
         self.total_iterations
     }
 
+    /// Explicitly release every GPU resource this renderer owns (its
+    /// `FlameBuffers` plus the fractal output texture). On WebGPU, dropping
+    /// alone defers reclamation to JS GC, so a throwaway export renderer's
+    /// multi-gigabyte buffers linger on the device and repeated large WASM
+    /// exports OOM it (all-black output). Call once after the final pixel read
+    /// completes, before dropping the renderer. See `FlameBuffers::destroy`.
+    pub fn destroy(&self) {
+        self.buffers.destroy();
+        self.fractal_texture.destroy();
+    }
+
+    /// Free the large iteration buffers (histogram + accumulation + sample/path/
+    /// blur), keeping the fractal output texture. For memory-constrained WASM
+    /// exports: call after tonemap (and after its GPU work has completed) to
+    /// reclaim ~3-4 GB at 8000² before a color-effect pass allocates its
+    /// full-res ping-pong. The renderer must not iterate or tonemap again
+    /// afterward; reading the fractal texture / running color effects is fine.
+    pub fn free_iteration_buffers(&self) {
+        self.buffers.free_iteration_buffers();
+    }
+
     /// Samples currently in the accumulator. Used by the render loop
     /// to decide whether to keep iterating past `max_iterations`: when
     /// this is zero (e.g., right after a resize cleared the

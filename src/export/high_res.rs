@@ -13,7 +13,7 @@ use egui_wgpu::wgpu::*;
 use rayon::prelude::*;
 
 use crate::config::FractalConfig;
-use crate::gpu::buffers::{GpuParams, GpuTransform, GpuVariationParams, TonemapParams};
+use crate::gpu::buffers::{GpuParams, GpuVariationParams, TonemapParams};
 use crate::renderer::effect_chain::EffectChainRunner;
 use crate::scene::tonemap::ToneCurve;
 use crate::scene::transforms::RenderMode;
@@ -114,6 +114,7 @@ pub struct HighResExporter {
     variation_params_buffer: Buffer,
     xaos_buffer: Buffer,  // Xaos transition weights (identity if not used)
     attachments_buffer: Buffer,  // Per-normal Linked + Final attachment lists
+    subflame_metadata_buffer: Buffer,  // binding 12: per-subflame metadata
     // Dummy path-tracking buffers — the unified shader's `header.wgsl`
     // declares `path_buffer` (binding 7) and `path_filters` (binding 8)
     // unconditionally, but the export shader builds with
@@ -266,10 +267,21 @@ impl HighResExporter {
         limits.max_storage_buffers_per_shader_stage =
             adapter_limits.max_storage_buffers_per_shader_stage;
 
+        // Request FLOAT32_FILTERABLE when the adapter advertises it so the
+        // density-effect chain can bilinear-sample the Rgba32Float accumulation
+        // (run_density_effects skips density entirely without it). Mirrors the
+        // FlameRenderer device in gpu/device.rs and the headless device in
+        // app/export.rs — without it, density effects silently no-op on the
+        // tiled export path.
+        let mut required_features = Features::empty();
+        if adapter.features().contains(Features::FLOAT32_FILTERABLE) {
+            required_features |= Features::FLOAT32_FILTERABLE;
+        }
+
         let (device, queue) = adapter
             .request_device(&DeviceDescriptor {
                 label: Some("Export Device"),
-                required_features: Features::empty(),
+                required_features,
                 required_limits: limits,
                 memory_hints: MemoryHints::Performance,
                 experimental_features: Default::default(),
@@ -291,11 +303,25 @@ impl HighResExporter {
         // path is sample-emit (OUTPUT_HISTOGRAM_DIRECT=false) and currently
         // strips analytic-blur routing, so the assigned slots go unread
         // (stochastic blur fallback) until Phase 2 step 2 wires this path.
-        let transforms = GpuTransform::from_flame(&config.flame, &global_registry());
+        // Pack parent + subflame transforms into the unified layout (shared
+        // with the FlameRenderer path) so subflames render identically. The
+        // buffer is sized for MAX_TRANSFORMS_UNIFIED; subflame xforms occupy
+        // [MAX_TRANSFORMS, MAX_TRANSFORMS_UNIFIED).
+        let transforms = crate::gpu::buffers::pack_gpu_transforms(&config.flame);
 
         let transform_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
             label: Some("Export Transform Buffer"),
             contents: bytemuck::cast_slice(&transforms),
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+        });
+
+        // Per-subflame metadata (binding 12). Empty/zeroed when the flame has no
+        // subflames; the shader only reads it when subflame variations are active.
+        let subflame_metas = crate::gpu::buffers::build_subflame_metas(&config.flame.subflames)
+            .map_err(|e| format!("Subflame metadata: {e}"))?;
+        let subflame_metadata_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
+            label: Some("Export Subflame Metadata Buffer"),
+            contents: bytemuck::cast_slice(&subflame_metas),
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
         });
 
@@ -391,8 +417,10 @@ impl HighResExporter {
         // Variation params buffer — sized for the worst-case
         // MAX_TRANSFORMS slots so flames whose pool count exceeds the
         // old 32-slot cap don't overflow the write.
-        let variation_params = GpuVariationParams::from_flame(&config.flame, &global_registry());
-        let variation_params_size = (crate::gpu::buffers::MAX_TRANSFORMS
+        // Parent + subflame variation params, sized for the unified slot space
+        // (MAX_TRANSFORMS_UNIFIED) so subflame slots [MAX_TRANSFORMS..) exist.
+        let variation_params = crate::gpu::buffers::pack_gpu_variation_params(&config.flame);
+        let variation_params_size = (crate::gpu::buffers::MAX_TRANSFORMS_UNIFIED
             * std::mem::size_of::<GpuVariationParams>()) as u64;
         let variation_params_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Export Variation Params Buffer"),
@@ -541,8 +569,15 @@ impl HighResExporter {
             label: Some("Export Palette Sampler"),
             address_mode_u: AddressMode::ClampToEdge,
             address_mode_v: AddressMode::ClampToEdge,
-            mag_filter: FilterMode::Linear,
-            min_filter: FilterMode::Linear,
+            // NEAREST (not Linear) to match FlameRenderer's palette sampler
+            // (gpu/buffers.rs) and flam3/Apophysis, which floor the colormap
+            // index (`j = (int)(color * cmap_size)`) with no interpolation.
+            // Linear filtering here interpolates between adjacent palette
+            // entries, shifting recovered colors a fraction of a percent per
+            // channel versus the in-app/FlameRenderer path — visible as a
+            // warmth/hue difference in dense regions after tone mapping.
+            mag_filter: FilterMode::Nearest,
+            min_filter: FilterMode::Nearest,
             ..Default::default()
         });
 
@@ -785,6 +820,18 @@ impl HighResExporter {
                 // binding 10: per-normal attachment lists (Linked + Final chains)
                 BindGroupLayoutEntry {
                     binding: 10,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // binding 12: subflame metadata (array<SubflameMeta>). Binding 11
+                // is intentionally unbound (legacy subflame_transforms, removed).
+                BindGroupLayoutEntry {
+                    binding: 12,
                     visibility: ShaderStages::COMPUTE,
                     ty: BindingType::Buffer {
                         ty: BufferBindingType::Storage { read_only: true },
@@ -1185,6 +1232,7 @@ impl HighResExporter {
             variation_params_buffer,
             xaos_buffer,
             attachments_buffer,
+            subflame_metadata_buffer,
             dummy_path_buffer,
             dummy_path_filter_buffer,
             blur_splat_buffer,
@@ -1310,6 +1358,10 @@ impl HighResExporter {
                     resource: self.attachments_buffer.as_entire_binding(),
                 },
                 BindGroupEntry {
+                    binding: 12,
+                    resource: self.subflame_metadata_buffer.as_entire_binding(),
+                },
+                BindGroupEntry {
                     binding: 13,
                     resource: self.blur_splat_buffer.as_entire_binding(),
                 },
@@ -1425,9 +1477,22 @@ impl HighResExporter {
             mapped_at_creation: false,
         });
 
-        // Calculate dispatch parameters using dynamic workgroup count
-        let workgroups_per_dispatch = Self::calculate_workgroups(self.iterations_per_thread) as u32;
-        let iterations_per_dispatch = self.samples_per_dispatch;
+        // Dispatch in FlameRenderer-sized passes (render.rs NUM_WORKGROUPS = 128
+        // workgroups × 64 threads × ipt) so HR dispatches the SAME total
+        // iteration count FR does: both round the target up to a whole pass,
+        // i.e. ceil(target / pass) × pass. The tonemap normalizes brightness by
+        // sample_density = total_iters / pixels and is only *approximately*
+        // iteration-invariant at low density, so a coarser HR overshoot (its
+        // buffer-derived dispatch was 2× FR's pass) made HR systematically
+        // dimmer than FR at low spp — the gap shrank as 1/spp, exactly tracking
+        // the overshoot ratio. The sample buffer (sized for the larger
+        // calculate_workgroups count) comfortably holds one 128-workgroup pass.
+        const FR_PASS_WORKGROUPS: u32 = 128; // mirrors render.rs NUM_WORKGROUPS
+        let workgroups_per_dispatch =
+            FR_PASS_WORKGROUPS.min(Self::calculate_workgroups(self.iterations_per_thread) as u32);
+        let iterations_per_dispatch = workgroups_per_dispatch as u64
+            * Self::THREADS_PER_WORKGROUP
+            * self.iterations_per_thread as u64;
         let num_dispatches =
             (total_iterations + iterations_per_dispatch - 1) / iterations_per_dispatch;
 
@@ -1955,13 +2020,430 @@ post_symmetry: (&config.flame.post_symmetry).into(),
         Ok(())
     }
 
-    /// GPU tonemap: histogram → RGBA pixels using GPU shader
-    /// Uploads CPU histogram to GPU texture, runs tonemap shader, reads back result.
-    ///
-    /// `total_iterations` is the cumulative iteration count across all
-    /// dispatches in this export — used by the scale-invariant
-    /// sample_density formula (Phase 8a). See
-    /// docs/projects/accumulator-unification.md.
+    /// Conservative budget for the post-histogram (Phase B) GPU texture set
+    /// when density effects are applied. By this point the histogram buffer has
+    /// been freed (drop+poll in the render loop), so Phase B is the peak. At
+    /// full resolution it allocates the accumulation texture (Rgba32Float,
+    /// 16 B/px) + the density ping-pong pair (2× Rgba16Float, 16 B/px) + the
+    /// tonemap output (Rgba8, 4 B/px) = 36 B/px. ~4 GB lets density effects
+    /// apply through ~10K² exports; beyond that we skip them (the marginal
+    /// ~16 B/px over the always-present accumulation) rather than risk OOM on
+    /// limited-VRAM GPUs. Color effects and the accumulation texture are
+    /// already unconditional, so this gates only the density addition.
+    const DENSITY_EFFECT_PHASE_B_BUDGET_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+
+    /// Whether the Phase-B texture set with density effects fits the budget.
+    fn density_effects_fit(width: u32, height: u32) -> bool {
+        (width as u64) * (height as u64) * 36 <= Self::DENSITY_EFFECT_PHASE_B_BUDGET_BYTES
+    }
+
+    /// Above this full-accumulation size, the tonemap runs strip-tiled so the
+    /// 16 B/px Rgba32Float accumulation texture (~2.3 GB at 12K) doesn't OOM
+    /// alongside the live app's GPU device. Below it the single-shot path is one
+    /// pass and fits fine. 1 GB ≈ 8000².
+    const TONEMAP_TILE_THRESHOLD_BYTES: u64 = 1024 * 1024 * 1024;
+
+    /// Per-strip accumulation-texture budget for the tiled tonemap. `strip_h` is
+    /// sized so one strip (W × strip_h × 16) fits this; peak GPU is then the
+    /// full output (W·H·4) + one strip accumulation + one strip output.
+    const TONEMAP_STRIP_BUDGET_BYTES: u64 = 256 * 1024 * 1024;
+
+    /// Convert a slice of the CPU histogram (row-major `HistogramPixel`s) into
+    /// Rgba32Float texel bytes: RGB = density-weighted mean colour (sum/count)
+    /// ∈ [0,1], A = raw hit count. Shared by the single-shot and tiled paths.
+    fn build_texture_data(slice: &[HistogramPixel]) -> Vec<u8> {
+        let mut texture_data = vec![0u8; slice.len() * 16];
+        texture_data
+            .par_chunks_mut(16)
+            .zip(slice.par_iter())
+            .for_each(|(chunk, pixel)| {
+                let (r, g, b, density) = if pixel.count > 0.0 {
+                    (
+                        (pixel.r / pixel.count) as f32,
+                        (pixel.g / pixel.count) as f32,
+                        (pixel.b / pixel.count) as f32,
+                        pixel.count as f32,
+                    )
+                } else {
+                    (0.0, 0.0, 0.0, 0.0)
+                };
+                chunk[0..4].copy_from_slice(&r.to_le_bytes());
+                chunk[4..8].copy_from_slice(&g.to_le_bytes());
+                chunk[8..12].copy_from_slice(&b.to_le_bytes());
+                chunk[12..16].copy_from_slice(&density.to_le_bytes());
+            });
+        texture_data
+    }
+
+    /// Build the global `TonemapParams` for an export (full width/height). The
+    /// tiled path overrides only `.height` per strip; `area`/`sample_density`
+    /// stay global so brightness is identical regardless of tiling. Mirrors the
+    /// single-shot Step 3 exactly.
+    fn build_tonemap_params(
+        &self,
+        config: &FractalConfig,
+        transparent: bool,
+        premultiplied: bool,
+        total_iterations: u64,
+    ) -> TonemapParams {
+        use crate::config::defaults::{PREFILTER_WHITE, BRIGHT_ADJUST};
+
+        let zoom = config.zoom;
+        let base_pixels_per_unit = (self.width.min(self.height) as f32) * 0.25;
+        let apophysis_zoom = zoom.log2();
+        let pixels_per_unit_zoomed = base_pixels_per_unit * 2.0_f32.powf(apophysis_zoom);
+        let area = (self.width as f32 * self.height as f32) / (pixels_per_unit_zoomed * pixels_per_unit_zoomed);
+
+        let total_pixels = (self.width as f32) * (self.height as f32);
+        let sample_density = ((total_iterations as f32) / total_pixels.max(1.0)).max(1e-6);
+
+        let tonemap_mode = match config.tonemap_mode {
+            crate::scene::tonemap::ToneMapMode::Linear => 0u32,
+            crate::scene::tonemap::ToneMapMode::Logarithmic => 1u32,
+            crate::scene::tonemap::ToneMapMode::DensityVisualization => 2u32,
+        };
+
+        TonemapParams {
+            exposure: config.exposure,
+            gamma: config.gamma,
+            density_scale: config.density_scale,
+            tonemap_mode,
+            background_color: config.background_color,
+            _pad_bg: 0.0,
+            use_curve: if config.use_curve { 1 } else { 0 },
+            vibrancy: config.vibrancy,
+            brightness: config.brightness,
+            white_level: config.white_level,
+            prefilter_white: PREFILTER_WHITE,
+            bright_adjust: BRIGHT_ADJUST,
+            area,
+            sample_density,
+            saturation: config.saturation,
+            hue_shift: config.hue_shift,
+            gamma_threshold: config.gamma_threshold,
+            alpha_blend_low: config.alpha_blend_low,
+            alpha_blend_high: config.alpha_blend_high,
+            // 0 = opaque, 1 = straight-alpha reconstruction, 2 = premultiplied.
+            transparent_mode: if !transparent { 0 } else if premultiplied { 2 } else { 1 },
+            color_mode: config.color_mode as u32,
+            width: self.width,
+            height: self.height,
+            path_map_style: config.path_map_style as u32,
+            burn_in: 20,
+            num_transforms: config.flame.transforms.len() as u32,
+            palette_size: config.palette_size,
+            levels_low: config.levels_low,
+            levels_high: config.levels_high,
+            levels_gamma: config.levels_gamma,
+            highlight_mode: match config.highlight_mode {
+                crate::scene::tonemap::HighlightMode::Clip => 0,
+                crate::scene::tonemap::HighlightMode::MaxNorm => 1,
+                crate::scene::tonemap::HighlightMode::Reinhard => 2,
+                crate::scene::tonemap::HighlightMode::Filmic => 3,
+            },
+            levels_enabled: if config.levels_enabled { 1 } else { 0 },
+            _pad_levels: [0; 2],
+        }
+    }
+
+    /// Upload the tone-curve LUT if the flame uses one. Shared by both paths.
+    fn upload_curve_lut(&self, config: &FractalConfig) {
+        if config.use_curve {
+            let curve_lut_data = config.tonemap_curve.generate_lut();
+            self.queue.write_texture(
+                TexelCopyTextureInfo {
+                    texture: &self.curve_lut_texture,
+                    mip_level: 0,
+                    origin: Origin3d::ZERO,
+                    aspect: TextureAspect::All,
+                },
+                &curve_lut_data,
+                TexelCopyBufferLayout { offset: 0, bytes_per_row: None, rows_per_image: None },
+                Extent3d { width: 256, height: 1, depth_or_array_layers: 1 },
+            );
+        }
+    }
+
+    /// Create a texture, turning a GPU out-of-memory failure into a recoverable
+    /// `Err` instead of wgpu's default fatal panic. On the background export
+    /// thread that panic would leave the progress overlay stuck "exporting"
+    /// forever; returning an error lets the caller report it and clean up. The
+    /// OutOfMemory error scope captures the failure at the allocation, so we
+    /// bail before the invalid texture triggers follow-on validation errors.
+    /// Used for the large export textures (the realistic OOM sites).
+    async fn try_create_texture(&self, desc: &TextureDescriptor<'_>) -> Result<Texture, String> {
+        let scope = self.device.push_error_scope(ErrorFilter::OutOfMemory);
+        let texture = self.device.create_texture(desc);
+        if let Some(err) = scope.pop().await {
+            return Err(format!(
+                "GPU out of memory allocating '{}' ({:?}) — try a smaller export size.",
+                desc.label.unwrap_or("texture"),
+                err
+            ));
+        }
+        Ok(texture)
+    }
+
+    /// Shared tonemap tail: run color effects on the tonemapped output (if any),
+    /// then read it back to RGBA8. Color effects are non-local so they always
+    /// run on the full output, after any tiling.
+    async fn finish_output(
+        &self,
+        output_texture: &Texture,
+        output_view: &TextureView,
+        config: &FractalConfig,
+    ) -> Result<Vec<u8>, String> {
+        let has_color_effects = EffectChainRunner::has_enabled_effects(&config.color_effects);
+        let mut effect_chain: Option<EffectChainRunner> = None;
+        let color_effects_ran = if has_color_effects {
+            log::info!("High-res export: Running {} color effect(s)",
+                config.color_effects.iter().filter(|e| e.enabled).count());
+            let mut chain = EffectChainRunner::new(&self.device, self.width, self.height);
+            let mut effect_encoder = self.device.create_command_encoder(&CommandEncoderDescriptor {
+                label: Some("Export Color Effects Encoder"),
+            });
+            chain.reset_slots();
+            let ran = chain.run_color_effects(
+                &self.device,
+                &self.queue,
+                &mut effect_encoder,
+                output_view,
+                &config.color_effects,
+            );
+            self.queue.submit(std::iter::once(effect_encoder.finish()));
+            effect_chain = Some(chain);
+            ran
+        } else {
+            false
+        };
+
+        if color_effects_ran {
+            if let Some(chain) = effect_chain.as_ref() {
+                return chain.read_color_output_pixels(&self.device, &self.queue).await
+                    .map(|(_, _, pixels)| pixels);
+            }
+        }
+
+        // Read from the tonemap output texture.
+        let bytes_per_pixel = 4u32;
+        let unpadded_bytes_per_row = self.width * bytes_per_pixel;
+        let align = COPY_BYTES_PER_ROW_ALIGNMENT;
+        let padded_bytes_per_row = ((unpadded_bytes_per_row + align - 1) / align) * align;
+        let buffer_size = (padded_bytes_per_row * self.height) as u64;
+
+        let readback_buffer = self.device.create_buffer(&BufferDescriptor {
+            label: Some("Export Tonemap Readback Buffer"),
+            size: buffer_size,
+            usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        let mut copy_encoder = self.device.create_command_encoder(&CommandEncoderDescriptor {
+            label: Some("Export Readback Encoder"),
+        });
+        copy_encoder.copy_texture_to_buffer(
+            TexelCopyTextureInfo {
+                texture: output_texture,
+                mip_level: 0,
+                origin: Origin3d::ZERO,
+                aspect: TextureAspect::All,
+            },
+            TexelCopyBufferInfo {
+                buffer: &readback_buffer,
+                layout: TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded_bytes_per_row),
+                    rows_per_image: Some(self.height),
+                },
+            },
+            Extent3d { width: self.width, height: self.height, depth_or_array_layers: 1 },
+        );
+        self.queue.submit(std::iter::once(copy_encoder.finish()));
+
+        let buffer_slice = readback_buffer.slice(..);
+        let (tx, rx) = futures::channel::oneshot::channel();
+        buffer_slice.map_async(MapMode::Read, move |result| { tx.send(result).ok(); });
+        let _ = self.device.poll(PollType::Wait { submission_index: None, timeout: None });
+        rx.await
+            .map_err(|_| "Failed to receive tonemap readback result".to_string())?
+            .map_err(|e| format!("Failed to map tonemap readback buffer: {:?}", e))?;
+
+        let data = buffer_slice.get_mapped_range();
+        let mut pixels = Vec::with_capacity((self.width * self.height * 4) as usize);
+        for y in 0..self.height {
+            let row_start = (y * padded_bytes_per_row) as usize;
+            let row_end = row_start + (self.width * bytes_per_pixel) as usize;
+            pixels.extend_from_slice(&data[row_start..row_end]);
+        }
+        drop(data);
+        readback_buffer.unmap();
+        Ok(pixels)
+    }
+
+    /// Strip-tiled tonemap for large exports (see `TONEMAP_TILE_THRESHOLD_BYTES`).
+    /// Uploads + tonemaps the accumulation in horizontal strips into the full
+    /// output texture, so peak VRAM is one strip instead of a full W·H·16
+    /// accumulation texture. Byte-identical to the single-shot path: each strip
+    /// uploads a (W × strip_h) accumulation texture and sets
+    /// `tonemap_params.height = strip_h` so the shader's `uv.y * height` indexes
+    /// it correctly, while width/area/sample_density stay global. Density
+    /// effects (non-local) are never tiled — the caller only routes here when
+    /// none run.
+    async fn tonemap_gpu_tiled(
+        &self,
+        histogram: &[HistogramPixel],
+        config: &FractalConfig,
+        mut tonemap_params: TonemapParams,
+    ) -> Result<Vec<u8>, String> {
+        self.upload_curve_lut(config);
+
+        // The one full-resolution GPU resource (color effects + readback need it
+        // whole). COPY_DST so each strip's tonemapped rows can be copied in.
+        let output_texture = self.try_create_texture(&TextureDescriptor {
+            label: Some("Export Output Texture (tiled)"),
+            size: Extent3d { width: self.width, height: self.height, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::Rgba8Unorm,
+            usage: TextureUsages::RENDER_ATTACHMENT
+                | TextureUsages::COPY_SRC
+                | TextureUsages::COPY_DST
+                | TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        }).await?;
+        let output_view = output_texture.create_view(&TextureViewDescriptor::default());
+        let curve_lut_view = self.curve_lut_texture.create_view(&TextureViewDescriptor::default());
+        let palette_view = self.palette_texture.create_view(&TextureViewDescriptor::default());
+
+        let bytes_per_row = (self.width as u64) * 16;
+        let strip_h = ((Self::TONEMAP_STRIP_BUDGET_BYTES / bytes_per_row.max(1)).max(1) as u32)
+            .min(self.height);
+        let num_strips = (self.height + strip_h - 1) / strip_h;
+        log::info!(
+            "High-res export: strip-tiled tonemap {}x{} — {} strips of ≤{} rows",
+            self.width, self.height, num_strips, strip_h
+        );
+
+        for s in 0..num_strips {
+            let y0 = s * strip_h;
+            let sh = strip_h.min(self.height - y0);
+
+            // This strip's accumulation data (rows [y0, y0+sh)).
+            let row0 = (y0 as usize) * (self.width as usize);
+            let row1 = row0 + (sh as usize) * (self.width as usize);
+            let strip_data = Self::build_texture_data(&histogram[row0..row1]);
+
+            let strip_accum = self.try_create_texture(&TextureDescriptor {
+                label: Some("Export Strip Accumulation"),
+                size: Extent3d { width: self.width, height: sh, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: TextureDimension::D2,
+                format: TextureFormat::Rgba32Float,
+                usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+                view_formats: &[],
+            }).await?;
+            self.queue.write_texture(
+                TexelCopyTextureInfo {
+                    texture: &strip_accum,
+                    mip_level: 0,
+                    origin: Origin3d::ZERO,
+                    aspect: TextureAspect::All,
+                },
+                &strip_data,
+                TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(self.width * 16),
+                    rows_per_image: Some(sh),
+                },
+                Extent3d { width: self.width, height: sh, depth_or_array_layers: 1 },
+            );
+            let strip_accum_view = strip_accum.create_view(&TextureViewDescriptor::default());
+
+            // Per-strip height: the shader's `uv.y * height` then maps onto
+            // these `sh` rows. width/area/sample_density stay global.
+            tonemap_params.height = sh;
+            self.queue.write_buffer(&self.tonemap_params_buffer, 0, bytemuck::bytes_of(&tonemap_params));
+
+            let strip_out = self.device.create_texture(&TextureDescriptor {
+                label: Some("Export Strip Output"),
+                size: Extent3d { width: self.width, height: sh, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: TextureDimension::D2,
+                format: TextureFormat::Rgba8Unorm,
+                usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            let strip_out_view = strip_out.create_view(&TextureViewDescriptor::default());
+
+            let bind_group = self.device.create_bind_group(&BindGroupDescriptor {
+                label: Some("Export Tonemap Bind Group (strip)"),
+                layout: &self.tonemap_bind_group_layout,
+                entries: &[
+                    BindGroupEntry { binding: 0, resource: BindingResource::TextureView(&strip_accum_view) },
+                    BindGroupEntry { binding: 1, resource: BindingResource::Sampler(&self.accumulation_sampler) },
+                    BindGroupEntry { binding: 2, resource: self.tonemap_params_buffer.as_entire_binding() },
+                    BindGroupEntry { binding: 3, resource: BindingResource::TextureView(&curve_lut_view) },
+                    BindGroupEntry { binding: 4, resource: BindingResource::Sampler(&self.curve_lut_sampler) },
+                    BindGroupEntry { binding: 5, resource: self.dummy_path_buffer.as_entire_binding() },
+                    BindGroupEntry { binding: 6, resource: BindingResource::TextureView(&palette_view) },
+                    BindGroupEntry { binding: 7, resource: BindingResource::Sampler(&self.palette_sampler) },
+                ],
+            });
+
+            let mut encoder = self.device.create_command_encoder(&CommandEncoderDescriptor {
+                label: Some("Export Strip Tonemap Encoder"),
+            });
+            {
+                let mut render_pass = encoder.begin_render_pass(&RenderPassDescriptor {
+                    label: Some("Export Strip Tonemap Pass"),
+                    color_attachments: &[Some(RenderPassColorAttachment {
+                        view: &strip_out_view,
+                        resolve_target: None,
+                        ops: Operations { load: LoadOp::Clear(Color::BLACK), store: StoreOp::Store },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                render_pass.set_pipeline(&self.tonemap_pipeline);
+                render_pass.set_bind_group(0, &bind_group, &[]);
+                render_pass.draw(0..3, 0..1);
+            }
+            // Copy this strip's tonemapped rows into the full output at y0.
+            encoder.copy_texture_to_texture(
+                TexelCopyTextureInfo {
+                    texture: &strip_out,
+                    mip_level: 0,
+                    origin: Origin3d::ZERO,
+                    aspect: TextureAspect::All,
+                },
+                TexelCopyTextureInfo {
+                    texture: &output_texture,
+                    mip_level: 0,
+                    origin: Origin3d { x: 0, y: y0, z: 0 },
+                    aspect: TextureAspect::All,
+                },
+                Extent3d { width: self.width, height: sh, depth_or_array_layers: 1 },
+            );
+            self.queue.submit(std::iter::once(encoder.finish()));
+            // Serialize so this strip's GPU work finishes and its textures free
+            // (on the drop below) before the next strip allocates — peak GPU
+            // stays at one strip's worth.
+            let _ = self.device.poll(PollType::Wait { submission_index: None, timeout: None });
+        }
+
+        self.finish_output(&output_texture, &output_view, config).await
+    }
+
+    /// GPU tonemap: histogram → RGBA8 pixels via the tonemap shader.
+    /// `total_iterations` feeds the scale-invariant sample_density formula.
+    /// Large, density-effect-free exports route to `tonemap_gpu_tiled` to bound
+    /// peak VRAM; everything else uses this single-shot path.
     async fn tonemap_gpu(
         &self,
         histogram: &[HistogramPixel],
@@ -1971,6 +2453,20 @@ post_symmetry: (&config.flame.post_symmetry).into(),
         total_iterations: u64,
     ) -> Result<Vec<u8>, String> {
         use crate::config::defaults::{PREFILTER_WHITE, BRIGHT_ADJUST};
+
+        // Route large, density-free exports to the strip-tiled tonemap to bound
+        // peak VRAM: a full W·H·16 accumulation texture (~2.3 GB at 12K) OOMs
+        // alongside the live app's GPU device. Density effects are non-local
+        // (can't be strip-tiled) but are already skipped at the sizes that route
+        // here (density_effects_fit), so they never collide. Everything else
+        // uses the single-shot path below, unchanged.
+        if (self.width as u64) * (self.height as u64) * 16 > Self::TONEMAP_TILE_THRESHOLD_BYTES
+            && !(EffectChainRunner::has_enabled_effects(&config.density_effects)
+                && Self::density_effects_fit(self.width, self.height))
+        {
+            let params = self.build_tonemap_params(config, transparent, premultiplied, total_iterations);
+            return self.tonemap_gpu_tiled(histogram, config, params).await;
+        }
 
         // ===== Step 1: Convert histogram to Rgba32Float format (parallelized) =====
         // The accumulation texture stores:
@@ -2007,7 +2503,7 @@ post_symmetry: (&config.flame.post_symmetry).into(),
 
 
         // ===== Step 2: Create and upload accumulation texture =====
-        let accumulation_texture = self.device.create_texture(&TextureDescriptor {
+        let accumulation_texture = self.try_create_texture(&TextureDescriptor {
             label: Some("Export Accumulation Texture"),
             size: Extent3d {
                 width: self.width,
@@ -2020,7 +2516,7 @@ post_symmetry: (&config.flame.post_symmetry).into(),
             format: TextureFormat::Rgba32Float,
             usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
             view_formats: &[],
-        });
+        }).await?;
 
         let bytes_per_row = self.width * 16; // 4 channels × 4 bytes (f32)
         self.queue.write_texture(
@@ -2151,14 +2647,59 @@ post_symmetry: (&config.flame.post_symmetry).into(),
             );
         }
 
-        // NOTE: density effects are intentionally NOT applied on the tiled
-        // export path. They run before tonemap on the full-res accumulation
-        // texture and need an EffectChainRunner's two full-res Rgba16Float
-        // ping-pong textures (~2·W·H·8 bytes ≈ 2.3 GB at 12K) ON TOP of the
-        // accumulation/output textures — which OOMs at the resolutions the
-        // tiled path is used for. The FlameRenderer path (in-app + sub-binding
-        // exports) applies them. See docs/projects/... / Known Issues.
-        let tonemap_input_view: &TextureView = &accumulation_view;
+        // ===== Step 3.5: Density effects (Phase B, before tonemap) =====
+        // Apply density effects on the full-res accumulation BEFORE tonemap,
+        // symmetric with the color-effect pass below. The GPU histogram buffer
+        // was freed (drop+poll) before this function, so these full-res
+        // ping-pong textures don't coexist with it. Mirrors the FlameRenderer
+        // path (render.rs): first effect reads the Rgba32Float accumulation
+        // (needs FLOAT32_FILTERABLE — run_density_effects guards that), writes
+        // the Rgba16Float ping-pong, and the result feeds tonemap's binding 0
+        // (textureLoad, so no filtering needed). Guarded by a resolution
+        // ceiling so the extra texture memory doesn't OOM at extreme sizes.
+        let has_density_effects = EffectChainRunner::has_enabled_effects(&config.density_effects);
+        let mut density_chain: Option<EffectChainRunner> = None;
+        if has_density_effects {
+            if Self::density_effects_fit(self.width, self.height) {
+                let mut chain = EffectChainRunner::new(&self.device, self.width, self.height);
+                let mut density_encoder = self.device.create_command_encoder(&CommandEncoderDescriptor {
+                    label: Some("Export Density Effects Encoder"),
+                });
+                chain.reset_slots();
+                let ran = chain.run_density_effects(
+                    &self.device,
+                    &self.queue,
+                    &mut density_encoder,
+                    &accumulation_view,
+                    &config.density_effects,
+                );
+                self.queue.submit(std::iter::once(density_encoder.finish()));
+                if ran {
+                    log::info!(
+                        "High-res export: applied {} density effect(s)",
+                        config.density_effects.iter().filter(|e| e.enabled).count()
+                    );
+                    density_chain = Some(chain);
+                }
+            } else {
+                log::warn!(
+                    "High-res export: skipping density effects at {}x{} — estimated Phase B \
+                     texture memory ({} MB) exceeds the safe budget ({} MB); export continues \
+                     without them to avoid OOM.",
+                    self.width,
+                    self.height,
+                    (self.width as u64 * self.height as u64 * 36) / (1024 * 1024),
+                    Self::DENSITY_EFFECT_PHASE_B_BUDGET_BYTES / (1024 * 1024),
+                );
+            }
+        }
+        // Density output (Rgba16Float) when effects ran, else the raw
+        // accumulation. Held by `density_chain`, which must outlive the tonemap
+        // pass below (it owns the ping-pong textures the bind group samples).
+        let tonemap_input_view: &TextureView = density_chain
+            .as_ref()
+            .and_then(|c| c.get_density_output())
+            .unwrap_or(&accumulation_view);
 
         // ===== Step 4: Create bind group and output texture =====
         let curve_lut_view = self.curve_lut_texture.create_view(&TextureViewDescriptor::default());
@@ -2254,6 +2795,20 @@ post_symmetry: (&config.flame.post_symmetry).into(),
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
+
+        // Free the accumulation texture (≈ W·H·16, ~2.3 GB at 12K) and any
+        // density-effect ping-pong now that tonemap has written `output_view`.
+        // They're dead weight through the color-effect pass below, whose
+        // full-res ping-pong (≈ W·H·8) would otherwise allocate ON TOP of them
+        // and OOM at high resolution (wgpu treats OOM as a fatal panic). Drop
+        // the bind group (it holds Arc refs to the accumulation/density views),
+        // then the textures, then poll so wgpu actually reclaims the VRAM
+        // before the color ping-pong allocates (a plain drop is deferred).
+        drop(tonemap_bind_group);
+        drop(density_chain);
+        drop(accumulation_view);
+        drop(accumulation_texture);
+        let _ = self.device.poll(PollType::Wait { submission_index: None, timeout: None });
 
         // ===== Step 5.5: Run color effects (if enabled) =====
         let has_color_effects = EffectChainRunner::has_enabled_effects(&config.color_effects);
