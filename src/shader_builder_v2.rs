@@ -787,6 +787,29 @@ impl ShaderBuilder {
         })
     }
 
+    /// True if any active variation reads/writes the per-thread 4th coordinate
+    /// `point_w` (`Feature::NeedsW`). Drives `HAS_W` (emitting `point_w` + the
+    /// respawn reset).
+    fn has_w_variation(&self, active_variations: &[(String, u32)]) -> bool {
+        active_variations.iter().any(|(name, _)| {
+            self.registry.get(name).is_some_and(|info| info.has_feature(Feature::NeedsW))
+        })
+    }
+
+    /// Per-thread 4th-coordinate source (`Feature::NeedsW`). A single
+    /// `var<private> f32` riding alongside the running `vec3` point for the
+    /// whole walk, so 4D / quaternion variations can carry `w` across transform
+    /// switches. `var<private>` is per-invocation and zero-initialized by the
+    /// WGSL spec; the main loop re-zeros it on bad-value respawn (HAS_W).
+    /// Emitted only when an active variation needs it.
+    fn build_w_coordinate(&self) -> String {
+        "// 4th coordinate for 4D / quaternion variations (Feature::NeedsW).\n\
+         // var<private> is per-invocation + zero-init; the main loop re-zeros it\n\
+         // on bad-value respawn. Variations read/write it directly.\n\
+         var<private> point_w: f32;\n\n"
+            .to_string()
+    }
+
     /// Compute the packed parameter layout for the active variation set.
     ///
     /// Wraps [`crate::scene::transforms::compute_packed_layout`] given the
@@ -1305,6 +1328,8 @@ impl ShaderBuilder {
         // Same shape for direct-RGB-writing variations: gates the `vrc`
         // parameter and the plot-time RGB blend.
         let has_rgb = self.has_rgb_variation(&active);
+        // 4th coordinate (`point_w`) for 4D / quaternion variations.
+        let has_w = self.has_w_variation(&active);
 
         // Build the template processor up front — both the header and the
         // main_template body have `{{#if ...}}` blocks (header gates which
@@ -1317,6 +1342,7 @@ impl ShaderBuilder {
         processor.set("XAOS_ENABLED", xaos_enabled);
         processor.set("HAS_DC", has_dc);
         processor.set("HAS_RGB", has_rgb);
+        processor.set("HAS_W", has_w);
         // HAS_ATTACHMENTS gates the per-iteration `attachments[xform_idx]`
         // load and the Linked/Final chain loops. False when the flame has
         // no Linked or Final transforms, restoring pre-attachment-feature
@@ -1467,6 +1493,14 @@ impl ShaderBuilder {
         //     See docs/projects/intra-iteration-state-and-accum.md.
         shader.push_str(&self.build_state_accessors(flame, &active));
         shader.push('\n');
+
+        // 8a-ii. Per-thread 4th coordinate `point_w` for 4D / quaternion
+        //        variations (only emits when an active variation has
+        //        Feature::NeedsW). The main loop re-zeros it on respawn.
+        if has_w {
+            shader.push_str(&self.build_w_coordinate());
+            shader.push('\n');
+        }
 
         // 8b. Complex arithmetic + 2x2 complex matrix helpers. Always
         //     injected (~90 LoC, dead-code-eliminated when unused).
@@ -2580,6 +2614,41 @@ mod tests {
             assert!(!shader.contains("{{#if"), "unprocessed {{{{#if}} in shader (render_3d={})", render_3d);
             assert!(!shader.contains("{{/if}}"), "unprocessed {{{{/if}} in shader (render_3d={})", render_3d);
         }
+    }
+
+    /// `Feature::NeedsW` emits the per-thread `point_w` 4th coordinate (and the
+    /// respawn reset) only when an active variation needs it.
+    #[test]
+    fn needs_w_emits_point_w_only_when_active() {
+        use crate::scene::transforms::{Flame, Transform};
+        let registry = crate::variations::global_registry().clone();
+        let builder = ShaderBuilder::new(registry);
+        let constants = ShaderConstants::default();
+
+        // 3D flame with the quaternion variation → point_w + body present.
+        let mut flame = Flame::new();
+        let mut xform = Transform::new();
+        xform.variations.insert("quaternion_julia".to_string(), 1.0);
+        flame.transforms.push(xform);
+        let mut active = HashMap::new();
+        active.insert("quaternion_julia".to_string(), 1.0);
+        let shader = builder.build_from_template(&flame, &active, true, false, false, true, &constants);
+        assert!(shader.contains("var<private> point_w"), "point_w must be emitted");
+        assert!(shader.contains("fn variation_quaternion_julia("), "variation body present");
+
+        // A flame without any NeedsW variation must NOT emit point_w.
+        let mut plain = Flame::new();
+        let mut t = Transform::new();
+        t.variations.insert("linear".to_string(), 1.0);
+        plain.transforms.push(t);
+        let mut plain_active = HashMap::new();
+        plain_active.insert("linear".to_string(), 1.0);
+        let plain_shader =
+            builder.build_from_template(&plain, &plain_active, true, false, false, true, &constants);
+        assert!(
+            !plain_shader.contains("var<private> point_w"),
+            "point_w must NOT be emitted for scratch-free flames"
+        );
     }
 
     /// Activating both `pointgrid_wf` and `pointgrid3d_wf` together used

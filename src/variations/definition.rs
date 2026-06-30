@@ -134,6 +134,21 @@ pub enum Feature {
     /// Input-DEPENDENT blurs (`radial_blur`, `farblur`, `post_rblur`,
     /// `exblur`) must NOT carry this flag — they stay fully stochastic.
     AnalyticBlur,
+
+    /// The variation reads/writes the per-thread **4th coordinate** `point_w` —
+    /// a single `var<private> f32` that rides alongside the running `vec3`
+    /// point through the whole walk (NOT keyed by xform/variation), so a
+    /// quaternion / 4D variation can treat `(p.xyz, point_w)` as a 4D point and
+    /// have `w` survive transform switches. When any active variation lists
+    /// this, the shader builder emits `point_w` and zeroes it on bad-value
+    /// respawn. The variation body references `point_w` directly.
+    ///
+    /// Deliberately specific rather than a general per-thread scratch pool —
+    /// the general "user data / scratch / formula" system is a separate
+    /// project. If `w` later needs to *sum* across multiple variations like
+    /// x/y/z do, promote it to a `ptr<function, f32>` threaded through
+    /// `apply_variations` (the `vc`/`vrc` pattern).
+    NeedsW,
 }
 
 /// Static definition of a variation
