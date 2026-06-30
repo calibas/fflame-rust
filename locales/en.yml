@@ -298,9 +298,6 @@ transform:
   affine_g: "g (Z):"
   post_affine_enabled: "Post-Affine"
   post_affine_matrix: "Post-Affine Matrix"
-  # JWildfire 3D affine extension — per-plane affines for YZ and ZX.
-  # See docs/projects/jwf-features.md ("zxCoefs / yzCoefs") for the
-  # math; these only matter in 3D mode.
   yz_affine_section: "YZ Plane Affine"
   zx_affine_section: "ZX Plane Affine"
   yz_post_affine_section: "YZ Plane Post-Affine"
@@ -313,7 +310,7 @@ variations:
   weight: "Weight"
   add: "➕ Add Variation"
   remove: "🗑 Delete"
-  phase_tooltip: "Phase — run this variation in the Pre, Main, or Post phase (JWildfire fx_priority)"
+  phase_tooltip: "Phase — run this variation in the Pre, Main, or Post phase"
   phase_label: "Phase"
   phase_pre: "Pre"
   phase_main: "Main"
@@ -423,10 +420,10 @@ view:
   tooltip_perspective: "Strength of 3D perspective effect.\n0 = orthographic, higher = more depth."
   tooltip_camera_pitch: "3D camera rotation (up/down).\nTilts the view vertically."
   tooltip_camera_yaw: "3D camera rotation (left/right).\nRotates the view horizontally."
-  tooltip_camera_bank: "3D camera bank (Y-axis tilt).\nJWildfire/Apophysis 4th camera angle — creates perspective skew. Round-trips through XML as cam_roll."
-  tooltip_camera_x: "Camera X position (world space).\nRound-trips through XML as cam_pos_x."
-  tooltip_camera_y: "Camera Y position (world space).\nRound-trips through XML as cam_pos_y."
-  tooltip_camera_z: "Camera Z position.\nMoves the viewpoint closer/further. Round-trips through XML as cam_pos_z + legacy cam_zpos."
+  tooltip_camera_bank: "3D camera bank (Y-axis tilt).\nCreates perspective skew."
+  tooltip_camera_x: "Camera X position (world space)."
+  tooltip_camera_y: "Camera Y position (world space)."
+  tooltip_camera_z: "Camera Z position.\nMoves the viewpoint closer/further."
   tooltip_fly_mode: "Free-fly camera (3D mode).\nPrimary mouse drag = look around\nWASD = move forward/back/strafe\nQ/E = down/up\nShift = sprint\nF2 hotkey toggles."
   tooltip_depth_density_compensation: "Keeps brightness depth-invariant under perspective (0 = off, 1 = full).\nNear structures normally fade as the camera approaches (their samples spread over more pixels); this re-weights samples by depth so close structures keep their brightness — at the cost of more grain up close.\nFar structures dim symmetrically; the focal plane is unaffected."
   tooltip_far_density_fade: "Thins out far structures (0 = off).\nSample density fades with Gaussian falloff past the start distance: weight = exp(−distance² × strength).\nUnlike fog (which recolors), far structures genuinely vanish with distance."
@@ -455,7 +452,7 @@ view:
   tooltip_post_symmetry_order: "Number of rotational copies for Point symmetry.\n2 = pair (180°), 3 = ternary (120°), 4 = quad (90°), …"
 
   preserve_z: "Preserve Z"
-  tooltip_preserve_z: "When off (default, matches Apophysis and JWildfire's per-file default), Z is reset to 0 at the end of each iteration so variations that scale Z by amounts > 1 (e.g. high-weight spherical) don't cascade to ±∞.\nTurn on to preserve Z across iterations — needed by some Z-aware 3D flames; matches JWildfire's `preserve_z=\"1\"`."
+  tooltip_preserve_z: "When off, Z is reset to 0 at the end of each iteration so variations that scale Z by amounts > 1 (e.g. high-weight spherical) don't cascade to ±∞.\nTurn on to preserve Z across iterations — needed by some Z-aware 3D flames."
 
 # Rendering Controls
 rendering:
@@ -1484,14 +1481,10 @@ tooltips:
   affine_g: "Z offset - depth in 3D mode"
   post_affine_enabled: "Enable a second affine transform applied after variations.\nUsed for fine-tuning shape and position independently of the pre-affine."
   post_affine_matrix: "Post-affine coefficients applied after variations."
-  # JWildfire-extension plane affines. Six positional coefficients
-  # `a c b d e f` (same layout as the XY `coefs`) acting on the
-  # named plane, composed sequentially after XY per JWildfire's
-  # TransformationAffineFullStep. Identity is `1 0 0 1 0 0`.
-  yz_affine: "JWildfire YZ plane affine. Acts on (y, z) before variations. Identity `1 0 0 1 0 0` = no effect."
-  zx_affine: "JWildfire ZX plane affine. Acts on (x, z) before variations. Identity `1 0 0 1 0 0` = no effect."
-  yz_post_affine: "JWildfire YZ plane post-affine. Applied after variations. Identity = no effect."
-  zx_post_affine: "JWildfire ZX plane post-affine. Applied after variations. Identity = no effect."
+  yz_affine: "YZ plane affine. Acts on (y, z) before variations. Identity `1 0 0 1 0 0` = no effect."
+  zx_affine: "ZX plane affine. Acts on (x, z) before variations. Identity `1 0 0 1 0 0` = no effect."
+  yz_post_affine: "YZ plane post-affine. Applied after variations. Identity = no effect."
+  zx_post_affine: "ZX plane post-affine. Applied after variations. Identity = no effect."
   color_speed: "How fast the color index changes during iteration.\n-1 to 1, where 0 = no change."
   opacity: "Transparency of points from this transform.\n0 = invisible, 1 = fully opaque"
   direct_color: "Blend strength for direct-color (DC) variations like dc_linear, dc_bubble.\n0 = standard color evolution; 1 = DC variations fully control color (default).\nNo effect when no DC variations are active in this transform — safe to leave at 1."
