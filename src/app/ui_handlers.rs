@@ -412,10 +412,13 @@ impl App {
 
     /// Handle generated flame from Random Generator panel (single)
     fn handle_generated_flame(&mut self, ui_response: &UiResponse) {
-        if let Some(ref flame) = ui_response.generated_flame {
-            // Create a new config with the generated flame
+        if let Some(ref bundle) = ui_response.generated_flame {
+            // Create a new config with the generated flame + its scene render
+            // settings (render_mode/perspective are config-level since v3).
             let mut new_config = FractalConfig::default();
-            new_config.flame = flame.clone();
+            new_config.flame = bundle.flame.clone();
+            new_config.render_mode = bundle.render_mode;
+            new_config.perspective_strength = bundle.perspective_strength;
 
             // Use a random palette from the library
             if self.palette_library.len() > 0 {
@@ -695,7 +698,7 @@ impl App {
             data.remove_temp::<String>(egui::Id::new("pending_subflame_load_raw"))
         }) {
             if let Some(index) = self.pending_subflame_load_index.take() {
-                match serde_json::from_str::<FractalConfig>(&json) {
+                match FractalConfig::from_json(&json) {
                     Ok(config) => {
                         let mut flame = config.flame;
                         flame.subflames.clear();
@@ -1082,7 +1085,7 @@ impl App {
             if let Some(json) = self.egui_layer.ctx.data_mut(|data| {
                 data.remove_temp::<String>(egui::Id::new("pending_config_load_raw"))
             }) {
-                match serde_json::from_str::<FractalConfig>(&json) {
+                match FractalConfig::from_json(&json) {
                     Ok(config) => {
                         if let Err(e) = self.load_config_with_undo(config, "history.action.load_config".to_string(), None) {
                             log::error!("Failed to load config: {}", e);

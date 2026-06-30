@@ -2,12 +2,18 @@ use serde::{Deserialize, Serialize};
 
 /// Color mode determines how colors are assigned during iteration
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+// Wire casing is snake_case (`"palette"`, `"speed"`, `"path_map"`) to match
+// the server's config blob and the Postgres enums it casts into; the
+// PascalCase `alias`es keep old `.fflame` files / presets loading.
 pub enum ColorMode {
     /// Use 1D palette texture lookup (Apophysis color coordinate evolution)
+    #[serde(rename = "palette", alias = "Palette")]
     Palette,
     /// Use speed-based coloring (distance traveled per iteration)
+    #[serde(rename = "speed", alias = "Speed")]
     Speed,
     /// Use transform path history as color (IFS tree visualization)
+    #[serde(rename = "path_map", alias = "PathMap")]
     PathMap,
 }
 
@@ -22,10 +28,13 @@ impl Default for ColorMode {
 pub enum PathCaptureMode {
     /// Capture on first hit to the pixel (original behavior)
     #[default]
+    #[serde(rename = "first_hit", alias = "FirstHit")]
     FirstHit,
     /// Capture first hit after burn-in iterations complete
+    #[serde(rename = "first_after_burn_in", alias = "FirstAfterBurnIn")]
     FirstAfterBurnIn,
     /// Always overwrite - shows most recent path to hit pixel
+    #[serde(rename = "last_hit", alias = "LastHit")]
     LastHit,
 }
 
@@ -41,8 +50,10 @@ impl PathCaptureMode {
 pub enum PathTrackingMode {
     /// Store the first 32 iterations, then stop tracking
     #[default]
+    #[serde(rename = "first", alias = "First")]
     First,
     /// Store the 32 most recent iterations (rolling window)
+    #[serde(rename = "recent", alias = "Recent")]
     Recent,
 }
 
@@ -58,20 +69,28 @@ impl PathTrackingMode {
 pub enum PathMapStyle {
     /// Color by path beginning (first ~8 transforms), similar paths = similar colors
     #[default]
+    #[serde(rename = "prefix", alias = "Prefix")]
     Prefix,
     /// Color by path end (recent transforms), similar paths = similar colors
+    #[serde(rename = "suffix", alias = "Suffix")]
     Suffix,
     /// Color by path beginning with hash scrambling for distinct colors
+    #[serde(rename = "prefix_distinct", alias = "PrefixDistinct")]
     PrefixDistinct,
     /// Color by path end with hash scrambling for distinct colors
+    #[serde(rename = "suffix_distinct", alias = "SuffixDistinct")]
     SuffixDistinct,
     /// Color by iteration depth (burn_in to 32), uses palette gradient
+    #[serde(rename = "depth", alias = "Depth")]
     Depth,
     /// Color by distance from origin (0 to sqrt(2)), uses palette gradient
+    #[serde(rename = "origin_radial", alias = "OriginRadial")]
     OriginRadial,
     /// Color by horizontal position (-1 to 1), uses palette gradient
+    #[serde(rename = "origin_horizontal", alias = "OriginHorizontal")]
     OriginHorizontal,
     /// Color by vertical position (-1 to 1), uses palette gradient
+    #[serde(rename = "origin_vertical", alias = "OriginVertical")]
     OriginVertical,
 }
 
@@ -449,7 +468,9 @@ impl Palette {
 ///   ratio `r` lives in `squeeze_factor` for this mode (typically ~0.5).
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum SqueezeMode {
+    #[serde(rename = "linear", alias = "Linear")]
     Linear,
+    #[serde(rename = "geometric", alias = "Geometric")]
     Geometric,
 }
 

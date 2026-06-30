@@ -68,13 +68,13 @@ impl PngMetadata {
         let config_json = serde_json::to_string(config).unwrap_or_default();
         let config_checksum = Self::calculate_checksum(&config_json);
 
-        let (render_mode, projection) = match config.flame.render_mode {
+        let (render_mode, projection) = match config.render_mode {
             crate::scene::transforms::RenderMode::TwoD => ("2D".to_string(), "N/A".to_string()),
             crate::scene::transforms::RenderMode::ThreeD => {
-                let proj_str = if config.flame.perspective_strength < 0.01 {
+                let proj_str = if config.perspective_strength < 0.01 {
                     "Orthographic".to_string()
                 } else {
-                    format!("Perspective{{strength:{}}}", config.flame.perspective_strength)
+                    format!("Perspective{{strength:{}}}", config.perspective_strength)
                 };
                 ("3D".to_string(), proj_str)
             }

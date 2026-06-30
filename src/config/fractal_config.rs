@@ -1,11 +1,24 @@
 use serde::{Deserialize, Serialize};
-use crate::scene::transforms::Flame;
+use crate::scene::transforms::{Flame, RenderMode};
 use crate::scene::palette::{ColorMode, Palette, PathCaptureMode, PathMapStyle, PathTrackingMode};
 use crate::scene::tonemap::{HighlightMode, ToneMapMode, ToneCurve};
 use crate::effects::EffectInstance;
 
-/// Current config format version
-pub const CURRENT_CONFIG_VERSION: u32 = 1;
+/// Current config format version.
+///
+/// v2 introduces the cloud "opaque blob" wire format (see
+/// `docs/projects/api-v2.md`): the same JSON a `.fflame` file holds is stored
+/// as a blob, so new config fields need no API/DB change. Both `.fflame` and
+/// cloud loads run through `migrate_value` (version-keyed, on the raw JSON
+/// *before* deserialize) so a version's old field defaults can be restored for
+/// fields that were stripped at save time.
+///
+/// v3 moves the scene-level render fields (`render_mode`, `preserve_z`,
+/// `perspective_strength`, `depth_density_compensation`, `far_density_fade`,
+/// `far_density_fade_start`) off `Flame` and onto `FractalConfig` — they were
+/// always whole-render settings (subflame copies were dead). The v2→v3
+/// migration lifts them from `config.flame.*` to the top level.
+pub const CURRENT_CONFIG_VERSION: u32 = 3;
 
 /// Complete fractal configuration (excludes runtime-only settings)
 /// All fields except `flame` have defaults for compact serialization
@@ -15,6 +28,24 @@ pub struct FractalConfig {
     /// Subflames (referenced by `subflame_wf` variations) live on the
     /// `Flame` struct itself, not here — see `Flame::subflames`.
     pub flame: Flame,
+
+    /// Render mode (2D vs 3D). Scene-level, not per-flame: the whole render
+    /// uses a single mode (one `RENDER_3D` shader flag), so subflames inherit
+    /// it — a mixed 2D/3D nesting was never possible. Moved here from `Flame`
+    /// in config v3. **Always serialized** (no skip) so the cloud blob's
+    /// top-level `render_mode` is never absent — the server projects it into a
+    /// typed column for catalog queries.
+    #[serde(default)]
+    pub render_mode: RenderMode,
+
+    /// JWildfire's `preserve_z` flag — whether the chaos game's Z carries
+    /// across iterations or resets each step. Scene-global (feeds the single
+    /// `flatten_z_per_iter` shader flag), moved here from `Flame` in v3.
+    /// Skipped when `true` (the pre-field default); absent ⇒ `true` on load so
+    /// flames authored before the flag keep their look. New flames default to
+    /// `false` (Apo/JWF semantics) and write it explicitly.
+    #[serde(default = "default_preserve_z", skip_serializing_if = "is_default_preserve_z")]
+    pub preserve_z: bool,
 
     /// View settings
     #[serde(default = "default_zoom")]
@@ -64,6 +95,13 @@ pub struct FractalConfig {
     #[serde(default)]
     pub camera_z: f32,
 
+    /// Perspective strength for 3D rendering (0.0 = flat/orthographic, higher
+    /// = stronger). A projection/camera parameter — moved here from `Flame` in
+    /// v3 to sit with the rest of the camera state. Round-trips through JWF's
+    /// `cam_perspective`/`cam_persp` XML attribute.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub perspective_strength: f32,
+
     /// Saved image dimensions. Mirrors the `size` attribute on
     /// JWildfire / Apophysis `<flame>` elements — historically a
     /// canvas-extent concept that also participates in the zoom math
@@ -92,6 +130,24 @@ pub struct FractalConfig {
     pub fog_strength: f32,  // Exponential fog density (0.0 = disabled)
     #[serde(default)]
     pub fog_start: f32,  // Depth where fog begins
+
+    /// Depth-dependent density compensation for 3D perspective (0.0 = off,
+    /// 1.0 = full radiance preservation). A render-time per-sample histogram
+    /// weighting — moved here from `Flame` in v3 to sit with the other depth
+    /// render effects (DoF, fog). Our own extension; `.fflame` only, dropped
+    /// on `.flame` XML export. See `Flame`'s old doc for the full `zr^(−2·s)`
+    /// derivation.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub depth_density_compensation: f32,
+    /// Far density fade strength (Gaussian falloff of far samples' density
+    /// weight). Render-time effect, moved here from `Flame` in v3. `.fflame`
+    /// only. 0 = off.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub far_density_fade: f32,
+    /// Camera-space depth where the far density fade starts. Only meaningful
+    /// when `far_density_fade > 0`. Moved here from `Flame` in v3.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub far_density_fade_start: f32,
 
     /// Spatial filter — Gaussian blur applied to the per-batch histogram
     /// before accumulation. Mirrors Apophysis's `filter` attribute: a
@@ -304,6 +360,40 @@ fn is_default_camera_bank(v: &f32) -> bool {
     *v == 0.0
 }
 
+/// Serde-absent default for `preserve_z`: `true`. Flames authored before the
+/// flag existed omit it, and historically defaulted to `true` (Z carries) to
+/// preserve their look. New flames default to `false` (via
+/// `FractalConfig::default`) and write the field explicitly.
+fn default_preserve_z() -> bool {
+    true
+}
+
+/// Skip-serialize helper for `preserve_z`: omit when `true` (the pre-field
+/// default). Paired with `default_preserve_z` so omitted ⇒ `true` on load.
+/// **Not** listed in `remove_default_fields` — that strips against
+/// `Self::default()` (`false`), which would wrongly drop genuine `false`
+/// values; the skip+default pair is the single source of truth here.
+fn is_default_preserve_z(v: &bool) -> bool {
+    *v
+}
+
+/// Convert the pre-rename legacy `projection` field (an enum: the string
+/// `"Orthographic"`, or `{ "Perspective": { "strength": X } }`) into a plain
+/// `perspective_strength` number, used by the v2→v3 migration. Mirrors the
+/// translation that used to live in `Flame`'s manual deserializer.
+fn legacy_projection_to_strength(v: serde_json::Value) -> serde_json::Value {
+    let strength = match &v {
+        serde_json::Value::String(s) if s == "Orthographic" => 0.0,
+        serde_json::Value::Object(obj) => obj
+            .get("Perspective")
+            .and_then(|p| p.get("strength"))
+            .and_then(|s| s.as_f64())
+            .unwrap_or(0.0),
+        _ => 0.0,
+    };
+    serde_json::json!(strength)
+}
+
 fn default_density_scale() -> f32 {
     super::defaults::DEFAULT_DENSITY_SCALE
 }
@@ -479,6 +569,14 @@ impl Default for FractalConfig {
 
         Self {
             flame: Flame::default(),
+            // Scene-level render state (moved off Flame in v3). New flames
+            // default to 2D / preserve_z=false (Apo/JWF semantics).
+            render_mode: RenderMode::TwoD,
+            preserve_z: false,
+            perspective_strength: 0.0,
+            depth_density_compensation: 0.0,
+            far_density_fade: 0.0,
+            far_density_fade_start: 0.0,
             zoom: 1.0,
             pan_x: 0.0,
             pan_y: 0.0,
@@ -559,10 +657,11 @@ impl FractalConfig {
         (dx * cos_r - dy * sin_r, dx * sin_r + dy * cos_r)
     }
 
-    /// Export configuration to JSON string with version header
-    /// Omits fields that match defaults for compact output
-    pub fn to_json(&self) -> Result<String, serde_json::Error> {
-        // Serialize to JSON value
+    /// Build the compact, version-headed JSON **value**: defaults stripped,
+    /// `version` first, `flame` next. This is the canonical serialized form
+    /// — `to_json` is just this stringified, and the cloud config blob
+    /// (`api::sync`) is this value minus the palette and root transforms.
+    pub(crate) fn to_json_value(&self) -> Result<serde_json::Value, serde_json::Error> {
         let mut value = serde_json::to_value(self)?;
 
         if let Some(obj) = value.as_object_mut() {
@@ -583,10 +682,16 @@ impl FractalConfig {
                     ordered_obj.insert(k.clone(), v.clone());
                 }
             }
-            serde_json::to_string_pretty(&ordered_obj)
+            Ok(serde_json::Value::Object(ordered_obj))
         } else {
-            serde_json::to_string_pretty(&value)
+            Ok(value)
         }
+    }
+
+    /// Export configuration to JSON string with version header
+    /// Omits fields that match defaults for compact output
+    pub fn to_json(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string_pretty(&self.to_json_value()?)
     }
 
     /// Remove fields from JSON object that match default values
@@ -641,43 +746,11 @@ impl FractalConfig {
         if config.deterministic_rng == defaults.deterministic_rng { obj.remove("deterministic_rng"); }
     }
 
-    /// Import configuration from JSON string with version checking and migration
+    /// Import configuration from a JSON string, with version-keyed migration.
+    /// Both `.fflame` files and cloud config blobs deserialize through here
+    /// (and `from_json_value`), so they share one migration path.
     pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
-        // Parse to check version first
-        let value: serde_json::Value = serde_json::from_str(json)?;
-
-        // Check version if present
-        let version = value.get("version")
-            .and_then(|v| v.as_u64())
-            .map(|v| v as u32)
-            .unwrap_or(0); // Pre-versioning configs are version 0
-
-        if version > CURRENT_CONFIG_VERSION {
-            let msg = format!(
-                "Config version {} is newer than supported version {}. Please update the application.",
-                version, CURRENT_CONFIG_VERSION
-            );
-            return Err(serde_json::Error::io(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                msg
-            )));
-        }
-
-        // Deserialize first (serde defaults will apply)
-        let mut config: Self = serde_json::from_value(value)?;
-
-        // Apply migrations if needed
-        if version < CURRENT_CONFIG_VERSION {
-            config = Self::migrate(config, version)?;
-        }
-
-        // Assign session-local IDs to every Transform / Flame / Effect
-        // that came in without one (i.e. all of them — IDs are
-        // serde-skipped). This makes the deserialized config immediately
-        // usable by the animation rebind machinery.
-        config.fixup_ids();
-
-        Ok(config)
+        Self::from_json_value(serde_json::from_str(json)?)
     }
 
     /// Walk every list-item (transforms in all three pools on Main and
@@ -703,39 +776,102 @@ impl FractalConfig {
         }
     }
 
-    /// Migrate config from old version to current version
-    /// Returns error as serde_json::Error for API consistency
-    fn migrate(mut config: Self, from_version: u32) -> Result<Self, serde_json::Error> {
-        let mut current_version = from_version;
+    /// Version-keyed migration on the raw JSON **value**, run BEFORE
+    /// `from_value`. This is the crucial ordering: a field stripped at save
+    /// time (because it equalled its default at *that* version) is *absent*
+    /// here, so an arm can restore the version's old default with
+    /// `obj.entry("field").or_insert(json!(old_default))`. If we migrated the
+    /// typed struct instead, serde would already have filled the absent field
+    /// with the *current* default and the old value would be unrecoverable.
+    ///
+    /// Each arm upgrades exactly one version; `version` is rewritten to current
+    /// on success. Arms for bumps that change no defaults/shape are empty —
+    /// serde's current default is already correct for every field.
+    fn migrate_value(from_version: u32, value: &mut serde_json::Value) -> Result<(), serde_json::Error> {
+        let obj = match value.as_object_mut() {
+            Some(o) => o,
+            // Non-object: let `from_value` surface the real type error.
+            None => return Ok(()),
+        };
 
-        // Migration chain: apply each migration in sequence
-        while current_version < CURRENT_CONFIG_VERSION {
-            config = match current_version {
-                0 => Self::migrate_v0_to_v1(config),
-                // Future migrations:
-                // 1 => Self::migrate_v1_to_v2(config),
-                // 2 => Self::migrate_v2_to_v3(config),
-                _ => {
-                    let msg = format!("Unknown config version {} during migration", current_version);
+        let mut version = from_version;
+        while version < CURRENT_CONFIG_VERSION {
+            match version {
+                // v0 -> v1: pre-versioning configs. No structural/default
+                // changes; serde defaults handle missing fields.
+                0 => {}
+                // v1 -> v2: opaque-blob format (docs/projects/api-v2.md). No
+                // field defaults changed, so this is a no-op for now. The arm
+                // exists so a *future* default change lands here as an explicit
+                // `obj.entry("field").or_insert(json!(v1_default))` rather than
+                // silently re-rendering old flames at the new default.
+                1 => {}
+                // v2 -> v3: lift the scene-level render fields from the nested
+                // `flame` object up to the config top level (see
+                // CURRENT_CONFIG_VERSION docs). Source of truth for these is
+                // now `config.*`; the `flame` object loses them. Subflames'
+                // (always-ignored) copies are left in place — `Flame`'s
+                // deserializer ignores unknown fields and they drop on re-save.
+                2 => {
+                    // Extract from the flame object, then insert at top level
+                    // (can't hold the `flame` borrow while mutating `obj`).
+                    let (render_mode, perspective, depth_dc, far_fade, far_fade_start, preserve_z) =
+                        if let Some(flame) = obj.get_mut("flame").and_then(|f| f.as_object_mut()) {
+                            let render_mode = flame
+                                .remove("render_mode")
+                                .unwrap_or_else(|| serde_json::json!("2d"));
+                            // perspective_strength, or the pre-rename legacy
+                            // `projection` enum form.
+                            let perspective = flame
+                                .remove("perspective_strength")
+                                .or_else(|| flame.remove("projection").map(legacy_projection_to_strength))
+                                .unwrap_or_else(|| serde_json::json!(0.0));
+                            let depth_dc = flame.remove("depth_density_compensation");
+                            let far_fade = flame.remove("far_density_fade");
+                            let far_fade_start = flame.remove("far_density_fade_start");
+                            // Absent in pre-flag flames ⇒ true (kept their look).
+                            let preserve_z = flame
+                                .remove("preserve_z")
+                                .unwrap_or_else(|| serde_json::json!(true));
+                            (render_mode, perspective, depth_dc, far_fade, far_fade_start, preserve_z)
+                        } else {
+                            (
+                                serde_json::json!("2d"),
+                                serde_json::json!(0.0),
+                                None,
+                                None,
+                                None,
+                                serde_json::json!(true),
+                            )
+                        };
+                    obj.insert("render_mode".to_string(), render_mode);
+                    obj.insert("perspective_strength".to_string(), perspective);
+                    if let Some(v) = depth_dc {
+                        obj.insert("depth_density_compensation".to_string(), v);
+                    }
+                    if let Some(v) = far_fade {
+                        obj.insert("far_density_fade".to_string(), v);
+                    }
+                    if let Some(v) = far_fade_start {
+                        obj.insert("far_density_fade_start".to_string(), v);
+                    }
+                    obj.insert("preserve_z".to_string(), preserve_z);
+                }
+                other => {
                     return Err(serde_json::Error::io(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
-                        msg
+                        format!("Unknown config version {} during migration", other),
                     )));
                 }
-            };
-            current_version += 1;
+            }
+            version += 1;
         }
 
-        log::info!("Migrated config from version {} to {}", from_version, CURRENT_CONFIG_VERSION);
-        Ok(config)
-    }
-
-    /// Migrate pre-versioning configs (version 0) to version 1
-    /// These are configs saved before versioning was implemented
-    fn migrate_v0_to_v1(config: Self) -> Self {
-        // No structural changes needed - serde defaults handle missing fields
-        // This migration exists to document that v0 -> v1 is a no-op
-        config
+        obj.insert("version".to_string(), serde_json::json!(CURRENT_CONFIG_VERSION));
+        if from_version < CURRENT_CONFIG_VERSION {
+            log::info!("Migrated config from version {} to {}", from_version, CURRENT_CONFIG_VERSION);
+        }
+        Ok(())
     }
 
     /// Export to JSON file
@@ -783,36 +919,51 @@ impl FractalConfig {
         }
     }
 
-    /// Import a single configuration from JSON value (internal helper)
-    fn from_json_value(value: serde_json::Value) -> Result<Self, serde_json::Error> {
-        // Check version if present
+    /// Import a single configuration from a JSON value, migrating it (on the
+    /// value, before deserialize) to the current version. Shared by `from_json`
+    /// and the array path; the cloud-blob path (`api::sync`) reuses it too,
+    /// which is why it's `pub(crate)`.
+    pub(crate) fn from_json_value(value: serde_json::Value) -> Result<Self, serde_json::Error> {
+        // `.fflame` / cloud blobs without a version are genuinely pre-versioning
+        // (v0).
+        Self::from_json_value_with_default_version(value, 0)
+    }
+
+    /// Like [`from_json_value`] but uses `default_version` when the value has no
+    /// `version` field, instead of assuming v0.
+    ///
+    /// The animation `base_config` path passes **2**: those configs were embedded
+    /// by the raw struct serializer (which never wrote a `version`) at a time
+    /// when the format was already v2, so an absent version means v2 — run only
+    /// the v2→current migrations, not the v0/v1 ones.
+    pub(crate) fn from_json_value_with_default_version(
+        mut value: serde_json::Value,
+        default_version: u32,
+    ) -> Result<Self, serde_json::Error> {
         let version = value.get("version")
             .and_then(|v| v.as_u64())
             .map(|v| v as u32)
-            .unwrap_or(0);
+            .unwrap_or(default_version);
 
         if version > CURRENT_CONFIG_VERSION {
-            let msg = format!(
-                "Config version {} is newer than supported version {}. Please update the application.",
-                version, CURRENT_CONFIG_VERSION
-            );
             return Err(serde_json::Error::io(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                msg,
+                format!(
+                    "Config version {} is newer than supported version {}. Please update the application.",
+                    version, CURRENT_CONFIG_VERSION
+                ),
             )));
         }
 
-        // Deserialize first (serde defaults will apply)
+        // Migrate on the value (restores version-specific defaults), THEN
+        // deserialize — serde fills any still-absent field with the current
+        // default, correct for every field a migration arm didn't touch.
+        Self::migrate_value(version, &mut value)?;
         let mut config: Self = serde_json::from_value(value)?;
 
-        // Apply migrations if needed
-        if version < CURRENT_CONFIG_VERSION {
-            config = Self::migrate(config, version)?;
-        }
-
-        // Assign session-local IDs (see `fixup_ids` doc).
+        // Assign session-local IDs to every Transform / Flame / Effect that
+        // came in without one (all of them — IDs are serde-skipped).
         config.fixup_ids();
-
         Ok(config)
     }
 
@@ -900,7 +1051,71 @@ mod tests {
     fn test_version_included_in_json() {
         let config = FractalConfig::default();
         let json = config.to_json().unwrap();
-        assert!(json.contains("\"version\": 1"));
+        assert!(json.contains(&format!("\"version\": {}", CURRENT_CONFIG_VERSION)));
+    }
+
+    #[test]
+    fn test_enums_serialize_snake_case_read_pascal_case() {
+        use crate::scene::palette::ColorMode;
+        use crate::scene::tonemap::ToneMapMode;
+        use crate::scene::transforms::RenderMode;
+
+        // Emit: the wire/blob form is snake_case (the server casts
+        // `render_mode` straight into a Postgres enum of '2d'/'3d').
+        let mut config = FractalConfig::default();
+        config.render_mode = RenderMode::ThreeD;
+        config.color_mode = ColorMode::PathMap;
+        config.tonemap_mode = ToneMapMode::DensityVisualization;
+        let json = config.to_json().unwrap();
+        assert!(json.contains("\"3d\""), "render_mode must emit \"3d\"");
+        assert!(json.contains("\"path_map\""), "color_mode must emit snake_case");
+        assert!(json.contains("\"density\""), "tonemap_mode must emit \"density\"");
+        assert!(!json.contains("ThreeD") && !json.contains("PathMap"));
+
+        // Read: legacy PascalCase enum values still load via the serde
+        // aliases. (render_mode is top-level config since v3.)
+        let mut legacy = serde_json::to_value(FractalConfig::default()).unwrap();
+        legacy["version"] = serde_json::json!(CURRENT_CONFIG_VERSION);
+        legacy["render_mode"] = serde_json::json!("ThreeD");
+        legacy["color_mode"] = serde_json::json!("PathMap");
+        legacy["tonemap_mode"] = serde_json::json!("DensityVisualization");
+        let restored = FractalConfig::from_json_value(legacy).unwrap();
+        assert_eq!(restored.render_mode, RenderMode::ThreeD);
+        assert_eq!(restored.color_mode, ColorMode::PathMap);
+        assert_eq!(restored.tonemap_mode, ToneMapMode::DensityVisualization);
+    }
+
+    /// v2→v3 migration: a v2 blob with the scene-render fields nested under
+    /// `flame` must lift them to the config top level, with `preserve_z`
+    /// absent ⇒ true and the legacy `projection` form mapped to perspective.
+    #[test]
+    fn test_v2_to_v3_lifts_scene_render_fields() {
+        use crate::scene::transforms::RenderMode;
+
+        // Build a v2-shaped value: start from a default config, then move the
+        // render fields back under `flame` and stamp version 2.
+        let mut v2 = serde_json::to_value(FractalConfig::default()).unwrap();
+        let obj = v2.as_object_mut().unwrap();
+        obj.insert("version".into(), serde_json::json!(2));
+        // These belong at top level in v3; put them under flame as a v2 file would.
+        obj.remove("render_mode");
+        obj.remove("preserve_z");
+        obj.remove("perspective_strength");
+        let flame = obj.get_mut("flame").unwrap().as_object_mut().unwrap();
+        flame.insert("render_mode".into(), serde_json::json!("3d"));
+        flame.insert("depth_density_compensation".into(), serde_json::json!(0.5));
+        // preserve_z intentionally absent ⇒ should migrate to true.
+        // Legacy `projection` enum form ⇒ perspective_strength 2.0.
+        flame.insert(
+            "projection".into(),
+            serde_json::json!({ "Perspective": { "strength": 2.0 } }),
+        );
+
+        let cfg = FractalConfig::from_json_value(v2).unwrap();
+        assert_eq!(cfg.render_mode, RenderMode::ThreeD, "render_mode lifted");
+        assert_eq!(cfg.depth_density_compensation, 0.5, "depth lifted");
+        assert!(cfg.preserve_z, "absent preserve_z ⇒ true");
+        assert_eq!(cfg.perspective_strength, 2.0, "legacy projection ⇒ perspective");
     }
 
     #[test]

@@ -285,7 +285,7 @@ pub struct EguiLayer {
 
     // Random generator panel state
     random_generator_panel: Option<random_generator::RandomGeneratorPanel>,
-    generated_flame: Option<crate::scene::transforms::Flame>,
+    generated_flame: Option<crate::scene::randomize::RandomFlame>,
     generated_batch: Option<Vec<crate::config::FractalConfig>>,
 
     // Fractal browser panel state
@@ -884,7 +884,7 @@ impl EguiLayer {
             can_undo,
             can_redo,
             is_paused: *paused,
-            render_mode_2d: config_manager.active_flame().render_mode == crate::scene::transforms::RenderMode::TwoD,
+            render_mode_2d: config_manager.config().render_mode == crate::scene::transforms::RenderMode::TwoD,
             online_mode: config_manager.system_settings().online_mode,
             has_api_flame_id: api_state.flame_id.is_some(),
             api_flame_id: api_state.flame_id.clone(),

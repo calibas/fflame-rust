@@ -135,7 +135,7 @@ pub fn render_view_content(
     // 3D Rendering Controls
     ui.label(t!("view.render_mode")).on_hover_text(t!("view.tooltip_render_mode"));
     ui.horizontal(|ui| {
-        let was_2d = matches!(config.flame.render_mode, crate::scene::transforms::RenderMode::TwoD);
+        let was_2d = matches!(config.render_mode, crate::scene::transforms::RenderMode::TwoD);
         if ui.selectable_label(was_2d, t!("view.mode_2d").as_ref())
             .on_hover_text(t!("view.tooltip_mode_2d"))
             .clicked()
@@ -161,8 +161,8 @@ pub fn render_view_content(
     });
 
     // Show perspective control only in 3D mode
-    if matches!(config.flame.render_mode, crate::scene::transforms::RenderMode::ThreeD) {
-        let mut perspective = config.flame.perspective_strength;
+    if matches!(config.render_mode, crate::scene::transforms::RenderMode::ThreeD) {
+        let mut perspective = config.perspective_strength;
         let response = ui.add(
             super::VkbSlider::new(&mut perspective, 0.0..=10.0)
                 .text(t!("view.perspective").as_ref())
@@ -183,7 +183,7 @@ pub fn render_view_content(
     ui.separator();
 
     // 3D Camera rotation controls (only visible in 3D mode)
-    if matches!(flame.render_mode, RenderMode::ThreeD) {
+    if matches!(config.render_mode, RenderMode::ThreeD) {
         ui.separator();
         ui.label(t!("view.camera_3d"));
 
@@ -361,7 +361,7 @@ pub fn render_view_content(
         // off (Apo/JWF default) so flames with variations that scale
         // Z by >1 (e.g. spherical at high weight) don't explode and
         // poison the camera transform via `0·∞ = NaN`.
-        let mut preserve_z = config.flame.preserve_z;
+        let mut preserve_z = config.preserve_z;
         let response = ui.checkbox(&mut preserve_z, t!("view.preserve_z").as_ref())
             .on_hover_text(t!("view.tooltip_preserve_z"));
         if response.changed() {
@@ -439,7 +439,7 @@ pub fn render_view_content(
                 // Depth-density compensation — only meaningful with
                 // perspective > 0 (the weight collapses to 1 in
                 // orthographic).
-                let mut depth_comp = config.flame.depth_density_compensation;
+                let mut depth_comp = config.depth_density_compensation;
                 let response = ui.add(
                     super::VkbSlider::new(&mut depth_comp, 0.0..=1.0)
                         .text(t!("view.depth_density_compensation").as_ref())
@@ -458,7 +458,7 @@ pub fn render_view_content(
                 ui.add_space(8.0);
                 ui.label(t!("view.far_density_fade_section").as_ref());
 
-                let mut far_fade = config.flame.far_density_fade;
+                let mut far_fade = config.far_density_fade;
                 let response = ui.add(
                     super::VkbSlider::new(&mut far_fade, 0.0..=5.0)
                         .text(t!("view.far_density_fade").as_ref())
@@ -471,7 +471,7 @@ pub fn render_view_content(
                     );
                 }
 
-                let mut far_fade_start = config.flame.far_density_fade_start;
+                let mut far_fade_start = config.far_density_fade_start;
                 let response = ui.add(
                     super::VkbSlider::new(&mut far_fade_start, -5.0..=5.0)
                         .text(t!("view.far_density_fade_start").as_ref())

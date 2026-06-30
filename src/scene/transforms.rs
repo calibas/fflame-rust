@@ -1546,26 +1546,22 @@ mod tests {
         assert_eq!(elig, vec![(0, "analytic_blur".to_string(), 0.3)]);
 
         // Full activation gate: orthographic 2D, no attachments → active.
-        assert!(flame.analytic_blur_active(&registry));
+        // (render_mode is scene-level since config v3, passed explicitly.)
+        assert!(flame.analytic_blur_active(&registry, RenderMode::TwoD));
         // A Final transform makes the plot path non-trivial → inactive (v1).
         let mut f = Transform::new();
         f.set_variation("linear", 1.0);
         flame.final_transforms = vec![f];
-        assert!(!flame.analytic_blur_active(&registry));
+        assert!(!flame.analytic_blur_active(&registry, RenderMode::TwoD));
         flame.final_transforms.clear();
         // Post-symmetry fans one sample into multiple copies → inactive (v1).
         flame.post_symmetry.ty = PostSymmetryType::Point;
         flame.post_symmetry.order = 3;
-        assert!(!flame.analytic_blur_active(&registry));
+        assert!(!flame.analytic_blur_active(&registry, RenderMode::TwoD));
         flame.post_symmetry = PostSymmetry::default();
-        assert!(flame.analytic_blur_active(&registry));
+        assert!(flame.analytic_blur_active(&registry, RenderMode::TwoD));
         // 3D — even orthographic — is deferred in v1.
-        flame.render_mode = RenderMode::ThreeD;
-        flame.perspective_strength = 0.0;
-        assert!(!flame.analytic_blur_active(&registry));
-        // Perspective (non-orthographic) → inactive (v1).
-        flame.perspective_strength = 0.3;
-        assert!(!flame.analytic_blur_active(&registry));
+        assert!(!flame.analytic_blur_active(&registry, RenderMode::ThreeD));
     }
 
     #[test]
@@ -1753,9 +1749,12 @@ mod tests {
 /// Rendering mode for the fractal flame
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RenderMode {
-    /// 2D rendering (traditional fractal flames)
+    /// 2D rendering (traditional fractal flames). Wire/cloud-blob form: `"2d"`
+    /// (the server casts this to the Postgres `render_mode` enum).
+    #[serde(rename = "2d", alias = "TwoD")]
     TwoD,
-    /// 3D rendering with pseudo-3D projection
+    /// 3D rendering with pseudo-3D projection. Wire/cloud-blob form: `"3d"`.
+    #[serde(rename = "3d", alias = "ThreeD")]
     ThreeD,
 }
 
@@ -1834,41 +1833,10 @@ pub struct Flame {
     /// and run in declaration order after the Linked chain.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub final_transforms: Vec<Transform>,
-    /// Rendering mode (2D or 3D)
-    pub render_mode: RenderMode,
-    /// Perspective strength for 3D rendering (0.0 = flat/orthographic, 10.0 = strong perspective)
-    pub perspective_strength: f32,
-    /// Depth-dependent density compensation for 3D perspective
-    /// rendering (0.0 = off / classic flux-conserving splats, 1.0 =
-    /// full radiance preservation). Each plotted sample's histogram
-    /// contribution is weighted by `zr^(−2·s)`, where `zr = 1 −
-    /// perspective · camera_z` is the perspective divisor at the
-    /// sample's depth: near structures (magnified, so diluted over
-    /// more pixels) gain weight, far structures (compressed, so
-    /// artificially dense) lose it, and the focal plane (`zr = 1`)
-    /// is invariant at any strength. Counters the "structures fade
-    /// as the camera approaches" effect of pure point splatting.
-    /// Our own extension — no Apo/JWF equivalent; serialized in
-    /// .fflame only, dropped on .flame XML export.
-    #[serde(default, skip_serializing_if = "f32_is_zero")]
-    pub depth_density_compensation: f32,
-    /// Far density fade strength. For samples farther than
-    /// `far_density_fade_start` (camera-space z below the threshold;
-    /// far = more negative z), the sample's histogram DENSITY weight
-    /// is multiplied by `exp(−zdist² · strength)` where
-    /// `zdist = far_density_fade_start − camera_z` — far structures
-    /// genuinely thin out and vanish with distance, unlike fog
-    /// (which recolors toward the background at full density).
-    /// Gaussian falloff borrowed from JWildfire's diminish-Z curve,
-    /// but the semantics differ (JWF lerps color, never density), so
-    /// this is our own extension: .fflame only, no XML attribute.
-    /// 0 = off.
-    #[serde(default, skip_serializing_if = "f32_is_zero")]
-    pub far_density_fade: f32,
-    /// Camera-space depth where the far density fade starts. Only
-    /// meaningful when `far_density_fade > 0`.
-    #[serde(default, skip_serializing_if = "f32_is_zero")]
-    pub far_density_fade_start: f32,
+    // render_mode, perspective_strength, depth_density_compensation,
+    // far_density_fade, far_density_fade_start moved to `FractalConfig` in
+    // config v3 — they were always whole-render (scene) settings, never
+    // per-flame. See `FractalConfig` and the v2→v3 migration.
     /// Xaos transition weights: xaos[src][dst] = modifier for src→dst transition
     /// None when all weights are 1.0 (default behavior, no memory allocated)
     /// When Some, outer Vec has len = transforms.len(), inner Vec has len = transforms.len()
@@ -1909,36 +1877,9 @@ pub struct Flame {
     /// ignores them.
     #[serde(default, skip_serializing_if = "PostSymmetry::is_default")]
     pub post_symmetry: PostSymmetry,
-
-    /// JWildfire's `preserve_z` flag — controls whether the chaos
-    /// game's Z carries across iterations or gets reset each step.
-    ///
-    /// - `false` (default, matches Apophysis and JWildfire's
-    ///   per-file defaults): Z is reset to 0 at the end of each
-    ///   iteration. Variations may still produce per-iteration Z
-    ///   values used in that iteration's plot, but the next iteration
-    ///   starts fresh. Prevents Z explosion from variations that
-    ///   scale Z by amounts > 1 (e.g. `spherical` at high weight),
-    ///   which can otherwise cascade to `±∞` and poison the camera
-    ///   transform (`0·∞ = NaN`).
-    /// - `true`: Z carries across iterations. Matches JWildfire's
-    ///   `preserve_z="1"` and is needed by some Z-aware flames.
-    ///
-    /// `.fflame` files saved before this field existed default to
-    /// **true** via the manual `Deserialize` fallback (preserving
-    /// their original look — see the `preserve_z.unwrap_or(true)`
-    /// call in the `Flame` deserializer's construction step).
-    /// `Default::default()` returns **false** so newly authored
-    /// flames and JWF imports match Apo/JWF defaults.
-    #[serde(skip_serializing_if = "skip_serializing_preserve_z_if_default")]
-    pub preserve_z: bool,
-}
-
-fn skip_serializing_preserve_z_if_default(v: &bool) -> bool {
-    // Skip writing the field when it matches the pre-field default
-    // (`true`). New flames default to `false` and write the field
-    // explicitly, so the round-trip is well-defined for both eras.
-    *v
+    // preserve_z moved to `FractalConfig` in config v3 (scene-global Z
+    // semantics, never per-flame). See `FractalConfig::preserve_z` and the
+    // v2→v3 migration (absent ⇒ true to preserve pre-flag flames' look).
 }
 
 /// What kind of plot-time symmetry to apply (see `Flame.post_symmetry`).
@@ -2056,17 +1997,10 @@ impl Default for Flame {
             transforms: Vec::new(),
             linked_transforms: Vec::new(),
             final_transforms: Vec::new(),
-            render_mode: RenderMode::default(),
-            perspective_strength: 0.0,  // Default to orthographic (flat)
-            depth_density_compensation: 0.0,  // Off: classic flux-conserving splats
-            far_density_fade: 0.0,      // Off
-            far_density_fade_start: 0.0,
             xaos: None,  // Default: no xaos (all weights implicitly 1.0)
             solo_transform: None,  // Default: no solo (all transforms active)
             subflames: Vec::new(),  // Default: no subflames
             post_symmetry: PostSymmetry::default(),
-            // New flames match Apo/JWF default: don't preserve Z.
-            preserve_z: false,
         }
     }
 }
@@ -2222,8 +2156,9 @@ impl Flame {
     pub fn blur_slots(
         &self,
         registry: &VariationRegistry,
+        render_mode: RenderMode,
     ) -> Vec<crate::variations::analytic_blur::BlurSlotInfo> {
-        if !self.analytic_blur_active(registry) {
+        if !self.analytic_blur_active(registry, render_mode) {
             return Vec::new();
         }
         self.analytic_blur_transforms(registry)
@@ -2253,8 +2188,8 @@ impl Flame {
     ///   into multiple plot copies, which the single mean splat can't model.
     /// When false, the feature is entirely off: no `HAS_ANALYTIC_BLUR`
     /// codegen, no blur buffers, no convolution.
-    pub fn analytic_blur_active(&self, registry: &VariationRegistry) -> bool {
-        matches!(self.render_mode, RenderMode::TwoD)
+    pub fn analytic_blur_active(&self, registry: &VariationRegistry, render_mode: RenderMode) -> bool {
+        matches!(render_mode, RenderMode::TwoD)
             && !self.has_attachments()
             && self.subflames.is_empty()
             && self.post_symmetry.ty == PostSymmetryType::None
@@ -2332,17 +2267,20 @@ impl<'de> Deserialize<'de> for Flame {
             FinalTransform,
             LinkedTransforms,
             FinalTransforms,
-            RenderMode,
-            PerspectiveStrength,
-            DepthDensityCompensation,
-            FarDensityFade,
-            FarDensityFadeStart,
-            Projection, // Old field name for backward compatibility
             Xaos,
             SoloTransform,
             Subflames,
             PostSymmetry,
-            PreserveZ,
+            // The scene-level render fields (render_mode, perspective_strength,
+            // depth_density_compensation, far_density_fade,
+            // far_density_fade_start, preserve_z) and the legacy `projection`
+            // field moved to `FractalConfig` in config v3 and are lifted by
+            // the migration. Any remaining copies — e.g. inside nested
+            // subflames of an old blob, where they were always ignored — fall
+            // through to `Ignore` so loads don't fail. This also makes `Flame`
+            // forward-compatible with unknown future keys.
+            #[serde(other)]
+            Ignore,
         }
 
         struct FlameVisitor;
@@ -2363,16 +2301,10 @@ impl<'de> Deserialize<'de> for Flame {
                 let mut final_transform: Option<Transform> = None;
                 let mut linked_transforms: Option<Vec<Transform>> = None;
                 let mut final_transforms: Option<Vec<Transform>> = None;
-                let mut render_mode = None;
-                let mut perspective_strength = None;
-                let mut depth_density_compensation = None;
-                let mut far_density_fade = None;
-                let mut far_density_fade_start = None;
                 let mut xaos = None;
                 let mut solo_transform = None;
                 let mut subflames: Option<Vec<Flame>> = None;
                 let mut post_symmetry: Option<PostSymmetry> = None;
-                let mut preserve_z: Option<bool> = None;
 
                 while let Some(key) = map.next_key()? {
                     match key {
@@ -2391,47 +2323,6 @@ impl<'de> Deserialize<'de> for Flame {
                         Field::FinalTransforms => {
                             final_transforms = Some(map.next_value()?);
                         }
-                        Field::RenderMode => {
-                            render_mode = Some(map.next_value()?);
-                        }
-                        Field::PerspectiveStrength => {
-                            perspective_strength = Some(map.next_value()?);
-                        }
-                        Field::DepthDensityCompensation => {
-                            depth_density_compensation = Some(map.next_value()?);
-                        }
-                        Field::FarDensityFade => {
-                            far_density_fade = Some(map.next_value()?);
-                        }
-                        Field::FarDensityFadeStart => {
-                            far_density_fade_start = Some(map.next_value()?);
-                        }
-                        Field::Projection => {
-                            // Old format: enum ProjectionType
-                            // { "Orthographic": null } or { "Perspective": { "strength": 2.0 } }
-                            let value: serde_json::Value = map.next_value()?;
-
-                            // Extract strength from old ProjectionType enum
-                            perspective_strength = Some(match value {
-                                serde_json::Value::String(ref s) if s == "Orthographic" => 0.0,
-                                serde_json::Value::Object(ref obj) => {
-                                    if let Some(persp) = obj.get("Perspective") {
-                                        if let Some(strength_obj) = persp.as_object() {
-                                            if let Some(strength) = strength_obj.get("strength") {
-                                                strength.as_f64().unwrap_or(0.0) as f32
-                                            } else {
-                                                2.0 // Default if strength missing
-                                            }
-                                        } else {
-                                            2.0 // Default
-                                        }
-                                    } else {
-                                        0.0 // Orthographic
-                                    }
-                                }
-                                _ => 0.0, // Default to orthographic
-                            });
-                        }
                         Field::Xaos => {
                             xaos = Some(map.next_value()?);
                         }
@@ -2444,8 +2335,8 @@ impl<'de> Deserialize<'de> for Flame {
                         Field::PostSymmetry => {
                             post_symmetry = Some(map.next_value()?);
                         }
-                        Field::PreserveZ => {
-                            preserve_z = Some(map.next_value()?);
+                        Field::Ignore => {
+                            let _ = map.next_value::<de::IgnoredAny>()?;
                         }
                     }
                 }
@@ -2462,18 +2353,10 @@ impl<'de> Deserialize<'de> for Flame {
                     transforms,
                     linked_transforms,
                     final_transforms,
-                    render_mode: render_mode.unwrap_or_default(),
-                    perspective_strength: perspective_strength.unwrap_or(0.0),
-                    depth_density_compensation: depth_density_compensation.unwrap_or(0.0),
-                    far_density_fade: far_density_fade.unwrap_or(0.0),
-                    far_density_fade_start: far_density_fade_start.unwrap_or(0.0),
                     xaos,
                     solo_transform: solo_transform.unwrap_or(None),
                     subflames: subflames.unwrap_or_default(),
                     post_symmetry: post_symmetry.unwrap_or_default(),
-                    // Old `.fflame` files (pre-preserve_z) default
-                    // to `true` to keep their look unchanged.
-                    preserve_z: preserve_z.unwrap_or(true),
                 };
                 // Migrate any legacy singular `final_transform` field
                 // (consumed locally above into `final_transform`) into the
@@ -2486,7 +2369,7 @@ impl<'de> Deserialize<'de> for Flame {
             }
         }
 
-        const FIELDS: &[&str] = &["name", "transforms", "final_transform", "linked_transforms", "final_transforms", "render_mode", "perspective_strength", "depth_density_compensation", "far_density_fade", "far_density_fade_start", "projection", "xaos", "solo_transform", "subflames", "post_symmetry", "preserve_z"];
+        const FIELDS: &[&str] = &["name", "transforms", "final_transform", "linked_transforms", "final_transforms", "xaos", "solo_transform", "subflames", "post_symmetry"];
         deserializer.deserialize_struct("Flame", FIELDS, FlameVisitor)
     }
 }

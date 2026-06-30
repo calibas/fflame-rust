@@ -120,8 +120,10 @@ pub struct UiResponse {
     // Path filters changed (applies to renderer, not config)
     pub path_filters_changed: Option<Vec<crate::gpu::buffers::GpuPathFilter>>,
 
-    // Generated flame from random generator panel (single)
-    pub generated_flame: Option<crate::scene::transforms::Flame>,
+    // Generated flame from random generator panel (single). Carries the
+    // scene render settings (render_mode/perspective) alongside the flame
+    // since those are config-level (v3).
+    pub generated_flame: Option<crate::scene::randomize::RandomFlame>,
 
     // Generated batch of configs from random generator (opens in File Browser)
     pub generated_batch: Option<Vec<crate::config::FractalConfig>>,
