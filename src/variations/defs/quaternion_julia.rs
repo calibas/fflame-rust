@@ -39,6 +39,7 @@ pub static QUATERNION_JULIA: VariationDef = VariationDef {
         param!("cy", "Constant Y", float, 0.4, -2.0, 2.0, "Vector-j component of c."),
         param!("cz", "Constant Z", float, 0.0, -2.0, 2.0, "Vector-k component of c. 3D only."),
         param!("cw", "Constant W", float, 0.0, -2.0, 2.0, "Scalar component of c (drives the 4th dimension). 3D only."),
+        param!("projection", "Projection", unlimited_int, 0.0, 0.0, 2.0, "How the 4D result maps to the plotted 3D point (3D only). 0 = Vector (drop w), 1 = Depth (surface w as z; z and w swap), 2 = Perspective (divide xyz by 1-w). The return both plots AND feeds forward, so each mode is effectively a different attractor, not just a different view."),
     ],
     wgsl_2d: WGSL_2D,
     wgsl_3d: WGSL_3D,
@@ -77,7 +78,30 @@ fn variation_quaternion_julia(p: vec3<f32>, xform_id: u32, variation_id: u32) ->
         get_param(xform_id, variation_id, 3u)
     );
     let r = q2 + c;
-    point_w = r.w;                          // carry the 4th coordinate forward
-    return r.xyz;
+
+    // Project the 4D result (x,y,z,w) to the plotted/fed-forward 3D point.
+    // The flame plots `current` (= this return) AND feeds it to the next
+    // iteration, so the projection shapes the attractor, not just the view.
+    let mode = u32(get_param(xform_id, variation_id, 4u) + 0.5);
+    switch (mode) {
+        case 1u: {
+            // Depth: surface w as the z axis; z and w swap roles each step.
+            point_w = r.z;
+            return vec3<f32>(r.x, r.y, r.w);
+        }
+        case 2u: {
+            // Perspective: fold w into a depth-like foreshortening by
+            // dividing xyz by (1 - w). Guard the singularity at w = 1.
+            point_w = r.w;
+            let denom = 1.0 - r.w;
+            let safe = select(denom, 1e-3, abs(denom) < 1e-3);
+            return r.xyz / safe;
+        }
+        default: {
+            // Vector: drop w (it evolves independently, hidden from the plot).
+            point_w = r.w;
+            return r.xyz;
+        }
+    }
 }
 "#;
