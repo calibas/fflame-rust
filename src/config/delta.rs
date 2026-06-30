@@ -2137,9 +2137,6 @@ impl ConfigPath {
             | ConfigPath::FinalTransformPostAffineScale { .. }
             | ConfigPath::RenderMode
             | ConfigPath::PerspectiveStrength
-        | ConfigPath::DepthDensityCompensation
-        | ConfigPath::FarDensityFade
-        | ConfigPath::FarDensityFadeStart
             | ConfigPath::DepthDensityCompensation
             | ConfigPath::Xaos { .. }
             | ConfigPath::SoloTransform

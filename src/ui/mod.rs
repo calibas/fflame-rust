@@ -285,7 +285,7 @@ pub struct EguiLayer {
 
     // Random generator panel state
     random_generator_panel: Option<random_generator::RandomGeneratorPanel>,
-    generated_flame: Option<crate::scene::transforms::Flame>,
+    generated_flame: Option<crate::scene::randomize::RandomFlame>,
     generated_batch: Option<Vec<crate::config::FractalConfig>>,
 
     // Fractal browser panel state
