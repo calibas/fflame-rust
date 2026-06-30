@@ -5,7 +5,7 @@
 //! (without creating undo points).
 
 use crate::config::{EditingTarget, FractalConfig};
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 mod controller;
 mod interpolation;
@@ -24,7 +24,16 @@ pub struct Animation {
     /// Embedded fractal configuration (makes animation self-contained and reproducible)
     /// When present, loading this animation also loads the base config.
     /// When absent, animation applies to whatever fractal is currently loaded.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ///
+    /// (De)serialized through the versioned config path so the embedded config
+    /// carries a `version` (v3) on save and runs through the migration on load
+    /// — an absent version is treated as v2 (see `deserialize_base_config`).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_base_config",
+        deserialize_with = "deserialize_base_config"
+    )]
     pub base_config: Option<FractalConfig>,
 
     /// Total duration in seconds
@@ -42,6 +51,39 @@ pub struct Animation {
 
     /// Looping behavior
     pub loop_mode: LoopMode,
+}
+
+/// Serialize an embedded `base_config` through the canonical config serializer
+/// so it carries a `version` stamp (v3) — without this the raw struct derive
+/// emits no version and the value can't be migrated on load.
+fn serialize_base_config<S>(value: &Option<FractalConfig>, s: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    match value {
+        Some(config) => config
+            .to_json_value()
+            .map_err(serde::ser::Error::custom)?
+            .serialize(s),
+        None => s.serialize_none(),
+    }
+}
+
+/// Deserialize an embedded `base_config` through the versioned migration path.
+/// A value with no `version` is assumed to be **v2** (animations embedded by the
+/// pre-versioning raw serializer were saved when the format was v2), so only
+/// v2→current migrations run.
+fn deserialize_base_config<'de, D>(d: D) -> Result<Option<FractalConfig>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    match Option::<serde_json::Value>::deserialize(d)? {
+        Some(value) => Ok(Some(
+            FractalConfig::from_json_value_with_default_version(value, 2)
+                .map_err(serde::de::Error::custom)?,
+        )),
+        None => Ok(None),
+    }
 }
 
 /// Legacy track format (for backwards compatibility)
@@ -678,6 +720,60 @@ impl Track {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_base_config_serializes_with_version_and_migrates() {
+        use crate::scene::transforms::RenderMode;
+
+        // Save: an embedded base_config carries a version stamp + top-level
+        // (v3) render_mode in the serialized animation.
+        let mut config = FractalConfig::default();
+        config.render_mode = RenderMode::ThreeD;
+        let mut anim = Animation::new("Versioned".into(), 5.0);
+        anim.set_base_config(config);
+
+        let json = serde_json::to_value(&anim).unwrap();
+        let base = &json["base_config"];
+        assert_eq!(base["version"], serde_json::json!(3), "version stamped");
+        assert_eq!(base["render_mode"], serde_json::json!("3d"), "v3 top-level render_mode");
+
+        // Round-trips back.
+        let restored: Animation = serde_json::from_value(json).unwrap();
+        assert_eq!(
+            restored.base_config.unwrap().render_mode,
+            RenderMode::ThreeD
+        );
+    }
+
+    #[test]
+    fn test_legacy_unversioned_base_config_assumed_v2() {
+        use crate::scene::transforms::RenderMode;
+
+        // A pre-versioning animation: base_config has NO version and the v2
+        // shape (render_mode nested under flame). Absent version ⇒ v2, so the
+        // v2→v3 migration lifts render_mode to the top level.
+        let mut base = serde_json::to_value(FractalConfig::default()).unwrap();
+        let obj = base.as_object_mut().unwrap();
+        obj.remove("version"); // raw derive never wrote one
+        obj.remove("render_mode");
+        obj.get_mut("flame")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .insert("render_mode".into(), serde_json::json!("3d"));
+
+        // Use the real animation serializer for the envelope (no base_config),
+        // then splice the legacy base_config in.
+        let mut anim_json = serde_json::to_value(&Animation::new("Legacy".into(), 5.0)).unwrap();
+        anim_json["base_config"] = base;
+
+        let anim: Animation = serde_json::from_value(anim_json).unwrap();
+        assert_eq!(
+            anim.base_config.unwrap().render_mode,
+            RenderMode::ThreeD,
+            "unversioned base_config treated as v2 → render_mode lifted"
+        );
+    }
 
     #[test]
     fn test_animation_json_roundtrip() {

@@ -515,7 +515,9 @@ pub fn animation_to_create_request(
         loop_mode: Some(animation.loop_mode.into()),
         tracks: serde_json::to_value(&animation.tracks).ok(),
         generators: serde_json::to_value(&animation.generators).ok(),
-        base_config: animation.base_config.as_ref().and_then(|c| serde_json::to_value(c).ok()),
+        // Stamp the config version (v3) via the canonical serializer so the
+        // embedded base_config round-trips through the migration on load.
+        base_config: animation.base_config.as_ref().and_then(|c| c.to_json_value().ok()),
         visibility,
     }
 }
@@ -533,8 +535,12 @@ pub fn animation_response_to_animation(resp: &AnimationResponse) -> crate::anima
         .and_then(|v| serde_json::from_value(v.clone()).ok())
         .unwrap_or_default();
 
+    // Embedded base_config carries a config version (v3+) when saved by a
+    // current client; legacy animations have no version ⇒ assume v2 (the
+    // format in use when the raw struct serializer was the only path), then
+    // migrate to current.
     let base_config = resp.base_config.as_ref()
-        .and_then(|v| serde_json::from_value(v.clone()).ok());
+        .and_then(|v| FractalConfig::from_json_value_with_default_version(v.clone(), 2).ok());
 
     crate::animation::Animation {
         name: resp.name.clone(),
