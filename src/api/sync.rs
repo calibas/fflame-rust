@@ -283,6 +283,26 @@ pub fn flame_response_to_config(resp: &FlameResponse) -> Result<FractalConfig, s
         ))
     })?;
 
+    // Recovery for the flattened-v2 API data bug: a migration merged the
+    // flame's fields into the config top level, so there is no "flame" object
+    // (a real v3 blob always has one). The scene-render fields — including
+    // `render_mode` — already sit at the top level (their v3 home), so we just
+    // rebuild a flame to hold the root transforms (still carried in
+    // `resp.transforms`) and let everything else deserialize from the top
+    // level. Non-transform flame state (xaos, solo_transform, post_symmetry,
+    // subflames) was merged into junk top-level keys and is unrecoverable — it
+    // falls back to defaults. Stamp the current version so the v2→v3 lift does
+    // NOT run: it would look for `render_mode` under the now-empty flame, miss
+    // it, default to "2d", and clobber the correct top-level value.
+    if !obj.contains_key("flame") {
+        obj.insert("flame".to_string(), serde_json::json!({}));
+        obj.insert(
+            "version".to_string(),
+            serde_json::json!(crate::config::CURRENT_CONFIG_VERSION),
+        );
+        obj.remove("config_version");
+    }
+
     let (normal, linked, finals) = wire_transforms_to_pools(&resp.transforms);
     if let Some(flame_obj) = obj.get_mut("flame").and_then(|f| f.as_object_mut()) {
         flame_obj.insert("transforms".to_string(), serde_json::Value::Array(normal));
@@ -491,6 +511,57 @@ mod tests {
         assert_eq!(config.path_map_style, PathMapStyle::OriginRadial);
         assert_eq!(config.path_capture_mode, PathCaptureMode::FirstAfterBurnIn);
         assert_eq!(config.path_tracking_mode, PathTrackingMode::Recent);
+    }
+
+    #[test]
+    fn test_flattened_v2_blob_recovered() {
+        // Simulate the flattened-v2 API data bug: the flame's fields were
+        // merged into the config top level, so there is no "flame" object.
+        // render_mode survived at the top level (its v3 home); the root
+        // transforms still arrive in `resp.transforms`.
+        let mut flat = serde_json::to_value(FractalConfig::default()).unwrap();
+        let obj = flat.as_object_mut().unwrap();
+        obj.remove("flame"); // merged up by the bug
+        obj.remove("version");
+        obj.insert("config_version".into(), serde_json::json!(2));
+        obj.insert("render_mode".into(), serde_json::json!("3d"));
+        obj.insert("zoom".into(), serde_json::json!(2.5));
+        // Junk flame fields that got merged to the top level — must be ignored.
+        obj.insert("xaos".into(), serde_json::json!([[1.0]]));
+        obj.insert("solo_transform".into(), serde_json::json!(0));
+
+        let mut t = Transform::new();
+        t.variations.insert("linear".to_string(), 1.0);
+        let resp = FlameResponse {
+            id: "x".into(),
+            user_id: "x".into(),
+            name: "Recovered".into(),
+            visibility: None,
+            palette: None,
+            config: flat,
+            transforms: vec![ApiTransformWire {
+                kind: "normal".into(),
+                sort_order: 0,
+                variation_names: vec!["linear".into()],
+                data: serde_json::to_value(&t).unwrap(),
+            }],
+            animation_count: 0,
+            animations: Vec::new(),
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+
+        let config = flame_response_to_config(&resp).unwrap();
+        // Flame rebuilt with the root transforms; render_mode preserved (NOT
+        // clobbered to 2d by a spurious v2→v3 lift); other config fields kept.
+        assert_eq!(config.flame.transforms.len(), 1);
+        assert_eq!(
+            config.flame.transforms[0].variations.get("linear"),
+            Some(&1.0)
+        );
+        assert_eq!(config.render_mode, RenderMode::ThreeD);
+        assert_eq!(config.zoom, 2.5);
+        assert_eq!(config.flame.name, "Recovered");
     }
 }
 
