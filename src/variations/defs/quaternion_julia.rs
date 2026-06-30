@@ -36,8 +36,9 @@ pub static QUATERNION_JULIA: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     // NeedsW: emits the per-thread `point_w` 4th coordinate + resets it on
     // bad-value respawn. NeedsRng: the inverse map picks one of the two square
-    // roots at random each step (the Inverse Iteration Method).
-    features: &[Feature::NeedsW, Feature::NeedsRng],
+    // roots at random each step. WritesColor: optionally colors by the 4th
+    // coordinate `w` (the `w_color` param) without touching the attractor.
+    features: &[Feature::NeedsW, Feature::NeedsRng, Feature::WritesColor],
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
@@ -49,27 +50,33 @@ pub static QUATERNION_JULIA: VariationDef = VariationDef {
         param!("cw", "Constant W", float, 0.0, -2.0, 2.0, "Scalar component of c (drives the 4th dimension). 3D only."),
         param!("projection", "Projection", unlimited_int, 0.0, 0.0, 2.0, "How the 4D result maps to the plotted 3D point (3D only). 0 = Vector (drop w), 1 = Depth (surface w as z; z and w swap), 2 = Perspective (divide xyz by 1-w). The return both plots AND feeds forward, so each mode is effectively a different attractor, not just a different view."),
         param!("inverse", "Inverse (Julia set)", unlimited_int, 0.0, 0.0, 1.0, "0 = forward q^2 + c (an IFS attractor of the forward map — NOT a Julia set under the chaos game). 1 = inverse ±sqrt(q - c): the Inverse Iteration Method, which converges to the actual Julia set. Use inverse=1 with an identity affine and weight 1.0 (alone on the transform) to render a real Julia."),
+        param!("w_color", "Color by W", float, 0.0, 0.0, 8.0, "0 = off (normal palette evolution). >0 = write a palette index from the 4th coordinate (3D: fract(w * scale); 2D: fract(|z| * scale)), revealing the hidden dimension as COLOR without altering the attractor. Set the transform's direct_color > 0 to actually apply it."),
     ],
     wgsl_2d: WGSL_2D,
     wgsl_3d: WGSL_3D,
 };
 
 const WGSL_2D: &str = r#"
-fn variation_quaternion_julia(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
+fn variation_quaternion_julia(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec2<f32> {
     // Complex Julia (the 2D case). `point_w` rides unused here.
     let cx = get_param(xform_id, variation_id, 0u);
     let cy = get_param(xform_id, variation_id, 1u);
+    var out: vec2<f32>;
     if (get_param(xform_id, variation_id, 5u) > 0.5) {
         // Inverse Iteration Method: z -> ±sqrt(z - c). Picking the branch at
         // random, the chaos game converges to the Julia set itself.
         let d = p - vec2<f32>(cx, cy);
         let half = atan2(d.y, d.x) * 0.5;
-        var root = sqrt(length(d)) * vec2<f32>(cos(half), sin(half));
-        if (rng_nextf(rng) < 0.5) { root = -root; }
-        return root;
+        out = sqrt(length(d)) * vec2<f32>(cos(half), sin(half));
+        if (rng_nextf(rng) < 0.5) { out = -out; }
+    } else {
+        // Forward: z^2 + c — the IFS attractor of the forward map, not the Julia set.
+        out = vec2<f32>(p.x * p.x - p.y * p.y + cx, 2.0 * p.x * p.y + cy);
     }
-    // Forward: z^2 + c — the IFS attractor of the forward map, not the Julia set.
-    return vec2<f32>(p.x * p.x - p.y * p.y + cx, 2.0 * p.x * p.y + cy);
+    // No w in 2D — color by radius instead when enabled.
+    let wcol = get_param(xform_id, variation_id, 6u);
+    if (wcol > 1e-6) { *vc = fract(length(out) * wcol); }
+    return out;
 }
 "#;
 
@@ -99,7 +106,7 @@ fn qjulia_qsqrt(q: vec4<f32>) -> vec4<f32> {
     return vec4<f32>(smag * sin_half * n, smag * cos_half);
 }
 
-fn variation_quaternion_julia(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
+fn variation_quaternion_julia(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec3<f32> {
     let q = vec4<f32>(p, point_w);          // 4D point: vector = p, scalar = w
     let c = vec4<f32>(
         get_param(xform_id, variation_id, 0u),
@@ -117,6 +124,10 @@ fn variation_quaternion_julia(p: vec3<f32>, xform_id: u32, variation_id: u32, rn
     } else {
         r = qjulia_qmul(q, q) + c;          // forward q^2 + c
     }
+
+    // Color by the 4th coordinate w (dynamics untouched) when enabled.
+    let wcol = get_param(xform_id, variation_id, 6u);
+    if (wcol > 1e-6) { *vc = fract(r.w * wcol); }
 
     // Project the 4D result (x,y,z,w) to the plotted/fed-forward 3D point.
     // The flame plots `current` (= this return) AND feeds it to the next
