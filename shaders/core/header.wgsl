@@ -256,7 +256,7 @@ struct SubflameMeta {
     normals_count: u32,
     finals_offset: u32,
     finals_count: u32,
-    render_mode: u32,
+    _reserved_render_mode: u32,  // was render_mode; render mode is scene-global in v3
     // Base added to (normals_offset/finals_offset + picked) to form the
     // synthetic xform_id the variation system sees. v1: always 128.
     // v2 will set this per-subflame to the unified-array start position

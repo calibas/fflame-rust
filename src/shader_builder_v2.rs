@@ -418,6 +418,8 @@ impl ShaderConstants {
         flame: &crate::scene::transforms::Flame,
         registry: &crate::variations::VariationRegistry,
         color_mode: u32,
+        render_mode: crate::scene::transforms::RenderMode,
+        preserve_z: bool,
     ) -> Self {
         // Ensure at least 1 transform to prevent shader overflow (NUM_TRANSFORMS - 1u)
         let num_transforms = flame.transforms.len().max(1) as u32;
@@ -569,11 +571,11 @@ impl ShaderConstants {
             has_post_affine: flame.has_post_affine(),
             has_attachments: flame.has_attachments(),
             has_post_symmetry: flame.post_symmetry.ty != crate::scene::transforms::PostSymmetryType::None,
-            has_analytic_blur: flame.analytic_blur_active(registry),
+            has_analytic_blur: flame.analytic_blur_active(registry, render_mode),
             // Per-iteration Z flatten — only meaningful in 3D, and
             // only when preserve_z is false (JWF/Apo default).
-            flatten_z_per_iter: matches!(flame.render_mode, crate::scene::transforms::RenderMode::ThreeD)
-                && !flame.preserve_z,
+            flatten_z_per_iter: matches!(render_mode, crate::scene::transforms::RenderMode::ThreeD)
+                && !preserve_z,
             attachment_cap: flame.attachment_cap() as u32,
             inlined_transforms: Some(inlined),
             cumulative_weights: Some(cumulative),
@@ -2225,7 +2227,7 @@ mod tests {
         flame.final_transforms = vec![mk(), mk()];      // 2 finals
 
         let registry = crate::variations::global_registry();
-        let constants = ShaderConstants::with_inlined_transforms(&flame, &registry, 0);
+        let constants = ShaderConstants::with_inlined_transforms(&flame, &registry, 0, crate::scene::transforms::RenderMode::TwoD, false);
         let inlined = constants
             .inlined_transforms
             .expect("inlined transforms present in inline mode");

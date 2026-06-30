@@ -6,7 +6,7 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::f32::consts::PI;
-use crate::scene::transforms::{Flame, Transform, RenderMode};
+use crate::scene::transforms::{Flame, Transform};
 
 /// Basic 2D variations that tend to produce visually interesting results
 const GOOD_VARIATIONS: &[&str] = &[
@@ -177,36 +177,21 @@ pub fn generate_random_flame_with_rng<R: Rng>(settings: &RandomGeneratorSettings
     // Add symmetry transforms after the random transforms
     add_symmetry_transforms(&mut transforms, settings.symmetry);
 
-    // Determine render mode
-    let render_mode = if settings.enable_3d {
-        RenderMode::ThreeD
-    } else {
-        RenderMode::TwoD
-    };
-
-    // Random perspective strength if 3D enabled
-    let perspective_strength = if settings.enable_3d {
-        rng.gen_range(settings.perspective_min..=settings.perspective_max)
-    } else {
-        0.0
-    };
-
+    // NOTE: `settings.enable_3d` / `perspective_*` used to set the flame's
+    // render_mode + perspective_strength, but those moved to `FractalConfig`
+    // in config v3 (scene-level). Re-homing the random 3D toggle to the
+    // config level is a small follow-up; for now the random generator
+    // produces a 2D-mode flame (render_mode defaults to 2D on the config).
     Flame {
         id: crate::scene::transforms::next_id(),
         name: "Random".to_string(),
         transforms,
         linked_transforms: Vec::new(),
         final_transforms: Vec::new(),
-        render_mode,
-        perspective_strength,
-        depth_density_compensation: 0.0,
-        far_density_fade: 0.0,
-        far_density_fade_start: 0.0,
         xaos: None,
         solo_transform: None,
         subflames: Vec::new(),
         post_symmetry: crate::scene::transforms::PostSymmetry::default(),
-        preserve_z: false, // Apo/JWF default — avoid Z-explosion trap.
     }
 }
 

@@ -184,6 +184,11 @@ pub struct FlameRenderer {
     highlight_mode: u32,
     background_color: [f32; 3],
     current_render_mode: crate::scene::transforms::RenderMode,
+    /// Scene-level `preserve_z` (config-level since v3). Cached on the renderer
+    /// so the incremental shader-rebuild path (`update_path_features` →
+    /// `build_shader_constants`) can compute `flatten_z_per_iter` without a
+    /// `FractalConfig` in hand.
+    preserve_z: bool,
     perspective_strength: f32,
     depth_density_compensation: f32,
     far_density_fade: f32,
@@ -312,11 +317,16 @@ impl FlameRenderer {
             white_level: crate::config::defaults::DEFAULT_WHITE_LEVEL,
             highlight_mode: 0,  // Clip — Apophysis-compatible default
             background_color: [0.0, 0.0, 0.0],
-            current_render_mode: flame.render_mode,
-            perspective_strength: flame.perspective_strength,
-            depth_density_compensation: flame.depth_density_compensation,
-            far_density_fade: flame.far_density_fade,
-            far_density_fade_start: flame.far_density_fade_start,
+            // Scene-level render state (lives on FractalConfig since v3, not
+            // Flame). These are placeholder defaults like the other constants
+            // here; the real values arrive via `update_flame` before any
+            // render.
+            current_render_mode: crate::scene::transforms::RenderMode::TwoD,
+            preserve_z: false,
+            perspective_strength: 0.0,
+            depth_density_compensation: 0.0,
+            far_density_fade: 0.0,
+            far_density_fade_start: 0.0,
             deterministic_rng: true, // Default to deterministic for reproducible rendering
             frame_counter: 0,
             dof_focus_distance: crate::config::DEFAULT_DOF_FOCUS_DISTANCE,
@@ -457,7 +467,12 @@ impl FlameRenderer {
     /// Build shader constants from current renderer state
     /// Used for incremental updates where FractalConfig isn't available
     /// Note: This creates non-inlined constants (legacy mode) for compatibility
-    fn build_shader_constants(&self, flame: &Flame) -> ShaderConstants {
+    fn build_shader_constants(
+        &self,
+        flame: &Flame,
+        render_mode: crate::scene::transforms::RenderMode,
+        preserve_z: bool,
+    ) -> ShaderConstants {
         ShaderConstants {
             // .max(1): empty flames (e.g., a freshly-added empty subflame
             // before the user has populated it) would compile a shader
@@ -470,9 +485,9 @@ impl FlameRenderer {
             has_post_affine: flame.has_post_affine(),
             has_attachments: flame.has_attachments(),
             has_post_symmetry: flame.post_symmetry.ty != crate::scene::transforms::PostSymmetryType::None,
-            has_analytic_blur: flame.analytic_blur_active(&crate::variations::global_registry()),
-            flatten_z_per_iter: matches!(flame.render_mode, crate::scene::transforms::RenderMode::ThreeD)
-                && !flame.preserve_z,
+            has_analytic_blur: flame.analytic_blur_active(&crate::variations::global_registry(), render_mode),
+            flatten_z_per_iter: matches!(render_mode, crate::scene::transforms::RenderMode::ThreeD)
+                && !preserve_z,
             attachment_cap: flame.attachment_cap() as u32,
             // No inlining for incremental updates (would trigger too many shader rebuilds)
             inlined_transforms: None,
@@ -986,7 +1001,7 @@ post_symmetry: (&self.post_symmetry).into(),
         }
 
         // 1. Update transforms and variation parameters in GPU buffer
-        self.buffers.update_transforms(queue, &config.flame);
+        self.buffers.update_transforms(queue, &config.flame, config.render_mode);
         self.buffers.update_variation_params(queue, &config.flame);
         self.buffers.update_attachments(queue, &config.flame, config.flame.attachment_cap());
         // Pack subflames against the same local_map the parent transforms used.
@@ -1031,11 +1046,12 @@ post_symmetry: (&self.post_symmetry).into(),
         self.background_color = config.background_color;
 
         // 4. Update render mode and perspective
-        self.current_render_mode = config.flame.render_mode;
-        self.perspective_strength = config.flame.perspective_strength;
-        self.depth_density_compensation = config.flame.depth_density_compensation;
-        self.far_density_fade = config.flame.far_density_fade;
-        self.far_density_fade_start = config.flame.far_density_fade_start;
+        self.current_render_mode = config.render_mode;
+        self.preserve_z = config.preserve_z;
+        self.perspective_strength = config.perspective_strength;
+        self.depth_density_compensation = config.depth_density_compensation;
+        self.far_density_fade = config.far_density_fade;
+        self.far_density_fade_start = config.far_density_fade_start;
         self.dof_focus_distance = config.dof_focus_distance;
         self.dof_blur_strength = config.dof_blur_strength;
         self.fog_strength = config.fog_strength;
@@ -1146,9 +1162,9 @@ post_symmetry: (&config.flame.post_symmetry).into(),
     }
 
     /// Update the flame being rendered
-    pub fn update_flame(&mut self, device: &Device, queue: &Queue, flame: &Flame, iterations_per_thread: u32, burn_in: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_bank: f32, camera_x: f32, camera_y: f32, camera_z: f32, speed_factor: f32, dof_focus_distance: f32, dof_blur_strength: f32, fog_strength: f32, fog_start: f32, background_color: [f32; 3], filter_radius: f32, filter_blur_edges: f32) {
+    pub fn update_flame(&mut self, device: &Device, queue: &Queue, flame: &Flame, iterations_per_thread: u32, burn_in: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_bank: f32, camera_x: f32, camera_y: f32, camera_z: f32, speed_factor: f32, dof_focus_distance: f32, dof_blur_strength: f32, fog_strength: f32, fog_start: f32, background_color: [f32; 3], filter_radius: f32, filter_blur_edges: f32, render_mode: crate::scene::transforms::RenderMode, perspective_strength: f32, depth_density_compensation: f32, far_density_fade: f32, far_density_fade_start: f32, preserve_z: bool) {
         // Check if shaders need to be recompiled (variations or constants changed)
-        let constants = self.build_shader_constants(flame);
+        let constants = self.build_shader_constants(flame, render_mode, preserve_z);
         let path_features_enabled = self.color_mode == ColorMode::PathMap
             || !self.path_filters.is_empty();
         let shaders_changed = self.pipelines.ensure_shaders_current_with_constants(
@@ -1156,6 +1172,7 @@ post_symmetry: (&config.flame.post_symmetry).into(),
             flame,
             path_features_enabled,
             constants,
+            render_mode,
         );
         if shaders_changed {
             log::info!("Shaders recompiled due to variation/constant changes - recreating bind group");
@@ -1164,7 +1181,7 @@ post_symmetry: (&config.flame.post_symmetry).into(),
             self.init_bind_group = self.pipelines.create_init_bind_group(device, &self.buffers);
         }
 
-        self.buffers.update_transforms(queue, flame);
+        self.buffers.update_transforms(queue, flame, render_mode);
         self.buffers.update_variation_params(queue, flame);
         self.buffers.update_attachments(queue, flame, flame.attachment_cap());
         if let Err(e) = self.buffers.update_subflames(
@@ -1188,11 +1205,12 @@ post_symmetry: (&config.flame.post_symmetry).into(),
         }
 
         // Update render mode, perspective, DOF, fog, and background color
-        self.current_render_mode = flame.render_mode;
-        self.perspective_strength = flame.perspective_strength;
-        self.depth_density_compensation = flame.depth_density_compensation;
-        self.far_density_fade = flame.far_density_fade;
-        self.far_density_fade_start = flame.far_density_fade_start;
+        self.current_render_mode = render_mode;
+        self.preserve_z = preserve_z;
+        self.perspective_strength = perspective_strength;
+        self.depth_density_compensation = depth_density_compensation;
+        self.far_density_fade = far_density_fade;
+        self.far_density_fade_start = far_density_fade_start;
         self.dof_focus_distance = dof_focus_distance;
         self.dof_blur_strength = dof_blur_strength;
         self.fog_strength = fog_strength;
@@ -1969,8 +1987,8 @@ post_symmetry: (&self.post_symmetry).into(),
 
         // Update shaders if any shader constants changed (path features, color mode, etc.)
         // The shader cache compares all constants and only rebuilds if something changed
-        let constants = self.build_shader_constants(flame);
-        if self.pipelines.ensure_shaders_current_with_constants(device, flame, needs_path, constants) {
+        let constants = self.build_shader_constants(flame, self.current_render_mode, self.preserve_z);
+        if self.pipelines.ensure_shaders_current_with_constants(device, flame, needs_path, constants, self.current_render_mode) {
             changed = true;
         }
 
@@ -1988,7 +2006,7 @@ post_symmetry: (&self.post_symmetry).into(),
         // Per-slot kernel inputs (same order as GpuTransform::from_flame's slot
         // assignment). Buffer allocation + the count cap happen in
         // maybe_rebuild_blur_kernels (which knows D); here we just record them.
-        self.blur_slots = flame.blur_slots(registry);
+        self.blur_slots = flame.blur_slots(registry, self.current_render_mode);
         // Flame changed → the kernel inputs and slot set may have changed;
         // force a rebuild (maybe_rebuild reallocates + rebinds as needed).
         self.blur_kernels_dirty = true;
