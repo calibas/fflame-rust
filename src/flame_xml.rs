@@ -427,20 +427,12 @@ fn parse_flame_element(
         transforms,
         linked_transforms: Vec::new(),
         final_transforms: Vec::new(),
-        render_mode,
-        perspective_strength,
-        // Our own extension; no .flame XML attribute (see Flame field docs)
-        depth_density_compensation: 0.0,
-        // Our own extension; no .flame XML attribute (see Flame field docs)
-        far_density_fade: 0.0,
-        far_density_fade_start: 0.0,
         xaos,
         solo_transform: solo_xform,
         // JWF `subflame_wf_flame` payloads decoded above; empty when no
         // xform carried one (the common Apo case).
         subflames: imported_subflames,
         post_symmetry,
-        preserve_z,
     };
     for final_xform in final_transforms_processed {
         flame.migrate_legacy_final(Some(final_xform));
@@ -477,6 +469,14 @@ fn parse_flame_element(
 
     Ok(FractalConfig {
         flame,
+        // Scene-level render state (config-level since v3).
+        render_mode,
+        perspective_strength,
+        preserve_z,
+        // Our own extensions; no .flame XML attribute (see FractalConfig docs).
+        depth_density_compensation: 0.0,
+        far_density_fade: 0.0,
+        far_density_fade_start: 0.0,
         zoom,
         pan_x,
         pan_y,
@@ -1239,11 +1239,11 @@ fn write_single_flame(out: &mut String, config: &FractalConfig, flame: &Flame) {
         out.push_str(&format!(" cam_pos_z=\"{}\"", fmt_f32(config.camera_z)));
         out.push_str(&format!(" cam_zpos=\"{}\"", fmt_f32(config.camera_z)));
     }
-    if flame.perspective_strength.abs() > 1e-6 {
+    if config.perspective_strength.abs() > 1e-6 {
         // Apo reads `cam_perspective`; JWF reads `cam_persp`. Emit both
         // so re-import lands the perspective in either editor.
-        out.push_str(&format!(" cam_perspective=\"{}\"", fmt_f32(flame.perspective_strength)));
-        out.push_str(&format!(" cam_persp=\"{}\"", fmt_f32(flame.perspective_strength)));
+        out.push_str(&format!(" cam_perspective=\"{}\"", fmt_f32(config.perspective_strength)));
+        out.push_str(&format!(" cam_persp=\"{}\"", fmt_f32(config.perspective_strength)));
     }
     if config.dof_blur_strength.abs() > 1e-6 {
         out.push_str(&format!(" cam_dof=\"{}\"", fmt_f32(config.dof_blur_strength)));
@@ -1279,7 +1279,7 @@ fn write_single_flame(out: &mut String, config: &FractalConfig, flame: &Flame) {
 
     // JWildfire convention: `preserve_z` is omitted when default
     // (false) and emitted as `"1"` when set. Apo ignores the attr.
-    if flame.preserve_z {
+    if config.preserve_z {
         out.push_str(" preserve_z=\"1\"");
     }
     // Apo density-estimator block — we don't use it, write its defaults
@@ -2581,7 +2581,7 @@ mod tests {
         let cfg = parse_flame_xml(xml).expect("parse").into_iter().next().unwrap();
 
         // cam_persp landed in perspective_strength.
-        assert!((cfg.flame.perspective_strength - 1.5).abs() < 1e-5);
+        assert!((cfg.perspective_strength - 1.5).abs() < 1e-5);
         // zoom = (scale / 200) × cam_zoom = (200/200) × 2.0 = 2.0
         assert!((cfg.zoom - 2.0).abs() < 1e-5, "zoom: {}", cfg.zoom);
     }
@@ -2815,7 +2815,7 @@ mod tests {
 </flames>
         "#;
         let cfg = parse_flame_xml(xml_none).expect("parse").into_iter().next().unwrap();
-        assert!(!cfg.flame.preserve_z, "missing attr should default to false");
+        assert!(!cfg.preserve_z, "missing attr should default to false");
         let xml_out = write_flame_xml(&cfg);
         assert!(!xml_out.contains("preserve_z"), "should not emit when false: {}", xml_out);
 
@@ -2829,13 +2829,13 @@ mod tests {
 </flames>
         "#;
         let cfg = parse_flame_xml(xml_set).expect("parse").into_iter().next().unwrap();
-        assert!(cfg.flame.preserve_z, "preserve_z=\"1\" should map to true");
+        assert!(cfg.preserve_z, "preserve_z=\"1\" should map to true");
         let xml_out = write_flame_xml(&cfg);
         assert!(xml_out.contains("preserve_z=\"1\""), "should re-emit when true: {}", xml_out);
 
         // Re-import after export — value survives.
         let cfg_back = parse_flame_xml(&xml_out).expect("re-parse").into_iter().next().unwrap();
-        assert!(cfg_back.flame.preserve_z);
+        assert!(cfg_back.preserve_z);
     }
 
     /// Diagnostic: print the rando13 subflame's structure (xform count,
@@ -2852,7 +2852,6 @@ mod tests {
         println!("--- subflame ---");
         println!("name: {}", child.name);
         println!("transforms: {}", child.transforms.len());
-        println!("perspective_strength: {}", child.perspective_strength);
         for (i, x) in child.transforms.iter().enumerate() {
             let vars: Vec<_> = x.variations.iter().collect();
             println!(

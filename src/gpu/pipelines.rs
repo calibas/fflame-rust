@@ -611,8 +611,8 @@ impl FlamePipelines {
 
     /// Ensure shaders are up-to-date with current flame configuration
     /// Returns true if shaders were recompiled
-    pub fn ensure_shaders_current(&mut self, device: &Device, flame: &Flame) -> bool {
-        self.shader_cache.ensure_current(device, &self.compute_bind_group_layout, flame)
+    pub fn ensure_shaders_current(&mut self, device: &Device, flame: &Flame, render_mode: crate::scene::transforms::RenderMode) -> bool {
+        self.shader_cache.ensure_current(device, &self.compute_bind_group_layout, flame, render_mode)
     }
 
     /// Ensure shaders are up-to-date with current flame configuration and path features state
@@ -622,12 +622,14 @@ impl FlamePipelines {
         device: &Device,
         flame: &Flame,
         path_features_enabled: bool,
+        render_mode: crate::scene::transforms::RenderMode,
     ) -> bool {
         self.shader_cache.ensure_current_with_path_features(
             device,
             &self.compute_bind_group_layout,
             flame,
             path_features_enabled,
+            render_mode,
         )
     }
 
@@ -647,6 +649,7 @@ impl FlamePipelines {
             &config.flame,
             path_features_enabled,
             constants,
+            config.render_mode,
         )
     }
 
@@ -659,6 +662,7 @@ impl FlamePipelines {
         flame: &Flame,
         path_features_enabled: bool,
         constants: crate::shader_builder_v2::ShaderConstants,
+        render_mode: crate::scene::transforms::RenderMode,
     ) -> bool {
         self.shader_cache.ensure_current_full(
             device,
@@ -666,6 +670,7 @@ impl FlamePipelines {
             flame,
             path_features_enabled,
             constants,
+            render_mode,
         )
     }
 

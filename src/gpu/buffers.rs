@@ -187,8 +187,10 @@ pub struct SubflameMeta {
     pub finals_offset: u32,
     /// Number of final transforms for this subflame.
     pub finals_count: u32,
-    /// Subflame's render mode: 0 = TwoD, 1 = ThreeD (Z is meaningful).
-    pub render_mode: u32,
+    /// Reserved. Was `render_mode` (0=2D/1=3D), removed in config v3 — render
+    /// mode is scene-global now and was never read by any shader. Kept as a
+    /// pad so the 32-byte GPU layout and every field offset stay stable.
+    pub _reserved_render_mode: u32,
     /// Base value added to (normals_offset/finals_offset + picked) to
     /// produce the synthetic `xform_id` the variation system sees for
     /// this subflame's xforms. v1: always 128 — the constant prefix that
@@ -212,9 +214,9 @@ unsafe impl bytemuck::Zeroable for SubflameMeta {}
 /// `HighResExporter` so both render engines lay out transforms (incl.
 /// subflames) identically. The subflame local index map matches
 /// `pack_gpu_variation_params`.
-pub fn pack_gpu_transforms(flame: &Flame) -> Vec<GpuTransform> {
+pub fn pack_gpu_transforms(flame: &Flame, render_mode: crate::scene::transforms::RenderMode) -> Vec<GpuTransform> {
     let registry = crate::variations::global_registry();
-    let mut gpu_transforms = GpuTransform::from_flame(flame, &registry);
+    let mut gpu_transforms = GpuTransform::from_flame(flame, &registry, render_mode);
 
     // Pad parent slack to MAX_TRANSFORMS so subflame slots start at the
     // synthetic-id base (matches variation_params layout).
@@ -320,10 +322,7 @@ pub fn build_subflame_metas(subflames: &[Flame]) -> Result<[SubflameMeta; MAX_SU
             normals_count,
             finals_offset,
             finals_count,
-            render_mode: match sf.render_mode {
-                crate::scene::transforms::RenderMode::TwoD => 0,
-                crate::scene::transforms::RenderMode::ThreeD => 1,
-            },
+            _reserved_render_mode: 0,
             xform_id_base: MAX_TRANSFORMS as u32,
             _pad0: 0,
             _pad1: 0,
@@ -436,6 +435,7 @@ impl GpuTransform {
     pub fn from_flame(
         flame: &Flame,
         registry: &crate::variations::VariationRegistry,
+        render_mode: crate::scene::transforms::RenderMode,
     ) -> Vec<Self> {
         let local_map = crate::scene::transforms::compute_local_index_map(
             flame.active_variation_names_ordered(registry),
@@ -467,7 +467,7 @@ impl GpuTransform {
         // these transforms' plots through the normal (stochastic) histogram.
         // Slots 0..MAX_BLUR_BUFFERS map to the first eligible normals; any
         // eligible transforms beyond the cap keep -1 (stochastic fallback).
-        if flame.analytic_blur_active(registry) {
+        if flame.analytic_blur_active(registry, render_mode) {
             for (slot, (xform_idx, name, _w)) in flame
                 .analytic_blur_transforms(registry)
                 .into_iter()
@@ -1808,7 +1808,10 @@ impl FlameBuffers {
         // code path used by every subsequent update (load_config, update_flame).
         // Single source of truth — no risk of the initial write disagreeing
         // with the steady-state write.
-        buffers.update_transforms(queue, flame);
+        // Bootstrap: render_mode is config-level (v3) and unavailable here;
+        // default to 2D. Real mode lands via the renderer's update_flame /
+        // config-load path, which repacks if it differs.
+        buffers.update_transforms(queue, flame, crate::scene::transforms::RenderMode::TwoD);
         buffers.update_variation_params(queue, flame);
         buffers.update_attachments(queue, flame, flame.attachment_cap());
         // Populate subflame buffers too. Without this, a flame whose
@@ -2010,7 +2013,7 @@ impl FlameBuffers {
     /// `transforms[xform_id].variations[var_id]` resolve for them —
     /// klein_group and other `needs_transform: true` variations read
     /// their own weight that way.
-    pub fn update_transforms(&self, queue: &Queue, flame: &Flame) {
+    pub fn update_transforms(&self, queue: &Queue, flame: &Flame, render_mode: crate::scene::transforms::RenderMode) {
         let total_transforms = flame.total_gpu_transform_slots();
         if total_transforms > MAX_TRANSFORMS {
             panic!(
@@ -2025,7 +2028,7 @@ impl FlameBuffers {
 
         // Pack parent + subflame transforms into the unified layout (shared
         // with HighResExporter for cross-engine parity).
-        let gpu_transforms = pack_gpu_transforms(flame);
+        let gpu_transforms = pack_gpu_transforms(flame, render_mode);
         queue.write_buffer(&self.transform_buffer, 0, bytemuck::cast_slice(&gpu_transforms));
     }
 

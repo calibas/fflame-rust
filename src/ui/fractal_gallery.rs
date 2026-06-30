@@ -519,7 +519,7 @@ impl FractalConfigGallery {
                 });
 
                 // Summary line
-                let render_mode = match config.flame.render_mode {
+                let render_mode = match config.render_mode {
                     crate::scene::transforms::RenderMode::TwoD => t!("fractal_gallery.render_mode_2d"),
                     crate::scene::transforms::RenderMode::ThreeD => t!("fractal_gallery.render_mode_3d"),
                 };

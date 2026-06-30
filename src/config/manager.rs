@@ -2035,12 +2035,13 @@ impl ConfigManager {
                 Ok(value.into())
             }
 
-            // Flame metadata — per-flame, so read from the resolved target.
-            ConfigPath::RenderMode => Ok(flame.render_mode.into()),
-            ConfigPath::PerspectiveStrength => Ok(flame.perspective_strength.into()),
-            ConfigPath::DepthDensityCompensation => Ok(flame.depth_density_compensation.into()),
-            ConfigPath::FarDensityFade => Ok(flame.far_density_fade.into()),
-            ConfigPath::FarDensityFadeStart => Ok(flame.far_density_fade_start.into()),
+            // Scene-level render state — config-level since v3 (read from the
+            // config, not the resolved flame target).
+            ConfigPath::RenderMode => Ok(config.render_mode.into()),
+            ConfigPath::PerspectiveStrength => Ok(config.perspective_strength.into()),
+            ConfigPath::DepthDensityCompensation => Ok(config.depth_density_compensation.into()),
+            ConfigPath::FarDensityFade => Ok(config.far_density_fade.into()),
+            ConfigPath::FarDensityFadeStart => Ok(config.far_density_fade_start.into()),
 
             // Effects
             ConfigPath::DensityEffectEnabled { index } => {
@@ -2103,7 +2104,7 @@ impl ConfigManager {
             ConfigPath::PostSymmetryCenterY => Ok(flame.post_symmetry.center_y.into()),
             ConfigPath::PostSymmetryDistance => Ok(flame.post_symmetry.distance.into()),
             ConfigPath::PostSymmetryRotation => Ok(flame.post_symmetry.rotation_deg.into()),
-            ConfigPath::PreserveZ => Ok(flame.preserve_z.into()),
+            ConfigPath::PreserveZ => Ok(config.preserve_z.into()),
 
             // System Settings - These should NOT be called via get_value (they're not in FractalConfig)
             // Use config_manager.system_settings() instead
@@ -2785,26 +2786,22 @@ impl ConfigManager {
                 Self::apply_variation_param(xform, variation, param, value)?;
             }
 
-            // Flame metadata (per-flame, so target-aware)
+            // Scene-level render state — config-level since v3 (write to the
+            // config, not the resolved flame target).
             ConfigPath::RenderMode => {
-                let v = value.try_into()?;
-                self.active_flame_mut()?.render_mode = v;
+                self.current.render_mode = value.try_into()?;
             }
             ConfigPath::PerspectiveStrength => {
-                let v = value.try_into()?;
-                self.active_flame_mut()?.perspective_strength = v;
+                self.current.perspective_strength = value.try_into()?;
             }
             ConfigPath::DepthDensityCompensation => {
-                let v = value.try_into()?;
-                self.active_flame_mut()?.depth_density_compensation = v;
+                self.current.depth_density_compensation = value.try_into()?;
             }
             ConfigPath::FarDensityFade => {
-                let v = value.try_into()?;
-                self.active_flame_mut()?.far_density_fade = v;
+                self.current.far_density_fade = value.try_into()?;
             }
             ConfigPath::FarDensityFadeStart => {
-                let v = value.try_into()?;
-                self.active_flame_mut()?.far_density_fade_start = v;
+                self.current.far_density_fade_start = value.try_into()?;
             }
 
             // Effects
@@ -2914,8 +2911,7 @@ impl ConfigManager {
                 self.active_flame_mut()?.post_symmetry.rotation_deg = v;
             }
             ConfigPath::PreserveZ => {
-                let v: bool = value.try_into()?;
-                self.active_flame_mut()?.preserve_z = v;
+                self.current.preserve_z = value.try_into()?;
             }
 
             // System Settings - These should NOT be called via apply_value (they're not in FractalConfig)

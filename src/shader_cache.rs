@@ -109,9 +109,12 @@ impl ShaderCache {
             has_post_affine: flame.has_post_affine(),
             has_attachments: flame.has_attachments(),
             has_post_symmetry: flame.post_symmetry.ty != crate::scene::transforms::PostSymmetryType::None,
-            has_analytic_blur: flame.analytic_blur_active(&crate::variations::global_registry()),
-            flatten_z_per_iter: matches!(flame.render_mode, crate::scene::transforms::RenderMode::ThreeD)
-                && !flame.preserve_z,
+            // Bootstrap defaults to 2D (render_mode / preserve_z are
+            // config-level since v3 and not available here); the real values
+            // arrive via `constants_from_config` on config load, which
+            // triggers a rebuild if they differ.
+            has_analytic_blur: flame.analytic_blur_active(&crate::variations::global_registry(), RenderMode::TwoD),
+            flatten_z_per_iter: false,
             attachment_cap: flame.attachment_cap() as u32,
             inlined_transforms: None,
             cumulative_weights: None,
@@ -119,7 +122,7 @@ impl ShaderCache {
             // overrides are filled in by `constants_from_config`.
             variation_priorities: std::collections::BTreeMap::new(),
         };
-        let render_mode = flame.render_mode;
+        let render_mode = RenderMode::TwoD;
 
         log::info!(
             "Initial shader compilation with {} active variations, path_features={}, xaos={}, mode={:?}",
@@ -284,6 +287,8 @@ impl ShaderCache {
                 &config.flame,
                 &registry,
                 config.color_mode as u32,
+                config.render_mode,
+                config.preserve_z,
             )
         } else {
             // Interactive mode - no inlining to avoid constant shader rebuilds
@@ -304,9 +309,9 @@ impl ShaderCache {
                 has_post_affine: config.flame.has_post_affine(),
                 has_attachments: config.flame.has_attachments(),
                 has_post_symmetry: config.flame.post_symmetry.ty != crate::scene::transforms::PostSymmetryType::None,
-                has_analytic_blur: config.flame.analytic_blur_active(&registry),
-                flatten_z_per_iter: matches!(config.flame.render_mode, crate::scene::transforms::RenderMode::ThreeD)
-                    && !config.flame.preserve_z,
+                has_analytic_blur: config.flame.analytic_blur_active(&registry, config.render_mode),
+                flatten_z_per_iter: matches!(config.render_mode, crate::scene::transforms::RenderMode::ThreeD)
+                    && !config.preserve_z,
                 attachment_cap: config.flame.attachment_cap() as u32,
                 inlined_transforms: None,
                 cumulative_weights: None,
@@ -319,8 +324,8 @@ impl ShaderCache {
 
     /// Check if shaders need recompilation and rebuild if necessary
     /// Returns true if shaders were recompiled
-    pub fn ensure_current(&mut self, device: &Device, bind_group_layout: &BindGroupLayout, flame: &Flame) -> bool {
-        self.ensure_current_with_path_features(device, bind_group_layout, flame, self.path_features_enabled)
+    pub fn ensure_current(&mut self, device: &Device, bind_group_layout: &BindGroupLayout, flame: &Flame, render_mode: RenderMode) -> bool {
+        self.ensure_current_with_path_features(device, bind_group_layout, flame, self.path_features_enabled, render_mode)
     }
 
     /// Check if shaders need recompilation, with explicit path_features_enabled state
@@ -331,9 +336,10 @@ impl ShaderCache {
         bind_group_layout: &BindGroupLayout,
         flame: &Flame,
         path_features_enabled: bool,
+        render_mode: RenderMode,
     ) -> bool {
         // Use current constants (caller should use ensure_current_full for constant updates)
-        self.ensure_current_full(device, bind_group_layout, flame, path_features_enabled, self.constants.clone())
+        self.ensure_current_full(device, bind_group_layout, flame, path_features_enabled, self.constants.clone(), render_mode)
     }
 
     /// Full shader update check with explicit path features and constants
@@ -345,9 +351,11 @@ impl ShaderCache {
         flame: &Flame,
         path_features_enabled: bool,
         constants: ShaderConstants,
+        // Scene-level render mode (config-level since v3); the desired mode,
+        // compared against the cache's `current_render_mode` below.
+        render_mode: RenderMode,
     ) -> bool {
         let needed = flame.extract_active_variations();
-        let render_mode = flame.render_mode;
         let xaos_enabled = flame.has_xaos();
 
         // Check if variations changed (only keys matter, not weights)

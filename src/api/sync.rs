@@ -382,7 +382,7 @@ mod tests {
         // survive now that the whole config rides in the blob.
         config.camera_bank = 0.25;
         config.camera_x = 1.5;
-        config.flame.preserve_z = true;
+        config.preserve_z = true;
 
         let req = config_to_create_request(&config, Some("Round Trip")).unwrap();
         let resp = mirror_as_response(req);
@@ -393,7 +393,7 @@ mod tests {
         assert_eq!(restored.gamma, 2.2);
         assert_eq!(restored.camera_bank, 0.25);
         assert_eq!(restored.camera_x, 1.5);
-        assert!(restored.flame.preserve_z);
+        assert!(restored.preserve_z);
         assert_eq!(restored.flame.transforms.len(), 1);
         assert_eq!(restored.flame.final_transforms.len(), 1);
         assert_eq!(
@@ -483,7 +483,7 @@ mod tests {
         };
 
         let config = flame_response_to_config(&resp).unwrap();
-        assert_eq!(config.flame.render_mode, RenderMode::ThreeD);
+        assert_eq!(config.render_mode, RenderMode::ThreeD);
         assert_eq!(config.color_mode, ColorMode::PathMap);
         assert_eq!(config.tonemap_mode, ToneMapMode::DensityVisualization);
         assert_eq!(config.highlight_mode, HighlightMode::MaxNorm);
