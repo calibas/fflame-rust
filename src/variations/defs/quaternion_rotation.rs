@@ -26,8 +26,8 @@ pub static QUATERNION_ROTATION: VariationDef = VariationDef {
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
     // NeedsW: reads/writes the 4th coordinate (the rotation mixes it). No RNG —
-    // the rotation is deterministic.
-    features: &[Feature::NeedsW],
+    // the rotation is deterministic. WritesColor: optional w-driven palette.
+    features: &[Feature::NeedsW, Feature::WritesColor],
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
@@ -38,13 +38,14 @@ pub static QUATERNION_ROTATION: VariationDef = VariationDef {
         param!("az", "Axis Z", float, 0.0, -1.0, 1.0, "Vector-k component of a."),
         param!("aw", "Scalar W", float, 0.95, -1.0, 1.0, "Scalar component of a. With the vector part, sets the rotation angle (aw = cos(θ/2))."),
         param!("projection", "Projection", unlimited_int, 0.0, 0.0, 2.0, "How the rotated 4D point maps to the plotted 3D point (3D only). 0 = Vector (drop w), 1 = Depth (surface w as z), 2 = Perspective (divide xyz by 1-w)."),
+        param!("w_color", "Color by W", float, 0.0, 0.0, 8.0, "0 = off. >0 = write a palette index from the 4th coordinate (3D: fract(w * scale); 2D: fract(|z| * scale)), revealing it as COLOR. Needs the transform's direct_color > 0."),
     ],
     wgsl_2d: WGSL_2D,
     wgsl_3d: WGSL_3D,
 };
 
 const WGSL_2D: &str = r#"
-fn variation_quaternion_rotation(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
+fn variation_quaternion_rotation(p: vec2<f32>, xform_id: u32, variation_id: u32, vc: ptr<function, f32>) -> vec2<f32> {
     // 2D: rotate (x, y) by the angle implied by (ax, aw) — a plain 2D rotation
     // (the 4D rotation needs all three spatial axes). `point_w` rides unused.
     let ax = get_param(xform_id, variation_id, 0u);
@@ -52,7 +53,10 @@ fn variation_quaternion_rotation(p: vec2<f32>, xform_id: u32, variation_id: u32)
     let ang = 2.0 * atan2(ax, aw);          // full angle from the half-angle quat
     let cs = cos(ang);
     let sn = sin(ang);
-    return vec2<f32>(p.x * cs - p.y * sn, p.x * sn + p.y * cs);
+    let out = vec2<f32>(p.x * cs - p.y * sn, p.x * sn + p.y * cs);
+    let wcol = get_param(xform_id, variation_id, 5u);
+    if (wcol > 1e-6) { *vc = fract(length(out) * wcol); }
+    return out;
 }
 "#;
 
@@ -66,7 +70,7 @@ fn qrot_qmul(a: vec4<f32>, b: vec4<f32>) -> vec4<f32> {
     );
 }
 
-fn variation_quaternion_rotation(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
+fn variation_quaternion_rotation(p: vec3<f32>, xform_id: u32, variation_id: u32, vc: ptr<function, f32>) -> vec3<f32> {
     let a_raw = vec4<f32>(
         get_param(xform_id, variation_id, 0u),
         get_param(xform_id, variation_id, 1u),
@@ -76,6 +80,9 @@ fn variation_quaternion_rotation(p: vec3<f32>, xform_id: u32, variation_id: u32)
     // Unit quaternion → rotation. Guard the all-zero case (fall back to identity).
     let a = normalize(a_raw + vec4<f32>(0.0, 0.0, 0.0, 1e-9));
     let r = qrot_qmul(a, vec4<f32>(p, point_w));   // â · q  (left-isoclinic 4D rotation)
+
+    let wcol = get_param(xform_id, variation_id, 5u);
+    if (wcol > 1e-6) { *vc = fract(r.w * wcol); }
 
     // Project the rotated 4D point (see quaternion_julia for the caveat).
     let mode = u32(get_param(xform_id, variation_id, 4u) + 0.5);
