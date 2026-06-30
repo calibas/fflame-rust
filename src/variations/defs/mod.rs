@@ -147,6 +147,7 @@ mod glsl_fractals;
 mod glsl_tilings;
 mod glsl_fields;
 mod octapol;
+mod quaternion_julia;
 mod yplot3d_wf;
 mod yplot2d_wf;
 mod parplot2d_wf;
@@ -312,6 +313,7 @@ pub use glsl_fractals::*;
 pub use glsl_tilings::*;
 pub use glsl_fields::*;
 pub use octapol::*;
+pub use quaternion_julia::*;
 pub use yplot3d_wf::*;
 pub use yplot2d_wf::*;
 pub use parplot2d_wf::*;
@@ -1135,4 +1137,5 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &CUT_CELTIC,
     &ANALYTIC_BLUR,
     &ANALYTIC_GAUSSIAN_BLUR,
+    &QUATERNION_JULIA,
 ];

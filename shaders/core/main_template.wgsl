@@ -286,6 +286,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 rng_nextf(&rng) * 2.0 - 1.0
             );
 {{/if}}
+{{#if HAS_W}}
+            // Reset the 4th coordinate with the point — a respawned walk
+            // must not carry a stale `w` (Feature::NeedsW).
+            point_w = 0.0;
+{{/if}}
             fuse = params.burn_in;
             continue;
         }
