@@ -701,7 +701,7 @@ fn variation_juliascope3Db(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: 
 /// XY. Produces 3D fractals stretched along the depth axis.
 pub static JULIA3DZ: VariationDef = VariationDef {
     name: "julia3Dz",
-    aliases: &[],
+    aliases: &["julia3dz"],
     display_name: "Julia3Dz",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Any,
