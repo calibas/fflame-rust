@@ -307,7 +307,7 @@ impl HighResExporter {
         // with the FlameRenderer path) so subflames render identically. The
         // buffer is sized for MAX_TRANSFORMS_UNIFIED; subflame xforms occupy
         // [MAX_TRANSFORMS, MAX_TRANSFORMS_UNIFIED).
-        let transforms = crate::gpu::buffers::pack_gpu_transforms(&config.flame);
+        let transforms = crate::gpu::buffers::pack_gpu_transforms(&config.flame, config.render_mode);
 
         let transform_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
             label: Some("Export Transform Buffer"),
@@ -356,7 +356,7 @@ impl HighResExporter {
         // splats means into it (mean ÷ D) and the CPU folds it in at the end
         // (convolve + upscale) using `setup`. Otherwise a 1-element dummy +
         // count=0 params so the routing falls back to stochastic.
-        let blur_slots = config.flame.blur_slots(&global_registry());
+        let blur_slots = config.flame.blur_slots(&global_registry(), config.render_mode);
         let (blur_splat_buffer, blur_setup, blur_count) = if !blur_slots.is_empty() {
             let setup = crate::variations::analytic_blur::compute_blur_setup(
                 width, height, config.zoom, config.rotation, &blur_slots,
@@ -628,7 +628,7 @@ impl HighResExporter {
         // exporting in PathMap COLOR_MODE will fall back to the white
         // default initialized in main_template.wgsl. See
         // docs/projects/unified-render-pipeline.md.
-        let analytic_active = config.flame.analytic_blur_active(&global_registry());
+        let analytic_active = config.flame.analytic_blur_active(&global_registry(), config.render_mode);
         let shader_builder = ShaderBuilder::new(global_registry().clone());
         let constants = crate::shader_cache::ShaderCache::constants_from_config(config);
         let shader_source = shader_builder.build_from_template(
@@ -1256,7 +1256,7 @@ impl HighResExporter {
             curve_lut_texture,
             curve_lut_sampler,
             accumulation_sampler,
-            render_mode: config.flame.render_mode,
+            render_mode: config.render_mode,
             samples_per_dispatch,
             iterations_per_thread,
         })
@@ -1529,10 +1529,10 @@ impl HighResExporter {
                 pan_y: config.pan_y,
                 rotation: config.rotation,
                 speed_factor: config.speed_factor,
-                perspective_strength: config.flame.perspective_strength,
-                depth_density_compensation: config.flame.depth_density_compensation,
-                far_density_fade: config.flame.far_density_fade,
-                far_density_fade_start: config.flame.far_density_fade_start,
+                perspective_strength: config.perspective_strength,
+                depth_density_compensation: config.depth_density_compensation,
+                far_density_fade: config.far_density_fade,
+                far_density_fade_start: config.far_density_fade_start,
                 _pad_before_post_symmetry: [0; 3],
                 camera_rotation_x: config.camera_rotation_x,
                 camera_rotation_y: config.camera_rotation_y,

@@ -6,7 +6,7 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::f32::consts::PI;
-use crate::scene::transforms::{Flame, Transform, RenderMode};
+use crate::scene::transforms::{Flame, RenderMode, Transform};
 
 /// Basic 2D variations that tend to produce visually interesting results
 const GOOD_VARIATIONS: &[&str] = &[
@@ -143,6 +143,38 @@ fn default_variations() -> HashSet<String> {
     GOOD_VARIATIONS.iter().map(|s| s.to_string()).collect()
 }
 
+/// A randomly generated flame plus its scene-level render settings. The render
+/// fields (`render_mode`, `perspective_strength`) live on `FractalConfig` since
+/// config v3, so they ride alongside the `Flame` rather than on it; the caller
+/// applies them to the config it builds.
+pub struct RandomFlame {
+    pub flame: Flame,
+    pub render_mode: RenderMode,
+    pub perspective_strength: f32,
+}
+
+/// Derive the scene render settings from the generator settings: `enable_3d`
+/// selects the mode and (in 3D) a random perspective strength.
+fn random_render_settings<R: Rng>(settings: &RandomGeneratorSettings, rng: &mut R) -> (RenderMode, f32) {
+    if settings.enable_3d {
+        (
+            RenderMode::ThreeD,
+            rng.gen_range(settings.perspective_min..=settings.perspective_max),
+        )
+    } else {
+        (RenderMode::TwoD, 0.0)
+    }
+}
+
+/// Generate a random flame **with** its render settings (the form the Random
+/// Generator panel needs, since `enable_3d` now sets config-level fields).
+pub fn generate_random_flame_bundle(settings: &RandomGeneratorSettings) -> RandomFlame {
+    let mut rng = rand::thread_rng();
+    let (render_mode, perspective_strength) = random_render_settings(settings, &mut rng);
+    let flame = generate_random_flame_with_rng(settings, &mut rng);
+    RandomFlame { flame, render_mode, perspective_strength }
+}
+
 /// Generate a random flame with visually interesting properties (using default settings)
 pub fn generate_random_flame() -> Flame {
     generate_random_flame_with_settings(&RandomGeneratorSettings::default())
@@ -177,62 +209,49 @@ pub fn generate_random_flame_with_rng<R: Rng>(settings: &RandomGeneratorSettings
     // Add symmetry transforms after the random transforms
     add_symmetry_transforms(&mut transforms, settings.symmetry);
 
-    // Determine render mode
-    let render_mode = if settings.enable_3d {
-        RenderMode::ThreeD
-    } else {
-        RenderMode::TwoD
-    };
-
-    // Random perspective strength if 3D enabled
-    let perspective_strength = if settings.enable_3d {
-        rng.gen_range(settings.perspective_min..=settings.perspective_max)
-    } else {
-        0.0
-    };
-
+    // This builds the IFS only. `settings.enable_3d` / `perspective_*` are
+    // scene-level (FractalConfig) since config v3 — `random_render_settings`
+    // derives them and `generate_random_flame_bundle` / `generate_batch`
+    // carry them out to the caller, which applies them to the config.
     Flame {
         id: crate::scene::transforms::next_id(),
         name: "Random".to_string(),
         transforms,
         linked_transforms: Vec::new(),
         final_transforms: Vec::new(),
-        render_mode,
-        perspective_strength,
-        depth_density_compensation: 0.0,
-        far_density_fade: 0.0,
-        far_density_fade_start: 0.0,
         xaos: None,
         solo_transform: None,
         subflames: Vec::new(),
         post_symmetry: crate::scene::transforms::PostSymmetry::default(),
-        preserve_z: false, // Apo/JWF default — avoid Z-explosion trap.
     }
 }
 
 /// Generate a batch of random flames
-pub fn generate_batch(settings: &RandomGeneratorSettings) -> Vec<Flame> {
-    let mut results = Vec::with_capacity(settings.batch_count);
+pub fn generate_batch(settings: &RandomGeneratorSettings) -> Vec<RandomFlame> {
+    // Derive render settings first (same rng) so seeded batches stay
+    // reproducible, then the flame.
+    fn gen_one<R: Rng>(settings: &RandomGeneratorSettings, rng: &mut R, i: usize) -> RandomFlame {
+        let (render_mode, perspective_strength) = random_render_settings(settings, rng);
+        let mut flame = generate_random_flame_with_rng(settings, rng);
+        flame.name = format!("Random {}", i + 1);
+        RandomFlame { flame, render_mode, perspective_strength }
+    }
 
+    let mut results = Vec::with_capacity(settings.batch_count);
     if let Some(seed) = settings.seed {
         // Use seeded RNG for reproducibility
         use rand::SeedableRng;
         let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
         for i in 0..settings.batch_count {
-            let mut flame = generate_random_flame_with_rng(settings, &mut rng);
-            flame.name = format!("Random {}", i + 1);
-            results.push(flame);
+            results.push(gen_one(settings, &mut rng, i));
         }
     } else {
         // Use thread RNG
         let mut rng = rand::thread_rng();
         for i in 0..settings.batch_count {
-            let mut flame = generate_random_flame_with_rng(settings, &mut rng);
-            flame.name = format!("Random {}", i + 1);
-            results.push(flame);
+            results.push(gen_one(settings, &mut rng, i));
         }
     }
-
     results
 }
 
@@ -526,7 +545,7 @@ mod tests {
         let batch2 = generate_batch(&settings);
         assert_eq!(batch.len(), batch2.len());
         for (f1, f2) in batch.iter().zip(batch2.iter()) {
-            assert_eq!(f1.transforms.len(), f2.transforms.len());
+            assert_eq!(f1.flame.transforms.len(), f2.flame.transforms.len());
         }
     }
 }

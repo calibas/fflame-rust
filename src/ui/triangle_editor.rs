@@ -233,7 +233,7 @@ fn render_triangle_editor_core(
             // Plane selector (XY / YZ / ZX) — 3D render mode only. The
             // YZ/ZX planes edit JWildfire's plane-affine arrays, which
             // only take effect in the 3D pipeline.
-            let is_3d = flame.render_mode == crate::scene::transforms::RenderMode::ThreeD;
+            let is_3d = config_manager.config().render_mode == crate::scene::transforms::RenderMode::ThreeD;
             let mut edit_plane = ui.ctx().data_mut(|d| {
                 d.get_persisted::<EditPlane>(egui::Id::new("triangle_editor_edit_plane"))
                     .unwrap_or_default()

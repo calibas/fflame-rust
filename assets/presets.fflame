@@ -965,10 +965,10 @@
           "g": 0.0,
           "opacity": 1.0,
           "variation_params": {
-            "julia3dz.power": -2.0
+            "julia3Dz.power": -2.0
           },
           "variations": {
-            "julia3dz": 2.0
+            "julia3Dz": 2.0
           },
           "weight": 1.0
         }

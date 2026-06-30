@@ -993,7 +993,7 @@ pub fn render_transforms_content(
 
     ui.separator();
 
-    let render_mode = flame.render_mode;
+    let render_mode = config_manager.config().render_mode;
     let num_normals = flame.transforms.len();
     let num_linked = flame.linked_transforms.len();
     let num_finals = flame.final_transforms.len();

@@ -109,6 +109,13 @@ impl App {
                         update_config.background_color,
                         update_config.filter_radius,
                         update_config.filter_blur_edges,
+                        // Scene-level render state (config-level since v3).
+                        update_config.render_mode,
+                        update_config.perspective_strength,
+                        update_config.depth_density_compensation,
+                        update_config.far_density_fade,
+                        update_config.far_density_fade_start,
+                        update_config.preserve_z,
                     );
                 }
 

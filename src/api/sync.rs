@@ -3,12 +3,8 @@
 //! The API uses a flat structure while FractalConfig has nested Flame/Palette/ToneCurve.
 //! These functions handle the mapping in both directions.
 
-use std::collections::HashMap;
-
 use crate::config::FractalConfig;
-use crate::effects::EffectInstance;
-use crate::scene::palette::{ColorMode, ColorStop, Palette, PathCaptureMode, PathMapStyle, PathTrackingMode};
-use crate::scene::tonemap::{ToneCurve, ToneMapMode};
+use crate::scene::palette::{ColorStop, Palette};
 use crate::scene::transforms::{Flame, RenderMode, Transform};
 
 use super::types::*;
@@ -33,291 +29,6 @@ impl From<ApiRenderMode> for RenderMode {
             ApiRenderMode::ThreeD => RenderMode::ThreeD,
         }
     }
-}
-
-impl From<ColorMode> for ApiColorMode {
-    fn from(mode: ColorMode) -> Self {
-        match mode {
-            ColorMode::Palette => ApiColorMode::Palette,
-            ColorMode::Speed => ApiColorMode::Speed,
-            ColorMode::PathMap => ApiColorMode::PathMap,
-        }
-    }
-}
-
-impl From<ApiColorMode> for ColorMode {
-    fn from(mode: ApiColorMode) -> Self {
-        match mode {
-            ApiColorMode::Palette => ColorMode::Palette,
-            ApiColorMode::Speed => ColorMode::Speed,
-            ApiColorMode::PathMap => ColorMode::PathMap,
-        }
-    }
-}
-
-impl From<ToneMapMode> for ApiToneMapMode {
-    fn from(mode: ToneMapMode) -> Self {
-        match mode {
-            ToneMapMode::Linear => ApiToneMapMode::Linear,
-            ToneMapMode::Logarithmic => ApiToneMapMode::Logarithmic,
-            ToneMapMode::DensityVisualization => ApiToneMapMode::Density,
-        }
-    }
-}
-
-impl From<ApiToneMapMode> for ToneMapMode {
-    fn from(mode: ApiToneMapMode) -> Self {
-        match mode {
-            ApiToneMapMode::Linear => ToneMapMode::Linear,
-            ApiToneMapMode::Logarithmic => ToneMapMode::Logarithmic,
-            ApiToneMapMode::Density => ToneMapMode::DensityVisualization,
-        }
-    }
-}
-
-impl From<crate::scene::tonemap::HighlightMode> for ApiHighlightMode {
-    fn from(mode: crate::scene::tonemap::HighlightMode) -> Self {
-        use crate::scene::tonemap::HighlightMode;
-        match mode {
-            HighlightMode::Clip => ApiHighlightMode::Clip,
-            HighlightMode::MaxNorm => ApiHighlightMode::MaxNorm,
-            HighlightMode::Reinhard => ApiHighlightMode::Reinhard,
-            HighlightMode::Filmic => ApiHighlightMode::Filmic,
-        }
-    }
-}
-
-impl From<ApiHighlightMode> for crate::scene::tonemap::HighlightMode {
-    fn from(mode: ApiHighlightMode) -> Self {
-        use crate::scene::tonemap::HighlightMode;
-        match mode {
-            ApiHighlightMode::Clip => HighlightMode::Clip,
-            ApiHighlightMode::MaxNorm => HighlightMode::MaxNorm,
-            ApiHighlightMode::Reinhard => HighlightMode::Reinhard,
-            ApiHighlightMode::Filmic => HighlightMode::Filmic,
-        }
-    }
-}
-
-impl From<crate::scene::palette::SqueezeMode> for ApiSqueezeMode {
-    fn from(mode: crate::scene::palette::SqueezeMode) -> Self {
-        use crate::scene::palette::SqueezeMode;
-        match mode {
-            SqueezeMode::Linear => ApiSqueezeMode::Linear,
-            SqueezeMode::Geometric => ApiSqueezeMode::Geometric,
-        }
-    }
-}
-
-impl From<ApiSqueezeMode> for crate::scene::palette::SqueezeMode {
-    fn from(mode: ApiSqueezeMode) -> Self {
-        use crate::scene::palette::SqueezeMode;
-        match mode {
-            ApiSqueezeMode::Linear => SqueezeMode::Linear,
-            ApiSqueezeMode::Geometric => SqueezeMode::Geometric,
-        }
-    }
-}
-
-impl From<PathMapStyle> for ApiPathMapStyle {
-    fn from(style: PathMapStyle) -> Self {
-        match style {
-            PathMapStyle::Prefix => ApiPathMapStyle::Prefix,
-            PathMapStyle::Suffix => ApiPathMapStyle::Suffix,
-            PathMapStyle::PrefixDistinct => ApiPathMapStyle::PrefixDistinct,
-            PathMapStyle::SuffixDistinct => ApiPathMapStyle::SuffixDistinct,
-            PathMapStyle::Depth => ApiPathMapStyle::Depth,
-            PathMapStyle::OriginRadial => ApiPathMapStyle::OriginRadial,
-            PathMapStyle::OriginHorizontal => ApiPathMapStyle::OriginHorizontal,
-            PathMapStyle::OriginVertical => ApiPathMapStyle::OriginVertical,
-        }
-    }
-}
-
-impl From<ApiPathMapStyle> for PathMapStyle {
-    fn from(style: ApiPathMapStyle) -> Self {
-        match style {
-            ApiPathMapStyle::Prefix => PathMapStyle::Prefix,
-            ApiPathMapStyle::Suffix => PathMapStyle::Suffix,
-            ApiPathMapStyle::PrefixDistinct => PathMapStyle::PrefixDistinct,
-            ApiPathMapStyle::SuffixDistinct => PathMapStyle::SuffixDistinct,
-            ApiPathMapStyle::Depth => PathMapStyle::Depth,
-            ApiPathMapStyle::OriginRadial => PathMapStyle::OriginRadial,
-            ApiPathMapStyle::OriginHorizontal => PathMapStyle::OriginHorizontal,
-            ApiPathMapStyle::OriginVertical => PathMapStyle::OriginVertical,
-        }
-    }
-}
-
-impl From<PathCaptureMode> for ApiPathCaptureMode {
-    fn from(mode: PathCaptureMode) -> Self {
-        match mode {
-            PathCaptureMode::FirstHit => ApiPathCaptureMode::FirstHit,
-            PathCaptureMode::FirstAfterBurnIn => ApiPathCaptureMode::FirstAfterBurnIn,
-            PathCaptureMode::LastHit => ApiPathCaptureMode::LastHit,
-        }
-    }
-}
-
-impl From<ApiPathCaptureMode> for PathCaptureMode {
-    fn from(mode: ApiPathCaptureMode) -> Self {
-        match mode {
-            ApiPathCaptureMode::FirstHit => PathCaptureMode::FirstHit,
-            ApiPathCaptureMode::FirstAfterBurnIn => PathCaptureMode::FirstAfterBurnIn,
-            ApiPathCaptureMode::LastHit => PathCaptureMode::LastHit,
-        }
-    }
-}
-
-impl From<PathTrackingMode> for ApiPathTrackingMode {
-    fn from(mode: PathTrackingMode) -> Self {
-        match mode {
-            PathTrackingMode::First => ApiPathTrackingMode::First,
-            PathTrackingMode::Recent => ApiPathTrackingMode::Recent,
-        }
-    }
-}
-
-impl From<ApiPathTrackingMode> for PathTrackingMode {
-    fn from(mode: ApiPathTrackingMode) -> Self {
-        match mode {
-            ApiPathTrackingMode::First => PathTrackingMode::First,
-            ApiPathTrackingMode::Recent => PathTrackingMode::Recent,
-        }
-    }
-}
-
-// ============================================================================
-// Transform conversion
-// ============================================================================
-
-fn transform_to_api(t: &Transform) -> CreateTransformInput {
-    CreateTransformInput {
-        a: Some(t.a),
-        b: Some(t.b),
-        c: Some(t.c),
-        d: Some(t.d),
-        e: Some(t.e),
-        f: Some(t.f),
-        g: Some(t.g),
-        weight: Some(t.weight),
-        color: Some(t.color),
-        color_speed: Some(t.color_speed),
-        opacity: Some(t.opacity),
-        direct_color: if t.direct_color.abs() > 1e-6 { Some(t.direct_color) } else { None },
-        variations: if t.variations.is_empty() { None } else { Some(t.variations.clone()) },
-        variation_params: if t.variation_params.is_empty() { None } else { Some(t.variation_params.clone()) },
-        post_affine_enabled: Some(t.post_affine_enabled),
-        post_a: Some(t.post_a),
-        post_b: Some(t.post_b),
-        post_c: Some(t.post_c),
-        post_d: Some(t.post_d),
-        post_e: Some(t.post_e),
-        post_f: Some(t.post_f),
-        post_g: Some(t.post_g),
-        linked_attachments: if t.linked_attachments.is_empty() {
-            None
-        } else {
-            Some(t.linked_attachments.clone())
-        },
-        final_attachments: if t.final_attachments.is_empty() {
-            None
-        } else {
-            Some(t.final_attachments.clone())
-        },
-    }
-}
-
-fn transform_from_api(resp: &TransformResponse) -> Transform {
-    Transform {
-        id: crate::scene::transforms::next_id(),
-        a: resp.a,
-        b: resp.b,
-        c: resp.c,
-        d: resp.d,
-        e: resp.e,
-        f: resp.f,
-        g: resp.g,
-        weight: resp.weight,
-        color: resp.color,
-        color_speed: resp.color_speed,
-        opacity: resp.opacity,
-        direct_color: resp.direct_color,
-        variations: resp.variations.clone(),
-        variation_params: resp.variation_params.clone(),
-        // fx_priority overrides aren't carried by the API contract yet;
-        // default to empty (every variation runs in its natural phase).
-        variation_priorities: std::collections::HashMap::new(),
-        // Variation order hint not carried by the API contract; empty =>
-        // registry-order fallback (the pre-feature behavior).
-        variation_order: Vec::new(),
-        post_affine_enabled: resp.post_affine_enabled,
-        post_a: resp.post_a,
-        post_b: resp.post_b,
-        post_c: resp.post_c,
-        post_d: resp.post_d,
-        post_e: resp.post_e,
-        post_f: resp.post_f,
-        post_g: resp.post_g,
-        // JWildfire-extension plane affines. The API contract doesn't
-        // carry these yet — default to identity so API-loaded flames
-        // stay Apophysis-semantics. When the API contract grows fields
-        // for them we'll wire them through here.
-        yz_coefs: crate::scene::transforms::IDENTITY_PLANE_COEFS,
-        zx_coefs: crate::scene::transforms::IDENTITY_PLANE_COEFS,
-        yz_post_coefs: crate::scene::transforms::IDENTITY_PLANE_COEFS,
-        zx_post_coefs: crate::scene::transforms::IDENTITY_PLANE_COEFS,
-        linked_attachments: resp.linked_attachments.clone(),
-        final_attachments: resp.final_attachments.clone(),
-    }
-}
-
-// ============================================================================
-// Effect conversion
-// ============================================================================
-
-fn effect_to_api(e: &EffectInstance) -> CreateEffectInput {
-    let params = if e.params.is_empty() {
-        None
-    } else {
-        // Convert HashMap<String, f32> to JSON value
-        Some(serde_json::to_value(&e.params).unwrap_or(serde_json::Value::Null))
-    };
-
-    CreateEffectInput {
-        effect_name: e.effect_type.clone(),
-        params,
-        enabled: e.enabled,
-    }
-}
-
-fn effect_from_api(resp: &ConfigEffectResponse) -> EffectInstance {
-    let params = resp
-        .params
-        .as_ref()
-        .and_then(|v| serde_json::from_value::<HashMap<String, f32>>(v.clone()).ok())
-        .unwrap_or_default();
-
-    EffectInstance {
-        id: crate::scene::transforms::next_id(),
-        effect_type: resp.effect_name.clone(),
-        enabled: resp.enabled,
-        params,
-    }
-}
-
-// ============================================================================
-// ToneCurve conversion
-// ============================================================================
-
-fn tonecurve_to_json(curve: &ToneCurve) -> serde_json::Value {
-    serde_json::to_value(curve).unwrap_or(serde_json::Value::Null)
-}
-
-fn tonecurve_from_json(value: Option<&serde_json::Value>) -> ToneCurve {
-    value
-        .and_then(|v| serde_json::from_value::<ToneCurve>(v.clone()).ok())
-        .unwrap_or_default()
 }
 
 // ============================================================================
@@ -409,137 +120,79 @@ pub fn palette_from_library_entry(entry: &LibraryPaletteEntry) -> Palette {
 // FractalConfig → API request
 // ============================================================================
 
-/// Convert a FractalConfig to an API CreateFlameRequest. The palette
-/// travels inline in `palette`; the server deduplicates by content hash.
-///
-/// Convert a nested `Flame` (subflame) into the `SubflameRequest` wire
-/// shape. Recursive — subflames can contain subflames up to depth 4
-/// (server-enforced). Only the `Flame` state crosses the wire; tonemap
-/// and palette belong to the parent `FractalConfig` and are inherited at
-/// render time.
-fn flame_to_subflame_request(flame: &Flame) -> SubflameRequest {
-    SubflameRequest {
-        flame_name: Some(flame.name.clone()),
-        render_mode: flame.render_mode.into(),
-        perspective_strength: flame.perspective_strength,
-        solo_transform: flame.solo_transform.map(|i| i as i32),
-        xaos: flame.xaos.as_ref().map(|x| {
-            serde_json::to_value(x).unwrap_or(serde_json::Value::Null)
-        }),
-        transforms: flame.transforms.iter().map(transform_to_api).collect(),
-        linked_transforms: flame
-            .linked_transforms
-            .iter()
-            .map(transform_to_api)
-            .collect(),
-        final_transforms: flame
-            .final_transforms
-            .iter()
-            .map(transform_to_api)
-            .collect(),
-        subflames: flame
-            .subflames
-            .iter()
-            .map(flame_to_subflame_request)
-            .collect(),
-    }
+/// Pool tag for a root transform, in the order the server stores them.
+const TRANSFORM_POOLS: [&str; 3] = ["normal", "linked", "final"];
+
+/// Names of the variations with non-zero weight on a transform. Search/index
+/// metadata only — the authoritative variation map lives in the transform's
+/// `data` blob. Order is unspecified (HashMap iteration); the server treats
+/// `variation_names` as a set.
+fn nonzero_variation_names(t: &Transform) -> Vec<String> {
+    t.variations
+        .iter()
+        .filter(|(_, &w)| w != 0.0)
+        .map(|(name, _)| name.clone())
+        .collect()
 }
 
-pub fn config_to_create_request(config: &FractalConfig, name: Option<&str>) -> CreateFlameRequest {
-    let flame = &config.flame;
-
-    CreateFlameRequest {
-        name: name.map(|n| n.to_string()).unwrap_or_else(|| flame.name.clone()),
-        flame_name: Some(flame.name.clone()),
-        transforms: flame.transforms.iter().map(transform_to_api).collect(),
-        linked_transforms: flame
-            .linked_transforms
-            .iter()
-            .map(transform_to_api)
-            .collect(),
-        final_transforms: flame
-            .final_transforms
-            .iter()
-            .map(transform_to_api)
-            .collect(),
-        subflames: flame
-            .subflames
-            .iter()
-            .map(flame_to_subflame_request)
-            .collect(),
-        visibility: None, // Set by caller if needed
-        render_mode: Some(flame.render_mode.into()),
-        perspective_strength: Some(flame.perspective_strength),
-        xaos: flame.xaos.as_ref().map(|x| serde_json::to_value(x).unwrap_or(serde_json::Value::Null)),
-        solo_transform: flame.solo_transform.map(|i| i as i32),
-
-        zoom: Some(config.zoom),
-        pan_x: Some(config.pan_x),
-        pan_y: Some(config.pan_y),
-        rotation: Some(config.rotation),
-        camera_rotation_x: Some(config.camera_rotation_x),
-        camera_rotation_y: Some(config.camera_rotation_y),
-        camera_z: Some(config.camera_z),
-
-        dof_focus_distance: Some(config.dof_focus_distance),
-        dof_blur_strength: Some(config.dof_blur_strength),
-        fog_strength: Some(config.fog_strength),
-        fog_start: Some(config.fog_start),
-        filter_radius: Some(config.filter_radius),
-        filter_blur_edges: Some(config.filter_blur_edges),
-
-        density_scale: Some(config.density_scale),
-        speed_factor: Some(config.speed_factor),
-        max_iterations: Some(config.max_iterations),
-        blend_factor: Some(config.blend_factor),
-        use_dynamic_blend: Some(config.use_dynamic_blend),
-
-        color_mode: Some(config.color_mode.into()),
-        path_map_style: Some(config.path_map_style.into()),
-        path_capture_mode: Some(config.path_capture_mode.into()),
-        path_tracking_mode: Some(config.path_tracking_mode.into()),
-        palette: Some(palette_to_api(&config.palette)),
-        palette_rotation: Some(config.palette_rotation),
-        palette_size: Some(config.palette_size as i32),
-        palette_squeeze: Some(config.palette_squeeze),
-        palette_squeeze_mode: Some(config.palette_squeeze_mode.into()),
-        palette_squeeze_falloff: Some(config.palette_squeeze_falloff),
-        palette_log_strength: Some(config.palette_log_strength),
-        palette_reverse: Some(config.palette_reverse),
-        background_color: Some(config.background_color.to_vec()),
-
-        tonemap_mode: Some(config.tonemap_mode.into()),
-        highlight_mode: Some(config.highlight_mode.into()),
-        white_level: Some(config.white_level),
-        tonemap_curve: Some(tonecurve_to_json(&config.tonemap_curve)),
-        use_curve: Some(config.use_curve),
-        exposure: Some(config.exposure),
-        gamma: Some(config.gamma),
-        gamma_threshold: Some(config.gamma_threshold),
-        brightness: Some(config.brightness),
-        vibrancy: Some(config.vibrancy),
-        saturation: Some(config.saturation),
-        hue_shift: Some(config.hue_shift),
-        alpha_blend_low: Some(config.alpha_blend_low),
-        alpha_blend_high: Some(config.alpha_blend_high),
-        levels_enabled: Some(config.levels_enabled),
-        levels_low: Some(config.levels_low),
-        levels_high: Some(config.levels_high),
-        levels_gamma: Some(config.levels_gamma),
-
-        density_effects: if config.density_effects.is_empty() {
-            None
-        } else {
-            Some(config.density_effects.iter().map(effect_to_api).collect())
-        },
-        color_effects: if config.color_effects.is_empty() {
-            None
-        } else {
-            Some(config.color_effects.iter().map(effect_to_api).collect())
-        },
-
-        deterministic_rng: Some(config.deterministic_rng),
+/// Split a flame's three root transform pools into the flat wire array. Each
+/// transform's full state serializes opaquely into `data` (the same JSON a
+/// `Transform` holds in a `.fflame`); `kind` + `sort_order` let the reader
+/// rebuild the pools.
+fn root_transforms_to_wire(flame: &Flame) -> Result<Vec<ApiTransformWire>, serde_json::Error> {
+    let pools = [
+        &flame.transforms,
+        &flame.linked_transforms,
+        &flame.final_transforms,
+    ];
+    let mut out = Vec::new();
+    for (kind, pool) in TRANSFORM_POOLS.iter().zip(pools.iter()) {
+        for (i, t) in pool.iter().enumerate() {
+            out.push(ApiTransformWire {
+                kind: kind.to_string(),
+                sort_order: i as i32,
+                variation_names: nonzero_variation_names(t),
+                data: serde_json::to_value(t)?,
+            });
+        }
     }
+    Ok(out)
+}
+
+/// Convert a `FractalConfig` to a `CreateFlameRequest`. The config becomes an
+/// opaque blob (the `.fflame` JSON minus the root transforms and minus the
+/// palette); the root transforms split into the flat `transforms[]` array;
+/// the palette travels inline (server hashes by content). Subflames — and
+/// their own transforms — ride inside the blob untouched.
+pub fn config_to_create_request(
+    config: &FractalConfig,
+    name: Option<&str>,
+) -> Result<CreateFlameRequest, serde_json::Error> {
+    let flame = &config.flame;
+    let transforms = root_transforms_to_wire(flame)?;
+
+    // Blob = canonical config value (versioned, defaults stripped) with the
+    // palette removed (sent inline) and the ROOT transform pools emptied
+    // (sent as `transforms[]`). Subflames keep their inline transforms.
+    let mut blob = config.to_json_value()?;
+    if let Some(obj) = blob.as_object_mut() {
+        obj.remove("palette");
+        if let Some(flame_obj) = obj.get_mut("flame").and_then(|f| f.as_object_mut()) {
+            flame_obj.insert("transforms".to_string(), serde_json::json!([]));
+            flame_obj.insert("linked_transforms".to_string(), serde_json::json!([]));
+            flame_obj.insert("final_transforms".to_string(), serde_json::json!([]));
+        }
+    }
+
+    Ok(CreateFlameRequest {
+        name: name
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| flame.name.clone()),
+        visibility: None, // Set by caller if needed
+        palette: Some(palette_to_api(&config.palette)),
+        config: blob,
+        transforms,
+    })
 }
 
 /// Encode a palette as either compact color_data (for 256-stop indexed palettes)
@@ -590,182 +243,89 @@ pub fn palette_to_api(palette: &Palette) -> ApiPalette {
 // API response → FractalConfig
 // ============================================================================
 
-/// Convert an API FlameResponse to a FractalConfig. The palette is
-/// reconstructed from the inline `resp.palette` payload; when the flame
-/// has no palette, the default palette is used.
-/// Recursively assemble a nested `Flame` from a subflame `FlameResponse`.
-/// Subflames don't carry their own tonemap/palette/visibility — those are
-/// inherited from the parent's `FractalConfig` at render time. Server
-/// stores defaults on subflame rows but we ignore those fields here.
-fn flame_from_subflame_response(resp: &FlameResponse) -> Flame {
-    let xaos: Option<Vec<Vec<f32>>> = resp
-        .xaos
-        .as_ref()
-        .and_then(|v| serde_json::from_value(v.clone()).ok());
-
-    let mut transforms: Vec<&TransformResponse> = resp.transforms.iter().collect();
-    transforms.sort_by_key(|t| t.sort_order);
-    let mut linked: Vec<&TransformResponse> = resp.linked_transforms.iter().collect();
-    linked.sort_by_key(|t| t.sort_order);
-    let mut finals: Vec<&TransformResponse> = resp.final_transforms.iter().collect();
-    finals.sort_by_key(|t| t.sort_order);
-
-    Flame {
-        id: crate::scene::transforms::next_id(),
-        name: resp.flame_name.clone().unwrap_or_else(|| resp.name.clone()),
-        transforms: transforms.iter().map(|t| transform_from_api(t)).collect(),
-        linked_transforms: linked.iter().map(|t| transform_from_api(t)).collect(),
-        final_transforms: finals.iter().map(|t| transform_from_api(t)).collect(),
-        render_mode: resp.render_mode.into(),
-        perspective_strength: resp.perspective_strength,
-        depth_density_compensation: 0.0,
-        far_density_fade: 0.0,
-        far_density_fade_start: 0.0,
-        xaos,
-        solo_transform: resp.solo_transform.map(|i| i as usize),
-        subflames: resp.subflames.iter().map(flame_from_subflame_response).collect(),
-        // API doesn't carry post_symmetry yet; default until the server
-        // schema gains the field.
-        post_symmetry: crate::scene::transforms::PostSymmetry::default(),
-        preserve_z: false,
+/// Bucket the flat root-transform wire array back into the three pools,
+/// each sorted by `sort_order`, returning the transforms' opaque `data`
+/// values ready to slot into the flame blob. Unknown `kind` values fall
+/// into the normal pool (forward-compatible with a future server that
+/// adds pool kinds).
+fn wire_transforms_to_pools(
+    wires: &[ApiTransformWire],
+) -> (Vec<serde_json::Value>, Vec<serde_json::Value>, Vec<serde_json::Value>) {
+    let mut pools: [Vec<&ApiTransformWire>; 3] = [Vec::new(), Vec::new(), Vec::new()];
+    for w in wires {
+        let idx = match w.kind.as_str() {
+            "linked" => 1,
+            "final" => 2,
+            _ => 0,
+        };
+        pools[idx].push(w);
     }
+    for pool in &mut pools {
+        pool.sort_by_key(|w| w.sort_order);
+    }
+    let [normal, linked, finals] = pools;
+    let data = |pool: Vec<&ApiTransformWire>| pool.into_iter().map(|w| w.data.clone()).collect();
+    (data(normal), data(linked), data(finals))
 }
 
-pub fn flame_response_to_config(resp: &FlameResponse) -> FractalConfig {
-    // Bucket the three pools by `transform_kind` and sort by sort_order
-    // within each. Server-side guarantees `transforms` only holds
-    // `normal` rows (linked / final pools come in their own arrays), but
-    // we filter defensively in case an older server returns a flat list.
-    let mut transforms: Vec<&TransformResponse> = resp
-        .transforms
-        .iter()
-        .filter(|t| matches!(t.transform_kind, ApiTransformKind::Normal))
-        .collect();
-    transforms.sort_by_key(|t| t.sort_order);
-    let mut linked: Vec<&TransformResponse> = resp.linked_transforms.iter().collect();
-    linked.sort_by_key(|t| t.sort_order);
-    let mut finals: Vec<&TransformResponse> = resp.final_transforms.iter().collect();
-    finals.sort_by_key(|t| t.sort_order);
+/// Convert an API `FlameResponse` back into a `FractalConfig`. Re-injects the
+/// root transforms (from the flat `transforms[]`) and the palette (from the
+/// inline `palette` payload) into the opaque config blob, then deserializes
+/// through the shared version-keyed migration path (`from_json_value`) so
+/// cloud blobs and local `.fflame` files agree. Subflame transforms already
+/// ride inside the blob and need no special handling.
+pub fn flame_response_to_config(resp: &FlameResponse) -> Result<FractalConfig, serde_json::Error> {
+    let mut blob = resp.config.clone();
+    let obj = blob.as_object_mut().ok_or_else(|| {
+        serde_json::Error::io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Flame config blob is not a JSON object",
+        ))
+    })?;
 
-    // Reconstruct xaos from JSON value
-    let xaos: Option<Vec<Vec<f32>>> = resp
-        .xaos
-        .as_ref()
-        .and_then(|v| serde_json::from_value(v.clone()).ok());
-
-    let flame = Flame {
-        id: crate::scene::transforms::next_id(),
-        name: resp.flame_name.clone().unwrap_or_else(|| resp.name.clone()),
-        transforms: transforms.iter().map(|t| transform_from_api(t)).collect(),
-        linked_transforms: linked.iter().map(|t| transform_from_api(t)).collect(),
-        final_transforms: finals.iter().map(|t| transform_from_api(t)).collect(),
-        render_mode: resp.render_mode.into(),
-        perspective_strength: resp.perspective_strength,
-        depth_density_compensation: 0.0,
-        far_density_fade: 0.0,
-        far_density_fade_start: 0.0,
-        xaos,
-        solo_transform: resp.solo_transform.map(|i| i as usize),
-        subflames: resp.subflames.iter().map(flame_from_subflame_response).collect(),
-        // API doesn't carry post_symmetry yet; default until the server
-        // schema gains the field.
-        post_symmetry: crate::scene::transforms::PostSymmetry::default(),
-        preserve_z: false,
-    };
-
-    // Reconstruct palette from the inline payload on the flame response.
-    let palette = resp
-        .palette
-        .as_ref()
-        .map(palette_from_api)
-        .unwrap_or_else(Palette::fire);
-
-    // Background color: API sends Vec<f32>, we need [f32; 3]
-    let background_color = if resp.background_color.len() >= 3 {
-        [
-            resp.background_color[0],
-            resp.background_color[1],
-            resp.background_color[2],
-        ]
-    } else {
-        [0.0, 0.0, 0.0]
-    };
-
-    FractalConfig {
-        flame,
-        zoom: resp.zoom,
-        pan_x: resp.pan_x,
-        pan_y: resp.pan_y,
-        rotation: resp.rotation,
-        camera_rotation_x: resp.camera_rotation_x,
-        camera_rotation_y: resp.camera_rotation_y,
-        // API contract doesn't carry camera_bank yet — defaults to 0
-        // (no bank applied). Wire through when the API grows a field.
-        camera_bank: 0.0,
-        // API contract doesn't carry camera_x/y yet — default to 0
-        // (camera at origin). Wire through when the API grows fields.
-        camera_x: 0.0,
-        camera_y: 0.0,
-        camera_z: resp.camera_z,
-        // API contract doesn't carry image_size yet; default to the
-        // historical 1920×1080 so API-loaded flames behave the same
-        // as a fresh `FractalConfig::default()`. Wire through when
-        // the API grows a field for it.
-        image_size: (1920, 1080),
-        dof_focus_distance: resp.dof_focus_distance,
-        dof_blur_strength: resp.dof_blur_strength,
-        fog_strength: resp.fog_strength,
-        fog_start: resp.fog_start,
-        filter_radius: resp.filter_radius.unwrap_or(0.0),
-        filter_blur_edges: resp.filter_blur_edges.unwrap_or(0.0),
-        density_scale: resp.density_scale,
-        speed_factor: resp.speed_factor,
-        max_iterations: resp.max_iterations,
-        blend_factor: resp.blend_factor,
-        use_dynamic_blend: resp.use_dynamic_blend,
-        color_mode: resp.color_mode.into(),
-        path_map_style: resp.path_map_style.into(),
-        path_capture_mode: resp.path_capture_mode.into(),
-        path_tracking_mode: resp.path_tracking_mode.into(),
-        palette,
-        palette_rotation: resp.palette_rotation,
-        palette_size: resp.palette_size as u32,
-        palette_squeeze: resp.palette_squeeze,
-        palette_squeeze_mode: resp
-            .palette_squeeze_mode
-            .map(Into::into)
-            .unwrap_or(crate::scene::palette::SqueezeMode::Linear),
-        palette_squeeze_falloff: resp.palette_squeeze_falloff.unwrap_or(0.5),
-        palette_log_strength: resp.palette_log_strength.unwrap_or(0.0),
-        palette_reverse: resp.palette_reverse.unwrap_or(false),
-        background_color,
-        tonemap_mode: resp.tonemap_mode.into(),
-        tonemap_curve: tonecurve_from_json(resp.tonemap_curve.as_ref()),
-        use_curve: resp.use_curve,
-        exposure: resp.exposure,
-        gamma: resp.gamma,
-        gamma_threshold: resp.gamma_threshold,
-        brightness: resp.brightness,
-        vibrancy: resp.vibrancy,
-        white_level: resp
-            .white_level
-            .unwrap_or(crate::config::defaults::DEFAULT_WHITE_LEVEL),
-        highlight_mode: resp
-            .highlight_mode
-            .map(Into::into)
-            .unwrap_or_default(),
-        saturation: resp.saturation,
-        hue_shift: resp.hue_shift,
-        alpha_blend_low: resp.alpha_blend_low,
-        alpha_blend_high: resp.alpha_blend_high,
-        levels_enabled: resp.levels_enabled,
-        levels_low: resp.levels_low,
-        levels_high: resp.levels_high,
-        levels_gamma: resp.levels_gamma,
-        density_effects: resp.density_effects.iter().map(effect_from_api).collect(),
-        color_effects: resp.color_effects.iter().map(effect_from_api).collect(),
-        deterministic_rng: resp.deterministic_rng,
+    // Recovery for the flattened-v2 API data bug: a migration merged the
+    // flame's fields into the config top level, so there is no "flame" object
+    // (a real v3 blob always has one). The scene-render fields — including
+    // `render_mode` — already sit at the top level (their v3 home), so we just
+    // rebuild a flame to hold the root transforms (still carried in
+    // `resp.transforms`) and let everything else deserialize from the top
+    // level. Non-transform flame state (xaos, solo_transform, post_symmetry,
+    // subflames) was merged into junk top-level keys and is unrecoverable — it
+    // falls back to defaults. Stamp the current version so the v2→v3 lift does
+    // NOT run: it would look for `render_mode` under the now-empty flame, miss
+    // it, default to "2d", and clobber the correct top-level value.
+    if !obj.contains_key("flame") {
+        obj.insert("flame".to_string(), serde_json::json!({}));
+        obj.insert(
+            "version".to_string(),
+            serde_json::json!(crate::config::CURRENT_CONFIG_VERSION),
+        );
+        obj.remove("config_version");
     }
+
+    let (normal, linked, finals) = wire_transforms_to_pools(&resp.transforms);
+    if let Some(flame_obj) = obj.get_mut("flame").and_then(|f| f.as_object_mut()) {
+        flame_obj.insert("transforms".to_string(), serde_json::Value::Array(normal));
+        flame_obj.insert(
+            "linked_transforms".to_string(),
+            serde_json::Value::Array(linked),
+        );
+        flame_obj.insert(
+            "final_transforms".to_string(),
+            serde_json::Value::Array(finals),
+        );
+        // The server `name` column is authoritative — in v2 the cloud title
+        // and `Flame::name` are a single field.
+        flame_obj.insert("name".to_string(), serde_json::json!(resp.name));
+    }
+
+    // Re-attach the palette (sent inline, kept out of the blob).
+    if let Some(api_palette) = &resp.palette {
+        let palette = palette_from_api(api_palette);
+        obj.insert("palette".to_string(), serde_json::to_value(&palette)?);
+    }
+
+    FractalConfig::from_json_value(blob)
 }
 
 #[cfg(test)]
@@ -779,94 +339,229 @@ mod tests {
     }
 
     #[test]
-    fn test_color_mode_roundtrip() {
-        assert_eq!(ColorMode::from(ApiColorMode::from(ColorMode::Palette)), ColorMode::Palette);
-        assert_eq!(ColorMode::from(ApiColorMode::from(ColorMode::Speed)), ColorMode::Speed);
-        assert_eq!(ColorMode::from(ApiColorMode::from(ColorMode::PathMap)), ColorMode::PathMap);
-    }
-
-    #[test]
-    fn test_tonemap_mode_roundtrip() {
-        assert_eq!(ToneMapMode::from(ApiToneMapMode::from(ToneMapMode::Linear)), ToneMapMode::Linear);
-        assert_eq!(ToneMapMode::from(ApiToneMapMode::from(ToneMapMode::Logarithmic)), ToneMapMode::Logarithmic);
-        assert_eq!(ToneMapMode::from(ApiToneMapMode::from(ToneMapMode::DensityVisualization)), ToneMapMode::DensityVisualization);
-    }
-
-    #[test]
-    fn test_api_enum_serialization() {
-        // Verify API enums serialize to the exact strings the API expects
+    fn test_render_mode_serialization() {
         assert_eq!(serde_json::to_string(&ApiRenderMode::TwoD).unwrap(), "\"2d\"");
         assert_eq!(serde_json::to_string(&ApiRenderMode::ThreeD).unwrap(), "\"3d\"");
-        assert_eq!(serde_json::to_string(&ApiColorMode::Palette).unwrap(), "\"palette\"");
-        assert_eq!(serde_json::to_string(&ApiColorMode::PathMap).unwrap(), "\"path_map\"");
-        assert_eq!(serde_json::to_string(&ApiToneMapMode::Logarithmic).unwrap(), "\"logarithmic\"");
-        assert_eq!(serde_json::to_string(&ApiToneMapMode::Density).unwrap(), "\"density\"");
-        assert_eq!(serde_json::to_string(&ApiPathMapStyle::PrefixDistinct).unwrap(), "\"prefix_distinct\"");
-        assert_eq!(serde_json::to_string(&ApiPathMapStyle::OriginRadial).unwrap(), "\"origin_radial\"");
     }
 
-    #[test]
-    fn test_transform_roundtrip() {
-        let t = Transform::new();
-        let api = transform_to_api(&t);
-
-        // Simulate API response (all fields required)
-        let resp = TransformResponse {
+    /// Mirror a `CreateFlameRequest` back the way the server would on read:
+    /// blob + transforms stored verbatim, palette echoed. Lets the tests
+    /// exercise the full save → load round trip without a live server.
+    fn mirror_as_response(req: CreateFlameRequest) -> FlameResponse {
+        FlameResponse {
             id: "test-id".to_string(),
-            sort_order: 0,
-            transform_kind: ApiTransformKind::Normal,
-            a: api.a.unwrap(),
-            b: api.b.unwrap(),
-            c: api.c.unwrap(),
-            d: api.d.unwrap(),
-            e: api.e.unwrap(),
-            f: api.f.unwrap(),
-            g: api.g.unwrap(),
-            weight: api.weight.unwrap(),
-            color: api.color.unwrap(),
-            color_speed: api.color_speed.unwrap(),
-            opacity: api.opacity.unwrap(),
-            // Fallback stays at 0.0 even though `Transform::default()` is
-            // now 1.0 — API responses for flames saved before the flip
-            // omit this field (line 207 serializes only when non-zero),
-            // and we want those server-stored flames to keep their look.
-            direct_color: api.direct_color.unwrap_or(0.0),
-            variations: api.variations.unwrap_or_default(),
-            variation_params: api.variation_params.unwrap_or_default(),
-            post_affine_enabled: api.post_affine_enabled.unwrap(),
-            post_a: api.post_a.unwrap(),
-            post_b: api.post_b.unwrap(),
-            post_c: api.post_c.unwrap(),
-            post_d: api.post_d.unwrap(),
-            post_e: api.post_e.unwrap(),
-            post_f: api.post_f.unwrap(),
-            post_g: api.post_g.unwrap(),
-            linked_attachments: api.linked_attachments.clone().unwrap_or_default(),
-            final_attachments: api.final_attachments.clone().unwrap_or_default(),
-        };
-
-        let restored = transform_from_api(&resp);
-        assert_eq!(t.a, restored.a);
-        assert_eq!(t.weight, restored.weight);
-        assert_eq!(t.opacity, restored.opacity);
-        assert_eq!(t.direct_color, restored.direct_color);
+            user_id: "test-user".to_string(),
+            name: req.name,
+            visibility: req.visibility,
+            palette: req.palette,
+            config: req.config,
+            transforms: req.transforms,
+            animation_count: 0,
+            animations: Vec::new(),
+            created_at: String::new(),
+            updated_at: String::new(),
+        }
     }
 
     #[test]
-    fn test_config_to_request_basic() {
-        use crate::scene::transforms::Transform;
-
+    fn test_blob_request_strips_palette_and_root_transforms() {
         let mut config = FractalConfig::default();
-        // Default Flame has empty transforms, add one for testing
         config.flame.transforms.push(Transform::new());
+        config.flame.final_transforms.push(Transform::new());
 
-        let req = config_to_create_request(&config, Some("Test Flame"));
+        let req = config_to_create_request(&config, Some("Test Flame")).unwrap();
 
         assert_eq!(req.name, "Test Flame");
-        assert_eq!(req.render_mode, Some(ApiRenderMode::TwoD));
-        assert_eq!(req.color_mode, Some(ApiColorMode::Palette));
-        assert_eq!(req.tonemap_mode, Some(ApiToneMapMode::Logarithmic));
-        assert!(!req.transforms.is_empty());
+        // Palette left the blob (sent inline).
+        assert!(req.palette.is_some());
+        assert!(req.config.get("palette").is_none());
+        // Root transform pools emptied in the blob, moved to `transforms[]`.
+        let blob_flame = req.config.get("flame").unwrap();
+        assert_eq!(blob_flame["transforms"].as_array().unwrap().len(), 0);
+        assert_eq!(blob_flame["final_transforms"].as_array().unwrap().len(), 0);
+        assert_eq!(req.transforms.iter().filter(|t| t.kind == "normal").count(), 1);
+        assert_eq!(req.transforms.iter().filter(|t| t.kind == "final").count(), 1);
+        // Blob carries the version header for migration.
+        assert!(req.config.get("version").is_some());
+    }
+
+    #[test]
+    fn test_blob_roundtrip_preserves_drift_fields() {
+        let mut config = FractalConfig::default();
+        let mut t = Transform::new();
+        t.variations.insert("linear".to_string(), 1.0);
+        t.variations.insert("spherical".to_string(), 0.5);
+        config.flame.transforms.push(t);
+        let mut tf = Transform::new();
+        tf.variations.insert("swirl".to_string(), 1.0);
+        config.flame.final_transforms.push(tf);
+        config.flame.name = "Round Trip".to_string();
+        config.zoom = 3.5;
+        config.gamma = 2.2;
+        // Fields the old per-field wire format silently dropped — must
+        // survive now that the whole config rides in the blob.
+        config.camera_bank = 0.25;
+        config.camera_x = 1.5;
+        config.preserve_z = true;
+
+        let req = config_to_create_request(&config, Some("Round Trip")).unwrap();
+        let resp = mirror_as_response(req);
+        let restored = flame_response_to_config(&resp).unwrap();
+
+        assert_eq!(restored.flame.name, "Round Trip");
+        assert_eq!(restored.zoom, 3.5);
+        assert_eq!(restored.gamma, 2.2);
+        assert_eq!(restored.camera_bank, 0.25);
+        assert_eq!(restored.camera_x, 1.5);
+        assert!(restored.preserve_z);
+        assert_eq!(restored.flame.transforms.len(), 1);
+        assert_eq!(restored.flame.final_transforms.len(), 1);
+        assert_eq!(
+            restored.flame.transforms[0].variations.get("spherical"),
+            Some(&0.5)
+        );
+        assert_eq!(
+            restored.flame.final_transforms[0].variations.get("swirl"),
+            Some(&1.0)
+        );
+    }
+
+    #[test]
+    fn test_response_migrates_v1_blob() {
+        // A blob written by an older (v1) client still loads: the shared
+        // version-keyed migration runs before deserialize.
+        let mut t = Transform::new();
+        t.variations.insert("linear".to_string(), 1.0);
+        let resp = FlameResponse {
+            id: "x".into(),
+            user_id: "x".into(),
+            name: "Old".into(),
+            visibility: None,
+            palette: None,
+            config: serde_json::json!({ "version": 1, "flame": { "name": "ignored" } }),
+            transforms: vec![ApiTransformWire {
+                kind: "normal".into(),
+                sort_order: 0,
+                variation_names: vec!["linear".into()],
+                data: serde_json::to_value(&t).unwrap(),
+            }],
+            animation_count: 0,
+            animations: Vec::new(),
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+
+        let config = flame_response_to_config(&resp).unwrap();
+        // Server `name` column is authoritative for the flame name.
+        assert_eq!(config.flame.name, "Old");
+        assert_eq!(config.flame.transforms.len(), 1);
+        assert_eq!(
+            config.flame.transforms[0].variations.get("linear"),
+            Some(&1.0)
+        );
+    }
+
+    #[test]
+    fn test_response_accepts_api_snake_case_enums() {
+        // The server's migrated blobs carry enum values in the API's
+        // snake_case casing (`"palette"`, `"density"`, `"2d"`, ...). Those
+        // must still deserialize into the config's PascalCase enums.
+        use crate::scene::palette::{
+            ColorMode, PathCaptureMode, PathMapStyle, PathTrackingMode, SqueezeMode,
+        };
+        use crate::scene::tonemap::{HighlightMode, ToneMapMode};
+
+        let mut t = Transform::new();
+        t.variations.insert("linear".to_string(), 1.0);
+        let resp = FlameResponse {
+            id: "x".into(),
+            user_id: "x".into(),
+            name: "Snake".into(),
+            visibility: None,
+            palette: None,
+            config: serde_json::json!({
+                "version": 2,
+                "flame": { "name": "Snake", "render_mode": "3d" },
+                "color_mode": "path_map",
+                "tonemap_mode": "density",
+                "highlight_mode": "max_norm",
+                "palette_squeeze_mode": "geometric",
+                "path_map_style": "origin_radial",
+                "path_capture_mode": "first_after_burn_in",
+                "path_tracking_mode": "recent"
+            }),
+            transforms: vec![ApiTransformWire {
+                kind: "normal".into(),
+                sort_order: 0,
+                variation_names: vec!["linear".into()],
+                data: serde_json::to_value(&t).unwrap(),
+            }],
+            animation_count: 0,
+            animations: Vec::new(),
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+
+        let config = flame_response_to_config(&resp).unwrap();
+        assert_eq!(config.render_mode, RenderMode::ThreeD);
+        assert_eq!(config.color_mode, ColorMode::PathMap);
+        assert_eq!(config.tonemap_mode, ToneMapMode::DensityVisualization);
+        assert_eq!(config.highlight_mode, HighlightMode::MaxNorm);
+        assert_eq!(config.palette_squeeze_mode, SqueezeMode::Geometric);
+        assert_eq!(config.path_map_style, PathMapStyle::OriginRadial);
+        assert_eq!(config.path_capture_mode, PathCaptureMode::FirstAfterBurnIn);
+        assert_eq!(config.path_tracking_mode, PathTrackingMode::Recent);
+    }
+
+    #[test]
+    fn test_flattened_v2_blob_recovered() {
+        // Simulate the flattened-v2 API data bug: the flame's fields were
+        // merged into the config top level, so there is no "flame" object.
+        // render_mode survived at the top level (its v3 home); the root
+        // transforms still arrive in `resp.transforms`.
+        let mut flat = serde_json::to_value(FractalConfig::default()).unwrap();
+        let obj = flat.as_object_mut().unwrap();
+        obj.remove("flame"); // merged up by the bug
+        obj.remove("version");
+        obj.insert("config_version".into(), serde_json::json!(2));
+        obj.insert("render_mode".into(), serde_json::json!("3d"));
+        obj.insert("zoom".into(), serde_json::json!(2.5));
+        // Junk flame fields that got merged to the top level — must be ignored.
+        obj.insert("xaos".into(), serde_json::json!([[1.0]]));
+        obj.insert("solo_transform".into(), serde_json::json!(0));
+
+        let mut t = Transform::new();
+        t.variations.insert("linear".to_string(), 1.0);
+        let resp = FlameResponse {
+            id: "x".into(),
+            user_id: "x".into(),
+            name: "Recovered".into(),
+            visibility: None,
+            palette: None,
+            config: flat,
+            transforms: vec![ApiTransformWire {
+                kind: "normal".into(),
+                sort_order: 0,
+                variation_names: vec!["linear".into()],
+                data: serde_json::to_value(&t).unwrap(),
+            }],
+            animation_count: 0,
+            animations: Vec::new(),
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+
+        let config = flame_response_to_config(&resp).unwrap();
+        // Flame rebuilt with the root transforms; render_mode preserved (NOT
+        // clobbered to 2d by a spurious v2→v3 lift); other config fields kept.
+        assert_eq!(config.flame.transforms.len(), 1);
+        assert_eq!(
+            config.flame.transforms[0].variations.get("linear"),
+            Some(&1.0)
+        );
+        assert_eq!(config.render_mode, RenderMode::ThreeD);
+        assert_eq!(config.zoom, 2.5);
+        assert_eq!(config.flame.name, "Recovered");
     }
 }
 
@@ -891,7 +586,9 @@ pub fn animation_to_create_request(
         loop_mode: Some(animation.loop_mode.into()),
         tracks: serde_json::to_value(&animation.tracks).ok(),
         generators: serde_json::to_value(&animation.generators).ok(),
-        base_config: animation.base_config.as_ref().and_then(|c| serde_json::to_value(c).ok()),
+        // Stamp the config version (v3) via the canonical serializer so the
+        // embedded base_config round-trips through the migration on load.
+        base_config: animation.base_config.as_ref().and_then(|c| c.to_json_value().ok()),
         visibility,
     }
 }
@@ -909,8 +606,12 @@ pub fn animation_response_to_animation(resp: &AnimationResponse) -> crate::anima
         .and_then(|v| serde_json::from_value(v.clone()).ok())
         .unwrap_or_default();
 
+    // Embedded base_config carries a config version (v3+) when saved by a
+    // current client; legacy animations have no version ⇒ assume v2 (the
+    // format in use when the raw struct serializer was the only path), then
+    // migrate to current.
     let base_config = resp.base_config.as_ref()
-        .and_then(|v| serde_json::from_value(v.clone()).ok());
+        .and_then(|v| FractalConfig::from_json_value_with_default_version(v.clone(), 2).ok());
 
     crate::animation::Animation {
         name: resp.name.clone(),

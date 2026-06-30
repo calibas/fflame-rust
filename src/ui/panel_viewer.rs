@@ -325,7 +325,7 @@ pub struct PanelContext<'a> {
 
     // Random generator panel state
     pub random_generator_panel: &'a mut Option<super::random_generator::RandomGeneratorPanel>,
-    pub generated_flame: &'a mut Option<crate::scene::transforms::Flame>,
+    pub generated_flame: &'a mut Option<crate::scene::randomize::RandomFlame>,
     pub generated_batch: &'a mut Option<Vec<crate::config::FractalConfig>>,
 
     // Fractal browser panel state (unified presets/batch/files)
@@ -1491,8 +1491,8 @@ impl<'a> PanelViewer<'a> {
 
             // Handle generate single request
             if response.generate_single {
-                let flame = crate::scene::randomize::generate_random_flame_with_settings(&panel.settings);
-                *self.context.generated_flame = Some(flame);
+                let bundle = crate::scene::randomize::generate_random_flame_bundle(&panel.settings);
+                *self.context.generated_flame = Some(bundle);
             }
 
             // Handle generate batch request - create configs with palettes, open File Browser
@@ -1507,10 +1507,13 @@ impl<'a> PanelViewer<'a> {
                 let configs: Vec<crate::config::FractalConfig> = flames
                     .into_iter()
                     .enumerate()
-                    .map(|(i, flame)| {
+                    .map(|(i, rf)| {
                         let mut config = crate::config::FractalConfig::default();
-                        config.flame = flame;
+                        config.flame = rf.flame;
                         config.flame.name = format!("Random {}", i + 1);
+                        // Scene render settings (config-level since v3).
+                        config.render_mode = rf.render_mode;
+                        config.perspective_strength = rf.perspective_strength;
 
                         // Assign palette - configs must be self-contained
                         if use_random_palette && palette_count > 0 {
