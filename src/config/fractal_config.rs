@@ -923,11 +923,27 @@ impl FractalConfig {
     /// value, before deserialize) to the current version. Shared by `from_json`
     /// and the array path; the cloud-blob path (`api::sync`) reuses it too,
     /// which is why it's `pub(crate)`.
-    pub(crate) fn from_json_value(mut value: serde_json::Value) -> Result<Self, serde_json::Error> {
+    pub(crate) fn from_json_value(value: serde_json::Value) -> Result<Self, serde_json::Error> {
+        // `.fflame` / cloud blobs without a version are genuinely pre-versioning
+        // (v0).
+        Self::from_json_value_with_default_version(value, 0)
+    }
+
+    /// Like [`from_json_value`] but uses `default_version` when the value has no
+    /// `version` field, instead of assuming v0.
+    ///
+    /// The animation `base_config` path passes **2**: those configs were embedded
+    /// by the raw struct serializer (which never wrote a `version`) at a time
+    /// when the format was already v2, so an absent version means v2 — run only
+    /// the v2→current migrations, not the v0/v1 ones.
+    pub(crate) fn from_json_value_with_default_version(
+        mut value: serde_json::Value,
+        default_version: u32,
+    ) -> Result<Self, serde_json::Error> {
         let version = value.get("version")
             .and_then(|v| v.as_u64())
             .map(|v| v as u32)
-            .unwrap_or(0); // Pre-versioning configs are version 0.
+            .unwrap_or(default_version);
 
         if version > CURRENT_CONFIG_VERSION {
             return Err(serde_json::Error::io(std::io::Error::new(
