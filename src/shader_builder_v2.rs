@@ -803,10 +803,19 @@ impl ShaderBuilder {
     /// WGSL spec; the main loop re-zeros it on bad-value respawn (HAS_W).
     /// Emitted only when an active variation needs it.
     fn build_w_coordinate(&self) -> String {
-        "// 4th coordinate for 4D / quaternion variations (Feature::NeedsW).\n\
-         // var<private> is per-invocation + zero-init; the main loop re-zeros it\n\
-         // on bad-value respawn. Variations read/write it directly.\n\
-         var<private> point_w: f32;\n\n"
+        // point_w: the running 4th coordinate (seeded at spawn, re-zeroed on
+        //   respawn) — the INPUT each variation body reads during a transform's
+        //   variation loop; written back once at the end of the loop.
+        // point_w_out: the current body's RAW (unweighted) w output.
+        // point_w_acc / point_w_hit: the dispatcher's weighted-sum accumulator.
+        //   w is summed across a transform's variations exactly like x/y/z
+        //   (order-independent), then written back to point_w.
+        "// 4th coordinate + w-summing state for 4D variations (Feature::NeedsW).\n\
+         // var<private> is per-invocation and zero-initialized by the WGSL spec.\n\
+         var<private> point_w: f32;\n\
+         var<private> point_w_out: f32;\n\
+         var<private> point_w_acc: f32;\n\
+         var<private> point_w_hit: bool;\n\n"
             .to_string()
     }
 
@@ -1328,8 +1337,9 @@ impl ShaderBuilder {
         // Same shape for direct-RGB-writing variations: gates the `vrc`
         // parameter and the plot-time RGB blend.
         let has_rgb = self.has_rgb_variation(&active);
-        // 4th coordinate (`point_w`) for 4D / quaternion variations.
-        let has_w = self.has_w_variation(&active);
+        // 4th coordinate (`point_w`) + w-summing for 4D / quaternion variations.
+        // Only meaningful in the 3D pipeline (2D bodies carry no w).
+        let has_w = self.has_w_variation(&active) && render_3d;
 
         // Build the template processor up front — both the header and the
         // main_template body have `{{#if ...}}` blocks (header gates which
@@ -2004,6 +2014,13 @@ impl ShaderBuilder {
         let (pre_variations, normal_variations, post_variations) =
             self.resolve_phase_buckets(active_variations, num_transforms, overrides, is_subflame);
 
+        // w-summing: any normal-phase variation that carries the 4th coordinate
+        // (Feature::NeedsW). When present, w accumulates across the transform's
+        // normal variations exactly like x/y/z (see the point_w_* globals).
+        let has_w_normal = normal_variations
+            .iter()
+            .any(|p| p.info.has_feature(Feature::NeedsW));
+
         // PHASE 1: Pre-variations - directly modify input coordinates (lines 343-349)
         if !pre_variations.is_empty() {
             code.push_str("    // Phase 1: Pre-variations (modify input)\n");
@@ -2061,6 +2078,9 @@ impl ShaderBuilder {
         // PHASE 3: Normal variations - weighted sum accumulation (lines 363-373)
         code.push_str("    // Phase 3: Normal variations (weighted sum from modified input)\n");
         code.push_str("    var result = vec3<f32>(0.0, 0.0, 0.0);\n\n");
+        if has_w_normal {
+            code.push_str("    point_w_acc = 0.0;\n    point_w_hit = false;\n\n");
+        }
 
         for placed in &normal_variations {
             let (name, idx, info) = (&placed.name, placed.idx, placed.info);
@@ -2147,6 +2167,25 @@ impl ShaderBuilder {
                 ("+=", "")
             };
 
+            // w-summing: a NeedsW variation writes its raw w-output to the
+            // `point_w_out` global; accumulate it into `point_w_acc` weighted by
+            // the same variation weight as xyz. Order-independent (a sum). `w`
+            // is the inlined-path weight local; the non-inlined path reads the
+            // buffer weight directly.
+            let w_sum_inlined = if info.has_feature(Feature::NeedsW) {
+                "            point_w_acc = point_w_acc + w * point_w_out;\n            point_w_hit = true;\n"
+            } else {
+                ""
+            };
+            let w_sum_plain = if info.has_feature(Feature::NeedsW) {
+                format!(
+                    "            point_w_acc = point_w_acc + xform.variations[{}] * point_w_out;\n            point_w_hit = true;\n",
+                    idx
+                )
+            } else {
+                String::new()
+            };
+
             // Use inlined weights when available
             if use_inlined {
                 code.push_str(&format!(
@@ -2155,19 +2194,28 @@ impl ShaderBuilder {
                      \x20       let w = get_inlined_var_weight(xform_id, {}u);\n\
                      \x20       if (w != 0.0{}) {{\n\
                      \x20           result {} w * {};\n\
-                     \x20       }}\n\
+                     {}\x20       }}\n\
                      \x20   }}\n\n",
-                    idx, info.display_name, tag, idx, gate, op, contrib
+                    idx, info.display_name, tag, idx, gate, op, contrib, w_sum_inlined
                 ));
             } else {
                 code.push_str(&format!(
                     "    // {}: {} (NORMAL{})\n\
                      \x20   if (xform.variations[{}] != 0.0{}) {{\n\
                      \x20       result {} xform.variations[{}] * {};\n\
-                     \x20   }}\n\n",
-                    idx, info.display_name, tag, idx, gate, op, idx, contrib
+                     {}\x20   }}\n\n",
+                    idx, info.display_name, tag, idx, gate, op, idx, contrib, w_sum_plain
                 ));
             }
+        }
+
+        // Commit the summed 4th coordinate after the normal weighted-sum
+        // (post-variations modify xyz only, not w). `point_w_hit` guards it so a
+        // transform with no active NeedsW variation leaves w untouched (carried
+        // forward). Linked/final transforms are separate apply_variations calls,
+        // each running their own sum — so composition across transforms works.
+        if has_w_normal {
+            code.push_str("    if (point_w_hit) { point_w = point_w_acc; }\n\n");
         }
 
         // PHASE 4: Post-variations - directly modify output coordinates (lines 375-383)
@@ -2649,6 +2697,39 @@ mod tests {
             !plain_shader.contains("var<private> point_w"),
             "point_w must NOT be emitted for scratch-free flames"
         );
+
+        // 2D flame: w is 3D-only, so no point_w even with a NeedsW variation.
+        let shader_2d = builder.build_from_template(&flame, &active, false, false, false, true, &constants);
+        assert!(
+            !shader_2d.contains("var<private> point_w"),
+            "point_w must NOT be emitted in the 2D pipeline"
+        );
+    }
+
+    /// w-summing: two NeedsW variations on one transform must weight-accumulate
+    /// their w into `point_w_acc` (like x/y/z) and commit it under `point_w_hit`.
+    #[test]
+    fn w_summing_accumulates_across_variations() {
+        use crate::scene::transforms::{Flame, Transform};
+        let registry = crate::variations::global_registry().clone();
+        let builder = ShaderBuilder::new(registry);
+        let constants = ShaderConstants::default();
+
+        let mut flame = Flame::new();
+        let mut xform = Transform::new();
+        xform.variations.insert("quaternion_julia".to_string(), 0.5);
+        xform.variations.insert("quaternion_rotation".to_string(), 0.5);
+        flame.transforms.push(xform);
+        let mut active = HashMap::new();
+        active.insert("quaternion_julia".to_string(), 0.5);
+        active.insert("quaternion_rotation".to_string(), 0.5);
+
+        let shader = builder.build_from_template(&flame, &active, true, false, false, true, &constants);
+        assert!(shader.contains("point_w_acc = point_w_acc +"), "w must accumulate");
+        assert!(shader.contains("point_w_hit = true;"), "w-touched must be set");
+        assert!(shader.contains("if (point_w_hit) { point_w = point_w_acc; }"), "summed w must commit");
+        // Both bodies write their raw contribution to point_w_out (not point_w).
+        assert!(shader.contains("point_w_out = "), "bodies write point_w_out");
     }
 
     /// Activating both `pointgrid_wf` and `pointgrid3d_wf` together used
