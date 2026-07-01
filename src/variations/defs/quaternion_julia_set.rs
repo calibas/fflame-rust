@@ -35,7 +35,9 @@ pub static QUATERNION_JULIA_SET: VariationDef = VariationDef {
     features: &[Feature::NeedsRng, Feature::CanHide, Feature::WritesColor],
     init_param_count: 0,
     wgsl_init: None,
-    state_count: 0,
+    // Crawl mode's per-thread walk: current surface point (x,y,z), its distance
+    // estimate, and a seeded flag. Zero-init is fine (flag 0 = "seed me").
+    state_count: 5,
     wgsl_state_init: None,
     parameters: &[
         param!("cx", "Constant X", float, 0.2, -2.0, 2.0, "Vector-i component of the Julia constant c."),
@@ -48,7 +50,9 @@ pub static QUATERNION_JULIA_SET: VariationDef = VariationDef {
         param!("sample_range", "Sample Range", float, 2.0, 0.2, 4.0, "Radius of the BALL the samples are drawn from (a ball, not a cube — so no box-face clipping). The whole set lies within |q| <= bailout, so leaving this at the bailout radius (2) guarantees the entire cross-section is covered. Shrink it ONLY to trade coverage for density on a set you know is smaller — too small clips (now as a sphere, not a cube)."),
         param!("w_slice", "Slice (real)", float, 0.0, -2.0, 2.0, "The fixed real (w) coordinate of the 3D cross-section (3D only). 0 is the widest slice for a complex c; sweep it (e.g. -0.6..0.6) to walk Bourke's slice series through the 4D solid."),
         param!("surface", "Surface Shell", float, 0.03, 0.0, 0.5, "0 = fill the SOLID interior (shows the object's form). >0 = plot only the boundary SHELL of this WORLD-SPACE thickness, found with a distance estimator (the exterior points within `surface` of the set), hiding the interior and deep exterior. This reveals Bourke's fractal surface detail at uniform density; ~0.02-0.05 is a crisp skin, larger = thicker/fuzzier."),
-        param!("w_color", "Color by Escape", float, 2.0, 0.0, 8.0, "0 = off. >0 = write a palette index from the escape speed: fract((escape_iter/limit) * scale), giving the classic escape-time bands across the surface. Needs the transform's direct_color > 0."),
+        param!("w_color", "Color by Escape", float, 2.0, 0.0, 8.0, "0 = off. >0 = write a palette index from the escape speed: fract((escape_iter/limit) * scale), giving the classic escape-time bands across the surface. Needs the transform's direct_color > 0. (In crawl mode, colors by radius instead.)"),
+        param!("crawl", "Surface Crawl", bool, false, "OFF = uniform Monte-Carlo sampling (simple, but ~97% of samples miss a thin surface shell). ON = a per-thread walk that stays pinned to the boundary via the distance estimator, so nearly every step plots a useful surface point — a big speedup for SURFACE renders. Needs Surface Shell > 0 (uses 0.02 if left at 0). Leave OFF for solid fill (uniform is already efficient there)."),
+        param!("crawl_step", "Crawl Step", float, 0.04, 0.005, 0.3, "Crawl mode only: size of each random step along the surface. Smaller = hugs the surface tighter but traverses slower; larger = faster coverage but looser. ~0.02-0.06 works well; scale it down for finer detail."),
     ],
     wgsl_2d: WGSL_2D,
     wgsl_3d: WGSL_3D,
@@ -120,20 +124,45 @@ fn qjset_qpow(q: vec4<f32>, n: f32) -> vec4<f32> {
     return vec4<f32>(rad * sin(ang) * nhat, rad * cos(ang));
 }
 
-fn variation_quaternion_julia_set(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>, hide: ptr<function, bool>) -> vec3<f32> {
-    // Fresh uniform sample of the (i,j,k) box; the real part is pinned to the slice.
-    let range = get_param(xform_id, variation_id, 7u);
-    // Uniform sample INSIDE a ball of radius `range` — a cube would clip the set
-    // at hard box faces. The whole set lies within |q| <= bailout, so
-    // range = bailout guarantees full coverage with no clipping.
+// Uniform point inside a ball of radius `range` (a ball, not a cube: no clip).
+fn qjset_sample_ball(rng: ptr<function, RngState>, range: f32) -> vec3<f32> {
     let costheta = 2.0 * rng_nextf(rng) - 1.0;
     let phi = 6.28318530718 * rng_nextf(rng);
     let rr = range * pow(rng_nextf(rng), 0.33333333);
     let sintheta = sqrt(max(0.0, 1.0 - costheta * costheta));
-    let sx = rr * sintheta * cos(phi);
-    let sy = rr * sintheta * sin(phi);
-    let sz = rr * costheta;
-    let wsl = get_param(xform_id, variation_id, 8u);
+    return vec3<f32>(rr * sintheta * cos(phi), rr * sintheta * sin(phi), rr * costheta);
+}
+
+// Uniform direction on the unit sphere (for the crawl step).
+fn qjset_rand_dir(rng: ptr<function, RngState>) -> vec3<f32> {
+    let costheta = 2.0 * rng_nextf(rng) - 1.0;
+    let phi = 6.28318530718 * rng_nextf(rng);
+    let sintheta = sqrt(max(0.0, 1.0 - costheta * costheta));
+    return vec3<f32>(sintheta * cos(phi), sintheta * sin(phi), costheta);
+}
+
+// Escape-time membership + distance estimate for the (i,j,k) point at slice w.
+// Returns (de, escaped01, esc_frac): de is the exterior distance estimate
+// DE = 0.5*|q|*ln|q|/|q'|, or the sentinel 1e3 for interior points (so a walk
+// treats the interior as "very far" and flees it toward the surface).
+fn qjset_eval(pos: vec3<f32>, wsl: f32, c: vec4<f32>, n: f32, is_sq: bool, bail2: f32, maxit: i32) -> vec3<f32> {
+    var q = vec4<f32>(pos, wsl);
+    var dr = 1.0;
+    var esc_i = maxit;
+    var escaped = false;
+    for (var i = 0; i < maxit; i = i + 1) {
+        let ql = length(q);
+        dr = n * pow(ql, n - 1.0) * dr;      // Julia: dr *= n*|q|^(n-1)
+        if (is_sq) { q = qjset_qmul(q, q) + c; } else { q = qjset_qpow(q, n) + c; }
+        if (dot(q, q) > bail2) { escaped = true; esc_i = i; break; }
+    }
+    let frac = f32(esc_i) / f32(maxit);
+    if (!escaped) { return vec3<f32>(1e3, 0.0, frac); }
+    let ql = length(q);
+    return vec3<f32>(0.5 * ql * log(ql) / max(dr, 1e-9), 1.0, frac);
+}
+
+fn variation_quaternion_julia_set(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>, hide: ptr<function, bool>) -> vec3<f32> {
     let c = vec4<f32>(
         get_param(xform_id, variation_id, 0u),
         get_param(xform_id, variation_id, 1u),
@@ -142,45 +171,74 @@ fn variation_quaternion_julia_set(p: vec3<f32>, xform_id: u32, variation_id: u32
     );
     let n = get_param(xform_id, variation_id, 4u);
     let is_sq = abs(n - 2.0) < 0.5;
-    let bail2 = pow(get_param(xform_id, variation_id, 6u), 2.0);
     let maxit = i32(get_param(xform_id, variation_id, 5u) + 0.5);
-
-    // Iterate q -> q^n + c, tracking the scalar derivative magnitude `dr` for
-    // the distance estimator (Julia: c constant, so dr *= n*|q|^(n-1)).
-    var q = vec4<f32>(sx, sy, sz, wsl);
-    var dr = 1.0;
-    var escaped = false;
-    var esc_i = maxit;
-    for (var i = 0; i < maxit; i = i + 1) {
-        let ql = length(q);
-        dr = n * pow(ql, n - 1.0) * dr;
-        if (is_sq) { q = qjset_qmul(q, q) + c; } else { q = qjset_qpow(q, n) + c; }
-        if (dot(q, q) > bail2) { escaped = true; esc_i = i; break; }
-    }
-
-    // Solid (surface=0): keep the interior, hide escapees. Shell (surface>0):
-    // keep exterior points whose distance estimate DE = 0.5*|q|*ln|q|/|q'| is
-    // within `surface` of the set — a uniform-thickness fractal skin.
+    let bail2 = pow(get_param(xform_id, variation_id, 6u), 2.0);
+    let range = get_param(xform_id, variation_id, 7u);
+    let wsl = get_param(xform_id, variation_id, 8u);
     let surface = get_param(xform_id, variation_id, 9u);
-    var de = 1e9;
-    if (escaped) {
-        let ql = length(q);
-        de = 0.5 * ql * log(ql) / max(dr, 1e-9);
-    }
-    if (surface <= 0.0) {
-        if (escaped) { *hide = true; }
-    } else {
-        if (!escaped || de > surface) { *hide = true; }
-    }
-
-    // Escape-time banding across the surface when enabled. Only escaped points
-    // carry a meaningful escape count; solid-interior points keep the
-    // transform's base color rather than collapsing to one band.
     let wcol = get_param(xform_id, variation_id, 10u);
-    if (wcol > 1e-6 && escaped) { *vc = fract((f32(esc_i) / f32(maxit)) * wcol); }
+    let crawl = get_param(xform_id, variation_id, 11u) > 0.5;
 
-    // Plot the sampled (i,j,k). The map ignores the incoming point, so the affine
-    // and feed-forward are irrelevant — each iteration is an independent sample.
-    return vec3<f32>(sx, sy, sz);
+    if (!crawl) {
+        // UNIFORM sampling: a fresh independent sample each call. Solid
+        // (surface=0) keeps the interior; shell (surface>0) keeps the exterior
+        // points within `surface` of the set. Most samples miss a thin shell.
+        let pos = qjset_sample_ball(rng, range);
+        let ev = qjset_eval(pos, wsl, c, n, is_sq, bail2, maxit);
+        let de = ev.x;
+        let escaped = ev.y > 0.5;
+        if (surface <= 0.0) {
+            if (escaped) { *hide = true; }
+        } else {
+            if (!escaped || de > surface) { *hide = true; }
+        }
+        if (wcol > 1e-6 && escaped) { *vc = fract(ev.z * wcol); }
+        return pos;
+    }
+
+    // CRAWL sampling: a per-thread walk pinned to the surface. State slots
+    // 0..2 = current point, 3 = its distance estimate, 4 = seeded flag. Because
+    // each thread runs only a few hundred iterations then a fresh thread starts,
+    // the walk is re-seeded millions of times over — natural coverage.
+    let surf = select(surface, 0.02, surface <= 0.0);   // crawl needs a target thickness
+    let step = get_param(xform_id, variation_id, 12u);
+    var pc = vec3<f32>(
+        get_state(xform_id, variation_id, 0u),
+        get_state(xform_id, variation_id, 1u),
+        get_state(xform_id, variation_id, 2u)
+    );
+    var dec = get_state(xform_id, variation_id, 3u);
+
+    if (get_state(xform_id, variation_id, 4u) < 0.5) {
+        // First step in this thread: drop a random seed and measure its DE.
+        pc = qjset_sample_ball(rng, range);
+        dec = qjset_eval(pc, wsl, c, n, is_sq, bail2, maxit).x;
+        set_state(xform_id, variation_id, 4u, 1.0);
+    } else if (rng_nextf(rng) < 0.01) {
+        // Occasional random jump so one thread can reach several lobes.
+        pc = qjset_sample_ball(rng, range);
+        dec = qjset_eval(pc, wsl, c, n, is_sq, bail2, maxit).x;
+    } else {
+        // Propose a small step; accept it if it descends toward the surface
+        // (DE decreases) or stays within the shell. Interior points carry the
+        // 1e3 sentinel, so the walk is pushed out toward the boundary.
+        let pn = pc + step * qjset_rand_dir(rng);
+        if (dot(pn, pn) <= range * range) {
+            let den = qjset_eval(pn, wsl, c, n, is_sq, bail2, maxit).x;
+            if (den <= dec || den < surf) { pc = pn; dec = den; }
+        }
+    }
+
+    set_state(xform_id, variation_id, 0u, pc.x);
+    set_state(xform_id, variation_id, 1u, pc.y);
+    set_state(xform_id, variation_id, 2u, pc.z);
+    set_state(xform_id, variation_id, 3u, dec);
+
+    // Plot only once the walk is actually pinned to the surface (still
+    // descending / interior → suppressed as burn-in). Color by radius (the
+    // escape count isn't retained across a rejected step).
+    if (dec >= surf) { *hide = true; }
+    if (wcol > 1e-6) { *vc = fract(length(pc) * wcol); }
+    return pc;
 }
 "#;
