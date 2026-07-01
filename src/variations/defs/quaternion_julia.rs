@@ -133,20 +133,20 @@ fn variation_quaternion_julia(p: vec3<f32>, xform_id: u32, variation_id: u32, rn
     switch (mode) {
         case 1u: {
             // Depth: surface w as the z axis; z and w swap roles each step.
-            point_w = r.z;
+            point_w_out = r.z;
             return vec3<f32>(r.x, r.y, r.w);
         }
         case 2u: {
             // Perspective: fold w into a depth-like foreshortening by
             // dividing xyz by (1 - w). Guard the singularity at w = 1.
-            point_w = r.w;
+            point_w_out = r.w;
             let denom = 1.0 - r.w;
             let safe = select(denom, 1e-3, abs(denom) < 1e-3);
             return r.xyz / safe;
         }
         default: {
             // Vector: drop w (it evolves independently, hidden from the plot).
-            point_w = r.w;
+            point_w_out = r.w;
             return r.xyz;
         }
     }

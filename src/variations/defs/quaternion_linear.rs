@@ -97,17 +97,17 @@ fn variation_quaternion_linear(p: vec3<f32>, xform_id: u32, variation_id: u32, v
     let mode = u32(get_param(xform_id, variation_id, 20u) + 0.5);
     switch (mode) {
         case 1u: {
-            point_w = r.z;
+            point_w_out = r.z;
             return vec3<f32>(r.x, r.y, r.w);
         }
         case 2u: {
-            point_w = r.w;
+            point_w_out = r.w;
             let denom = 1.0 - r.w;
             let safe = select(denom, 1e-3, abs(denom) < 1e-3);
             return r.xyz / safe;
         }
         default: {
-            point_w = r.w;
+            point_w_out = r.w;
             return r.xyz;
         }
     }
