@@ -152,3 +152,116 @@ fn variation_quaternion_julia(p: vec3<f32>, xform_id: u32, variation_id: u32, rn
     }
 }
 "#;
+
+/// Algebraic-identity verification for the quaternion helpers. These mirror the
+/// WGSL bodies (qmul from quaternion_rotation, qpow/qroot above) line-for-line
+/// in Rust and assert the relations that MUST hold if the math is correct — no
+/// reference render needed:
+///   * `qmul` anchored by identity and `i·j = k`,
+///   * `qpow(q, 2) == qmul(q, q)` and `qpow(q, 3) == q·q·q` (polar == Hamilton),
+///   * `qpow(qroot(q, n, k, 1), n) == q` for every branch (root inverts power) —
+///     the correctness of the inverse-iteration Julia math,
+///   * `|â·q| == |q|` (the rotation is an isometry).
+#[cfg(test)]
+mod quaternion_identity_tests {
+    type Q = [f32; 4]; // (x, y, z, w) — vector part (x,y,z), scalar w.
+
+    fn norm(q: Q) -> f32 {
+        (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt()
+    }
+
+    /// Hamilton product — mirrors `qrot_qmul` / `qcubic_qmul`.
+    fn qmul(a: Q, b: Q) -> Q {
+        [
+            a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
+            a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
+            a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
+            a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2],
+        ]
+    }
+
+    /// Polar power — mirrors WGSL `qjulia_qpow`.
+    fn qpow(q: Q, n: f32) -> Q {
+        let mag = norm(q) + 1e-12;
+        let rad = mag.powf(n);
+        let ang = (q[3] / mag).clamp(-1.0, 1.0).acos() * n;
+        qpolar(q, rad, ang)
+    }
+
+    /// Polar n-th root, branch `k` — mirrors WGSL `qjulia_qroot`.
+    fn qroot(q: Q, n: f32, branch: f32, dist: f32) -> Q {
+        let mag = norm(q) + 1e-12;
+        let rad = mag.powf(dist / n);
+        let ang = ((q[3] / mag).clamp(-1.0, 1.0).acos() + branch * std::f32::consts::TAU) / n;
+        qpolar(q, rad, ang)
+    }
+
+    fn qpolar(q: Q, rad: f32, ang: f32) -> Q {
+        let vlen = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2]).sqrt();
+        let nhat = if vlen > 1e-9 {
+            [q[0] / vlen, q[1] / vlen, q[2] / vlen]
+        } else {
+            [1.0, 0.0, 0.0]
+        };
+        [rad * ang.sin() * nhat[0], rad * ang.sin() * nhat[1], rad * ang.sin() * nhat[2], rad * ang.cos()]
+    }
+
+    fn approx(a: Q, b: Q, eps: f32) -> bool {
+        (0..4).all(|i| (a[i] - b[i]).abs() < eps)
+    }
+
+    // General + edge cases (pure real ±, pure vector).
+    const SAMPLES: [Q; 7] = [
+        [0.3, -0.5, 0.7, 0.2],
+        [-0.6, 0.2, 0.1, 0.8],
+        [0.5, 0.5, 0.5, 0.5],
+        [1.2, -0.3, 0.4, -0.9],
+        [0.0, 0.0, 0.0, 0.7],
+        [0.0, 0.0, 0.0, -0.7],
+        [0.8, 0.0, 0.0, 0.0],
+    ];
+
+    #[test]
+    fn qmul_anchored() {
+        let id = [0.0, 0.0, 0.0, 1.0];
+        let q = [0.3, -0.5, 0.7, 0.2];
+        assert!(approx(qmul(q, id), q, 1e-6), "q·1 = q");
+        assert!(approx(qmul(id, q), q, 1e-6), "1·q = q");
+        // i·j = k
+        assert!(approx(qmul([1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]), [0.0, 0.0, 1.0, 0.0], 1e-6));
+    }
+
+    #[test]
+    fn qpow_matches_hamilton() {
+        for &q in &SAMPLES {
+            assert!(approx(qpow(q, 2.0), qmul(q, q), 3e-3), "q^2 != q·q for {:?}", q);
+            assert!(approx(qpow(q, 3.0), qmul(qmul(q, q), q), 3e-3), "q^3 != q·q·q for {:?}", q);
+        }
+    }
+
+    #[test]
+    fn qroot_inverts_qpow() {
+        for &q in &SAMPLES {
+            for n in [2i32, 3, 4] {
+                for k in 0..n {
+                    let back = qpow(qroot(q, n as f32, k as f32, 1.0), n as f32);
+                    assert!(
+                        approx(back, q, 3e-3),
+                        "qpow(qroot(q,{n},{k}),{n}) != q; q={q:?} back={back:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn rotation_is_isometry() {
+        let raw = [0.3, 0.1, -0.2, 0.9];
+        let m = norm(raw);
+        let a = [raw[0] / m, raw[1] / m, raw[2] / m, raw[3] / m]; // unit
+        for &q in &SAMPLES {
+            let r = qmul(a, q);
+            assert!((norm(r) - norm(q)).abs() < 1e-4, "|â·q| != |q| for {:?}", q);
+        }
+    }
+}
