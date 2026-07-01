@@ -17,6 +17,13 @@
 //!   other values distort it radially (the `julian` look). Use alone, identity
 //!   affine, weight 1.0.
 //!
+//! **4D caveat:** the inverse root inherits the *axis* of `q − c`, so the walk
+//! collapses onto the 2D complex plane through `1` and `c` (verified: the
+//! transverse `j,k` magnitude decays geometrically to zero). Inverse mode is
+//! therefore a faithful *2D* Julia renderer embedded in 4D, but it does **not**
+//! fill the genuine 4D quaternion Julia set — for that (Bourke's solids and
+//! their slices) use [`quaternion_julia_set`], which tests membership directly.
+//!
 //! 2D mode is the complex Julia-N `zⁿ + (cx + i·cy)` / its inverse.
 
 use crate::variations::{
