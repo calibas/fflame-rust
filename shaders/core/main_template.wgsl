@@ -49,6 +49,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 {{/if}}
 {{/if}}
 
+{{#if HAS_W}}
+    // Seed the 4th coordinate like x/y/z (Feature::NeedsW) — otherwise every
+    // walk would start on the w=0 hyperplane. The respawn resets it to 0,
+    // mirroring z's JWF re-fuse convention.
+    point_w = rng_nextf(&rng) * 2.0 - 1.0;
+{{/if}}
+
     var color = vec3<f32>(1.0, 1.0, 1.0);
     var color_index = 0.0;  // For palette mode
 

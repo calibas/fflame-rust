@@ -1143,7 +1143,7 @@ animation_panel:
   encoder: "Encoder:"
   encoder_not_available: "%{encoder} (not available for %{codec})"
   crf: "CRF"
-  quality_hint: "Lower = better quality, larger file. Around 12 is recommended"
+  quality_hint: "Lower = better quality, larger file"
   preset: "Preset:"
   preset_not_supported: "(not supported)"
   preset_hint: "Faster = quick encoding (larger file), Slower = better compression"
