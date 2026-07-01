@@ -148,7 +148,6 @@ mod glsl_tilings;
 mod glsl_fields;
 mod octapol;
 mod quaternion_julia;
-mod quaternion_cubic;
 mod quaternion_rotation;
 mod quaternion_linear;
 mod yplot3d_wf;
@@ -317,7 +316,6 @@ pub use glsl_tilings::*;
 pub use glsl_fields::*;
 pub use octapol::*;
 pub use quaternion_julia::*;
-pub use quaternion_cubic::*;
 pub use quaternion_rotation::*;
 pub use quaternion_linear::*;
 pub use yplot3d_wf::*;
@@ -1144,7 +1142,6 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &ANALYTIC_BLUR,
     &ANALYTIC_GAUSSIAN_BLUR,
     &QUATERNION_JULIA,
-    &QUATERNION_CUBIC,
     &QUATERNION_ROTATION,
     &QUATERNION_LINEAR,
 ];
