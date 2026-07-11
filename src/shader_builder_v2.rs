@@ -667,7 +667,21 @@ impl ShaderConstants {
             code.push_str("    }\n");
             code.push_str("}\n\n");
 
-            // Generate variation param lookup function
+            // Generate variation param lookup function.
+            //
+            // The switch key packs (var_idx, param_slot) into one u32. The
+            // stride must EXCEED every param_slot in the flame or two
+            // (var_idx, slot) pairs collide into duplicate `case` keys — a
+            // naga validation error. A fixed 16 broke the first time a
+            // >16-slot variation (quaternion_linear: 24) shared a transform
+            // with a second variation, so size it from the actual data.
+            let stride = transforms
+                .iter()
+                .flat_map(|x| x.variation_params.iter())
+                .map(|((_, slot), _)| slot + 1)
+                .max()
+                .unwrap_or(16)
+                .max(16);
             code.push_str("// Get inlined variation parameter (eliminates buffer reads)\n");
             code.push_str("fn get_inlined_var_param(xform_id: u32, var_idx: u32, param_slot: u32) -> f32 {\n");
             code.push_str("    switch(xform_id) {\n");
@@ -677,9 +691,9 @@ impl ShaderConstants {
                     continue;
                 }
                 code.push_str(&format!("        case {}u: {{\n", xform_idx));
-                code.push_str("            switch(var_idx * 16u + param_slot) {\n");
+                code.push_str(&format!("            switch(var_idx * {}u + param_slot) {{\n", stride));
                 for ((var_idx, param_slot), value) in &xform.variation_params {
-                    let combined_idx = var_idx * 16 + param_slot;
+                    let combined_idx = var_idx * stride + param_slot;
                     code.push_str(&format!(
                         "                case {}u: {{ return {:.8}; }}\n",
                         combined_idx, value
@@ -2767,6 +2781,55 @@ mod tests {
             sub_shader.contains("if (point_w_hit) { point_w = point_w_acc; }"),
             "outer dispatcher still commits w"
         );
+    }
+
+    /// The inlined-constants param switch must not collide keys when a
+    /// variation with MORE than 16 param slots (quaternion_linear: 24) shares
+    /// a transform with a second variation. The old fixed `var_idx*16 + slot`
+    /// packing made linear's slot 16 collide with the next variation's slot 0
+    /// — duplicate `case 16u` arms, a naga validation error on every CLI
+    /// export of such a flame.
+    #[test]
+    fn inlined_param_keys_do_not_collide_for_wide_variations() {
+        use crate::scene::transforms::{Flame, RenderMode, Transform};
+        let mut flame = Flame::new();
+        let mut xform = Transform::new();
+        xform.variations.insert("quaternion_linear".to_string(), 0.5);
+        xform.variations.insert("quaternion_rotation".to_string(), 0.5);
+        xform.variation_params.insert("quaternion_linear.tx".to_string(), 0.5); // slot 16
+        xform.variation_params.insert("quaternion_rotation.ax".to_string(), 0.35); // slot 0
+        flame.transforms.push(xform);
+
+        let registry = crate::variations::global_registry();
+        let constants = ShaderConstants::with_inlined_transforms(
+            &flame,
+            &registry,
+            0,
+            RenderMode::ThreeD,
+            true,
+        );
+        let builder = ShaderBuilder::new(registry.clone());
+        let mut active = HashMap::new();
+        active.insert("quaternion_linear".to_string(), 0.5);
+        active.insert("quaternion_rotation".to_string(), 0.5);
+        let shader = builder.build_from_template(&flame, &active, true, false, false, true, &constants);
+
+        let start = shader.find("fn get_inlined_var_param(").expect("inlined param fn emitted");
+        let end = shader[start..].find("\n}\n").unwrap() + start;
+        let body = &shader[start..end];
+        // Every packed key must be unique within each transform's arm — a
+        // duplicate is exactly the naga "conflicting switch arm" failure.
+        // Only inner value arms carry `return` on the case line (the outer
+        // xform_id arms open a nested switch instead).
+        let mut keys: Vec<&str> = body
+            .lines()
+            .filter(|l| l.contains("case ") && l.contains("return"))
+            .filter_map(|l| l.split("case ").nth(1).and_then(|s| s.split('u').next()))
+            .collect();
+        let total = keys.len();
+        keys.sort_unstable();
+        keys.dedup();
+        assert_eq!(keys.len(), total, "duplicate switch keys in get_inlined_var_param:\n{body}");
     }
 
     /// All four quaternion variations compile into one shader together —
