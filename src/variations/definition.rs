@@ -134,6 +134,34 @@ pub enum Feature {
     /// Input-DEPENDENT blurs (`radial_blur`, `farblur`, `post_rblur`,
     /// `exblur`) must NOT carry this flag — they stay fully stochastic.
     AnalyticBlur,
+
+    /// The variation carries the per-thread **4th coordinate** `point_w` — a
+    /// single `var<private> f32` that rides alongside the running `vec3` point
+    /// through the whole walk (NOT keyed by xform/variation), so a quaternion /
+    /// 4D variation can treat `(p.xyz, point_w)` as a 4D point and have `w`
+    /// survive transform switches.
+    ///
+    /// **Authoring contract (3D body only — `w` is 3D-gated, so 2D bodies must
+    /// not reference any `point_w*` symbol):**
+    /// * READ the current 4th coordinate from `point_w`.
+    /// * WRITE your raw (unweighted) w-output to **`point_w_out`** — never
+    ///   assign `point_w` directly. The dispatcher weight-sums each NeedsW
+    ///   variation's `point_w_out` into `point_w_acc` (using the same weight as
+    ///   xyz) and commits `point_w = point_w_acc` at the end of the transform's
+    ///   normal phase, so multiple 4D variations on one transform BLEND like
+    ///   x/y/z do. A direct `point_w` write compiles fine but is silently
+    ///   overwritten by that commit.
+    /// * You almost certainly also want `Feature::AlwaysZ`: a genuinely-4D map
+    ///   writes z unconditionally, and without AlwaysZ `preserve_z = false`
+    ///   re-flattens z every iteration.
+    ///
+    /// The builder seeds `point_w` uniformly in [-1, 1] at spawn, zeroes it on
+    /// bad-value respawn (the JWF z convention), rails it against NaN/overflow
+    /// like z, and save/restores it around Final transforms (finals shape only
+    /// the plot). Inside subflames the commit is suppressed — a nested walk
+    /// must not mutate the parent's w. Deliberately specific rather than a
+    /// general per-thread scratch pool — that's a separate project.
+    NeedsW,
 }
 
 /// Static definition of a variation

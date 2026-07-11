@@ -49,6 +49,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 {{/if}}
 {{/if}}
 
+{{#if HAS_W}}
+    // Seed the 4th coordinate like x/y/z (Feature::NeedsW) — otherwise every
+    // walk would start on the w=0 hyperplane. The respawn resets it to 0,
+    // mirroring z's JWF re-fuse convention.
+    point_w = rng_nextf(&rng) * 2.0 - 1.0;
+{{/if}}
+
     var color = vec3<f32>(1.0, 1.0, 1.0);
     var color_index = 0.0;  // For palette mode
 
@@ -267,6 +274,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         if (abs(current.z) >= 1e32) {
             z_railed_respawn = rng_nextf(&rng) < 0.00390625;
         }
+{{#if HAS_W}}
+        // The 4th coordinate gets the same rail as z: quaternion maps can
+        // grow w unboundedly with zero w→xyz coupling (e.g. quaternion_linear
+        // with m33 > 1), so x/y-based respawn never fires for it. Saturate at
+        // ±1e32 and map non-finite (NaN from 0·∞) to 0, exactly like z above.
+        let w_sat = clamp(point_w, -1e32, 1e32);
+        point_w = select(0.0, w_sat, abs(w_sat) <= 1e32);
+{{/if}}
 {{else}}
         let z_railed_respawn = false;
 {{/if}}
@@ -285,6 +300,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 rng_nextf(&rng) * 2.0 - 1.0,
                 rng_nextf(&rng) * 2.0 - 1.0
             );
+{{/if}}
+{{#if HAS_W}}
+            // Reset the 4th coordinate with the point — a respawned walk
+            // must not carry a stale `w` (Feature::NeedsW).
+            point_w = 0.0;
 {{/if}}
             fuse = params.burn_in;
             continue;
@@ -366,6 +386,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             // DC writes from Final variations are discarded for color_index
             // (color was already locked in after the Linked chain).
             var final_pos = current;
+{{#if HAS_W}}
+            // Finals don't feed forward — that must include the 4th
+            // coordinate. A NeedsW variation on a Final commits point_w via
+            // the dispatcher (it's a global); save/restore so the final's w,
+            // like its xyz and color, shapes only the plot, not the walk.
+            let point_w_before_final = point_w;
+{{/if}}
             for (var fi = 0u; fi < attach.final_count; fi = fi + 1u) {
                 let fid = attach.final_[fi];
                 let fxform = transforms[fid];
@@ -395,6 +422,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     }
                 }
             }
+{{#if HAS_W}}
+            point_w = point_w_before_final;
+{{/if}}
 {{else}}
             // No attachments: skip the chain — plot the post-Linked
             // (== post-Normal) point directly.

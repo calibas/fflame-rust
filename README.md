@@ -29,7 +29,7 @@ This program was originally based on Apophysis written by:
 It also includes features from JWildfire, created by Andreas Maschke, and IFSRenderer, by Zoltán Dócs.
 
 Variations contributed by:
--Joel Faber, Michael Faber, Jed Kelsey, Scott Draves, Brad Stefanov, Jesus Sosa, DarkBeam, Xyrus02, cothe, zephyrtronium, Andreas Maschke, Larry Berlin, Zueuk, Tatyana Zabanova, Raykoid666, Zy0rg, CozyG, eralex61, chronologicaldot, Whittaker Courtney, FracFx, gossamer light, TyrantWave, cyberxaos, FractalDesire, Z+, IROIRO++, slobo777, David Young, FarDareisMai, Will Evans, bezo97, Don Town, Ffey, Framelet, Frank Baumann, guagapunyaimel, Keeps,  Maulana Randa, meckie, Paul Bourke, Rick Sidwell, timothy-vincent, Victor Ganora
+- Joel Faber, Michael Faber, Jed Kelsey, Scott Draves, Brad Stefanov, Jesus Sosa, DarkBeam, Xyrus02, cothe, zephyrtronium, Andreas Maschke, Larry Berlin, Zueuk, Tatyana Zabanova, Raykoid666, Zy0rg, CozyG, eralex61, chronologicaldot, Whittaker Courtney, FracFx, gossamer light, TyrantWave, cyberxaos, FractalDesire, Z+, IROIRO++, slobo777, David Young, FarDareisMai, Will Evans, bezo97, Don Town, Ffey, Framelet, Frank Baumann, guagapunyaimel, Keeps,  Maulana Randa, meckie, Paul Bourke, Rick Sidwell, timothy-vincent, Victor Ganora
 
 ## See also
 Fractal renderers:
