@@ -309,6 +309,17 @@ pub struct ShaderConstants {
     /// for the shader-cache constants-changed check.
     pub flatten_z_per_iter: bool,
 
+    /// Solid rendering (Phase 0): `config.solid_strength > 0 && 3D`.
+    /// Drives the `SOLID` template flag — nearest-depth atomicMax +
+    /// occlusion gating at the splat site, plus the histogram buffer's
+    /// extra depth region. When false the emitted WGSL is byte-identical
+    /// to a pre-solid build (hard requirement — enforced by
+    /// `solid_off_is_byte_identical`). Only honored on the
+    /// direct-histogram output path; the sample-emit/tiled exporters
+    /// don't carry a depth region yet (see
+    /// docs/projects/solid-rendering.md, Phase 0 export notes).
+    pub solid_enabled: bool,
+
     /// Per-flame `array<u32, N>` length for the AttachmentList struct.
     /// Substituted into the shader headers via the `{{ATTACHMENT_CAP}}`
     /// placeholder; also drives the dynamic stride used when the host
@@ -350,6 +361,7 @@ impl Default for ShaderConstants {
             has_post_symmetry: false,
             has_analytic_blur: false,
             flatten_z_per_iter: false,
+            solid_enabled: false,
             attachment_cap: 1,
             inlined_transforms: None,
             cumulative_weights: None,
@@ -576,6 +588,10 @@ impl ShaderConstants {
             // only when preserve_z is false (JWF/Apo default).
             flatten_z_per_iter: matches!(render_mode, crate::scene::transforms::RenderMode::ThreeD)
                 && !preserve_z,
+            // Solid isn't knowable from (flame, render_mode) alone —
+            // config-level. constants_from_config overrides after
+            // construction.
+            solid_enabled: false,
             attachment_cap: flame.attachment_cap() as u32,
             inlined_transforms: Some(inlined),
             cumulative_weights: Some(cumulative),
@@ -1407,6 +1423,18 @@ impl ShaderBuilder {
         // mode binds samples + sample_counter. See
         // docs/projects/unified-render-pipeline.md.
         processor.set("OUTPUT_HISTOGRAM_DIRECT", output_histogram_direct);
+        // SOLID gates the nearest-depth occlusion block at the splat site
+        // (solid rendering Phase 0). Requirements baked into the flag:
+        //   - 3D only (depth is a camera-space concept),
+        //   - direct-histogram output only (the depth region lives at
+        //     offset W*H*4 inside the histogram binding; the sample-emit
+        //     path has no such buffer — see docs/projects/solid-rendering.md).
+        // False ⇒ byte-identical WGSL to a pre-solid build (hard
+        // requirement, enforced by `solid_off_is_byte_identical`).
+        processor.set(
+            "SOLID",
+            constants.solid_enabled && render_3d && output_histogram_direct,
+        );
 
         let mut shader = String::new();
 
@@ -2830,6 +2858,81 @@ mod tests {
         keys.sort_unstable();
         keys.dedup();
         assert_eq!(keys.len(), total, "duplicate switch keys in get_inlined_var_param:\n{body}");
+    }
+
+    /// Solid rendering hard requirement: with `solid_enabled = false` the
+    /// emitted WGSL is BYTE-IDENTICAL to a default-constants build — no
+    /// depth reads/writes, no extra branches, nothing. (The SOLID template
+    /// flag must be the only path by which solid code enters a shader.)
+    #[test]
+    fn solid_off_is_byte_identical() {
+        use crate::scene::transforms::{Flame, Transform};
+        let registry = crate::variations::global_registry().clone();
+        let builder = ShaderBuilder::new(registry);
+
+        let mut flame = Flame::new();
+        let mut xform = Transform::new();
+        xform.variations.insert("linear3D".to_string(), 1.0);
+        flame.transforms.push(xform);
+        let mut active = HashMap::new();
+        active.insert("linear3D".to_string(), 1.0);
+
+        let base = ShaderConstants::default();
+        let mut off = ShaderConstants::default();
+        off.solid_enabled = false;
+        let mut on = ShaderConstants::default();
+        on.solid_enabled = true;
+
+        let shader_base = builder.build_from_template(&flame, &active, true, false, false, true, &base);
+        let shader_off = builder.build_from_template(&flame, &active, true, false, false, true, &off);
+        assert_eq!(shader_base, shader_off, "solid off must be byte-identical");
+        // The Params STRUCT fields (solid_strength etc., in the fixed
+        // uniform layout) are always declared; the occlusion CODE must not be.
+        assert!(!shader_off.contains("solid_d"), "no depth-test code when off");
+        assert!(!shader_off.contains("atomicMax(&histogram["), "no depth atomicMax when off");
+
+        // Enabled: the occlusion block compiles in (3D + direct-histogram).
+        let shader_on = builder.build_from_template(&flame, &active, true, false, false, true, &on);
+        assert!(shader_on.contains("atomicMax(&histogram["), "depth atomicMax present when on");
+        assert!(shader_on.contains("params.surface_thickness"), "shell test present when on");
+        assert!(shader_on.contains("params.depth_prime"), "priming gate present when on");
+
+        // 2D build ignores solid entirely (depth is a camera-space concept).
+        let shader_2d_on = builder.build_from_template(&flame, &active, false, false, false, true, &on);
+        let shader_2d_off = builder.build_from_template(&flame, &active, false, false, false, true, &base);
+        assert_eq!(shader_2d_on, shader_2d_off, "2D shader unaffected by solid");
+
+        // Sample-emit (tiled export) build ignores solid: no histogram
+        // binding exists there for the depth region to live in.
+        let shader_emit_on = builder.build_from_template(&flame, &active, true, false, false, false, &on);
+        assert!(!shader_emit_on.contains("solid_d"), "sample-emit path never compiles solid");
+    }
+
+    /// The depth encoding used by the SOLID splat block: ordered-float bits,
+    /// inverted, so LARGER encoded = NEARER and 0 = "no sample". Mirror the
+    /// WGSL and assert monotonicity + the sentinel across sign boundaries.
+    #[test]
+    fn solid_depth_encoding_is_monotone() {
+        fn encode(d: f32) -> u32 {
+            let b = d.to_bits();
+            let ord = if b & 0x8000_0000 != 0 { !b } else { b | 0x8000_0000 };
+            !ord
+        }
+        // Strictly decreasing encoding over increasing depth, across the
+        // negative/zero/positive boundary (orthographic mode can produce
+        // negative camera-space depths).
+        let depths = [-1.0e30_f32, -5.0, -1.0, -1.0e-6, 0.0, 1.0e-6, 0.02, 1.0, 5.0, 1.0e30];
+        for w in depths.windows(2) {
+            assert!(
+                encode(w[0]) > encode(w[1]),
+                "encoding must strictly decrease: d={} -> {:#x}, d={} -> {:#x}",
+                w[0], encode(w[0]), w[1], encode(w[1])
+            );
+        }
+        // Every real depth beats the empty sentinel (0), so atomicMax works.
+        for &d in &depths {
+            assert!(encode(d) > 0, "real depth {} must beat the empty sentinel", d);
+        }
     }
 
     /// All four quaternion variations compile into one shader together —

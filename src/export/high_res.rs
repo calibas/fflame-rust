@@ -1545,7 +1545,12 @@ impl HighResExporter {
                 depth_density_compensation: config.depth_density_compensation,
                 far_density_fade: config.far_density_fade,
                 far_density_fade_start: config.far_density_fade_start,
-                _pad_before_post_symmetry: [0; 3],
+                // Solid rendering unsupported on the tiled/sample-emit
+                // export path (Phase 0 scope: direct-histogram only) —
+                // constants gate SOLID off there, so these are inert.
+                solid_strength: 0.0,
+                surface_thickness: crate::config::DEFAULT_SURFACE_THICKNESS,
+                depth_prime: 0,
                 camera_rotation_x: config.camera_rotation_x,
                 camera_rotation_y: config.camera_rotation_y,
                 camera_bank: config.camera_bank,

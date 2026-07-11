@@ -142,24 +142,37 @@ Deliverable: opaque (or partially opaque) fractals with correct silhouettes
 and inter-shape occlusion. No lighting yet. This alone fixes "transparent
 ghost".
 
-- [ ] Refactor: compute `camera_space` once at the splat site; rewrite the 4
-      existing consumers to use it (behavior-identical; verify with visual
-      regression before proceeding — render baselines FIRST).
-- [ ] Histogram buffer 4→5 u32/px; depth region indexing helpers; clear-to-
-      ones for the region; `TARGET_BUFFER_SIZE` math updated.
-- [ ] Splat-site depth `atomicMin` + gating via `density_weight`
-      (template-gated on a new SOLID flag so non-solid flames compile
-      byte-identical shaders).
-- [ ] Depth priming on reset.
-- [ ] Config: `solid_strength: f32` (0 default), `surface_thickness: f32`
-      (world units, default ~0.02) — new "Solid Rendering" section in
-      FractalConfig, skip-if-default serde, ConfigPath entries, undo,
-      UpdateType wiring for GPU sync.
-- [ ] UI: two sliders in the View panel (full Lighting panel comes with
-      Phase 1).
-- [ ] Sample-emit + tiled + CPU export paths.
-- [ ] Tests: depth-encoding monotonicity unit test; solid-off byte-identical
-      shader assertion; visual regression category `solid`.
+- [x] Refactor: compute `camera_space` once at the splat site (`33514ea`) —
+      `project_3d_full` in utilities.wgsl returns {pixel, camera_space}; all
+      4 consumers rewritten. Verified pixel-hash-identical against
+      deterministic baselines (`output/solid-baselines/`, both the
+      all-four-effects scene and plain 3D).
+- [x] Histogram buffer 4→5 u32/px when solid (`FlameBuffers::
+      set_solid_depth_region`, zero new bindings; scratch stays 4/px).
+      DESIGN CHANGE vs the plan: depth is encoded as INVERTED ordered-float
+      bits with `atomicMax` (larger = nearer, 0 = "no sample"), so plain
+      zero-clears initialize the region — no fill-to-ones pipeline at all.
+      The per-batch `clear_histogram` is range-limited to the RGBD words so
+      depth persists across batches.
+- [x] Splat-site depth test + gating via `density_weight`; SOLID template
+      flag; at-splat DoF compiled out in solid mode (post-DoF from depth is
+      the Phase 3 replacement). SOLID additionally requires the
+      direct-histogram output path.
+- [x] Depth priming on reset (`needs_depth_prime`, armed by reset/
+      load_config/resize/toggle; one depth-only batch).
+- [x] Config: `solid_strength` + `surface_thickness` (FractalConfig +
+      serde skip-default, ConfigPath::SolidStrength/SurfaceThickness →
+      IterationReset, undo/history i18n keys).
+- [x] UI: two sliders in the View panel ("Solid Rendering" section).
+- [ ] Sample-emit + tiled + CPU export paths (>128 MB exports render
+      WITHOUT solid for now — the SOLID flag self-gates off the sample-emit
+      shader; wire the tiled paths before closing Phase 0).
+- [x] Tests: `solid_off_is_byte_identical` (byte-identity + 2D +
+      sample-emit gating), `solid_depth_encoding_is_monotone`. Baselines
+      re-verified pixel-identical with solid off. Visual regression
+      category still TODO.
+- [ ] `TARGET_BUFFER_SIZE` math in high_res.rs for the 5/4 growth (only
+      matters once the tiled path carries depth).
 
 ## Phase 1 — deferred shading
 

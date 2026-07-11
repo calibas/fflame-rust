@@ -473,6 +473,9 @@ fn parse_flame_element(
         render_mode,
         perspective_strength,
         preserve_z,
+        // Solid rendering is ours-only — .flame XML never carries it.
+        solid_strength: crate::config::DEFAULT_SOLID_STRENGTH,
+        surface_thickness: crate::config::DEFAULT_SURFACE_THICKNESS,
         // Our own extensions; no .flame XML attribute (see FractalConfig docs).
         depth_density_compensation: 0.0,
         far_density_fade: 0.0,

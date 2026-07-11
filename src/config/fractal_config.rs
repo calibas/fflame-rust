@@ -149,6 +149,20 @@ pub struct FractalConfig {
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub far_density_fade_start: f32,
 
+    /// Solid rendering (Phase 0): occlusion strength. 0 = classic additive
+    /// transparency (the SOLID shader path compiles out entirely and no
+    /// depth region is allocated); 1 = hard surface (samples behind the
+    /// nearest-depth shell are dropped); values between render a
+    /// translucent solid. 3D only. `.fflame` only — see
+    /// docs/projects/solid-rendering.md.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub solid_strength: f32,
+    /// Solid rendering: world-space thickness of the depth shell accepted
+    /// as "the surface" by the occlusion test. Only meaningful when
+    /// `solid_strength > 0`.
+    #[serde(default = "default_surface_thickness", skip_serializing_if = "is_default_surface_thickness")]
+    pub surface_thickness: f32,
+
     /// Spatial filter — Gaussian blur applied to the per-batch histogram
     /// before accumulation. Mirrors Apophysis's `filter` attribute: a
     /// small per-sample-spread Gaussian that smooths per-iteration grain.
@@ -538,6 +552,14 @@ fn is_default_filter_radius(v: &f32) -> bool {
     v.abs() < FLOAT_EPSILON  // Default is 0.0 (filter off)
 }
 
+fn default_surface_thickness() -> f32 {
+    super::defaults::DEFAULT_SURFACE_THICKNESS
+}
+
+fn is_default_surface_thickness(v: &f32) -> bool {
+    (*v - super::defaults::DEFAULT_SURFACE_THICKNESS).abs() < FLOAT_EPSILON
+}
+
 fn is_default_filter_blur_edges(v: &f32) -> bool {
     v.abs() < FLOAT_EPSILON  // Default is 0.0 (strict edge preservation)
 }
@@ -577,6 +599,8 @@ impl Default for FractalConfig {
             depth_density_compensation: 0.0,
             far_density_fade: 0.0,
             far_density_fade_start: 0.0,
+            solid_strength: super::defaults::DEFAULT_SOLID_STRENGTH,
+            surface_thickness: super::defaults::DEFAULT_SURFACE_THICKNESS,
             zoom: 1.0,
             pan_x: 0.0,
             pan_y: 0.0,

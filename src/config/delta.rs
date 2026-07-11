@@ -226,6 +226,8 @@ pub enum ConfigPath {
     PerspectiveStrength,
     DepthDensityCompensation,
     FarDensityFade,
+    SolidStrength,
+    SurfaceThickness,
     FarDensityFadeStart,
     /// Xaos (chaos) weight for transition from src transform to dst transform
     /// Modifies the probability of selecting dst when coming from src
@@ -752,6 +754,8 @@ impl Display for ConfigPath {
             ConfigPath::PerspectiveStrength => write!(f, "Perspective Strength"),
             ConfigPath::DepthDensityCompensation => write!(f, "Depth Density Compensation"),
             ConfigPath::FarDensityFade => write!(f, "Far Density Fade"),
+            ConfigPath::SolidStrength => write!(f, "Solid Strength"),
+            ConfigPath::SurfaceThickness => write!(f, "Surface Thickness"),
             ConfigPath::FarDensityFadeStart => write!(f, "Far Density Fade Start"),
             ConfigPath::Xaos { src, dst } => {
                 write!(f, "Xaos {} → {}", src + 1, dst + 1)
@@ -1182,6 +1186,8 @@ impl ConfigPath {
             ConfigPath::PerspectiveStrength => I18nKey::simple("history.param.perspective_strength"),
             ConfigPath::DepthDensityCompensation => I18nKey::simple("history.param.depth_density_compensation"),
             ConfigPath::FarDensityFade => I18nKey::simple("history.param.far_density_fade"),
+            ConfigPath::SolidStrength => I18nKey::simple("history.param.solid_strength"),
+            ConfigPath::SurfaceThickness => I18nKey::simple("history.param.surface_thickness"),
             ConfigPath::FarDensityFadeStart => I18nKey::simple("history.param.far_density_fade_start"),
             ConfigPath::Xaos { src, dst } => I18nKey::with_params(
                 "history.param.xaos",
@@ -2017,6 +2023,8 @@ impl ConfigPath {
             | ConfigPath::FogStrength
             | ConfigPath::FogStart
             | ConfigPath::FarDensityFade
+            | ConfigPath::SolidStrength
+            | ConfigPath::SurfaceThickness
             | ConfigPath::FarDensityFadeStart
             | ConfigPath::FilterRadius
             | ConfigPath::FilterBlurEdges => UpdateType::IterationReset,
@@ -2383,6 +2391,8 @@ impl ConfigPath {
             ConfigPath::PerspectiveStrength => "PerspectiveStrength".to_string(),
             ConfigPath::DepthDensityCompensation => "DepthDensityCompensation".to_string(),
             ConfigPath::FarDensityFade => "FarDensityFade".to_string(),
+            ConfigPath::SolidStrength => "SolidStrength".to_string(),
+            ConfigPath::SurfaceThickness => "SurfaceThickness".to_string(),
             ConfigPath::FarDensityFadeStart => "FarDensityFadeStart".to_string(),
             ConfigPath::Xaos { src, dst } => format!("Xaos.{}.{}", src, dst),
             ConfigPath::SoloTransform => "SoloTransform".to_string(),
@@ -2499,6 +2509,8 @@ impl ConfigPath {
             "PerspectiveStrength" => return Some(ConfigPath::PerspectiveStrength),
             "DepthDensityCompensation" => return Some(ConfigPath::DepthDensityCompensation),
             "FarDensityFade" => return Some(ConfigPath::FarDensityFade),
+            "SolidStrength" => return Some(ConfigPath::SolidStrength),
+            "SurfaceThickness" => return Some(ConfigPath::SurfaceThickness),
             "FarDensityFadeStart" => return Some(ConfigPath::FarDensityFadeStart),
             "SoloTransform" => return Some(ConfigPath::SoloTransform),
             "PostSymmetryType" => return Some(ConfigPath::PostSymmetryType),
@@ -2829,6 +2841,8 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::BlendFactor
         | ConfigPath::PerspectiveStrength
         | ConfigPath::DepthDensityCompensation
+        | ConfigPath::SolidStrength
+        | ConfigPath::SurfaceThickness
         | ConfigPath::FarDensityFade
         | ConfigPath::FarDensityFadeStart
         | ConfigPath::TransformWeight { .. }
@@ -3385,6 +3399,8 @@ mod tests {
             ConfigPath::PerspectiveStrength,
             ConfigPath::DepthDensityCompensation,
             ConfigPath::FarDensityFade,
+            ConfigPath::SolidStrength,
+            ConfigPath::SurfaceThickness,
             ConfigPath::FarDensityFadeStart,
             ConfigPath::Xaos { src: 0, dst: 1 },
             ConfigPath::Xaos { src: 3, dst: 7 },

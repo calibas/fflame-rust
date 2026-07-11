@@ -115,6 +115,7 @@ impl ShaderCache {
             // triggers a rebuild if they differ.
             has_analytic_blur: flame.analytic_blur_active(&crate::variations::global_registry(), RenderMode::TwoD),
             flatten_z_per_iter: false,
+            solid_enabled: false,
             attachment_cap: flame.attachment_cap() as u32,
             inlined_transforms: None,
             cumulative_weights: None,
@@ -283,13 +284,18 @@ impl ShaderCache {
         // Check if inlined constants mode is enabled (CLI export)
         if crate::shader_builder_v2::should_use_inlined_constants() {
             let registry = crate::variations::global_registry();
-            ShaderConstants::with_inlined_transforms(
-                &config.flame,
-                &registry,
-                config.color_mode as u32,
-                config.render_mode,
-                config.preserve_z,
-            )
+            {
+                let mut constants = ShaderConstants::with_inlined_transforms(
+                    &config.flame,
+                    &registry,
+                    config.color_mode as u32,
+                    config.render_mode,
+                    config.preserve_z,
+                );
+                constants.solid_enabled = config.solid_strength > 0.0
+                    && matches!(config.render_mode, crate::scene::transforms::RenderMode::ThreeD);
+                constants
+            }
         } else {
             // Interactive mode - no inlining to avoid constant shader rebuilds
             // Ensure at least 1 transform to prevent shader overflow (NUM_TRANSFORMS - 1u)
@@ -312,6 +318,8 @@ impl ShaderCache {
                 has_analytic_blur: config.flame.analytic_blur_active(&registry, config.render_mode),
                 flatten_z_per_iter: matches!(config.render_mode, crate::scene::transforms::RenderMode::ThreeD)
                     && !config.preserve_z,
+                solid_enabled: config.solid_strength > 0.0
+                    && matches!(config.render_mode, crate::scene::transforms::RenderMode::ThreeD),
                 attachment_cap: config.flame.attachment_cap() as u32,
                 inlined_transforms: None,
                 cumulative_weights: None,
