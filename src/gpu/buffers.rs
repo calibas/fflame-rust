@@ -870,21 +870,20 @@ pub struct GpuParams {
     pub background_g: f32, // Background color G (for depth fog)
     pub background_b: f32, // Background color B (for depth fog)
 
-    // std140 alignment pad. With the camera_x / camera_y f32 fields
-    // added by the free-camera-position work, the f32 fields above
-    // total 34 × 4 = 136 bytes. `post_symmetry` is a struct and
-    // std140 requires struct fields to start at a 16-byte boundary,
-    // so 8 bytes of pad land it at 144. Mirror in `header.wgsl`.
+    // Solid rendering (Phase 0). These three fields occupy what used to
+    // be the 12-byte std140 pad before `post_symmetry` (37 scalars × 4 =
+    // 148 bytes; the struct must start on a 16-byte boundary = 160), so
+    // the layout is unchanged. Only read when the SOLID shader-builder
+    // flag is set. Mirror in shaders/core/header.wgsl.
+    pub solid_strength: f32,    // Occlusion strength: 0 = off, 1 = hard surface
+    pub surface_thickness: f32, // Depth shell accepted as "the surface" (world units)
+    pub depth_prime: u32,       // 1 = depth-priming batch (record depth, plot nothing)
 
     // Post-symmetry — plot-time density replication. Each chaos-game
     // sample also deposits at K−1 mirrored/rotated positions before the
     // camera transform. Gated by the HAS_POST_SYMMETRY shader-builder
     // flag, so when `post_symmetry.kind == 0` the symmetry block
     // doesn't compile in and these fields aren't read.
-    // std140 alignment pad: 37 scalars x 4 = 148 bytes; post_symmetry
-    // (a struct) must start on a 16-byte boundary -> 12 bytes pad to 160.
-    // Mirror in shaders/core/header.wgsl.
-    pub _pad_before_post_symmetry: [u32; 3],
     pub post_symmetry: GpuPostSymmetry,
 }
 
@@ -1191,13 +1190,19 @@ pub struct FlameBuffers {
     pub accumulation_view_b: TextureView,
 
     // Histogram storage buffer for atomic color accumulation (within-frame)
-    // Layout: [r, g, b, density] × (width × height) as u32 array
+    // Layout: [r, g, b, density] × (width × height) as u32 array.
+    // When `solid_depth_region` is set, one extra u32 per pixel follows at
+    // offset W*H*4 — the solid-rendering nearest-depth region (inverted
+    // ordered-float encoding, 0 = no sample; see main_template.wgsl SOLID).
     pub histogram_buffer: Buffer,
     // Second histogram buffer used as the spatial-filter scratch — when
     // `filter_radius > 0`, the histogram-blur pass writes the horizontal
     // Gaussian pass here and the vertical pass writes back to the primary
-    // buffer that accumulate.wgsl reads. Same layout/size as the primary.
+    // buffer that accumulate.wgsl reads. Always RGBD-sized (4 words/px):
+    // the blur never touches the depth region.
     pub histogram_buffer_scratch: Buffer,
+    // Whether histogram_buffer carries the solid-rendering depth region.
+    pub solid_depth_region: bool,
 
     // Per-pixel iteration count buffer for convergence tracking
     // Per-pixel path buffer for PathMap color mode (OPTIONAL)
@@ -1448,7 +1453,9 @@ impl FlameBuffers {
             background_r: 0.0,
             background_g: 0.0,
             background_b: 0.0,
-            _pad_before_post_symmetry: [0; 3],
+            solid_strength: 0.0,
+            surface_thickness: crate::config::DEFAULT_SURFACE_THICKNESS,
+            depth_prime: 0,
             post_symmetry: GpuPostSymmetry::none(),
         };
 
@@ -1776,6 +1783,7 @@ impl FlameBuffers {
             accumulation_view_b,
             histogram_buffer,
             histogram_buffer_scratch,
+            solid_depth_region: false,
             path_buffer,
             path_filter_buffer,
             dummy_path_buffer,
@@ -1898,9 +1906,52 @@ impl FlameBuffers {
         drop(render_pass); // End the render pass immediately
     }
 
+    /// Bytes of the RGBD portion of the histogram (4 u32 per pixel).
+    fn histogram_rgbd_bytes(&self) -> u64 {
+        (self.width as u64) * (self.height as u64) * 4 * std::mem::size_of::<u32>() as u64
+    }
+
+    /// Ensure the histogram buffer does / does not carry the per-pixel depth
+    /// region solid rendering needs (one extra u32 per pixel at offset
+    /// W*H*4). Recreates the buffer when the requirement changes — the
+    /// CALLER must then recreate every bind group referencing the histogram
+    /// (compute, accumulate, histogram-blur H/V) and reset accumulation.
+    /// Returns true when the buffer was recreated. No-op (and no cost) when
+    /// the state already matches, so non-solid flames keep today's exact
+    /// allocation.
+    pub fn set_solid_depth_region(&mut self, device: &Device, enabled: bool) -> bool {
+        if self.solid_depth_region == enabled {
+            return false;
+        }
+        let words: u64 = if enabled { 5 } else { 4 };
+        let size = (self.width as u64) * (self.height as u64) * words * std::mem::size_of::<u32>() as u64;
+        self.histogram_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some(if enabled {
+                "Histogram Buffer (+solid depth region)"
+            } else {
+                "Histogram Buffer"
+            }),
+            size,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.solid_depth_region = enabled;
+        true
+    }
+
     /// Clear histogram buffer only (before each batch for proper accumulation math)
     pub fn clear_histogram(&self, encoder: &mut CommandEncoder) {
-        encoder.clear_buffer(&self.histogram_buffer, 0, None);
+        if self.solid_depth_region {
+            // Per-batch clear touches only the RGBD region: the depth region
+            // persists across batches so the nearest-depth test tightens
+            // progressively. Full resets go through clear_all /
+            // clear_histogram_and_paths, which zero everything — 0 is the
+            // depth encoding's "no sample" sentinel, so a plain zero clear
+            // is a correct depth reset.
+            encoder.clear_buffer(&self.histogram_buffer, 0, Some(self.histogram_rgbd_bytes()));
+        } else {
+            encoder.clear_buffer(&self.histogram_buffer, 0, None);
+        }
         // Analytic-blur low-res splat buffer is per-batch too: the convolution
         // folds it into the main histogram each frame, so it must start each
         // batch empty alongside it.

@@ -482,6 +482,37 @@ pub fn render_view_content(
                         far_fade_start.into()
                     );
                 }
+
+                // Solid rendering (Phase 0): nearest-depth occlusion.
+                // Our own extension — see docs/projects/solid-rendering.md.
+                ui.add_space(8.0);
+                ui.label(t!("view.solid_section").as_ref());
+
+                let mut solid_strength = config.solid_strength;
+                let response = ui.add(
+                    super::VkbSlider::new(&mut solid_strength, 0.0..=1.0)
+                        .text(t!("view.solid_strength").as_ref())
+                        .step_by(0.01)
+                ).on_hover_text(t!("view.tooltip_solid_strength"));
+                if response.changed() {
+                    let _ = config_manager.update_param(
+                        ConfigPath::SolidStrength,
+                        solid_strength.into()
+                    );
+                }
+
+                let mut surface_thickness = config.surface_thickness;
+                let response = ui.add(
+                    super::VkbSlider::new(&mut surface_thickness, 0.001..=0.5)
+                        .text(t!("view.surface_thickness").as_ref())
+                        .step_by(0.001)
+                ).on_hover_text(t!("view.tooltip_surface_thickness"));
+                if response.changed() {
+                    let _ = config_manager.update_param(
+                        ConfigPath::SurfaceThickness,
+                        surface_thickness.into()
+                    );
+                }
             });
     }
 

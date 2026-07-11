@@ -108,13 +108,14 @@ struct Params {
     background_r: f32,  // Background color R (for depth fog)
     background_g: f32,  // Background color G (for depth fog)
     background_b: f32,  // Background color B (for depth fog)
-    // std140 alignment pad — the scalar fields above total 37 × 4 =
-    // 148 bytes, and `post_symmetry` is a struct so std140 requires
-    // it to start at a 16-byte boundary. 12 bytes of pad land it at
-    // 160. Mirror in `src/gpu/buffers.rs`.
-    _pad0_before_post_symmetry: u32,
-    _pad1_before_post_symmetry: u32,
-    _pad2_before_post_symmetry: u32,
+    // Solid rendering (Phase 0). These three fields occupy what used to be
+    // the 12-byte std140 pad before `post_symmetry` (37 scalars × 4 = 148
+    // bytes; the struct must start at a 16-byte boundary = 160), so the
+    // layout is unchanged. Only read when the SOLID builder flag is set.
+    // Mirror in `src/gpu/buffers.rs`.
+    solid_strength: f32,     // Occlusion strength: 0 = off (transparent), 1 = hard surface
+    surface_thickness: f32,  // Depth shell accepted as "the surface" (world units)
+    depth_prime: u32,        // 1 = depth-priming batch (record depth, plot nothing)
     post_symmetry: PostSymmetry,  // Plot-time symmetry (gated by HAS_POST_SYMMETRY)
 }
 

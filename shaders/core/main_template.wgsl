@@ -536,6 +536,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 }
             }
 
+{{#if SOLID}}
+            // DoF is compiled out in solid mode: the at-splat position
+            // jitter would land samples at pixels whose depth they don't
+            // belong to, corrupting the nearest-depth buffer AND the
+            // occlusion test. Post-DoF from the depth buffer is the
+            // planned replacement (docs/projects/solid-rendering.md,
+            // Phase 3).
+{{else}}
             // Apply depth of field blur (3D mode only)
             if (params.dof_blur_strength > 0.0) {
                 let depth = camera_space.z;  // Z in camera space = depth from camera
@@ -568,6 +576,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     i32(round(sin(angle) * radius))
                 );
             }
+{{/if}}
 {{else}}
             let pixel = world_to_pixel(plot_pos);
 {{/if}}
@@ -712,6 +721,39 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 {{/if}}
 
 {{#if RENDER_3D}}
+{{#if SOLID}}
+                // ── Solid rendering (Phase 0): nearest-depth occlusion ──
+                // Depth region: one u32 per pixel at offset W*H*4 inside the
+                // histogram buffer (same binding — the buffer is allocated
+                // with the extra region only when this shader is built).
+                //
+                // Encoding: IEEE-754 bits made monotone (sign-flip trick),
+                // then INVERTED, so numerically LARGER encodings are NEARER
+                // samples and 0 means "no sample yet". A plain zero-clear
+                // therefore initializes the region, and `atomicMax` tracks
+                // the nearest depth. (NaN depths encode small and lose the
+                // max — harmlessly ignored.)
+                let solid_d = -camera_space.z;  // positive = in front of the camera
+                let sd_bits = bitcast<u32>(solid_d);
+                let sd_ord = select(sd_bits | 0x80000000u, ~sd_bits, (sd_bits & 0x80000000u) != 0u);
+                let sd_enc = ~sd_ord;
+                let solid_slot = params.width * params.height * 4u + pixel_idx;
+                let solid_prev = atomicMax(&histogram[solid_slot], sd_enc);
+                // Decode the nearest depth seen so far (including this sample).
+                let near_ord = ~max(solid_prev, sd_enc);
+                let near_bits = select(~near_ord, near_ord ^ 0x80000000u, (near_ord & 0x80000000u) != 0u);
+                let d_near = bitcast<f32>(near_bits);
+                if (params.depth_prime != 0u) {
+                    // Priming batch right after a reset: record depth only,
+                    // plot nothing — keeps interior ghosting out of the
+                    // accumulator while the depth buffer converges.
+                    density_weight = 0.0;
+                } else if (solid_d > d_near + params.surface_thickness) {
+                    // Behind the surface shell: fade by solid_strength
+                    // (1 = fully occluded, 0 = classic transparency).
+                    density_weight *= 1.0 - params.solid_strength;
+                }
+{{/if}}
                 // Far density fade (3D mode only): genuinely thin out
                 // far samples by scaling their histogram DENSITY
                 // weight, unlike fog which recolors at full density.
@@ -751,6 +793,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 // Gated by OUTPUT_HISTOGRAM_DIRECT. See
                 // docs/projects/unified-render-pipeline.md.
                 //
+{{#if SOLID}}
+                // Occluded (weight 0) and priming samples skip the histogram
+                // atomics entirely — their depth write above already happened.
+                if (density_weight > 0.0) {
+{{/if}}
                 // Write RGB as 4× u32 (unpacked, full 32-bit precision).
                 let base_idx = pixel_idx * 4u;  // 4 words per pixel (R, G, B, density)
 
@@ -776,6 +823,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 atomicAdd(&histogram[base_idx + 1u], g_u32);
                 atomicAdd(&histogram[base_idx + 2u], b_u32);
                 atomicAdd(&histogram[base_idx + 3u], density_u32);
+{{#if SOLID}}
+                }
+{{/if}}
 {{else}}
                 // Sample-emit path (multi-tile render). Stream one Sample
                 // per plotted point to a buffer; a host-driven accumulate

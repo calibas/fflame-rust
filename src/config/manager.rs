@@ -2041,6 +2041,8 @@ impl ConfigManager {
             ConfigPath::PerspectiveStrength => Ok(config.perspective_strength.into()),
             ConfigPath::DepthDensityCompensation => Ok(config.depth_density_compensation.into()),
             ConfigPath::FarDensityFade => Ok(config.far_density_fade.into()),
+            ConfigPath::SolidStrength => Ok(config.solid_strength.into()),
+            ConfigPath::SurfaceThickness => Ok(config.surface_thickness.into()),
             ConfigPath::FarDensityFadeStart => Ok(config.far_density_fade_start.into()),
 
             // Effects
@@ -2799,6 +2801,12 @@ impl ConfigManager {
             }
             ConfigPath::FarDensityFade => {
                 self.current.far_density_fade = value.try_into()?;
+            }
+            ConfigPath::SolidStrength => {
+                self.current.solid_strength = value.try_into()?;
+            }
+            ConfigPath::SurfaceThickness => {
+                self.current.surface_thickness = value.try_into()?;
             }
             ConfigPath::FarDensityFadeStart => {
                 self.current.far_density_fade_start = value.try_into()?;

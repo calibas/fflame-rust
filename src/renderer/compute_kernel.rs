@@ -199,6 +199,9 @@ pub struct FlameRenderer {
     dof_blur_strength: f32, // DOF: Blur amount (0.0 = disabled)
     fog_strength: f32, // Depth fog: exponential fog density (0.0 = disabled)
     fog_start: f32, // Depth fog: distance where fog begins
+    solid_strength: f32, // Solid rendering: occlusion strength (0 = off)
+    surface_thickness: f32, // Solid rendering: depth shell (world units)
+    needs_depth_prime: bool, // Next compute batch records depth only (set on reset while solid)
     filter_radius: f32, // Spatial filter (Apo's `filter`): Gaussian sigma in pixels on histogram, 0 = off
     filter_blur_edges: f32, // Bilateral edge-handling [0..1]: 0 = preserve edges (default), 1 = uniform Gaussian
     background_r: f32, // Background color R (for depth fog)
@@ -333,6 +336,9 @@ impl FlameRenderer {
             dof_blur_strength: crate::config::DEFAULT_DOF_BLUR_STRENGTH,
             fog_strength: crate::config::DEFAULT_FOG_STRENGTH,
             fog_start: crate::config::DEFAULT_FOG_START,
+            solid_strength: crate::config::DEFAULT_SOLID_STRENGTH,
+            surface_thickness: crate::config::DEFAULT_SURFACE_THICKNESS,
+            needs_depth_prime: false,
             filter_radius: 0.0,
             filter_blur_edges: 0.0,
             background_r: 0.0,
@@ -360,6 +366,13 @@ impl FlameRenderer {
         // Recreate buffers with new size (preserve palette_size)
         let palette_size = self.buffers.palette_size();
         self.buffers = FlameBuffers::with_palette_size(device, queue, width, height, flame, palette_size);
+
+        // Re-apply the solid depth region — fresh buffers default to none.
+        // Bind groups referencing the histogram are recreated just below.
+        let solid_enabled = self.solid_strength > 0.0
+            && matches!(self.current_render_mode, crate::scene::transforms::RenderMode::ThreeD);
+        self.buffers.set_solid_depth_region(device, solid_enabled);
+        self.needs_depth_prime = solid_enabled;
 
         // Recreating variation_params_buffer wipes the init-derived slots
         // (slots N..N+M, written by the init dispatch). User-param slots
@@ -488,6 +501,8 @@ impl FlameRenderer {
             has_analytic_blur: flame.analytic_blur_active(&crate::variations::global_registry(), render_mode),
             flatten_z_per_iter: matches!(render_mode, crate::scene::transforms::RenderMode::ThreeD)
                 && !preserve_z,
+            solid_enabled: self.solid_strength > 0.0
+                && matches!(render_mode, crate::scene::transforms::RenderMode::ThreeD),
             attachment_cap: flame.attachment_cap() as u32,
             // No inlining for incremental updates (would trigger too many shader rebuilds)
             inlined_transforms: None,
@@ -508,6 +523,10 @@ impl FlameRenderer {
 
     /// Reset accumulation buffer and sample count (full reset including effective iterations)
     pub fn reset(&mut self, encoder: &mut CommandEncoder, queue: &Queue, _iterations_per_thread: u32, _zoom: f32, _pan_x: f32, _pan_y: f32, _rotation: f32, _camera_rotation_x: f32, _camera_rotation_y: f32, _camera_bank: f32, _camera_x: f32, _camera_y: f32, _camera_z: f32, _speed_factor: f32) {
+        // Solid rendering: the depth region is about to be cleared —
+        // record depth only on the first batch after this reset.
+        self.needs_depth_prime = self.solid_strength > 0.0
+            && matches!(self.current_render_mode, crate::scene::transforms::RenderMode::ThreeD);
         self.reset_iteration_counter();
         // Reset effective_iterations when doing a full reset (buffer cleared)
         self.effective_iterations = 0;
@@ -530,6 +549,18 @@ impl FlameRenderer {
         // 0.0 = orthographic (flat), higher values = increasing perspective
 
         let seed = self.get_rng_seed();
+
+        // Depth-priming: the first batch after a full reset (while solid
+        // rendering is active) records depth only — the SOLID shader path
+        // zeroes every sample's plot weight — so the accumulator never
+        // ingests interior samples gated against an empty depth buffer.
+        let depth_prime_flag: u32 = if self.needs_depth_prime {
+            self.needs_depth_prime = false;
+            1
+        } else {
+            0
+        };
+
         let params = GpuParams {
             num_transforms: self.num_transforms,
             iterations_per_thread,
@@ -552,7 +583,9 @@ impl FlameRenderer {
             depth_density_compensation: self.depth_density_compensation,
             far_density_fade: self.far_density_fade,
             far_density_fade_start: self.far_density_fade_start,
-            _pad_before_post_symmetry: [0; 3],
+            solid_strength: self.solid_strength,
+            surface_thickness: self.surface_thickness,
+            depth_prime: depth_prime_flag,
             camera_rotation_x,
             camera_rotation_y,
             camera_bank,
@@ -1061,6 +1094,20 @@ post_symmetry: (&self.post_symmetry).into(),
         self.post_symmetry = config.flame.post_symmetry.clone();
         self.burn_in = burn_in;
 
+        // 4b. Solid rendering: sync state + histogram depth region.
+        self.solid_strength = config.solid_strength;
+        self.surface_thickness = config.surface_thickness;
+        let solid_enabled = config.solid_strength > 0.0
+            && matches!(config.render_mode, crate::scene::transforms::RenderMode::ThreeD);
+        if self.buffers.set_solid_depth_region(device, solid_enabled) {
+            self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
+            self.accumulate_bind_group = self.pipelines.create_accumulate_bind_group(device, &self.buffers);
+            self.histogram_blur_h_bind_group = self.pipelines.create_histogram_blur_h_bind_group(device, &self.buffers);
+            self.histogram_blur_v_bind_group = self.pipelines.create_histogram_blur_v_bind_group(device, &self.buffers);
+        }
+        // load_config resets accumulation — prime depth on the next batch.
+        self.needs_depth_prime = solid_enabled;
+
         // 5. Update palette size (recreates texture + bind groups if changed)
         if self.set_palette_size(device, queue, &config.flame, config.palette_size) {
             log::info!("Palette size changed to {} during config load", config.palette_size);
@@ -1107,7 +1154,9 @@ post_symmetry: (&self.post_symmetry).into(),
             depth_density_compensation: self.depth_density_compensation,
             far_density_fade: self.far_density_fade,
             far_density_fade_start: self.far_density_fade_start,
-            _pad_before_post_symmetry: [0; 3],
+            solid_strength: self.solid_strength,
+            surface_thickness: self.surface_thickness,
+            depth_prime: 0,
             camera_rotation_x: config.camera_rotation_x,
             camera_rotation_y: config.camera_rotation_y,
             camera_bank: config.camera_bank,
@@ -1162,7 +1211,25 @@ post_symmetry: (&config.flame.post_symmetry).into(),
     }
 
     /// Update the flame being rendered
-    pub fn update_flame(&mut self, device: &Device, queue: &Queue, flame: &Flame, iterations_per_thread: u32, burn_in: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_bank: f32, camera_x: f32, camera_y: f32, camera_z: f32, speed_factor: f32, dof_focus_distance: f32, dof_blur_strength: f32, fog_strength: f32, fog_start: f32, background_color: [f32; 3], filter_radius: f32, filter_blur_edges: f32, render_mode: crate::scene::transforms::RenderMode, perspective_strength: f32, depth_density_compensation: f32, far_density_fade: f32, far_density_fade_start: f32, preserve_z: bool) {
+    pub fn update_flame(&mut self, device: &Device, queue: &Queue, flame: &Flame, iterations_per_thread: u32, burn_in: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_bank: f32, camera_x: f32, camera_y: f32, camera_z: f32, speed_factor: f32, dof_focus_distance: f32, dof_blur_strength: f32, fog_strength: f32, fog_start: f32, background_color: [f32; 3], filter_radius: f32, filter_blur_edges: f32, render_mode: crate::scene::transforms::RenderMode, perspective_strength: f32, depth_density_compensation: f32, far_density_fade: f32, far_density_fade_start: f32, preserve_z: bool, solid_strength: f32, surface_thickness: f32) {
+        // Solid rendering state must be set BEFORE build_shader_constants
+        // below (it feeds ShaderConstants::solid_enabled) and before the
+        // histogram depth-region toggle.
+        self.solid_strength = solid_strength;
+        self.surface_thickness = surface_thickness;
+        let solid_enabled = solid_strength > 0.0
+            && matches!(render_mode, crate::scene::transforms::RenderMode::ThreeD);
+        if self.buffers.set_solid_depth_region(device, solid_enabled) {
+            // Histogram buffer was recreated — every bind group that
+            // references it must be too.
+            self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
+            self.accumulate_bind_group = self.pipelines.create_accumulate_bind_group(device, &self.buffers);
+            self.histogram_blur_h_bind_group = self.pipelines.create_histogram_blur_h_bind_group(device, &self.buffers);
+            self.histogram_blur_v_bind_group = self.pipelines.create_histogram_blur_v_bind_group(device, &self.buffers);
+            // Fresh (zeroed) depth region: prime before plotting again.
+            self.needs_depth_prime = solid_enabled;
+        }
+
         // Check if shaders need to be recompiled (variations or constants changed)
         let constants = self.build_shader_constants(flame, render_mode, preserve_z);
         let path_features_enabled = self.color_mode == ColorMode::PathMap
@@ -1252,7 +1319,9 @@ post_symmetry: (&config.flame.post_symmetry).into(),
             depth_density_compensation: self.depth_density_compensation,
             far_density_fade: self.far_density_fade,
             far_density_fade_start: self.far_density_fade_start,
-            _pad_before_post_symmetry: [0; 3],
+            solid_strength: self.solid_strength,
+            surface_thickness: self.surface_thickness,
+            depth_prime: 0,
             camera_rotation_x,
             camera_rotation_y,
             camera_bank,
@@ -1493,7 +1562,9 @@ post_symmetry: (&self.post_symmetry).into(),
             depth_density_compensation: self.depth_density_compensation,
             far_density_fade: self.far_density_fade,
             far_density_fade_start: self.far_density_fade_start,
-            _pad_before_post_symmetry: [0; 3],
+            solid_strength: self.solid_strength,
+            surface_thickness: self.surface_thickness,
+            depth_prime: 0,
             camera_rotation_x,
             camera_rotation_y,
             camera_bank,
@@ -1843,7 +1914,9 @@ post_symmetry: (&self.post_symmetry).into(),
             depth_density_compensation: self.depth_density_compensation,
             far_density_fade: self.far_density_fade,
             far_density_fade_start: self.far_density_fade_start,
-            _pad_before_post_symmetry: [0; 3],
+            solid_strength: self.solid_strength,
+            surface_thickness: self.surface_thickness,
+            depth_prime: 0,
             camera_rotation_x,
             camera_rotation_y,
             camera_bank,
