@@ -24,7 +24,10 @@ pub static QUATERNION_LINEAR: VariationDef = VariationDef {
     display_name: "Quaternion Linear",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    features: &[Feature::NeedsW, Feature::WritesColor],
+    // AlwaysZ: row 2 (z') is computed unconditionally; without it
+    // preserve_z = false zeroes z each iteration, silently disabling the m2x
+    // row and the z couplings this variation exists to expose.
+    features: &[Feature::NeedsW, Feature::WritesColor, Feature::AlwaysZ],
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,

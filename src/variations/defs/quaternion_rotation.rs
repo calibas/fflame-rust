@@ -8,8 +8,8 @@
 //! which would rotate only `(x,y,z)` and leave `w` untouched.
 //!
 //! Not a fractal on its own — it's a 4D building block. Repeatedly applying it
-//! spins the point along a great circle of S³; composed with the Julia /
-//! cubic variations (or the affine + multiple transforms) it twists the 4D
+//! spins the point along a great circle of S³; composed with `quaternion_julia`
+//! / `quaternion_linear` (or the affine + multiple transforms) it twists the 4D
 //! attractor before projection. For a general 4D rotation `â·q·b̂`, chain this
 //! with a right-multiplying sibling (easy to add later).
 
@@ -27,7 +27,10 @@ pub static QUATERNION_ROTATION: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     // NeedsW: reads/writes the 4th coordinate (the rotation mixes it). No RNG —
     // the rotation is deterministic. WritesColor: optional w-driven palette.
-    features: &[Feature::NeedsW, Feature::WritesColor],
+    // AlwaysZ: z is written unconditionally (the rotation mixes all four
+    // components); without it preserve_z = false re-flattens z each step and
+    // the 4D rotation stops tracing great circles of S³.
+    features: &[Feature::NeedsW, Feature::WritesColor, Feature::AlwaysZ],
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,

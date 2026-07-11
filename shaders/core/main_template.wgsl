@@ -274,6 +274,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         if (abs(current.z) >= 1e32) {
             z_railed_respawn = rng_nextf(&rng) < 0.00390625;
         }
+{{#if HAS_W}}
+        // The 4th coordinate gets the same rail as z: quaternion maps can
+        // grow w unboundedly with zero w→xyz coupling (e.g. quaternion_linear
+        // with m33 > 1), so x/y-based respawn never fires for it. Saturate at
+        // ±1e32 and map non-finite (NaN from 0·∞) to 0, exactly like z above.
+        let w_sat = clamp(point_w, -1e32, 1e32);
+        point_w = select(0.0, w_sat, abs(w_sat) <= 1e32);
+{{/if}}
 {{else}}
         let z_railed_respawn = false;
 {{/if}}
@@ -378,6 +386,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             // DC writes from Final variations are discarded for color_index
             // (color was already locked in after the Linked chain).
             var final_pos = current;
+{{#if HAS_W}}
+            // Finals don't feed forward — that must include the 4th
+            // coordinate. A NeedsW variation on a Final commits point_w via
+            // the dispatcher (it's a global); save/restore so the final's w,
+            // like its xyz and color, shapes only the plot, not the walk.
+            let point_w_before_final = point_w;
+{{/if}}
             for (var fi = 0u; fi < attach.final_count; fi = fi + 1u) {
                 let fid = attach.final_[fi];
                 let fxform = transforms[fid];
@@ -407,6 +422,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     }
                 }
             }
+{{#if HAS_W}}
+            point_w = point_w_before_final;
+{{/if}}
 {{else}}
             // No attachments: skip the chain — plot the post-Linked
             // (== post-Normal) point directly.
