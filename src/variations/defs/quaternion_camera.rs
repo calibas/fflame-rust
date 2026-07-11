@@ -52,6 +52,7 @@ pub static QUATERNION_CAMERA: VariationDef = VariationDef {
         param!("rot_yw", "Rotate YW", unlimited_float, 0.0, -3.1416, 3.1416, "Rotation of the (y, w) plane in radians (a '4D pitch')."),
         param!("rot_zw", "Rotate ZW", unlimited_float, 0.0, -3.1416, 3.1416, "Rotation of the (z, w) plane in radians."),
         param!("persp", "Perspective", float, 1.0, 0.0, 4.0, "4D perspective strength: p' = xyz / (1 - persp*w) after the eye transform — a pinhole on the w axis. 0 = orthographic (drop w). Higher = stronger w-foreshortening and a closer eye; points behind the eye are hidden."),
+        param!("w_depth", "W to Depth", unlimited_float, 0.0, -2.0, 2.0, "Shear the camera-space w into the plotted DEPTH: z' = z + w_depth*w (before the perspective divide). This hands w to the engine's entire per-sample depth stack — DoF blur, depth fog, far-density fade, depth-density compensation — so their existing View-panel sliders become 4th-dimension effects: w-driven blur, w-driven dimming/fade. 0 = off."),
     ],
     wgsl_2d: WGSL_2D,
     wgsl_3d: WGSL_3D,
@@ -86,6 +87,12 @@ fn variation_quaternion_camera(p: vec3<f32>, xform_id: u32, variation_id: u32, h
     q = vec4<f32>(q.x, q.y, czw * q.z + szw * q.w, czw * q.w - szw * q.z);
 
     point_w_out = q.w;   // camera-space w (finals restore the walk's w anyway)
+
+    // Route w into the plotted depth so the engine's z-keyed effects (DoF,
+    // fog, far-density fade, depth-density) become w-driven. Applied before
+    // the divide so it foreshortens consistently with x/y.
+    let wd = get_param(xform_id, variation_id, 8u);
+    q.z = q.z + wd * q.w;
 
     // Pinhole on the w axis; persp = 0 → orthographic drop-w.
     let persp = get_param(xform_id, variation_id, 7u);

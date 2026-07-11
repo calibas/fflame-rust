@@ -27,10 +27,11 @@ pub static QUATERNION_ROTATION: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     // NeedsW: reads/writes the 4th coordinate (the rotation mixes it). No RNG —
     // the rotation is deterministic. WritesColor: optional w-driven palette.
-    // AlwaysZ: z is written unconditionally (the rotation mixes all four
-    // components); without it preserve_z = false re-flattens z each step and
-    // the 4D rotation stops tracing great circles of S³.
-    features: &[Feature::NeedsW, Feature::WritesColor, Feature::AlwaysZ],
+    // WritesRgb: optional w-driven brightness/saturation shading. AlwaysZ: z
+    // is written unconditionally (the rotation mixes all four components);
+    // without it preserve_z = false re-flattens z each step and the 4D
+    // rotation stops tracing great circles of S³.
+    features: &[Feature::NeedsW, Feature::WritesColor, Feature::WritesRgb, Feature::AlwaysZ],
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
@@ -42,13 +43,16 @@ pub static QUATERNION_ROTATION: VariationDef = VariationDef {
         param!("aw", "Scalar W", float, 0.95, -1.0, 1.0, "Scalar component of a. With the vector part, sets the rotation angle (aw = cos(θ/2))."),
         param!("projection", "Projection", unlimited_int, 0.0, 0.0, 2.0, "How the rotated 4D point maps to the plotted 3D point (3D only). 0 = Vector (drop w), 1 = Depth (surface w as z), 2 = Perspective (divide xyz by 1-w)."),
         param!("w_color", "Color by W", float, 0.0, 0.0, 8.0, "0 = off. >0 = write a palette index from the 4th coordinate (3D: fract(w * scale); 2D: fract(|z| * scale)), revealing it as COLOR. Needs the transform's direct_color > 0."),
+        param!("w_bright", "Brightness by W", unlimited_float, 0.0, -2.0, 2.0, "0 = off. Scales the sample's palette color by (1 + w_bright*w): positive = high-w structure glows brighter (feeds the Glow post-effect nicely), negative = it dims. Hue-preserving; 3D only. Needs the transform's direct_color > 0."),
+        param!("w_sat", "Saturation by W", unlimited_float, 0.0, -2.0, 2.0, "0 = off. Shifts the sample's color saturation by (1 + w_sat*w) around its luminance: negative w_sat washes high-w structure toward gray, >1 total over-saturates. Hue-preserving; 3D only. Needs the transform's direct_color > 0."),
     ],
     wgsl_2d: WGSL_2D,
     wgsl_3d: WGSL_3D,
 };
 
 const WGSL_2D: &str = r#"
-fn variation_quaternion_rotation(p: vec2<f32>, xform_id: u32, variation_id: u32, vc: ptr<function, f32>) -> vec2<f32> {
+fn variation_quaternion_rotation(p: vec2<f32>, xform_id: u32, variation_id: u32, vc: ptr<function, f32>, vrc: ptr<function, vec3<f32>>) -> vec2<f32> {
+    // vrc unused in 2D: w-shading (w_bright/w_sat) is a 4D-only effect.
     // 2D: rotate (x, y) by the angle implied by (ax, aw) — a plain 2D rotation
     // (the 4D rotation needs all three spatial axes). `point_w` rides unused.
     let ax = get_param(xform_id, variation_id, 0u);
@@ -73,7 +77,7 @@ fn qrot_qmul(a: vec4<f32>, b: vec4<f32>) -> vec4<f32> {
     );
 }
 
-fn variation_quaternion_rotation(p: vec3<f32>, xform_id: u32, variation_id: u32, vc: ptr<function, f32>) -> vec3<f32> {
+fn variation_quaternion_rotation(p: vec3<f32>, xform_id: u32, variation_id: u32, vc: ptr<function, f32>, vrc: ptr<function, vec3<f32>>) -> vec3<f32> {
     let a_raw = vec4<f32>(
         get_param(xform_id, variation_id, 0u),
         get_param(xform_id, variation_id, 1u),
@@ -86,6 +90,18 @@ fn variation_quaternion_rotation(p: vec3<f32>, xform_id: u32, variation_id: u32,
 
     let wcol = get_param(xform_id, variation_id, 5u);
     if (wcol > 1e-6) { *vc = fract(r.w * wcol); }
+
+    // w-shading: brightness / saturation of the palette color scaled by w
+    // (see quaternion_julia for the contract).
+    let wb = get_param(xform_id, variation_id, 6u);
+    let ws = get_param(xform_id, variation_id, 7u);
+    if (abs(wb) > 1e-6 || abs(ws) > 1e-6) {
+        let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(clamp(*vc, 0.0, 1.0), 0.5), 0.0).rgb;
+        var col = srgb_to_linear(srgb) * clamp(1.0 + wb * r.w, 0.0, 4.0);
+        let luma = dot(col, vec3<f32>(0.2126, 0.7152, 0.0722));
+        col = mix(vec3<f32>(luma), col, clamp(1.0 + ws * r.w, 0.0, 2.0));
+        *vrc = col;
+    }
 
     // Project the rotated 4D point (see quaternion_julia for the caveat).
     let mode = u32(get_param(xform_id, variation_id, 4u) + 0.5);
