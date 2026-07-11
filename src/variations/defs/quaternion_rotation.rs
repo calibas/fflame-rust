@@ -1,17 +1,20 @@
-//! `quaternion_rotation` — 4D rotation of the point by `q' = â·q`.
+//! `quaternion_rotation` — general 4D rotation of the point by `q' = â·q·b̂`.
 //!
-//! Left-multiplies the running 4D point `q = (x, y, z, w)` (vector part = the
-//! 3D point, scalar part = `point_w` via `Feature::NeedsW`) by a constant
-//! **unit** quaternion `â = normalize(ax, ay, az, aw)`. Left multiplication by
-//! a unit quaternion is a rotation of R⁴ (a *left-isoclinic* rotation), so this
-//! genuinely mixes all four components — unlike a 3D conjugation `â·q·â⁻¹`,
-//! which would rotate only `(x,y,z)` and leave `w` untouched.
+//! Sandwiches the running 4D point `q = (x, y, z, w)` (vector part = the 3D
+//! point, scalar part = `point_w` via `Feature::NeedsW`) between two constant
+//! **unit** quaternions `â = normalize(ax..aw)` and `b̂ = normalize(bx..bw)`.
+//! Every rotation of R⁴ has exactly this form (the (â, b̂) pairs double-cover
+//! SO(4)), so this one variation spans the whole rotation group:
 //!
-//! Not a fractal on its own — it's a 4D building block. Repeatedly applying it
-//! spins the point along a great circle of S³; composed with `quaternion_julia`
-//! / `quaternion_linear` (or the affine + multiple transforms) it twists the 4D
-//! attractor before projection. For a general 4D rotation `â·q·b̂`, chain this
-//! with a right-multiplying sibling (easy to add later).
+//! * `b̂ = 1` (the default): left-isoclinic rotation `â·q` — mixes all four
+//!   components, spinning the point along a great circle of S³.
+//! * `â = 1`: right-isoclinic rotation `q·b̂` — the opposite chirality.
+//! * `b̂ = conjugate(â)` (negate bx/by/bz vs ax/ay/az): the ordinary **3D**
+//!   rotation of the vector part `(x,y,z)` with `w` left untouched.
+//!
+//! Not a fractal on its own — it's a 4D building block: composed with
+//! `quaternion_julia` / `quaternion_linear` (or the affine + multiple
+//! transforms) it twists the 4D attractor before projection.
 
 use crate::variations::{
     definition::{Feature, VariationDef, VariationParamDef},
@@ -45,6 +48,10 @@ pub static QUATERNION_ROTATION: VariationDef = VariationDef {
         param!("w_color", "Color by W", float, 0.0, 0.0, 8.0, "0 = off. >0 = write a palette index from the 4th coordinate (3D: fract(w * scale); 2D: fract(|z| * scale)), revealing it as COLOR. Needs the transform's direct_color > 0."),
         param!("w_bright", "Brightness by W", unlimited_float, 0.0, -2.0, 2.0, "0 = off. Scales the sample's palette color by (1 + w_bright*w): positive = high-w structure glows brighter (feeds the Glow post-effect nicely), negative = it dims. Hue-preserving; 3D only. Needs the transform's direct_color > 0."),
         param!("w_sat", "Saturation by W", unlimited_float, 0.0, -2.0, 2.0, "0 = off. Shifts the sample's color saturation by (1 + w_sat*w) around its luminance: negative w_sat washes high-w structure toward gray, >1 total over-saturates. Hue-preserving; 3D only. Needs the transform's direct_color > 0."),
+        param!("bx", "Right Axis X", float, 0.0, -1.0, 1.0, "Vector-i component of the RIGHT quaternion b in q' = a*q*b (normalized at runtime). Default b = (0,0,0,1) is the identity — pure left rotation. Set b = a-conjugate (negate bx/by/bz vs ax/ay/az, bw = aw) for an ordinary 3D rotation that leaves w untouched. 3D only."),
+        param!("by", "Right Axis Y", float, 0.0, -1.0, 1.0, "Vector-j component of b. 3D only."),
+        param!("bz", "Right Axis Z", float, 0.0, -1.0, 1.0, "Vector-k component of b. 3D only."),
+        param!("bw", "Right Scalar W", float, 1.0, -1.0, 1.0, "Scalar component of b (bw = cos of the right half-angle). Every 4D rotation is some pair (a, b) — combining left and right spans the whole rotation group SO(4). 3D only."),
     ],
     wgsl_2d: WGSL_2D,
     wgsl_3d: WGSL_3D,
@@ -84,9 +91,17 @@ fn variation_quaternion_rotation(p: vec3<f32>, xform_id: u32, variation_id: u32,
         get_param(xform_id, variation_id, 2u),
         get_param(xform_id, variation_id, 3u)
     );
-    // Unit quaternion → rotation. Guard the all-zero case (fall back to identity).
+    // Unit quaternions → rotation. Guard the all-zero case (fall back to identity).
     let a = normalize(a_raw + vec4<f32>(0.0, 0.0, 0.0, 1e-9));
-    let r = qrot_qmul(a, vec4<f32>(p, point_w));   // â · q  (left-isoclinic 4D rotation)
+    let b_raw = vec4<f32>(
+        get_param(xform_id, variation_id, 8u),
+        get_param(xform_id, variation_id, 9u),
+        get_param(xform_id, variation_id, 10u),
+        get_param(xform_id, variation_id, 11u)
+    );
+    let b = normalize(b_raw + vec4<f32>(0.0, 0.0, 0.0, 1e-9));
+    // â·q·b̂ — the general 4D rotation (b defaults to the identity → â·q).
+    let r = qrot_qmul(qrot_qmul(a, vec4<f32>(p, point_w)), b);
 
     let wcol = get_param(xform_id, variation_id, 5u);
     if (wcol > 1e-6) { *vc = fract(r.w * wcol); }
