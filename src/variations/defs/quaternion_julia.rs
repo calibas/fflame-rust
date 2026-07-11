@@ -287,9 +287,22 @@ mod quaternion_identity_tests {
         let raw = [0.3, 0.1, -0.2, 0.9];
         let m = norm(raw);
         let a = [raw[0] / m, raw[1] / m, raw[2] / m, raw[3] / m]; // unit
+        let conj_a = [-a[0], -a[1], -a[2], a[3]];
         for &q in &SAMPLES {
-            let r = qmul(a, q);
-            assert!((norm(r) - norm(q)).abs() < 1e-4, "|â·q| != |q| for {:?}", q);
+            // Left, right, and sandwich (â·q·b̂) multiplications by unit
+            // quaternions are all rotations of R⁴ — norms preserved.
+            let left = qmul(a, q);
+            assert!((norm(left) - norm(q)).abs() < 1e-4, "|â·q| != |q| for {:?}", q);
+            let right = qmul(q, a);
+            assert!((norm(right) - norm(q)).abs() < 1e-4, "|q·â| != |q| for {:?}", q);
+            let sandwich = qmul(qmul(a, q), conj_a);
+            assert!((norm(sandwich) - norm(q)).abs() < 1e-4, "|â·q·ā| != |q| for {:?}", q);
+            // b̂ = conjugate(â) is the ordinary 3D rotation: the scalar part
+            // (our point_w) must pass through untouched.
+            assert!(
+                (sandwich[3] - q[3]).abs() < 1e-4,
+                "â·q·ā must fix the scalar part; q={q:?} got {sandwich:?}"
+            );
         }
     }
 }
