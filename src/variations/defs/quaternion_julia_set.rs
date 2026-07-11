@@ -8,15 +8,27 @@
 //! this tests membership directly and so reaches the genuine 4D set.
 //!
 //! Each call ignores the incoming point, draws a fresh uniform sample in a
-//! `sample_range`-radius ball with the **real** part pinned to `w_slice`, iterates
-//! `q → qⁿ + c`, and **hides** the sample if it escapes (`|q| > bailout` within
-//! `escape_iters`). Surviving samples fill the interior of the 3D cross-section
-//! `{ (i,j,k) : (i,j,k,w_slice) ∈ filled-Julia }`. Sweep `w_slice` for Bourke's
-//! series of slices. Use alone, identity affine, weight 1.0.
+//! `sample_range`-radius ball with one quaternion component (`slice_axis`)
+//! pinned to `w_slice`, iterates `q → qⁿ + c`, and **hides** the sample if it
+//! escapes (`|q| > bailout` within `escape_iters`). Surviving samples fill the
+//! interior of that 3D cross-section of the 4D solid. Sweep `w_slice` for
+//! Bourke's series of slices. Use alone, identity affine, weight 1.0.
+//!
+//! **Choosing the slice axis matters enormously for complex constants.** When
+//! `c` has only real + i components (e.g. Bourke's `-1 + 0.2i`), `q² + c`
+//! commutes with rotations of the `(j,k)` plane, so the 4D set is a solid of
+//! revolution — and the **real-axis slice is always a smooth, featureless
+//! revolved ball**, no matter the `c`. All the 2D-Julia fractal detail lives in
+//! the `(real, i)` plane, which the real-axis slice is everywhere transverse
+//! to. Slice **j or k instead** (`slice_axis` 1 or 2, value 0): that slice
+//! *contains* the complex plane, so you get the classic detailed Bourke solid —
+//! the 2D Julia set revolved through the remaining vector direction.
 //!
 //! Convention `q = (x,y,z,w)`: vector part `(x,y,z) = (i,j,k)`, scalar `w` =
 //! real. For Bourke's `c = (-1, 0.2, 0, 0)` (scalar-first) set `cw=-1, cx=0.2`.
-//! 2D mode is the flat filled Julia for `c = cx + i·cy`.
+//! For vector-axis slices the **real axis is plotted as screen Y** so the
+//! complex-plane detail faces the default camera. 2D mode is the flat filled
+//! Julia for `c = cx + i·cy`.
 
 use crate::variations::{
     definition::{Feature, VariationDef, VariationParamDef},
@@ -48,11 +60,12 @@ pub static QUATERNION_JULIA_SET: VariationDef = VariationDef {
         param!("escape_iters", "Escape Iterations", int, 16.0, 2.0, 64.0, "Membership-test depth: how many times to apply q -> q^n + c before declaring a sample interior. Higher = sharper boundary (fewer false-interior points) but thinner surviving interior and slower."),
         param!("bailout", "Bailout", float, 2.0, 1.0, 8.0, "Escape radius: a sample escapes (and is hidden) once |q| exceeds this. ~2 is standard for |c|~1."),
         param!("sample_range", "Sample Range", float, 2.0, 0.2, 4.0, "Radius of the BALL the samples are drawn from (a ball, not a cube — so no box-face clipping). The whole set lies within |q| <= bailout, so leaving this at the bailout radius (2) guarantees the entire cross-section is covered. Shrink it ONLY to trade coverage for density on a set you know is smaller — too small clips (now as a sphere, not a cube)."),
-        param!("w_slice", "Slice (real)", float, 0.0, -2.0, 2.0, "The fixed real (w) coordinate of the 3D cross-section (3D only). 0 is the widest slice for a complex c; sweep it (e.g. -0.6..0.6) to walk Bourke's slice series through the 4D solid."),
+        param!("w_slice", "Slice Value", float, 0.0, -2.0, 2.0, "Position of the cutting hyperplane along the Slice Axis (3D only). Sweep it (e.g. -0.6..0.6) to walk Bourke's slice series through the 4D solid."),
         param!("surface", "Surface Shell", float, 0.03, 0.0, 0.5, "0 = fill the SOLID interior (shows the object's form). >0 = plot only the boundary SHELL of this WORLD-SPACE thickness, found with a distance estimator (the exterior points within `surface` of the set), hiding the interior and deep exterior. This reveals Bourke's fractal surface detail at uniform density; ~0.02-0.05 is a crisp skin, larger = thicker/fuzzier."),
         param!("w_color", "Color by Escape", float, 2.0, 0.0, 8.0, "0 = off. >0 = write a palette index from the escape speed: fract((escape_iter/limit) * scale), giving the classic escape-time bands across the surface. Needs the transform's direct_color > 0. (In crawl mode, colors by radius instead.)"),
         param!("crawl", "Surface Crawl", bool, false, "OFF = uniform Monte-Carlo sampling (simple, but ~97% of samples miss a thin surface shell). ON = a per-thread walk that stays pinned to the boundary via the distance estimator, so nearly every step plots a useful surface point — a big speedup for SURFACE renders. Needs Surface Shell > 0 (uses 0.02 if left at 0). Leave OFF for solid fill (uniform is already efficient there)."),
         param!("crawl_step", "Crawl Step", float, 0.04, 0.005, 0.3, "Crawl mode only: size of each random step along the surface. Smaller = hugs the surface tighter but traverses slower; larger = faster coverage but looser. ~0.02-0.06 works well; scale it down for finer detail."),
+        param!("slice_axis", "Slice Axis", unlimited_int, 3.0, 0.0, 3.0, "Which quaternion component the cutting hyperplane pins to Slice Value: 0 = x/i, 1 = y/j, 2 = z/k, 3 = w/real. CRITICAL for a complex c (cy=cz=0, e.g. Bourke's -1+0.2i): the real-axis slice (3) is ALWAYS a smooth featureless ball of revolution; slice j or k (1 or 2) at value 0 instead — that slice contains the complex plane, giving the classic detailed Bourke solid. For vector-axis slices the real axis is plotted as screen Y so the Julia detail faces the camera."),
     ],
     wgsl_2d: WGSL_2D,
     wgsl_3d: WGSL_3D,
@@ -141,12 +154,27 @@ fn qjset_rand_dir(rng: ptr<function, RngState>) -> vec3<f32> {
     return vec3<f32>(sintheta * cos(phi), sintheta * sin(phi), costheta);
 }
 
-// Escape-time membership + distance estimate for the (i,j,k) point at slice w.
-// Returns (de, escaped01, esc_frac): de is the exterior distance estimate
-// DE = 0.5*|q|*ln|q|/|q'|, or the sentinel 1e3 for interior points (so a walk
-// treats the interior as "very far" and flees it toward the surface).
-fn qjset_eval(pos: vec3<f32>, wsl: f32, c: vec4<f32>, n: f32, is_sq: bool, bail2: f32, maxit: i32) -> vec3<f32> {
-    var q = vec4<f32>(pos, wsl);
+// Assemble the 4D quaternion from the plotted 3D point, pinning `axis`
+// (0=x/i, 1=y/j, 2=z/k, 3=w/real) to the slice value. For vector-axis slices
+// the plotted Y carries the REAL component, so the complex-plane (real, i)
+// detail faces the default camera; the two free vector components take
+// plotted X and Z in slot order.
+fn qjset_q4(pos: vec3<f32>, sval: f32, axis: u32) -> vec4<f32> {
+    switch (axis) {
+        case 0u: { return vec4<f32>(sval, pos.x, pos.z, pos.y); }
+        case 1u: { return vec4<f32>(pos.x, sval, pos.z, pos.y); }
+        case 2u: { return vec4<f32>(pos.x, pos.z, sval, pos.y); }
+        default: { return vec4<f32>(pos, sval); }
+    }
+}
+
+// Escape-time membership + distance estimate for the plotted point on the
+// `axis` slice at value `sval`. Returns (de, escaped01, esc_frac): de is the
+// exterior distance estimate DE = 0.5*|q|*ln|q|/|q'|, or the sentinel 1e3 for
+// interior points (so a walk treats the interior as "very far" and flees it
+// toward the surface).
+fn qjset_eval(pos: vec3<f32>, sval: f32, axis: u32, c: vec4<f32>, n: f32, is_sq: bool, bail2: f32, maxit: i32) -> vec3<f32> {
+    var q = qjset_q4(pos, sval, axis);
     var dr = 1.0;
     var esc_i = maxit;
     var escaped = false;
@@ -178,13 +206,14 @@ fn variation_quaternion_julia_set(p: vec3<f32>, xform_id: u32, variation_id: u32
     let surface = get_param(xform_id, variation_id, 9u);
     let wcol = get_param(xform_id, variation_id, 10u);
     let crawl = get_param(xform_id, variation_id, 11u) > 0.5;
+    let axis = min(u32(get_param(xform_id, variation_id, 13u) + 0.5), 3u);
 
     if (!crawl) {
         // UNIFORM sampling: a fresh independent sample each call. Solid
         // (surface=0) keeps the interior; shell (surface>0) keeps the exterior
         // points within `surface` of the set. Most samples miss a thin shell.
         let pos = qjset_sample_ball(rng, range);
-        let ev = qjset_eval(pos, wsl, c, n, is_sq, bail2, maxit);
+        let ev = qjset_eval(pos, wsl, axis, c, n, is_sq, bail2, maxit);
         let de = ev.x;
         let escaped = ev.y > 0.5;
         if (surface <= 0.0) {
@@ -212,19 +241,19 @@ fn variation_quaternion_julia_set(p: vec3<f32>, xform_id: u32, variation_id: u32
     if (get_state(xform_id, variation_id, 4u) < 0.5) {
         // First step in this thread: drop a random seed and measure its DE.
         pc = qjset_sample_ball(rng, range);
-        dec = qjset_eval(pc, wsl, c, n, is_sq, bail2, maxit).x;
+        dec = qjset_eval(pc, wsl, axis, c, n, is_sq, bail2, maxit).x;
         set_state(xform_id, variation_id, 4u, 1.0);
     } else if (rng_nextf(rng) < 0.01) {
         // Occasional random jump so one thread can reach several lobes.
         pc = qjset_sample_ball(rng, range);
-        dec = qjset_eval(pc, wsl, c, n, is_sq, bail2, maxit).x;
+        dec = qjset_eval(pc, wsl, axis, c, n, is_sq, bail2, maxit).x;
     } else {
         // Propose a small step; accept it if it descends toward the surface
         // (DE decreases) or stays within the shell. Interior points carry the
         // 1e3 sentinel, so the walk is pushed out toward the boundary.
         let pn = pc + step * qjset_rand_dir(rng);
         if (dot(pn, pn) <= range * range) {
-            let den = qjset_eval(pn, wsl, c, n, is_sq, bail2, maxit).x;
+            let den = qjset_eval(pn, wsl, axis, c, n, is_sq, bail2, maxit).x;
             if (den <= dec || den < surf) { pc = pn; dec = den; }
         }
     }
