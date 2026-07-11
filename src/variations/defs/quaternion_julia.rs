@@ -39,11 +39,12 @@ pub static QUATERNION_JULIA: VariationDef = VariationDef {
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
     // NeedsW: the persistent 4th coordinate. NeedsRng: the inverse map picks one
-    // of the n roots at random. WritesColor: optional color-by-w. AlwaysZ: the
-    // 3D body writes z unconditionally (it's the quaternion's k component) —
-    // without it, preserve_z = false would flatten k every iteration and the
+    // of the n roots at random. WritesColor: optional color-by-w. WritesRgb:
+    // optional w-driven brightness/saturation of the palette color. AlwaysZ:
+    // the 3D body writes z unconditionally (it's the quaternion's k component)
+    // — without it, preserve_z = false would flatten k every iteration and the
     // 4D map silently degenerates to the (x, y, w) subspace.
-    features: &[Feature::NeedsW, Feature::NeedsRng, Feature::WritesColor, Feature::AlwaysZ],
+    features: &[Feature::NeedsW, Feature::NeedsRng, Feature::WritesColor, Feature::WritesRgb, Feature::AlwaysZ],
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
@@ -58,13 +59,16 @@ pub static QUATERNION_JULIA: VariationDef = VariationDef {
         param!("projection", "Projection", unlimited_int, 0.0, 0.0, 2.0, "How the 4D result maps to the plotted 3D point (3D only). 0 = Vector (drop w), 1 = Depth (surface w as z; z and w swap), 2 = Perspective (divide xyz by 1-w). The return both plots AND feeds forward, so each mode is effectively a different attractor."),
         param!("inverse", "Inverse (Julia set)", unlimited_int, 0.0, 0.0, 1.0, "0 = forward q^n + c (an IFS attractor, NOT a Julia set under the chaos game). 1 = inverse (q - c)^(1/n) with a random branch: the Inverse Iteration Method, which converges to the actual Julia set. Use inverse=1 with an identity affine and weight 1.0."),
         param!("w_color", "Color by W", float, 0.0, 0.0, 8.0, "0 = off. >0 = write a palette index from the 4th coordinate (3D: fract(w * scale); 2D: fract(|z| * scale)), revealing the hidden dimension as COLOR without altering the attractor. Needs the transform's direct_color > 0."),
+        param!("w_bright", "Brightness by W", unlimited_float, 0.0, -2.0, 2.0, "0 = off. Scales the sample's palette color by (1 + w_bright*w): positive = high-w structure glows brighter (feeds the Glow post-effect nicely), negative = it dims. Hue-preserving; 3D only. Needs the transform's direct_color > 0."),
+        param!("w_sat", "Saturation by W", unlimited_float, 0.0, -2.0, 2.0, "0 = off. Shifts the sample's color saturation by (1 + w_sat*w) around its luminance: negative w_sat washes high-w structure toward gray, >1 total over-saturates. Hue-preserving; 3D only. Needs the transform's direct_color > 0."),
     ],
     wgsl_2d: WGSL_2D,
     wgsl_3d: WGSL_3D,
 };
 
 const WGSL_2D: &str = r#"
-fn variation_quaternion_julia(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec2<f32> {
+fn variation_quaternion_julia(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>, vrc: ptr<function, vec3<f32>>) -> vec2<f32> {
+    // vrc unused in 2D: w-shading (w_bright/w_sat) is a 4D-only effect.
     let cx = get_param(xform_id, variation_id, 0u);
     let cy = get_param(xform_id, variation_id, 1u);
     let n = get_param(xform_id, variation_id, 4u);
@@ -111,7 +115,7 @@ fn qjulia_qroot(q: vec4<f32>, n: f32, branch: f32, dist: f32) -> vec4<f32> {
     return vec4<f32>(rad * sin(ang) * nhat, rad * cos(ang));
 }
 
-fn variation_quaternion_julia(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec3<f32> {
+fn variation_quaternion_julia(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>, vrc: ptr<function, vec3<f32>>) -> vec3<f32> {
     let q = vec4<f32>(p, point_w);          // 4D point: vector = p, scalar = w
     let c = vec4<f32>(
         get_param(xform_id, variation_id, 0u),
@@ -135,6 +139,19 @@ fn variation_quaternion_julia(p: vec3<f32>, xform_id: u32, variation_id: u32, rn
     // Color by the 4th coordinate w (dynamics untouched) when enabled.
     let wcol = get_param(xform_id, variation_id, 8u);
     if (wcol > 1e-6) { *vc = fract(r.w * wcol); }
+
+    // w-shading: scale brightness / saturation of the palette color by w.
+    // Samples the palette at the CURRENT color coordinate (post any w_color
+    // write above) and hands the shaded RGB to the direct-color mix at plot.
+    let wb = get_param(xform_id, variation_id, 9u);
+    let ws = get_param(xform_id, variation_id, 10u);
+    if (abs(wb) > 1e-6 || abs(ws) > 1e-6) {
+        let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(clamp(*vc, 0.0, 1.0), 0.5), 0.0).rgb;
+        var col = srgb_to_linear(srgb) * clamp(1.0 + wb * r.w, 0.0, 4.0);
+        let luma = dot(col, vec3<f32>(0.2126, 0.7152, 0.0722));
+        col = mix(vec3<f32>(luma), col, clamp(1.0 + ws * r.w, 0.0, 2.0));
+        *vrc = col;
+    }
 
     // Project the 4D result (x,y,z,w) to the plotted/fed-forward 3D point.
     // The flame plots `current` (= this return) AND feeds it to the next
