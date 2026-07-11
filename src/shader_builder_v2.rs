@@ -2017,9 +2017,18 @@ impl ShaderBuilder {
         // w-summing: any normal-phase variation that carries the 4th coordinate
         // (Feature::NeedsW). When present, w accumulates across the transform's
         // normal variations exactly like x/y/z (see the point_w_* globals).
-        let has_w_normal = normal_variations
-            .iter()
-            .any(|p| p.info.has_feature(Feature::NeedsW));
+        //
+        // NOT in the subflame dispatcher: point_w_acc/point_w_hit are shared
+        // module-scope globals, and apply_subflame_variations runs NESTED
+        // inside the outer dispatcher's Phase-3 loop (via subflame_wf) — an
+        // inner reset/commit would clobber the outer walk's partially
+        // accumulated sum. Inside a subflame, NeedsW bodies still read the
+        // parent's point_w and write point_w_out, but nothing commits it: the
+        // subflame's w is frozen at the parent walk's value.
+        let has_w_normal = !is_subflame
+            && normal_variations
+                .iter()
+                .any(|p| p.info.has_feature(Feature::NeedsW));
 
         // PHASE 1: Pre-variations - directly modify input coordinates (lines 343-349)
         if !pre_variations.is_empty() {
@@ -2172,12 +2181,12 @@ impl ShaderBuilder {
             // the same variation weight as xyz. Order-independent (a sum). `w`
             // is the inlined-path weight local; the non-inlined path reads the
             // buffer weight directly.
-            let w_sum_inlined = if info.has_feature(Feature::NeedsW) {
+            let w_sum_inlined = if has_w_normal && info.has_feature(Feature::NeedsW) {
                 "            point_w_acc = point_w_acc + w * point_w_out;\n            point_w_hit = true;\n"
             } else {
                 ""
             };
-            let w_sum_plain = if info.has_feature(Feature::NeedsW) {
+            let w_sum_plain = if has_w_normal && info.has_feature(Feature::NeedsW) {
                 format!(
                     "            point_w_acc = point_w_acc + xform.variations[{}] * point_w_out;\n            point_w_hit = true;\n",
                     idx
@@ -2730,6 +2739,64 @@ mod tests {
         assert!(shader.contains("if (point_w_hit) { point_w = point_w_acc; }"), "summed w must commit");
         // Both bodies write their raw contribution to point_w_out (not point_w).
         assert!(shader.contains("point_w_out = "), "bodies write point_w_out");
+
+        // The subflame dispatcher must NOT touch the w accumulator: it runs
+        // nested inside the outer dispatcher's variation loop, and the
+        // point_w_* globals are shared — an inner reset/commit would clobber
+        // the outer transform's partially accumulated sum. Build a flame that
+        // has BOTH a subflame and a NeedsW variation to exercise it.
+        let mut sub_flame = Flame::new();
+        let mut sub_xform = Transform::new();
+        sub_xform.variations.insert("quaternion_julia".to_string(), 0.5);
+        sub_xform.variations.insert("subflame_wf".to_string(), 0.5);
+        sub_flame.transforms.push(sub_xform);
+        let mut sub_active = HashMap::new();
+        sub_active.insert("quaternion_julia".to_string(), 0.5);
+        sub_active.insert("subflame_wf".to_string(), 0.5);
+        let sub_shader =
+            builder.build_from_template(&sub_flame, &sub_active, true, false, false, true, &constants);
+        let sub_start = sub_shader.find("fn apply_subflame_variations(").expect("subflame dispatcher emitted");
+        let sub_end = sub_shader[sub_start..].find("\n}\n").unwrap() + sub_start;
+        let sub_body = &sub_shader[sub_start..sub_end];
+        assert!(
+            !sub_body.contains("point_w_acc") && !sub_body.contains("point_w_hit"),
+            "subflame dispatcher must not reset/accumulate/commit point_w"
+        );
+        // ...while the outer dispatcher in the same shader still sums w.
+        assert!(
+            sub_shader.contains("if (point_w_hit) { point_w = point_w_acc; }"),
+            "outer dispatcher still commits w"
+        );
+    }
+
+    /// All four quaternion variations compile into one shader together —
+    /// exercises helper-name collision freedom (qjulia_/qrot_/qjset_ prefixes)
+    /// and every NeedsW emission path at once.
+    #[test]
+    fn all_quaternion_variations_coexist() {
+        use crate::scene::transforms::{Flame, Transform};
+        let registry = crate::variations::global_registry().clone();
+        let builder = ShaderBuilder::new(registry);
+        let constants = ShaderConstants::default();
+
+        let names = ["quaternion_julia", "quaternion_rotation", "quaternion_linear", "quaternion_julia_set"];
+        let mut flame = Flame::new();
+        let mut xform = Transform::new();
+        for n in names {
+            xform.variations.insert(n.to_string(), 0.25);
+        }
+        flame.transforms.push(xform);
+        let mut active = HashMap::new();
+        for n in names {
+            active.insert(n.to_string(), 0.25);
+        }
+
+        let shader = builder.build_from_template(&flame, &active, true, false, false, true, &constants);
+        for n in names {
+            assert!(shader.contains(&format!("fn variation_{}(", n)), "{} body present", n);
+        }
+        assert!(shader.contains("var<private> point_w"), "point_w emitted");
+        assert!(!shader.contains("{{#if"), "unprocessed template flags");
     }
 
     /// Activating both `pointgrid_wf` and `pointgrid3d_wf` together used

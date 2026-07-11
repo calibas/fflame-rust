@@ -39,8 +39,11 @@ pub static QUATERNION_JULIA: VariationDef = VariationDef {
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
     // NeedsW: the persistent 4th coordinate. NeedsRng: the inverse map picks one
-    // of the n roots at random. WritesColor: optional color-by-w.
-    features: &[Feature::NeedsW, Feature::NeedsRng, Feature::WritesColor],
+    // of the n roots at random. WritesColor: optional color-by-w. AlwaysZ: the
+    // 3D body writes z unconditionally (it's the quaternion's k component) —
+    // without it, preserve_z = false would flatten k every iteration and the
+    // 4D map silently degenerates to the (x, y, w) subspace.
+    features: &[Feature::NeedsW, Feature::NeedsRng, Feature::WritesColor, Feature::AlwaysZ],
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
@@ -177,7 +180,8 @@ mod quaternion_identity_tests {
         (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt()
     }
 
-    /// Hamilton product — mirrors `qrot_qmul` / `qcubic_qmul`.
+    /// Hamilton product — mirrors `qrot_qmul` (quaternion_rotation) /
+    /// `qjset_qmul` (quaternion_julia_set), which are byte-identical.
     fn qmul(a: Q, b: Q) -> Q {
         [
             a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
