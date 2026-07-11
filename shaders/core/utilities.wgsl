@@ -308,15 +308,39 @@ fn project_3d_to_2d_apophysis(
 // deliberately here; pitch/yaw/bank behavior is unaffected because
 // the outermost roll composes after them either way.)
 fn world_to_pixel_3d(p: vec3<f32>) -> vec2<i32> {
-    let p2d = project_3d_to_2d_apophysis(
-        p,
-        params.camera_rotation_x,  // pitch
-        params.camera_rotation_y,  // yaw
-        params.camera_bank,        // bank (XML `cam_roll` — JWildfire rename quirk)
-        0.0,                       // roll applied post-projection below
-        vec3<f32>(params.camera_x, params.camera_y, params.camera_z),
-        params.perspective_strength
+    return project_3d_full(p).pixel;
+}
+
+// Full 3D projection result: the pixel plus the camera-space position it
+// was projected from. The camera_space here is ROLL-LESS (params.rotation
+// is applied post-projection, see world_to_pixel_3d's doc above) — but the
+// outermost roll is a screen-plane rotation that never touches camera-space
+// z, so this single camera_space serves every per-sample depth consumer
+// (depth-density compensation, DoF, far-density fade, fog, and solid
+// rendering's depth buffer). Those blocks previously each rebuilt an
+// equivalent matrix per splat; z is roll-invariant so the values are
+// identical.
+struct Projection3D {
+    pixel: vec2<i32>,
+    camera_space: vec3<f32>,
+}
+
+fn project_3d_full(p: vec3<f32>) -> Projection3D {
+    // Same matrix world_to_pixel_3d always built via
+    // project_3d_to_2d_apophysis (roll = 0.0 in the matrix; see the slot
+    // mapping comments there).
+    let camera_matrix = build_camera_matrix(
+        0.0,                        // roll applied post-projection below
+        -params.camera_rotation_x,  // pitch
+        -params.camera_bank,        // bank
+         params.camera_rotation_y,  // matrix roll slot ← our yaw
     );
+    let camera_space = camera_transform(
+        p,
+        camera_matrix,
+        vec3<f32>(params.camera_x, params.camera_y, params.camera_z)
+    );
+    let p2d = apply_perspective(camera_space, params.perspective_strength);
 
     // Pan, rotate, zoom — mirrors `world_to_pixel` (2D) exactly.
     var transformed = p2d - vec2<f32>(params.pan_x, params.pan_y);
@@ -334,7 +358,7 @@ fn world_to_pixel_3d(p: vec3<f32>) -> vec2<i32> {
     let scale = f32(min(params.width, params.height)) * 0.25;
     let center = vec2<f32>(f32(params.width), f32(params.height)) * 0.5;
     let pixel = center + transformed * scale;
-    return vec2<i32>(i32(pixel.x), i32(pixel.y));
+    return Projection3D(vec2<i32>(i32(pixel.x), i32(pixel.y)), camera_space);
 }
 
 // Convert 2D fractal coords to pixel coords
