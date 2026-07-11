@@ -667,7 +667,21 @@ impl ShaderConstants {
             code.push_str("    }\n");
             code.push_str("}\n\n");
 
-            // Generate variation param lookup function
+            // Generate variation param lookup function.
+            //
+            // The switch key packs (var_idx, param_slot) into one u32. The
+            // stride must EXCEED every param_slot in the flame or two
+            // (var_idx, slot) pairs collide into duplicate `case` keys — a
+            // naga validation error. A fixed 16 broke the first time a
+            // >16-slot variation (quaternion_linear: 24) shared a transform
+            // with a second variation, so size it from the actual data.
+            let stride = transforms
+                .iter()
+                .flat_map(|x| x.variation_params.iter())
+                .map(|((_, slot), _)| slot + 1)
+                .max()
+                .unwrap_or(16)
+                .max(16);
             code.push_str("// Get inlined variation parameter (eliminates buffer reads)\n");
             code.push_str("fn get_inlined_var_param(xform_id: u32, var_idx: u32, param_slot: u32) -> f32 {\n");
             code.push_str("    switch(xform_id) {\n");
@@ -677,9 +691,9 @@ impl ShaderConstants {
                     continue;
                 }
                 code.push_str(&format!("        case {}u: {{\n", xform_idx));
-                code.push_str("            switch(var_idx * 16u + param_slot) {\n");
+                code.push_str(&format!("            switch(var_idx * {}u + param_slot) {{\n", stride));
                 for ((var_idx, param_slot), value) in &xform.variation_params {
-                    let combined_idx = var_idx * 16 + param_slot;
+                    let combined_idx = var_idx * stride + param_slot;
                     code.push_str(&format!(
                         "                case {}u: {{ return {:.8}; }}\n",
                         combined_idx, value
@@ -785,6 +799,38 @@ impl ShaderBuilder {
         active_variations.iter().any(|(name, _)| {
             self.registry.get(name).is_some_and(|info| info.has_feature(Feature::WritesRgb))
         })
+    }
+
+    /// True if any active variation reads/writes the per-thread 4th coordinate
+    /// `point_w` (`Feature::NeedsW`). Drives `HAS_W` (emitting `point_w` + the
+    /// respawn reset).
+    fn has_w_variation(&self, active_variations: &[(String, u32)]) -> bool {
+        active_variations.iter().any(|(name, _)| {
+            self.registry.get(name).is_some_and(|info| info.has_feature(Feature::NeedsW))
+        })
+    }
+
+    /// Per-thread 4th-coordinate source (`Feature::NeedsW`). A single
+    /// `var<private> f32` riding alongside the running `vec3` point for the
+    /// whole walk, so 4D / quaternion variations can carry `w` across transform
+    /// switches. `var<private>` is per-invocation and zero-initialized by the
+    /// WGSL spec; the main loop re-zeros it on bad-value respawn (HAS_W).
+    /// Emitted only when an active variation needs it.
+    fn build_w_coordinate(&self) -> String {
+        // point_w: the running 4th coordinate (seeded at spawn, re-zeroed on
+        //   respawn) — the INPUT each variation body reads during a transform's
+        //   variation loop; written back once at the end of the loop.
+        // point_w_out: the current body's RAW (unweighted) w output.
+        // point_w_acc / point_w_hit: the dispatcher's weighted-sum accumulator.
+        //   w is summed across a transform's variations exactly like x/y/z
+        //   (order-independent), then written back to point_w.
+        "// 4th coordinate + w-summing state for 4D variations (Feature::NeedsW).\n\
+         // var<private> is per-invocation and zero-initialized by the WGSL spec.\n\
+         var<private> point_w: f32;\n\
+         var<private> point_w_out: f32;\n\
+         var<private> point_w_acc: f32;\n\
+         var<private> point_w_hit: bool;\n\n"
+            .to_string()
     }
 
     /// Compute the packed parameter layout for the active variation set.
@@ -1305,6 +1351,9 @@ impl ShaderBuilder {
         // Same shape for direct-RGB-writing variations: gates the `vrc`
         // parameter and the plot-time RGB blend.
         let has_rgb = self.has_rgb_variation(&active);
+        // 4th coordinate (`point_w`) + w-summing for 4D / quaternion variations.
+        // Only meaningful in the 3D pipeline (2D bodies carry no w).
+        let has_w = self.has_w_variation(&active) && render_3d;
 
         // Build the template processor up front — both the header and the
         // main_template body have `{{#if ...}}` blocks (header gates which
@@ -1317,6 +1366,7 @@ impl ShaderBuilder {
         processor.set("XAOS_ENABLED", xaos_enabled);
         processor.set("HAS_DC", has_dc);
         processor.set("HAS_RGB", has_rgb);
+        processor.set("HAS_W", has_w);
         // HAS_ATTACHMENTS gates the per-iteration `attachments[xform_idx]`
         // load and the Linked/Final chain loops. False when the flame has
         // no Linked or Final transforms, restoring pre-attachment-feature
@@ -1467,6 +1517,14 @@ impl ShaderBuilder {
         //     See docs/projects/intra-iteration-state-and-accum.md.
         shader.push_str(&self.build_state_accessors(flame, &active));
         shader.push('\n');
+
+        // 8a-ii. Per-thread 4th coordinate `point_w` for 4D / quaternion
+        //        variations (only emits when an active variation has
+        //        Feature::NeedsW). The main loop re-zeros it on respawn.
+        if has_w {
+            shader.push_str(&self.build_w_coordinate());
+            shader.push('\n');
+        }
 
         // 8b. Complex arithmetic + 2x2 complex matrix helpers. Always
         //     injected (~90 LoC, dead-code-eliminated when unused).
@@ -1970,6 +2028,22 @@ impl ShaderBuilder {
         let (pre_variations, normal_variations, post_variations) =
             self.resolve_phase_buckets(active_variations, num_transforms, overrides, is_subflame);
 
+        // w-summing: any normal-phase variation that carries the 4th coordinate
+        // (Feature::NeedsW). When present, w accumulates across the transform's
+        // normal variations exactly like x/y/z (see the point_w_* globals).
+        //
+        // NOT in the subflame dispatcher: point_w_acc/point_w_hit are shared
+        // module-scope globals, and apply_subflame_variations runs NESTED
+        // inside the outer dispatcher's Phase-3 loop (via subflame_wf) — an
+        // inner reset/commit would clobber the outer walk's partially
+        // accumulated sum. Inside a subflame, NeedsW bodies still read the
+        // parent's point_w and write point_w_out, but nothing commits it: the
+        // subflame's w is frozen at the parent walk's value.
+        let has_w_normal = !is_subflame
+            && normal_variations
+                .iter()
+                .any(|p| p.info.has_feature(Feature::NeedsW));
+
         // PHASE 1: Pre-variations - directly modify input coordinates (lines 343-349)
         if !pre_variations.is_empty() {
             code.push_str("    // Phase 1: Pre-variations (modify input)\n");
@@ -2027,6 +2101,9 @@ impl ShaderBuilder {
         // PHASE 3: Normal variations - weighted sum accumulation (lines 363-373)
         code.push_str("    // Phase 3: Normal variations (weighted sum from modified input)\n");
         code.push_str("    var result = vec3<f32>(0.0, 0.0, 0.0);\n\n");
+        if has_w_normal {
+            code.push_str("    point_w_acc = 0.0;\n    point_w_hit = false;\n\n");
+        }
 
         for placed in &normal_variations {
             let (name, idx, info) = (&placed.name, placed.idx, placed.info);
@@ -2113,6 +2190,25 @@ impl ShaderBuilder {
                 ("+=", "")
             };
 
+            // w-summing: a NeedsW variation writes its raw w-output to the
+            // `point_w_out` global; accumulate it into `point_w_acc` weighted by
+            // the same variation weight as xyz. Order-independent (a sum). `w`
+            // is the inlined-path weight local; the non-inlined path reads the
+            // buffer weight directly.
+            let w_sum_inlined = if has_w_normal && info.has_feature(Feature::NeedsW) {
+                "            point_w_acc = point_w_acc + w * point_w_out;\n            point_w_hit = true;\n"
+            } else {
+                ""
+            };
+            let w_sum_plain = if has_w_normal && info.has_feature(Feature::NeedsW) {
+                format!(
+                    "            point_w_acc = point_w_acc + xform.variations[{}] * point_w_out;\n            point_w_hit = true;\n",
+                    idx
+                )
+            } else {
+                String::new()
+            };
+
             // Use inlined weights when available
             if use_inlined {
                 code.push_str(&format!(
@@ -2121,19 +2217,28 @@ impl ShaderBuilder {
                      \x20       let w = get_inlined_var_weight(xform_id, {}u);\n\
                      \x20       if (w != 0.0{}) {{\n\
                      \x20           result {} w * {};\n\
-                     \x20       }}\n\
+                     {}\x20       }}\n\
                      \x20   }}\n\n",
-                    idx, info.display_name, tag, idx, gate, op, contrib
+                    idx, info.display_name, tag, idx, gate, op, contrib, w_sum_inlined
                 ));
             } else {
                 code.push_str(&format!(
                     "    // {}: {} (NORMAL{})\n\
                      \x20   if (xform.variations[{}] != 0.0{}) {{\n\
                      \x20       result {} xform.variations[{}] * {};\n\
-                     \x20   }}\n\n",
-                    idx, info.display_name, tag, idx, gate, op, idx, contrib
+                     {}\x20   }}\n\n",
+                    idx, info.display_name, tag, idx, gate, op, idx, contrib, w_sum_plain
                 ));
             }
+        }
+
+        // Commit the summed 4th coordinate after the normal weighted-sum
+        // (post-variations modify xyz only, not w). `point_w_hit` guards it so a
+        // transform with no active NeedsW variation leaves w untouched (carried
+        // forward). Linked/final transforms are separate apply_variations calls,
+        // each running their own sum — so composition across transforms works.
+        if has_w_normal {
+            code.push_str("    if (point_w_hit) { point_w = point_w_acc; }\n\n");
         }
 
         // PHASE 4: Post-variations - directly modify output coordinates (lines 375-383)
@@ -2580,6 +2685,181 @@ mod tests {
             assert!(!shader.contains("{{#if"), "unprocessed {{{{#if}} in shader (render_3d={})", render_3d);
             assert!(!shader.contains("{{/if}}"), "unprocessed {{{{/if}} in shader (render_3d={})", render_3d);
         }
+    }
+
+    /// `Feature::NeedsW` emits the per-thread `point_w` 4th coordinate (and the
+    /// respawn reset) only when an active variation needs it.
+    #[test]
+    fn needs_w_emits_point_w_only_when_active() {
+        use crate::scene::transforms::{Flame, Transform};
+        let registry = crate::variations::global_registry().clone();
+        let builder = ShaderBuilder::new(registry);
+        let constants = ShaderConstants::default();
+
+        // 3D flame with the quaternion variation → point_w + body present.
+        let mut flame = Flame::new();
+        let mut xform = Transform::new();
+        xform.variations.insert("quaternion_julia".to_string(), 1.0);
+        flame.transforms.push(xform);
+        let mut active = HashMap::new();
+        active.insert("quaternion_julia".to_string(), 1.0);
+        let shader = builder.build_from_template(&flame, &active, true, false, false, true, &constants);
+        assert!(shader.contains("var<private> point_w"), "point_w must be emitted");
+        assert!(shader.contains("fn variation_quaternion_julia("), "variation body present");
+
+        // A flame without any NeedsW variation must NOT emit point_w.
+        let mut plain = Flame::new();
+        let mut t = Transform::new();
+        t.variations.insert("linear".to_string(), 1.0);
+        plain.transforms.push(t);
+        let mut plain_active = HashMap::new();
+        plain_active.insert("linear".to_string(), 1.0);
+        let plain_shader =
+            builder.build_from_template(&plain, &plain_active, true, false, false, true, &constants);
+        assert!(
+            !plain_shader.contains("var<private> point_w"),
+            "point_w must NOT be emitted for scratch-free flames"
+        );
+
+        // 2D flame: w is 3D-only, so no point_w even with a NeedsW variation.
+        let shader_2d = builder.build_from_template(&flame, &active, false, false, false, true, &constants);
+        assert!(
+            !shader_2d.contains("var<private> point_w"),
+            "point_w must NOT be emitted in the 2D pipeline"
+        );
+    }
+
+    /// w-summing: two NeedsW variations on one transform must weight-accumulate
+    /// their w into `point_w_acc` (like x/y/z) and commit it under `point_w_hit`.
+    #[test]
+    fn w_summing_accumulates_across_variations() {
+        use crate::scene::transforms::{Flame, Transform};
+        let registry = crate::variations::global_registry().clone();
+        let builder = ShaderBuilder::new(registry);
+        let constants = ShaderConstants::default();
+
+        let mut flame = Flame::new();
+        let mut xform = Transform::new();
+        xform.variations.insert("quaternion_julia".to_string(), 0.5);
+        xform.variations.insert("quaternion_rotation".to_string(), 0.5);
+        flame.transforms.push(xform);
+        let mut active = HashMap::new();
+        active.insert("quaternion_julia".to_string(), 0.5);
+        active.insert("quaternion_rotation".to_string(), 0.5);
+
+        let shader = builder.build_from_template(&flame, &active, true, false, false, true, &constants);
+        assert!(shader.contains("point_w_acc = point_w_acc +"), "w must accumulate");
+        assert!(shader.contains("point_w_hit = true;"), "w-touched must be set");
+        assert!(shader.contains("if (point_w_hit) { point_w = point_w_acc; }"), "summed w must commit");
+        // Both bodies write their raw contribution to point_w_out (not point_w).
+        assert!(shader.contains("point_w_out = "), "bodies write point_w_out");
+
+        // The subflame dispatcher must NOT touch the w accumulator: it runs
+        // nested inside the outer dispatcher's variation loop, and the
+        // point_w_* globals are shared — an inner reset/commit would clobber
+        // the outer transform's partially accumulated sum. Build a flame that
+        // has BOTH a subflame and a NeedsW variation to exercise it.
+        let mut sub_flame = Flame::new();
+        let mut sub_xform = Transform::new();
+        sub_xform.variations.insert("quaternion_julia".to_string(), 0.5);
+        sub_xform.variations.insert("subflame_wf".to_string(), 0.5);
+        sub_flame.transforms.push(sub_xform);
+        let mut sub_active = HashMap::new();
+        sub_active.insert("quaternion_julia".to_string(), 0.5);
+        sub_active.insert("subflame_wf".to_string(), 0.5);
+        let sub_shader =
+            builder.build_from_template(&sub_flame, &sub_active, true, false, false, true, &constants);
+        let sub_start = sub_shader.find("fn apply_subflame_variations(").expect("subflame dispatcher emitted");
+        let sub_end = sub_shader[sub_start..].find("\n}\n").unwrap() + sub_start;
+        let sub_body = &sub_shader[sub_start..sub_end];
+        assert!(
+            !sub_body.contains("point_w_acc") && !sub_body.contains("point_w_hit"),
+            "subflame dispatcher must not reset/accumulate/commit point_w"
+        );
+        // ...while the outer dispatcher in the same shader still sums w.
+        assert!(
+            sub_shader.contains("if (point_w_hit) { point_w = point_w_acc; }"),
+            "outer dispatcher still commits w"
+        );
+    }
+
+    /// The inlined-constants param switch must not collide keys when a
+    /// variation with MORE than 16 param slots (quaternion_linear: 24) shares
+    /// a transform with a second variation. The old fixed `var_idx*16 + slot`
+    /// packing made linear's slot 16 collide with the next variation's slot 0
+    /// — duplicate `case 16u` arms, a naga validation error on every CLI
+    /// export of such a flame.
+    #[test]
+    fn inlined_param_keys_do_not_collide_for_wide_variations() {
+        use crate::scene::transforms::{Flame, RenderMode, Transform};
+        let mut flame = Flame::new();
+        let mut xform = Transform::new();
+        xform.variations.insert("quaternion_linear".to_string(), 0.5);
+        xform.variations.insert("quaternion_rotation".to_string(), 0.5);
+        xform.variation_params.insert("quaternion_linear.tx".to_string(), 0.5); // slot 16
+        xform.variation_params.insert("quaternion_rotation.ax".to_string(), 0.35); // slot 0
+        flame.transforms.push(xform);
+
+        let registry = crate::variations::global_registry();
+        let constants = ShaderConstants::with_inlined_transforms(
+            &flame,
+            &registry,
+            0,
+            RenderMode::ThreeD,
+            true,
+        );
+        let builder = ShaderBuilder::new(registry.clone());
+        let mut active = HashMap::new();
+        active.insert("quaternion_linear".to_string(), 0.5);
+        active.insert("quaternion_rotation".to_string(), 0.5);
+        let shader = builder.build_from_template(&flame, &active, true, false, false, true, &constants);
+
+        let start = shader.find("fn get_inlined_var_param(").expect("inlined param fn emitted");
+        let end = shader[start..].find("\n}\n").unwrap() + start;
+        let body = &shader[start..end];
+        // Every packed key must be unique within each transform's arm — a
+        // duplicate is exactly the naga "conflicting switch arm" failure.
+        // Only inner value arms carry `return` on the case line (the outer
+        // xform_id arms open a nested switch instead).
+        let mut keys: Vec<&str> = body
+            .lines()
+            .filter(|l| l.contains("case ") && l.contains("return"))
+            .filter_map(|l| l.split("case ").nth(1).and_then(|s| s.split('u').next()))
+            .collect();
+        let total = keys.len();
+        keys.sort_unstable();
+        keys.dedup();
+        assert_eq!(keys.len(), total, "duplicate switch keys in get_inlined_var_param:\n{body}");
+    }
+
+    /// All four quaternion variations compile into one shader together —
+    /// exercises helper-name collision freedom (qjulia_/qrot_/qjset_ prefixes)
+    /// and every NeedsW emission path at once.
+    #[test]
+    fn all_quaternion_variations_coexist() {
+        use crate::scene::transforms::{Flame, Transform};
+        let registry = crate::variations::global_registry().clone();
+        let builder = ShaderBuilder::new(registry);
+        let constants = ShaderConstants::default();
+
+        let names = ["quaternion_julia", "quaternion_rotation", "quaternion_linear", "quaternion_julia_set"];
+        let mut flame = Flame::new();
+        let mut xform = Transform::new();
+        for n in names {
+            xform.variations.insert(n.to_string(), 0.25);
+        }
+        flame.transforms.push(xform);
+        let mut active = HashMap::new();
+        for n in names {
+            active.insert(n.to_string(), 0.25);
+        }
+
+        let shader = builder.build_from_template(&flame, &active, true, false, false, true, &constants);
+        for n in names {
+            assert!(shader.contains(&format!("fn variation_{}(", n)), "{} body present", n);
+        }
+        assert!(shader.contains("var<private> point_w"), "point_w emitted");
+        assert!(!shader.contains("{{#if"), "unprocessed template flags");
     }
 
     /// Activating both `pointgrid_wf` and `pointgrid3d_wf` together used

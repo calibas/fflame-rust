@@ -629,12 +629,24 @@ impl HighResExporter {
         // default initialized in main_template.wgsl. See
         // docs/projects/unified-render-pipeline.md.
         let analytic_active = config.flame.analytic_blur_active(&global_registry(), config.render_mode);
+        // NeedsW variations break the "Z=0 falls through unchanged" invariant
+        // that lets the 3D shader stand in for 2D: their 2D and 3D bodies are
+        // deliberately DIFFERENT maps (2D complex Julia vs 4D quaternion with
+        // a randomly-seeded w), so a 2D-authored flame must build the 2D
+        // shader here or the export won't match the viewport.
+        let has_needs_w = active_variations.keys().any(|name| {
+            global_registry()
+                .get(name)
+                .is_some_and(|info| info.has_feature(crate::variations::definition::Feature::NeedsW))
+        });
+        let force_2d = analytic_active
+            || (config.render_mode == crate::scene::transforms::RenderMode::TwoD && has_needs_w);
         let shader_builder = ShaderBuilder::new(global_registry().clone());
         let constants = crate::shader_cache::ShaderCache::constants_from_config(config);
         let shader_source = shader_builder.build_from_template(
             &config.flame,
             &active_variations,
-            !analytic_active,           // render_3d (2D shader for analytic flames)
+            !force_2d,                  // render_3d (2D shader for analytic / 2D-NeedsW flames)
             false,                      // path_features_enabled
             config.flame.has_xaos(),    // xaos_enabled
             false,                      // output_histogram_direct → sample-emit
