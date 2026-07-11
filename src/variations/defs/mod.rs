@@ -151,6 +151,7 @@ mod quaternion_julia;
 mod quaternion_rotation;
 mod quaternion_linear;
 mod quaternion_julia_set;
+mod quaternion_camera;
 mod yplot3d_wf;
 mod yplot2d_wf;
 mod parplot2d_wf;
@@ -320,6 +321,7 @@ pub use quaternion_julia::*;
 pub use quaternion_rotation::*;
 pub use quaternion_linear::*;
 pub use quaternion_julia_set::*;
+pub use quaternion_camera::*;
 pub use yplot3d_wf::*;
 pub use yplot2d_wf::*;
 pub use parplot2d_wf::*;
@@ -1147,4 +1149,5 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &QUATERNION_ROTATION,
     &QUATERNION_LINEAR,
     &QUATERNION_JULIA_SET,
+    &QUATERNION_CAMERA,
 ];
