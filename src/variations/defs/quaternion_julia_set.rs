@@ -62,10 +62,11 @@ pub static QUATERNION_JULIA_SET: VariationDef = VariationDef {
         param!("sample_range", "Sample Range", float, 2.0, 0.2, 4.0, "Radius of the BALL the samples are drawn from (a ball, not a cube — so no box-face clipping). The whole set lies within |q| <= bailout, so leaving this at the bailout radius (2) guarantees the entire cross-section is covered. Shrink it ONLY to trade coverage for density on a set you know is smaller — too small clips (now as a sphere, not a cube)."),
         param!("w_slice", "Slice Value", float, 0.0, -2.0, 2.0, "Position of the cutting hyperplane along the Slice Axis (3D only). Sweep it (e.g. -0.6..0.6) to walk Bourke's slice series through the 4D solid."),
         param!("surface", "Surface Shell", float, 0.03, 0.0, 0.5, "0 = fill the SOLID interior (shows the object's form). >0 = plot only the boundary SHELL of this WORLD-SPACE thickness, found with a distance estimator (the exterior points within `surface` of the set), hiding the interior and deep exterior. This reveals Bourke's fractal surface detail at uniform density; ~0.02-0.05 is a crisp skin, larger = thicker/fuzzier."),
-        param!("w_color", "Color by Escape", float, 2.0, 0.0, 8.0, "0 = off. >0 = write a palette index from the escape speed: fract((escape_iter/limit) * scale), giving the classic escape-time bands across the surface. Needs the transform's direct_color > 0. (In crawl mode, colors by radius instead.)"),
+        param!("w_color", "Color Scale", float, 2.0, 0.0, 8.0, "0 = off. >0 = write a palette index per Color Mode: escape-time bands (mode 0, scale = band frequency) or depth-into-shell (mode 1, scale = contrast exponent). Needs the transform's direct_color > 0. (Crawl + mode 0 colors by radius instead — the escape count isn't retained across rejected steps.)"),
         param!("crawl", "Surface Crawl", bool, false, "OFF = uniform Monte-Carlo sampling (simple, but ~97% of samples miss a thin surface shell). ON = a per-thread walk that stays pinned to the boundary via the distance estimator, so nearly every step plots a useful surface point — a big speedup for SURFACE renders. Needs Surface Shell > 0 (uses 0.02 if left at 0). Leave OFF for solid fill (uniform is already efficient there)."),
         param!("crawl_step", "Crawl Step", float, 0.04, 0.005, 0.3, "Crawl mode only: size of each random step along the surface. Smaller = hugs the surface tighter but traverses slower; larger = faster coverage but looser. ~0.02-0.06 works well; scale it down for finer detail."),
         param!("slice_axis", "Slice Axis", unlimited_int, 3.0, 0.0, 3.0, "Which quaternion component the cutting hyperplane pins to Slice Value: 0 = x/i, 1 = y/j, 2 = z/k, 3 = w/real. CRITICAL for a complex c (cy=cz=0, e.g. Bourke's -1+0.2i): the real-axis slice (3) is ALWAYS a smooth featureless ball of revolution; slice j or k (1 or 2) at value 0 instead — that slice contains the complex plane, giving the classic detailed Bourke solid. For vector-axis slices the real axis is plotted as screen Y so the Julia detail faces the camera."),
+        param!("color_mode", "Color Mode", unlimited_int, 0.0, 0.0, 1.0, "What Color Scale writes to the palette index. 0 = escape-time bands: fract(escape_fraction * scale) — wraps, so the palette needs black at position 0 to keep the outer shell dark. 1 = depth-into-shell: (1 - DE/surface)^scale — monotone, true surface at the palette's TOP end, shell edge at 0, no wrapping; any dark-at-0 palette just works, and Color Scale acts as a contrast exponent (>1 concentrates brightness at the surface). Shell mode only (solid interiors keep the base color)."),
     ],
     wgsl_2d: WGSL_2D,
     wgsl_3d: WGSL_3D,
@@ -207,6 +208,7 @@ fn variation_quaternion_julia_set(p: vec3<f32>, xform_id: u32, variation_id: u32
     let wcol = get_param(xform_id, variation_id, 10u);
     let crawl = get_param(xform_id, variation_id, 11u) > 0.5;
     let axis = min(u32(get_param(xform_id, variation_id, 13u) + 0.5), 3u);
+    let cmode = u32(get_param(xform_id, variation_id, 14u) + 0.5);
 
     if (!crawl) {
         // UNIFORM sampling: a fresh independent sample each call. Solid
@@ -221,7 +223,15 @@ fn variation_quaternion_julia_set(p: vec3<f32>, xform_id: u32, variation_id: u32
         } else {
             if (!escaped || de > surface) { *hide = true; }
         }
-        if (wcol > 1e-6 && escaped) { *vc = fract(ev.z * wcol); }
+        if (wcol > 1e-6 && escaped) {
+            if (cmode == 1u && surface > 0.0) {
+                // Depth-into-shell: monotone, surface = 1, shell edge = 0;
+                // wcol is a contrast exponent (no fract wrapping).
+                *vc = pow(clamp(1.0 - de / surface, 0.0, 1.0), wcol);
+            } else {
+                *vc = fract(ev.z * wcol);
+            }
+        }
         return pos;
     }
 
@@ -267,7 +277,13 @@ fn variation_quaternion_julia_set(p: vec3<f32>, xform_id: u32, variation_id: u32
     // descending / interior → suppressed as burn-in). Color by radius (the
     // escape count isn't retained across a rejected step).
     if (dec >= surf) { *hide = true; }
-    if (wcol > 1e-6) { *vc = fract(length(pc) * wcol); }
+    if (wcol > 1e-6) {
+        if (cmode == 1u) {
+            *vc = pow(clamp(1.0 - dec / surf, 0.0, 1.0), wcol);
+        } else {
+            *vc = fract(length(pc) * wcol);
+        }
+    }
     return pc;
 }
 "#;
