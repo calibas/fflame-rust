@@ -1939,15 +1939,22 @@ impl FlameBuffers {
         true
     }
 
-    /// Clear histogram buffer only (before each batch for proper accumulation math)
-    pub fn clear_histogram(&self, encoder: &mut CommandEncoder) {
-        if self.solid_depth_region {
-            // Per-batch clear touches only the RGBD region: the depth region
-            // persists across batches so the nearest-depth test tightens
-            // progressively. Full resets go through clear_all /
-            // clear_histogram_and_paths, which zero everything — 0 is the
-            // depth encoding's "no sample" sentinel, so a plain zero clear
-            // is a correct depth reset.
+    /// Clear histogram buffer only (before each batch for proper accumulation math).
+    ///
+    /// `reset_depth`: also clear the solid depth region. Pass true in
+    /// OVERWRITE mode (interactive param drags) — the fractal is changing
+    /// frame to frame, and a persistent depth region would occlusion-test
+    /// new samples against the OLD shape's surface (dark patches wherever
+    /// the new shape sits deeper). Depth is then single-batch, consistent
+    /// with the single-batch image overwrite mode displays. Pass false for
+    /// progressive accumulation, where depth persists across batches and
+    /// the occlusion test tightens as the run converges.
+    pub fn clear_histogram(&self, encoder: &mut CommandEncoder, reset_depth: bool) {
+        if self.solid_depth_region && !reset_depth {
+            // RGBD only — the depth region survives this batch boundary.
+            // Full resets go through clear_all / clear_histogram_and_paths,
+            // which zero everything — 0 is the depth encoding's "no sample"
+            // sentinel, so a plain zero clear is a correct depth reset.
             encoder.clear_buffer(&self.histogram_buffer, 0, Some(self.histogram_rgbd_bytes()));
         } else {
             encoder.clear_buffer(&self.histogram_buffer, 0, None);

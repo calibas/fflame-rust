@@ -643,9 +643,12 @@ post_symmetry: (&self.post_symmetry).into(),
             self.total_iterations += samples_this_frame;
         }
 
-        // Clear histogram buffer before each batch (needed for proper accumulation math)
+        // Clear histogram buffer before each batch (needed for proper accumulation
+        // math). In overwrite mode the solid depth region resets with it — the
+        // fractal is changing between frames, so the OLD shape's surface must not
+        // occlude the NEW shape's samples (see FlameBuffers::clear_histogram).
         if clear_histogram {
-            self.buffers.clear_histogram(encoder);
+            self.buffers.clear_histogram(encoder, self.overwrite_mode);
         }
         // Clear path buffer only on full reset (view change, flame change, etc.)
         // Path buffer persists across batches to accumulate path data for all pixels
