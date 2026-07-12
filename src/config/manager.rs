@@ -2043,6 +2043,30 @@ impl ConfigManager {
             ConfigPath::FarDensityFade => Ok(config.far_density_fade.into()),
             ConfigPath::SolidStrength => Ok(config.solid_strength.into()),
             ConfigPath::SurfaceThickness => Ok(config.surface_thickness.into()),
+            ConfigPath::ShadingStrength => Ok(config.solid_shading.shading_strength.into()),
+            ConfigPath::SolidAmbient => Ok(config.solid_shading.ambient.into()),
+            ConfigPath::SolidDiffuse => Ok(config.solid_shading.diffuse.into()),
+            ConfigPath::SolidSpecular => Ok(config.solid_shading.specular.into()),
+            ConfigPath::SolidShininess => Ok(config.solid_shading.shininess.into()),
+            ConfigPath::SsaoStrength => Ok(config.solid_shading.ssao_strength.into()),
+            ConfigPath::SsaoRadius => Ok(config.solid_shading.ssao_radius.into()),
+            ConfigPath::SolidLightEnabled { index } => {
+                let l = config.solid_shading.lights.get(*index).ok_or(ConfigError::InvalidIndex)?;
+                Ok(l.enabled.into())
+            }
+            ConfigPath::SolidLightParam { index, param } => {
+                let l = config.solid_shading.lights.get(*index).ok_or(ConfigError::InvalidIndex)?;
+                let v = match param.as_str() {
+                    "azimuth" => l.azimuth,
+                    "elevation" => l.elevation,
+                    "intensity" => l.intensity,
+                    "color_r" => l.color[0],
+                    "color_g" => l.color[1],
+                    "color_b" => l.color[2],
+                    _ => return Err(ConfigError::InvalidIndex),
+                };
+                Ok(v.into())
+            }
             ConfigPath::FarDensityFadeStart => Ok(config.far_density_fade_start.into()),
 
             // Effects
@@ -2807,6 +2831,44 @@ impl ConfigManager {
             }
             ConfigPath::SurfaceThickness => {
                 self.current.surface_thickness = value.try_into()?;
+            }
+            ConfigPath::ShadingStrength => {
+                self.current.solid_shading.shading_strength = value.try_into()?;
+            }
+            ConfigPath::SolidAmbient => {
+                self.current.solid_shading.ambient = value.try_into()?;
+            }
+            ConfigPath::SolidDiffuse => {
+                self.current.solid_shading.diffuse = value.try_into()?;
+            }
+            ConfigPath::SolidSpecular => {
+                self.current.solid_shading.specular = value.try_into()?;
+            }
+            ConfigPath::SolidShininess => {
+                self.current.solid_shading.shininess = value.try_into()?;
+            }
+            ConfigPath::SsaoStrength => {
+                self.current.solid_shading.ssao_strength = value.try_into()?;
+            }
+            ConfigPath::SsaoRadius => {
+                self.current.solid_shading.ssao_radius = value.try_into()?;
+            }
+            ConfigPath::SolidLightEnabled { index } => {
+                let l = self.current.solid_shading.lights.get_mut(*index).ok_or(ConfigError::InvalidIndex)?;
+                l.enabled = value.try_into()?;
+            }
+            ConfigPath::SolidLightParam { index, param } => {
+                let l = self.current.solid_shading.lights.get_mut(*index).ok_or(ConfigError::InvalidIndex)?;
+                let v: f32 = value.try_into()?;
+                match param.as_str() {
+                    "azimuth" => l.azimuth = v,
+                    "elevation" => l.elevation = v,
+                    "intensity" => l.intensity = v,
+                    "color_r" => l.color[0] = v,
+                    "color_g" => l.color[1] = v,
+                    "color_b" => l.color[2] = v,
+                    _ => return Err(ConfigError::InvalidIndex),
+                }
             }
             ConfigPath::FarDensityFadeStart => {
                 self.current.far_density_fade_start = value.try_into()?;
