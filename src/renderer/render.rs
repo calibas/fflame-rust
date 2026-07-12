@@ -313,6 +313,10 @@ pub async fn render(
     // Reset effect slot counter (allows multiple effects with unique params in same submit)
     effect_chain.reset_slots();
 
+    // Solid brightness renormalization: exact accepted-density measurement
+    // before the single final tonemap.
+    renderer.apply_exact_density_fraction(device, queue);
+
     // Solid-rendering shade pass — same ordering as the interactive frame:
     // shade, then density effects, then tonemap.
     let shade_ran = renderer.run_shade_pass(

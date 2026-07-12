@@ -238,6 +238,21 @@ specular. The milestone where same-palette shapes become legible.
 - [ ] Visual regression scenes: single light, multi-light, SSAO-only,
       solid_strength sweep.
 
+### Brightness renormalization (landed with Phase 1)
+
+Hard occlusion culls most dispatched samples, but the tonemap normalizes
+by dispatched iterations — solids rendered dark by exactly the culled
+fraction (the Phase 0 "dark cloud" finding). Fixed by measurement: a
+one-workgroup GPU reduction (`shaders/density_stats.wgsl`) sums the
+accumulator's alpha (accepted density); `survival_fraction =
+sum / samples_in_buffer` scales the tonemap's `sample_density`.
+Interactive path: async readback every 16 frames, EMA-smoothed (a couple
+frames of lag is invisible for a brightness scalar). CLI path: one exact
+blocking measurement before the final tonemap. Fraction clamped to
+[0.005, 1] (≤200× boost); forced to 1.0 whenever occlusion isn't culling
+(transparent renders verified bit-identical). Self-calibrating for any
+solid_strength — partial occlusion measures its own partial fraction.
+
 ## Phase 2 — density volume
 
 Deliverable: world-space ∇ρ normals (stable under camera motion, no

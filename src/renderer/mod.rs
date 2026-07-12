@@ -3,6 +3,7 @@ pub mod effect_chain;
 pub mod histogram;
 pub mod render;
 pub mod shade_pass;
+pub mod density_stats;
 pub mod thumbnail;
 
 pub use compute_kernel::{FlameRenderer, PathEntry};
