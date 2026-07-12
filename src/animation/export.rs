@@ -1811,11 +1811,30 @@ pub async fn export_animation_fast(
         )
         .await;
 
+        // Solid rendering finalize — mirrors the interactive frame and the
+        // CLI export: exact brightness renormalization for occluded
+        // renders, then the shade pass (lighting/SSAO), then tonemap from
+        // the shaded output.
+        renderer.apply_exact_density_fraction(&device, &queue);
+
         // Tonemap
         let mut tonemap_encoder = device.create_command_encoder(&CommandEncoderDescriptor {
             label: Some("Tonemap"),
         });
-        renderer.tonemap_pass(&queue, &mut tonemap_encoder);
+        let shade_ran = renderer.run_shade_pass(
+            &device,
+            &queue,
+            &mut tonemap_encoder,
+            frame_config.zoom,
+            frame_config.rotation,
+            frame_config.pan_x,
+            frame_config.pan_y,
+        );
+        if shade_ran {
+            renderer.tonemap_pass_with_input(&device, &queue, &mut tonemap_encoder, renderer.shade_output_view());
+        } else {
+            renderer.tonemap_pass(&queue, &mut tonemap_encoder);
+        }
         queue.submit(std::iter::once(tonemap_encoder.finish()));
 
         // Run color effects if enabled
