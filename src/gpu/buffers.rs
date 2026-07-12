@@ -892,7 +892,12 @@ pub struct GpuParams {
     // Mirror in shaders/core/header.wgsl.
     pub volume_dim: u32,     // Grid resolution per axis (e.g. 192)
     pub volume_extent: f32,  // World half-extent of the grid cube
-    pub _pad_volume: [u32; 2],
+    // World-space center of the grid cube (view-fit mode tracks the
+    // world point at screen center; manual mode is the origin).
+    pub volume_center_x: f32,
+    pub volume_center_y: f32,
+    pub volume_center_z: f32,
+    pub _pad_volume: [u32; 3],
 }
 
 /// Plot-time symmetry params packed for the GPU uniform. Mirrors the
@@ -1480,7 +1485,10 @@ impl FlameBuffers {
             post_symmetry: GpuPostSymmetry::none(),
             volume_dim: 0,
             volume_extent: 2.5,
-            _pad_volume: [0; 2],
+            volume_center_x: 0.0,
+            volume_center_y: 0.0,
+            volume_center_z: 0.0,
+            _pad_volume: [0; 3],
         };
 
         let params_buffer = device.create_buffer_init(&util::BufferInitDescriptor {

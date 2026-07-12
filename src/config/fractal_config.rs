@@ -630,6 +630,16 @@ pub struct SolidShadingSettings {
     /// [-extent, extent]^3 centered on the origin). Flames typically live
     /// within ~2; enlarge for sprawling scenes (coarser voxels).
     pub volume_extent: f32,
+    /// Auto-fit the volume to the VIEW (default): centered on the world
+    /// point at screen center, sized from zoom so voxels stay ~1/100th
+    /// of the visible width at any magnification. A fixed world cube
+    /// wastes the entire grid when zoomed in (voxels larger than the
+    /// visible object → blocky normals/AO, dead occlusion repair).
+    /// Camera/zoom/pan changes already reset accumulation — which clears
+    /// and re-splats the volume — so tracking the view costs nothing.
+    /// When false, volume_extent is used as a manual world half-extent
+    /// centered on the origin.
+    pub volume_auto_fit: bool,
     /// Volume shadow-march strength (0 = off): each light's diffuse +
     /// specular is attenuated by the density integrated along a ray
     /// marched toward it through the volume. Needs volume_enabled.
@@ -654,6 +664,7 @@ impl Default for SolidShadingSettings {
             gap_fill: 0,
             volume_enabled: false,
             volume_extent: 2.5,
+            volume_auto_fit: true,
             shadow_strength: 0.0,
             lights: [
                 SolidLight { enabled: true, ..SolidLight::default() },

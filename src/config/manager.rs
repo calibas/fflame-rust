@@ -2059,6 +2059,7 @@ impl ConfigManager {
             ConfigPath::SurfaceThickness => Ok(config.surface_thickness.into()),
             ConfigPath::VolumeEnabled => Ok(config.solid_shading.volume_enabled.into()),
             ConfigPath::VolumeExtent => Ok(config.solid_shading.volume_extent.into()),
+            ConfigPath::VolumeAutoFit => Ok(config.solid_shading.volume_auto_fit.into()),
             ConfigPath::SolidShadowStrength => Ok(config.solid_shading.shadow_strength.into()),
             ConfigPath::ShadingStrength => Ok(config.solid_shading.shading_strength.into()),
             ConfigPath::SolidAmbient => Ok(config.solid_shading.ambient.into()),
@@ -2856,6 +2857,9 @@ impl ConfigManager {
             }
             ConfigPath::VolumeExtent => {
                 self.current.solid_shading.volume_extent = value.try_into()?;
+            }
+            ConfigPath::VolumeAutoFit => {
+                self.current.solid_shading.volume_auto_fit = value.try_into()?;
             }
             ConfigPath::SolidShadowStrength => {
                 self.current.solid_shading.shadow_strength = value.try_into()?;

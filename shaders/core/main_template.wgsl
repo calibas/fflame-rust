@@ -513,11 +513,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             // makes volume-driven occlusion coverage-independent.
             {
                 let ve = params.volume_extent;
-                if (abs(plot_pos.x) < ve && abs(plot_pos.y) < ve && abs(plot_pos.z) < ve) {
+                let vrel = plot_pos - vec3<f32>(
+                    params.volume_center_x, params.volume_center_y, params.volume_center_z);
+                if (abs(vrel.x) < ve && abs(vrel.y) < ve && abs(vrel.z) < ve) {
                     let vd = params.volume_dim;
-                    let vx = min(u32((plot_pos.x / ve * 0.5 + 0.5) * f32(vd)), vd - 1u);
-                    let vy = min(u32((plot_pos.y / ve * 0.5 + 0.5) * f32(vd)), vd - 1u);
-                    let vz = min(u32((plot_pos.z / ve * 0.5 + 0.5) * f32(vd)), vd - 1u);
+                    let vx = min(u32((vrel.x / ve * 0.5 + 0.5) * f32(vd)), vd - 1u);
+                    let vy = min(u32((vrel.y / ve * 0.5 + 0.5) * f32(vd)), vd - 1u);
+                    let vz = min(u32((vrel.z / ve * 0.5 + 0.5) * f32(vd)), vd - 1u);
                     atomicAdd(&density_volume[(vz * vd + vy) * vd + vx], 1u);
                 }
             }

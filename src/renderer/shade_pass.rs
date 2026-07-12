@@ -22,8 +22,8 @@ struct ShadeLight {
     color: [f32; 4],
 }
 
-/// Mirrors WGSL `ShadeParams` (shade.wgsl) — 20 scalars + 5 vec4s +
-/// 4 lights × 32 B = 288 bytes.
+/// Mirrors WGSL `ShadeParams` (shade.wgsl) — 20 scalars + 6 vec4s +
+/// 4 lights × 32 B = 304 bytes.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct ShadeParams {
@@ -52,6 +52,7 @@ struct ShadeParams {
     cam_row1: [f32; 4],
     cam_row2: [f32; 4],
     cam_pos: [f32; 4],
+    vol_center: [f32; 4],
     volume_dim: u32,
     volume_extent: f32,
     vol_density_scale: f32,
@@ -88,6 +89,9 @@ pub struct VolumeShadeInput<'a> {
     pub camera_rotation_y: f32,
     pub camera_bank: f32,
     pub camera_pos: [f32; 3],
+    /// World-space center of the grid cube (must match what the splat
+    /// used — FlameRenderer::volume_placement is the single source).
+    pub center: [f32; 3],
 }
 
 /// Effective world→camera rotation rows, replicating EXACTLY what the
@@ -96,7 +100,7 @@ pub struct VolumeShadeInput<'a> {
 /// there) applied through `camera_transform`'s transposed indexing.
 /// Row r satisfies cam[r] = dot(row_r, world − camera_pos); the matrix
 /// is orthonormal, so the shade pass inverts it by transposition.
-fn effective_camera_rows(camera_rotation_x: f32, camera_rotation_y: f32, camera_bank: f32) -> [[f32; 3]; 3] {
+pub fn effective_camera_rows(camera_rotation_x: f32, camera_rotation_y: f32, camera_bank: f32) -> [[f32; 3]; 3] {
     let (sy, cy) = (0.0f32, 1.0f32); // WGSL yaw slot is always 0
     let (sp, cp) = ((-camera_rotation_x).sin(), (-camera_rotation_x).cos());
     let (sb, cb) = ((-camera_bank).sin(), (-camera_bank).cos());
@@ -593,7 +597,7 @@ impl ShadePass {
         // Phase 2 volume inputs. Density normalizer: rho_norm = 1 marks
         // "solid" at 8× the uniform-spread per-voxel mean — concentrated
         // fractal surfaces sit far above it, Poisson noise far below.
-        let (vol_buffer, vol_dim, vol_extent, vol_scale, cam_rows, cam_pos) = match volume {
+        let (vol_buffer, vol_dim, vol_extent, vol_scale, cam_rows, cam_pos, vol_center) = match volume {
             Some(v) if v.dim > 0 => {
                 let voxels = (v.dim as f64).powi(3);
                 let scale = (voxels / (f64::from(v.splats.max(1.0)) * 8.0)) as f32;
@@ -604,9 +608,10 @@ impl ShadePass {
                     scale,
                     effective_camera_rows(v.camera_rotation_x, v.camera_rotation_y, v.camera_bank),
                     v.camera_pos,
+                    v.center,
                 )
             }
-            _ => (&self.dummy_volume, 0, 0.0, 0.0, [[0.0; 3]; 3], [0.0; 3]),
+            _ => (&self.dummy_volume, 0, 0.0, 0.0, [[0.0; 3]; 3], [0.0; 3], [0.0; 3]),
         };
 
         let params = ShadeParams {
@@ -635,6 +640,7 @@ impl ShadePass {
             cam_row1: [cam_rows[1][0], cam_rows[1][1], cam_rows[1][2], 0.0],
             cam_row2: [cam_rows[2][0], cam_rows[2][1], cam_rows[2][2], 0.0],
             cam_pos: [cam_pos[0], cam_pos[1], cam_pos[2], 0.0],
+            vol_center: [vol_center[0], vol_center[1], vol_center[2], 0.0],
             volume_dim: vol_dim,
             volume_extent: vol_extent,
             vol_density_scale: vol_scale,

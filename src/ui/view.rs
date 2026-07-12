@@ -527,17 +527,28 @@ pub fn render_view_content(
                     );
                 }
                 if volume_enabled {
-                    let mut volume_extent = config.solid_shading.volume_extent;
-                    let response = ui.add(
-                        super::VkbSlider::new(&mut volume_extent, 0.5..=20.0)
-                            .text(t!("view.volume_extent").as_ref())
-                            .step_by(0.1)
-                    ).on_hover_text(t!("view.tooltip_volume_extent"));
+                    let mut auto_fit = config.solid_shading.volume_auto_fit;
+                    let response = ui.checkbox(&mut auto_fit, t!("view.volume_auto_fit").as_ref())
+                        .on_hover_text(t!("view.tooltip_volume_auto_fit"));
                     if response.changed() {
                         let _ = config_manager.update_param(
-                            ConfigPath::VolumeExtent,
-                            volume_extent.into()
+                            ConfigPath::VolumeAutoFit,
+                            auto_fit.into()
                         );
+                    }
+                    if !auto_fit {
+                        let mut volume_extent = config.solid_shading.volume_extent;
+                        let response = ui.add(
+                            super::VkbSlider::new(&mut volume_extent, 0.5..=20.0)
+                                .text(t!("view.volume_extent").as_ref())
+                                .step_by(0.1)
+                        ).on_hover_text(t!("view.tooltip_volume_extent"));
+                        if response.changed() {
+                            let _ = config_manager.update_param(
+                                ConfigPath::VolumeExtent,
+                                volume_extent.into()
+                            );
+                        }
                     }
                 }
 

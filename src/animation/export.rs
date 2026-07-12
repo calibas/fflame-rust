@@ -657,6 +657,7 @@ fn apply_config_value(
         (ConfigPath::SurfaceThickness, ConfigValue::Float(v)) => config.surface_thickness = *v,
         (ConfigPath::VolumeEnabled, ConfigValue::Bool(v)) => config.solid_shading.volume_enabled = *v,
         (ConfigPath::VolumeExtent, ConfigValue::Float(v)) => config.solid_shading.volume_extent = *v,
+        (ConfigPath::VolumeAutoFit, ConfigValue::Bool(v)) => config.solid_shading.volume_auto_fit = *v,
         (ConfigPath::SolidShadowStrength, ConfigValue::Float(v)) => config.solid_shading.shadow_strength = *v,
         (ConfigPath::ShadingStrength, ConfigValue::Float(v)) => config.solid_shading.shading_strength = *v,
         (ConfigPath::SolidAmbient, ConfigValue::Float(v)) => config.solid_shading.ambient = *v,

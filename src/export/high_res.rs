@@ -1621,7 +1621,10 @@ impl HighResExporter {
                 // sample-emit exporter never compiles it.
                 volume_dim: 0,
                 volume_extent: 0.0,
-                _pad_volume: [0; 2],
+                volume_center_x: 0.0,
+                volume_center_y: 0.0,
+                volume_center_z: 0.0,
+                _pad_volume: [0; 3],
             };
             self.queue
                 .write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));
