@@ -224,8 +224,15 @@ specular. The milestone where same-palette shapes become legible.
 - [ ] Per-transform `material` index + material table (diffuse/specular/
       shininess per slot) — the JWF import hook, even before XML import
       exists.
-- [ ] Lighting panel (lights, material editor, SSAO, strengths); config +
-      undo + animation-track paths for all lighting params.
+- [x] Lighting UI: View panel "Lighting" section (shading strength,
+      ambient/diffuse/specular/shininess, SSAO, 4 lights with enable/
+      color/azimuth/elevation/intensity). ConfigPaths: 7 flat params +
+      SolidLightEnabled{index} + SolidLightParam{index, param} (mirroring
+      the DensityEffectParam pattern), all -> IterationReset (smooth
+      overwrite-mode transitions; a dedicated lighter UpdateType is a
+      possible optimization). Undo/history + string roundtrip covered. A
+      dedicated dockable Lighting panel is deferred until the control
+      count grows (materials, Phase 2).
 - [ ] WASM verification pass (all core WebGPU; no FLOAT32_FILTERABLE
       dependency — shade pass uses `textureLoad`).
 - [ ] Visual regression scenes: single light, multi-light, SSAO-only,
