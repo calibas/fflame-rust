@@ -1,0 +1,238 @@
+// Solid-rendering deferred shade pass (Phase 1).
+//
+// Runs between accumulate and tonemap (via tonemap_pass_with_input, like
+// density effects): reads the accumulator (rgb = density-weighted mean
+// flame color = "albedo", a = density) plus the per-pixel nearest-depth
+// region the SOLID splat path maintains inside the histogram buffer, and
+// writes a shaded Rgba32Float image (alpha passed through untouched so
+// the tonemap's log-density math is unaffected).
+//
+// Per pixel:
+//   1. decode nearest depth (inverted ordered-float encoding; 0 = no
+//      sample → emissive pass-through),
+//   2. reconstruct the camera-space position (inverting the Apophysis
+//      projection: zr = 1 + persp·d, camera xy = projected xy · zr),
+//   3. estimate a camera-space normal from depth differences (picking
+//      the smaller of forward/backward differences per axis to avoid
+//      silhouette smearing),
+//   4. SSAO: spiral depth taps, occluded when a neighbor is closer than
+//      the center by more than a normal-dependent bias,
+//   5. Blinn-Phong: ambient + up to 4 directional lights (directions
+//      precomputed host-side in camera space) with diffuse + specular,
+//   6. final rgb = mix(albedo, lit, shading_strength).
+//
+// All reads are textureLoad / raw buffer indexing — no samplers, no
+// FLOAT32_FILTERABLE dependency, WASM-clean.
+
+struct ShadeLight {
+    // xyz = normalized camera-space direction TO the light, w = intensity
+    // (0 when the light is disabled — host bakes enabled into intensity).
+    dir_intensity: vec4<f32>,
+    // rgb = light color (linear), w unused.
+    color: vec4<f32>,
+}
+
+struct ShadeParams {
+    width: u32,
+    height: u32,
+    // View-transform inverse inputs (must match utilities.wgsl
+    // world_to_pixel_3d / project_3d_full).
+    zoom: f32,
+    rotation: f32,
+    pan_x: f32,
+    pan_y: f32,
+    perspective_strength: f32,
+    // Master emissive↔lit blend (0 = pass-through; the host skips the
+    // whole pass at 0).
+    shading_strength: f32,
+
+    ambient: f32,
+    diffuse: f32,
+    specular: f32,
+    shininess: f32,
+
+    ssao_strength: f32,   // 0 = off
+    ssao_radius: f32,     // world units at the surface
+    // Depth-noise scale for the bilateral smooth: the nearest-depth field
+    // carries Monte-Carlo variance on the order of the surface shell, so
+    // neighbors within ~2 shells of the center are averaged before
+    // normals are taken from the smoothed field.
+    surface_thickness: f32,
+    _pad1: f32,
+
+    lights: array<ShadeLight, 4>,
+}
+
+@group(0) @binding(0) var accum_tex: texture_2d<f32>;
+// The full histogram buffer; only the depth region (offset W*H*4 words)
+// is read here. Non-atomic read-only view of the same buffer the splat
+// pass writes with atomics — the shade pass runs after the batch's
+// compute+accumulate, so there are no concurrent writers.
+@group(0) @binding(1) var<storage, read> histogram: array<u32>;
+@group(0) @binding(2) var<uniform> sp: ShadeParams;
+@group(0) @binding(3) var shade_out: texture_storage_2d<rgba32float, write>;
+
+// Decode the splat path's inverted ordered-float depth encoding.
+// Returns the out-of-band sentinel 3e38 ("no sample") for empty pixels —
+// NOT a sign check: legitimate depths are negative whenever geometry sits
+// behind the camera plane (orthographic renders don't clip it, and any
+// object straddling z = 0 has a negative-depth front surface).
+fn depth_at(px: i32, py: i32) -> f32 {
+    if (px < 0 || py < 0 || px >= i32(sp.width) || py >= i32(sp.height)) {
+        return 3.0e38;
+    }
+    let idx = sp.width * sp.height * 4u + u32(py) * sp.width + u32(px);
+    let enc = histogram[idx];
+    if (enc == 0u) {
+        return 3.0e38;
+    }
+    let ord = ~enc;
+    let bits = select(~ord, ord ^ 0x80000000u, (ord & 0x80000000u) != 0u);
+    return bitcast<f32>(bits);
+}
+
+// Camera-space position for a pixel at depth d — the inverse of
+// project_3d_full's pixel mapping. Camera looks down -z; the point sits
+// at camera z = -d.
+fn reconstruct(px: f32, py: f32, d: f32) -> vec3<f32> {
+    let scale = f32(min(sp.width, sp.height)) * 0.25;
+    let center = vec2<f32>(f32(sp.width), f32(sp.height)) * 0.5;
+    var t = (vec2<f32>(px + 0.5, py + 0.5) - center) / scale;
+    t = t / max(sp.zoom, 1e-6);
+    let c = cos(-sp.rotation);
+    let s = sin(-sp.rotation);
+    t = vec2<f32>(t.x * c - t.y * s, t.x * s + t.y * c);
+    t = t + vec2<f32>(sp.pan_x, sp.pan_y);
+    // Perspective divide inversion: projected = camera_xy / zr with
+    // zr = 1 - persp·camera_z = 1 + persp·d.
+    let zr = 1.0 + sp.perspective_strength * d;
+    return vec3<f32>(t * zr, -d);
+}
+
+@compute @workgroup_size(8, 8, 1)
+fn shade_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if (gid.x >= sp.width || gid.y >= sp.height) {
+        return;
+    }
+    let px = i32(gid.x);
+    let py = i32(gid.y);
+    let accum = textureLoad(accum_tex, vec2<i32>(px, py), 0);
+
+    let d = depth_at(px, py);
+    if (d > 1.0e37) {
+        // No surface here — emissive pass-through.
+        textureStore(shade_out, vec2<i32>(px, py), accum);
+        return;
+    }
+
+    let pos = reconstruct(f32(px), f32(py), d);
+
+    // Bilateral slope fit: 9x9 window of neighbors whose depth sits
+    // within a few surface-shells of the center. The raw nearest-depth
+    // field carries Monte-Carlo noise comparable to the shell thickness;
+    // the wide in-window average kills it (~9x noise reduction) without
+    // bleeding across silhouette edges (out-of-window neighbors are
+    // other surfaces). One 81-tap pass per pixel, once per frame.
+    let win = max(sp.surface_thickness, 0.005) * 3.0;
+    var tangent_x: vec3<f32>;
+    var tangent_y: vec3<f32>;
+    {
+        var sum_l = 0.0; var w_l = 0.0;
+        var sum_r = 0.0; var w_r = 0.0;
+        var sum_u = 0.0; var w_u = 0.0;
+        var sum_dn = 0.0; var w_dn = 0.0;
+        for (var oy = -4; oy <= 4; oy = oy + 1) {
+            for (var ox = -4; ox <= 4; ox = ox + 1) {
+                let nd = depth_at(px + ox, py + oy);
+                if (nd > 1.0e37 || abs(nd - d) > win) {
+                    continue;
+                }
+                // Accumulate weighted x/y-slope estimates: each in-window
+                // neighbor contributes its per-pixel depth slope.
+                if (ox != 0) {
+                    sum_l = sum_l + (nd - d) / f32(ox);
+                    w_l = w_l + 1.0;
+                }
+                if (oy != 0) {
+                    sum_u = sum_u + (nd - d) / f32(oy);
+                    w_u = w_u + 1.0;
+                }
+            }
+        }
+        let dzdx = select(0.0, sum_l / w_l, w_l > 0.0);
+        let dzdy = select(0.0, sum_u / w_u, w_u > 0.0);
+        sum_r = dzdx; sum_dn = dzdy; w_r = w_l; w_dn = w_u; // (silence dead vars)
+        // Tangents from the smoothed slopes, one pixel apart in screen
+        // space, reconstructed into camera space.
+        tangent_x = reconstruct(f32(px + 1), f32(py), d + dzdx) - pos;
+        tangent_y = reconstruct(f32(px), f32(py + 1), d + dzdy) - pos;
+    }
+    var n = cross(tangent_y, tangent_x);
+    // Face the camera (camera at origin, looking down -z: normals should
+    // have positive z toward the viewer).
+    if (n.z < 0.0) {
+        n = -n;
+    }
+    let nlen = length(n);
+    if (nlen < 1e-12) {
+        textureStore(shade_out, vec2<i32>(px, py), accum);
+        return;
+    }
+    n = n / nlen;
+
+    // SSAO: 8 spiral taps. A tap occludes when its surface point is
+    // closer to the camera than the center's tangent plane allows
+    // (bias grows with slope), with a range falloff so distant
+    // foreground objects don't darken the background.
+    var ao = 1.0;
+    if (sp.ssao_strength > 0.0) {
+        let scale = f32(min(sp.width, sp.height)) * 0.25;
+        let zr = 1.0 + sp.perspective_strength * d;
+        let radius_px = max(sp.ssao_radius * scale * sp.zoom / max(zr, 1e-3), 1.5);
+        var occl = 0.0;
+        var taps = 0.0;
+        for (var i = 0; i < 8; i = i + 1) {
+            let ang = f32(i) * 2.39996323;          // golden angle spiral
+            let r = radius_px * sqrt((f32(i) + 0.5) / 8.0);
+            let sx = px + i32(round(cos(ang) * r));
+            let sy = py + i32(round(sin(ang) * r));
+            let sd = depth_at(sx, sy);
+            if (sd > 1.0e37) {
+                continue;
+            }
+            taps = taps + 1.0;
+            let diff = d - sd;                       // >0: neighbor nearer
+            let bias = 0.01 + 0.02 * sp.ssao_radius;
+            if (diff > bias) {
+                // Range check: fade occlusion from far-foreground objects.
+                occl = occl + clamp(1.0 - (diff - bias) / (4.0 * sp.ssao_radius + 1e-6), 0.0, 1.0);
+            }
+        }
+        if (taps > 0.0) {
+            ao = 1.0 - sp.ssao_strength * (occl / taps);
+        }
+    }
+
+    // Blinn-Phong with camera-space directional lights.
+    let albedo = accum.rgb;
+    let v = normalize(-pos);
+    var lit = albedo * (sp.ambient * ao);
+    for (var li = 0; li < 4; li = li + 1) {
+        let intensity = sp.lights[li].dir_intensity.w;
+        if (intensity <= 0.0) {
+            continue;
+        }
+        let l = sp.lights[li].dir_intensity.xyz;
+        let lcol = sp.lights[li].color.rgb * intensity;
+        let ndotl = max(dot(n, l), 0.0);
+        lit = lit + albedo * lcol * (sp.diffuse * ndotl * ao);
+        if (sp.specular > 0.0 && ndotl > 0.0) {
+            let h = normalize(l + v);
+            let spec = pow(max(dot(n, h), 0.0), max(sp.shininess, 1.0));
+            lit = lit + lcol * (sp.specular * spec);
+        }
+    }
+
+    let rgb = mix(albedo, lit, clamp(sp.shading_strength, 0.0, 1.0));
+    textureStore(shade_out, vec2<i32>(px, py), vec4<f32>(rgb, accum.a));
+}

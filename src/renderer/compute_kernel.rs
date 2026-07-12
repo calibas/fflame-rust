@@ -202,6 +202,8 @@ pub struct FlameRenderer {
     solid_strength: f32, // Solid rendering: occlusion strength (0 = off)
     surface_thickness: f32, // Solid rendering: depth shell (world units)
     needs_depth_prime: bool, // Next compute batch records depth only (set on reset while solid)
+    solid_shading: crate::config::SolidShadingSettings, // Phase 1 lighting (shade pass); active() => depth capture even at solid_strength 0
+    shade_pass: crate::renderer::shade_pass::ShadePass, // Deferred shade pass (dispatched only when shading is active)
     filter_radius: f32, // Spatial filter (Apo's `filter`): Gaussian sigma in pixels on histogram, 0 = off
     filter_blur_edges: f32, // Bilateral edge-handling [0..1]: 0 = preserve edges (default), 1 = uniform Gaussian
     background_r: f32, // Background color R (for depth fog)
@@ -339,6 +341,8 @@ impl FlameRenderer {
             solid_strength: crate::config::DEFAULT_SOLID_STRENGTH,
             surface_thickness: crate::config::DEFAULT_SURFACE_THICKNESS,
             needs_depth_prime: false,
+            solid_shading: crate::config::SolidShadingSettings::default(),
+            shade_pass: crate::renderer::shade_pass::ShadePass::new(device, width, height),
             filter_radius: 0.0,
             filter_blur_edges: 0.0,
             background_r: 0.0,
@@ -369,10 +373,11 @@ impl FlameRenderer {
 
         // Re-apply the solid depth region — fresh buffers default to none.
         // Bind groups referencing the histogram are recreated just below.
-        let solid_enabled = self.solid_strength > 0.0
+        let solid_enabled = (self.solid_strength > 0.0 || self.solid_shading.active())
             && matches!(self.current_render_mode, crate::scene::transforms::RenderMode::ThreeD);
         self.buffers.set_solid_depth_region(device, solid_enabled);
         self.needs_depth_prime = solid_enabled;
+        self.shade_pass.resize(device, width, height);
 
         // Recreating variation_params_buffer wipes the init-derived slots
         // (slots N..N+M, written by the init dispatch). User-param slots
@@ -501,7 +506,7 @@ impl FlameRenderer {
             has_analytic_blur: flame.analytic_blur_active(&crate::variations::global_registry(), render_mode),
             flatten_z_per_iter: matches!(render_mode, crate::scene::transforms::RenderMode::ThreeD)
                 && !preserve_z,
-            solid_enabled: self.solid_strength > 0.0
+            solid_enabled: (self.solid_strength > 0.0 || self.solid_shading.active())
                 && matches!(render_mode, crate::scene::transforms::RenderMode::ThreeD),
             attachment_cap: flame.attachment_cap() as u32,
             // No inlining for incremental updates (would trigger too many shader rebuilds)
@@ -525,7 +530,7 @@ impl FlameRenderer {
     pub fn reset(&mut self, encoder: &mut CommandEncoder, queue: &Queue, _iterations_per_thread: u32, _zoom: f32, _pan_x: f32, _pan_y: f32, _rotation: f32, _camera_rotation_x: f32, _camera_rotation_y: f32, _camera_bank: f32, _camera_x: f32, _camera_y: f32, _camera_z: f32, _speed_factor: f32) {
         // Solid rendering: the depth region is about to be cleared —
         // record depth only on the first batch after this reset.
-        self.needs_depth_prime = self.solid_strength > 0.0
+        self.needs_depth_prime = (self.solid_strength > 0.0 || self.solid_shading.active())
             && matches!(self.current_render_mode, crate::scene::transforms::RenderMode::ThreeD);
         self.reset_iteration_counter();
         // Reset effective_iterations when doing a full reset (buffer cleared)
@@ -1018,6 +1023,49 @@ post_symmetry: (&self.post_symmetry).into(),
         self.buffers.current_accumulation_view()
     }
 
+    /// Solid-rendering shade pass (Phase 1). Dispatches when lighting is
+    /// active and the depth region exists; returns whether it ran (the
+    /// caller then feeds `shade_output_view()` to density effects /
+    /// tonemap instead of the accumulator). Zero cost when off — nothing
+    /// is dispatched.
+    pub fn run_shade_pass(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        encoder: &mut CommandEncoder,
+        zoom: f32,
+        rotation: f32,
+        pan_x: f32,
+        pan_y: f32,
+    ) -> bool {
+        let lit = self.solid_shading.active()
+            && matches!(self.current_render_mode, crate::scene::transforms::RenderMode::ThreeD)
+            && self.buffers.solid_depth_region;
+        if !lit {
+            return false;
+        }
+        self.shade_pass.run(
+            device,
+            queue,
+            encoder,
+            self.buffers.current_accumulation_view(),
+            &self.buffers.histogram_buffer,
+            &self.solid_shading,
+            zoom,
+            rotation,
+            pan_x,
+            pan_y,
+            self.perspective_strength,
+            self.surface_thickness,
+        );
+        true
+    }
+
+    /// Shaded output view (valid after `run_shade_pass` returned true).
+    pub fn shade_output_view(&self) -> &TextureView {
+        self.shade_pass.output_view()
+    }
+
     /// Debug: Read back scale buffer and compute statistics
     // Note: debug_scale_stats() removed - scale_buffer no longer exists
 
@@ -1098,9 +1146,11 @@ post_symmetry: (&self.post_symmetry).into(),
         self.burn_in = burn_in;
 
         // 4b. Solid rendering: sync state + histogram depth region.
+        // Depth capture activates for occlusion OR lighting (see update_flame).
         self.solid_strength = config.solid_strength;
         self.surface_thickness = config.surface_thickness;
-        let solid_enabled = config.solid_strength > 0.0
+        self.solid_shading = config.solid_shading.clone();
+        let solid_enabled = (config.solid_strength > 0.0 || self.solid_shading.active())
             && matches!(config.render_mode, crate::scene::transforms::RenderMode::ThreeD);
         if self.buffers.set_solid_depth_region(device, solid_enabled) {
             self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
@@ -1214,13 +1264,17 @@ post_symmetry: (&config.flame.post_symmetry).into(),
     }
 
     /// Update the flame being rendered
-    pub fn update_flame(&mut self, device: &Device, queue: &Queue, flame: &Flame, iterations_per_thread: u32, burn_in: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_bank: f32, camera_x: f32, camera_y: f32, camera_z: f32, speed_factor: f32, dof_focus_distance: f32, dof_blur_strength: f32, fog_strength: f32, fog_start: f32, background_color: [f32; 3], filter_radius: f32, filter_blur_edges: f32, render_mode: crate::scene::transforms::RenderMode, perspective_strength: f32, depth_density_compensation: f32, far_density_fade: f32, far_density_fade_start: f32, preserve_z: bool, solid_strength: f32, surface_thickness: f32) {
+    pub fn update_flame(&mut self, device: &Device, queue: &Queue, flame: &Flame, iterations_per_thread: u32, burn_in: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_bank: f32, camera_x: f32, camera_y: f32, camera_z: f32, speed_factor: f32, dof_focus_distance: f32, dof_blur_strength: f32, fog_strength: f32, fog_start: f32, background_color: [f32; 3], filter_radius: f32, filter_blur_edges: f32, render_mode: crate::scene::transforms::RenderMode, perspective_strength: f32, depth_density_compensation: f32, far_density_fade: f32, far_density_fade_start: f32, preserve_z: bool, solid_strength: f32, surface_thickness: f32, solid_shading: crate::config::SolidShadingSettings) {
         // Solid rendering state must be set BEFORE build_shader_constants
         // below (it feeds ShaderConstants::solid_enabled) and before the
         // histogram depth-region toggle.
         self.solid_strength = solid_strength;
         self.surface_thickness = surface_thickness;
-        let solid_enabled = solid_strength > 0.0
+        self.solid_shading = solid_shading;
+        // Depth capture activates for occlusion OR lighting: the shade pass
+        // needs the depth region even when solid_strength is 0 (gating is a
+        // no-op multiplier there), so transparent flames can be lit.
+        let solid_enabled = (solid_strength > 0.0 || self.solid_shading.active())
             && matches!(render_mode, crate::scene::transforms::RenderMode::ThreeD);
         if self.buffers.set_solid_depth_region(device, solid_enabled) {
             // Histogram buffer was recreated — every bind group that
