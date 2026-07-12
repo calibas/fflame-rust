@@ -389,6 +389,8 @@ view:
   solid_section: "Solid Rendering"
   solid_strength: "Solid Strength"
   surface_thickness: "Surface Thickness"
+  volume_enabled: "Density Volume"
+  volume_extent: "Volume Extent"
   lighting_section: "Lighting"
   shading_strength: "Shading Strength"
   solid_ambient: "Ambient"
@@ -404,6 +406,13 @@ view:
   light_elevation: "Elevation"
   light_intensity: "Intensity"
   tooltip_shading_strength: "Deferred lighting on the depth surface (0 = off).\nBlends the classic emissive flame color toward a lit surface: normals from depth, ambient + up to 4 directional lights, SSAO.\nWorks with Solid Strength 0 too - lighting alone activates the depth buffer.\n3D mode only."
+  tooltip_volume_enabled: "Build a world-space density volume while rendering (Phase 2 solid rendering).
+Feeds volume-based normals, ambient occlusion, shadows and occlusion repair.
+Toggling reallocates the voxel grid and restarts accumulation.
+3D mode only."
+  tooltip_volume_extent: "World-space half-size of the density volume cube.
+Geometry outside +/-extent isn't voxelized - fit it to your flame's bounds.
+Smaller extents give finer voxels for the same grid resolution."
   fly_mode_settings: "Fly Mode Settings"
   fly_camera_mode: "Camera mode:"
   fly_camera_mode_free_look: "Free-look"
@@ -667,6 +676,8 @@ history:
     dof_focus_distance: "DOF Focus Distance"
     solid_strength: "Solid Strength"
     surface_thickness: "Surface Thickness"
+    volume_enabled: "Density Volume"
+    volume_extent: "Volume Extent"
     shading_strength: "Shading Strength"
     solid_ambient: "Ambient Light"
     solid_diffuse: "Diffuse Light"

@@ -506,6 +506,23 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             // path always plots at weight 1.
             var density_weight = 1.0;
 
+{{#if VOLUME}}
+            // Phase 2: density-volume splat — WORLD space (pre-camera), so
+            // the grid is camera-independent and every sample contributes
+            // regardless of which pixel (if any) it lands on. This is what
+            // makes volume-driven occlusion coverage-independent.
+            {
+                let ve = params.volume_extent;
+                if (abs(plot_pos.x) < ve && abs(plot_pos.y) < ve && abs(plot_pos.z) < ve) {
+                    let vd = params.volume_dim;
+                    let vx = min(u32((plot_pos.x / ve * 0.5 + 0.5) * f32(vd)), vd - 1u);
+                    let vy = min(u32((plot_pos.y / ve * 0.5 + 0.5) * f32(vd)), vd - 1u);
+                    let vz = min(u32((plot_pos.z / ve * 0.5 + 0.5) * f32(vd)), vd - 1u);
+                    atomicAdd(&density_volume[(vz * vd + vy) * vd + vx], 1u);
+                }
+            }
+{{/if}}
+
             // Convert to pixel coordinates
 {{#if RENDER_3D}}
             // One projection per plotted copy: pixel + the camera-space

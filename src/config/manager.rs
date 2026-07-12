@@ -2057,6 +2057,8 @@ impl ConfigManager {
             ConfigPath::FarDensityFade => Ok(config.far_density_fade.into()),
             ConfigPath::SolidStrength => Ok(config.solid_strength.into()),
             ConfigPath::SurfaceThickness => Ok(config.surface_thickness.into()),
+            ConfigPath::VolumeEnabled => Ok(config.solid_shading.volume_enabled.into()),
+            ConfigPath::VolumeExtent => Ok(config.solid_shading.volume_extent.into()),
             ConfigPath::ShadingStrength => Ok(config.solid_shading.shading_strength.into()),
             ConfigPath::SolidAmbient => Ok(config.solid_shading.ambient.into()),
             ConfigPath::SolidDiffuse => Ok(config.solid_shading.diffuse.into()),
@@ -2847,6 +2849,12 @@ impl ConfigManager {
             }
             ConfigPath::SurfaceThickness => {
                 self.current.surface_thickness = value.try_into()?;
+            }
+            ConfigPath::VolumeEnabled => {
+                self.current.solid_shading.volume_enabled = value.try_into()?;
+            }
+            ConfigPath::VolumeExtent => {
+                self.current.solid_shading.volume_extent = value.try_into()?;
             }
             ConfigPath::ShadingStrength => {
                 self.current.solid_shading.shading_strength = value.try_into()?;
