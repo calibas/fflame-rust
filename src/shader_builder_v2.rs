@@ -1423,18 +1423,15 @@ impl ShaderBuilder {
         // mode binds samples + sample_counter. See
         // docs/projects/unified-render-pipeline.md.
         processor.set("OUTPUT_HISTOGRAM_DIRECT", output_histogram_direct);
-        // SOLID gates the nearest-depth occlusion block at the splat site
-        // (solid rendering Phase 0). Requirements baked into the flag:
-        //   - 3D only (depth is a camera-space concept),
-        //   - direct-histogram output only (the depth region lives at
-        //     offset W*H*4 inside the histogram binding; the sample-emit
-        //     path has no such buffer — see docs/projects/solid-rendering.md).
-        // False ⇒ byte-identical WGSL to a pre-solid build (hard
-        // requirement, enforced by `solid_off_is_byte_identical`).
-        processor.set(
-            "SOLID",
-            constants.solid_enabled && render_3d && output_histogram_direct,
-        );
+        // SOLID gates the solid-rendering code at the splat site (Phase 0).
+        // 3D only (depth is a camera-space concept). In direct-histogram
+        // mode it emits the nearest-depth atomicMax + occlusion gate; in
+        // sample-emit mode it just carries camera-space depth in the
+        // Sample's spare slot (the tile scatter pass owns the depth region
+        // and gating — see accumulate_samples.wgsl). False ⇒ byte-identical
+        // WGSL to a pre-solid build (hard requirement, enforced by
+        // `solid_off_is_byte_identical`).
+        processor.set("SOLID", constants.solid_enabled && render_3d);
 
         let mut shader = String::new();
 
@@ -2902,10 +2899,15 @@ mod tests {
         let shader_2d_off = builder.build_from_template(&flame, &active, false, false, false, true, &base);
         assert_eq!(shader_2d_on, shader_2d_off, "2D shader unaffected by solid");
 
-        // Sample-emit (tiled export) build ignores solid: no histogram
-        // binding exists there for the depth region to live in.
+        // Sample-emit (tiled export) build: depth rides in the Sample's
+        // spare slot; the atomicMax/gating lives in the scatter pass, NOT
+        // this shader (no histogram binding exists here).
         let shader_emit_on = builder.build_from_template(&flame, &active, true, false, false, false, &on);
-        assert!(!shader_emit_on.contains("solid_d"), "sample-emit path never compiles solid");
+        assert!(shader_emit_on.contains("solid_d"), "sample-emit carries depth in the Sample");
+        assert!(!shader_emit_on.contains("atomicMax(&histogram["), "sample-emit never gates in-shader");
+        // ...and with solid off, the emit shader is byte-identical too.
+        let shader_emit_off = builder.build_from_template(&flame, &active, true, false, false, false, &base);
+        assert!(!shader_emit_off.contains("solid_d"), "no solid code in emit shader when off");
     }
 
     /// The depth encoding used by the SOLID splat block: ordered-float bits,

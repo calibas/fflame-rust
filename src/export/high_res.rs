@@ -34,7 +34,9 @@ pub struct Sample {
     /// Scales the sample's contribution to all four histogram
     /// channels — mirror of the WGSL `Sample.weight` field.
     pub weight: f32,
-    pub _pad2: f32,
+    /// Solid rendering: camera-space depth (positive = in front). Only
+    /// meaningful when the iterate shader was built with SOLID; 0 otherwise.
+    pub depth: f32,
     pub _pad3: f32,
 }
 
@@ -74,15 +76,19 @@ pub struct TileLayout {
     pub tile_height: u32,
     pub image_width: u32,
     pub image_height: u32,
+    /// 4 (RGBD) normally; 5 with solid rendering — each tile's span then
+    /// ends with one u32/pixel of nearest-depth region (the scatter shader
+    /// indexes it at bound_width*bound_height*4 + pixel_idx).
+    pub words_per_pixel: u32,
 }
 
 impl TileLayout {
     /// Byte offset of `tile_idx` inside the concatenated buffer.
-    /// Each tile is `tile_width × tile_height × 16` bytes (4 u32 per
-    /// pixel: R, G, B, density).
+    /// Each tile spans `tile_width × tile_height × words_per_pixel × 4`
+    /// bytes (RGBD, plus the depth word under solid rendering).
     pub fn tile_byte_offset(&self, tile_idx: u32) -> u64 {
         let tile_pixels = (self.image_width as u64) * (self.tile_height as u64);
-        (tile_idx as u64) * tile_pixels * 16
+        (tile_idx as u64) * tile_pixels * (self.words_per_pixel as u64) * 4
     }
 
     /// Y-coordinate of the first row of `tile_idx` in full-image
@@ -182,6 +188,12 @@ pub struct HighResExporter {
     render_mode: RenderMode,
     samples_per_dispatch: u64,
     iterations_per_thread: u32,
+    // Solid rendering (Phase 0): occlusion state mirrored from the config.
+    // solid_enabled = strength > 0 && 3D; drives the SOLID iterate shader,
+    // the 5-words/px tile spans, and the scatter-pass gating.
+    solid_enabled: bool,
+    solid_strength: f32,
+    surface_thickness: f32,
 }
 
 impl HighResExporter {
@@ -941,9 +953,12 @@ impl HighResExporter {
         //                  routing this is unreachable, but a future
         //                  caller hitting HighResExporter::new for a
         //                  small image (e.g. testing) shouldn't crash.
-        let strategy = crate::export::pick_strategy(width, height, &device.limits());
+        let solid_enabled = config.solid_strength > 0.0
+            && matches!(config.render_mode, RenderMode::ThreeD);
+        let hist_words: u64 = if solid_enabled { 5 } else { 4 };
+        let strategy = crate::export::pick_strategy(width, height, &device.limits(), solid_enabled);
         let device_limits = device.limits();
-        let total_hist_size = (width as u64) * (height as u64) * 16; // 4× u32 per pixel
+        let total_hist_size = (width as u64) * (height as u64) * hist_words * 4;
 
         let mut tile_histograms_buffer: Option<Buffer> = None;
         let mut tile_layout: Option<TileLayout> = None;
@@ -970,6 +985,7 @@ impl HighResExporter {
                         tile_height,
                         image_width: width,
                         image_height: height,
+                        words_per_pixel: hist_words as u32,
                     });
                 } else {
                     log::info!(
@@ -1015,6 +1031,7 @@ impl HighResExporter {
                         tile_height: height,
                         image_width: width,
                         image_height: height,
+                        words_per_pixel: hist_words as u32,
                     });
                 } else {
                     log::warn!(
@@ -1270,6 +1287,9 @@ impl HighResExporter {
             accumulation_sampler,
             render_mode: config.render_mode,
             samples_per_dispatch,
+            solid_enabled,
+            solid_strength: config.solid_strength,
+            surface_thickness: config.surface_thickness,
             iterations_per_thread,
         })
     }
@@ -1288,6 +1308,14 @@ impl HighResExporter {
         // incrementally per-dispatch.
         let num_pixels = (self.width as usize) * (self.height as usize);
         let mut histogram: Vec<HistogramPixel> = vec![HistogramPixel::default(); num_pixels];
+        // Solid rendering (CPU accumulate path): per-pixel nearest depth,
+        // persisted across dispatches like the GPU depth regions. The CPU
+        // path is sequential per row, so its gating is deterministic.
+        let mut depth_near: Vec<f32> = if self.solid_enabled && self.tile_histograms_buffer.is_none() {
+            vec![f32::INFINITY; num_pixels]
+        } else {
+            Vec::new()
+        };
 
         // GPU accumulate path uses this scale to widen the [0,1] sample
         // RGB into u32 atomic-add precision; we divide back by it on
@@ -1443,7 +1471,7 @@ impl HighResExporter {
                     let offset = layout.tile_byte_offset(tile_idx);
                     let tile_pixels = (layout.image_width as u64)
                         * (layout.tile_actual_height(tile_idx) as u64);
-                    let size = tile_pixels * 16;
+                    let size = tile_pixels * (layout.words_per_pixel as u64) * 4;
                     self.device.create_bind_group(&BindGroupDescriptor {
                         label: Some("Export Accumulate Bind Group (Tile)"),
                         layout: &self.accumulate_bind_group_layout,
@@ -1644,8 +1672,15 @@ post_symmetry: (&config.flame.post_symmetry).into(),
                             bound_height: layout.tile_actual_height(tile_idx_u32),
                             sample_count,
                             color_scale: color_scale_f,
+                            solid_strength: if self.solid_enabled { self.solid_strength } else { 0.0 },
+                            surface_thickness: self.surface_thickness,
+                            // First dispatch primes the depth region (depth
+                            // only, nothing plotted) — mirrors the interactive
+                            // renderer's post-reset priming.
+                            depth_prime: u32::from(self.solid_enabled && dispatch == 0),
                             _pad0: 0,
                             _pad1: 0,
+                            _pad2: 0,
                         };
                         self.queue.write_buffer(
                             &self.accumulate_params_buffer,
@@ -1710,6 +1745,47 @@ post_symmetry: (&config.flame.post_symmetry).into(),
                     }
 
                     let cs = color_scale_f as f64;
+                    if self.solid_enabled {
+                        // Solid rendering: nearest-depth gating, mirroring the
+                        // GPU scatter (update depth FIRST so a pixel's own
+                        // nearest sample always passes; prime dispatch records
+                        // depth only). Rows are independent, samples within a
+                        // row process in readback order — deterministic.
+                        let prime = dispatch == 0;
+                        let solid_strength = self.solid_strength;
+                        let surface_thickness = self.surface_thickness;
+                        histogram
+                            .par_chunks_mut(width_usize)
+                            .zip(depth_near.par_chunks_mut(width_usize))
+                            .enumerate()
+                            .for_each(|(row_idx, (row_pixels, row_depth))| {
+                                for sample in &row_samples[row_idx] {
+                                    let x = sample.x as i32;
+                                    if x >= 0 && x < width {
+                                        let xi = x as usize;
+                                        if sample.depth < row_depth[xi] {
+                                            row_depth[xi] = sample.depth;
+                                        }
+                                        if prime {
+                                            continue;
+                                        }
+                                        let mut w = sample.weight;
+                                        if sample.depth > row_depth[xi] + surface_thickness {
+                                            w *= 1.0 - solid_strength;
+                                            if w <= 0.0 {
+                                                continue;
+                                            }
+                                        }
+                                        let pixel = &mut row_pixels[xi];
+                                        let ws = color_scale_f * w;
+                                        pixel.r += (sample.r.clamp(0.0, 1.0) * ws).floor() as f64 / cs;
+                                        pixel.g += (sample.g.clamp(0.0, 1.0) * ws).floor() as f64 / cs;
+                                        pixel.b += (sample.b.clamp(0.0, 1.0) * ws).floor() as f64 / cs;
+                                        pixel.count += ws.floor() as f64 / cs;
+                                    }
+                                }
+                            });
+                    } else {
                     histogram
                         .par_chunks_mut(width_usize)
                         .enumerate()
@@ -1736,6 +1812,7 @@ post_symmetry: (&config.flame.post_symmetry).into(),
                                 }
                             }
                         });
+                    }
 
                     total_samples_accumulated += samples.len() as u64;
                 }
@@ -1861,7 +1938,31 @@ post_symmetry: (&config.flame.post_symmetry).into(),
         let mut encoder = self.device.create_command_encoder(&CommandEncoderDescriptor {
             label: Some("Export GPU Histogram Readback Encoder"),
         });
-        encoder.copy_buffer_to_buffer(hist, 0, &readback, 0, bytes);
+        match self.tile_layout {
+            Some(layout) if layout.words_per_pixel > 4 => {
+                // Solid rendering: each tile's span ends with its depth
+                // region — gather only the RGBD words, packed contiguously
+                // into the readback buffer (row order is preserved because
+                // tiles are horizontal slices in image order).
+                let mut dst: u64 = 0;
+                for tile_idx in 0..layout.num_tiles {
+                    let rgbd_bytes = (layout.image_width as u64)
+                        * (layout.tile_actual_height(tile_idx) as u64)
+                        * 16;
+                    encoder.copy_buffer_to_buffer(
+                        hist,
+                        layout.tile_byte_offset(tile_idx),
+                        &readback,
+                        dst,
+                        rgbd_bytes,
+                    );
+                    dst += rgbd_bytes;
+                }
+            }
+            _ => {
+                encoder.copy_buffer_to_buffer(hist, 0, &readback, 0, bytes);
+            }
+        }
         self.queue.submit(std::iter::once(encoder.finish()));
 
         let slice = readback.slice(..);

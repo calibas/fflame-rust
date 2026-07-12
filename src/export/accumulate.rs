@@ -17,7 +17,7 @@ use egui_wgpu::wgpu::*;
 
 /// Parameters uniform consumed by `accumulate_samples.wgsl`. Layout
 /// must match the WGSL `AccumulateParams` struct exactly — ordered for
-/// std140 with explicit padding to round to 32 bytes (a multiple of 16,
+/// std140 with explicit padding to round to 48 bytes (a multiple of 16,
 /// the std140 minimum stride for uniforms).
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -40,8 +40,18 @@ pub struct AccumulateParams {
     /// — must be the same value the iterate dispatch wrote with so
     /// post-tonemap densities are proportional.
     pub color_scale: f32,
+    /// Solid rendering occlusion strength (0 = off). When active the
+    /// bound histogram region carries one extra u32 per pixel at offset
+    /// bound_width*bound_height*4 (the nearest-depth region) and the
+    /// scatter gates each sample against it.
+    pub solid_strength: f32,
+    /// Solid rendering: world-space thickness of the accepted depth shell.
+    pub surface_thickness: f32,
+    /// 1 = depth-priming dispatch (record depth only, plot nothing).
+    pub depth_prime: u32,
     pub _pad0: u32,
     pub _pad1: u32,
+    pub _pad2: u32,
 }
 
 /// Threads per workgroup along x. Must match the `@workgroup_size` in
@@ -128,9 +138,10 @@ mod tests {
 
     #[test]
     fn accumulate_params_size_matches_wgsl() {
-        // WGSL struct AccumulateParams: 4 u32 + 1 u32 + 1 f32 + 2 u32 padding = 32 bytes.
-        // std140 uniform layout pads to a multiple of 16; 32 satisfies.
-        assert_eq!(std::mem::size_of::<AccumulateParams>(), 32);
+        // WGSL struct AccumulateParams: 5 u32 + 1 f32 (color_scale) +
+        // 2 f32 + 1 u32 (solid fields) + 3 u32 padding = 48 bytes.
+        // std140 uniform layout pads to a multiple of 16; 48 satisfies.
+        assert_eq!(std::mem::size_of::<AccumulateParams>(), 48);
     }
 
     #[test]

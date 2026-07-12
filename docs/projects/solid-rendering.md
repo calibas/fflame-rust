@@ -164,15 +164,25 @@ ghost".
       serde skip-default, ConfigPath::SolidStrength/SurfaceThickness →
       IterationReset, undo/history i18n keys).
 - [x] UI: two sliders in the View panel ("Solid Rendering" section).
-- [ ] Sample-emit + tiled + CPU export paths (>128 MB exports render
-      WITHOUT solid for now — the SOLID flag self-gates off the sample-emit
-      shader; wire the tiled paths before closing Phase 0).
+- [x] Sample-emit + tiled + CPU export paths: depth rides the Sample's
+      spare slot; the tile scatter pass owns a per-tile depth region
+      (appended to each tile's span, 5 words/px) with the same encoding,
+      gating, and first-dispatch priming; the CPU accumulate path gates
+      deterministically (sequential per row). Readback gathers RGBD spans
+      per tile. Engine parity verified (flamerenderer vs highres forced on
+      the same solid config: differences within the run-to-run noise
+      envelope).
 - [x] Tests: `solid_off_is_byte_identical` (byte-identity + 2D +
       sample-emit gating), `solid_depth_encoding_is_monotone`. Baselines
       re-verified pixel-identical with solid off. Visual regression
       category still TODO.
-- [ ] `TARGET_BUFFER_SIZE` math in high_res.rs for the 5/4 growth (only
-      matters once the tiled path carries depth).
+- [x] Size/threshold math is solid-aware end to end:
+      `histogram_size_bytes(_, _, solid)`, `pick_strategy(..., solid)`
+      (tile heights sized for 20 B/px spans + offset alignment), and both
+      app routing sites.
+- [ ] Visual regression category `solid` — needs tolerance-based compare
+      (solid renders are not bit-reproducible, see below); the last open
+      Phase 0 box.
 
 ## Phase 1 — deferred shading
 
