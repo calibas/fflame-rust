@@ -401,18 +401,15 @@ view:
   ssao_radius: "SSAO Radius"
   normal_smoothing: "Normal Smoothing"
   gap_fill: "Gap Fill"
+  shadow_strength: "Shadow Strength"
   solid_light: "Light"
   light_azimuth: "Azimuth"
   light_elevation: "Elevation"
   light_intensity: "Intensity"
   tooltip_shading_strength: "Deferred lighting on the depth surface (0 = off).\nBlends the classic emissive flame color toward a lit surface: normals from depth, ambient + up to 4 directional lights, SSAO.\nWorks with Solid Strength 0 too - lighting alone activates the depth buffer.\n3D mode only."
-  tooltip_volume_enabled: "Build a world-space density volume while rendering (Phase 2 solid rendering).
-Feeds volume-based normals, ambient occlusion, shadows and occlusion repair.
-Toggling reallocates the voxel grid and restarts accumulation.
-3D mode only."
-  tooltip_volume_extent: "World-space half-size of the density volume cube.
-Geometry outside +/-extent isn't voxelized - fit it to your flame's bounds.
-Smaller extents give finer voxels for the same grid resolution."
+  tooltip_volume_enabled: "Build a world-space density volume while rendering (Phase 2 solid rendering).\nFeeds volume-based normals, ambient occlusion, shadows and occlusion repair.\nToggling reallocates the voxel grid and restarts accumulation.\n3D mode only."
+  tooltip_volume_extent: "World-space half-size of the density volume cube.\nGeometry outside +/-extent isn't voxelized - fit it to your flame's bounds.\nSmaller extents give finer voxels for the same grid resolution."
+  tooltip_shadow_strength: "Volume shadow march (0 = off): attenuates each light by the density between the surface and the light.\nRequires the Density Volume - does nothing without it."
   fly_mode_settings: "Fly Mode Settings"
   fly_camera_mode: "Camera mode:"
   fly_camera_mode_free_look: "Free-look"
@@ -685,6 +682,7 @@ history:
     solid_shininess: "Shininess"
     ssao_strength: "SSAO Strength"
     ssao_radius: "SSAO Radius"
+    shadow_strength: "Shadow Strength"
     normal_smoothing: "Normal Smoothing"
     gap_fill: "Gap Fill"
     solid_light_enabled: "Light Enabled"

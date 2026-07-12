@@ -630,6 +630,10 @@ pub struct SolidShadingSettings {
     /// [-extent, extent]^3 centered on the origin). Flames typically live
     /// within ~2; enlarge for sprawling scenes (coarser voxels).
     pub volume_extent: f32,
+    /// Volume shadow-march strength (0 = off): each light's diffuse +
+    /// specular is attenuated by the density integrated along a ray
+    /// marched toward it through the volume. Needs volume_enabled.
+    pub shadow_strength: f32,
     /// Up to 4 directional lights. Light 0 defaults enabled once
     /// shading is turned on via the UI (the config default is all-off,
     /// so `is_default` stays cheap for untouched flames).
@@ -650,6 +654,7 @@ impl Default for SolidShadingSettings {
             gap_fill: 0,
             volume_enabled: false,
             volume_extent: 2.5,
+            shadow_strength: 0.0,
             lights: [
                 SolidLight { enabled: true, ..SolidLight::default() },
                 SolidLight { azimuth: -60.0, elevation: 10.0, intensity: 0.5, ..SolidLight::default() },

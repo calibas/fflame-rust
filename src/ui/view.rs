@@ -562,7 +562,7 @@ pub fn render_view_content(
                 }
 
                 if shading.shading_strength > 0.0 {
-                    let global_sliders: [(ConfigPath, &str, f32, std::ops::RangeInclusive<f32>, f64); 8] = [
+                    let global_sliders: [(ConfigPath, &str, f32, std::ops::RangeInclusive<f32>, f64); 9] = [
                         (ConfigPath::SolidAmbient, "view.solid_ambient", shading.ambient, 0.0..=1.0, 0.01),
                         (ConfigPath::SolidDiffuse, "view.solid_diffuse", shading.diffuse, 0.0..=2.0, 0.01),
                         (ConfigPath::SolidSpecular, "view.solid_specular", shading.specular, 0.0..=2.0, 0.01),
@@ -571,6 +571,8 @@ pub fn render_view_content(
                         (ConfigPath::SsaoRadius, "view.ssao_radius", shading.ssao_radius, 0.01..=1.0, 0.01),
                         (ConfigPath::NormalSmoothing, "view.normal_smoothing", shading.normal_smoothing as f32, 0.0..=3.0, 1.0),
                         (ConfigPath::GapFill, "view.gap_fill", shading.gap_fill as f32, 0.0..=3.0, 1.0),
+                        // Needs the density volume; a no-op without it.
+                        (ConfigPath::SolidShadowStrength, "view.shadow_strength", shading.shadow_strength, 0.0..=1.0, 0.01),
                     ];
                     for (path, label, value, range, step) in global_sliders {
                         let mut v = value;
