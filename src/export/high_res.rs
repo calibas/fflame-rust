@@ -1616,7 +1616,12 @@ impl HighResExporter {
                 background_r: config.background_color[0],
                 background_g: config.background_color[1],
                 background_b: config.background_color[2],
-post_symmetry: (&config.flame.post_symmetry).into(),
+                post_symmetry: (&config.flame.post_symmetry).into(),
+                // VOLUME is gated to the direct-histogram path; the
+                // sample-emit exporter never compiles it.
+                volume_dim: 0,
+                volume_extent: 0.0,
+                _pad_volume: [0; 2],
             };
             self.queue
                 .write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));

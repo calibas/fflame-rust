@@ -309,6 +309,12 @@ pub struct ShaderConstants {
     /// for the shader-cache constants-changed check.
     pub flatten_z_per_iter: bool,
 
+    /// Phase 2 density volume: `config.solid_shading.volume_enabled && 3D`.
+    /// Drives the `VOLUME` template flag — the world-space grid splat at
+    /// the plot site + the binding-6 declaration. False ⇒ byte-identical
+    /// WGSL (enforced alongside the SOLID byte-identity test).
+    pub volume_enabled: bool,
+
     /// Solid rendering (Phase 0): `config.solid_strength > 0 && 3D`.
     /// Drives the `SOLID` template flag — nearest-depth atomicMax +
     /// occlusion gating at the splat site, plus the histogram buffer's
@@ -362,6 +368,7 @@ impl Default for ShaderConstants {
             has_analytic_blur: false,
             flatten_z_per_iter: false,
             solid_enabled: false,
+            volume_enabled: false,
             attachment_cap: 1,
             inlined_transforms: None,
             cumulative_weights: None,
@@ -588,10 +595,11 @@ impl ShaderConstants {
             // only when preserve_z is false (JWF/Apo default).
             flatten_z_per_iter: matches!(render_mode, crate::scene::transforms::RenderMode::ThreeD)
                 && !preserve_z,
-            // Solid isn't knowable from (flame, render_mode) alone —
+            // Solid/volume aren't knowable from (flame, render_mode) alone —
             // config-level. constants_from_config overrides after
             // construction.
             solid_enabled: false,
+            volume_enabled: false,
             attachment_cap: flame.attachment_cap() as u32,
             inlined_transforms: Some(inlined),
             cumulative_weights: Some(cumulative),
@@ -1432,6 +1440,11 @@ impl ShaderBuilder {
         // WGSL to a pre-solid build (hard requirement, enforced by
         // `solid_off_is_byte_identical`).
         processor.set("SOLID", constants.solid_enabled && render_3d);
+        // VOLUME gates the Phase 2 density-grid splat + its binding.
+        processor.set(
+            "VOLUME",
+            constants.volume_enabled && render_3d && output_histogram_direct,
+        );
 
         let mut shader = String::new();
 
@@ -2908,6 +2921,50 @@ mod tests {
         // ...and with solid off, the emit shader is byte-identical too.
         let shader_emit_off = builder.build_from_template(&flame, &active, true, false, false, false, &base);
         assert!(!shader_emit_off.contains("solid_d"), "no solid code in emit shader when off");
+    }
+
+    /// Same zero-cost-off contract for the Phase 2 density volume: with
+    /// `volume_enabled = false` the WGSL is byte-identical to a build that
+    /// predates the feature; enabled compiles the world-space splat +
+    /// binding-6 declaration (3D + direct-histogram only).
+    #[test]
+    fn volume_off_is_byte_identical() {
+        use crate::scene::transforms::{Flame, Transform};
+        let registry = crate::variations::global_registry().clone();
+        let builder = ShaderBuilder::new(registry);
+
+        let mut flame = Flame::new();
+        let mut xform = Transform::new();
+        xform.variations.insert("linear3D".to_string(), 1.0);
+        flame.transforms.push(xform);
+        let mut active = HashMap::new();
+        active.insert("linear3D".to_string(), 1.0);
+
+        let base = ShaderConstants::default();
+        let mut on = ShaderConstants::default();
+        on.volume_enabled = true;
+
+        let shader_base = builder.build_from_template(&flame, &active, true, false, false, true, &base);
+        let mut off = ShaderConstants::default();
+        off.volume_enabled = false;
+        let shader_off = builder.build_from_template(&flame, &active, true, false, false, true, &off);
+        assert_eq!(shader_base, shader_off, "volume off must be byte-identical");
+        assert!(!shader_off.contains("density_volume"), "no volume binding/code when off");
+
+        // Enabled (3D + direct-histogram): binding declaration + splat.
+        let shader_on = builder.build_from_template(&flame, &active, true, false, false, true, &on);
+        assert!(shader_on.contains("var<storage, read_write> density_volume"), "volume binding declared when on");
+        assert!(shader_on.contains("atomicAdd(&density_volume["), "voxel splat present when on");
+        assert!(shader_on.contains("params.volume_extent"), "extent bounds test present when on");
+
+        // 2D build ignores the volume entirely.
+        let shader_2d_on = builder.build_from_template(&flame, &active, false, false, false, true, &on);
+        assert!(!shader_2d_on.contains("density_volume"), "2D shader unaffected by volume");
+
+        // Sample-emit (tiled export) path never compiles the volume —
+        // the flag is additionally gated on output_histogram_direct.
+        let shader_emit_on = builder.build_from_template(&flame, &active, true, false, false, false, &on);
+        assert!(!shader_emit_on.contains("density_volume"), "sample-emit never compiles the volume");
     }
 
     /// The depth encoding used by the SOLID splat block: ordered-float bits,

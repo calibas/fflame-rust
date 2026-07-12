@@ -226,6 +226,13 @@ pub struct FlameRenderer {
 }
 
 impl FlameRenderer {
+    /// Phase 2 density-volume grid resolution per axis. Desktop 192
+    /// (~28 MB), WASM 128 (~8 MB) — inside one storage binding everywhere.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub const VOLUME_DIM: u32 = 192;
+    #[cfg(target_arch = "wasm32")]
+    pub const VOLUME_DIM: u32 = 128;
+
     /// Create new FlameRenderer with default palette size (256)
     pub fn new(
         device: &Device,
@@ -381,6 +388,9 @@ impl FlameRenderer {
             && matches!(self.current_render_mode, crate::scene::transforms::RenderMode::ThreeD);
         self.buffers.set_solid_depth_region(device, solid_enabled);
         self.needs_depth_prime = solid_enabled;
+        // Same for the density volume — resolution-independent, but the
+        // fresh FlameBuffers dropped it.
+        self.buffers.set_density_volume(device, self.volume_active(), Self::VOLUME_DIM);
         self.shade_pass.resize(device, width, height);
 
         // Recreating variation_params_buffer wipes the init-derived slots
@@ -512,6 +522,8 @@ impl FlameRenderer {
                 && !preserve_z,
             solid_enabled: (self.solid_strength > 0.0 || self.solid_shading.active())
                 && matches!(render_mode, crate::scene::transforms::RenderMode::ThreeD),
+            volume_enabled: self.solid_shading.volume_enabled
+                && matches!(render_mode, crate::scene::transforms::RenderMode::ThreeD),
             attachment_cap: flame.attachment_cap() as u32,
             // No inlining for incremental updates (would trigger too many shader rebuilds)
             inlined_transforms: None,
@@ -616,7 +628,10 @@ impl FlameRenderer {
             background_r: self.background_r,
             background_g: self.background_g,
             background_b: self.background_b,
-post_symmetry: (&self.post_symmetry).into(),
+            post_symmetry: (&self.post_symmetry).into(),
+            volume_dim: if self.volume_active() { Self::VOLUME_DIM } else { 0 },
+            volume_extent: self.solid_shading.volume_extent,
+            _pad_volume: [0; 2],
         };
         self.buffers.update_params(queue, &params);
 
@@ -1090,6 +1105,13 @@ post_symmetry: (&self.post_symmetry).into(),
         self.buffers.solid_depth_region
     }
 
+    /// Whether the Phase 2 density volume should be compiled + bound for
+    /// the current state (mirrors the VOLUME shader-builder gate).
+    pub fn volume_active(&self) -> bool {
+        self.solid_shading.volume_enabled
+            && matches!(self.current_render_mode, crate::scene::transforms::RenderMode::ThreeD)
+    }
+
     /// Interactive-path density-stats tick (solid brightness renorm):
     /// pumps the async measurement and encodes a fresh reduction every N
     /// frames while occlusion is actively culling. Call once per frame,
@@ -1219,7 +1241,11 @@ post_symmetry: (&self.post_symmetry).into(),
         self.solid_shading = config.solid_shading.clone();
         let solid_enabled = (config.solid_strength > 0.0 || self.solid_shading.active())
             && matches!(config.render_mode, crate::scene::transforms::RenderMode::ThreeD);
-        if self.buffers.set_solid_depth_region(device, solid_enabled) {
+        let volume_enabled = self.solid_shading.volume_enabled
+            && matches!(config.render_mode, crate::scene::transforms::RenderMode::ThreeD);
+        let mut rebind = self.buffers.set_solid_depth_region(device, solid_enabled);
+        rebind |= self.buffers.set_density_volume(device, volume_enabled, Self::VOLUME_DIM);
+        if rebind {
             self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
             self.accumulate_bind_group = self.pipelines.create_accumulate_bind_group(device, &self.buffers);
             self.histogram_blur_h_bind_group = self.pipelines.create_histogram_blur_h_bind_group(device, &self.buffers);
@@ -1298,7 +1324,10 @@ post_symmetry: (&self.post_symmetry).into(),
             background_r: config.background_color[0],
             background_g: config.background_color[1],
             background_b: config.background_color[2],
-post_symmetry: (&config.flame.post_symmetry).into(),
+            post_symmetry: (&config.flame.post_symmetry).into(),
+            volume_dim: if self.volume_active() { Self::VOLUME_DIM } else { 0 },
+            volume_extent: self.solid_shading.volume_extent,
+            _pad_volume: [0; 2],
         };
         self.buffers.update_params(queue, &params);
 
@@ -1343,13 +1372,19 @@ post_symmetry: (&config.flame.post_symmetry).into(),
         // no-op multiplier there), so transparent flames can be lit.
         let solid_enabled = (solid_strength > 0.0 || self.solid_shading.active())
             && matches!(render_mode, crate::scene::transforms::RenderMode::ThreeD);
-        if self.buffers.set_solid_depth_region(device, solid_enabled) {
-            // Histogram buffer was recreated — every bind group that
-            // references it must be too.
+        let depth_changed = self.buffers.set_solid_depth_region(device, solid_enabled);
+        let volume_enabled = self.solid_shading.volume_enabled
+            && matches!(render_mode, crate::scene::transforms::RenderMode::ThreeD);
+        let volume_changed = self.buffers.set_density_volume(device, volume_enabled, Self::VOLUME_DIM);
+        if depth_changed || volume_changed {
+            // Histogram / volume buffer was recreated — every bind group
+            // that references it must be too.
             self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
             self.accumulate_bind_group = self.pipelines.create_accumulate_bind_group(device, &self.buffers);
             self.histogram_blur_h_bind_group = self.pipelines.create_histogram_blur_h_bind_group(device, &self.buffers);
             self.histogram_blur_v_bind_group = self.pipelines.create_histogram_blur_v_bind_group(device, &self.buffers);
+        }
+        if depth_changed {
             // Fresh (zeroed) depth region: prime before plotting again.
             self.needs_depth_prime = solid_enabled;
         }
@@ -1467,7 +1502,10 @@ post_symmetry: (&config.flame.post_symmetry).into(),
             background_r: self.background_r,
             background_g: self.background_g,
             background_b: self.background_b,
-post_symmetry: (&self.post_symmetry).into(),
+            post_symmetry: (&self.post_symmetry).into(),
+            volume_dim: if self.volume_active() { Self::VOLUME_DIM } else { 0 },
+            volume_extent: self.solid_shading.volume_extent,
+            _pad_volume: [0; 2],
         };
 
         self.buffers.update_params(queue, &params);
@@ -1710,7 +1748,10 @@ post_symmetry: (&self.post_symmetry).into(),
             background_r: self.background_r,
             background_g: self.background_g,
             background_b: self.background_b,
-post_symmetry: (&self.post_symmetry).into(),
+            post_symmetry: (&self.post_symmetry).into(),
+            volume_dim: if self.volume_active() { Self::VOLUME_DIM } else { 0 },
+            volume_extent: self.solid_shading.volume_extent,
+            _pad_volume: [0; 2],
         };
         self.buffers.update_params(queue, &params);
     }
@@ -2062,7 +2103,10 @@ post_symmetry: (&self.post_symmetry).into(),
             background_r: self.background_r,
             background_g: self.background_g,
             background_b: self.background_b,
-post_symmetry: (&self.post_symmetry).into(),
+            post_symmetry: (&self.post_symmetry).into(),
+            volume_dim: if self.volume_active() { Self::VOLUME_DIM } else { 0 },
+            volume_extent: self.solid_shading.volume_extent,
+            _pad_volume: [0; 2],
         };
         self.buffers.update_params(queue, &params);
     }

@@ -117,6 +117,12 @@ struct Params {
     surface_thickness: f32,  // Depth shell accepted as "the surface" (world units)
     depth_prime: u32,        // 1 = depth-priming batch (record depth, plot nothing)
     post_symmetry: PostSymmetry,  // Plot-time symmetry (gated by HAS_POST_SYMMETRY)
+    // Phase 2 density volume (solid rendering) — only read when the
+    // VOLUME builder flag is set. Mirror in src/gpu/buffers.rs.
+    volume_dim: u32,     // Grid resolution per axis
+    volume_extent: f32,  // World half-extent of the grid cube
+    _pad_volume0: u32,
+    _pad_volume1: u32,
 }
 
 // Plot-time symmetry. Matches `GpuPostSymmetry` in src/gpu/buffers.rs.
@@ -222,6 +228,13 @@ struct SampleCounter {
 {{else}}
 // Sample stream: shader writes one entry per plotted point.
 @group(0) @binding(2) var<storage, read_write> samples: array<Sample>;
+{{/if}}
+{{#if VOLUME}}
+// Phase 2 density volume: flat world-space grid (volume_dim^3 atomic
+// counts, x-fastest). Splatted alongside the histogram; consumed by the
+// shade pass for gradient normals / AO / shadows / occlusion repair.
+// Reuses the reserved binding slot 6 (ex iteration_counts).
+@group(0) @binding(6) var<storage, read_write> density_volume: array<atomic<u32>>;
 {{/if}}
 @group(0) @binding(3) var palette_texture: texture_2d<f32>;
 @group(0) @binding(4) var palette_sampler: sampler;

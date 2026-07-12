@@ -621,6 +621,15 @@ pub struct SolidShadingSettings {
     /// pixels whose neighbor ring agrees it's one surface — closes the
     /// see-through pinholes sparse chaos-game coverage leaves in solids.
     pub gap_fill: u32,
+    /// Phase 2: world-space density volume (3D grid the chaos game splats
+    /// into alongside the histogram). Powers gradient normals, volumetric
+    /// AO/shadows, and coverage-independent occlusion repair. Costs one
+    /// extra atomicAdd per sample + the grid memory (~28 MB desktop).
+    pub volume_enabled: bool,
+    /// Half-extent of the volume's world-space cube (the grid covers
+    /// [-extent, extent]^3 centered on the origin). Flames typically live
+    /// within ~2; enlarge for sprawling scenes (coarser voxels).
+    pub volume_extent: f32,
     /// Up to 4 directional lights. Light 0 defaults enabled once
     /// shading is turned on via the UI (the config default is all-off,
     /// so `is_default` stays cheap for untouched flames).
@@ -639,6 +648,8 @@ impl Default for SolidShadingSettings {
             ssao_radius: 0.15,
             normal_smoothing: 1,
             gap_fill: 0,
+            volume_enabled: false,
+            volume_extent: 2.5,
             lights: [
                 SolidLight { enabled: true, ..SolidLight::default() },
                 SolidLight { azimuth: -60.0, elevation: 10.0, intensity: 0.5, ..SolidLight::default() },

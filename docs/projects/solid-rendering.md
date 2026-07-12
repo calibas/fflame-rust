@@ -1,6 +1,6 @@
 # Solid Rendering: occlusion, lighting, and shading for 3D flames
 
-**Status**: Phase 1 COMPLETE (occlusion + lighting + SSAO + à-trous + brightness renorm, all render/export paths, UI/undo/animation) — Phase 2 (density volume) next
+**Status**: Phase 1 COMPLETE — Phase 2 IN PROGRESS: splat foundation done (VOLUME flag, world-space grid, binding 6, config/UI/undo, byte-identity test); consumption (∇ρ normals, AO, shadows, occlusion repair) next
 **Motivation**: 3D flames render as additive transparent ghosts. Shapes have no
 occlusion (far structure bleeds through near structure), and geometry becomes
 invisible wherever palette colors are uniform, because *all* shape information
@@ -270,15 +270,21 @@ screen-space edge artifacts), volumetric AO, shadow rays toward lights, and
 an optional emission/absorption translucent mode. This is where quality
 passes JWF.
 
-- [ ] Flat `array<atomic<u32>>` density grid in a world-space AABB
-      (auto-fit from accumulated bounds or user-set). Size auto-scales to a
-      memory budget: desktop default 256³ (67 MB), WASM/mobile 128³ (8 MB).
-      Separate bind group (shade pass, not main pass) to respect the
-      binding budget; the *splat* into the grid does ride the main pass —
-      one added storage buffer there, acceptable because it's optional
-      (template-gated) and Phase-2 hardware targets report ≥12.
-- [ ] Splat: one extra `atomicAdd` per plotted sample (optionally
-      stochastically subsampled for perf).
+- [x] Flat `array<atomic<u32>>` density grid in a world-space cube
+      (user-set half-extent, `volume_extent`, default 2.5). Fixed dim:
+      desktop 192³ (28 MB), WASM 128³ (8 MB) — `FlameRenderer::VOLUME_DIM`.
+      Rides the main compute pass at binding 6 (the old iteration_counts
+      gap); 4-byte dummy bound when off, real buffer created/dropped by
+      `FlameBuffers::set_density_volume` (update_flame / load_config /
+      resize rewire bind groups on change). Lifecycle mirrors the depth
+      region: persists across progressive batches, cleared on full reset
+      and per-frame in overwrite mode.
+- [x] Splat: one extra `atomicAdd` per plotted sample (VOLUME template
+      flag = volume_enabled && 3D && direct-histogram; sample-emit export
+      path never compiles it). `volume_off_is_byte_identical` enforces
+      zero-cost-off. Config: `solid_shading.volume_enabled/volume_extent`,
+      ConfigPaths VolumeEnabled/VolumeExtent (IterationReset), View-panel
+      toggle + extent slider.
 - [ ] Shade pass: trilinear ∇ρ normals replacing screen-space normals
       (screen-space kept as fallback / low-VRAM mode); density-sphere AO;
       fixed-step shadow march toward each light.

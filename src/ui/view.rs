@@ -514,6 +514,33 @@ pub fn render_view_content(
                     );
                 }
 
+                // Phase 2: world-space density volume (∇ρ normals, AO,
+                // shadows, occlusion repair). Toggling reallocates the
+                // voxel grid and resets iterations.
+                let mut volume_enabled = config.solid_shading.volume_enabled;
+                let response = ui.checkbox(&mut volume_enabled, t!("view.volume_enabled").as_ref())
+                    .on_hover_text(t!("view.tooltip_volume_enabled"));
+                if response.changed() {
+                    let _ = config_manager.update_param(
+                        ConfigPath::VolumeEnabled,
+                        volume_enabled.into()
+                    );
+                }
+                if volume_enabled {
+                    let mut volume_extent = config.solid_shading.volume_extent;
+                    let response = ui.add(
+                        super::VkbSlider::new(&mut volume_extent, 0.5..=20.0)
+                            .text(t!("view.volume_extent").as_ref())
+                            .step_by(0.1)
+                    ).on_hover_text(t!("view.tooltip_volume_extent"));
+                    if response.changed() {
+                        let _ = config_manager.update_param(
+                            ConfigPath::VolumeExtent,
+                            volume_extent.into()
+                        );
+                    }
+                }
+
                 // Phase 1: deferred lighting (shade pass). Works with or
                 // without occlusion — any nonzero shading strength turns
                 // on the depth capture by itself.
