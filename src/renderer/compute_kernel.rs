@@ -204,6 +204,8 @@ pub struct FlameRenderer {
     needs_depth_prime: bool, // Next compute batch records depth only (set on reset while solid)
     solid_shading: crate::config::SolidShadingSettings, // Phase 1 lighting (shade pass); active() => depth capture even at solid_strength 0
     shade_pass: crate::renderer::shade_pass::ShadePass, // Deferred shade pass (dispatched only when shading is active)
+    density_stats: crate::renderer::density_stats::DensityStats, // Accepted-density reduction (solid brightness renorm)
+    solid_density_fraction: f32, // Measured accepted/dispatched fraction (1.0 = no correction); scales tonemap sample_density
     filter_radius: f32, // Spatial filter (Apo's `filter`): Gaussian sigma in pixels on histogram, 0 = off
     filter_blur_edges: f32, // Bilateral edge-handling [0..1]: 0 = preserve edges (default), 1 = uniform Gaussian
     background_r: f32, // Background color R (for depth fog)
@@ -343,6 +345,8 @@ impl FlameRenderer {
             needs_depth_prime: false,
             solid_shading: crate::config::SolidShadingSettings::default(),
             shade_pass: crate::renderer::shade_pass::ShadePass::new(device, width, height),
+            density_stats: crate::renderer::density_stats::DensityStats::new(device),
+            solid_density_fraction: 1.0,
             filter_radius: 0.0,
             filter_blur_edges: 0.0,
             background_r: 0.0,
@@ -911,7 +915,13 @@ post_symmetry: (&self.post_symmetry).into(),
         // promise (sample_density should track total_iterations
         // linearly through any iter count); 1e-6 is small enough to
         // never bind in practice.
-        let sample_density = ((self.samples_in_buffer as f32) / total_pixels.max(1.0)).max(1e-6);
+        // Solid brightness renormalization: hard occlusion culls most
+        // dispatched samples; scale the normalization density by the
+        // MEASURED accepted fraction (1.0 when solid is off) so solids
+        // tone-map at the brightness their surviving samples deserve.
+        let sample_density = ((self.samples_in_buffer as f32) * self.solid_density_fraction
+            / total_pixels.max(1.0))
+            .max(1e-6);
         let offset = std::mem::offset_of!(TonemapParams, sample_density) as u64;
         queue.write_buffer(
             &self.buffers.tonemap_params_buffer,
@@ -1078,6 +1088,49 @@ post_symmetry: (&self.post_symmetry).into(),
     /// Whether the histogram currently carries the solid depth region.
     pub fn has_solid_depth_region(&self) -> bool {
         self.buffers.solid_depth_region
+    }
+
+    /// Interactive-path density-stats tick (solid brightness renorm):
+    /// pumps the async measurement and encodes a fresh reduction every N
+    /// frames while occlusion is actively culling. Call once per frame,
+    /// after accumulate and before tonemap.
+    pub fn update_density_stats(&mut self, device: &Device, queue: &Queue, encoder: &mut CommandEncoder) {
+        let active = self.solid_strength > 0.0
+            && matches!(self.current_render_mode, crate::scene::transforms::RenderMode::ThreeD)
+            && self.buffers.solid_depth_region;
+        if !active {
+            self.solid_density_fraction = 1.0;
+            return;
+        }
+        let accum_view = self.buffers.current_accumulation_view();
+        if let Some(sum) = self.density_stats.tick(device, queue, encoder, accum_view, self.width, self.height) {
+            let dispatched = (self.samples_in_buffer as f32).max(1.0);
+            let measured = (sum / dispatched).clamp(0.005, 1.0);
+            // EMA: brightness scalar — smooth over the measurement lag so
+            // convergence-driven fraction drift never pumps the image.
+            self.solid_density_fraction = self.solid_density_fraction * 0.7 + measured * 0.3;
+        }
+    }
+
+    /// Exact (blocking) density-fraction measurement for one-shot renders
+    /// (CLI export) — sets the fraction the final tonemap will use.
+    pub fn apply_exact_density_fraction(&mut self, device: &Device, queue: &Queue) {
+        let active = self.solid_strength > 0.0
+            && matches!(self.current_render_mode, crate::scene::transforms::RenderMode::ThreeD)
+            && self.buffers.solid_depth_region;
+        if !active {
+            self.solid_density_fraction = 1.0;
+            return;
+        }
+        let accum_view = self.buffers.current_accumulation_view();
+        if let Some(sum) = self.density_stats.measure_blocking(device, queue, accum_view, self.width, self.height) {
+            let dispatched = (self.samples_in_buffer as f32).max(1.0);
+            self.solid_density_fraction = (sum / dispatched).clamp(0.005, 1.0);
+            log::info!(
+                "solid brightness renorm: accepted/dispatched = {:.4}",
+                self.solid_density_fraction
+            );
+        }
     }
 
     /// Debug: Read back scale buffer and compute statistics

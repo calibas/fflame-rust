@@ -2056,6 +2056,11 @@ impl App {
             // Reset effect slot counter for this frame (allows multiple effects with unique params)
             self.effect_chain.reset_slots();
 
+            // Solid brightness renormalization: measure the accepted
+            // density every few frames while occlusion culls (async, EMA-
+            // smoothed) so hard solids tone-map at full brightness.
+            renderer.update_density_stats(&self.gpu.device, &self.gpu.queue, &mut render_encoder);
+
             // Solid-rendering shade pass (lighting/SSAO on the depth buffer)
             // — runs before density effects; both consume HDR pre-tonemap data.
             let shade_ran = renderer.run_shade_pass(
