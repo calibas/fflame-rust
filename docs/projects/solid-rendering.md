@@ -397,7 +397,10 @@ passes JWF.
   (surface closing in the shade pass). Fundamental fixes: splat
   footprints > 1px (surface splatting), surface-sampler variations
   (quaternion_julia_set-style density generators for common shells),
-  and the Phase 2 volume.
+  and the Phase 2 volume. Surface samplers v1 SHIPPED: `solid_sphere`
+  + `bubble_solid` (defs/solid_samplers.rs) - radial thickness + a
+  uniform `fill` probability give shells guaranteed baseline density,
+  attacking the holes at the source.
 - Surface thickness sweet spot is 0.001-0.01; above ~0.01 "ripples"
   appear — the acceptance shell is measured along the VIEW ray, so on
   slanted surfaces a thick shell cuts iso-depth contour bands whose
