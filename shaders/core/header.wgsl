@@ -121,8 +121,13 @@ struct Params {
     // VOLUME builder flag is set. Mirror in src/gpu/buffers.rs.
     volume_dim: u32,     // Grid resolution per axis
     volume_extent: f32,  // World half-extent of the grid cube
+    // World-space center of the grid cube (view-fit).
+    volume_center_x: f32,
+    volume_center_y: f32,
+    volume_center_z: f32,
     _pad_volume0: u32,
     _pad_volume1: u32,
+    _pad_volume2: u32,
 }
 
 // Plot-time symmetry. Matches `GpuPostSymmetry` in src/gpu/buffers.rs.

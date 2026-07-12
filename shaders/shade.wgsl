@@ -91,6 +91,9 @@ struct ShadeParams {
     cam_row1: vec4<f32>,
     cam_row2: vec4<f32>,
     cam_pos: vec4<f32>,
+    // World-space center of the grid cube (view-fit mode tracks the
+    // world point at screen center; manual mode is the origin).
+    vol_center: vec4<f32>,
     // Grid resolution per axis; 0 = volume absent → every volume feature
     // (gradient normals, volumetric AO, shadow march, occlusion repair)
     // compiles to the Phase 1 behavior.
@@ -139,24 +142,26 @@ fn dir_to_cam(w: vec3<f32>) -> vec3<f32> {
 // Nearest-voxel normalized density; 0 outside the grid.
 fn vol_density_nearest(w: vec3<f32>) -> f32 {
     let ve = sp.volume_extent;
-    if (abs(w.x) >= ve || abs(w.y) >= ve || abs(w.z) >= ve) {
+    let r = w - sp.vol_center.xyz;
+    if (abs(r.x) >= ve || abs(r.y) >= ve || abs(r.z) >= ve) {
         return 0.0;
     }
     let vd = sp.volume_dim;
-    let vx = min(u32((w.x / ve * 0.5 + 0.5) * f32(vd)), vd - 1u);
-    let vy = min(u32((w.y / ve * 0.5 + 0.5) * f32(vd)), vd - 1u);
-    let vz = min(u32((w.z / ve * 0.5 + 0.5) * f32(vd)), vd - 1u);
+    let vx = min(u32((r.x / ve * 0.5 + 0.5) * f32(vd)), vd - 1u);
+    let vy = min(u32((r.y / ve * 0.5 + 0.5) * f32(vd)), vd - 1u);
+    let vz = min(u32((r.z / ve * 0.5 + 0.5) * f32(vd)), vd - 1u);
     return f32(vol[(vz * vd + vy) * vd + vx]) * sp.vol_density_scale;
 }
 
 // Trilinear normalized density (for gradients and AO taps); 0 outside.
 fn vol_density(w: vec3<f32>) -> f32 {
     let ve = sp.volume_extent;
-    if (abs(w.x) >= ve || abs(w.y) >= ve || abs(w.z) >= ve) {
+    let r = w - sp.vol_center.xyz;
+    if (abs(r.x) >= ve || abs(r.y) >= ve || abs(r.z) >= ve) {
         return 0.0;
     }
     let vd = i32(sp.volume_dim);
-    let g = (w / ve * 0.5 + vec3<f32>(0.5)) * f32(sp.volume_dim) - vec3<f32>(0.5);
+    let g = (r / ve * 0.5 + vec3<f32>(0.5)) * f32(sp.volume_dim) - vec3<f32>(0.5);
     let gf = floor(g);
     let f = g - gf;
     let i0 = vec3<i32>(gf);
@@ -180,12 +185,13 @@ fn vol_ray_depth(px: f32, py: f32) -> f32 {
     let r_c = reconstruct(px, py, 1.0) - o_c;
     let o_w = cam_to_world(o_c);
     let r_w = dir_to_world(r_c);           // NOT unit length: param = depth
-    // Slab-intersect the cube [-ve, ve]³ in the depth parameter.
+    // Slab-intersect the cube center ± ve in the depth parameter.
     let ve = sp.volume_extent;
+    let o_rel = o_w - sp.vol_center.xyz;
     var d0 = -3.0e38;
     var d1 = 3.0e38;
     for (var a = 0; a < 3; a = a + 1) {
-        let ro = o_w[a];
+        let ro = o_rel[a];
         let rd = r_w[a];
         if (abs(rd) < 1e-12) {
             if (abs(ro) >= ve) {
@@ -576,11 +582,14 @@ fn shade_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             var t = sh_voxel * 3.0;
             for (var s = 0; s < 32; s = s + 1) {
                 let swp = sh_origin + lw * t;
-                if (abs(swp.x) >= sp.volume_extent || abs(swp.y) >= sp.volume_extent
-                    || abs(swp.z) >= sp.volume_extent) {
+                let srel = swp - sp.vol_center.xyz;
+                if (abs(srel.x) >= sp.volume_extent || abs(srel.y) >= sp.volume_extent
+                    || abs(srel.z) >= sp.volume_extent) {
                     break;
                 }
-                dens = dens + vol_density_nearest(swp) * 2.0;
+                // Trilinear: a nearest-voxel march casts voxel-shaped
+                // shadow blocks.
+                dens = dens + vol_density(swp) * 2.0;
                 if (dens > 8.0) {
                     break;      // already opaque — stop integrating
                 }

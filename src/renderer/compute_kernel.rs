@@ -582,6 +582,7 @@ impl FlameRenderer {
             0
         };
 
+        let vol_fit = self.volume_placement(zoom, pan_x, pan_y, camera_rotation_x, camera_rotation_y, camera_bank, [camera_x, camera_y, camera_z]);
         let params = GpuParams {
             num_transforms: self.num_transforms,
             iterations_per_thread,
@@ -630,8 +631,11 @@ impl FlameRenderer {
             background_b: self.background_b,
             post_symmetry: (&self.post_symmetry).into(),
             volume_dim: if self.volume_active() { Self::VOLUME_DIM } else { 0 },
-            volume_extent: self.solid_shading.volume_extent,
-            _pad_volume: [0; 2],
+            volume_extent: vol_fit.1,
+            volume_center_x: vol_fit.0[0],
+            volume_center_y: vol_fit.0[1],
+            volume_center_z: vol_fit.0[2],
+            _pad_volume: [0; 3],
         };
         self.buffers.update_params(queue, &params);
 
@@ -1079,17 +1083,19 @@ impl FlameRenderer {
         // Phase 2: hand the density volume (when active) to the shade
         // pass — gradient normals, volumetric AO, shadow march, and
         // occlusion repair all key off it.
+        let vol_fit = self.volume_placement(zoom, pan_x, pan_y, camera_rotation_x, camera_rotation_y, camera_bank, [camera_x, camera_y, camera_z]);
         let volume = if self.volume_active() && self.buffers.volume_dim > 0 {
             self.buffers.density_volume_buffer.as_ref().map(|buf| {
                 crate::renderer::shade_pass::VolumeShadeInput {
                     buffer: buf,
                     dim: self.buffers.volume_dim,
-                    extent: self.solid_shading.volume_extent,
+                    extent: vol_fit.1,
                     splats: self.samples_in_buffer as f32,
                     camera_rotation_x,
                     camera_rotation_y,
                     camera_bank,
                     camera_pos: [camera_x, camera_y, camera_z],
+                    center: vol_fit.0,
                 }
             })
         } else {
@@ -1130,6 +1136,37 @@ impl FlameRenderer {
     /// Whether the histogram currently carries the solid depth region.
     pub fn has_solid_depth_region(&self) -> bool {
         self.buffers.solid_depth_region
+    }
+
+
+    /// Density-volume placement. View-fit mode (default) centers the
+    /// cube on the world point at screen center (camera-space
+    /// (pan_x, pan_y, 0) mapped through the inverse camera rotation) and
+    /// sizes it to 2x the visible half-width at the focal plane - voxels
+    /// track what the user actually sees instead of wasting the grid on
+    /// off-screen world (a fixed cube leaves a zoomed-in object spanning
+    /// a handful of voxels: blocky normals/AO, dead occlusion repair).
+    /// Camera/zoom/pan changes reset accumulation, which clears and
+    /// re-splats the volume, so tracking the view is free. Manual mode:
+    /// origin-centered volume_extent cube.
+    #[allow(clippy::too_many_arguments)]
+    fn volume_placement(&self, zoom: f32, pan_x: f32, pan_y: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_bank: f32, camera_pos: [f32; 3]) -> ([f32; 3], f32) {
+        if !self.solid_shading.volume_auto_fit {
+            return ([0.0; 3], self.solid_shading.volume_extent);
+        }
+        let rows = crate::renderer::shade_pass::effective_camera_rows(
+            camera_rotation_x, camera_rotation_y, camera_bank);
+        let mut center = camera_pos;
+        for i in 0..3 {
+            center[i] += pan_x * rows[0][i] + pan_y * rows[1][i];
+        }
+        let aspect = self.width.max(self.height).max(1) as f32
+            / self.width.min(self.height).max(1) as f32;
+        // Visible camera-space half-width at the focal plane is
+        // 2*aspect/zoom (see shade.wgsl reconstruct()); 2x headroom
+        // covers depth and perspective spread.
+        let extent = (4.0 * aspect / zoom.max(1e-6)).clamp(1e-3, 1e6);
+        (center, extent)
     }
 
     /// Whether the Phase 2 density volume should be compiled + bound for
@@ -1305,6 +1342,7 @@ impl FlameRenderer {
         // Update transform tracking
         self.num_transforms = config.flame.transforms.len() as u32;
 
+        let vol_fit = self.volume_placement(config.zoom, config.pan_x, config.pan_y, config.camera_rotation_x, config.camera_rotation_y, config.camera_bank, [config.camera_x, config.camera_y, config.camera_z]);
         let params = GpuParams {
             num_transforms: self.num_transforms,
             iterations_per_thread,
@@ -1353,8 +1391,11 @@ impl FlameRenderer {
             background_b: config.background_color[2],
             post_symmetry: (&config.flame.post_symmetry).into(),
             volume_dim: if self.volume_active() { Self::VOLUME_DIM } else { 0 },
-            volume_extent: self.solid_shading.volume_extent,
-            _pad_volume: [0; 2],
+            volume_extent: vol_fit.1,
+            volume_center_x: vol_fit.0[0],
+            volume_center_y: vol_fit.0[1],
+            volume_center_z: vol_fit.0[2],
+            _pad_volume: [0; 3],
         };
         self.buffers.update_params(queue, &params);
 
@@ -1483,6 +1524,7 @@ impl FlameRenderer {
         // Update transform tracking
         self.num_transforms = flame.transforms.len() as u32;
 
+        let vol_fit = self.volume_placement(zoom, pan_x, pan_y, camera_rotation_x, camera_rotation_y, camera_bank, [camera_x, camera_y, camera_z]);
         let params = GpuParams {
             num_transforms: self.num_transforms,
             iterations_per_thread,
@@ -1531,8 +1573,11 @@ impl FlameRenderer {
             background_b: self.background_b,
             post_symmetry: (&self.post_symmetry).into(),
             volume_dim: if self.volume_active() { Self::VOLUME_DIM } else { 0 },
-            volume_extent: self.solid_shading.volume_extent,
-            _pad_volume: [0; 2],
+            volume_extent: vol_fit.1,
+            volume_center_x: vol_fit.0[0],
+            volume_center_y: vol_fit.0[1],
+            volume_center_z: vol_fit.0[2],
+            _pad_volume: [0; 3],
         };
 
         self.buffers.update_params(queue, &params);
@@ -1729,6 +1774,7 @@ impl FlameRenderer {
     pub fn update_iterations(&mut self, queue: &Queue, iterations_per_thread: u32, burn_in: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_bank: f32, camera_x: f32, camera_y: f32, camera_z: f32, speed_factor: f32) {
         self.burn_in = burn_in;
 
+        let vol_fit = self.volume_placement(zoom, pan_x, pan_y, camera_rotation_x, camera_rotation_y, camera_bank, [camera_x, camera_y, camera_z]);
         let params = GpuParams {
             num_transforms: self.num_transforms,
             iterations_per_thread,
@@ -1777,8 +1823,11 @@ impl FlameRenderer {
             background_b: self.background_b,
             post_symmetry: (&self.post_symmetry).into(),
             volume_dim: if self.volume_active() { Self::VOLUME_DIM } else { 0 },
-            volume_extent: self.solid_shading.volume_extent,
-            _pad_volume: [0; 2],
+            volume_extent: vol_fit.1,
+            volume_center_x: vol_fit.0[0],
+            volume_center_y: vol_fit.0[1],
+            volume_center_z: vol_fit.0[2],
+            _pad_volume: [0; 3],
         };
         self.buffers.update_params(queue, &params);
     }
@@ -2084,6 +2133,7 @@ impl FlameRenderer {
         self.color_mode = color_mode;
 
         // Update params to reflect new color mode
+        let vol_fit = self.volume_placement(zoom, pan_x, pan_y, camera_rotation_x, camera_rotation_y, camera_bank, [camera_x, camera_y, camera_z]);
         let params = GpuParams {
             num_transforms: self.num_transforms,
             iterations_per_thread,
@@ -2132,8 +2182,11 @@ impl FlameRenderer {
             background_b: self.background_b,
             post_symmetry: (&self.post_symmetry).into(),
             volume_dim: if self.volume_active() { Self::VOLUME_DIM } else { 0 },
-            volume_extent: self.solid_shading.volume_extent,
-            _pad_volume: [0; 2],
+            volume_extent: vol_fit.1,
+            volume_center_x: vol_fit.0[0],
+            volume_center_y: vol_fit.0[1],
+            volume_center_z: vol_fit.0[2],
+            _pad_volume: [0; 3],
         };
         self.buffers.update_params(queue, &params);
     }

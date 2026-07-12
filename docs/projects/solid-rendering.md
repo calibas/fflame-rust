@@ -310,6 +310,17 @@ passes JWF.
         authority (volume-backed fill instead of blind ring consensus).
       - Density normalization: `vol_density_scale` = dim³/(splats·8), so
         ρ_norm ≈ 1 ⇔ 8× the uniform-spread mean — iteration-invariant.
+      - VIEW-FIT placement (default, `volume_auto_fit`): the cube centers
+        on the world point at screen center and sizes to 2× the visible
+        half-width (`FlameRenderer::volume_placement`), so voxels stay
+        ~1/100th of the visible width at any zoom. A fixed world cube
+        left a zoomed-in object spanning ~3 voxels — giant rectangular
+        AO/normal facets and dead occlusion repair (field-reported on
+        the grand-julian sphere). Camera/zoom/pan changes reset
+        accumulation → the volume re-splats anyway, so tracking the view
+        is free. Manual mode (auto-fit off) keeps the origin-centered
+        `volume_extent` cube. Shadow march samples trilinearly (a
+        nearest march casts voxel-shaped shadow blocks).
       - Verified on solid-lit: the inter-tile see-through gaps close,
         facets shade coherently, shadows add real depth.
 - [ ] Translucent volumetric mode: short emission/absorption march composited
