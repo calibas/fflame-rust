@@ -378,6 +378,7 @@ fn get_view_items() -> Vec<TargetItem> {
         TargetItem::new(ConfigPath::SolidShininess, "Shininess"),
         TargetItem::new(ConfigPath::SsaoStrength, "SSAO Strength"),
         TargetItem::new(ConfigPath::SsaoRadius, "SSAO Radius"),
+        TargetItem::new(ConfigPath::SolidShadowStrength, "Shadow Strength"),
         TargetItem::new(ConfigPath::SolidLightParam { index: 0, param: "azimuth".to_string() }, "Light 1 Azimuth"),
         TargetItem::new(ConfigPath::SolidLightParam { index: 0, param: "elevation".to_string() }, "Light 1 Elevation"),
         TargetItem::new(ConfigPath::SolidLightParam { index: 0, param: "intensity".to_string() }, "Light 1 Intensity"),

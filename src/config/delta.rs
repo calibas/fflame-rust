@@ -231,6 +231,7 @@ pub enum ConfigPath {
     // Solid rendering Phase 2: world-space density volume.
     VolumeEnabled,
     VolumeExtent,
+    SolidShadowStrength,
     // Solid rendering Phase 1: deferred lighting (shade pass).
     ShadingStrength,
     SolidAmbient,
@@ -776,6 +777,7 @@ impl Display for ConfigPath {
             ConfigPath::SurfaceThickness => write!(f, "Surface Thickness"),
             ConfigPath::VolumeEnabled => write!(f, "Density Volume"),
             ConfigPath::VolumeExtent => write!(f, "Volume Extent"),
+            ConfigPath::SolidShadowStrength => write!(f, "Shadow Strength"),
             ConfigPath::ShadingStrength => write!(f, "Shading Strength"),
             ConfigPath::SolidAmbient => write!(f, "Ambient Light"),
             ConfigPath::SolidDiffuse => write!(f, "Diffuse Light"),
@@ -1221,6 +1223,7 @@ impl ConfigPath {
             ConfigPath::SurfaceThickness => I18nKey::simple("history.param.surface_thickness"),
             ConfigPath::VolumeEnabled => I18nKey::simple("history.param.volume_enabled"),
             ConfigPath::VolumeExtent => I18nKey::simple("history.param.volume_extent"),
+            ConfigPath::SolidShadowStrength => I18nKey::simple("history.param.shadow_strength"),
             ConfigPath::ShadingStrength => I18nKey::simple("history.param.shading_strength"),
             ConfigPath::SolidAmbient => I18nKey::simple("history.param.solid_ambient"),
             ConfigPath::SolidDiffuse => I18nKey::simple("history.param.solid_diffuse"),
@@ -2092,6 +2095,7 @@ impl ConfigPath {
             | ConfigPath::SsaoRadius
             | ConfigPath::NormalSmoothing
             | ConfigPath::GapFill
+            | ConfigPath::SolidShadowStrength
             | ConfigPath::SolidLightEnabled { .. }
             | ConfigPath::SolidLightParam { .. } => UpdateType::ShadingOnly,
 
@@ -2461,6 +2465,7 @@ impl ConfigPath {
             ConfigPath::SurfaceThickness => "SurfaceThickness".to_string(),
             ConfigPath::VolumeEnabled => "VolumeEnabled".to_string(),
             ConfigPath::VolumeExtent => "VolumeExtent".to_string(),
+            ConfigPath::SolidShadowStrength => "SolidShadowStrength".to_string(),
             ConfigPath::ShadingStrength => "ShadingStrength".to_string(),
             ConfigPath::SolidAmbient => "SolidAmbient".to_string(),
             ConfigPath::SolidDiffuse => "SolidDiffuse".to_string(),
@@ -2592,6 +2597,7 @@ impl ConfigPath {
             "SurfaceThickness" => return Some(ConfigPath::SurfaceThickness),
             "VolumeEnabled" => return Some(ConfigPath::VolumeEnabled),
             "VolumeExtent" => return Some(ConfigPath::VolumeExtent),
+            "SolidShadowStrength" => return Some(ConfigPath::SolidShadowStrength),
             "ShadingStrength" => return Some(ConfigPath::ShadingStrength),
             "SolidAmbient" => return Some(ConfigPath::SolidAmbient),
             "SolidDiffuse" => return Some(ConfigPath::SolidDiffuse),
@@ -2951,6 +2957,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::SsaoRadius
         | ConfigPath::NormalSmoothing
         | ConfigPath::GapFill
+        | ConfigPath::SolidShadowStrength
         | ConfigPath::SolidLightParam { .. }
         | ConfigPath::FarDensityFade
         | ConfigPath::FarDensityFadeStart
@@ -3514,6 +3521,7 @@ mod tests {
             ConfigPath::SurfaceThickness,
             ConfigPath::VolumeEnabled,
             ConfigPath::VolumeExtent,
+            ConfigPath::SolidShadowStrength,
             ConfigPath::ShadingStrength,
             ConfigPath::SolidAmbient,
             ConfigPath::SolidDiffuse,

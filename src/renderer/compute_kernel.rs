@@ -1053,6 +1053,7 @@ impl FlameRenderer {
     /// caller then feeds `shade_output_view()` to density effects /
     /// tonemap instead of the accumulator). Zero cost when off — nothing
     /// is dispatched.
+    #[allow(clippy::too_many_arguments)]
     pub fn run_shade_pass(
         &mut self,
         device: &Device,
@@ -1062,6 +1063,12 @@ impl FlameRenderer {
         rotation: f32,
         pan_x: f32,
         pan_y: f32,
+        camera_rotation_x: f32,
+        camera_rotation_y: f32,
+        camera_bank: f32,
+        camera_x: f32,
+        camera_y: f32,
+        camera_z: f32,
     ) -> bool {
         let lit = self.solid_shading.active()
             && matches!(self.current_render_mode, crate::scene::transforms::RenderMode::ThreeD)
@@ -1069,6 +1076,25 @@ impl FlameRenderer {
         if !lit {
             return false;
         }
+        // Phase 2: hand the density volume (when active) to the shade
+        // pass — gradient normals, volumetric AO, shadow march, and
+        // occlusion repair all key off it.
+        let volume = if self.volume_active() && self.buffers.volume_dim > 0 {
+            self.buffers.density_volume_buffer.as_ref().map(|buf| {
+                crate::renderer::shade_pass::VolumeShadeInput {
+                    buffer: buf,
+                    dim: self.buffers.volume_dim,
+                    extent: self.solid_shading.volume_extent,
+                    splats: self.samples_in_buffer as f32,
+                    camera_rotation_x,
+                    camera_rotation_y,
+                    camera_bank,
+                    camera_pos: [camera_x, camera_y, camera_z],
+                }
+            })
+        } else {
+            None
+        };
         self.shade_pass.run(
             device,
             queue,
@@ -1082,6 +1108,7 @@ impl FlameRenderer {
             pan_y,
             self.perspective_strength,
             self.surface_thickness,
+            volume.as_ref(),
         );
         true
     }

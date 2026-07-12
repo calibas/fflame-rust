@@ -2071,6 +2071,12 @@ impl App {
                 final_config.rotation,
                 final_config.pan_x,
                 final_config.pan_y,
+                final_config.camera_rotation_x,
+                final_config.camera_rotation_y,
+                final_config.camera_bank,
+                final_config.camera_x,
+                final_config.camera_y,
+                final_config.camera_z,
             );
             let pre_tonemap_view = if shade_ran {
                 renderer.shade_output_view()

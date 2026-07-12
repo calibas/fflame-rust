@@ -1,6 +1,6 @@
 # Solid Rendering: occlusion, lighting, and shading for 3D flames
 
-**Status**: Phase 1 COMPLETE — Phase 2 IN PROGRESS: splat foundation done (VOLUME flag, world-space grid, binding 6, config/UI/undo, byte-identity test); consumption (∇ρ normals, AO, shadows, occlusion repair) next
+**Status**: Phase 1 COMPLETE — Phase 2 CORE COMPLETE: density-volume splat + shade-pass consumption (∇ρ normals, volumetric AO, shadow march, volume-authoritative occlusion repair). Remaining: translucent volumetric mode, perf tuning of the per-pixel ray march
 **Motivation**: 3D flames render as additive transparent ghosts. Shapes have no
 occlusion (far structure bleeds through near structure), and geometry becomes
 invisible wherever palette colors are uniform, because *all* shape information
@@ -285,12 +285,42 @@ passes JWF.
       zero-cost-off. Config: `solid_shading.volume_enabled/volume_extent`,
       ConfigPaths VolumeEnabled/VolumeExtent (IterationReset), View-panel
       toggle + extent slider.
-- [ ] Shade pass: trilinear ∇ρ normals replacing screen-space normals
-      (screen-space kept as fallback / low-VRAM mode); density-sphere AO;
-      fixed-step shadow march toward each light.
+- [x] Shade pass consumption (all gated on `sp.volume_dim > 0`; the
+      camera→world inverse comes from `effective_camera_rows` in
+      shade_pass.rs, which replicates utilities.wgsl's build_camera_matrix
+      + transposed application EXACTLY — verify against it before touching
+      either):
+      - ∇ρ gradient normals (trilinear central differences), blended over
+        the screen-space normal by edge confidence (|∇ρ| per voxel
+        relative to local density) — world-space, camera-stable.
+      - Volumetric AO: 5 hemisphere density taps at the SSAO radius,
+        multiplied into the SSAO term under the same strength control.
+      - Shadow march: 32 × 2-voxel steps toward each light; transmittance
+        exp(-∫ρ) attenuates diffuse + specular. New `shadow_strength`
+        config/ConfigPath (SolidShadowStrength, ShadingOnly) + UI slider
+        + animation target.
+      - OCCLUSION REPAIR (the "high density shows through low density"
+        fix): per-pixel volume ray march (`vol_ray_depth`, 160 × 1.25-voxel
+        steps, integrated-density first-hit) gives an authoritative
+        surface depth. Pixels whose nearest sample sits > margin behind it
+        are LEAKS — rebuilt from front-surface ring neighbors anchored to
+        the volume depth (relaxed consensus, runs even at gap_fill 0);
+        no-ring fallback keeps the pixel's color but moves its geometry to
+        the volume surface with the gradient normal. Holes get the same
+        authority (volume-backed fill instead of blind ring consensus).
+      - Density normalization: `vol_density_scale` = dim³/(splats·8), so
+        ρ_norm ≈ 1 ⇔ 8× the uniform-spread mean — iteration-invariant.
+      - Verified on solid-lit: the inter-tile see-through gaps close,
+        facets shade coherently, shadows add real depth.
 - [ ] Translucent volumetric mode: short emission/absorption march composited
       with the solid term — makes solid↔volumetric a continuous artistic dial.
-- [ ] High-res export: the grid is resolution-independent — no tiling work.
+- [ ] High-res export: the exporter currently passes `volume: None` (the
+      tiled path is sample-emit and never builds a grid; the single-shot
+      direct path could — wire it when Phase 2 stabilizes). Interactive,
+      CLI, and video-export paths all consume the volume.
+- [ ] Perf: `vol_ray_depth` is ~160 nearest-voxel fetches per pixel per
+      shade. Fine at preview sizes; consider early-out via pixel depth,
+      coarse mip pre-pass, or half-res repair mask if it shows up.
 
 ### Field feedback (2026-07-12, first real-scene session)
 

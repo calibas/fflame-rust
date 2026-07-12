@@ -657,6 +657,7 @@ fn apply_config_value(
         (ConfigPath::SurfaceThickness, ConfigValue::Float(v)) => config.surface_thickness = *v,
         (ConfigPath::VolumeEnabled, ConfigValue::Bool(v)) => config.solid_shading.volume_enabled = *v,
         (ConfigPath::VolumeExtent, ConfigValue::Float(v)) => config.solid_shading.volume_extent = *v,
+        (ConfigPath::SolidShadowStrength, ConfigValue::Float(v)) => config.solid_shading.shadow_strength = *v,
         (ConfigPath::ShadingStrength, ConfigValue::Float(v)) => config.solid_shading.shading_strength = *v,
         (ConfigPath::SolidAmbient, ConfigValue::Float(v)) => config.solid_shading.ambient = *v,
         (ConfigPath::SolidDiffuse, ConfigValue::Float(v)) => config.solid_shading.diffuse = *v,
@@ -1868,6 +1869,12 @@ pub async fn export_animation_fast(
             frame_config.rotation,
             frame_config.pan_x,
             frame_config.pan_y,
+            frame_config.camera_rotation_x,
+            frame_config.camera_rotation_y,
+            frame_config.camera_bank,
+            frame_config.camera_x,
+            frame_config.camera_y,
+            frame_config.camera_z,
         );
         if shade_ran {
             renderer.tonemap_pass_with_input(&device, &queue, &mut tonemap_encoder, renderer.shade_output_view());

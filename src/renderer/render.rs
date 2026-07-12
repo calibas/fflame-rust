@@ -327,6 +327,12 @@ pub async fn render(
         job.config.rotation,
         job.config.pan_x,
         job.config.pan_y,
+        job.config.camera_rotation_x,
+        job.config.camera_rotation_y,
+        job.config.camera_bank,
+        job.config.camera_x,
+        job.config.camera_y,
+        job.config.camera_z,
     );
     let pre_tonemap_view = if shade_ran {
         renderer.shade_output_view()
