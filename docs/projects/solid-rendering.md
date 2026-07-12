@@ -321,6 +321,62 @@ passes JWF.
         is free. Manual mode (auto-fit off) keeps the origin-centered
         `volume_extent` cube. Shadow march samples trilinearly (a
         nearest march casts voxel-shaped shadow blocks).
+      - DERIVED FIELDS (volume_mip.wgsl): the shade pass never samples
+        the raw splat grid — at view-fit resolution it carries per-voxel
+        Poisson noise ("patchy" lighting) and cell-faceted gradients
+        ("rectangular" shading blocks). Each shade derives two half-res
+        fields: a 4³-window MEAN (gradient normals, AO, shadow march —
+        with per-pixel jittered march phase) and a morphologically
+        CLOSED max field (dilate→erode, radius = `volume_closing`, 0-2,
+        ShadingOnly) for the occlusion/repair ray march — holes in
+        genuinely sparse shells (julian-on-bubble) read as sealed.
+        Closing INVENTS surface where the IFS measure has none; it's an
+        artistic dial, documented as such. `ShadePass::ensure_vol_derived`
+        allocates; `run_region` stays `&self` for the exporters and
+        silently disables volume shading if unprepared.
+      - REPAIR STABILITY (hardened through four field-feedback rounds;
+        every rule below exists because its absence produced a specific
+        visible artifact — treat them as load-bearing):
+        · The march returns continuous INTEGRALS (occlusion in front of
+          the pixel; opacity-clipped mean depth of the first surface
+          unit), never a first-hit depth — first-hit is bistable when a
+          sparse shell hovers at the trip threshold.
+        · The repair weight is a SATURATING function of the occlusion
+          integral (o²/(o²+0.25)) — windowed smoothsteps paint a seam
+          along the iso-occlusion contour.
+        · March steps are OPACITY-CLAMPED at the solid level — fractal
+          density spans orders of magnitude, and one filament voxel
+          (1000× "solid") otherwise casts a saturated voxel-shaped
+          shadow block; clamped voxels also converge early.
+        · Ring statistics are DENSITY-WEIGHTED, so a neighbor whose
+          depth just flipped front grows into the ring smoothly instead
+          of jumping every pixel that gathers it.
+        · There is deliberately NO no-ring fallback: an occluder with no
+          sampled pixels (a dense plane seen edge-on = 1-px image line)
+          would get relit into bright streaks. Repair only paints what
+          the ring has image evidence for.
+        · `vol_trust` (host): geometric (derived voxels across the
+          visible width, 1 at ~36+, 0 at ≤12) × statistical (ramps over
+          the first ~12 batches; overwrite frames ≈ 0) scales every
+          volume feature — coarse or thin volumes fade to the Phase 1
+          look instead of stamping voxel artifacts.
+        · ACCUMULATOR DEPTH-TIGHTENING RESET (accumulate.wgsl +
+          accum_depth buffer): when a pixel's nearest depth moves closer
+          by > 1.5× thickness, its accumulated history (provably
+          occluded surface) is discarded instead of blended.
+        · TEMPORAL EMA (0.85, interactive only) on the shade output —
+          repaired pixels track the front shell's relative density,
+          which genuinely drifts during the coverage-transition window
+          (user-visible at ~0.5-1G iters on large viewports); the blend
+          turns per-frame stepping into a calm drift. History resets on
+          lighting edits, accumulation resets, and per video frame.
+        · Volumetric AO taps are lifted 2 voxels off the shell, jittered
+          per pixel, and half-weighted — surface-scale features
+          otherwise darken voxel-shaped footprints.
+        Verify banding fixes with CROPS at the coverage-transition
+        window (~150M iters at 800×600 for the grand-julian scenes), not
+        full-frame thumbnails, and check temporal stability by diffing
+        deterministic renders at N vs N+10% iterations.
       - Verified on solid-lit: the inter-tile see-through gaps close,
         facets shade coherently, shadows add real depth.
 - [ ] Translucent volumetric mode: short emission/absorption march composited

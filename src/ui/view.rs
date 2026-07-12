@@ -536,7 +536,27 @@ pub fn render_view_content(
                             auto_fit.into()
                         );
                     }
+                    let mut closing = config.solid_shading.volume_closing as f32;
+                    let response = ui.add(
+                        super::VkbSlider::new(&mut closing, 0.0..=2.0)
+                            .text(t!("view.volume_closing").as_ref())
+                            .step_by(1.0)
+                    ).on_hover_text(t!("view.tooltip_volume_closing"));
+                    if response.changed() {
+                        let _ = config_manager.update_param(
+                            ConfigPath::VolumeClosing,
+                            closing.into()
+                        );
+                    }
                     if !auto_fit {
+                        // Volume features (incl. shadows) fade with grid
+                        // resolution vs the view — a manual extent much
+                        // larger than the visible area disables them.
+                        ui.label(
+                            egui::RichText::new(t!("view.volume_manual_hint"))
+                                .small()
+                                .weak(),
+                        );
                         let mut volume_extent = config.solid_shading.volume_extent;
                         let response = ui.add(
                             super::VkbSlider::new(&mut volume_extent, 0.5..=20.0)

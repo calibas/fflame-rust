@@ -640,6 +640,15 @@ pub struct SolidShadingSettings {
     /// When false, volume_extent is used as a manual world half-extent
     /// centered on the origin.
     pub volume_auto_fit: bool,
+    /// Morphological closing radius for the volume's occlusion field
+    /// (0-2 half-res voxels, 0 = off): dilate-then-erode seals holes in
+    /// the splatted density up to ~2x this radius before the occlusion /
+    /// repair ray march reads it, so see-through pinholes in genuinely
+    /// sparse shells read as sealed surface. Erosion undoes the
+    /// dilation's silhouette inflation everywhere except inside holes.
+    /// This INVENTS surface where the IFS measure has none - it's an
+    /// artistic dial, not recovery of real data.
+    pub volume_closing: u32,
     /// Volume shadow-march strength (0 = off): each light's diffuse +
     /// specular is attenuated by the density integrated along a ray
     /// marched toward it through the volume. Needs volume_enabled.
@@ -665,6 +674,7 @@ impl Default for SolidShadingSettings {
             volume_enabled: false,
             volume_extent: 2.5,
             volume_auto_fit: true,
+            volume_closing: 1,
             shadow_strength: 0.0,
             lights: [
                 SolidLight { enabled: true, ..SolidLight::default() },

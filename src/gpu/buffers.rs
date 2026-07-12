@@ -1162,7 +1162,15 @@ pub struct AccumulateParams {
     pub background_r: f32,  // Background color RGB (for blending when no samples)
     pub background_g: f32,
     pub background_b: f32,
-    pub _pad1: f32,  // Total 9 fields = 36 bytes (rounds to 48 with padding)
+    pub _pad1: f32,
+    /// Solid rendering depth-tightening reset (see accumulate.wgsl):
+    /// discard a pixel's accumulated history when its nearest depth
+    /// moves closer by more than ~1.5× this.
+    pub surface_thickness: f32,
+    /// 1 when the histogram carries the depth region AND accum_depth
+    /// is a real buffer.
+    pub has_depth: u32,
+    pub _pad2: [u32; 2],
 }
 
 /// Manages GPU buffers and textures for fractal flame rendering
@@ -1216,6 +1224,10 @@ pub struct FlameBuffers {
     pub histogram_buffer_scratch: Buffer,
     // Whether histogram_buffer carries the solid-rendering depth region.
     pub solid_depth_region: bool,
+    // Solid rendering: per-pixel encoded depth the ACCUMULATOR's data
+    // belongs to (accumulate.wgsl's depth-tightening reset). Allocated
+    // with the depth region; 0-filled = "no data yet".
+    pub accum_depth_buffer: Option<Buffer>,
 
     // Per-pixel iteration count buffer for convergence tracking
     // Per-pixel path buffer for PathMap color mode (OPTIONAL)
@@ -1345,6 +1357,7 @@ impl FlameBuffers {
         if let Some(b) = &self.path_filter_buffer { b.destroy(); }
         if let Some(b) = &self.xaos_buffer { b.destroy(); }
         if let Some(b) = &self.density_volume_buffer { b.destroy(); }
+        if let Some(b) = &self.accum_depth_buffer { b.destroy(); }
         if let Some(b) = &self.blur_splat_buffer { b.destroy(); }
         if let Some(b) = &self.blur_convolved_buffer { b.destroy(); }
         // Small uniform/param/dummy buffers + 1D LUT textures (KB each, but
@@ -1515,6 +1528,9 @@ impl FlameBuffers {
             background_g: 0.0,
             background_b: 0.0,
             _pad1: 0.0,
+            surface_thickness: 0.0,
+            has_depth: 0,
+            _pad2: [0; 2],
         };
         let accumulate_params_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
             label: Some("Accumulate Params Buffer"),
@@ -1824,6 +1840,7 @@ impl FlameBuffers {
             histogram_buffer,
             histogram_buffer_scratch,
             solid_depth_region: false,
+            accum_depth_buffer: None,
             path_buffer,
             path_filter_buffer,
             dummy_path_buffer,
@@ -1916,6 +1933,9 @@ impl FlameBuffers {
         if let Some(ref vol) = self.density_volume_buffer {
             encoder.clear_buffer(vol, 0, None);
         }
+        if let Some(ref ad) = self.accum_depth_buffer {
+            encoder.clear_buffer(ad, 0, None);
+        }
 
         // Clear path buffer (zero out all paths) - only if enabled
         if let Some(ref path_buffer) = self.path_buffer {
@@ -1981,6 +2001,19 @@ impl FlameBuffers {
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        // The accumulator's depth-ownership tracker lives and dies with
+        // the depth region (accumulate.wgsl depth-tightening reset).
+        if let Some(b) = self.accum_depth_buffer.take() {
+            b.destroy();
+        }
+        if enabled {
+            self.accum_depth_buffer = Some(device.create_buffer(&BufferDescriptor {
+                label: Some("Accumulator Depth Buffer"),
+                size: (self.width as u64) * (self.height as u64) * 4,
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+        }
         self.solid_depth_region = enabled;
         true
     }
@@ -2052,6 +2085,9 @@ impl FlameBuffers {
             if let Some(ref vol) = self.density_volume_buffer {
                 encoder.clear_buffer(vol, 0, None);
             }
+            if let Some(ref ad) = self.accum_depth_buffer {
+                encoder.clear_buffer(ad, 0, None);
+            }
         }
     }
 
@@ -2067,6 +2103,9 @@ impl FlameBuffers {
         encoder.clear_buffer(&self.histogram_buffer, 0, None);
         if let Some(ref vol) = self.density_volume_buffer {
             encoder.clear_buffer(vol, 0, None);
+        }
+        if let Some(ref ad) = self.accum_depth_buffer {
+            encoder.clear_buffer(ad, 0, None);
         }
         if let Some(ref path_buffer) = self.path_buffer {
             encoder.clear_buffer(path_buffer, 0, None);
