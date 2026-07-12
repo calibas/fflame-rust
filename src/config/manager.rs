@@ -2064,6 +2064,7 @@ impl ConfigManager {
             ConfigPath::SolidShininess => Ok(config.solid_shading.shininess.into()),
             ConfigPath::SsaoStrength => Ok(config.solid_shading.ssao_strength.into()),
             ConfigPath::SsaoRadius => Ok(config.solid_shading.ssao_radius.into()),
+            ConfigPath::NormalSmoothing => Ok((config.solid_shading.normal_smoothing as f32).into()),
             ConfigPath::SolidLightEnabled { index } => {
                 let l = config.solid_shading.lights.get(*index).ok_or(ConfigError::InvalidIndex)?;
                 Ok(l.enabled.into())
@@ -2866,6 +2867,10 @@ impl ConfigManager {
             }
             ConfigPath::SsaoRadius => {
                 self.current.solid_shading.ssao_radius = value.try_into()?;
+            }
+            ConfigPath::NormalSmoothing => {
+                let v: f32 = value.try_into()?;
+                self.current.solid_shading.normal_smoothing = (v.round().max(0.0) as u32).min(3);
             }
             ConfigPath::SolidLightEnabled { index } => {
                 let l = self.current.solid_shading.lights.get_mut(*index).ok_or(ConfigError::InvalidIndex)?;

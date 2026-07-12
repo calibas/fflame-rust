@@ -236,6 +236,7 @@ pub enum ConfigPath {
     SolidShininess,
     SsaoStrength,
     SsaoRadius,
+    NormalSmoothing,
     /// Enable/disable one of the 4 shade-pass lights.
     SolidLightEnabled { index: usize },
     /// Parameter of one shade-pass light: "azimuth", "elevation",
@@ -776,6 +777,7 @@ impl Display for ConfigPath {
             ConfigPath::SolidShininess => write!(f, "Shininess"),
             ConfigPath::SsaoStrength => write!(f, "SSAO Strength"),
             ConfigPath::SsaoRadius => write!(f, "SSAO Radius"),
+            ConfigPath::NormalSmoothing => write!(f, "Normal Smoothing"),
             ConfigPath::SolidLightEnabled { index } => write!(f, "Light {} Enabled", index + 1),
             ConfigPath::SolidLightParam { index, param } => write!(f, "Light {} {}", index + 1, param),
             ConfigPath::FarDensityFadeStart => write!(f, "Far Density Fade Start"),
@@ -1217,6 +1219,7 @@ impl ConfigPath {
             ConfigPath::SolidShininess => I18nKey::simple("history.param.solid_shininess"),
             ConfigPath::SsaoStrength => I18nKey::simple("history.param.ssao_strength"),
             ConfigPath::SsaoRadius => I18nKey::simple("history.param.ssao_radius"),
+            ConfigPath::NormalSmoothing => I18nKey::simple("history.param.normal_smoothing"),
             ConfigPath::SolidLightEnabled { .. } => I18nKey::simple("history.param.solid_light_enabled"),
             ConfigPath::SolidLightParam { .. } => I18nKey::simple("history.param.solid_light_param"),
             ConfigPath::FarDensityFadeStart => I18nKey::simple("history.param.far_density_fade_start"),
@@ -2075,6 +2078,7 @@ impl ConfigPath {
             | ConfigPath::SolidShininess
             | ConfigPath::SsaoStrength
             | ConfigPath::SsaoRadius
+            | ConfigPath::NormalSmoothing
             | ConfigPath::SolidLightEnabled { .. }
             | ConfigPath::SolidLightParam { .. } => UpdateType::ShadingOnly,
 
@@ -2449,6 +2453,7 @@ impl ConfigPath {
             ConfigPath::SolidShininess => "SolidShininess".to_string(),
             ConfigPath::SsaoStrength => "SsaoStrength".to_string(),
             ConfigPath::SsaoRadius => "SsaoRadius".to_string(),
+            ConfigPath::NormalSmoothing => "NormalSmoothing".to_string(),
             ConfigPath::SolidLightEnabled { index } => format!("SolidLight.{}.enabled", index),
             ConfigPath::SolidLightParam { index, param } => format!("SolidLight.{}.{}", index, param),
             ConfigPath::FarDensityFadeStart => "FarDensityFadeStart".to_string(),
@@ -2576,6 +2581,7 @@ impl ConfigPath {
             "SolidShininess" => return Some(ConfigPath::SolidShininess),
             "SsaoStrength" => return Some(ConfigPath::SsaoStrength),
             "SsaoRadius" => return Some(ConfigPath::SsaoRadius),
+            "NormalSmoothing" => return Some(ConfigPath::NormalSmoothing),
             "FarDensityFadeStart" => return Some(ConfigPath::FarDensityFadeStart),
             "SoloTransform" => return Some(ConfigPath::SoloTransform),
             "PostSymmetryType" => return Some(ConfigPath::PostSymmetryType),
@@ -2923,6 +2929,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::SolidShininess
         | ConfigPath::SsaoStrength
         | ConfigPath::SsaoRadius
+        | ConfigPath::NormalSmoothing
         | ConfigPath::SolidLightParam { .. }
         | ConfigPath::FarDensityFade
         | ConfigPath::FarDensityFadeStart
@@ -3490,6 +3497,7 @@ mod tests {
             ConfigPath::SolidShininess,
             ConfigPath::SsaoStrength,
             ConfigPath::SsaoRadius,
+            ConfigPath::NormalSmoothing,
             ConfigPath::SolidLightEnabled { index: 2 },
             ConfigPath::SolidLightParam { index: 1, param: "azimuth".to_string() },
             ConfigPath::SolidLightParam { index: 3, param: "color_b".to_string() },

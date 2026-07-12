@@ -1,6 +1,6 @@
 # Solid Rendering: occlusion, lighting, and shading for 3D flames
 
-**Status**: Phase 1 core landed (shade pass: normals, 4 lights, SSAO); ConfigPaths/UI/regression scenes in progress
+**Status**: Phase 1 COMPLETE (occlusion + lighting + SSAO + à-trous + brightness renorm, all render/export paths, UI/undo/animation) — Phase 2 (density volume) next
 **Motivation**: 3D flames render as additive transparent ghosts. Shapes have no
 occlusion (far structure bleeds through near structure), and geometry becomes
 invisible wherever palette colors are uniform, because *all* shape information
@@ -215,15 +215,25 @@ specular. The milestone where same-palette shapes become legible.
       (serde unit, skip-if-default) — not a fan of flat fields.
 - [ ] Position reconstruction from depth; screen-space normals from depth
       gradients.
-- [ ] Depth-guided à-trous smoothing for normals (2–3 iterations, reusing
-      the effect-chain `Rgba16Float` ping-pong textures as scratch).
+- [x] À-trous normal smoothing: dedicated normals pass (normals.wgsl,
+      extracting the bilateral slope fit) + 0-3 edge-aware à-trous
+      iterations (atrous.wgsl: 5×5 B3 kernel at strides 1/2/4, weights =
+      depth-gaussian × normal-similarity^8, σ_z tied to the surface
+      shell) over a dedicated Rgba32Float (normal, depth) ping-pong —
+      NOT the effect-chain textures (16F loses depth precision).
+      `normal_smoothing` (0-3, default 1) on SolidShadingSettings, UI
+      slider, ShadingOnly (live, no reset). Interactive + single-shot
+      export paths use it; the strip-tiled export keeps the inline
+      estimator (apron machinery not worth it at those sizes).
+      Verified: the noisy sphere case at 3 iterations renders a coherent
+      lit hemisphere with a clean terminator.
 - [ ] Lighting model: ambient + N≤4 lights, diffuse + specular; final color
       = `mix(emissive_flame_color, lit_color, shading_strength)` — the
       emissive term preserves today's look as a blendable component.
 - [ ] SSAO: depth-buffer horizon sampling, radius/strength params.
-- [ ] Per-transform `material` index + material table (diffuse/specular/
-      shininess per slot) — the JWF import hook, even before XML import
-      exists.
+- [ ] Per-transform `material` index + material table — MOVED to Phase 2
+      (materials pair naturally with the volume work; global material
+      params shipped in Phase 1 cover the single-material case).
 - [x] Lighting UI: View panel "Lighting" section (shading strength,
       ambient/diffuse/specular/shininess, SSAO, 4 lights with enable/
       color/azimuth/elevation/intensity). ConfigPaths: 7 flat params +
