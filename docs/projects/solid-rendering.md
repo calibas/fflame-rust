@@ -231,6 +231,28 @@ passes JWF.
 - Marching-cubes isosurface export (mesh for Blender) from the Phase 2 grid.
 - à-trous as a general user-facing denoise effect.
 
+## Known limitation: solid renders are not bit-reproducible
+
+Measured (pentatope, same binary, deterministic_rng, two runs): ~49% of
+covered pixels differ at mean channel delta ~4.8/255 (sub-visible shell
+jitter; isolated thin-feature pixels can flip harder). Cause: within a
+batch, a sample's occlusion test races the same batch's depth writes
+(`atomicMax` return order is GPU-scheduling dependent). Depth persisted
+from PREVIOUS batches is deterministic — only in-batch self-gating races.
+(Correction for the record: commit 156067e's message claims a bit-identical
+export verification; that comparison was actually measuring this
+nondeterminism. The overwrite fix itself is sound.)
+
+Consequences and options:
+- Visual regression for solid scenes needs tolerance-based comparison, not
+  pixel hashes (transparent renders remain bit-exact — verified).
+- If bit-exact solid renders become necessary (regression tests, render
+  farms): ping-pong the depth region (2 words/pixel, gate against the
+  PREVIOUS batch's completed depth, swap each batch). Removes the in-batch
+  race entirely at +1 word/pixel; depth converges one batch delayed, which
+  priming already covers. Candidate for a "deterministic solid" option —
+  not default (memory + a batch of convergence lag for no visual gain).
+
 ## Risks / open questions
 
 - **Nearest-depth noise**: a single stray sample claims a pixel's depth.
