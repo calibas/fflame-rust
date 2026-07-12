@@ -46,7 +46,7 @@ struct ShadeParams {
     tex_y0: u32,
     tex_height: u32,
     use_normal_tex: u32,
-    _pad1: u32,
+    gap_fill: u32,
     lights: [ShadeLight; 4],
 }
 
@@ -525,7 +525,8 @@ impl ShadePass {
             tex_y0,
             tex_height,
             use_normal_tex: u32::from(normal_view.is_some()),
-            _pad1: 0,
+            // Surface closing requires the full-image normal texture.
+            gap_fill: if normal_view.is_some() { shading.gap_fill.min(3) } else { 0 },
             lights,
         };
         queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));
