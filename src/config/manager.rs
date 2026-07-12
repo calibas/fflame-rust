@@ -202,6 +202,11 @@ pub struct UpdateAction {
     /// Needed when: active variations change
     pub rebuild_shader: bool,
 
+    /// Refresh the solid-rendering shade-pass parameters (lighting).
+    /// Post-accumulate only: no reset, no overwrite mode, no flame
+    /// update — the per-frame shade+tonemap re-render picks it up.
+    pub update_shading: bool,
+
     /// One of the six animation-tracked lists changed shape (add /
     /// delete / reorder of a transform pool, subflame, or effect).
     /// The App layer's animation update code checks this and calls
@@ -233,6 +238,13 @@ impl UpdateAction {
                 ..Default::default()
             },
 
+            UpdateType::ShadingOnly => Self {
+                update_shading: true,
+                // No reset — the shade pass is post-accumulation, so
+                // lighting edits keep every accumulated iteration.
+                ..Default::default()
+            },
+
             UpdateType::ColorOnly => Self {
                 update_palette: true,
                 reset_accumulation: false, // Never reset - use overwrite mode for smooth updates
@@ -246,6 +258,7 @@ impl UpdateAction {
                 update_tone_curve: true,
                 reset_accumulation: false, // Don't reset - use overwrite mode for smooth transition
                 rebuild_shader: false, // TODO: detect variation changes
+                update_shading: true, // Full updates refresh shading state too (update_flame carries it)
                 structural_changed: false, // Only set by explicit structural mutation sites
             },
         }
@@ -259,6 +272,7 @@ impl UpdateAction {
         self.update_tone_curve |= other.update_tone_curve;
         self.update_view |= other.update_view;
         self.rebuild_shader |= other.rebuild_shader;
+        self.update_shading |= other.update_shading;
         self.structural_changed |= other.structural_changed;
     }
 }

@@ -1066,6 +1066,20 @@ post_symmetry: (&self.post_symmetry).into(),
         self.shade_pass.output_view()
     }
 
+    /// Lightweight lighting update: refresh the shade-pass settings
+    /// WITHOUT touching iteration state. Only valid when the change
+    /// doesn't flip the depth-capture requirement — the caller checks
+    /// `has_solid_depth_region()` against the desired state and
+    /// escalates to `update_flame` when they differ.
+    pub fn set_solid_shading(&mut self, shading: crate::config::SolidShadingSettings) {
+        self.solid_shading = shading;
+    }
+
+    /// Whether the histogram currently carries the solid depth region.
+    pub fn has_solid_depth_region(&self) -> bool {
+        self.buffers.solid_depth_region
+    }
+
     /// Debug: Read back scale buffer and compute statistics
     // Note: debug_scale_stats() removed - scale_buffer no longer exists
 

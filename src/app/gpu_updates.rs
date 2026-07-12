@@ -28,6 +28,7 @@ impl App {
             || actions.update_tone_curve
             || actions.update_view
             || actions.rebuild_shader
+            || actions.update_shading
             || view_changed_by_keyboard;
 
         if needs_update {
@@ -120,6 +121,61 @@ impl App {
                         update_config.surface_thickness,
                         update_config.solid_shading.clone(),
                     );
+                }
+
+                // Lightweight lighting update: the shade pass is
+                // post-accumulation, so lighting edits keep every
+                // accumulated iteration — just refresh the renderer's
+                // copy; the per-frame shade+tonemap re-render does the
+                // rest. EXCEPTION: when the edit flips the depth-capture
+                // requirement (lighting toggled on/off while
+                // solid_strength is 0), the histogram layout and shader
+                // must change — escalate to the full flame update.
+                if actions.update_shading && !actions.update_flame {
+                    let want_capture = (update_config.solid_strength > 0.0
+                        || update_config.solid_shading.active())
+                        && matches!(
+                            update_config.render_mode,
+                            crate::scene::transforms::RenderMode::ThreeD
+                        );
+                    if want_capture != renderer.has_solid_depth_region() {
+                        renderer.update_flame(
+                            &self.gpu.device,
+                            &self.gpu.queue,
+                            render_source,
+                            self.config_manager.system_settings().iterations_per_thread,
+                            self.config_manager.system_settings().burn_in,
+                            update_config.zoom,
+                            update_config.pan_x,
+                            update_config.pan_y,
+                            update_config.rotation,
+                            update_config.camera_rotation_x,
+                            update_config.camera_rotation_y,
+                            update_config.camera_bank,
+                            update_config.camera_x,
+                            update_config.camera_y,
+                            update_config.camera_z,
+                            update_config.speed_factor,
+                            update_config.dof_focus_distance,
+                            update_config.dof_blur_strength,
+                            update_config.fog_strength,
+                            update_config.fog_start,
+                            update_config.background_color,
+                            update_config.filter_radius,
+                            update_config.filter_blur_edges,
+                            update_config.render_mode,
+                            update_config.perspective_strength,
+                            update_config.depth_density_compensation,
+                            update_config.far_density_fade,
+                            update_config.far_density_fade_start,
+                            update_config.preserve_z,
+                            update_config.solid_strength,
+                            update_config.surface_thickness,
+                            update_config.solid_shading.clone(),
+                        );
+                    } else {
+                        renderer.set_solid_shading(update_config.solid_shading.clone());
+                    }
                 }
 
                 // Update view parameters (includes view changes and iteration changes)
