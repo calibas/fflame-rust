@@ -149,6 +149,7 @@ mod glsl_fields;
 mod octapol;
 mod quaternion_julia;
 mod quaternion_rotation;
+mod solid_samplers;
 mod quaternion_linear;
 mod quaternion_julia_set;
 mod quaternion_camera;
@@ -319,6 +320,7 @@ pub use glsl_fields::*;
 pub use octapol::*;
 pub use quaternion_julia::*;
 pub use quaternion_rotation::*;
+pub use solid_samplers::*;
 pub use quaternion_linear::*;
 pub use quaternion_julia_set::*;
 pub use quaternion_camera::*;
@@ -1150,4 +1152,6 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &QUATERNION_LINEAR,
     &QUATERNION_JULIA_SET,
     &QUATERNION_CAMERA,
+    &SOLID_SPHERE,
+    &BUBBLE_SOLID,
 ];
