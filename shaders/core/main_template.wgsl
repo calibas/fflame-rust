@@ -723,6 +723,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 {{#if RENDER_3D}}
 {{#if SOLID}}
                 // ── Solid rendering (Phase 0): nearest-depth occlusion ──
+                let solid_d = -camera_space.z;  // positive = in front of the camera
+{{#if OUTPUT_HISTOGRAM_DIRECT}}
                 // Depth region: one u32 per pixel at offset W*H*4 inside the
                 // histogram buffer (same binding — the buffer is allocated
                 // with the extra region only when this shader is built).
@@ -733,7 +735,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 // therefore initializes the region, and `atomicMax` tracks
                 // the nearest depth. (NaN depths encode small and lose the
                 // max — harmlessly ignored.)
-                let solid_d = -camera_space.z;  // positive = in front of the camera
                 let sd_bits = bitcast<u32>(solid_d);
                 let sd_ord = select(sd_bits | 0x80000000u, ~sd_bits, (sd_bits & 0x80000000u) != 0u);
                 let sd_enc = ~sd_ord;
@@ -753,6 +754,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     // (1 = fully occluded, 0 = classic transparency).
                     density_weight *= 1.0 - params.solid_strength;
                 }
+{{else}}
+                // Sample-emit mode: this shader has no per-pixel state —
+                // solid_d rides the Sample's spare slot below, and the tile
+                // scatter pass (accumulate_samples.wgsl) owns the depth
+                // region, the priming batch, and the occlusion gating.
+{{/if}}
 {{/if}}
                 // Far density fade (3D mode only): genuinely thin out
                 // far samples by scaling their histogram DENSITY
@@ -846,7 +853,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                         clamp(final_color.r, 0.0, 1.0),
                         clamp(final_color.g, 0.0, 1.0),
                         clamp(final_color.b, 0.0, 1.0),
+{{#if SOLID}}
+                        // Camera-space depth in the first spare slot — the
+                        // tile scatter pass gates against its depth region.
+                        density_weight, solid_d, 0.0
+{{else}}
                         density_weight, 0.0, 0.0
+{{/if}}
                     );
                 }
 {{/if}}

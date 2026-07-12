@@ -289,7 +289,9 @@ impl App {
         // binding, or row-tiles when it doesn't — either way bounded memory +
         // progress. Synchronous ⇒ the app's own device, blocking briefly.
         let max_binding = self.gpu.device.limits().max_storage_buffer_binding_size as u64;
-        let hist_size = crate::export::histogram_size_bytes(self.export_width, self.export_height);
+        let solid_active = config.solid_strength > 0.0
+            && matches!(config.render_mode, crate::scene::transforms::RenderMode::ThreeD);
+        let hist_size = crate::export::histogram_size_bytes(self.export_width, self.export_height, solid_active);
         let long_render = config.max_iterations > Self::BACKGROUND_EXPORT_ITER_THRESHOLD;
         if hist_size > max_binding || long_render {
             println!(

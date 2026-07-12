@@ -162,7 +162,9 @@ pub async fn export_headless(
 ) -> Result<bool, Box<dyn std::error::Error>> {
     let max_binding = probe_max_binding_size().await
         .unwrap_or(128 * 1024 * 1024);
-    let hist_size = crate::export::histogram_size_bytes(width, height);
+    let solid_active = config.solid_strength > 0.0
+        && matches!(config.render_mode, crate::scene::transforms::RenderMode::ThreeD);
+    let hist_size = crate::export::histogram_size_bytes(width, height, solid_active);
 
     // `Auto` routes by size; explicit variants force one engine (parity testing).
     let use_highres = match engine {

@@ -28,7 +28,10 @@ struct Sample {
     // Density weight (depth-density compensation; 1.0 = neutral).
     // Scales all four histogram adds below.
     weight: f32,
-    _pad2: f32,
+    // Solid rendering: camera-space depth (positive = in front of the
+    // camera). Only meaningful when the iteration shader was built with
+    // SOLID; 0 otherwise.
+    depth: f32,
     _pad3: f32,
 }
 
@@ -52,8 +55,21 @@ struct AccumulateParams {
     // multiplier so the accumulation precision matches across modes.
     color_scale: f32,
 
+    // Solid rendering (0 = off). When active, the bound histogram region
+    // carries one extra u32 per pixel at offset bound_width*bound_height*4
+    // — the nearest-depth region (inverted ordered-float encoding, 0 =
+    // "no sample"; identical to the interactive direct path, see
+    // main_template.wgsl SOLID). Samples deeper than nearest +
+    // surface_thickness get weight *= (1 - solid_strength).
+    solid_strength: f32,
+    surface_thickness: f32,
+    // 1 = depth-priming dispatch: record depth only, plot nothing (the
+    // host sets this for the export's first batch, mirroring the
+    // interactive renderer's post-reset priming).
+    depth_prime: u32,
     _pad0: u32,
     _pad1: u32,
+    _pad2: u32,
 }
 
 @group(0) @binding(0) var<storage, read> samples: array<Sample>;
@@ -88,10 +104,36 @@ fn accumulate_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let pixel_idx = local_y * ap.bound_width + local_x;
     let base = pixel_idx * 4u;
 
+    // Solid rendering: nearest-depth test against this tile's depth
+    // region. Runtime-gated (this pass is export-only, not the hot
+    // interactive loop) — with solid off the region doesn't exist and
+    // this block never touches it. Same encoding + race semantics as
+    // the interactive direct path (main_template.wgsl SOLID).
+    var solid_weight = 1.0;
+    if (ap.solid_strength > 0.0) {
+        let sd_bits = bitcast<u32>(s.depth);
+        let sd_ord = select(sd_bits | 0x80000000u, ~sd_bits, (sd_bits & 0x80000000u) != 0u);
+        let sd_enc = ~sd_ord;
+        let solid_slot = ap.bound_width * ap.bound_height * 4u + pixel_idx;
+        let solid_prev = atomicMax(&histogram[solid_slot], sd_enc);
+        if (ap.depth_prime != 0u) {
+            return;  // priming dispatch: depth recorded, nothing plotted
+        }
+        let near_ord = ~max(solid_prev, sd_enc);
+        let near_bits = select(~near_ord, near_ord ^ 0x80000000u, (near_ord & 0x80000000u) != 0u);
+        let d_near = bitcast<f32>(near_bits);
+        if (s.depth > d_near + ap.surface_thickness) {
+            solid_weight = 1.0 - ap.solid_strength;
+            if (solid_weight <= 0.0) {
+                return;  // fully occluded — depth already recorded
+            }
+        }
+    }
+
     // All four channels carry the sample's weight so the color
     // recovery ratio Σcolor/Σdensity is weight-invariant. Weight is
     // 1.0 unless depth-density compensation produced it.
-    let weighted_scale = ap.color_scale * s.weight;
+    let weighted_scale = ap.color_scale * s.weight * solid_weight;
     let r_u32 = u32(clamp(s.r, 0.0, 1.0) * weighted_scale);
     let g_u32 = u32(clamp(s.g, 0.0, 1.0) * weighted_scale);
     let b_u32 = u32(clamp(s.b, 0.0, 1.0) * weighted_scale);
