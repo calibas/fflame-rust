@@ -75,7 +75,11 @@ struct ShadeParams {
     // full-image normal textures don't exist). The texture is full-image
     // sized and indexed with GLOBAL coordinates.
     use_normal_tex: u32,
-    _pad1: u32,
+    // Surface closing (0 = off): fill pixels with NO sample when a ring
+    // of neighbors within this radius agree they are one surface (valid
+    // depths, tight spread) — closes the see-through pinholes a sparse
+    // chaos game leaves in solid surfaces. Requires use_normal_tex.
+    gap_fill: u32,
 
     lights: array<ShadeLight, 4>,
 }
@@ -143,17 +147,85 @@ fn shade_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let py = i32(gid.y + sp.tex_y0);
     let accum = textureLoad(accum_tex, vec2<i32>(lx, ly), 0);
 
-    let d = depth_at(px, py);
+    var d = depth_at(px, py);
+    var albedo = accum.rgb;
+    var alpha_out = accum.a;
+    var fill_normal = vec3<f32>(0.0);
+    var filled = false;
+
     if (d > 1.0e37) {
-        // No surface here — emissive pass-through.
-        textureStore(shade_out, vec2<i32>(lx, ly), accum);
-        return;
+        // No sample here. Surface closing: if a ring of neighbors agree
+        // they're one continuous surface, synthesize this pixel from them
+        // — the chaos game leaves pinholes in solid surfaces wherever the
+        // IFS measure is thin, and those read as see-through geometry.
+        if (sp.use_normal_tex != 0u && sp.gap_fill > 0u) {
+            let win = max(sp.surface_thickness, 0.005) * 6.0;
+            for (var g = 1; g <= i32(sp.gap_fill); g = g + 1) {
+                var cnt = 0.0;
+                var dmin = 3.0e38;
+                var dmax = -3.0e38;
+                var dsum = 0.0;
+                var nsum = vec3<f32>(0.0);
+                var asum = vec4<f32>(0.0);
+                for (var k = 0; k < 8; k = k + 1) {
+                    var ox = 0; var oy = 0;
+                    switch (k) {
+                        case 0: { ox = g; oy = 0; }
+                        case 1: { ox = -g; oy = 0; }
+                        case 2: { ox = 0; oy = g; }
+                        case 3: { ox = 0; oy = -g; }
+                        case 4: { ox = g; oy = g; }
+                        case 5: { ox = -g; oy = g; }
+                        case 6: { ox = g; oy = -g; }
+                        default: { ox = -g; oy = -g; }
+                    }
+                    let sx = px + ox;
+                    let sy = py + oy;
+                    if (sx < 0 || sy < 0 || sx >= i32(sp.width) || sy >= i32(sp.height)) {
+                        continue;
+                    }
+                    let nt = textureLoad(normal_tex, vec2<i32>(sx, sy), 0);
+                    if (nt.w > 1.0e37) {
+                        continue;
+                    }
+                    cnt = cnt + 1.0;
+                    dmin = min(dmin, nt.w);
+                    dmax = max(dmax, nt.w);
+                    dsum = dsum + nt.w;
+                    nsum = nsum + nt.xyz;
+                    asum = asum + textureLoad(accum_tex, vec2<i32>(lx + ox, ly + oy), 0);
+                }
+                // Fill only when most of the ring is surface AND it's ONE
+                // surface (tight depth spread) — silhouette gaps between
+                // different surfaces stay open.
+                if (cnt >= 5.0 && (dmax - dmin) < win) {
+                    d = dsum / cnt;
+                    let nl = length(nsum);
+                    if (nl > 1e-9) {
+                        fill_normal = nsum / nl;
+                    } else {
+                        fill_normal = vec3<f32>(0.0, 0.0, 1.0);
+                    }
+                    albedo = asum.rgb / cnt;
+                    alpha_out = asum.a / cnt;
+                    filled = true;
+                    break;
+                }
+            }
+        }
+        if (!filled) {
+            // Genuinely empty — emissive pass-through.
+            textureStore(shade_out, vec2<i32>(lx, ly), accum);
+            return;
+        }
     }
 
     let pos = reconstruct(f32(px), f32(py), d);
 
     var n: vec3<f32>;
-    if (sp.use_normal_tex != 0u) {
+    if (filled) {
+        n = fill_normal;
+    } else if (sp.use_normal_tex != 0u) {
         // Pre-computed + à-trous-smoothed normal (full-image texture,
         // global coordinates).
         n = textureLoad(normal_tex, vec2<i32>(px, py), 0).xyz;
@@ -248,7 +320,6 @@ fn shade_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     // Blinn-Phong with camera-space directional lights.
-    let albedo = accum.rgb;
     let v = normalize(-pos);
     var lit = albedo * (sp.ambient * ao);
     for (var li = 0; li < 4; li = li + 1) {
@@ -268,5 +339,5 @@ fn shade_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     let rgb = mix(albedo, lit, clamp(sp.shading_strength, 0.0, 1.0));
-    textureStore(shade_out, vec2<i32>(lx, ly), vec4<f32>(rgb, accum.a));
+    textureStore(shade_out, vec2<i32>(lx, ly), vec4<f32>(rgb, alpha_out));
 }

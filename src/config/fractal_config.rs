@@ -617,6 +617,10 @@ pub struct SolidShadingSettings {
     /// carries Monte-Carlo noise; each iteration smooths normals edge-
     /// aware at doubling strides. 0 = raw slope-fit normals.
     pub normal_smoothing: u32,
+    /// Surface closing radius in pixels (0-3, 0 = off): fills sample-free
+    /// pixels whose neighbor ring agrees it's one surface — closes the
+    /// see-through pinholes sparse chaos-game coverage leaves in solids.
+    pub gap_fill: u32,
     /// Up to 4 directional lights. Light 0 defaults enabled once
     /// shading is turned on via the UI (the config default is all-off,
     /// so `is_default` stays cheap for untouched flames).
@@ -634,6 +638,7 @@ impl Default for SolidShadingSettings {
             ssao_strength: 0.6,
             ssao_radius: 0.15,
             normal_smoothing: 1,
+            gap_fill: 0,
             lights: [
                 SolidLight { enabled: true, ..SolidLight::default() },
                 SolidLight { azimuth: -60.0, elevation: 10.0, intensity: 0.5, ..SolidLight::default() },

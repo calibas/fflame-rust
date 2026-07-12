@@ -286,10 +286,38 @@ passes JWF.
       with the solid term — makes solid↔volumetric a continuous artistic dial.
 - [ ] High-res export: the grid is resolution-independent — no tiling work.
 
+### Field feedback (2026-07-12, first real-scene session)
+
+- Sparse-coverage GAPS (e.g. julian projected on a sphere via bubble):
+  see-through pinholes wherever the IFS measure is thin; worst in
+  animation (temporal shimmer). First-line fix shipped: `gap_fill`
+  (surface closing in the shade pass). Fundamental fixes: splat
+  footprints > 1px (surface splatting), surface-sampler variations
+  (quaternion_julia_set-style density generators for common shells),
+  and the Phase 2 volume.
+- Surface thickness sweet spot is 0.001-0.01; above ~0.01 "ripples"
+  appear — the acceptance shell is measured along the VIEW ray, so on
+  slanted surfaces a thick shell cuts iso-depth contour bands whose
+  accepted density varies with slope. Candidate fix: slope-adaptive
+  thickness (scale the shell by the surface slant once normals exist);
+  the volume makes it moot.
+- Residual bright-pixel noise in rough areas after à-trous: sparse
+  single-sample albedo amplified by lighting. Candidates: supersampled
+  rendering (render at 2x + downsample — no user-facing supersampling
+  exists today), firefly clamp against the local neighborhood in the
+  shade pass.
+
 ## Phase 3 — backlog (unscheduled)
 
 - JWF solid-rendering `.flame` XML import (`sld_render_*`, materials, lights).
 - Post-DoF from the depth buffer (replaces at-splat DoF in solid mode).
+- Supersampling / AA (render at 2x + downsample) — also the answer to
+  residual lit-surface speckle beyond what à-trous removes.
+- Firefly clamp in the shade pass (limit lit output vs neighborhood).
+- Slope-adaptive surface thickness (fixes thick-shell ripples).
+- Surface-sampler variation family (solid-friendly shells: sphere, box,
+  torus projections with uniform coverage — the quaternion_julia_set
+  sampler generalized).
 - Matcap / environment-map materials ("image textures, later").
 - Marching-cubes isosurface export (mesh for Blender) from the Phase 2 grid.
 - à-trous as a general user-facing denoise effect.
