@@ -613,6 +613,10 @@ pub struct SolidShadingSettings {
     pub ssao_strength: f32,
     /// SSAO radius in world units at the surface.
     pub ssao_radius: f32,
+    /// À-trous normal-smoothing iterations (0-3). The nearest-depth field
+    /// carries Monte-Carlo noise; each iteration smooths normals edge-
+    /// aware at doubling strides. 0 = raw slope-fit normals.
+    pub normal_smoothing: u32,
     /// Up to 4 directional lights. Light 0 defaults enabled once
     /// shading is turned on via the UI (the config default is all-off,
     /// so `is_default` stays cheap for untouched flames).
@@ -629,6 +633,7 @@ impl Default for SolidShadingSettings {
             shininess: 32.0,
             ssao_strength: 0.6,
             ssao_radius: 0.15,
+            normal_smoothing: 1,
             lights: [
                 SolidLight { enabled: true, ..SolidLight::default() },
                 SolidLight { azimuth: -60.0, elevation: 10.0, intensity: 0.5, ..SolidLight::default() },

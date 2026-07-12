@@ -70,7 +70,11 @@ struct ShadeParams {
     // Interactive: tex_y0 = 0, tex_height = height.
     tex_y0: u32,
     tex_height: u32,
-    _pad0: u32,
+    // 1 = read normals from the pre-smoothed (normals + à-trous) texture
+    // at binding 4; 0 = estimate inline (strip-tiled exports, where the
+    // full-image normal textures don't exist). The texture is full-image
+    // sized and indexed with GLOBAL coordinates.
+    use_normal_tex: u32,
     _pad1: u32,
 
     lights: array<ShadeLight, 4>,
@@ -84,6 +88,9 @@ struct ShadeParams {
 @group(0) @binding(1) var<storage, read> histogram: array<u32>;
 @group(0) @binding(2) var<uniform> sp: ShadeParams;
 @group(0) @binding(3) var shade_out: texture_storage_2d<rgba32float, write>;
+// Pre-smoothed (normal.xyz, depth) from normals.wgsl + atrous.wgsl.
+// Bound to a 1x1 dummy when use_normal_tex == 0.
+@group(0) @binding(4) var normal_tex: texture_2d<f32>;
 
 // Decode the splat path's inverted ordered-float depth encoding.
 // Returns the out-of-band sentinel 3e38 ("no sample") for empty pixels —
@@ -145,20 +152,29 @@ fn shade_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let pos = reconstruct(f32(px), f32(py), d);
 
-    // Bilateral slope fit: 9x9 window of neighbors whose depth sits
-    // within a few surface-shells of the center. The raw nearest-depth
-    // field carries Monte-Carlo noise comparable to the shell thickness;
-    // the wide in-window average kills it (~9x noise reduction) without
-    // bleeding across silhouette edges (out-of-window neighbors are
-    // other surfaces). One 81-tap pass per pixel, once per frame.
+    var n: vec3<f32>;
+    if (sp.use_normal_tex != 0u) {
+        // Pre-computed + à-trous-smoothed normal (full-image texture,
+        // global coordinates).
+        n = textureLoad(normal_tex, vec2<i32>(px, py), 0).xyz;
+        if (length(n) < 1e-6) {
+            textureStore(shade_out, vec2<i32>(lx, ly), accum);
+            return;
+        }
+    } else {
+    // Inline bilateral slope fit: 9x9 window of neighbors whose depth
+    // sits within a few surface-shells of the center. The raw
+    // nearest-depth field carries Monte-Carlo noise comparable to the
+    // shell; the wide in-window average kills it without bleeding across
+    // silhouette edges. Used by the strip-tiled export path (the
+    // full-image normal textures don't exist there); the interactive and
+    // single-shot paths use normals.wgsl + atrous.wgsl instead.
     let win = max(sp.surface_thickness, 0.005) * 3.0;
     var tangent_x: vec3<f32>;
     var tangent_y: vec3<f32>;
     {
-        var sum_l = 0.0; var w_l = 0.0;
-        var sum_r = 0.0; var w_r = 0.0;
-        var sum_u = 0.0; var w_u = 0.0;
-        var sum_dn = 0.0; var w_dn = 0.0;
+        var sum_x = 0.0; var w_x = 0.0;
+        var sum_y = 0.0; var w_y = 0.0;
         for (var oy = -4; oy <= 4; oy = oy + 1) {
             for (var ox = -4; ox <= 4; ox = ox + 1) {
                 let nd = depth_at(px + ox, py + oy);
@@ -168,35 +184,35 @@ fn shade_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 // Accumulate weighted x/y-slope estimates: each in-window
                 // neighbor contributes its per-pixel depth slope.
                 if (ox != 0) {
-                    sum_l = sum_l + (nd - d) / f32(ox);
-                    w_l = w_l + 1.0;
+                    sum_x = sum_x + (nd - d) / f32(ox);
+                    w_x = w_x + 1.0;
                 }
                 if (oy != 0) {
-                    sum_u = sum_u + (nd - d) / f32(oy);
-                    w_u = w_u + 1.0;
+                    sum_y = sum_y + (nd - d) / f32(oy);
+                    w_y = w_y + 1.0;
                 }
             }
         }
-        let dzdx = select(0.0, sum_l / w_l, w_l > 0.0);
-        let dzdy = select(0.0, sum_u / w_u, w_u > 0.0);
-        sum_r = dzdx; sum_dn = dzdy; w_r = w_l; w_dn = w_u; // (silence dead vars)
+        let dzdx = select(0.0, sum_x / w_x, w_x > 0.0);
+        let dzdy = select(0.0, sum_y / w_y, w_y > 0.0);
         // Tangents from the smoothed slopes, one pixel apart in screen
         // space, reconstructed into camera space.
         tangent_x = reconstruct(f32(px + 1), f32(py), d + dzdx) - pos;
         tangent_y = reconstruct(f32(px), f32(py + 1), d + dzdy) - pos;
     }
-    var n = cross(tangent_y, tangent_x);
+    var ni = cross(tangent_y, tangent_x);
     // Face the camera (camera at origin, looking down -z: normals should
     // have positive z toward the viewer).
-    if (n.z < 0.0) {
-        n = -n;
+    if (ni.z < 0.0) {
+        ni = -ni;
     }
-    let nlen = length(n);
+    let nlen = length(ni);
     if (nlen < 1e-12) {
         textureStore(shade_out, vec2<i32>(lx, ly), accum);
         return;
     }
-    n = n / nlen;
+    n = ni / nlen;
+    }
 
     // SSAO: 8 spiral taps. A tap occludes when its surface point is
     // closer to the camera than the center's tangent plane allows
