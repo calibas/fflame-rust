@@ -611,6 +611,35 @@ class UnifiedBenchmarkRunner:
             print(f"{Colors.WARNING}Failed to extract metadata from {png_path.name}: {e}{Colors.ENDC}")
             return None
 
+    # Solid-rendering tests are NOT bit-reproducible: the occlusion test
+    # races its own batch's depth writes, so shell-marginal samples accept
+    # or reject on GPU scheduling (see docs/projects/solid-rendering.md,
+    # "Known limitation"). Tests named `solid-*` therefore compare with a
+    # tolerance instead of an exact pixel hash. Thresholds sit well above
+    # the measured run-to-run noise (mean ~2-5/255) and far below any real
+    # regression (solid-off vs solid-on differs by mean >40/255).
+    SOLID_MEAN_TOLERANCE = 8.0       # mean |delta| per channel, 0-255 scale
+    SOLID_BIG_DELTA = 32             # "large" per-channel delta threshold
+    SOLID_BIG_FRACTION = 0.05        # allowed fraction of large-delta channel samples
+
+    def images_within_tolerance(self, path1: Path, path2: Path):
+        """Tolerance comparison for non-bit-reproducible (solid) renders.
+
+        Returns (ok, detail_string). Uses PIL only (no numpy dependency).
+        """
+        from PIL import Image, ImageChops
+        a = Image.open(path1).convert('RGB')
+        b = Image.open(path2).convert('RGB')
+        if a.size != b.size:
+            return False, "size mismatch"
+        diff = ImageChops.difference(a, b)
+        hist = diff.histogram()  # 3 contiguous 256-bin channel histograms
+        n = a.size[0] * a.size[1] * 3
+        mean = sum(v * hist[c * 256 + v] for c in range(3) for v in range(256)) / n
+        big = sum(hist[c * 256 + v] for c in range(3) for v in range(self.SOLID_BIG_DELTA + 1, 256)) / n
+        ok = mean <= self.SOLID_MEAN_TOLERANCE and big <= self.SOLID_BIG_FRACTION
+        return ok, f"mean {mean:.2f} big {big * 100:.1f}%"
+
     def compare_directories(self, dir1: Path, dir2: Path, label1: str, label2: str):
         """Compare pixel hashes between two directories of PNG files."""
         if not HAS_PILLOW:
@@ -641,6 +670,18 @@ class UnifiedBenchmarkRunner:
             path2 = dir2 / f"{test_name}.png"
 
             if path1.exists() and path2.exists():
+                if test_name.startswith("solid-"):
+                    # Solid renders: tolerance compare (not bit-reproducible).
+                    ok, detail = self.images_within_tolerance(path1, path2)
+                    if ok:
+                        match_str = f"{Colors.OKGREEN}✓ WITHIN TOL{Colors.ENDC}"
+                        matches += 1
+                    else:
+                        match_str = f"{Colors.FAIL}✗ EXCEEDS TOL{Colors.ENDC}"
+                        mismatches += 1
+                    print(f"{test_name:<30} {detail:<41} {match_str}")
+                    continue
+
                 hash1 = self.hash_image(path1)
                 hash2 = self.hash_image(path2)
 

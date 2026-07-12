@@ -1,6 +1,6 @@
 # Solid Rendering: occlusion, lighting, and shading for 3D flames
 
-**Status**: Phase 0 in progress (branch `solid-rendering`)
+**Status**: Phase 0 COMPLETE (branch `solid-rendering`) — Phase 1 (deferred shading) next
 **Motivation**: 3D flames render as additive transparent ghosts. Shapes have no
 occlusion (far structure bleeds through near structure), and geometry becomes
 invisible wherever palette colors are uniform, because *all* shape information
@@ -180,9 +180,14 @@ ghost".
       `histogram_size_bytes(_, _, solid)`, `pick_strategy(..., solid)`
       (tile heights sized for 20 B/px spans + offset alignment), and both
       app routing sites.
-- [ ] Visual regression category `solid` — needs tolerance-based compare
-      (solid renders are not bit-reproducible, see below); the last open
-      Phase 0 box.
+- [x] Visual regression category `solid`: 3 scenes
+      (tests/visual/configs/solid/ — hard occlusion, translucent blend,
+      solid + depth effects incl. a deliberately nonzero DoF that must
+      have no effect) with baselines. `solid-*` tests compare with a
+      tolerance in run_benchmarks.py (mean delta <= 8/255, large-delta
+      channel fraction <= 5%) instead of pixel hashes. Comparator
+      validated both ways: re-render passes (mean 0.01), solid-off vs
+      baseline fails loudly (mean 15.5, 19.8% big).
 
 ## Phase 1 — deferred shading
 
