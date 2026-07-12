@@ -2629,6 +2629,8 @@ impl HighResExporter {
                     // Density volume rides the direct-histogram path only;
                     // the tiled sample-emit exporter never builds one.
                     None,
+                    0.0,
+                    None,
                 );
                 self.queue.submit(std::iter::once(shade_encoder.finish()));
                 strip_shade = Some((tex, view));
@@ -2855,6 +2857,8 @@ impl HighResExporter {
                 0,
                 self.height,
                 // No volume on the exporter path (see strip shade above).
+                None,
+                0.0,
                 None,
             );
             self.queue.submit(std::iter::once(shade_encoder.finish()));

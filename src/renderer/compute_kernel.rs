@@ -175,6 +175,9 @@ pub struct FlameRenderer {
     /// stays put → tonemap reads scale-mismatched data → preview
     /// mode goes ~N× dimmer than steady-state for N drag frames.
     samples_in_buffer: u64,
+    /// Samples of the most recent compute batch — the unit for the
+    /// volume trust ramp's "how many batches deep are we" estimate.
+    last_batch_samples: u64,
     color_mode: ColorMode,
     path_map_style: PathMapStyle,
     path_capture_mode: PathCaptureMode,
@@ -323,6 +326,7 @@ impl FlameRenderer {
             total_iterations: 0,
             effective_iterations: 0,
             samples_in_buffer: 0,
+            last_batch_samples: 0,
             color_mode: ColorMode::Palette,
             path_map_style: PathMapStyle::default(),
             path_capture_mode: PathCaptureMode::default(),
@@ -551,6 +555,10 @@ impl FlameRenderer {
         self.reset_iteration_counter();
         // Reset effective_iterations when doing a full reset (buffer cleared)
         self.effective_iterations = 0;
+        // Shade temporal history belongs to the pre-reset accumulation
+        // (and, in video export, to the PREVIOUS animation frame —
+        // blending against it would motion-ghost).
+        self.shade_pass.reset_temporal();
 
         // Clear accumulation buffers
         self.buffers.clear_all(encoder, queue);
@@ -751,8 +759,10 @@ impl FlameRenderer {
         // would drop ~N× across N drag frames.
         if self.overwrite_mode {
             self.samples_in_buffer = samples_this_frame;
+            self.last_batch_samples = samples_this_frame;
         } else {
             self.samples_in_buffer += samples_this_frame;
+            self.last_batch_samples = samples_this_frame;
         }
 
         // Pick blend mode + rate for the accumulate shader. See
@@ -786,6 +796,11 @@ impl FlameRenderer {
             background_g: self.background_color[1],
             background_b: self.background_color[2],
             _pad1: 0.0,
+            surface_thickness: self.surface_thickness,
+            has_depth: u32::from(
+                self.buffers.solid_depth_region && self.buffers.accum_depth_buffer.is_some(),
+            ),
+            _pad2: [0; 2],
         };
 
         self.buffers.update_accumulate_params(queue, &params);
@@ -1084,6 +1099,28 @@ impl FlameRenderer {
         // pass — gradient normals, volumetric AO, shadow march, and
         // occlusion repair all key off it.
         let vol_fit = self.volume_placement(zoom, pan_x, pan_y, camera_rotation_x, camera_rotation_y, camera_bank, [camera_x, camera_y, camera_z]);
+        // Volume trust: voxels of the DERIVED (half-res) grid across the
+        // visible width. Auto-fit yields ~48 (trust 1); a manual extent
+        // much larger than the view collapses it toward 0 and the shade
+        // pass fades every volume feature out instead of stamping
+        // voxel-scale artifacts on the image.
+        let vol_trust = {
+            let hd = (self.buffers.volume_dim / 2).max(1) as f32;
+            let voxel = 2.0 * vol_fit.1 / hd;
+            let aspect = self.width.max(self.height).max(1) as f32
+                / self.width.min(self.height).max(1) as f32;
+            let visible = 4.0 * aspect / zoom.max(1e-6);
+            let geometric = ((visible / voxel.max(1e-9) - 12.0) / 24.0).clamp(0.0, 1.0);
+            // Statistical ramp: a volume holding only a batch or two is
+            // mostly Poisson noise — repair/normals driven by it strobe
+            // violently (worst in the overwrite window, which clears the
+            // volume EVERY frame). Fade the features in over the first
+            // ~dozen batches instead; drags fall back to the Phase 1
+            // look, matching how overwrite degrades everything else.
+            let batches = self.samples_in_buffer as f32
+                / (self.last_batch_samples.max(1) as f32);
+            geometric * (batches / 12.0).clamp(0.0, 1.0)
+        };
         let volume = if self.volume_active() && self.buffers.volume_dim > 0 {
             self.buffers.density_volume_buffer.as_ref().map(|buf| {
                 crate::renderer::shade_pass::VolumeShadeInput {
@@ -1096,6 +1133,8 @@ impl FlameRenderer {
                     camera_bank,
                     camera_pos: [camera_x, camera_y, camera_z],
                     center: vol_fit.0,
+                    closing: self.solid_shading.volume_closing,
+                    trust: vol_trust,
                 }
             })
         } else {
@@ -1115,6 +1154,12 @@ impl FlameRenderer {
             self.perspective_strength,
             self.surface_thickness,
             volume.as_ref(),
+            // Temporal smoothing of the shade output: the volume-derived
+            // shading tracks genuinely drifting data during accumulation
+            // (repaired pixels ride the front shell's relative density);
+            // raw per-frame it strobes. Overwrite mode gets 0 — every
+            // frame is a fresh single-batch preview.
+            if self.overwrite_mode { 0.0 } else { 0.85 },
         );
         true
     }
@@ -1131,6 +1176,9 @@ impl FlameRenderer {
     /// escalates to `update_flame` when they differ.
     pub fn set_solid_shading(&mut self, shading: crate::config::SolidShadingSettings) {
         self.solid_shading = shading;
+        // Lighting changed: blending the new look against the old one
+        // would lag/ghost the edit — restart the temporal history.
+        self.shade_pass.reset_temporal();
     }
 
     /// Whether the histogram currently carries the solid depth region.

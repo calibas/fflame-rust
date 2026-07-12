@@ -232,6 +232,7 @@ pub enum ConfigPath {
     VolumeEnabled,
     VolumeExtent,
     VolumeAutoFit,
+    VolumeClosing,
     SolidShadowStrength,
     // Solid rendering Phase 1: deferred lighting (shade pass).
     ShadingStrength,
@@ -779,6 +780,7 @@ impl Display for ConfigPath {
             ConfigPath::VolumeEnabled => write!(f, "Density Volume"),
             ConfigPath::VolumeExtent => write!(f, "Volume Extent"),
             ConfigPath::VolumeAutoFit => write!(f, "Volume Auto Fit"),
+            ConfigPath::VolumeClosing => write!(f, "Volume Hole Closing"),
             ConfigPath::SolidShadowStrength => write!(f, "Shadow Strength"),
             ConfigPath::ShadingStrength => write!(f, "Shading Strength"),
             ConfigPath::SolidAmbient => write!(f, "Ambient Light"),
@@ -1226,6 +1228,7 @@ impl ConfigPath {
             ConfigPath::VolumeEnabled => I18nKey::simple("history.param.volume_enabled"),
             ConfigPath::VolumeExtent => I18nKey::simple("history.param.volume_extent"),
             ConfigPath::VolumeAutoFit => I18nKey::simple("history.param.volume_auto_fit"),
+            ConfigPath::VolumeClosing => I18nKey::simple("history.param.volume_closing"),
             ConfigPath::SolidShadowStrength => I18nKey::simple("history.param.shadow_strength"),
             ConfigPath::ShadingStrength => I18nKey::simple("history.param.shading_strength"),
             ConfigPath::SolidAmbient => I18nKey::simple("history.param.solid_ambient"),
@@ -2099,6 +2102,7 @@ impl ConfigPath {
             | ConfigPath::SsaoRadius
             | ConfigPath::NormalSmoothing
             | ConfigPath::GapFill
+            | ConfigPath::VolumeClosing
             | ConfigPath::SolidShadowStrength
             | ConfigPath::SolidLightEnabled { .. }
             | ConfigPath::SolidLightParam { .. } => UpdateType::ShadingOnly,
@@ -2470,6 +2474,7 @@ impl ConfigPath {
             ConfigPath::VolumeEnabled => "VolumeEnabled".to_string(),
             ConfigPath::VolumeExtent => "VolumeExtent".to_string(),
             ConfigPath::VolumeAutoFit => "VolumeAutoFit".to_string(),
+            ConfigPath::VolumeClosing => "VolumeClosing".to_string(),
             ConfigPath::SolidShadowStrength => "SolidShadowStrength".to_string(),
             ConfigPath::ShadingStrength => "ShadingStrength".to_string(),
             ConfigPath::SolidAmbient => "SolidAmbient".to_string(),
@@ -2603,6 +2608,7 @@ impl ConfigPath {
             "VolumeEnabled" => return Some(ConfigPath::VolumeEnabled),
             "VolumeExtent" => return Some(ConfigPath::VolumeExtent),
             "VolumeAutoFit" => return Some(ConfigPath::VolumeAutoFit),
+            "VolumeClosing" => return Some(ConfigPath::VolumeClosing),
             "SolidShadowStrength" => return Some(ConfigPath::SolidShadowStrength),
             "ShadingStrength" => return Some(ConfigPath::ShadingStrength),
             "SolidAmbient" => return Some(ConfigPath::SolidAmbient),
@@ -2963,6 +2969,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::SsaoRadius
         | ConfigPath::NormalSmoothing
         | ConfigPath::GapFill
+        | ConfigPath::VolumeClosing
         | ConfigPath::SolidShadowStrength
         | ConfigPath::SolidLightParam { .. }
         | ConfigPath::FarDensityFade
@@ -3529,6 +3536,7 @@ mod tests {
             ConfigPath::VolumeEnabled,
             ConfigPath::VolumeExtent,
             ConfigPath::VolumeAutoFit,
+            ConfigPath::VolumeClosing,
             ConfigPath::SolidShadowStrength,
             ConfigPath::ShadingStrength,
             ConfigPath::SolidAmbient,
