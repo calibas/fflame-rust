@@ -42,7 +42,11 @@ struct ShadeParams {
     ssao_strength: f32,
     ssao_radius: f32,
     surface_thickness: f32,
-    _pad1: f32,
+    depth_word_offset: u32,
+    tex_y0: u32,
+    tex_height: u32,
+    _pad0: u32,
+    _pad1: u32,
     lights: [ShadeLight; 4],
 }
 
@@ -50,13 +54,24 @@ pub struct ShadePass {
     pipeline: ComputePipeline,
     bind_group_layout: BindGroupLayout,
     params_buffer: Buffer,
-    output_texture: Texture,
-    output_view: TextureView,
+    /// Full-image output (interactive path). Absent for pipeline-only
+    /// users (exporters bring their own region-sized outputs).
+    output: Option<(Texture, TextureView)>,
     width: u32,
     height: u32,
 }
 
 impl ShadePass {
+    /// Pipeline-only construction (exporters): no standing output
+    /// allocation; callers provide region outputs to `run_region`.
+    pub fn new_pipeline_only(device: &Device) -> Self {
+        let mut this = Self::new(device, 1, 1);
+        this.output = None;
+        this.width = 0;
+        this.height = 0;
+        this
+    }
+
     pub fn new(device: &Device, width: u32, height: u32) -> Self {
         let shader = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("Solid Shade Shader"),
@@ -134,14 +149,13 @@ impl ShadePass {
             mapped_at_creation: false,
         });
 
-        let (output_texture, output_view) = Self::create_output(device, width, height);
+        let output = Some(Self::create_output(device, width, height));
 
         Self {
             pipeline,
             bind_group_layout,
             params_buffer,
-            output_texture,
-            output_view,
+            output,
             width,
             height,
         }
@@ -166,20 +180,19 @@ impl ShadePass {
         if width == self.width && height == self.height {
             return;
         }
-        let (tex, view) = Self::create_output(device, width, height);
-        self.output_texture = tex;
-        self.output_view = view;
+        self.output = Some(Self::create_output(device, width, height));
         self.width = width;
         self.height = height;
     }
 
     pub fn output_view(&self) -> &TextureView {
-        &self.output_view
+        &self.output.as_ref().expect("ShadePass built pipeline-only has no output").1
     }
 
-    /// Encode the shade dispatch. The caller guarantees the histogram
-    /// buffer carries the depth region (solid active) and that this runs
-    /// after the frame's accumulate pass.
+    /// Interactive-path dispatch: full image, depth region inside the
+    /// histogram binding, internal output texture. The caller guarantees
+    /// the depth region exists and this runs after the frame's
+    /// accumulate pass.
     #[allow(clippy::too_many_arguments)]
     pub fn run(
         &self,
@@ -195,6 +208,56 @@ impl ShadePass {
         pan_y: f32,
         perspective_strength: f32,
         surface_thickness: f32,
+    ) {
+        let output_view = &self.output.as_ref().expect("interactive ShadePass has an output").1;
+        self.run_region(
+            device,
+            queue,
+            encoder,
+            accumulation_view,
+            histogram_buffer,
+            output_view,
+            shading,
+            zoom,
+            rotation,
+            pan_x,
+            pan_y,
+            perspective_strength,
+            surface_thickness,
+            self.width,
+            self.height,
+            self.width * self.height * 4, // depth region inside the histogram
+            0,
+            self.height,
+        );
+    }
+
+    /// Region dispatch (exporters): shade full-width rows
+    /// [tex_y0, tex_y0 + tex_height) of a full_width×full_height image.
+    /// `depth_buffer` holds encoded depths at `depth_word_offset` (0 for
+    /// a dedicated depth buffer); the input/output textures are
+    /// region-sized.
+    #[allow(clippy::too_many_arguments)]
+    pub fn run_region(
+        &self,
+        device: &Device,
+        queue: &Queue,
+        encoder: &mut CommandEncoder,
+        accumulation_view: &TextureView,
+        depth_buffer: &Buffer,
+        output_view: &TextureView,
+        shading: &SolidShadingSettings,
+        zoom: f32,
+        rotation: f32,
+        pan_x: f32,
+        pan_y: f32,
+        perspective_strength: f32,
+        surface_thickness: f32,
+        full_width: u32,
+        full_height: u32,
+        depth_word_offset: u32,
+        tex_y0: u32,
+        tex_height: u32,
     ) {
         let mut lights = [ShadeLight {
             dir_intensity: [0.0; 4],
@@ -219,8 +282,8 @@ impl ShadePass {
         }
 
         let params = ShadeParams {
-            width: self.width,
-            height: self.height,
+            width: full_width,
+            height: full_height,
             zoom,
             rotation,
             pan_x,
@@ -234,7 +297,11 @@ impl ShadePass {
             ssao_strength: shading.ssao_strength,
             ssao_radius: shading.ssao_radius,
             surface_thickness,
-            _pad1: 0.0,
+            depth_word_offset,
+            tex_y0,
+            tex_height,
+            _pad0: 0,
+            _pad1: 0,
             lights,
         };
         queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));
@@ -251,7 +318,7 @@ impl ShadePass {
                 },
                 BindGroupEntry {
                     binding: 1,
-                    resource: histogram_buffer.as_entire_binding(),
+                    resource: depth_buffer.as_entire_binding(),
                 },
                 BindGroupEntry {
                     binding: 2,
@@ -259,7 +326,7 @@ impl ShadePass {
                 },
                 BindGroupEntry {
                     binding: 3,
-                    resource: BindingResource::TextureView(&self.output_view),
+                    resource: BindingResource::TextureView(output_view),
                 },
             ],
         });
@@ -270,6 +337,6 @@ impl ShadePass {
         });
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
-        pass.dispatch_workgroups(self.width.div_ceil(8), self.height.div_ceil(8), 1);
+        pass.dispatch_workgroups(full_width.div_ceil(8), tex_height.div_ceil(8), 1);
     }
 }

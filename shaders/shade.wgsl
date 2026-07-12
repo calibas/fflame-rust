@@ -33,6 +33,8 @@ struct ShadeLight {
 }
 
 struct ShadeParams {
+    // FULL image dimensions — reconstruction and depth indexing always
+    // work in full-image coordinates, even when shading a strip.
     width: u32,
     height: u32,
     // View-transform inverse inputs (must match utilities.wgsl
@@ -58,7 +60,18 @@ struct ShadeParams {
     // neighbors within ~2 shells of the center are averaged before
     // normals are taken from the smoothed field.
     surface_thickness: f32,
-    _pad1: f32,
+    // Word offset of the depth region inside the bound buffer:
+    // interactive = W*H*4 (depth region inside the histogram binding);
+    // export = 0 (a dedicated full-image depth buffer).
+    depth_word_offset: u32,
+
+    // Region rendering (strip-tiled exporters): the bound input/output
+    // textures cover full-width rows [tex_y0, tex_y0 + tex_height).
+    // Interactive: tex_y0 = 0, tex_height = height.
+    tex_y0: u32,
+    tex_height: u32,
+    _pad0: u32,
+    _pad1: u32,
 
     lights: array<ShadeLight, 4>,
 }
@@ -81,7 +94,7 @@ fn depth_at(px: i32, py: i32) -> f32 {
     if (px < 0 || py < 0 || px >= i32(sp.width) || py >= i32(sp.height)) {
         return 3.0e38;
     }
-    let idx = sp.width * sp.height * 4u + u32(py) * sp.width + u32(px);
+    let idx = sp.depth_word_offset + u32(py) * sp.width + u32(px);
     let enc = histogram[idx];
     if (enc == 0u) {
         return 3.0e38;
@@ -111,17 +124,22 @@ fn reconstruct(px: f32, py: f32, d: f32) -> vec3<f32> {
 
 @compute @workgroup_size(8, 8, 1)
 fn shade_main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if (gid.x >= sp.width || gid.y >= sp.height) {
+    if (gid.x >= sp.width || gid.y >= sp.tex_height) {
         return;
     }
-    let px = i32(gid.x);
-    let py = i32(gid.y);
-    let accum = textureLoad(accum_tex, vec2<i32>(px, py), 0);
+    // Local (texture) vs global (image) coordinates: albedo reads and the
+    // output write are texture-local; depth, reconstruction, and SSAO use
+    // full-image coordinates so strips shade identically to a one-shot.
+    let lx = i32(gid.x);
+    let ly = i32(gid.y);
+    let px = lx;
+    let py = i32(gid.y + sp.tex_y0);
+    let accum = textureLoad(accum_tex, vec2<i32>(lx, ly), 0);
 
     let d = depth_at(px, py);
     if (d > 1.0e37) {
         // No surface here — emissive pass-through.
-        textureStore(shade_out, vec2<i32>(px, py), accum);
+        textureStore(shade_out, vec2<i32>(lx, ly), accum);
         return;
     }
 
@@ -175,7 +193,7 @@ fn shade_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let nlen = length(n);
     if (nlen < 1e-12) {
-        textureStore(shade_out, vec2<i32>(px, py), accum);
+        textureStore(shade_out, vec2<i32>(lx, ly), accum);
         return;
     }
     n = n / nlen;
@@ -234,5 +252,5 @@ fn shade_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     let rgb = mix(albedo, lit, clamp(sp.shading_strength, 0.0, 1.0));
-    textureStore(shade_out, vec2<i32>(px, py), vec4<f32>(rgb, accum.a));
+    textureStore(shade_out, vec2<i32>(lx, ly), vec4<f32>(rgb, accum.a));
 }

@@ -194,6 +194,12 @@ pub struct HighResExporter {
     solid_enabled: bool,
     solid_strength: f32,
     surface_thickness: f32,
+    /// Shade pass (pipeline only) — present when the config wants lighting.
+    shade_pass: Option<crate::renderer::shade_pass::ShadePass>,
+    /// Full-image encoded depth gathered before the tile buffer is freed.
+    shade_depth_buffer: Option<Buffer>,
+    /// Accepted/dispatched fraction for solid brightness renormalization.
+    solid_density_fraction: f32,
 }
 
 impl HighResExporter {
@@ -1249,6 +1255,13 @@ impl HighResExporter {
             ..Default::default()
         });
 
+        // Built before the struct literal moves `device` into the field.
+        let shade_pass = if solid_enabled && config.solid_shading.active() {
+            Some(crate::renderer::shade_pass::ShadePass::new_pipeline_only(&device))
+        } else {
+            None
+        };
+
         Ok(Self {
             device,
             queue,
@@ -1290,6 +1303,9 @@ impl HighResExporter {
             solid_enabled,
             solid_strength: config.solid_strength,
             surface_thickness: config.surface_thickness,
+            shade_pass,
+            shade_depth_buffer: None,
+            solid_density_fraction: 1.0,
             iterations_per_thread,
         })
     }
@@ -1835,6 +1851,10 @@ post_symmetry: (&config.flame.post_symmetry).into(),
             self.fold_analytic_blur(&mut histogram, color_scale_f).await?;
         }
 
+        // Solid shading: gather the full-image depth (per-tile regions /
+        // CPU depth vec) BEFORE the tile buffer is freed below.
+        self.prepare_shade_depth(&depth_near);
+
         // Free the GPU tile histogram (up to ~2 GB) now that it's all in the
         // CPU `histogram` Vec — the tonemap + color-effect passes below
         // allocate their own full-res textures, so releasing this first gives
@@ -1852,11 +1872,89 @@ post_symmetry: (&config.flame.post_symmetry).into(),
         // not the user-passed target — feed that to the scale-invariant
         // sample_density formula (Phase 8a).
         let total_iters_dispatched = num_dispatches * iterations_per_dispatch;
+
+        // Solid brightness renormalization (exact, CPU): accepted density
+        // over dispatched iterations — mirrors the interactive
+        // density-stats measurement.
+        self.solid_density_fraction = if self.solid_enabled && self.solid_strength > 0.0 {
+            let accepted: f64 = histogram.par_iter().map(|p| p.count).sum();
+            let f = ((accepted / (total_iters_dispatched.max(1) as f64)) as f32).clamp(0.005, 1.0);
+            log::info!("High-res export: solid brightness renorm fraction {:.4}", f);
+            f
+        } else {
+            1.0
+        };
+
         let pixels = self.tonemap_gpu(&histogram, config, transparent, premultiplied, total_iters_dispatched).await?;
 
         reporter.progress(1.0, "Encoding…");
 
         Ok(pixels)
+    }
+
+    /// Gather the full-image encoded depth for the shade pass — from the
+    /// per-tile depth regions (GPU path) or the CPU depth vec — BEFORE the
+    /// tile histogram buffer is freed. Disables shading (with a warning)
+    /// when no depth source exists or the buffer exceeds one binding.
+    fn prepare_shade_depth(&mut self, cpu_depth: &[f32]) {
+        self.shade_depth_buffer = None;
+        if self.shade_pass.is_none() {
+            return;
+        }
+        let bytes = (self.width as u64) * (self.height as u64) * 4;
+        if bytes > self.device.limits().max_storage_buffer_binding_size as u64 {
+            log::warn!(
+                "High-res export: skipping lighting — depth buffer {} MB exceeds one storage binding",
+                bytes / (1024 * 1024)
+            );
+            self.shade_pass = None;
+            return;
+        }
+        let buf = self.device.create_buffer(&BufferDescriptor {
+            label: Some("Export Shade Depth"),
+            size: bytes,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        match (self.tile_histograms_buffer.as_ref(), self.tile_layout) {
+            (Some(hist), Some(layout)) if layout.words_per_pixel > 4 => {
+                let mut encoder = self.device.create_command_encoder(&CommandEncoderDescriptor {
+                    label: Some("Export Shade Depth Gather"),
+                });
+                let mut dst: u64 = 0;
+                for tile_idx in 0..layout.num_tiles {
+                    let rows = layout.tile_actual_height(tile_idx) as u64;
+                    let tile_pixels = (layout.image_width as u64) * rows;
+                    let src = layout.tile_byte_offset(tile_idx) + tile_pixels * 16;
+                    encoder.copy_buffer_to_buffer(hist, src, &buf, dst, tile_pixels * 4);
+                    dst += tile_pixels * 4;
+                }
+                self.queue.submit(std::iter::once(encoder.finish()));
+            }
+            _ if !cpu_depth.is_empty() => {
+                // CPU accumulate path: encode world depths into the shader's
+                // inverted ordered-float format (INFINITY = empty = 0).
+                let words: Vec<u32> = cpu_depth
+                    .par_iter()
+                    .map(|d| {
+                        if !d.is_finite() {
+                            0u32
+                        } else {
+                            let b = d.to_bits();
+                            let ord = if b & 0x8000_0000 != 0 { !b } else { b | 0x8000_0000 };
+                            !ord
+                        }
+                    })
+                    .collect();
+                self.queue.write_buffer(&buf, 0, bytemuck::cast_slice(&words));
+            }
+            _ => {
+                log::warn!("High-res export: no depth source for lighting — rendering unlit");
+                self.shade_pass = None;
+                return;
+            }
+        }
+        self.shade_depth_buffer = Some(buf);
     }
 
     /// Read sample counter from GPU
@@ -2213,7 +2311,9 @@ post_symmetry: (&config.flame.post_symmetry).into(),
         let area = (self.width as f32 * self.height as f32) / (pixels_per_unit_zoomed * pixels_per_unit_zoomed);
 
         let total_pixels = (self.width as f32) * (self.height as f32);
-        let sample_density = ((total_iterations as f32) / total_pixels.max(1.0)).max(1e-6);
+        let sample_density = ((total_iterations as f32) * self.solid_density_fraction
+            / total_pixels.max(1.0))
+            .max(1e-6);
 
         let tonemap_mode = match config.tonemap_mode {
             crate::scene::tonemap::ToneMapMode::Linear => 0u32,
@@ -2479,6 +2579,52 @@ post_symmetry: (&config.flame.post_symmetry).into(),
             );
             let strip_accum_view = strip_accum.create_view(&TextureViewDescriptor::default());
 
+            // Solid shading per strip: full-image depth buffer + this
+            // strip's albedo rows (the shade pass reads the accumulator
+            // only at its own pixel, so strips shade identically to a
+            // one-shot — see shade.wgsl region params).
+            let mut strip_shade: Option<(Texture, TextureView)> = None;
+            if let (Some(shade), Some(depth)) = (self.shade_pass.as_ref(), self.shade_depth_buffer.as_ref()) {
+                let tex = self.try_create_texture(&TextureDescriptor {
+                    label: Some("Export Strip Shaded"),
+                    size: Extent3d { width: self.width, height: sh, depth_or_array_layers: 1 },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: TextureDimension::D2,
+                    format: TextureFormat::Rgba32Float,
+                    usage: TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                }).await?;
+                let view = tex.create_view(&TextureViewDescriptor::default());
+                let mut shade_encoder = self.device.create_command_encoder(&CommandEncoderDescriptor {
+                    label: Some("Export Strip Shade Encoder"),
+                });
+                shade.run_region(
+                    &self.device,
+                    &self.queue,
+                    &mut shade_encoder,
+                    &strip_accum_view,
+                    depth,
+                    &view,
+                    &config.solid_shading,
+                    config.zoom,
+                    config.rotation,
+                    config.pan_x,
+                    config.pan_y,
+                    config.perspective_strength,
+                    self.surface_thickness,
+                    self.width,
+                    self.height,
+                    0,
+                    y0,
+                    sh,
+                );
+                self.queue.submit(std::iter::once(shade_encoder.finish()));
+                strip_shade = Some((tex, view));
+            }
+            let strip_input_view: &TextureView =
+                strip_shade.as_ref().map(|(_, v)| v).unwrap_or(&strip_accum_view);
+
             // Per-strip height: the shader's `uv.y * height` then maps onto
             // these `sh` rows. width/area/sample_density stay global.
             tonemap_params.height = sh;
@@ -2500,7 +2646,7 @@ post_symmetry: (&config.flame.post_symmetry).into(),
                 label: Some("Export Tonemap Bind Group (strip)"),
                 layout: &self.tonemap_bind_group_layout,
                 entries: &[
-                    BindGroupEntry { binding: 0, resource: BindingResource::TextureView(&strip_accum_view) },
+                    BindGroupEntry { binding: 0, resource: BindingResource::TextureView(strip_input_view) },
                     BindGroupEntry { binding: 1, resource: BindingResource::Sampler(&self.accumulation_sampler) },
                     BindGroupEntry { binding: 2, resource: self.tonemap_params_buffer.as_entire_binding() },
                     BindGroupEntry { binding: 3, resource: BindingResource::TextureView(&curve_lut_view) },
@@ -2659,6 +2805,52 @@ post_symmetry: (&config.flame.post_symmetry).into(),
 
         let accumulation_view = accumulation_texture.create_view(&TextureViewDescriptor::default());
 
+        // Solid shading (Phase 1): shade the accumulation into a separate
+        // texture and feed THAT to density effects / tonemap — the same
+        // ordering the interactive frame uses.
+        let mut shade_holder: Option<(Texture, TextureView)> = None;
+        if let (Some(shade), Some(depth)) = (self.shade_pass.as_ref(), self.shade_depth_buffer.as_ref()) {
+            let tex = self.try_create_texture(&TextureDescriptor {
+                label: Some("Export Shaded Accumulation"),
+                size: Extent3d { width: self.width, height: self.height, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: TextureDimension::D2,
+                format: TextureFormat::Rgba32Float,
+                usage: TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            }).await?;
+            let view = tex.create_view(&TextureViewDescriptor::default());
+            let mut shade_encoder = self.device.create_command_encoder(&CommandEncoderDescriptor {
+                label: Some("Export Shade Encoder"),
+            });
+            shade.run_region(
+                &self.device,
+                &self.queue,
+                &mut shade_encoder,
+                &accumulation_view,
+                depth,
+                &view,
+                &config.solid_shading,
+                config.zoom,
+                config.rotation,
+                config.pan_x,
+                config.pan_y,
+                config.perspective_strength,
+                self.surface_thickness,
+                self.width,
+                self.height,
+                0,
+                0,
+                self.height,
+            );
+            self.queue.submit(std::iter::once(shade_encoder.finish()));
+            log::info!("High-res export: applied solid lighting (shade pass)");
+            shade_holder = Some((tex, view));
+        }
+        let base_accum_view: &TextureView =
+            shade_holder.as_ref().map(|(_, v)| v).unwrap_or(&accumulation_view);
+
         // ===== Step 3: Set up tonemap params =====
         // Calculate area and sample_density matching GPU formula
         let zoom = config.zoom;
@@ -2675,7 +2867,9 @@ post_symmetry: (&config.flame.post_symmetry).into(),
         // yields a scale-invariant `density × k2` so brightness doesn't
         // drift with sample count.
         let total_pixels = (self.width as f32) * (self.height as f32);
-        let sample_density = ((total_iterations as f32) / total_pixels.max(1.0)).max(1e-6);
+        let sample_density = ((total_iterations as f32) * self.solid_density_fraction
+            / total_pixels.max(1.0))
+            .max(1e-6);
 
         let tonemap_mode = match config.tonemap_mode {
             crate::scene::tonemap::ToneMapMode::Linear => 0u32,
@@ -2788,7 +2982,7 @@ post_symmetry: (&config.flame.post_symmetry).into(),
                     &self.device,
                     &self.queue,
                     &mut density_encoder,
-                    &accumulation_view,
+                    base_accum_view,
                     &config.density_effects,
                 );
                 self.queue.submit(std::iter::once(density_encoder.finish()));
@@ -2817,7 +3011,7 @@ post_symmetry: (&config.flame.post_symmetry).into(),
         let tonemap_input_view: &TextureView = density_chain
             .as_ref()
             .and_then(|c| c.get_density_output())
-            .unwrap_or(&accumulation_view);
+            .unwrap_or(base_accum_view);
 
         // ===== Step 4: Create bind group and output texture =====
         let curve_lut_view = self.curve_lut_texture.create_view(&TextureViewDescriptor::default());
