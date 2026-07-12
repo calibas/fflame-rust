@@ -2017,6 +2017,7 @@ pub enum UpdateType {
     None,            // No update needed
     ViewOnly,        // Just update view transform (zoom, pan, rotation)
     ToneMappingOnly, // Re-run tonemap pass (exposure, gamma)
+    ShadingOnly,     // Refresh the solid-rendering shade pass params (lighting) — no reset, no re-accumulation
     ColorOnly,       // Re-run color accumulation (palette, color mode)
     IterationReset,  // Full reset - clear accumulation, restart iterations
 }
@@ -2056,7 +2057,18 @@ impl ConfigPath {
             | ConfigPath::FarDensityFade
             | ConfigPath::SolidStrength
             | ConfigPath::SurfaceThickness
-            | ConfigPath::ShadingStrength
+            | ConfigPath::FarDensityFadeStart
+            | ConfigPath::FilterRadius
+            | ConfigPath::FilterBlurEdges => UpdateType::IterationReset,
+
+            // Solid-rendering LIGHTING: the shade pass runs after
+            // accumulation, so lighting never invalidates accumulated
+            // data — refresh the renderer's shading copy and let the
+            // per-frame shade+tonemap pick it up. The one structural
+            // case (a change flipping the depth-capture requirement,
+            // e.g. lighting toggled on while solid_strength is 0) is
+            // escalated by the app layer to a full flame update.
+            ConfigPath::ShadingStrength
             | ConfigPath::SolidAmbient
             | ConfigPath::SolidDiffuse
             | ConfigPath::SolidSpecular
@@ -2064,10 +2076,7 @@ impl ConfigPath {
             | ConfigPath::SsaoStrength
             | ConfigPath::SsaoRadius
             | ConfigPath::SolidLightEnabled { .. }
-            | ConfigPath::SolidLightParam { .. }
-            | ConfigPath::FarDensityFadeStart
-            | ConfigPath::FilterRadius
-            | ConfigPath::FilterBlurEdges => UpdateType::IterationReset,
+            | ConfigPath::SolidLightParam { .. } => UpdateType::ShadingOnly,
 
             // Tone mapping - re-run tonemap shader
             ConfigPath::Exposure

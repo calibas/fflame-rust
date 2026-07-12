@@ -26,7 +26,7 @@ Thanks to [Scott Draves](https://flam3.com/) for the Fractal Flame algorithm.
 This program was originally based on Apophysis written by:
 - Mark Townsend, Ronald Hordijk, Piotr Borys, Peter Sdobnov, Georg Kiehne
 
-It also includes features from JWildfire, created by Andreas Maschke, and IFSRenderer, by Zoltán Dócs.
+It also includes features from [JWildfire](https://jwildfire.overwhale.com/), created by Andreas Maschke, and [IFSRenderer](https://github.com/bezo97/IFSRenderer), by Zoltán Dócs.
 
 Variations contributed by:
 - Joel Faber, Michael Faber, Jed Kelsey, Scott Draves, Brad Stefanov, Jesus Sosa, DarkBeam, Xyrus02, cothe, zephyrtronium, Andreas Maschke, Larry Berlin, Zueuk, Tatyana Zabanova, Raykoid666, Zy0rg, CozyG, eralex61, chronologicaldot, Whittaker Courtney, FracFx, gossamer light, TyrantWave, cyberxaos, FractalDesire, Z+, IROIRO++, slobo777, David Young, FarDareisMai, Will Evans, bezo97, Don Town, Ffey, Framelet, Frank Baumann, guagapunyaimel, Keeps,  Maulana Randa, meckie, Paul Bourke, Rick Sidwell, timothy-vincent, Victor Ganora
