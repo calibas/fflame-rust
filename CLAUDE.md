@@ -88,6 +88,7 @@
 - **Camera**: full 4-angle Apophysis/JWildfire camera (pitch, yaw, bank, roll/rotation — effective chain `Rz(rotation)·Rx(pitch)·Ry(bank)·Rz(−yaw)`) plus world-space position (`camera_x/y/z`, JWF `cam_pos_*` round-trip)
   - **Fly mode** (F2 / 🚀): WASD/QE movement + mouse-look; two modes in SystemSettings — FreeLook (screen-relative, gimbal-free) and FPS (world-up anchored)
 - **Depth tools** (3D): DoF blur, depth fog, depth-density compensation (radiance-preserving splats), far-density fade
+- **Solid rendering** (3D, Phase 0): per-pixel nearest-depth occlusion — `solid_strength` (0 = classic transparency, 1 = hard surface, blendable via the per-sample `density_weight` channel) + `surface_thickness` shell. Depth region lives inside the histogram buffer (5th u32/pixel, inverted ordered-float encoding, atomicMax); SOLID shader-builder flag ⇒ byte-identical WGSL when off; at-splat DoF compiles out in solid mode. All export paths supported. Solid renders are NOT bit-reproducible (in-batch depth race) — the `solid-*` visual regression tests use tolerance compare. See [docs/projects/solid-rendering.md](docs/projects/solid-rendering.md)
 - **Pan/rotation**: both render modes compose pan → rotate → zoom (Apophysis convention); all pan inputs share `FractalConfig::screen_delta_to_pan_frame`
 
 ### UI Architecture (egui_dock)
