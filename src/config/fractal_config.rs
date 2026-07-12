@@ -163,6 +163,16 @@ pub struct FractalConfig {
     #[serde(default = "default_surface_thickness", skip_serializing_if = "is_default_surface_thickness")]
     pub surface_thickness: f32,
 
+    /// Solid rendering Phase 1: deferred lighting (normals from the depth
+    /// buffer, ambient + up to 4 directional lights, SSAO). Off when
+    /// `shading_strength == 0` (the shade pass isn't dispatched at all).
+    /// Lighting works with OR without occlusion: any nonzero
+    /// `shading_strength` activates the depth capture even at
+    /// `solid_strength == 0`, so classic transparent flames can be lit.
+    /// 3D only. See docs/projects/solid-rendering.md.
+    #[serde(default, skip_serializing_if = "SolidShadingSettings::is_default")]
+    pub solid_shading: SolidShadingSettings,
+
     /// Spatial filter — Gaussian blur applied to the per-batch histogram
     /// before accumulation. Mirrors Apophysis's `filter` attribute: a
     /// small per-sample-spread Gaussian that smooths per-iteration grain.
@@ -556,6 +566,90 @@ fn default_surface_thickness() -> f32 {
     super::defaults::DEFAULT_SURFACE_THICKNESS
 }
 
+/// One directional light for the solid-rendering shade pass. Direction is
+/// camera-space: azimuth/elevation in DEGREES, where (0°, 0°) is a
+/// headlight from the viewer, azimuth swings around the vertical axis and
+/// elevation tilts up.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct SolidLight {
+    pub enabled: bool,
+    pub azimuth: f32,
+    pub elevation: f32,
+    pub intensity: f32,
+    pub color: [f32; 3],
+}
+
+impl Default for SolidLight {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            azimuth: 35.0,
+            elevation: 40.0,
+            intensity: 1.0,
+            color: [1.0, 1.0, 1.0],
+        }
+    }
+}
+
+/// Solid-rendering Phase 1 lighting settings — one nested config object
+/// (serialized as a unit, skip-if-default) rather than a fan of flat
+/// fields. `shading_strength == 0` means the shade pass is off and this
+/// struct costs nothing.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SolidShadingSettings {
+    /// Master emissive ↔ lit blend: 0 = classic flame color (pass off),
+    /// 1 = fully lit surface.
+    pub shading_strength: f32,
+    /// Ambient term (multiplied by the flame color and SSAO).
+    pub ambient: f32,
+    /// Diffuse (Lambert) coefficient.
+    pub diffuse: f32,
+    /// Specular (Blinn-Phong) coefficient.
+    pub specular: f32,
+    /// Specular exponent (higher = tighter highlight).
+    pub shininess: f32,
+    /// SSAO strength, 0 = off.
+    pub ssao_strength: f32,
+    /// SSAO radius in world units at the surface.
+    pub ssao_radius: f32,
+    /// Up to 4 directional lights. Light 0 defaults enabled once
+    /// shading is turned on via the UI (the config default is all-off,
+    /// so `is_default` stays cheap for untouched flames).
+    pub lights: [SolidLight; 4],
+}
+
+impl Default for SolidShadingSettings {
+    fn default() -> Self {
+        Self {
+            shading_strength: 0.0,
+            ambient: 0.25,
+            diffuse: 0.9,
+            specular: 0.35,
+            shininess: 32.0,
+            ssao_strength: 0.6,
+            ssao_radius: 0.15,
+            lights: [
+                SolidLight { enabled: true, ..SolidLight::default() },
+                SolidLight { azimuth: -60.0, elevation: 10.0, intensity: 0.5, ..SolidLight::default() },
+                SolidLight::default(),
+                SolidLight::default(),
+            ],
+        }
+    }
+}
+
+impl SolidShadingSettings {
+    pub fn is_default(v: &SolidShadingSettings) -> bool {
+        *v == SolidShadingSettings::default()
+    }
+
+    /// Whether the shade pass should run at all.
+    pub fn active(&self) -> bool {
+        self.shading_strength > 0.0
+    }
+}
+
 fn is_default_surface_thickness(v: &f32) -> bool {
     (*v - super::defaults::DEFAULT_SURFACE_THICKNESS).abs() < FLOAT_EPSILON
 }
@@ -601,6 +695,7 @@ impl Default for FractalConfig {
             far_density_fade_start: 0.0,
             solid_strength: super::defaults::DEFAULT_SOLID_STRENGTH,
             surface_thickness: super::defaults::DEFAULT_SURFACE_THICKNESS,
+            solid_shading: SolidShadingSettings::default(),
             zoom: 1.0,
             pan_x: 0.0,
             pan_y: 0.0,

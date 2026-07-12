@@ -2056,23 +2056,44 @@ impl App {
             // Reset effect slot counter for this frame (allows multiple effects with unique params)
             self.effect_chain.reset_slots();
 
+            // Solid-rendering shade pass (lighting/SSAO on the depth buffer)
+            // — runs before density effects; both consume HDR pre-tonemap data.
+            let shade_ran = renderer.run_shade_pass(
+                &self.gpu.device,
+                &self.gpu.queue,
+                &mut render_encoder,
+                final_config.zoom,
+                final_config.rotation,
+                final_config.pan_x,
+                final_config.pan_y,
+            );
+            let pre_tonemap_view = if shade_ran {
+                renderer.shade_output_view()
+            } else {
+                renderer.get_accumulation_view()
+            };
+
             // Run density effects (before tonemap, on HDR accumulation data)
             let density_effects_ran = self.effect_chain.run_density_effects(
                 &self.gpu.device,
                 &self.gpu.queue,
                 &mut render_encoder,
-                renderer.get_accumulation_view(),
+                pre_tonemap_view,
                 &final_config.density_effects,
             );
 
-            // Render to internal fractal texture with tone mapping
-            // If density effects ran, use their output; otherwise use accumulation directly
+            // Render to internal fractal texture with tone mapping.
+            // Input priority: density-effect output > shade output > accumulator.
             if density_effects_ran {
                 if let Some(density_output) = self.effect_chain.get_density_output() {
                     renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut render_encoder, density_output);
+                } else if shade_ran {
+                    renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut render_encoder, renderer.shade_output_view());
                 } else {
                     renderer.tonemap_pass(&self.gpu.queue, &mut render_encoder);
                 }
+            } else if shade_ran {
+                renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut render_encoder, renderer.shade_output_view());
             } else {
                 renderer.tonemap_pass(&self.gpu.queue, &mut render_encoder);
             }

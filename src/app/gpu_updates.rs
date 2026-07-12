@@ -118,6 +118,7 @@ impl App {
                         update_config.preserve_z,
                         update_config.solid_strength,
                         update_config.surface_thickness,
+                        update_config.solid_shading.clone(),
                     );
                 }
 

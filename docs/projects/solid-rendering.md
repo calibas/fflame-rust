@@ -1,6 +1,6 @@
 # Solid Rendering: occlusion, lighting, and shading for 3D flames
 
-**Status**: Phase 0 COMPLETE (branch `solid-rendering`) — Phase 1 (deferred shading) next
+**Status**: Phase 1 core landed (shade pass: normals, 4 lights, SSAO); ConfigPaths/UI/regression scenes in progress
 **Motivation**: 3D flames render as additive transparent ghosts. Shapes have no
 occlusion (far structure bleeds through near structure), and geometry becomes
 invisible wherever palette colors are uniform, because *all* shape information
@@ -195,8 +195,24 @@ Deliverable: lit solids — normals, ambient + up to 4 lights
 (directional/point, Blinn-Phong to match JWF's parameter vocabulary), SSAO,
 specular. The milestone where same-palette shapes become legible.
 
-- [ ] Shade compute pass + pipeline; wire through `tonemap_pass_with_input`;
-      skipped entirely when `solid_strength == 0` and lighting off.
+- [x] Shade compute pass + pipeline (`shaders/shade.wgsl`,
+      `src/renderer/shade_pass.rs`): wired through
+      `tonemap_pass_with_input` in both the interactive frame and the CLI
+      render path, ordered shade → density effects → tonemap. Not
+      dispatched when `shading_strength == 0`. DESIGN CHANGE: lighting is
+      decoupled from occlusion — the depth capture activates when
+      solid_strength > 0 OR shading_strength > 0 (gating multiplies by
+      solid_strength, a no-op at 0), so transparent flames can be lit.
+- [x] Position reconstruction from depth (inverse Apophysis projection) +
+      normals via a depth-bilateral 9x9 slope fit (edge-preserving window
+      = 3x surface_thickness). LESSON: the depth sentinel must be
+      out-of-band (3e38), NOT sign-based — geometry straddling the camera
+      plane has legitimately negative depths.
+- [x] Lighting: ambient + 4 camera-space directional lights (azimuth/
+      elevation), Blinn-Phong diffuse+specular, SSAO (8-tap golden-angle
+      spiral with range falloff), final = mix(emissive, lit,
+      shading_strength). Config: nested `SolidShadingSettings` struct
+      (serde unit, skip-if-default) — not a fan of flat fields.
 - [ ] Position reconstruction from depth; screen-space normals from depth
       gradients.
 - [ ] Depth-guided à-trous smoothing for normals (2–3 iterations, reusing

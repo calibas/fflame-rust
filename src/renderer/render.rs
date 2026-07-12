@@ -313,24 +313,47 @@ pub async fn render(
     // Reset effect slot counter (allows multiple effects with unique params in same submit)
     effect_chain.reset_slots();
 
+    // Solid-rendering shade pass — same ordering as the interactive frame:
+    // shade, then density effects, then tonemap.
+    let shade_ran = renderer.run_shade_pass(
+        device,
+        queue,
+        &mut tonemap_encoder,
+        job.config.zoom,
+        job.config.rotation,
+        job.config.pan_x,
+        job.config.pan_y,
+    );
+    let pre_tonemap_view = if shade_ran {
+        renderer.shade_output_view()
+    } else {
+        renderer.get_accumulation_view()
+    };
+
     if has_density_effects {
         let density_ran = effect_chain.run_density_effects(
             device,
             queue,
             &mut tonemap_encoder,
-            renderer.get_accumulation_view(),
+            pre_tonemap_view,
             &job.config.density_effects,
         );
 
         if density_ran {
             if let Some(density_output) = effect_chain.get_density_output() {
                 renderer.tonemap_pass_with_input(device, queue, &mut tonemap_encoder, density_output);
+            } else if shade_ran {
+                renderer.tonemap_pass_with_input(device, queue, &mut tonemap_encoder, renderer.shade_output_view());
             } else {
                 renderer.tonemap_pass(queue, &mut tonemap_encoder);
             }
+        } else if shade_ran {
+            renderer.tonemap_pass_with_input(device, queue, &mut tonemap_encoder, renderer.shade_output_view());
         } else {
             renderer.tonemap_pass(queue, &mut tonemap_encoder);
         }
+    } else if shade_ran {
+        renderer.tonemap_pass_with_input(device, queue, &mut tonemap_encoder, renderer.shade_output_view());
     } else {
         renderer.tonemap_pass(queue, &mut tonemap_encoder);
     }
