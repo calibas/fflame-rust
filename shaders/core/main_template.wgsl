@@ -507,10 +507,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             var density_weight = 1.0;
 
 {{#if VOLUME}}
-            // Phase 2: density-volume splat — WORLD space (pre-camera), so
-            // the grid is camera-independent and every sample contributes
-            // regardless of which pixel (if any) it lands on. This is what
-            // makes volume-driven occlusion coverage-independent.
+            // Phase 3: RGBA density-volume splat — WORLD space (pre-camera),
+            // so the grid is camera-independent and every sample contributes
+            // regardless of which pixel (if any) it lands on. Color rides
+            // along (same fixed-point scheme as the 2D histogram) so the
+            // volume can serve as the BASE COAT for the volume-primary
+            // march: voxels fill ~1000× faster than pixels, giving a
+            // complete, hole-free colored surface long before per-pixel
+            // coverage converges.
             {
                 let ve = params.volume_extent;
                 let vrel = plot_pos - vec3<f32>(
@@ -520,7 +524,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     let vx = min(u32((vrel.x / ve * 0.5 + 0.5) * f32(vd)), vd - 1u);
                     let vy = min(u32((vrel.y / ve * 0.5 + 0.5) * f32(vd)), vd - 1u);
                     let vz = min(u32((vrel.z / ve * 0.5 + 0.5) * f32(vd)), vd - 1u);
-                    atomicAdd(&density_volume[(vz * vd + vy) * vd + vx], 1u);
+                    let vi = ((vz * vd + vy) * vd + vx) * 4u;
+                    let vscale = 100.0;
+                    atomicAdd(&density_volume[vi + 0u], u32(clamp(base_final_color.r, 0.0, 1.0) * vscale));
+                    atomicAdd(&density_volume[vi + 1u], u32(clamp(base_final_color.g, 0.0, 1.0) * vscale));
+                    atomicAdd(&density_volume[vi + 2u], u32(clamp(base_final_color.b, 0.0, 1.0) * vscale));
+                    atomicAdd(&density_volume[vi + 3u], 1u);
                 }
             }
 {{/if}}

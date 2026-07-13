@@ -413,6 +413,54 @@ passes JWF.
   exists today), firefly clamp against the local neighborhood in the
   shade pass.
 
+## Phase 3 — volume-primary solid mode (IN PROGRESS)
+
+Decision (2026-07-12, after four field-feedback rounds on Phase 2): the
+depth-buffer renderer consulting the volume by rules was the inverted
+architecture — every hole/repair-seam/banding artifact came from
+reconciling two geometry sources with thresholds. Phase 3 makes the
+volume THE renderer, per the original 3d-volume-surface-planning.md
+recommendation ("voxel volume as the destination architecture").
+
+Stage A (DONE):
+- RGBA volume: the splat carries base_final_color (histogram
+  fixed-point scheme, 4 u32/voxel). volume_mip's reduce also emits a
+  half-res base-coat color field (density-weighted window mean).
+- volume_march (shade.wgsl): front-to-back emission/absorption through
+  the CLOSED field; solid_strength is the σ dial (1 = hard surface,
+  lower = translucent); density opacity-clamped; per-pixel jittered
+  start; returns weighted base color, coverage, surface depth, and
+  mean unclamped density.
+- Compositing: base coat from the march (voxels fill ~1000× faster
+  than pixels — complete surface long before pixel convergence),
+  per-pixel chaos-game data layered on top by a continuous detail
+  confidence (accum.a vs scene-mean base_alpha), gated to samples at
+  or in front of the base surface (occluded back structure can never
+  show through). Lighting: ∇ρ normals + emissive fallback where the
+  gradient is weak (dust), volumetric AO, opacity-clamped shadow
+  march. Base-coat tonemap alpha scales with the ray's mean density
+  (keeps the flame's log-density dynamic range).
+- The Phase 2 repair machinery (integral leak march, ring anchoring,
+  sparse hand-over) is REPLACED by this path and removed; Phase 1
+  (volume off) keeps plain gap_fill + depth-buffer shading.
+- Consequence users will notice: ALL density in the view volume now
+  renders as solid geometry — structures the old path showed as
+  near-black dust become lit volumetric surfaces. That is the real
+  field made solid; artistic control via solid_strength (σ) and
+  the flame itself.
+
+Stage B (NEXT):
+- Light-space transmittance grids (deep-shadow style: one sweep per
+  light per shade, one lookup per sample) replacing the per-pixel
+  32-step shadow march.
+- Brightness calibration of the base coat vs detail layer against
+  engine-mean-intensity references; base_alpha currently =
+  samples×survival/pixels.
+- March quality: step-count/early-out tuning, possible half-res march
+  + bilateral upsample for interactive, higher-dim volume as a
+  quality setting.
+- Retire/repurpose gap_fill & closing UI copy for the new pipeline.
+
 ## Phase 3 — backlog (unscheduled)
 
 - JWF solid-rendering `.flame` XML import (`sld_render_*`, materials, lights).

@@ -59,8 +59,8 @@ struct ShadeParams {
     shadow_strength: f32,
     vol_trust: f32,
     temporal_ema: f32,
-    _pad_t1: f32,
-    _pad_t2: f32,
+    solid_strength: f32,
+    base_alpha: f32,
     lights: [ShadeLight; 4],
 }
 
@@ -113,6 +113,10 @@ pub struct VolumeShadeInput<'a> {
     /// from voxels across the visible width). Scales every volume
     /// shading feature.
     pub trust: f32,
+    /// Scene-mean per-pixel accumulated density (Σaccum.a / pixels) —
+    /// the tonemap alpha for base-coat-only pixels and the detail
+    /// layer's confidence scale.
+    pub base_alpha: f32,
 }
 
 /// Effective world→camera rotation rows, replicating EXACTLY what the
@@ -177,9 +181,10 @@ pub struct ShadePass {
     mip_erode_pipeline: ComputePipeline,
     mip_bgl: BindGroupLayout,
     mip_params: Buffer,
-    /// (raw dim, [avg, vmax, tmp, closed]) — allocated on first volume
-    /// shade, recreated when the raw dim changes.
-    vol_derived: Option<(u32, [Buffer; 4])>,
+    /// (raw dim, [avg, vmax, tmp, closed, color]) — allocated on first
+    /// volume shade, recreated when the raw dim changes. `color` is
+    /// hd³ × vec4<f32> (base-coat rgb + mean count).
+    vol_derived: Option<(u32, [Buffer; 5])>,
     /// Full-image output ping-pong (interactive path; two textures so
     /// the temporal blend can read last frame's result while writing
     /// this frame's). Absent for pipeline-only users (exporters bring
@@ -301,6 +306,17 @@ impl ShadePass {
                         sample_type: TextureSampleType::Float { filterable: false },
                         view_dimension: TextureViewDimension::D2,
                         multisampled: false,
+                    },
+                    count: None,
+                },
+                // 8: half-res base-coat color (4-byte dummy when absent)
+                BindGroupLayoutEntry {
+                    binding: 8,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
                     },
                     count: None,
                 },
@@ -506,6 +522,18 @@ impl ShadePass {
                     },
                     count: None,
                 },
+                // 5: half-res base-coat color (reduce writes; the
+                // dilate/erode passes bind it unused).
+                BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
         let mip_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
@@ -668,19 +696,20 @@ impl ShadePass {
         }
         let hd = (dim / 2).max(1);
         let size = u64::from(hd).pow(3) * 4;
-        let mk = |label: &str| {
+        let mk = |label: &str, sz: u64| {
             device.create_buffer(&BufferDescriptor {
                 label: Some(label),
-                size,
+                size: sz,
                 usage: BufferUsages::STORAGE,
                 mapped_at_creation: false,
             })
         };
         self.vol_derived = Some((dim, [
-            mk("Volume Avg"),
-            mk("Volume Max"),
-            mk("Volume Closing Tmp"),
-            mk("Volume Closed"),
+            mk("Volume Avg", size),
+            mk("Volume Max", size),
+            mk("Volume Closing Tmp", size),
+            mk("Volume Closed", size),
+            mk("Volume Base Color", size * 4),
         ]));
     }
 
@@ -703,6 +732,7 @@ impl ShadePass {
         pan_y: f32,
         perspective_strength: f32,
         surface_thickness: f32,
+        solid_strength: f32,
         volume: Option<&VolumeShadeInput>,
         temporal_ema: f32,
     ) {
@@ -728,6 +758,7 @@ impl ShadePass {
             pan_y,
             perspective_strength,
             surface_thickness,
+            solid_strength,
             self.width,
             self.height,
             self.width * self.height * 4, // depth region inside the histogram
@@ -763,6 +794,7 @@ impl ShadePass {
         pan_y: f32,
         perspective_strength: f32,
         surface_thickness: f32,
+        solid_strength: f32,
         full_width: u32,
         full_height: u32,
         depth_word_offset: u32,
@@ -814,6 +846,7 @@ impl ShadePass {
         // silently disabled rather than out-of-bounds sampling.
         let mut vol_avg_buffer: &Buffer = &self.dummy_volume;
         let mut vol_closed_buffer: &Buffer = &self.dummy_volume;
+        let mut vol_color_buffer: &Buffer = &self.dummy_volume;
         let mut vol_ready = false;
         if let Some(v) = volume {
             if v.dim > 0 {
@@ -825,7 +858,8 @@ impl ShadePass {
                 if prepared {
                 vol_ready = true;
                 let (_, bufs) = self.vol_derived.as_ref().unwrap();
-                let (avg, vmax, tmp, closed) = (&bufs[0], &bufs[1], &bufs[2], &bufs[3]);
+                let (avg, vmax, tmp, closed, colorb) =
+                    (&bufs[0], &bufs[1], &bufs[2], &bufs[3], &bufs[4]);
                 let closing = v.closing.min(2);
                 queue.write_buffer(&self.mip_params, 0, bytemuck::bytes_of(&MipParams {
                     dim: v.dim,
@@ -834,7 +868,7 @@ impl ShadePass {
                     _pad: 0,
                 }));
                 let groups = hd.div_ceil(4);
-                let mip_bg = |src: &Buffer, out_a: &Buffer, out_b: &Buffer, src_f: &Buffer, label: &str| {
+                let mip_bg = |src: &Buffer, out_a: &Buffer, out_b: &Buffer, src_f: &Buffer, out_c: &Buffer, label: &str| {
                     device.create_bind_group(&BindGroupDescriptor {
                         label: Some(label),
                         layout: &self.mip_bgl,
@@ -844,17 +878,18 @@ impl ShadePass {
                             BindGroupEntry { binding: 2, resource: out_a.as_entire_binding() },
                             BindGroupEntry { binding: 3, resource: out_b.as_entire_binding() },
                             BindGroupEntry { binding: 4, resource: src_f.as_entire_binding() },
+                            BindGroupEntry { binding: 5, resource: out_c.as_entire_binding() },
                         ],
                     })
                 };
                 // reduce: raw → avg + vmax (src_f slot needs a distinct,
                 // unused buffer — tmp).
-                let reduce_bg = mip_bg(v.buffer, avg, vmax, tmp, "Volume Reduce BG");
-                // dilate: vmax → tmp; erode: tmp → closed. out_b is
-                // written by neither entry point — bind a distinct
-                // scratch to satisfy aliasing rules.
-                let dilate_bg = mip_bg(v.buffer, tmp, closed, vmax, "Volume Dilate BG");
-                let erode_bg = mip_bg(v.buffer, closed, vmax, tmp, "Volume Erode BG");
+                let reduce_bg = mip_bg(v.buffer, avg, vmax, tmp, colorb, "Volume Reduce BG");
+                // dilate: vmax → tmp; erode: tmp → closed. out_b and
+                // out_c are written by neither entry point — bind
+                // distinct scratch to satisfy aliasing rules.
+                let dilate_bg = mip_bg(v.buffer, tmp, closed, vmax, colorb, "Volume Dilate BG");
+                let erode_bg = mip_bg(v.buffer, closed, vmax, tmp, colorb, "Volume Erode BG");
                 {
                     let mut pass = encoder.begin_compute_pass(&ComputePassDescriptor {
                         label: Some("Volume Derive Pass"),
@@ -873,9 +908,10 @@ impl ShadePass {
                     }
                 }
                 vol_avg_buffer = avg;
-                // Closing off: the occlusion march reads the plain
+                // Closing off: the march's σ source is the plain
                 // half-res max field.
                 vol_closed_buffer = if closing > 0 { closed } else { vmax };
+                vol_color_buffer = colorb;
                 }
             }
         }
@@ -883,7 +919,7 @@ impl ShadePass {
         // Phase 2 volume inputs. Density normalizer: rho_norm = 1 marks
         // "solid" at 8× the uniform-spread per-voxel mean — concentrated
         // fractal surfaces sit far above it, Poisson noise far below.
-        let (vol_dim, vol_extent, vol_scale, cam_rows, cam_pos, vol_center, vol_trust) = match volume {
+        let (vol_dim, vol_extent, vol_scale, cam_rows, cam_pos, vol_center, vol_trust, vol_base_alpha) = match volume {
             Some(v) if v.dim > 0 && vol_ready => {
                 let voxels = (v.dim as f64).powi(3);
                 let scale = (voxels / (f64::from(v.splats.max(1.0)) * 8.0)) as f32;
@@ -895,9 +931,10 @@ impl ShadePass {
                     v.camera_pos,
                     v.center,
                     v.trust.clamp(0.0, 1.0),
+                    v.base_alpha.max(1e-6),
                 )
             }
-            _ => (0, 0.0, 0.0, [[0.0; 3]; 3], [0.0; 3], [0.0; 3], 0.0),
+            _ => (0, 0.0, 0.0, [[0.0; 3]; 3], [0.0; 3], [0.0; 3], 0.0, 1.0),
         };
 
 
@@ -935,8 +972,8 @@ impl ShadePass {
             shadow_strength: shading.shadow_strength * vol_trust,
             vol_trust,
             temporal_ema: if prev_shade.is_some() { temporal_ema.clamp(0.0, 0.95) } else { 0.0 },
-            _pad_t1: 0.0,
-            _pad_t2: 0.0,
+            solid_strength,
+            base_alpha: vol_base_alpha,
             lights,
         };
         queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));
@@ -1039,6 +1076,10 @@ impl ShadePass {
                     resource: BindingResource::TextureView(
                         prev_shade.unwrap_or(&self.dummy_normal.1),
                     ),
+                },
+                BindGroupEntry {
+                    binding: 8,
+                    resource: vol_color_buffer.as_entire_binding(),
                 },
             ],
         });

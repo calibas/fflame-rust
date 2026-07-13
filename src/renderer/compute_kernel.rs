@@ -1135,6 +1135,11 @@ impl FlameRenderer {
                     center: vol_fit.0,
                     closing: self.solid_shading.volume_closing,
                     trust: vol_trust,
+                    // Scene-mean per-pixel density: dispatched iterations
+                    // × the measured survival fraction, per pixel.
+                    base_alpha: (self.samples_in_buffer as f32 * self.solid_density_fraction
+                        / ((self.width * self.height).max(1) as f32))
+                        .max(1e-3),
                 }
             })
         } else {
@@ -1153,6 +1158,7 @@ impl FlameRenderer {
             pan_y,
             self.perspective_strength,
             self.surface_thickness,
+            self.solid_strength,
             volume.as_ref(),
             // Temporal smoothing of the shade output: the volume-derived
             // shading tracks genuinely drifting data during accumulation
