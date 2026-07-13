@@ -240,6 +240,13 @@ struct SampleCounter {
 // shade pass for gradient normals / AO / shadows / occlusion repair.
 // Reuses the reserved binding slot 6 (ex iteration_counts).
 @group(0) @binding(6) var<storage, read_write> density_volume: array<atomic<u32>>;
+
+// Ordered-float encoding for the attractor-bounds atomicMax tail
+// (monotone: enc(a) < enc(b) <=> a < b; 0 is the "no data" sentinel).
+fn bounds_enc(v: f32) -> u32 {
+    let b = bitcast<u32>(v);
+    return select(b | 0x80000000u, ~b, (b & 0x80000000u) != 0u);
+}
 {{/if}}
 @group(0) @binding(3) var palette_texture: texture_2d<f32>;
 @group(0) @binding(4) var palette_sampler: sampler;

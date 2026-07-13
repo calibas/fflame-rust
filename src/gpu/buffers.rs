@@ -1990,7 +1990,10 @@ impl FlameBuffers {
             return false;
         }
         let words: u64 = if enabled { 5 } else { 4 };
-        let size = (self.width as u64) * (self.height as u64) * words * std::mem::size_of::<u32>() as u64;
+        // +8-word tail when the depth region exists: subsampled
+        // attractor-bounds atomics (6 used) for the volume auto-fit.
+        let tail: u64 = if enabled { 32 } else { 0 };
+        let size = (self.width as u64) * (self.height as u64) * words * std::mem::size_of::<u32>() as u64 + tail;
         self.histogram_buffer = device.create_buffer(&BufferDescriptor {
             label: Some(if enabled {
                 "Histogram Buffer (+solid depth region)"
@@ -1998,7 +2001,9 @@ impl FlameBuffers {
                 "Histogram Buffer"
             }),
             size,
-            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            // COPY_SRC: the bounds tail (last 32 B) is read back for the
+            // volume auto-fit when the depth region exists.
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
         // The accumulator's depth-ownership tracker lives and dies with

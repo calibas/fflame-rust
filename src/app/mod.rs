@@ -1980,6 +1980,40 @@ impl App {
                 log::debug!("Rendering complete: max_iterations reached");
             }
 
+            // Volume auto-fit: when the first real bounds measurement
+            // lands (early in a run), re-freeze the cube placement and
+            // restart accumulation so the volume covers the actual flame
+            // instead of a zoom guess. Only fires while the run is young.
+            if should_iterate
+                && renderer.maybe_refit_volume(
+                    final_config.zoom,
+                    final_config.pan_x,
+                    final_config.pan_y,
+                    final_config.camera_rotation_x,
+                    final_config.camera_rotation_y,
+                    final_config.camera_bank,
+                    [final_config.camera_x, final_config.camera_y, final_config.camera_z],
+                )
+            {
+                renderer.reset(
+                    &mut render_encoder,
+                    &self.gpu.queue,
+                    self.config_manager.system_settings().iterations_per_thread,
+                    final_config.zoom,
+                    final_config.pan_x,
+                    final_config.pan_y,
+                    final_config.rotation,
+                    final_config.camera_rotation_x,
+                    final_config.camera_rotation_y,
+                    final_config.camera_bank,
+                    final_config.camera_x,
+                    final_config.camera_y,
+                    final_config.camera_z,
+                    final_config.speed_factor,
+                );
+                self.frames_since_accumulation = 0;
+            }
+
             if should_iterate {
                 const NUM_WORKGROUPS: u32 = 128;
 
