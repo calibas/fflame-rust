@@ -559,7 +559,7 @@ pub fn render_view_content(
                         );
                         let mut volume_extent = config.solid_shading.volume_extent;
                         let response = ui.add(
-                            super::VkbSlider::new(&mut volume_extent, 0.5..=20.0)
+                            super::VkbSlider::new(&mut volume_extent, 0.01..=20.0)
                                 .text(t!("view.volume_extent").as_ref())
                                 .step_by(0.1)
                         ).on_hover_text(t!("view.tooltip_volume_extent"));
