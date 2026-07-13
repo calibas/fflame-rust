@@ -466,6 +466,24 @@ Stage A follow-ups (DONE, field feedback):
   instead of solid voxel blocks ("big ugly blocks" report). Solid
   shells unaffected.
 
+ARCHITECTURE SETTLED (2026-07-13, after base-coat field feedback): the
+volume is SCAFFOLDING, never visible geometry. A practical grid cannot
+represent the sub-voxel filaments flames are made of without inflating
+them into voxel-thick tubes; rendering voxel color at all produces
+lumpy blobs and halos wherever a filament is dense. The compositor
+therefore uses the march ONLY for: surface depth + coverage (occlusion
+authority), gradient normals, volumetric AO, shadow marches. Every
+visible color is PIXEL data — the pixel's own accumulation when at or
+in front of the volume surface, or a ring fill of neighboring pixels
+anchored at the march depth (holes + occluded leaks). No pixel
+evidence → passthrough; nothing is invented. This also retired the
+base-coat brightness-alpha calibration problem.
+
+Perf: run_shade_pass skips entirely when inputs are unchanged and the
+temporal blend has settled (shade_dirty + 16-frame settle) — lighting
+used to burn the full march/normals/AO/shadow chain every frame even
+after rendering completed.
+
 Stage B (NEXT):
 - Light-space transmittance grids (deep-shadow style: one sweep per
   light per shade, one lookup per sample) replacing the per-pixel
