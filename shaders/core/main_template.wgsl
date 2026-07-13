@@ -506,14 +506,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 should_plot = false;
             }
 {{/if}}
-{{#if VOLUME}}
 {{#if HAS_VOLUME_SIDE}}
-            // Side-emitted volume point (Feature::VolumeSideEmit): an
-            // ADDITIONAL deposit into the density volume — the plotted
-            // sample above/below is completely untouched. Runs the
-            // transform's post-affine so a moved/scaled shell carries
-            // its volume along; the final chain and post-symmetry are
-            // NOT applied (documented limitation). Honors opacity.
+{{#if RENDER_3D}}
+            // Side-emitted geometry (Feature::VolumeSideEmit): an
+            // ADDITIONAL geometry-only deposit — the plotted sample and
+            // the image colors are completely untouched. The transform's
+            // post-affine is applied so a moved/scaled shell carries its
+            // geometry along; the final chain and post-symmetry are NOT
+            // applied (documented limitation). Honors opacity.
             if (volume_side_flag && should_plot) {
                 var svp = volume_side_point;
 {{#if HAS_POST_AFFINE}}
@@ -521,6 +521,30 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     svp = apply_post_affine(xform, svp);
                 }
 {{/if}}
+{{#if SOLID}}
+{{#if OUTPUT_HISTOGRAM_DIRECT}}
+                // DEPTH-ONLY splat: seal the camera depth buffer so the
+                // splat-time occlusion culls anything behind the emitted
+                // surface — pixel-resolution occlusion with no volume
+                // required. Sealed-but-unsampled pixels render dark (an
+                // honest "solid object, not yet textured") and fill in
+                // with real texture as samples arrive.
+                {
+                    let sproj = project_3d_full(svp);
+                    if (sproj.pixel.x >= 0 && sproj.pixel.x < i32(params.width) &&
+                        sproj.pixel.y >= 0 && sproj.pixel.y < i32(params.height)) {
+                        let s_d = -sproj.camera_space.z;
+                        let s_bits = bitcast<u32>(s_d);
+                        let s_ord = select(s_bits | 0x80000000u, ~s_bits, (s_bits & 0x80000000u) != 0u);
+                        let s_idx = u32(sproj.pixel.y) * params.width + u32(sproj.pixel.x);
+                        atomicMax(&histogram[params.width * params.height * 4u + s_idx], ~s_ord);
+                    }
+                }
+{{/if}}
+{{/if}}
+{{#if VOLUME}}
+                // Density-volume deposit (kept for volume-based shading
+                // when the volume is enabled).
                 let ve_s = params.volume_extent;
                 let srel = svp - vec3<f32>(
                     params.volume_center_x, params.volume_center_y, params.volume_center_z);
@@ -535,6 +559,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     atomicAdd(&density_volume[si + 2u], u32(clamp(base_final_color.b, 0.0, 1.0) * 100.0));
                     atomicAdd(&density_volume[si + 3u], 1u);
                 }
+{{/if}}
             }
 {{/if}}
 {{/if}}

@@ -499,6 +499,27 @@ raw grid; the queued answer for pixel-fine shadow detail is
 screen-space contact shadows (short depth-buffer march toward the
 light) composited with the volume shadows.
 
+SPLAT-NATIVE PIVOT (2026-07-13, stage 1 SHIPPED): theory review
+concluded the density volume's load-bearing roles all have
+pixel-resolution splat-native replacements — see the discussion in this
+session's log. sphere_volume's side emission now writes DEPTH-ONLY
+splats into the camera depth buffer (encoding identical to the SOLID
+block), so the existing splat-time occlusion culls everything behind
+the emitted surface with NO volume required. Sealed-but-unsampled
+pixels render dark — an honest "solid object, not yet textured" — and
+fill in as real samples arrive. Verified: the sealed-pixel map is a
+crisp disk matching the sphere silhouette. The volume deposit remains
+when the volume is enabled (optional shading polish).
+
+Stage 2 of the pivot (NEXT, replaces the volume's last unique role):
+LIGHT-SPACE SHADOW MAPS — splat sample depths into a small per-light
+ortho depth buffer (one atomicMax per sample per enabled light, few MB;
+side-emitted points included, so invisible geometry casts shadows);
+shade tests against it with PCF. Shadows at SPLAT resolution — the
+original "shadows show fine detail" goal, which no affordable voxel
+grid can deliver. After that the density volume becomes optional
+(volumetric AO / haze aesthetics only).
+
 Stage B (NEXT):
 - Light-space transmittance grids (deep-shadow style: one sweep per
   light per shade, one lookup per sample) replacing the per-pixel
