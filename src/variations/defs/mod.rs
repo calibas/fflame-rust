@@ -1153,5 +1153,8 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &QUATERNION_JULIA_SET,
     &QUATERNION_CAMERA,
     &SOLID_SPHERE,
-    &BUBBLE_SOLID,
+    // bubble_solid was removed before release of this branch (its fill
+    // consumed image samples — replaced by the side-emitting
+    // sphere_volume). Tail position, so no stable IDs shifted.
+    &SPHERE_VOLUME,
 ];

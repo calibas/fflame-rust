@@ -359,7 +359,7 @@ struct MarchResult {
     density: f32,
 }
 
-fn volume_march(px: f32, py: f32, jitter: f32) -> MarchResult {
+fn volume_march(px: f32, py: f32, jitter: f32, d_cap: f32) -> MarchResult {
     var res: MarchResult;
     res.rgb = vec3<f32>(0.0);
     res.coverage = 0.0;
@@ -387,6 +387,11 @@ fn volume_march(px: f32, py: f32, jitter: f32) -> MarchResult {
         d0 = max(d0, min(t0, t1));
         d1 = min(d1, max(t0, t1));
     }
+    // Pixels that already have surface data only need the march up to
+    // (just past) that surface — occlusion beyond it can't change the
+    // outcome. Roughly a 3× shade-cost cut on covered scenes
+    // (field-reported: volume + lighting tanked performance).
+    d1 = min(d1, d_cap);
     if (d1 <= d0) {
         return res;
     }
@@ -493,10 +498,11 @@ fn shade_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Pixels with no data and no nearby data pass through untouched —
     // nothing is invented.
     if (sp.volume_dim > 0u && sp.vol_trust > 0.0) {
-        let mr = volume_march(f32(px), f32(py), shade_hash(px, py));
-        let cov = mr.coverage * sp.vol_trust;
         let voxel = 2.0 * sp.volume_extent / f32(sp.volume_dim);
         let vol_margin = max(6.0 * max(sp.surface_thickness, 0.001), 6.0 * voxel);
+        let d_cap = select(3.0e38, d + vol_margin * 3.0, d < 1.0e37);
+        let mr = volume_march(f32(px), f32(py), shade_hash(px, py), d_cap);
+        let cov = mr.coverage * sp.vol_trust;
         let solid_here = cov >= 0.5 && mr.d_surf < 1.0e37;
 
         var albedo2 = accum.rgb;
