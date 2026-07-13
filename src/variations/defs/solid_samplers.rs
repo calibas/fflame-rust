@@ -84,17 +84,21 @@ fn variation_solid_sphere(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: p
 "#,
 };
 
-/// Pure side-effect volume emitter: adds a spherical shell/ball of
-/// density to the solid-rendering DENSITY VOLUME each iteration —
-/// occlusion, lighting and shadows see a sealed solid — while the
-/// chaos game, the plotted position, and the image colors are
-/// completely untouched (the variation contributes zero to the
-/// variation sum; its weight merely activates it). Pair it with plain
-/// `bubble` on the same transform: bubble paints the surface texture,
-/// this seals the interior. Defaults (radius 1, center 0, thickness 1)
-/// match bubble's unit sphere exactly. The transform's post-affine is
-/// applied to the emitted point; final transforms and post-symmetry
-/// are not. Without the Density Volume this variation does nothing.
+/// Pure side-effect geometry emitter: each iteration deposits one
+/// point of a spherical shell/ball as GEOMETRY ONLY — it seals the
+/// solid-rendering depth buffer (so the existing splat-time occlusion
+/// culls everything behind the emitted surface, at pixel resolution)
+/// and, when the Density Volume is enabled, the volume too. The chaos
+/// game, the plotted position, and the image colors are completely
+/// untouched (the variation contributes zero to the variation sum; its
+/// weight merely activates it). Pair with plain `bubble` on the same
+/// transform: bubble paints the surface texture, this makes the sphere
+/// SOLID — sealed-but-unsampled pixels render dark (an honest "not yet
+/// textured" surface) and fill in as real samples arrive. Defaults
+/// (radius 1, center 0, thickness 1) match bubble's unit sphere.
+/// The transform's post-affine applies to emitted points; final
+/// transforms and post-symmetry do not. Requires Solid Rendering
+/// (or lighting) to be active.
 pub static SPHERE_VOLUME: VariationDef = VariationDef {
     name: "sphere_volume",
     aliases: &[],
