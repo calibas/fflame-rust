@@ -30,7 +30,12 @@ struct MipParams {
     dim: u32,       // raw grid resolution per axis
     half_dim: u32,  // derived grid resolution per axis (dim / 2)
     radius: u32,    // closing radius in half-res voxels (1 or 2)
-    _pad: u32,
+    // Per-voxel count cap applied BEFORE smoothing (raw-count units,
+    // ≈ 8× the solid threshold). Fractal density spans orders of
+    // magnitude; unclamped, a filament 100× "solid" bleeds through the
+    // 4³ window at levels that still render — translucent blobs around
+    // the densest areas. Clamped, bleed maxes out near the dust floor.
+    clamp_raw: f32,
 }
 
 // Raw splat grid: 4 × u32 per voxel (scaled R/G/B sums + count).
@@ -68,11 +73,15 @@ fn reduce_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     continue;
                 }
                 let vi = ((u32(p.z) * mp.dim + u32(p.y)) * mp.dim + u32(p.x)) * 4u;
-                let v = f32(src[vi + 3u]);
+                let raw = f32(src[vi + 3u]);
+                let v = min(raw, mp.clamp_raw);
+                // Scale the color sums by the same factor so the mean
+                // color stays exact for clamped voxels.
+                let cfac = v / max(raw, 1.0);
                 sum = sum + v;
                 cnt = cnt + 1.0;
                 mx = max(mx, v);
-                csum = csum + vec3<f32>(f32(src[vi + 0u]), f32(src[vi + 1u]), f32(src[vi + 2u]));
+                csum = csum + vec3<f32>(f32(src[vi + 0u]), f32(src[vi + 1u]), f32(src[vi + 2u])) * cfac;
             }
         }
     }
