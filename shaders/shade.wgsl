@@ -648,22 +648,26 @@ fn shade_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             let ndotl = max(dot(n, l), 0.0);
             var shadow = 1.0;
             if (do_shadow && ndotl > 0.0) {
+                // RAW-grid march (like the surface march): the smoothed
+                // field casts voxel-blurred shadows; raw trilinear keeps
+                // shadow edges at full grid resolution.
+                let rv = 2.0 * sp.volume_extent / f32(sp.volume_dim);
                 let lw = dir_to_world(l);
                 var dens = 0.0;
-                var t = h * (2.0 + 2.0 * sh_jitter);
-                for (var st = 0; st < 32; st = st + 1) {
+                var t = rv * (3.0 + 3.0 * sh_jitter);
+                for (var st = 0; st < 48; st = st + 1) {
                     let swp = sh_origin + lw * t;
                     let srel = swp - sp.vol_center.xyz;
                     if (abs(srel.x) >= sp.volume_extent || abs(srel.y) >= sp.volume_extent
                         || abs(srel.z) >= sp.volume_extent) {
                         break;
                     }
-                    let ramp = smoothstep(h * 2.0, h * 4.0, t);
-                    dens = dens + min(vol_density(swp), 1.0) * 2.0 * ramp;
+                    let ramp = smoothstep(rv * 3.0, rv * 6.0, t);
+                    dens = dens + min(vol_raw_density(swp), 1.0) * 1.5 * ramp;
                     if (dens > 8.0) {
                         break;
                     }
-                    t = t + h * 2.0;
+                    t = t + rv * 1.5;
                 }
                 shadow = mix(1.0, exp(-dens), sp.shadow_strength);
             }

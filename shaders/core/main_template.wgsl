@@ -123,6 +123,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // iteration's splat (the chaos game still advances). See the
         // CanHide feature + the gate after the transform chain below.
         var should_hide = false;
+{{#if HAS_VOLUME_FILL}}
+        // Reset the volume-only routing flag (variations with
+        // Feature::VolumeFill set it during the transform chain).
+        volume_fill_flag = false;
+{{/if}}
 
         // Analytic-blur mean-splat accumulator: the selected transform's
         // analytic-blur variation (if any) writes its weighted offset
@@ -487,6 +492,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             }
 {{/if}}
 
+{{#if HAS_VOLUME_FILL}}
+            // Volume-only samples: seal geometry in the density volume
+            // without touching the image (fill without diluting colors).
+            // When no volume exists (2D / volume off / sample-emit), the
+            // sample is simply dropped — fill has no other meaning.
+            let volume_fill_sample = volume_fill_flag && should_plot;
+            if (volume_fill_flag) {
+                should_plot = false;
+            }
+{{/if}}
             for (var sym_k: u32 = 0u; sym_k < sym_count; sym_k = sym_k + 1u) {
 {{#if HAS_POST_SYMMETRY}}
 {{#if RENDER_3D}}
@@ -517,7 +532,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             // coverage converges.
             // Gated on should_plot: opacity-0 (hidden / solo'd-out)
             // transforms must not leave ghost geometry in the volume.
-            if (should_plot) {
+            // Volume-only fill samples pass this gate too — that's their
+            // entire purpose.
+            if (should_plot{{#if HAS_VOLUME_FILL}} || volume_fill_sample{{/if}}) {
                 let ve = params.volume_extent;
                 let vrel = plot_pos - vec3<f32>(
                     params.volume_center_x, params.volume_center_y, params.volume_center_z);

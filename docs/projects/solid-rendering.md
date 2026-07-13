@@ -484,6 +484,21 @@ temporal blend has settled (shade_dirty + 16-frame settle) — lighting
 used to burn the full march/normals/AO/shadow chain every frame even
 after rendering completed.
 
+Volume-only fill (Feature::VolumeFill, SHIPPED): a variation can mark
+an iteration's sample volume-only via the builder-emitted per-thread
+`volume_fill_flag` — it splats into the density volume (sealing
+geometry for occlusion / lighting / shadows) but never into the image,
+so fill can't dilute colors. Dropped entirely when no volume exists.
+`bubble_solid.fill` uses it; measured: mean image brightness identical
+at fill 0.3 vs 0 (the old plotting fill dimmed the texture).
+
+Shadow fine detail: the shadow march reads the RAW grid (trilinear,
+opacity-clamped, 1.5-voxel steps) — the smoothed field cast
+voxel-blurred shadows. Remaining limit: shadows can't be finer than the
+raw grid; the queued answer for pixel-fine shadow detail is
+screen-space contact shadows (short depth-buffer march toward the
+light) composited with the volume shadows.
+
 Stage B (NEXT):
 - Light-space transmittance grids (deep-shadow style: one sweep per
   light per shade, one lookup per sample) replacing the per-pixel

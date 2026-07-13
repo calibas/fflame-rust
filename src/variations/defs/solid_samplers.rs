@@ -97,10 +97,10 @@ pub static BUBBLE_SOLID: VariationDef = VariationDef {
     display_name: "Bubble (Solid)",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Any,
-    features: &[Feature::NeedsRng, Feature::AlwaysZ],
+    features: &[Feature::NeedsRng, Feature::AlwaysZ, Feature::VolumeFill],
     parameters: &[
         param!("thickness", "Thickness", float, 0.02, 0.0, 1.0, "Radial shell depth as a fraction of the sphere radius. Gives the surface real volume - the depth buffer and density volume see a closed shell instead of a one-sample-thin film."),
-        param!("fill", "Fill", float, 0.1, 0.0, 1.0, "Probability that a sample ignores the incoming point and lands uniformly on the sphere instead. Guarantees baseline coverage where the incoming fractal has holes; the textured samples dominate wherever they have density."),
+        param!("fill", "Fill", float, 0.1, 0.0, 1.0, "Probability that a sample seals the sphere in the density volume instead of plotting: uniform shell geometry for occlusion/lighting/shadows, with ZERO effect on image colors. Only meaningful with the Density Volume enabled - such samples are dropped otherwise."),
     ],
     init_param_count: 0,
     wgsl_init: None,
@@ -112,6 +112,8 @@ fn variation_bubble_solid(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: p
     let fill = clamp(get_param(xform_id, variation_id, 1u), 0.0, 1.0);
     var pt: vec2<f32>;
     if (rng_nextf(rng) < fill) {
+        // Volume-only: seals geometry, never plots (dropped in 2D).
+        volume_fill_flag = true;
         // Uniform point on the unit circle (the 2D bubble image's rim).
         let theta = rng_nextf(rng) * 6.28318530718;
         pt = vec2<f32>(cos(theta), sin(theta));
@@ -130,6 +132,9 @@ fn variation_bubble_solid(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: p
     let fill = clamp(get_param(xform_id, variation_id, 1u), 0.0, 1.0);
     var pt: vec3<f32>;
     if (rng_nextf(rng) < fill) {
+        // Volume-only: seals the shell's geometry in the density volume
+        // (occlusion / lighting / shadows) without diluting image colors.
+        volume_fill_flag = true;
         // Uniform point on the unit sphere.
         let z = rng_nextf(rng) * 2.0 - 1.0;
         let phi = rng_nextf(rng) * 6.28318530718;
