@@ -459,7 +459,9 @@ impl ShadePass {
         let dummy_normal = Self::create_normal_tex(device, 1, 1, "Shade Dummy Normal");
         let dummy_volume = device.create_buffer(&BufferDescriptor {
             label: Some("Shade Dummy Volume"),
-            size: 4,
+            // 16 bytes: binding 8 is array<vec4<f32>> (16-byte element),
+            // and one dummy serves bindings 5/6/8 when the volume is off.
+            size: 16,
             usage: BufferUsages::STORAGE,
             mapped_at_creation: false,
         });
