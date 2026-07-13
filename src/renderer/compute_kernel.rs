@@ -1237,6 +1237,12 @@ impl FlameRenderer {
         // voxels, and every halving of the extent doubles the base
         // coat's effective resolution. Capped at 12x the view fit so a
         // wildly sprawling attractor can't starve the visible region.
+        let rows = crate::renderer::shade_pass::effective_camera_rows(
+            camera_rotation_x, camera_rotation_y, camera_bank);
+        let mut view_center = camera_pos;
+        for i in 0..3 {
+            view_center[i] += pan_x * rows[0][i] + pan_y * rows[1][i];
+        }
         if let Some((mn, mx)) = self.measured_bounds {
             let c = [
                 (mn[0] + mx[0]) * 0.5,
@@ -1245,15 +1251,16 @@ impl FlameRenderer {
             ];
             let half = ((mx[0] - mn[0]).max(mx[1] - mn[1]).max(mx[2] - mn[2]) * 0.5 * 1.15)
                 .max(1e-3);
-            return (c, half.clamp(view_extent * 0.05, view_extent * 12.0));
+            // Zoomed IN past the flame's size, track the VIEWED region:
+            // covering the whole flame would spend voxels on off-screen
+            // structure and coarsen the visible surface. Zoomed out,
+            // cover the flame.
+            if half <= view_extent {
+                return (c, half.max(view_extent * 0.05));
+            }
+            return (view_center, view_extent.min(half).min(view_extent * 12.0));
         }
-        let rows = crate::renderer::shade_pass::effective_camera_rows(
-            camera_rotation_x, camera_rotation_y, camera_bank);
-        let mut center = camera_pos;
-        for i in 0..3 {
-            center[i] += pan_x * rows[0][i] + pan_y * rows[1][i];
-        }
-        (center, view_extent)
+        (view_center, view_extent)
     }
 
     /// Interactive volume auto-refit: when a fresh bounds measurement
