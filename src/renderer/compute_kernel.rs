@@ -190,6 +190,15 @@ pub struct FlameRenderer {
     frozen_vol_placement: Option<([f32; 3], f32)>,
     /// A fresh bounds measurement arrived since the placement froze.
     bounds_dirty: bool,
+    /// Shade inputs changed since the last shade (accumulate ran,
+    /// lighting edited, reset, ...). When false and the temporal blend
+    /// has settled, run_shade_pass skips entirely — the previous output
+    /// texture is still exact. The march + normals chain + AO + shadows
+    /// are NOT cheap; without this they burned GPU every frame even
+    /// after rendering completed (field-reported).
+    shade_dirty: bool,
+    /// Temporal-blend settle countdown after the last dirty shade.
+    shade_settle: u32,
     color_mode: ColorMode,
     path_map_style: PathMapStyle,
     path_capture_mode: PathCaptureMode,
@@ -343,6 +352,8 @@ impl FlameRenderer {
             measured_bounds: None,
             frozen_vol_placement: None,
             bounds_dirty: false,
+            shade_dirty: true,
+            shade_settle: 0,
             color_mode: ColorMode::Palette,
             path_map_style: PathMapStyle::default(),
             path_capture_mode: PathCaptureMode::default(),
@@ -576,6 +587,7 @@ impl FlameRenderer {
         // (and, in video export, to the PREVIOUS animation frame —
         // blending against it would motion-ghost).
         self.shade_pass.reset_temporal();
+        self.shade_dirty = true;
 
         // Clear accumulation buffers
         self.buffers.clear_all(encoder, queue);
@@ -759,6 +771,7 @@ impl FlameRenderer {
 
     /// Run accumulation pass to blend new samples with previous accumulation
     pub fn accumulate_pass(&mut self, encoder: &mut CommandEncoder, queue: &Queue, device: &Device, samples_this_frame: u64) {
+        self.shade_dirty = true;
         self.samples_accumulated += samples_this_frame;
 
         // Update effective_iterations (for brightness) only when NOT in overwrite mode
@@ -1112,6 +1125,18 @@ impl FlameRenderer {
         if !lit {
             return false;
         }
+        // Inputs unchanged and the temporal blend has settled: the
+        // previous shade output is still exact — skip the whole chain.
+        if !self.shade_dirty && self.shade_settle == 0 {
+            return true;
+        }
+        if self.shade_dirty {
+            self.shade_dirty = false;
+            // ~2 blend time-constants at ema 0.85.
+            self.shade_settle = 16;
+        } else {
+            self.shade_settle -= 1;
+        }
         // Phase 2: hand the density volume (when active) to the shade
         // pass — gradient normals, volumetric AO, shadow march, and
         // occlusion repair all key off it.
@@ -1202,6 +1227,7 @@ impl FlameRenderer {
         // Lighting changed: blending the new look against the old one
         // would lag/ghost the edit — restart the temporal history.
         self.shade_pass.reset_temporal();
+        self.shade_dirty = true;
     }
 
     /// Whether the histogram currently carries the solid depth region.
