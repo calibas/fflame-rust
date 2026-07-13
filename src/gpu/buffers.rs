@@ -1247,9 +1247,9 @@ pub struct FlameBuffers {
     pub dummy_path_buffer: Buffer,
     pub dummy_filter_buffer: Buffer,
 
-    // Phase 2 solid-rendering density volume (OPTIONAL): flat
-    // array<atomic<u32>> of volume_dim³ world-space voxel hit counts,
-    // camera-independent. Bound at compute binding 6 when the VOLUME
+    // Solid-rendering density volume (OPTIONAL): flat
+    // array<atomic<u32>>, 4 words per voxel (scaled R/G/B sums + count),
+    // volume_dim³ voxels, world-space, camera-independent. Bound at compute binding 6 when the VOLUME
     // shader flag is set; dummy_volume_buffer otherwise. Persists across
     // progressive batches like the accumulator (cleared on full reset,
     // and per-frame in overwrite mode alongside the depth region).
@@ -2033,7 +2033,10 @@ impl FlameBuffers {
             b.destroy();
         }
         if want_dim > 0 {
-            let size = (want_dim as u64).pow(3) * std::mem::size_of::<u32>() as u64;
+            // 4 × u32 per voxel: scaled R, G, B sums + raw count (same
+            // fixed-point scheme as the 2D histogram) — the volume is the
+            // volume-primary march's colored base coat, not just density.
+            let size = (want_dim as u64).pow(3) * 4 * std::mem::size_of::<u32>() as u64;
             self.density_volume_buffer = Some(device.create_buffer(&BufferDescriptor {
                 label: Some("Density Volume Buffer"),
                 size,

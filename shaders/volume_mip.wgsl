@@ -33,6 +33,7 @@ struct MipParams {
     _pad: u32,
 }
 
+// Raw splat grid: 4 × u32 per voxel (scaled R/G/B sums + count).
 @group(0) @binding(0) var<storage, read> src: array<u32>;
 @group(0) @binding(1) var<uniform> mp: MipParams;
 @group(0) @binding(2) var<storage, read_write> out_a: array<f32>;
@@ -40,6 +41,9 @@ struct MipParams {
 // f32-typed view of the same slot as `src` for the half-res→half-res
 // passes (dilate/erode read the previous pass's f32 output).
 @group(0) @binding(4) var<storage, read> src_f: array<f32>;
+// reduce only: half-res mean color (rgb in [0,1], w = mean count) —
+// the volume-primary march's base-coat color field.
+@group(0) @binding(5) var<storage, read_write> out_c: array<vec4<f32>>;
 
 @compute @workgroup_size(4, 4, 4)
 fn reduce_main(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -52,6 +56,7 @@ fn reduce_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var sum = 0.0;
     var cnt = 0.0;
     var mx = 0.0;
+    var csum = vec3<f32>(0.0);
     // 4³ window centered on the 2×2×2 block (offsets -1..2): a plain
     // 2× box keeps too much noise; the one-voxel overlap between
     // neighboring outputs acts as the smoothing kernel.
@@ -62,16 +67,22 @@ fn reduce_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 if (p.x < 0 || p.y < 0 || p.z < 0 || p.x >= d || p.y >= d || p.z >= d) {
                     continue;
                 }
-                let v = f32(src[(u32(p.z) * mp.dim + u32(p.y)) * mp.dim + u32(p.x)]);
+                let vi = ((u32(p.z) * mp.dim + u32(p.y)) * mp.dim + u32(p.x)) * 4u;
+                let v = f32(src[vi + 3u]);
                 sum = sum + v;
                 cnt = cnt + 1.0;
                 mx = max(mx, v);
+                csum = csum + vec3<f32>(f32(src[vi + 0u]), f32(src[vi + 1u]), f32(src[vi + 2u]));
             }
         }
     }
     let idx = (gid.z * hd + gid.y) * hd + gid.x;
-    out_a[idx] = sum / max(cnt, 1.0);
+    let mean = sum / max(cnt, 1.0);
+    out_a[idx] = mean;
     out_b[idx] = mx;
+    // Density-weighted mean color of the window; the 100× fixed-point
+    // scale cancels against the count exactly as in accumulate.wgsl.
+    out_c[idx] = vec4<f32>(csum / max(sum * 100.0, 1.0), mean);
 }
 
 @compute @workgroup_size(4, 4, 4)
