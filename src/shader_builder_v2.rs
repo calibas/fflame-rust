@@ -834,6 +834,15 @@ impl ShaderBuilder {
         })
     }
 
+    /// True if any active variation can mark samples volume-only
+    /// (`Feature::VolumeFill`). Drives `HAS_VOLUME_FILL` (emitting the
+    /// per-thread flag + the plot-time routing in main_template).
+    fn has_volume_fill_variation(&self, active_variations: &[(String, u32)]) -> bool {
+        active_variations.iter().any(|(name, _)| {
+            self.registry.get(name).is_some_and(|info| info.has_feature(Feature::VolumeFill))
+        })
+    }
+
     /// Per-thread 4th-coordinate source (`Feature::NeedsW`). A single
     /// `var<private> f32` riding alongside the running `vec3` point for the
     /// whole walk, so 4D / quaternion variations can carry `w` across transform
@@ -1378,6 +1387,7 @@ impl ShaderBuilder {
         // 4th coordinate (`point_w`) + w-summing for 4D / quaternion variations.
         // Only meaningful in the 3D pipeline (2D bodies carry no w).
         let has_w = self.has_w_variation(&active) && render_3d;
+        let has_volume_fill = self.has_volume_fill_variation(&active);
 
         // Build the template processor up front — both the header and the
         // main_template body have `{{#if ...}}` blocks (header gates which
@@ -1391,6 +1401,7 @@ impl ShaderBuilder {
         processor.set("HAS_DC", has_dc);
         processor.set("HAS_RGB", has_rgb);
         processor.set("HAS_W", has_w);
+        processor.set("HAS_VOLUME_FILL", has_volume_fill);
         // HAS_ATTACHMENTS gates the per-iteration `attachments[xform_idx]`
         // load and the Linked/Final chain loops. False when the flame has
         // no Linked or Final transforms, restoring pre-attachment-feature
@@ -1561,6 +1572,15 @@ impl ShaderBuilder {
         //        Feature::NeedsW). The main loop re-zeros it on respawn.
         if has_w {
             shader.push_str(&self.build_w_coordinate());
+        }
+        if has_volume_fill {
+            shader.push_str(
+                "// Per-thread volume-only-sample flag (Feature::VolumeFill).\n\
+                 // var<private> is per-invocation; the main loop resets it\n\
+                 // each iteration and routes flagged samples to the density\n\
+                 // volume only (or drops them when no volume exists).\n\
+                 var<private> volume_fill_flag: bool;\n\n",
+            );
             shader.push('\n');
         }
 
