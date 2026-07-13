@@ -1503,6 +1503,15 @@ impl FlameRenderer {
         self.solid_strength = config.solid_strength;
         self.surface_thickness = config.surface_thickness;
         self.solid_shading = config.solid_shading.clone();
+        // load_config is a full reset point: drop the shade temporal
+        // history and force a fresh shade. The VIDEO EXPORT path loads a
+        // config per frame WITHOUT calling reset() — with the history
+        // kept, the temporal blend mixed ~85% of the PREVIOUS animation
+        // frame into each new one (field-reported smearing/trails on
+        // moving fractals; in-app was immune because interactive motion
+        // runs in overwrite mode where the blend is disabled).
+        self.shade_pass.reset_temporal();
+        self.shade_dirty = true;
         let solid_enabled = (config.solid_strength > 0.0 || self.solid_shading.active())
             && matches!(config.render_mode, crate::scene::transforms::RenderMode::ThreeD);
         let volume_enabled = self.solid_shading.volume_enabled && solid_enabled
