@@ -128,6 +128,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // Feature::VolumeFill set it during the transform chain).
         volume_fill_flag = false;
 {{/if}}
+{{#if HAS_VOLUME_SIDE}}
+        // Reset the side-emission flag (Feature::VolumeSideEmit).
+        volume_side_flag = false;
+{{/if}}
 
         // Analytic-blur mean-splat accumulator: the selected transform's
         // analytic-blur variation (if any) writes its weighted offset
@@ -501,6 +505,38 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             if (volume_fill_flag) {
                 should_plot = false;
             }
+{{/if}}
+{{#if VOLUME}}
+{{#if HAS_VOLUME_SIDE}}
+            // Side-emitted volume point (Feature::VolumeSideEmit): an
+            // ADDITIONAL deposit into the density volume — the plotted
+            // sample above/below is completely untouched. Runs the
+            // transform's post-affine so a moved/scaled shell carries
+            // its volume along; the final chain and post-symmetry are
+            // NOT applied (documented limitation). Honors opacity.
+            if (volume_side_flag && should_plot) {
+                var svp = volume_side_point;
+{{#if HAS_POST_AFFINE}}
+                if (xform.post_enabled > 0.5) {
+                    svp = apply_post_affine(xform, svp);
+                }
+{{/if}}
+                let ve_s = params.volume_extent;
+                let srel = svp - vec3<f32>(
+                    params.volume_center_x, params.volume_center_y, params.volume_center_z);
+                if (abs(srel.x) < ve_s && abs(srel.y) < ve_s && abs(srel.z) < ve_s) {
+                    let vd_s = params.volume_dim;
+                    let sx = min(u32((srel.x / ve_s * 0.5 + 0.5) * f32(vd_s)), vd_s - 1u);
+                    let sy = min(u32((srel.y / ve_s * 0.5 + 0.5) * f32(vd_s)), vd_s - 1u);
+                    let sz = min(u32((srel.z / ve_s * 0.5 + 0.5) * f32(vd_s)), vd_s - 1u);
+                    let si = ((sz * vd_s + sy) * vd_s + sx) * 4u;
+                    atomicAdd(&density_volume[si + 0u], u32(clamp(base_final_color.r, 0.0, 1.0) * 100.0));
+                    atomicAdd(&density_volume[si + 1u], u32(clamp(base_final_color.g, 0.0, 1.0) * 100.0));
+                    atomicAdd(&density_volume[si + 2u], u32(clamp(base_final_color.b, 0.0, 1.0) * 100.0));
+                    atomicAdd(&density_volume[si + 3u], 1u);
+                }
+            }
+{{/if}}
 {{/if}}
             for (var sym_k: u32 = 0u; sym_k < sym_count; sym_k = sym_k + 1u) {
 {{#if HAS_POST_SYMMETRY}}

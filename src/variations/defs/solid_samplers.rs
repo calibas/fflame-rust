@@ -84,71 +84,60 @@ fn variation_solid_sphere(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: p
 "#,
 };
 
-/// `bubble` with a solid shell: the same inverse-stereographic mapping
-/// of the plane onto the unit sphere, plus (a) real radial THICKNESS
-/// so the surface has volume instead of being one sample thin, and
-/// (b) a `fill` probability of ignoring the incoming direction and
-/// sampling the sphere uniformly — guaranteed baseline density even
-/// where the incoming fractal has holes. `thickness 0, fill 0` is
-/// classic bubble.
-pub static BUBBLE_SOLID: VariationDef = VariationDef {
-    name: "bubble_solid",
+/// Pure side-effect volume emitter: adds a spherical shell/ball of
+/// density to the solid-rendering DENSITY VOLUME each iteration —
+/// occlusion, lighting and shadows see a sealed solid — while the
+/// chaos game, the plotted position, and the image colors are
+/// completely untouched (the variation contributes zero to the
+/// variation sum; its weight merely activates it). Pair it with plain
+/// `bubble` on the same transform: bubble paints the surface texture,
+/// this seals the interior. Defaults (radius 1, center 0, thickness 1)
+/// match bubble's unit sphere exactly. The transform's post-affine is
+/// applied to the emitted point; final transforms and post-symmetry
+/// are not. Without the Density Volume this variation does nothing.
+pub static SPHERE_VOLUME: VariationDef = VariationDef {
+    name: "sphere_volume",
     aliases: &[],
-    display_name: "Bubble (Solid)",
+    display_name: "Sphere Volume (Solid)",
     category: VariationCategory::Full3D,
-    phase: VariationPhase::Any,
-    features: &[Feature::NeedsRng, Feature::AlwaysZ, Feature::VolumeFill],
+    phase: VariationPhase::Normal,
+    features: &[Feature::NeedsRng, Feature::AlwaysZ, Feature::VolumeSideEmit],
     parameters: &[
-        param!("thickness", "Thickness", float, 0.02, 0.0, 1.0, "Radial shell depth as a fraction of the sphere radius. Gives the surface real volume - the depth buffer and density volume see a closed shell instead of a one-sample-thin film."),
-        param!("fill", "Fill", float, 0.1, 0.0, 1.0, "Probability that a sample seals the sphere in the density volume instead of plotting: uniform shell geometry for occlusion/lighting/shadows, with ZERO effect on image colors. Only meaningful with the Density Volume enabled - such samples are dropped otherwise."),
+        param!("radius", "Radius", unlimited_float, 1.0, 0.0, 10.0, "Outer radius of the emitted sphere (bubble's surface is the unit sphere: radius 1)."),
+        param!("thickness", "Thickness", float, 1.0, 0.0, 1.0, "Shell depth as a fraction of the radius: 1 = solid ball (volume in the middle), small values = just a sealed skin."),
+        param!("cx", "Center X", unlimited_float, 0.0, -5.0, 5.0, "Sphere center X (bubble is centered at the origin)."),
+        param!("cy", "Center Y", unlimited_float, 0.0, -5.0, 5.0, "Sphere center Y."),
+        param!("cz", "Center Z", unlimited_float, 0.0, -5.0, 5.0, "Sphere center Z."),
     ],
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
+    // 2D: no volume exists — pure no-op pass-through of nothing.
     wgsl_2d: r#"
-fn variation_bubble_solid(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
-    let thickness = clamp(get_param(xform_id, variation_id, 0u), 0.0, 1.0);
-    let fill = clamp(get_param(xform_id, variation_id, 1u), 0.0, 1.0);
-    var pt: vec2<f32>;
-    if (rng_nextf(rng) < fill) {
-        // Volume-only: seals geometry, never plots (dropped in 2D).
-        volume_fill_flag = true;
-        // Uniform point on the unit circle (the 2D bubble image's rim).
-        let theta = rng_nextf(rng) * 6.28318530718;
-        pt = vec2<f32>(cos(theta), sin(theta));
-    } else {
-        // Classic 2D bubble.
-        let r = dot(p, p) / 4.0 + 1.0;
-        pt = p / r;
-    }
-    let s = 1.0 + (rng_nextf(rng) - 0.5) * thickness;
-    return pt * s;
+fn variation_sphere_volume(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
+    return vec2<f32>(0.0);
 }
 "#,
     wgsl_3d: r#"
-fn variation_bubble_solid(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
-    let thickness = clamp(get_param(xform_id, variation_id, 0u), 0.0, 1.0);
-    let fill = clamp(get_param(xform_id, variation_id, 1u), 0.0, 1.0);
-    var pt: vec3<f32>;
-    if (rng_nextf(rng) < fill) {
-        // Volume-only: seals the shell's geometry in the density volume
-        // (occlusion / lighting / shadows) without diluting image colors.
-        volume_fill_flag = true;
-        // Uniform point on the unit sphere.
-        let z = rng_nextf(rng) * 2.0 - 1.0;
-        let phi = rng_nextf(rng) * 6.28318530718;
-        let rxy = sqrt(max(1.0 - z * z, 0.0));
-        pt = vec3<f32>(rxy * cos(phi), rxy * sin(phi), z);
-    } else {
-        // Classic bubble: inverse stereographic projection of the XY
-        // plane onto the unit sphere (matches `bubble`'s 3D body).
-        let r = dot(p.xy, p.xy) / 4.0 + 1.0;
-        pt = vec3<f32>(p.x / r, p.y / r, 2.0 / r - 1.0);
-    }
-    // Radial thickness jitter: the shell gets real volume.
-    let s = 1.0 + (rng_nextf(rng) - 0.5) * thickness;
-    return pt * s;
+fn variation_sphere_volume(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
+    let radius = get_param(xform_id, variation_id, 0u);
+    let thickness = clamp(get_param(xform_id, variation_id, 1u), 0.0, 1.0);
+    let cx = get_param(xform_id, variation_id, 2u);
+    let cy = get_param(xform_id, variation_id, 3u);
+    let cz = get_param(xform_id, variation_id, 4u);
+    // Volumetrically uniform point in the shell radius·[1−thickness, 1].
+    let z = rng_nextf(rng) * 2.0 - 1.0;
+    let phi = rng_nextf(rng) * 6.28318530718;
+    let rxy = sqrt(max(1.0 - z * z, 0.0));
+    let dir = vec3<f32>(rxy * cos(phi), rxy * sin(phi), z);
+    let ri = 1.0 - thickness;
+    let ri3 = ri * ri * ri;
+    let r = radius * pow(mix(ri3, 1.0, rng_nextf(rng)), 0.33333333);
+    volume_side_point = vec3<f32>(cx, cy, cz) + dir * r;
+    volume_side_flag = true;
+    // Pure side effect: contribute NOTHING to the variation sum.
+    return vec3<f32>(0.0);
 }
 "#,
 };

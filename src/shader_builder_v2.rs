@@ -843,6 +843,14 @@ impl ShaderBuilder {
         })
     }
 
+    /// True if any active variation side-emits volume-only points
+    /// (`Feature::VolumeSideEmit`). Drives `HAS_VOLUME_SIDE`.
+    fn has_volume_side_variation(&self, active_variations: &[(String, u32)]) -> bool {
+        active_variations.iter().any(|(name, _)| {
+            self.registry.get(name).is_some_and(|info| info.has_feature(Feature::VolumeSideEmit))
+        })
+    }
+
     /// Per-thread 4th-coordinate source (`Feature::NeedsW`). A single
     /// `var<private> f32` riding alongside the running `vec3` point for the
     /// whole walk, so 4D / quaternion variations can carry `w` across transform
@@ -1388,6 +1396,7 @@ impl ShaderBuilder {
         // Only meaningful in the 3D pipeline (2D bodies carry no w).
         let has_w = self.has_w_variation(&active) && render_3d;
         let has_volume_fill = self.has_volume_fill_variation(&active);
+        let has_volume_side = self.has_volume_side_variation(&active);
 
         // Build the template processor up front — both the header and the
         // main_template body have `{{#if ...}}` blocks (header gates which
@@ -1402,6 +1411,7 @@ impl ShaderBuilder {
         processor.set("HAS_RGB", has_rgb);
         processor.set("HAS_W", has_w);
         processor.set("HAS_VOLUME_FILL", has_volume_fill);
+        processor.set("HAS_VOLUME_SIDE", has_volume_side);
         // HAS_ATTACHMENTS gates the per-iteration `attachments[xform_idx]`
         // load and the Linked/Final chain loops. False when the flame has
         // no Linked or Final transforms, restoring pre-attachment-feature
@@ -1580,6 +1590,15 @@ impl ShaderBuilder {
                  // each iteration and routes flagged samples to the density\n\
                  // volume only (or drops them when no volume exists).\n\
                  var<private> volume_fill_flag: bool;\n\n",
+            );
+        }
+        if has_volume_side {
+            shader.push_str(
+                "// Per-thread volume side-emission (Feature::VolumeSideEmit):\n\
+                 // an ADDITIONAL volume-only point deposited each iteration\n\
+                 // without touching the chaos game or the image.\n\
+                 var<private> volume_side_point: vec3<f32>;\n\
+                 var<private> volume_side_flag: bool;\n\n",
             );
             shader.push('\n');
         }

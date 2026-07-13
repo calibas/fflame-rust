@@ -133,6 +133,19 @@ pub enum Feature {
     /// dropped entirely: fill only means something when a volume exists.
     VolumeFill,
 
+    /// The variation emits an ADDITIONAL volume-only point as a pure
+    /// side effect — the chaos game, the plotted position, and the
+    /// image colors are completely untouched (the variation contributes
+    /// zero to the sum; its weight only activates it). Each iteration
+    /// the variation writes the side point to the builder-emitted
+    /// per-thread `volume_side_point` and sets `volume_side_flag`; the
+    /// main loop splats it into the density volume (after the
+    /// transform's post-affine, with the iteration's palette color).
+    /// This is how a shell projection (e.g. bubble) gets interior /
+    /// sealed volume for occlusion, lighting and shadows WITHOUT
+    /// spending or altering any image samples. No volume → no-op.
+    VolumeSideEmit,
+
     /// The variation is an **input-independent** blur: its output is the
     /// input point plus a random offset whose distribution does NOT depend
     /// on the input position (e.g. `blur`, `gaussian_blur` — a random disc /
