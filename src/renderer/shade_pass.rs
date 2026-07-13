@@ -71,7 +71,8 @@ struct MipParams {
     dim: u32,
     half_dim: u32,
     radius: u32,
-    _pad: u32,
+    /// Pre-smoothing per-voxel count cap (see volume_mip.wgsl).
+    clamp_raw: f32,
 }
 
 /// Mirrors WGSL `AtrousParams` (atrous.wgsl).
@@ -312,6 +313,17 @@ impl ShadePass {
                 // 8: half-res base-coat color (4-byte dummy when absent)
                 BindGroupLayoutEntry {
                     binding: 8,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // 9: RAW splat grid (march opacity; dummy when absent)
+                BindGroupLayoutEntry {
+                    binding: 9,
                     visibility: ShaderStages::COMPUTE,
                     ty: BindingType::Buffer {
                         ty: BufferBindingType::Storage { read_only: true },
@@ -849,6 +861,7 @@ impl ShadePass {
         let mut vol_avg_buffer: &Buffer = &self.dummy_volume;
         let mut vol_closed_buffer: &Buffer = &self.dummy_volume;
         let mut vol_color_buffer: &Buffer = &self.dummy_volume;
+        let mut vol_raw_buffer: &Buffer = &self.dummy_volume;
         let mut vol_ready = false;
         if let Some(v) = volume {
             if v.dim > 0 {
@@ -863,11 +876,15 @@ impl ShadePass {
                 let (avg, vmax, tmp, closed, colorb) =
                     (&bufs[0], &bufs[1], &bufs[2], &bufs[3], &bufs[4]);
                 let closing = v.closing.min(2);
+                // 8× the solid threshold in raw counts: normalized scale
+                // is dim³/(splats·8), so "normalized 8" = 64·splats/dim³.
+                let clamp_raw = (64.0 * f64::from(v.splats.max(1.0))
+                    / (v.dim as f64).powi(3)) as f32;
                 queue.write_buffer(&self.mip_params, 0, bytemuck::bytes_of(&MipParams {
                     dim: v.dim,
                     half_dim: hd,
                     radius: closing.max(1),
-                    _pad: 0,
+                    clamp_raw: clamp_raw.max(1.0),
                 }));
                 let groups = hd.div_ceil(4);
                 let mip_bg = |src: &Buffer, out_a: &Buffer, out_b: &Buffer, src_f: &Buffer, out_c: &Buffer, label: &str| {
@@ -914,6 +931,7 @@ impl ShadePass {
                 // half-res max field.
                 vol_closed_buffer = if closing > 0 { closed } else { vmax };
                 vol_color_buffer = colorb;
+                vol_raw_buffer = v.buffer;
                 }
             }
         }
@@ -1082,6 +1100,10 @@ impl ShadePass {
                 BindGroupEntry {
                     binding: 8,
                     resource: vol_color_buffer.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 9,
+                    resource: vol_raw_buffer.as_entire_binding(),
                 },
             ],
         });

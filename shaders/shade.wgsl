@@ -161,6 +161,13 @@ struct ShadeParams {
 // Half-res mean color (rgb in [0,1], w = mean count): the march's
 // base-coat color. 4-byte dummy when volume_dim == 0.
 @group(0) @binding(8) var<storage, read> vol_color: array<vec4<f32>>;
+// RAW splat grid (4 u32/voxel, count in word 3): the march's opacity
+// source at FULL grid resolution. Smoothed fields spread every hard
+// density boundary outward by ~half the smoothing window — above
+// hyper-dense regions that bleed renders as a cloudy rim protruding
+// from the surface (field-reported). Raw trilinear localizes the
+// surface to one raw voxel. 16-byte dummy when volume_dim == 0.
+@group(0) @binding(9) var<storage, read> vol_raw: array<u32>;
 
 // ── Phase 2 volume helpers (all callers gate on sp.volume_dim > 0) ──
 
@@ -234,6 +241,32 @@ fn vol_color_at(w: vec3<f32>) -> vec3<f32> {
         wsum = wsum + wgt;
     }
     return csum / max(wsum, 1e-6);
+}
+
+// Trilinear normalized density from the RAW grid (full resolution,
+// per-tap clamped) — the march's opacity source.
+fn vol_raw_density(w: vec3<f32>) -> f32 {
+    let ve = sp.volume_extent;
+    let r = w - sp.vol_center.xyz;
+    if (abs(r.x) >= ve || abs(r.y) >= ve || abs(r.z) >= ve) {
+        return 0.0;
+    }
+    let vd = sp.volume_dim;
+    let vdi = i32(vd);
+    let g = (r / ve * 0.5 + vec3<f32>(0.5)) * f32(vd) - vec3<f32>(0.5);
+    let gf = floor(g);
+    let f = g - gf;
+    let i0 = vec3<i32>(gf);
+    var sum = 0.0;
+    for (var c = 0; c < 8; c = c + 1) {
+        let o = vec3<i32>(c & 1, (c >> 1) & 1, (c >> 2) & 1);
+        let i = clamp(i0 + o, vec3<i32>(0), vec3<i32>(vdi - 1));
+        let wgt = mix(vec3<f32>(1.0) - f, f, vec3<f32>(o));
+        let cnt = f32(vol_raw[((u32(i.z) * vd + u32(i.y)) * vd + u32(i.x)) * 4u + 3u]);
+        // Per-tap opacity clamp: a 1000× filament is not 1000× solid.
+        sum = sum + min(cnt * sp.vol_density_scale, 8.0) * wgt.x * wgt.y * wgt.z;
+    }
+    return sum;
 }
 
 // Trilinear normalized density from the SMOOTHED field (gradient
@@ -357,32 +390,29 @@ fn volume_march(px: f32, py: f32, jitter: f32) -> MarchResult {
     if (d1 <= d0) {
         return res;
     }
-    let voxel = 2.0 * ve / f32(vol_hd());
+    // RAW-grid resolution march: full-dim voxels localize the surface
+    // 2× tighter than the smoothed half-res fields (and without their
+    // window bleed).
+    let voxel = 2.0 * ve / f32(sp.volume_dim);
     let wlen = max(length(r_w), 1e-9);
-    let step_d = 0.75 * voxel / wlen;
+    let step_d = 1.0 * voxel / wlen;
     // Opacity per voxel-length of solid density: solid_strength 1 makes
     // a solid voxel saturate within ~a step (hard surface); lower values
     // are translucent emission/absorption. Density is OPACITY-CLAMPED —
     // solid is solid; a 1000× filament is not 1000× solid.
-    let sigma_k = mix(0.25, 4.0, clamp(sp.solid_strength, 0.0, 1.0)) * 0.75;
+    let sigma_k = mix(0.25, 4.0, clamp(sp.solid_strength, 0.0, 1.0));
     var t_ = 1.0;
     var csum = vec3<f32>(0.0);
     var wsum = 0.0;
     var dsum = 0.0;
     var densum = 0.0;
     var d = d0 + step_d * (0.25 + 0.5 * jitter);
-    for (var i = 0; i < 192; i = i + 1) {
+    for (var i = 0; i < 352; i = i + 1) {
         if (d >= d1) {
             break;
         }
         let w = o_w + r_w * d;
-        // σ from the MEAN field, not the closed/max field: max-pooling
-        // dilates every dense surface by the window radius, wrapping
-        // solids in a semi-transparent halo of inflated voxels
-        // (field-reported as "blobs extending from the sphere"). The
-        // mean field keeps the shell its true thickness, and its 4³
-        // smoothing already seals sub-voxel pinholes.
-        let sig_raw = vol_density(w);
+        let sig_raw = vol_raw_density(w);
         // Optically-thin dust: sub-solid density is progressively
         // TRANSLUCENT (emission/absorption physics) instead of rendering
         // sparse structure as solid voxel blocks. The floor rides
