@@ -413,14 +413,19 @@ fn volume_march(px: f32, py: f32, jitter: f32) -> MarchResult {
         }
         let w = o_w + r_w * d;
         let sig_raw = vol_raw_density(w);
-        // Optically-thin dust: sub-solid density is progressively
-        // TRANSLUCENT (emission/absorption physics) instead of rendering
-        // sparse structure as solid voxel blocks. The floor rides
-        // solid_strength: at 1 the user asked for hard SURFACES — only
-        // near-solid density renders; lower values keep the volumetric
-        // haze character.
-        let dust_floor = mix(0.03, 0.35, clamp(sp.solid_strength, 0.0, 1.0));
-        let sig = min(sig_raw, 1.5) * smoothstep(dust_floor, dust_floor + 0.75, sig_raw);
+        // Opacity transfer rides solid_strength. At 1 it approaches an
+        // ISO-SURFACE step at half-solid: the trilinear field ramps
+        // 0→solid across one voxel at every hard boundary, and rendering
+        // that ramp as translucent paints a voxel-wide glow fringe —
+        // 10-20 SCREEN pixels at close zoom (field-reported
+        // protrusions). A sharp transition at the 0.5 iso level
+        // localizes the surface sub-voxel, exactly like isosurface
+        // raymarchers on coarse grids. Low strengths keep the soft
+        // volumetric transfer (dust as haze).
+        let ss = clamp(sp.solid_strength, 0.0, 1.0);
+        let edge0 = mix(0.03, 0.45, ss);
+        let edge1 = mix(0.80, 0.58, ss);
+        let sig = min(sig_raw, 1.5) * smoothstep(edge0, edge1, sig_raw);
         if (sig > 0.002) {
             let a_step = 1.0 - exp(-sig * sigma_k);
             let contrib = t_ * a_step;
