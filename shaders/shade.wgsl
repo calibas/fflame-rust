@@ -376,12 +376,21 @@ fn volume_march(px: f32, py: f32, jitter: f32) -> MarchResult {
             break;
         }
         let w = o_w + r_w * d;
-        let sig_raw = vol_closed_density(w);
+        // σ from the MEAN field, not the closed/max field: max-pooling
+        // dilates every dense surface by the window radius, wrapping
+        // solids in a semi-transparent halo of inflated voxels
+        // (field-reported as "blobs extending from the sphere"). The
+        // mean field keeps the shell its true thickness, and its 4³
+        // smoothing already seals sub-voxel pinholes.
+        let sig_raw = vol_density(w);
         // Optically-thin dust: sub-solid density is progressively
         // TRANSLUCENT (emission/absorption physics) instead of rendering
-        // sparse structure as solid voxel blocks. Solid shells (ρ ≥ ~1)
-        // are unaffected.
-        let sig = min(sig_raw, 1.5) * smoothstep(0.05, 0.8, sig_raw);
+        // sparse structure as solid voxel blocks. The floor rides
+        // solid_strength: at 1 the user asked for hard SURFACES — only
+        // near-solid density renders; lower values keep the volumetric
+        // haze character.
+        let dust_floor = mix(0.03, 0.35, clamp(sp.solid_strength, 0.0, 1.0));
+        let sig = min(sig_raw, 1.5) * smoothstep(dust_floor, dust_floor + 0.75, sig_raw);
         if (sig > 0.002) {
             let a_step = 1.0 - exp(-sig * sigma_k);
             let contrib = t_ * a_step;
