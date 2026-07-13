@@ -515,7 +515,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             // march: voxels fill ~1000× faster than pixels, giving a
             // complete, hole-free colored surface long before per-pixel
             // coverage converges.
-            {
+            // Gated on should_plot: opacity-0 (hidden / solo'd-out)
+            // transforms must not leave ghost geometry in the volume.
+            if (should_plot) {
                 let ve = params.volume_extent;
                 let vrel = plot_pos - vec3<f32>(
                     params.volume_center_x, params.volume_center_y, params.volume_center_z);
@@ -530,6 +532,21 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     atomicAdd(&density_volume[vi + 1u], u32(clamp(base_final_color.g, 0.0, 1.0) * vscale));
                     atomicAdd(&density_volume[vi + 2u], u32(clamp(base_final_color.b, 0.0, 1.0) * vscale));
                     atomicAdd(&density_volume[vi + 3u], 1u);
+                }
+                // Attractor bounds (subsampled 1/16 threads): ordered-float
+                // atomicMax over the six per-axis extremes, written to the
+                // 8-word tail after the depth region. Feeds the next
+                // placement's auto-fit so the cube covers the FLAME, not a
+                // guess from zoom (a too-small cube chops surrounding
+                // structure into box-face slabs).
+                if ((thread_id & 15u) == 0u) {
+                    let bbase = params.width * params.height * 5u;
+                    atomicMax(&histogram[bbase + 0u], bounds_enc(plot_pos.x));
+                    atomicMax(&histogram[bbase + 1u], bounds_enc(-plot_pos.x));
+                    atomicMax(&histogram[bbase + 2u], bounds_enc(plot_pos.y));
+                    atomicMax(&histogram[bbase + 3u], bounds_enc(-plot_pos.y));
+                    atomicMax(&histogram[bbase + 4u], bounds_enc(plot_pos.z));
+                    atomicMax(&histogram[bbase + 5u], bounds_enc(-plot_pos.z));
                 }
             }
 {{/if}}

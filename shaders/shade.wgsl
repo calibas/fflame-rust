@@ -377,7 +377,11 @@ fn volume_march(px: f32, py: f32, jitter: f32) -> MarchResult {
         }
         let w = o_w + r_w * d;
         let sig_raw = vol_closed_density(w);
-        let sig = min(sig_raw, 1.5);
+        // Optically-thin dust: sub-solid density is progressively
+        // TRANSLUCENT (emission/absorption physics) instead of rendering
+        // sparse structure as solid voxel blocks. Solid shells (ρ ≥ ~1)
+        // are unaffected.
+        let sig = min(sig_raw, 1.5) * smoothstep(0.05, 0.8, sig_raw);
         if (sig > 0.002) {
             let a_step = 1.0 - exp(-sig * sigma_k);
             let contrib = t_ * a_step;

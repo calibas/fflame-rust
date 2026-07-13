@@ -449,6 +449,23 @@ Stage A (DONE):
   field made solid; artistic control via solid_strength (σ) and
   the flame itself.
 
+Stage A follow-ups (DONE, field feedback):
+- Volume splat gated on should_plot: opacity-0 / solo'd-out transforms
+  no longer leave ghost geometry in the volume.
+- MEASURED-BOUNDS auto-fit: the splat maintains a running world AABB of
+  plotted samples (subsampled ordered-float atomicMax, 8-word tail
+  after the depth region); async readback (BoundsTracker) feeds
+  volume_placement, which now fits the cube to the FLAME — shrinking
+  well below the view fit when the attractor is small (every halving
+  doubles base-coat resolution). Placement is FROZEN per accumulation
+  run (splat coords depend on it); interactive auto-refit fires once
+  when the first measurement lands (young runs only), exports run a
+  6-batch warmup + blocking read + reset.
+- Optically-thin dust: march opacity scales by smoothstep(0.05, 0.8)
+  of raw density — sparse structure renders as translucent veil
+  instead of solid voxel blocks ("big ugly blocks" report). Solid
+  shells unaffected.
+
 Stage B (NEXT):
 - Light-space transmittance grids (deep-shadow style: one sweep per
   light per shade, one lookup per sample) replacing the per-pixel
