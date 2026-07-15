@@ -198,6 +198,24 @@ pub struct HighResExporter {
     shade_pass: Option<crate::renderer::shade_pass::ShadePass>,
     /// Full-image encoded depth gathered before the tile buffer is freed.
     shade_depth_buffer: Option<Buffer>,
+    // Light-space shadow maps (Stage 2, GPU-tiled path): written by the
+    // scatter pass, copied into shade_depth_buffer's tail before the
+    // shade. None on the CPU-histogram path (no maps, v1) or when
+    // shadows are off.
+    shadow_maps_buffer: Option<Buffer>,
+    /// 16-byte stand-in for binding 3 when shadow maps are off.
+    shadow_dummy_buffer: Buffer,
+    /// Frozen shadow fit (center, radius) — view-derived (the exporter
+    /// has no bounds measurement).
+    shadow_fit: ([f32; 3], f32),
+    /// Per-slot world light dirs (w = enabled) + camera rows/pos for
+    /// the scatter's world reconstruction.
+    shadow_dirs: [[f32; 4]; 4],
+    shadow_cam_rows: [[f32; 3]; 3],
+    shadow_cam_pos: [f32; 3],
+    /// View-transform inputs the scatter needs to reconstruct world
+    /// positions from (pixel, depth) samples.
+    shadow_view: (f32, f32, f32, f32, f32), // zoom, rotation, pan_x, pan_y, persp
     /// Accepted/dispatched fraction for solid brightness renormalization.
     solid_density_fraction: f32,
 }
@@ -1262,6 +1280,67 @@ impl HighResExporter {
             None
         };
 
+        // ── Light-space shadow maps (Stage 2) ──
+        let shadow_cam_rows = crate::renderer::shade_pass::effective_camera_rows(
+            config.camera_rotation_x,
+            config.camera_rotation_y,
+            config.camera_bank,
+        );
+        let shadow_cam_pos = [config.camera_x, config.camera_y, config.camera_z];
+        let mut shadow_dirs = [[0.0f32; 4]; 4];
+        let mut any_light = false;
+        for (i, l) in config.solid_shading.lights.iter().enumerate().take(4) {
+            if !(l.enabled && l.intensity > 0.0) {
+                continue;
+            }
+            any_light = true;
+            let az = l.azimuth.to_radians();
+            let el = l.elevation.to_radians();
+            let c = [el.cos() * az.sin(), el.sin(), el.cos() * az.cos()];
+            let mut w = [0.0f32; 3];
+            for k in 0..3 {
+                w[k] = c[0] * shadow_cam_rows[0][k]
+                    + c[1] * shadow_cam_rows[1][k]
+                    + c[2] * shadow_cam_rows[2][k];
+            }
+            shadow_dirs[i] = [w[0], w[1], w[2], 1.0];
+        }
+        let shadow_wanted =
+            solid_enabled && config.solid_shading.shadow_strength > 0.0 && any_light;
+        // View-derived fit (no bounds measurement on this path): center
+        // on the world point at screen center, radius = the view fit.
+        let aspect = width.max(height).max(1) as f32 / width.min(height).max(1) as f32;
+        let mut fit_center = shadow_cam_pos;
+        for k in 0..3 {
+            fit_center[k] += config.pan_x * shadow_cam_rows[0][k]
+                + config.pan_y * shadow_cam_rows[1][k];
+        }
+        let shadow_fit = (
+            fit_center,
+            (4.0 * aspect / config.zoom.max(1e-6)).clamp(1e-3, 1e6),
+        );
+        // Maps only on the GPU-tiled path (the CPU-histogram fallback
+        // has no scatter dispatch to write them, v1).
+        let shadow_maps_buffer = if shadow_wanted && tile_histograms_buffer.is_some() {
+            Some(device.create_buffer(&BufferDescriptor {
+                label: Some("Export Shadow Maps"),
+                size: 4 * 1024 * 1024 * 4,
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            }))
+        } else {
+            if shadow_wanted {
+                log::warn!("High-res export: shadow maps unavailable on the CPU-histogram path");
+            }
+            None
+        };
+        let shadow_dummy_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Export Shadow Dummy"),
+            size: 16,
+            usage: BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
+
         Ok(Self {
             device,
             queue,
@@ -1305,6 +1384,19 @@ impl HighResExporter {
             surface_thickness: config.surface_thickness,
             shade_pass,
             shade_depth_buffer: None,
+            shadow_maps_buffer,
+            shadow_dummy_buffer,
+            shadow_fit,
+            shadow_dirs,
+            shadow_cam_rows,
+            shadow_cam_pos,
+            shadow_view: (
+                config.zoom,
+                config.rotation,
+                config.pan_x,
+                config.pan_y,
+                config.perspective_strength,
+            ),
             solid_density_fraction: 1.0,
             iterations_per_thread,
         })
@@ -1507,6 +1599,14 @@ impl HighResExporter {
                                     offset,
                                     size: std::num::NonZeroU64::new(size),
                                 }),
+                            },
+                            BindGroupEntry {
+                                binding: 3,
+                                resource: self
+                                    .shadow_maps_buffer
+                                    .as_ref()
+                                    .unwrap_or(&self.shadow_dummy_buffer)
+                                    .as_entire_binding(),
                             },
                         ],
                     })
@@ -1713,6 +1813,24 @@ impl HighResExporter {
                             _pad0: 0,
                             _pad1: 0,
                             _pad2: 0,
+                            full_width: self.width,
+                            full_height: self.height,
+                            shadow_count: if self.shadow_maps_buffer.is_some() { 4 } else { 0 },
+                            _pad3: 0,
+                            zoom: self.shadow_view.0,
+                            rotation: self.shadow_view.1,
+                            pan_x: self.shadow_view.2,
+                            pan_y: self.shadow_view.3,
+                            persp: self.shadow_view.4,
+                            _pad4: 0.0,
+                            _pad5: 0.0,
+                            _pad6: 0.0,
+                            cam_row0: [self.shadow_cam_rows[0][0], self.shadow_cam_rows[0][1], self.shadow_cam_rows[0][2], 0.0],
+                            cam_row1: [self.shadow_cam_rows[1][0], self.shadow_cam_rows[1][1], self.shadow_cam_rows[1][2], 0.0],
+                            cam_row2: [self.shadow_cam_rows[2][0], self.shadow_cam_rows[2][1], self.shadow_cam_rows[2][2], 0.0],
+                            cam_pos: [self.shadow_cam_pos[0], self.shadow_cam_pos[1], self.shadow_cam_pos[2], 0.0],
+                            shadow_fit: [self.shadow_fit.0[0], self.shadow_fit.0[1], self.shadow_fit.0[2], self.shadow_fit.1],
+                            shadow_dirs: self.shadow_dirs,
                         };
                         self.queue.write_buffer(
                             &self.accumulate_params_buffer,
@@ -1917,7 +2035,12 @@ impl HighResExporter {
         if self.shade_pass.is_none() {
             return;
         }
-        let bytes = (self.width as u64) * (self.height as u64) * 4;
+        let map_bytes: u64 = if self.shadow_maps_buffer.is_some() {
+            4 * 1024 * 1024 * 4
+        } else {
+            0
+        };
+        let bytes = (self.width as u64) * (self.height as u64) * 4 + map_bytes;
         if bytes > self.device.limits().max_storage_buffer_binding_size as u64 {
             log::warn!(
                 "High-res export: skipping lighting — depth buffer {} MB exceeds one storage binding",
@@ -1932,6 +2055,21 @@ impl HighResExporter {
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        // Shadow maps ride the tail (word offset W·H) so the shade
+        // pass reaches them through the same binding as the depth.
+        if let Some(maps) = self.shadow_maps_buffer.as_ref() {
+            let mut enc = self.device.create_command_encoder(&CommandEncoderDescriptor {
+                label: Some("Export Shadow Map Gather"),
+            });
+            enc.copy_buffer_to_buffer(
+                maps,
+                0,
+                &buf,
+                (self.width as u64) * (self.height as u64) * 4,
+                map_bytes,
+            );
+            self.queue.submit(std::iter::once(enc.finish()));
+        }
         match (self.tile_histograms_buffer.as_ref(), self.tile_layout) {
             (Some(hist), Some(layout)) if layout.words_per_pixel > 4 => {
                 let mut encoder = self.device.create_command_encoder(&CommandEncoderDescriptor {
@@ -2640,8 +2778,9 @@ impl HighResExporter {
                     // Density volume rides the direct-histogram path only;
                     // the tiled sample-emit exporter never builds one.
                     None,
-                    // No shadow maps on the tiled path (v1).
-                    None,
+                    self.shadow_maps_buffer.as_ref().map(|_| {
+                        (self.width * self.height, self.shadow_fit.0, self.shadow_fit.1)
+                    }),
                     0.0,
                     None,
                 );
@@ -2874,8 +3013,9 @@ impl HighResExporter {
                  [config.camera_x, config.camera_y, config.camera_z]),
                 // No volume on the exporter path (see strip shade above).
                 None,
-                // No shadow maps on the tiled path (v1).
-                None,
+                self.shadow_maps_buffer.as_ref().map(|_| {
+                    (self.width * self.height, self.shadow_fit.0, self.shadow_fit.1)
+                }),
                 0.0,
                 None,
             );
