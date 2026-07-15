@@ -128,6 +128,17 @@ struct ShadeParams {
     // layer's confidence scale.
     base_alpha: f32,
 
+    // Light-space shadow maps (Stage 2): ortho fit (xyz center,
+    // w radius) matching the splat's frozen fit exactly.
+    shadow_fit: vec4<f32>,
+    // Word offset of map 0 inside the histogram binding; maps are
+    // shadow_res² words each, light i ↔ map i. shadow_count = 0
+    // disables the lookup (exports without maps, shadows off).
+    shadow_word_offset: u32,
+    shadow_res: u32,
+    shadow_count: u32,
+    _pad_sm: u32,
+
     lights: array<ShadeLight, 4>,
 }
 
@@ -301,6 +312,49 @@ fn shade_hash(px: i32, py: i32) -> f32 {
     var h = u32(px) * 374761393u + u32(py) * 668265263u;
     h = (h ^ (h >> 13u)) * 1274126177u;
     return f32(h & 0xFFFFu) / 65536.0;
+}
+
+// Light-space shadow-map factor for light `li` at world position
+// `wpos` (lw = world-space direction TO the light): 1 = fully lit,
+// 0 = fully occluded. 4-tap PCF against the splat-resolution ortho
+// depth map in the histogram tail — shadows resolve at SPLAT
+// resolution, which no affordable voxel grid can deliver. The basis
+// derivation must match shadow_map_splat in core/header.wgsl exactly.
+fn shadow_map_factor(wpos: vec3<f32>, lw: vec3<f32>, li: u32) -> f32 {
+    let rel = wpos - sp.shadow_fit.xyz;
+    var bu = cross(lw, vec3<f32>(0.0, 0.0, 1.0));
+    if (dot(bu, bu) < 1e-6) {
+        bu = cross(lw, vec3<f32>(1.0, 0.0, 0.0));
+    }
+    bu = normalize(bu);
+    let bv = cross(lw, bu);
+    let r = max(sp.shadow_fit.w, 1e-6);
+    let res = f32(sp.shadow_res);
+    let mu = (dot(rel, bu) / r * 0.5 + 0.5) * res;
+    let mv = (dot(rel, bv) / r * 0.5 + 0.5) * res;
+    if (mu < 0.0 || mu >= res || mv < 0.0 || mv >= res) {
+        return 1.0;
+    }
+    let my_d = dot(rel, lw);
+    // Bias ~2.5 texels of world size: below it, surface samples shadow
+    // themselves (acne); far above it, shadows detach (peter-panning).
+    let bias = 2.5 * (2.0 * r / res);
+    var lit = 0.0;
+    for (var t = 0u; t < 4u; t = t + 1u) {
+        let ox = select(-0.75, 0.75, (t & 1u) != 0u);
+        let oy = select(-0.75, 0.75, (t & 2u) != 0u);
+        let tx = u32(clamp(mu + ox, 0.0, res - 1.0));
+        let ty = u32(clamp(mv + oy, 0.0, res - 1.0));
+        let enc = histogram[sp.shadow_word_offset + li * sp.shadow_res * sp.shadow_res + ty * sp.shadow_res + tx];
+        if (enc == 0u) {
+            lit = lit + 1.0;
+            continue;
+        }
+        let ord = select(~enc, enc & 0x7FFFFFFFu, (enc & 0x80000000u) != 0u);
+        let occ_d = bitcast<f32>(ord);
+        lit = lit + select(0.0, 1.0, occ_d <= my_d + bias);
+    }
+    return lit * 0.25;
 }
 
 // Decode the splat path's inverted ordered-float depth encoding.
@@ -653,29 +707,11 @@ fn shade_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             let lcol = sp.lights[li].color.rgb * intensity;
             let ndotl = max(dot(n, l), 0.0);
             var shadow = 1.0;
-            if (do_shadow && ndotl > 0.0) {
-                // RAW-grid march (like the surface march): the smoothed
-                // field casts voxel-blurred shadows; raw trilinear keeps
-                // shadow edges at full grid resolution.
-                let rv = 2.0 * sp.volume_extent / f32(sp.volume_dim);
+            if (do_shadow && ndotl > 0.0 && sp.shadow_count > 0u) {
+                // Splat-resolution shadow maps (Stage 2) — replaced the
+                // voxel-limited raw-grid march.
                 let lw = dir_to_world(l);
-                var dens = 0.0;
-                var t = rv * (3.0 + 3.0 * sh_jitter);
-                for (var st = 0; st < 48; st = st + 1) {
-                    let swp = sh_origin + lw * t;
-                    let srel = swp - sp.vol_center.xyz;
-                    if (abs(srel.x) >= sp.volume_extent || abs(srel.y) >= sp.volume_extent
-                        || abs(srel.z) >= sp.volume_extent) {
-                        break;
-                    }
-                    let ramp = smoothstep(rv * 3.0, rv * 6.0, t);
-                    dens = dens + min(vol_raw_density(swp), 1.0) * 1.5 * ramp;
-                    if (dens > 8.0) {
-                        break;
-                    }
-                    t = t + rv * 1.5;
-                }
-                shadow = mix(1.0, exp(-dens), sp.shadow_strength);
+                shadow = mix(1.0, shadow_map_factor(wpos, lw, u32(li)), sp.shadow_strength);
             }
             lit = lit + albedo2 * lcol * (sp.diffuse * ndotl * ao * shadow);
             if (sp.specular > 0.0 && ndotl > 0.0) {
@@ -869,9 +905,16 @@ fn shade_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
-    // Blinn-Phong with camera-space directional lights.
+    // Blinn-Phong with camera-space directional lights. Splat-resolution
+    // shadow maps apply here too (Stage 2) — the volume-off path gets
+    // shadows for the first time.
     let v = normalize(-pos);
     var lit = albedo * (sp.ambient * ao);
+    let p1_shadows = sp.shadow_count > 0u && sp.shadow_strength > 0.0;
+    var p1_wpos = vec3<f32>(0.0);
+    if (p1_shadows) {
+        p1_wpos = cam_to_world(pos);
+    }
     for (var li = 0; li < 4; li = li + 1) {
         let intensity = sp.lights[li].dir_intensity.w;
         if (intensity <= 0.0) {
@@ -880,11 +923,15 @@ fn shade_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let l = sp.lights[li].dir_intensity.xyz;
         let lcol = sp.lights[li].color.rgb * intensity;
         let ndotl = max(dot(n, l), 0.0);
-        lit = lit + albedo * lcol * (sp.diffuse * ndotl * ao);
+        var shadow = 1.0;
+        if (p1_shadows && ndotl > 0.0) {
+            shadow = mix(1.0, shadow_map_factor(p1_wpos, dir_to_world(l), u32(li)), sp.shadow_strength);
+        }
+        lit = lit + albedo * lcol * (sp.diffuse * ndotl * ao * shadow);
         if (sp.specular > 0.0 && ndotl > 0.0) {
             let hh = normalize(l + v);
             let spec = pow(max(dot(n, hh), 0.0), max(sp.shininess, 1.0));
-            lit = lit + lcol * (sp.specular * spec);
+            lit = lit + lcol * (sp.specular * spec * shadow);
         }
     }
 

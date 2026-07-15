@@ -61,6 +61,11 @@ struct ShadeParams {
     temporal_ema: f32,
     solid_strength: f32,
     base_alpha: f32,
+    shadow_fit: [f32; 4],
+    shadow_word_offset: u32,
+    shadow_res: u32,
+    shadow_count: u32,
+    _pad_sm: u32,
     lights: [ShadeLight; 4],
 }
 
@@ -100,10 +105,6 @@ pub struct VolumeShadeInput<'a> {
     /// histogram) — normalizes voxel counts to an iteration-invariant
     /// density scale.
     pub splats: f32,
-    pub camera_rotation_x: f32,
-    pub camera_rotation_y: f32,
-    pub camera_bank: f32,
-    pub camera_pos: [f32; 3],
     /// World-space center of the grid cube (must match what the splat
     /// used — FlameRenderer::volume_placement is the single source).
     pub center: [f32; 3],
@@ -747,7 +748,9 @@ impl ShadePass {
         perspective_strength: f32,
         surface_thickness: f32,
         solid_strength: f32,
+        camera: (f32, f32, f32, [f32; 3]),
         volume: Option<&VolumeShadeInput>,
+        shadow: Option<(u32, [f32; 3], f32)>,
         temporal_ema: f32,
     ) {
         if let Some(v) = volume {
@@ -778,7 +781,9 @@ impl ShadePass {
             self.width * self.height * 4, // depth region inside the histogram
             0,
             self.height,
+            camera,
             volume,
+            shadow,
             ema,
             Some(&output[self.output_front].1),
         );
@@ -814,7 +819,14 @@ impl ShadePass {
         depth_word_offset: u32,
         tex_y0: u32,
         tex_height: u32,
+        // (camera_rotation_x, camera_rotation_y, camera_bank, camera_pos)
+        // — the shade pass's world↔camera transform. Needed by the
+        // volume features AND the shadow-map lookup; must not depend on
+        // the volume being enabled (that dependency zeroed the camera
+        // rows with the volume off and broke every world-space lookup).
+        camera: (f32, f32, f32, [f32; 3]),
         volume: Option<&VolumeShadeInput>,
+        shadow: Option<(u32, [f32; 3], f32)>,
         temporal_ema: f32,
         prev_shade: Option<&TextureView>,
     ) {
@@ -939,7 +951,9 @@ impl ShadePass {
         // Phase 2 volume inputs. Density normalizer: rho_norm = 1 marks
         // "solid" at 8× the uniform-spread per-voxel mean — concentrated
         // fractal surfaces sit far above it, Poisson noise far below.
-        let (vol_dim, vol_extent, vol_scale, cam_rows, cam_pos, vol_center, vol_trust, vol_base_alpha) = match volume {
+        let cam_rows = effective_camera_rows(camera.0, camera.1, camera.2);
+        let cam_pos = camera.3;
+        let (vol_dim, vol_extent, vol_scale, vol_center, vol_trust, vol_base_alpha) = match volume {
             Some(v) if v.dim > 0 && vol_ready => {
                 let voxels = (v.dim as f64).powi(3);
                 let scale = (voxels / (f64::from(v.splats.max(1.0)) * 8.0)) as f32;
@@ -947,14 +961,12 @@ impl ShadePass {
                     v.dim,
                     v.extent,
                     scale,
-                    effective_camera_rows(v.camera_rotation_x, v.camera_rotation_y, v.camera_bank),
-                    v.camera_pos,
                     v.center,
                     v.trust.clamp(0.0, 1.0),
                     v.base_alpha.max(1e-6),
                 )
             }
-            _ => (0, 0.0, 0.0, [[0.0; 3]; 3], [0.0; 3], [0.0; 3], 0.0, 1.0),
+            _ => (0, 0.0, 0.0, [0.0; 3], 0.0, 1.0),
         };
 
 
@@ -988,12 +1000,21 @@ impl ShadePass {
             volume_dim: vol_dim,
             volume_extent: vol_extent,
             vol_density_scale: vol_scale,
-            // Coarse grids cast voxel-slab shadows — fade with trust.
-            shadow_strength: shading.shadow_strength * vol_trust,
+            // Splat-resolution shadow maps don't depend on voxel
+            // quality — no vol_trust fade (that was the march era).
+            shadow_strength: shading.shadow_strength,
             vol_trust,
             temporal_ema: if prev_shade.is_some() { temporal_ema.clamp(0.0, 0.95) } else { 0.0 },
             solid_strength,
             base_alpha: vol_base_alpha,
+            shadow_fit: match shadow {
+                Some((_, c, r)) => [c[0], c[1], c[2], r],
+                None => [0.0, 0.0, 0.0, 1.0],
+            },
+            shadow_word_offset: shadow.map_or(0, |(o, _, _)| o),
+            shadow_res: 1024,
+            shadow_count: if shadow.is_some() && shading.shadow_strength > 0.0 { 4 } else { 0 },
+            _pad_sm: 0,
             lights,
         };
         queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));

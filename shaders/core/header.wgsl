@@ -128,6 +128,18 @@ struct Params {
     _pad_volume0: u32,
     _pad_volume1: u32,
     _pad_volume2: u32,
+    // Light-space shadow maps (solid rendering Stage 2): ortho fit +
+    // world-space light directions. shadow_count = 0 disables the
+    // splat at runtime. Mirror in src/gpu/buffers.rs.
+    shadow_center_x: f32,
+    shadow_center_y: f32,
+    shadow_center_z: f32,
+    shadow_radius: f32,
+    shadow_count: u32,
+    _pad_shadow0: u32,
+    _pad_shadow1: u32,
+    _pad_shadow2: u32,
+    shadow_dirs: array<vec4<f32>, 4>,
 }
 
 // Plot-time symmetry. Matches `GpuPostSymmetry` in src/gpu/buffers.rs.
@@ -247,6 +259,50 @@ fn bounds_enc(v: f32) -> u32 {
     let b = bitcast<u32>(v);
     return select(b | 0x80000000u, ~b, (b & 0x80000000u) != 0u);
 }
+{{/if}}
+{{#if SOLID}}
+{{#if OUTPUT_HISTOGRAM_DIRECT}}
+// Light-space shadow-map splat (solid rendering Stage 2). Each of up
+// to 4 enabled lights owns a SHADOW_MAP_RES² ortho depth map in the
+// histogram tail (after the depth region + bounds words): the map
+// stores the ordered-float MAX of dot(p − center, L) per texel — the
+// occluder closest to the light. Written for every plotted sample and
+// every side-emitted point, so shadows resolve at SPLAT resolution
+// (the goal a voxel grid could never deliver). Runtime-gated by
+// shadow_count, so toggling Shadow Strength needs no shader rebuild.
+fn shadow_map_splat(p: vec3<f32>) {
+    let rel = p - vec3<f32>(params.shadow_center_x, params.shadow_center_y, params.shadow_center_z);
+    for (var li = 0u; li < params.shadow_count; li = li + 1u) {
+        let ld = params.shadow_dirs[li];
+        if (ld.w < 0.5) {
+            continue;
+        }
+        let l_dir = ld.xyz;
+        // Deterministic ortho basis around the light direction (the
+        // shade pass rebuilds the identical basis for the lookup).
+        var bu = cross(l_dir, vec3<f32>(0.0, 0.0, 1.0));
+        if (dot(bu, bu) < 1e-6) {
+            bu = cross(l_dir, vec3<f32>(1.0, 0.0, 0.0));
+        }
+        bu = normalize(bu);
+        let bv = cross(l_dir, bu);
+        let r = max(params.shadow_radius, 1e-6);
+        let mu = dot(rel, bu) / r * 0.5 + 0.5;
+        let mv = dot(rel, bv) / r * 0.5 + 0.5;
+        if (mu < 0.0 || mu >= 1.0 || mv < 0.0 || mv >= 1.0) {
+            continue;
+        }
+        let res = 1024u;
+        let tx = min(u32(mu * f32(res)), res - 1u);
+        let ty = min(u32(mv * f32(res)), res - 1u);
+        let dl = dot(rel, l_dir);
+        let db = bitcast<u32>(dl);
+        let de = select(db | 0x80000000u, ~db, (db & 0x80000000u) != 0u);
+        let slot = params.width * params.height * 5u + 8u + li * (res * res) + ty * res + tx;
+        atomicMax(&histogram[slot], de);
+    }
+}
+{{/if}}
 {{/if}}
 @group(0) @binding(3) var palette_texture: texture_2d<f32>;
 @group(0) @binding(4) var palette_sampler: sampler;

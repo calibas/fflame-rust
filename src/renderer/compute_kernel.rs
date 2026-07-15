@@ -190,6 +190,9 @@ pub struct FlameRenderer {
     frozen_vol_placement: Option<([f32; 3], f32)>,
     /// A fresh bounds measurement arrived since the placement froze.
     bounds_dirty: bool,
+    /// Light-space shadow-map fit (center, radius) FROZEN at the last
+    /// accumulation reset — splat texel coordinates depend on it.
+    frozen_shadow_fit: Option<([f32; 3], f32)>,
     /// Shade inputs changed since the last shade (accumulate ran,
     /// lighting edited, reset, ...). When false and the temporal blend
     /// has settled, run_shade_pass skips entirely — the previous output
@@ -352,6 +355,7 @@ impl FlameRenderer {
             measured_bounds: None,
             frozen_vol_placement: None,
             bounds_dirty: false,
+            frozen_shadow_fit: None,
             shade_dirty: true,
             shade_settle: 0,
             color_mode: ColorMode::Palette,
@@ -620,6 +624,8 @@ impl FlameRenderer {
         };
 
         let vol_fit = self.frozen_vol_placement.unwrap_or_else(|| self.volume_placement(zoom, pan_x, pan_y, camera_rotation_x, camera_rotation_y, camera_bank, [camera_x, camera_y, camera_z]));
+        let sh_fit = self.frozen_shadow_fit.unwrap_or_else(|| self.shadow_placement(zoom, pan_x, pan_y, camera_rotation_x, camera_rotation_y, camera_bank, [camera_x, camera_y, camera_z]));
+        let sh_dirs = self.shadow_light_dirs(camera_rotation_x, camera_rotation_y, camera_bank);
         let params = GpuParams {
             num_transforms: self.num_transforms,
             iterations_per_thread,
@@ -673,6 +679,13 @@ impl FlameRenderer {
             volume_center_y: vol_fit.0[1],
             volume_center_z: vol_fit.0[2],
             _pad_volume: [0; 3],
+            shadow_center_x: sh_fit.0[0],
+            shadow_center_y: sh_fit.0[1],
+            shadow_center_z: sh_fit.0[2],
+            shadow_radius: sh_fit.1,
+            shadow_count: sh_dirs.0,
+            _pad_shadow: [0; 3],
+            shadow_dirs: sh_dirs.1,
         };
         self.buffers.update_params(queue, &params);
 
@@ -1141,6 +1154,8 @@ impl FlameRenderer {
         // pass — gradient normals, volumetric AO, shadow march, and
         // occlusion repair all key off it.
         let vol_fit = self.frozen_vol_placement.unwrap_or_else(|| self.volume_placement(zoom, pan_x, pan_y, camera_rotation_x, camera_rotation_y, camera_bank, [camera_x, camera_y, camera_z]));
+        let sh_fit = self.frozen_shadow_fit.unwrap_or_else(|| self.shadow_placement(zoom, pan_x, pan_y, camera_rotation_x, camera_rotation_y, camera_bank, [camera_x, camera_y, camera_z]));
+        let sh_dirs = self.shadow_light_dirs(camera_rotation_x, camera_rotation_y, camera_bank);
         // Volume trust: voxels of the DERIVED (half-res) grid across the
         // visible width. Auto-fit yields ~48 (trust 1); a manual extent
         // much larger than the view collapses it toward 0 and the shade
@@ -1170,10 +1185,6 @@ impl FlameRenderer {
                     dim: self.buffers.volume_dim,
                     extent: vol_fit.1,
                     splats: self.samples_in_buffer as f32,
-                    camera_rotation_x,
-                    camera_rotation_y,
-                    camera_bank,
-                    camera_pos: [camera_x, camera_y, camera_z],
                     center: vol_fit.0,
                     closing: self.solid_shading.volume_closing,
                     trust: vol_trust,
@@ -1201,7 +1212,13 @@ impl FlameRenderer {
             self.perspective_strength,
             self.surface_thickness,
             self.solid_strength,
+            (camera_rotation_x, camera_rotation_y, camera_bank, [camera_x, camera_y, camera_z]),
             volume.as_ref(),
+            if self.shadow_capture_wanted() && self.buffers.solid_depth_region {
+                Some((self.buffers.shadow_map_word_offset(), sh_fit.0, sh_fit.1))
+            } else {
+                None
+            },
             // Temporal smoothing of the shade output: the volume-derived
             // shading tracks genuinely drifting data during accumulation
             // (repaired pixels ride the front shell's relative density);
@@ -1315,8 +1332,77 @@ impl FlameRenderer {
         };
         if material {
             self.frozen_vol_placement = Some(new_fit);
+            self.frozen_shadow_fit = Some(self.shadow_placement(zoom, pan_x, pan_y, camera_rotation_x, camera_rotation_y, camera_bank, camera_pos));
         }
         material
+    }
+
+    /// Light-space shadow-map fit: cover the measured attractor bounds
+    /// (bounding-sphere radius) — falls back to a view-derived guess
+    /// until the first measurement lands. Frozen per accumulation run.
+    #[allow(clippy::too_many_arguments)]
+    fn shadow_placement(&self, zoom: f32, pan_x: f32, pan_y: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_bank: f32, camera_pos: [f32; 3]) -> ([f32; 3], f32) {
+        if let Some((mn, mx)) = self.measured_bounds {
+            let c = [
+                (mn[0] + mx[0]) * 0.5,
+                (mn[1] + mx[1]) * 0.5,
+                (mn[2] + mx[2]) * 0.5,
+            ];
+            let dx = mx[0] - mn[0];
+            let dy = mx[1] - mn[1];
+            let dz = mx[2] - mn[2];
+            let r = ((dx * dx + dy * dy + dz * dz).sqrt() * 0.5 * 1.1).max(1e-3);
+            return (c, r);
+        }
+        let rows = crate::renderer::shade_pass::effective_camera_rows(
+            camera_rotation_x, camera_rotation_y, camera_bank);
+        let mut center = camera_pos;
+        for i in 0..3 {
+            center[i] += pan_x * rows[0][i] + pan_y * rows[1][i];
+        }
+        let aspect = self.width.max(self.height).max(1) as f32
+            / self.width.min(self.height).max(1) as f32;
+        (center, (4.0 * aspect / zoom.max(1e-6)).clamp(1e-3, 1e6))
+    }
+
+    /// Whether shadow maps should capture for the current settings.
+    pub fn shadow_capture_wanted(&self) -> bool {
+        self.solid_shading.shadow_strength > 0.0
+            && (self.solid_strength > 0.0 || self.solid_shading.active())
+            && matches!(self.current_render_mode, crate::scene::transforms::RenderMode::ThreeD)
+            && self.solid_shading.lights.iter().any(|l| l.enabled && l.intensity > 0.0)
+    }
+
+    /// Per-slot world-space light directions (xyz; w = enabled) plus the
+    /// runtime shadow_count gate (4 when capturing, 0 otherwise). Slot
+    /// order matches the lights array so the shade lookup maps
+    /// light i ↔ map i directly.
+    fn shadow_light_dirs(&self, camera_rotation_x: f32, camera_rotation_y: f32, camera_bank: f32) -> (u32, [[f32; 4]; 4]) {
+        let mut dirs = [[0.0f32; 4]; 4];
+        if !self.shadow_capture_wanted() {
+            log::warn!("SHDBG: capture off (strength {} solid {} mode {:?})",
+                self.solid_shading.shadow_strength, self.solid_strength, self.current_render_mode);
+            return (0, dirs);
+        }
+        log::warn!("SHDBG: capture ON");
+        let rows = crate::renderer::shade_pass::effective_camera_rows(
+            camera_rotation_x, camera_rotation_y, camera_bank);
+        for (i, l) in self.solid_shading.lights.iter().enumerate().take(4) {
+            if !(l.enabled && l.intensity > 0.0) {
+                continue;
+            }
+            let az = l.azimuth.to_radians();
+            let el = l.elevation.to_radians();
+            // Camera-space direction TO the light (same formula as the
+            // shade pass), rotated to world by E^T.
+            let c = [el.cos() * az.sin(), el.sin(), el.cos() * az.cos()];
+            let mut w = [0.0f32; 3];
+            for k in 0..3 {
+                w[k] = c[0] * rows[0][k] + c[1] * rows[1][k] + c[2] * rows[2][k];
+            }
+            dirs[i] = [w[0], w[1], w[2], 1.0];
+        }
+        (4, dirs)
     }
 
     /// Byte offset of the attractor-bounds tail in the histogram buffer
@@ -1552,7 +1638,10 @@ impl FlameRenderer {
         self.num_transforms = config.flame.transforms.len() as u32;
 
         self.frozen_vol_placement = Some(self.volume_placement(config.zoom, config.pan_x, config.pan_y, config.camera_rotation_x, config.camera_rotation_y, config.camera_bank, [config.camera_x, config.camera_y, config.camera_z]));
+        self.frozen_shadow_fit = Some(self.shadow_placement(config.zoom, config.pan_x, config.pan_y, config.camera_rotation_x, config.camera_rotation_y, config.camera_bank, [config.camera_x, config.camera_y, config.camera_z]));
         let vol_fit = self.frozen_vol_placement.unwrap();
+        let sh_fit = self.frozen_shadow_fit.unwrap();
+        let sh_dirs = self.shadow_light_dirs(config.camera_rotation_x, config.camera_rotation_y, config.camera_bank);
         let params = GpuParams {
             num_transforms: self.num_transforms,
             iterations_per_thread,
@@ -1606,6 +1695,13 @@ impl FlameRenderer {
             volume_center_y: vol_fit.0[1],
             volume_center_z: vol_fit.0[2],
             _pad_volume: [0; 3],
+            shadow_center_x: sh_fit.0[0],
+            shadow_center_y: sh_fit.0[1],
+            shadow_center_z: sh_fit.0[2],
+            shadow_radius: sh_fit.1,
+            shadow_count: sh_dirs.0,
+            _pad_shadow: [0; 3],
+            shadow_dirs: sh_dirs.1,
         };
         self.buffers.update_params(queue, &params);
 
@@ -1653,6 +1749,7 @@ impl FlameRenderer {
         // Reset point: re-freeze the volume placement from the latest
         // measured bounds (splat coordinates must not move mid-run).
         self.frozen_vol_placement = Some(self.volume_placement(zoom, pan_x, pan_y, camera_rotation_x, camera_rotation_y, camera_bank, [camera_x, camera_y, camera_z]));
+        self.frozen_shadow_fit = Some(self.shadow_placement(zoom, pan_x, pan_y, camera_rotation_x, camera_rotation_y, camera_bank, [camera_x, camera_y, camera_z]));
         let depth_changed = self.buffers.set_solid_depth_region(device, solid_enabled);
         let volume_enabled = self.solid_shading.volume_enabled && solid_enabled
             && matches!(render_mode, crate::scene::transforms::RenderMode::ThreeD);
@@ -1738,6 +1835,8 @@ impl FlameRenderer {
         self.num_transforms = flame.transforms.len() as u32;
 
         let vol_fit = self.frozen_vol_placement.unwrap_or_else(|| self.volume_placement(zoom, pan_x, pan_y, camera_rotation_x, camera_rotation_y, camera_bank, [camera_x, camera_y, camera_z]));
+        let sh_fit = self.frozen_shadow_fit.unwrap_or_else(|| self.shadow_placement(zoom, pan_x, pan_y, camera_rotation_x, camera_rotation_y, camera_bank, [camera_x, camera_y, camera_z]));
+        let sh_dirs = self.shadow_light_dirs(camera_rotation_x, camera_rotation_y, camera_bank);
         let params = GpuParams {
             num_transforms: self.num_transforms,
             iterations_per_thread,
@@ -1791,6 +1890,13 @@ impl FlameRenderer {
             volume_center_y: vol_fit.0[1],
             volume_center_z: vol_fit.0[2],
             _pad_volume: [0; 3],
+            shadow_center_x: sh_fit.0[0],
+            shadow_center_y: sh_fit.0[1],
+            shadow_center_z: sh_fit.0[2],
+            shadow_radius: sh_fit.1,
+            shadow_count: sh_dirs.0,
+            _pad_shadow: [0; 3],
+            shadow_dirs: sh_dirs.1,
         };
 
         self.buffers.update_params(queue, &params);
@@ -1988,6 +2094,8 @@ impl FlameRenderer {
         self.burn_in = burn_in;
 
         let vol_fit = self.frozen_vol_placement.unwrap_or_else(|| self.volume_placement(zoom, pan_x, pan_y, camera_rotation_x, camera_rotation_y, camera_bank, [camera_x, camera_y, camera_z]));
+        let sh_fit = self.frozen_shadow_fit.unwrap_or_else(|| self.shadow_placement(zoom, pan_x, pan_y, camera_rotation_x, camera_rotation_y, camera_bank, [camera_x, camera_y, camera_z]));
+        let sh_dirs = self.shadow_light_dirs(camera_rotation_x, camera_rotation_y, camera_bank);
         let params = GpuParams {
             num_transforms: self.num_transforms,
             iterations_per_thread,
@@ -2041,6 +2149,13 @@ impl FlameRenderer {
             volume_center_y: vol_fit.0[1],
             volume_center_z: vol_fit.0[2],
             _pad_volume: [0; 3],
+            shadow_center_x: sh_fit.0[0],
+            shadow_center_y: sh_fit.0[1],
+            shadow_center_z: sh_fit.0[2],
+            shadow_radius: sh_fit.1,
+            shadow_count: sh_dirs.0,
+            _pad_shadow: [0; 3],
+            shadow_dirs: sh_dirs.1,
         };
         self.buffers.update_params(queue, &params);
     }
@@ -2347,6 +2462,8 @@ impl FlameRenderer {
 
         // Update params to reflect new color mode
         let vol_fit = self.frozen_vol_placement.unwrap_or_else(|| self.volume_placement(zoom, pan_x, pan_y, camera_rotation_x, camera_rotation_y, camera_bank, [camera_x, camera_y, camera_z]));
+        let sh_fit = self.frozen_shadow_fit.unwrap_or_else(|| self.shadow_placement(zoom, pan_x, pan_y, camera_rotation_x, camera_rotation_y, camera_bank, [camera_x, camera_y, camera_z]));
+        let sh_dirs = self.shadow_light_dirs(camera_rotation_x, camera_rotation_y, camera_bank);
         let params = GpuParams {
             num_transforms: self.num_transforms,
             iterations_per_thread,
@@ -2400,6 +2517,13 @@ impl FlameRenderer {
             volume_center_y: vol_fit.0[1],
             volume_center_z: vol_fit.0[2],
             _pad_volume: [0; 3],
+            shadow_center_x: sh_fit.0[0],
+            shadow_center_y: sh_fit.0[1],
+            shadow_center_z: sh_fit.0[2],
+            shadow_radius: sh_fit.1,
+            shadow_count: sh_dirs.0,
+            _pad_shadow: [0; 3],
+            shadow_dirs: sh_dirs.1,
         };
         self.buffers.update_params(queue, &params);
     }

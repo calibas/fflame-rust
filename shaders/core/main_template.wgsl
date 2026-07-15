@@ -540,6 +540,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                         atomicMax(&histogram[params.width * params.height * 4u + s_idx], ~s_ord);
                     }
                 }
+                // ...and the emitted geometry casts shadows too.
+                if (params.shadow_count > 0u) {
+                    shadow_map_splat(svp);
+                }
 {{/if}}
 {{/if}}
 {{#if VOLUME}}
@@ -876,6 +880,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     // Behind the surface shell: fade by solid_strength
                     // (1 = fully occluded, 0 = classic transparency).
                     density_weight *= 1.0 - params.solid_strength;
+                }
+                // Light-space shadow maps (Stage 2): record this sample
+                // toward every enabled light. Accumulates during the
+                // priming batch too (it's depth-only data).
+                if (params.shadow_count > 0u) {
+                    shadow_map_splat(plot_pos);
                 }
 {{else}}
                 // Sample-emit mode: this shader has no per-pixel state —

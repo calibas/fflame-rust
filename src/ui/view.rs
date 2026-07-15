@@ -602,7 +602,8 @@ pub fn render_view_content(
                         (ConfigPath::SsaoRadius, "view.ssao_radius", shading.ssao_radius, 0.01..=1.0, 0.01),
                         (ConfigPath::NormalSmoothing, "view.normal_smoothing", shading.normal_smoothing as f32, 0.0..=3.0, 1.0),
                         (ConfigPath::GapFill, "view.gap_fill", shading.gap_fill as f32, 0.0..=3.0, 1.0),
-                        // Needs the density volume; a no-op without it.
+                        // Splat-resolution shadow maps (Stage 2) — works
+                        // with or without the density volume.
                         (ConfigPath::SolidShadowStrength, "view.shadow_strength", shading.shadow_strength, 0.0..=1.0, 0.01),
                     ];
                     for (path, label, value, range, step) in global_sliders {
