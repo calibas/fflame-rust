@@ -52,6 +52,32 @@ pub struct AccumulateParams {
     pub _pad0: u32,
     pub _pad1: u32,
     pub _pad2: u32,
+    // ── Light-space shadow maps (Stage 2, export path) ──
+    /// Full-image dimensions (sample coords are full-image pixels; the
+    /// world reconstruction needs the whole view transform).
+    pub full_width: u32,
+    pub full_height: u32,
+    /// 0 disables the shadow splat entirely.
+    pub shadow_count: u32,
+    pub _pad3: u32,
+    pub zoom: f32,
+    pub rotation: f32,
+    pub pan_x: f32,
+    pub pan_y: f32,
+    pub persp: f32,
+    pub _pad4: f32,
+    pub _pad5: f32,
+    pub _pad6: f32,
+    /// Effective world→camera rotation rows + camera position
+    /// (shade_pass::effective_camera_rows).
+    pub cam_row0: [f32; 4],
+    pub cam_row1: [f32; 4],
+    pub cam_row2: [f32; 4],
+    pub cam_pos: [f32; 4],
+    /// xyz = map center, w = bounding radius.
+    pub shadow_fit: [f32; 4],
+    /// xyz = world direction TO each light, w = enabled.
+    pub shadow_dirs: [[f32; 4]; 4],
 }
 
 /// Threads per workgroup along x. Must match the `@workgroup_size` in
@@ -63,10 +89,12 @@ pub fn accumulate_dispatch_groups(sample_count: u32) -> u32 {
     (sample_count + ACCUMULATE_WORKGROUP_SIZE - 1) / ACCUMULATE_WORKGROUP_SIZE
 }
 
-/// Bind-group layout for the accumulate pipeline. Three bindings:
+/// Bind-group layout for the accumulate pipeline. Four bindings:
 ///   - 0: sample stream (storage, read)
 ///   - 1: AccumulateParams (uniform)
 ///   - 2: histogram region (storage, read_write atomic u32)
+///   - 3: light-space shadow maps (storage, read_write atomic u32;
+///        16-byte dummy when shadow_count == 0)
 pub fn create_bind_group_layout(device: &Device) -> BindGroupLayout {
     device.create_bind_group_layout(&BindGroupLayoutDescriptor {
         label: Some("Accumulate Bind Group Layout"),
@@ -93,6 +121,16 @@ pub fn create_bind_group_layout(device: &Device) -> BindGroupLayout {
             },
             BindGroupLayoutEntry {
                 binding: 2,
+                visibility: ShaderStages::COMPUTE,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Storage { read_only: false },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            BindGroupLayoutEntry {
+                binding: 3,
                 visibility: ShaderStages::COMPUTE,
                 ty: BindingType::Buffer {
                     ty: BufferBindingType::Storage { read_only: false },
@@ -138,10 +176,10 @@ mod tests {
 
     #[test]
     fn accumulate_params_size_matches_wgsl() {
-        // WGSL struct AccumulateParams: 5 u32 + 1 f32 (color_scale) +
-        // 2 f32 + 1 u32 (solid fields) + 3 u32 padding = 48 bytes.
-        // std140 uniform layout pads to a multiple of 16; 48 satisfies.
-        assert_eq!(std::mem::size_of::<AccumulateParams>(), 48);
+        // 48 bytes of original fields + 48 bytes of shadow-map scalars
+        // + 5 vec4 (camera rows/pos + fit) + 4 vec4 light dirs
+        // = 48 + 48 + 80 + 64 = 240 bytes (multiple of 16 for std140).
+        assert_eq!(std::mem::size_of::<AccumulateParams>(), 240);
     }
 
     #[test]
