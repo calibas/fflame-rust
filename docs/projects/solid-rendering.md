@@ -523,8 +523,21 @@ run alongside the volume placement. shade.wgsl's shadow_map_factor
 does a 4-tap PCF lookup with a 2.5-texel bias — shadows at SPLAT
 resolution in BOTH shade paths (the volume-off path gains shadows for
 the first time; the volume branch's raw-grid march is retired). The
-basis derivation in splat and lookup must match exactly. Tiled
-sample-emit exports: no maps (v1, documented).
+basis derivation in splat and lookup must match exactly (three sites:
+core/header.wgsl shadow_map_splat, shade.wgsl shadow_map_factor,
+accumulate_samples.wgsl sm_splat).
+TILED EXPORTS (shipped): the scatter pass splats shadows — tiles
+partition the image so each sample records exactly once (after the
+tile-bounds check; the priming dispatch contributes too). World
+positions reconstruct from (pixel, depth) with the shade pass's
+inversion; camera rows/view transform ride AccumulateParams. Maps live
+in a dedicated 16 MB buffer (scatter binding 3, dummy when off),
+copied into shade_depth_buffer's tail before shading
+(shadow_word_offset = W·H). Fit is view-derived (no bounds measurement
+on this path). CPU-histogram fallback: no maps (v1), warned in log.
+Verified via --engine highres: shadows 0↔1 changes 4.6% of pixels
+(direct engine: 4.7%); shadow-on cross-engine divergence is no larger
+than shadow-off (all pre-existing solid variance).
 LESSON (cost one debug cycle): the shade pass's camera rows/pos were
 plumbed through VolumeShadeInput and were ZERO with the volume off —
 camera data is now a first-class run_region argument; nothing
