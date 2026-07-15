@@ -511,14 +511,28 @@ fill in as real samples arrive. Verified: the sealed-pixel map is a
 crisp disk matching the sphere silhouette. The volume deposit remains
 when the volume is enabled (optional shading polish).
 
-Stage 2 of the pivot (NEXT, replaces the volume's last unique role):
-LIGHT-SPACE SHADOW MAPS — splat sample depths into a small per-light
-ortho depth buffer (one atomicMax per sample per enabled light, few MB;
-side-emitted points included, so invisible geometry casts shadows);
-shade tests against it with PCF. Shadows at SPLAT resolution — the
-original "shadows show fine detail" goal, which no affordable voxel
-grid can deliver. After that the density volume becomes optional
-(volumetric AO / haze aesthetics only).
+Stage 2 of the pivot (SHIPPED): LIGHT-SPACE SHADOW MAPS. 4 ortho
+depth maps (SHADOW_MAP_RES=1024², 16 MB) ride the solid histogram's
+tail after the bounds words; the main pass splats every plotted sample
+and every side-emitted point toward each enabled light (ordered-float
+atomicMax; shadow_map_splat in core/header.wgsl; runtime-gated by
+params.shadow_count so Shadow Strength stays ShadingOnly-cheap, with a
+gpu_updates escalation when the capture requirement flips). The shadow
+fit (center + bounding-sphere radius from measured bounds) freezes per
+run alongside the volume placement. shade.wgsl's shadow_map_factor
+does a 4-tap PCF lookup with a 2.5-texel bias — shadows at SPLAT
+resolution in BOTH shade paths (the volume-off path gains shadows for
+the first time; the volume branch's raw-grid march is retired). The
+basis derivation in splat and lookup must match exactly. Tiled
+sample-emit exports: no maps (v1, documented).
+LESSON (cost one debug cycle): the shade pass's camera rows/pos were
+plumbed through VolumeShadeInput and were ZERO with the volume off —
+camera data is now a first-class run_region argument; nothing
+world-space may depend on the volume being enabled.
+The density volume is now OPTIONAL everywhere: occlusion = splat-time
+depth culling (+ sphere_volume sealing), shadows = maps, AO/normals =
+screen-space; the volume adds gradient normals, volumetric AO and the
+march compositor when enabled.
 
 Stage B (NEXT):
 - Light-space transmittance grids (deep-shadow style: one sweep per

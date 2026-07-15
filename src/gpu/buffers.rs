@@ -898,6 +898,18 @@ pub struct GpuParams {
     pub volume_center_y: f32,
     pub volume_center_z: f32,
     pub _pad_volume: [u32; 3],
+    // Light-space shadow maps (solid rendering Stage 2). The maps cover
+    // the sphere of `shadow_radius` around `shadow_center` (frozen per
+    // accumulation run from measured bounds). shadow_count = 0 disables
+    // the splat at runtime (cheap branch inside the SOLID block).
+    pub shadow_center_x: f32,
+    pub shadow_center_y: f32,
+    pub shadow_center_z: f32,
+    pub shadow_radius: f32,
+    pub shadow_count: u32,
+    pub _pad_shadow: [u32; 3],
+    // xyz = world-space direction TO each light, w unused.
+    pub shadow_dirs: [[f32; 4]; 4],
 }
 
 /// Plot-time symmetry params packed for the GPU uniform. Mirrors the
@@ -1502,6 +1514,13 @@ impl FlameBuffers {
             volume_center_y: 0.0,
             volume_center_z: 0.0,
             _pad_volume: [0; 3],
+            shadow_center_x: 0.0,
+            shadow_center_y: 0.0,
+            shadow_center_z: 0.0,
+            shadow_radius: 1.0,
+            shadow_count: 0,
+            _pad_shadow: [0; 3],
+            shadow_dirs: [[0.0; 4]; 4],
         };
 
         let params_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
@@ -1972,6 +1991,16 @@ impl FlameBuffers {
         drop(render_pass); // End the render pass immediately
     }
 
+    /// Light-space shadow map resolution per axis (4 maps ride the
+    /// solid histogram's tail — 16 MB total at 1024).
+    pub const SHADOW_MAP_RES: u32 = 1024;
+
+    /// Word offset of the shadow-map region inside the solid histogram
+    /// (after RGBD + depth region + 8-word bounds tail).
+    pub fn shadow_map_word_offset(&self) -> u32 {
+        self.width * self.height * 5 + 8
+    }
+
     /// Bytes of the RGBD portion of the histogram (4 u32 per pixel).
     fn histogram_rgbd_bytes(&self) -> u64 {
         (self.width as u64) * (self.height as u64) * 4 * std::mem::size_of::<u32>() as u64
@@ -1990,9 +2019,18 @@ impl FlameBuffers {
             return false;
         }
         let words: u64 = if enabled { 5 } else { 4 };
-        // +8-word tail when the depth region exists: subsampled
-        // attractor-bounds atomics (6 used) for the volume auto-fit.
-        let tail: u64 = if enabled { 32 } else { 0 };
+        // Tail regions when the depth region exists:
+        //  - 8 words: subsampled attractor-bounds atomics (6 used) for
+        //    the volume / shadow auto-fit;
+        //  - 4 light-space shadow maps (SHADOW_MAP_RES² words each,
+        //    ordered-float atomicMax depth toward each light) — shadows
+        //    at SPLAT resolution, written by the main pass, read by the
+        //    shade pass, cleared with the depth region.
+        let tail: u64 = if enabled {
+            32 + 4 * (Self::SHADOW_MAP_RES as u64).pow(2) * 4
+        } else {
+            0
+        };
         let size = (self.width as u64) * (self.height as u64) * words * std::mem::size_of::<u32>() as u64 + tail;
         self.histogram_buffer = device.create_buffer(&BufferDescriptor {
             label: Some(if enabled {

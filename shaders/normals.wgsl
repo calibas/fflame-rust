@@ -44,6 +44,8 @@ struct ShadeParams {
     _pad_cam4: vec4<f32>,
     _pad_vol: vec4<f32>,
     _pad_vol2: vec4<f32>,
+    _pad_sm0: vec4<f32>,
+    _pad_sm1: vec4<f32>,
     lights: array<ShadeLight, 4>,
 }
 

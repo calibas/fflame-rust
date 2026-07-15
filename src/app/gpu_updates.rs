@@ -138,7 +138,20 @@ impl App {
                             update_config.render_mode,
                             crate::scene::transforms::RenderMode::ThreeD
                         );
-                    if want_capture != renderer.has_solid_depth_region() {
+                    // Shadow-map capture rides the main pass: flipping it
+                    // (Shadow Strength 0 ↔ >0, lights toggled) needs the
+                    // full update path so the splat starts/stops writing
+                    // the maps — same escalation as the depth-capture flip.
+                    let want_shadows = want_capture
+                        && update_config.solid_shading.shadow_strength > 0.0
+                        && update_config
+                            .solid_shading
+                            .lights
+                            .iter()
+                            .any(|l| l.enabled && l.intensity > 0.0);
+                    if want_capture != renderer.has_solid_depth_region()
+                        || want_shadows != renderer.shadow_capture_wanted()
+                    {
                         renderer.update_flame(
                             &self.gpu.device,
                             &self.gpu.queue,

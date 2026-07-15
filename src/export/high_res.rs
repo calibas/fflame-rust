@@ -1625,6 +1625,14 @@ impl HighResExporter {
                 volume_center_y: 0.0,
                 volume_center_z: 0.0,
                 _pad_volume: [0; 3],
+                // No shadow maps on the tiled sample-emit path (v1).
+                shadow_center_x: 0.0,
+                shadow_center_y: 0.0,
+                shadow_center_z: 0.0,
+                shadow_radius: 1.0,
+                shadow_count: 0,
+                _pad_shadow: [0; 3],
+                shadow_dirs: [[0.0; 4]; 4],
             };
             self.queue
                 .write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));
@@ -2627,8 +2635,12 @@ impl HighResExporter {
                     0,
                     y0,
                     sh,
+                    (config.camera_rotation_x, config.camera_rotation_y, config.camera_bank,
+                     [config.camera_x, config.camera_y, config.camera_z]),
                     // Density volume rides the direct-histogram path only;
                     // the tiled sample-emit exporter never builds one.
+                    None,
+                    // No shadow maps on the tiled path (v1).
                     None,
                     0.0,
                     None,
@@ -2858,7 +2870,11 @@ impl HighResExporter {
                 0,
                 0,
                 self.height,
+                (config.camera_rotation_x, config.camera_rotation_y, config.camera_bank,
+                 [config.camera_x, config.camera_y, config.camera_z]),
                 // No volume on the exporter path (see strip shade above).
+                None,
+                // No shadow maps on the tiled path (v1).
                 None,
                 0.0,
                 None,
