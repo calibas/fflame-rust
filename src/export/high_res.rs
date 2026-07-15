@@ -987,9 +987,17 @@ impl HighResExporter {
         let mut tile_histograms_buffer: Option<Buffer> = None;
         let mut tile_layout: Option<TileLayout> = None;
 
+        // `max_buffer_size` is what the DRIVER permits for one buffer —
+        // modern drivers report values far beyond physically-free VRAM,
+        // and an allocation that doesn't fit is a FATAL wgpu OOM
+        // (field-reported: 19200×10800 solid = a 3.9 GB histogram
+        // panicking in-app). Cap the GPU-tiles histogram at a
+        // conservative budget; anything larger takes the CPU-histogram
+        // path, which is slower but memory-bounded.
+        const GPU_HISTOGRAM_BUDGET: u64 = 2_560 * 1024 * 1024;
         match strategy {
             crate::export::RenderStrategy::ParallelTiles { tiles_y, tile_height, .. } => {
-                if total_hist_size <= device_limits.max_buffer_size as u64 {
+                if total_hist_size <= (device_limits.max_buffer_size as u64).min(GPU_HISTOGRAM_BUDGET) {
                     log::info!(
                         "High-res export: GPU accumulate (ParallelTiles) — {}x{}, \
                          {} tile{} of {} rows × {} cols, {} MB total",
@@ -1014,10 +1022,10 @@ impl HighResExporter {
                 } else {
                     log::info!(
                         "High-res export: CPU accumulate fallback ({}x{}, \
-                         total {} MB > max_buffer_size {} MB — too big for one GPU buffer)",
+                         total {} MB > GPU histogram cap {} MB — bounded-memory path)",
                         width, height,
                         total_hist_size / (1024 * 1024),
-                        device_limits.max_buffer_size / (1024 * 1024),
+                        (device_limits.max_buffer_size as u64).min(GPU_HISTOGRAM_BUDGET) / (1024 * 1024),
                     );
                 }
             }
