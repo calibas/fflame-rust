@@ -189,6 +189,10 @@ pub struct FlameRenderer {
     /// Light-space shadow-map fit (center, radius) FROZEN at the last
     /// accumulation reset — splat texel coordinates depend on it.
     frozen_shadow_fit: Option<([f32; 3], f32)>,
+    /// Whether frozen_shadow_fit was derived from MEASURED bounds (vs a
+    /// view guess). A guess-based fit gets one tightening refit when the
+    /// first real measurement lands; measured fits only refit on growth.
+    frozen_fit_measured: bool,
     /// Shade inputs changed since the last shade (accumulate ran,
     /// lighting edited, reset, ...). When false and the temporal blend
     /// has settled, run_shade_pass skips entirely — the previous output
@@ -344,6 +348,7 @@ impl FlameRenderer {
             measured_bounds: None,
             bounds_dirty: false,
             frozen_shadow_fit: None,
+            frozen_fit_measured: false,
             shade_dirty: true,
             shade_settle: 0,
             color_mode: ColorMode::Palette,
@@ -1178,34 +1183,53 @@ impl FlameRenderer {
     }
 
 
-    /// Interactive shadow-fit auto-refit: when a fresh bounds
-    /// measurement materially moves the fit AND the run is still young
-    /// (a refit restarts accumulation — invisible at ~1 s in, enraging
-    /// at 20 min in), re-freeze and report true so the caller resets.
+    /// Interactive shadow-fit auto-refit: re-freeze (and report true so
+    /// the caller resets accumulation) ONLY when the measured attractor
+    /// extends beyond the frozen fit's coverage — clipped geometry casts
+    /// no shadow, so growth is a correctness refit. Shrinkage NEVER
+    /// refits: an oversized map merely wastes resolution, and every
+    /// natural reset re-freezes from the latest bounds anyway (free
+    /// tightening). A symmetric "changed by >10%" test here caused an
+    /// infinite reset loop (field-reported at ~250M iterations): each
+    /// reset clears the bounds tail, the fresh run's PARTIAL AABB reads
+    /// as a material shrink, refit resets again, ad infinitum.
     #[allow(clippy::too_many_arguments)]
     pub fn maybe_refit_shadow(&mut self, zoom: f32, pan_x: f32, pan_y: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_bank: f32, camera_pos: [f32; 3]) -> bool {
         if !self.bounds_dirty || !self.shadow_capture_wanted() {
             return false;
         }
         self.bounds_dirty = false;
+        // Young runs only: a refit restarts accumulation — invisible at
+        // ~1 s in, enraging at 20 min in. Late growth keeps the current
+        // maps (worst case: the far tail renders unshadowed this run).
         let batches = self.samples_in_buffer / self.last_batch_samples.max(1);
         if batches > 64 {
             return false;
         }
         let new_fit = self.shadow_placement(zoom, pan_x, pan_y, camera_rotation_x, camera_rotation_y, camera_bank, camera_pos);
-        let material = match self.frozen_shadow_fit {
+        let needs = match self.frozen_shadow_fit {
+            // A view-guess fit tightens ONCE when the first real
+            // measurement lands (can't loop: the refit below marks the
+            // fit measured, and measured fits only refit on growth).
+            Some(_) if !self.frozen_fit_measured => true,
             Some((c, r)) => {
-                let dc = (c[0] - new_fit.0[0]).abs()
-                    .max((c[1] - new_fit.0[1]).abs())
-                    .max((c[2] - new_fit.0[2]).abs());
-                dc > r * 0.1 || (new_fit.1 - r).abs() > r * 0.1
+                // New bounding sphere not contained in the frozen one
+                // (5% hysteresis so boundary noise can't retrigger).
+                let d = ((c[0] - new_fit.0[0]).powi(2)
+                    + (c[1] - new_fit.0[1]).powi(2)
+                    + (c[2] - new_fit.0[2]).powi(2))
+                    .sqrt();
+                d + new_fit.1 > r * 1.05
             }
             None => true,
         };
-        if material {
+        if needs {
             self.frozen_shadow_fit = Some(new_fit);
+            // bounds_dirty implied a fresh measurement, so the new fit
+            // is measurement-derived.
+            self.frozen_fit_measured = self.measured_bounds.is_some();
         }
-        material
+        needs
     }
 
     /// Light-space shadow-map fit: cover the measured attractor bounds
@@ -1313,6 +1337,7 @@ impl FlameRenderer {
             None => true,
         };
         self.frozen_shadow_fit = Some(new_fit);
+        self.frozen_fit_measured = self.measured_bounds.is_some();
         changed
     }
 
@@ -1501,6 +1526,7 @@ impl FlameRenderer {
         self.num_transforms = config.flame.transforms.len() as u32;
 
         self.frozen_shadow_fit = Some(self.shadow_placement(config.zoom, config.pan_x, config.pan_y, config.camera_rotation_x, config.camera_rotation_y, config.camera_bank, [config.camera_x, config.camera_y, config.camera_z]));
+        self.frozen_fit_measured = self.measured_bounds.is_some();
         let sh_fit = self.frozen_shadow_fit.unwrap();
         let sh_dirs = self.shadow_light_dirs(config.camera_rotation_x, config.camera_rotation_y, config.camera_bank);
         let params = GpuParams {
@@ -1604,6 +1630,7 @@ impl FlameRenderer {
         // Reset point: re-freeze the shadow fit from the latest measured
         // bounds (splat texel coordinates must not move mid-run).
         self.frozen_shadow_fit = Some(self.shadow_placement(zoom, pan_x, pan_y, camera_rotation_x, camera_rotation_y, camera_bank, [camera_x, camera_y, camera_z]));
+        self.frozen_fit_measured = self.measured_bounds.is_some();
         let depth_changed = self.buffers.set_solid_depth_region(device, solid_enabled);
         if depth_changed {
             // Histogram buffer was recreated — every bind group that
