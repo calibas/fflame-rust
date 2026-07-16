@@ -90,6 +90,7 @@ pub fn render_export_content(
     export_height: &mut u32,
     use_custom_export_size: &mut bool,
     png_export_premultiplied: &mut bool,
+    png_export_supersample: &mut bool,
     config_manager: &mut ConfigManager,
     viewport_size: Option<(u32, u32)>,
     export_active: bool,
@@ -119,6 +120,15 @@ pub fn render_export_content(
     ui.checkbox(png_export_premultiplied, t!("export.premultiplied_alpha"))
         .on_hover_text(t!("export.premultiplied_alpha_tooltip"));
 
+    // 2× supersampled antialiasing (desktop export paths only for now).
+    #[cfg(not(target_arch = "wasm32"))]
+    ui.checkbox(png_export_supersample, t!("export.supersample"))
+        .on_hover_text(t!("export.supersample_tooltip"));
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = &png_export_supersample;
+    }
+
     ui.add_space(4.0);
     ui.separator();
     ui.add_space(4.0);
@@ -144,10 +154,17 @@ pub fn render_export_content(
             && matches!(c.render_mode, crate::scene::transforms::RenderMode::ThreeD);
         (solid, solid && c.solid_shading.active(), solid && c.dof_blur_strength > 0.0)
     };
-    let max_px = max_export_pixels(spatial_filter, solid_on, lighting_on, dof_on);
+    // 2× supersampling renders at doubled dimensions: 4× the pixel
+    // budget per requested pixel, and half the per-axis texture ceiling.
+    let ss_factor: u64 = if *png_export_supersample { 4 } else { 1 };
+    let max_px = max_export_pixels(spatial_filter, solid_on, lighting_on, dof_on) / ss_factor;
     // Per-axis widget ceiling: the GPU's max texture size (the pixel budget
     // constrains the product within it). Guard against a degenerate 0.
-    let dim_ceiling = max_export_dimension.max(MIN_EXPORT_DIM);
+    let dim_ceiling = if *png_export_supersample {
+        (max_export_dimension / 2).max(MIN_EXPORT_DIM)
+    } else {
+        max_export_dimension.max(MIN_EXPORT_DIM)
+    };
 
     // Keep the current size within the (feature-dependent) budget — e.g. when
     // the flame's spatial filter toggles on and lowers the cap. Shrink

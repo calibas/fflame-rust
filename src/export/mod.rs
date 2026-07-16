@@ -11,6 +11,7 @@
 
 mod high_res;
 pub mod accumulate;
+pub mod supersample;
 
 pub use high_res::*;
 

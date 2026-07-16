@@ -255,6 +255,8 @@ export:
   with_background: "Export with Background"
   transparent: "Export Transparent"
   premultiplied_alpha: "Premultiplied alpha"
+  supersample: "2× Antialiasing"
+  supersample_tooltip: "Render internally at double resolution and box-filter down (with a firefly clamp).\nSmooth edges on 2D, 3D and solid renders alike; roughly 4× the render cost.\nDim regions may need more iterations for equal quality (4× the buckets share the samples)."
   premultiplied_alpha_tooltip: "Transparent export: use premultiplied alpha (for After Effects / Nuke / linear compositing). Off = straight alpha, where flattening over black in an image editor reproduces the opaque export."
   use_custom_size: "Use Custom Export Size"
   width: "Width:"
