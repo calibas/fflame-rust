@@ -559,7 +559,15 @@ Stage B (NEXT):
   quality setting.
 - Retire/repurpose gap_fill & closing UI copy for the new pipeline.
 
-## Remaining queue (2026-07-15, user-tracked)
+## Remaining queue (2026-07-15, user-tracked) — ALL SHIPPED 2026-07-16
+
+Status: 1 (post-process DoF — dense 2-D disk gather, CoC prepass,
+max-dilate loop bounds), 2 (depth-effects audit — post-lighting fog +
+occlusion-only brightness renorm), 4 (2× supersampled AA export with
+firefly clamp and auto-scaled ×4 iterations), and the JWildfire
+`sld_render_*` XML import/export are all implemented. 5 (positional
+point lights) remains skipped by choice. Original queue text kept
+below for the reasoning record.
 
 1. DEPTH-OF-FIELD with solid rendering + lighting: at-splat DoF is
    compiled out under SOLID by design (position jitter corrupts the
