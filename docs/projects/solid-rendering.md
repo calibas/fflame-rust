@@ -559,6 +559,34 @@ Stage B (NEXT):
   quality setting.
 - Retire/repurpose gap_fill & closing UI copy for the new pipeline.
 
+## Remaining queue (2026-07-15, user-tracked)
+
+1. DEPTH-OF-FIELD with solid rendering + lighting: at-splat DoF is
+   compiled out under SOLID by design (position jitter corrupts the
+   nearest-depth buffer). The replacement is POST-PROCESS DoF from the
+   per-pixel depth: a gather blur between shade and tonemap whose
+   kernel radius follows |depth − focus| × strength, with
+   depth-aware weights so background doesn't bleed over foreground
+   edges. Assessment: MODERATE — the inputs (depth region, shade
+   output, pass hooks) all exist; the work is one new shader + wiring
+   + the usual bias/edge tuning round. Not architecturally hard.
+2. Audit the other depth effects under solid+lighting: fog (applied at
+   splat time to surviving samples — likely fine), depth-density
+   compensation and far-density fade (per-sample weights interact with
+   occlusion culling and the brightness renorm — verify no double
+   counting).
+3. Density volume final disposition: now optional everywhere
+   (occlusion = depth culling, shadows = maps, AO/normals =
+   screen-space). Decide: keep as experimental toggle for gradient
+   normals / volumetric AO / haze, or retire the march compositor.
+4. AA / supersampling quality pass: 2× supersampled export (render
+   internal buffers at 2×, box-downsample before PNG) + firefly clamp
+   in the shade pass. flam3-style oversample+filter is the reference.
+5. Optional: positional POINT lights (current lights are directional
+   only — azimuth/elevation, infinitely far, cannot sit inside the
+   fractal). Point lights inside the flame need per-light cube or
+   paraboloid shadow projections — a bigger follow-on.
+
 ## Phase 3 — backlog (unscheduled)
 
 - JWF solid-rendering `.flame` XML import (`sld_render_*`, materials, lights).

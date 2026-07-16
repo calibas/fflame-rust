@@ -1155,7 +1155,6 @@ impl FlameRenderer {
         // occlusion repair all key off it.
         let vol_fit = self.frozen_vol_placement.unwrap_or_else(|| self.volume_placement(zoom, pan_x, pan_y, camera_rotation_x, camera_rotation_y, camera_bank, [camera_x, camera_y, camera_z]));
         let sh_fit = self.frozen_shadow_fit.unwrap_or_else(|| self.shadow_placement(zoom, pan_x, pan_y, camera_rotation_x, camera_rotation_y, camera_bank, [camera_x, camera_y, camera_z]));
-        let sh_dirs = self.shadow_light_dirs(camera_rotation_x, camera_rotation_y, camera_bank);
         // Volume trust: voxels of the DERIVED (half-res) grid across the
         // visible width. Auto-fit yields ~48 (trust 1); a manual extent
         // much larger than the view collapses it toward 0 and the shade
@@ -1363,6 +1362,12 @@ impl FlameRenderer {
         let aspect = self.width.max(self.height).max(1) as f32
             / self.width.min(self.height).max(1) as f32;
         (center, (4.0 * aspect / zoom.max(1e-6)).clamp(1e-3, 1e6))
+    }
+
+    /// The renderer's CURRENT shading settings (pre-update state — used
+    /// by gpu_updates to detect shadow-relevant light changes).
+    pub fn solid_shading(&self) -> &crate::config::SolidShadingSettings {
+        &self.solid_shading
     }
 
     /// Whether shadow maps should capture for the current settings.
