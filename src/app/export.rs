@@ -164,6 +164,8 @@ pub async fn export_headless(
     // 2× supersampling: render the WHOLE pipeline at 2W×2H (nothing in
     // it knows) and box-filter the final tonemapped image down — see
     // export::supersample for why the downsample must be post-tonemap.
+    // The PNG metadata embeds the ORIGINAL config, not the scaled copy.
+    let orig_config = config;
     let ss_config;
     let (config, render_width, render_height) = if supersample {
         ss_config = crate::export::supersample::scale_config_for_supersample(config);
@@ -203,6 +205,7 @@ pub async fn export_headless(
         );
         return export_headless_cpu(
             config,
+            orig_config,
             output_path,
             render_width,
             render_height,
@@ -223,6 +226,7 @@ pub async fn export_headless(
     );
     export_headless_gpu(
         config,
+        orig_config,
         output_path,
         render_width,
         render_height,
@@ -260,6 +264,8 @@ async fn probe_max_binding_size() -> Option<u64> {
 #[cfg(not(target_arch = "wasm32"))]
 async fn export_headless_gpu(
     config: &FractalConfig,
+    // Unscaled original — embedded in PNG metadata for exact round-trip.
+    meta_config: &FractalConfig,
     output_path: &std::path::Path,
     width: u32,
     height: u32,
@@ -358,8 +364,8 @@ async fn export_headless_gpu(
         result.total_iterations,
         total_export_time_ms,
         iterations_per_thread,
-        config.speed_factor,
-        config,
+        meta_config.speed_factor,
+        meta_config,
     );
     metadata.test_category = test_category;
 
@@ -381,6 +387,8 @@ async fn export_headless_gpu(
 #[cfg(not(target_arch = "wasm32"))]
 async fn export_headless_cpu(
     config: &FractalConfig,
+    // Unscaled original — embedded in PNG metadata for exact round-trip.
+    meta_config: &FractalConfig,
     output_path: &std::path::Path,
     width: u32,
     height: u32,
@@ -426,8 +434,8 @@ async fn export_headless_cpu(
         total_iterations,
         total_export_time_ms,
         iterations_per_thread,
-        config.speed_factor,
-        config,
+        meta_config.speed_factor,
+        meta_config,
     );
     metadata.test_category = test_category;
 
