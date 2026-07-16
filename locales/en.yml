@@ -52,6 +52,7 @@ menu:
   window_performance: "📊 Performance"
   window_rendering: "⚙ Rendering"
   window_view: "🔍 View"
+  window_solid_lighting: "💡 Solid & Lighting"
   window_transforms: "🔧 Transforms"
   window_triangle_editor: "📐 Triangle Editor"
   window_colors: "🎨 Colors & Tone Mapping"
@@ -116,6 +117,9 @@ help:
   wheel_zoom: "  Wheel    - Zoom (toward cursor)"
 
 # Panel Titles (used in tabs and window titles)
+solid:
+  requires_3d: "Solid rendering and lighting apply in 3D render mode only."
+
 panels:
   fractal: "Fractal"
   transforms: "Transforms"
@@ -141,6 +145,7 @@ panels:
   tone_mapping: "Tone Mapping"
   xaos_editor: "Xaos Editor"
   signal: "Signals"
+  solid_lighting: "Solid & Lighting"
   variations: "Variations"
   subflames: "Subflames"
 

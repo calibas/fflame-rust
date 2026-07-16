@@ -579,6 +579,9 @@ impl<'a> PanelViewer<'a> {
             PanelType::Rendering => {
                 self.render_rendering_panel(ui);
             }
+            PanelType::SolidLighting => {
+                self.render_solid_lighting_panel(ui);
+            }
             PanelType::History => {
                 self.render_history_panel(ui);
             }
@@ -765,6 +768,18 @@ impl<'a> PanelViewer<'a> {
             self.context.paused,
             self.context.config_manager,
         );
+    }
+
+    /// Render the Solid Rendering & Lighting panel
+    fn render_solid_lighting_panel(&mut self, ui: &mut egui::Ui) {
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                super::solid_panel::render_solid_panel_content(
+                    ui,
+                    self.context.config_manager,
+                );
+            });
     }
 
 
