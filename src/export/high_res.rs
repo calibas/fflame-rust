@@ -2737,6 +2737,13 @@ impl HighResExporter {
             // strip's albedo rows (the shade pass reads the accumulator
             // only at its own pixel, so strips shade identically to a
             // one-shot — see shade.wgsl region params).
+            if y0 == 0 && config.dof_blur_strength > 0.0
+                && matches!(config.render_mode, crate::scene::transforms::RenderMode::ThreeD)
+            {
+                // A gather blur can't run per strip without aprons —
+                // taps would cross strip boundaries and seam.
+                log::warn!("Post-process DoF is not yet supported on the tiled export path — skipped");
+            }
             let mut strip_shade: Option<(Texture, TextureView)> = None;
             if let (Some(shade), Some(depth)) = (self.shade_pass.as_ref(), self.shade_depth_buffer.as_ref()) {
                 let tex = self.try_create_texture(&TextureDescriptor {
@@ -3016,8 +3023,46 @@ impl HighResExporter {
             log::info!("High-res export: applied solid lighting (shade pass)");
             shade_holder = Some((tex, view));
         }
-        let base_accum_view: &TextureView =
-            shade_holder.as_ref().map(|(_, v)| v).unwrap_or(&accumulation_view);
+
+        // Post-process DoF (solid mode): between shade and density
+        // effects/tonemap, same ordering as the interactive frame. Needs
+        // the per-pixel depth buffer (present whenever solid shading
+        // ran on this path).
+        let mut dof_holder: Option<crate::renderer::dof_pass::DofPass> = None;
+        if config.dof_blur_strength > 0.0
+            && matches!(config.render_mode, crate::scene::transforms::RenderMode::ThreeD)
+        {
+            if let Some(depth) = self.shade_depth_buffer.as_ref() {
+                let input_view: &TextureView =
+                    shade_holder.as_ref().map(|(_, v)| v).unwrap_or(&accumulation_view);
+                let mut dp = crate::renderer::dof_pass::DofPass::new(&self.device);
+                let mut dof_encoder = self.device.create_command_encoder(&CommandEncoderDescriptor {
+                    label: Some("Export DoF Encoder"),
+                });
+                dp.run(
+                    &self.device,
+                    &self.queue,
+                    &mut dof_encoder,
+                    input_view,
+                    depth,
+                    0, // dedicated depth buffer: depth at word offset 0
+                    self.width,
+                    self.height,
+                    config.zoom,
+                    config.dof_focus_distance,
+                    config.dof_blur_strength,
+                );
+                self.queue.submit(std::iter::once(dof_encoder.finish()));
+                log::info!("High-res export: applied post-process DoF");
+                dof_holder = Some(dp);
+            } else {
+                log::warn!("High-res export: DoF requested but no depth buffer (solid rendering off) — skipped");
+            }
+        }
+        let base_accum_view: &TextureView = match &dof_holder {
+            Some(dp) => dp.output_view(),
+            None => shade_holder.as_ref().map(|(_, v)| v).unwrap_or(&accumulation_view),
+        };
 
         // ===== Step 3: Set up tonemap params =====
         // Calculate area and sample_density matching GPU formula

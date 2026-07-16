@@ -2112,7 +2112,18 @@ impl App {
                 final_config.camera_y,
                 final_config.camera_z,
             );
-            let pre_tonemap_view = if shade_ran {
+            // Post-process DoF (solid mode) sits between shade and
+            // density effects/tonemap.
+            let dof_ran = renderer.run_dof_pass(
+                &self.gpu.device,
+                &self.gpu.queue,
+                &mut render_encoder,
+                shade_ran,
+                final_config.zoom,
+            );
+            let pre_tonemap_view = if dof_ran {
+                renderer.dof_output_view()
+            } else if shade_ran {
                 renderer.shade_output_view()
             } else {
                 renderer.get_accumulation_view()
@@ -2132,13 +2143,13 @@ impl App {
             if density_effects_ran {
                 if let Some(density_output) = self.effect_chain.get_density_output() {
                     renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut render_encoder, density_output);
-                } else if shade_ran {
-                    renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut render_encoder, renderer.shade_output_view());
+                } else if dof_ran || shade_ran {
+                    renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut render_encoder, pre_tonemap_view);
                 } else {
                     renderer.tonemap_pass(&self.gpu.queue, &mut render_encoder);
                 }
-            } else if shade_ran {
-                renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut render_encoder, renderer.shade_output_view());
+            } else if dof_ran || shade_ran {
+                renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut render_encoder, pre_tonemap_view);
             } else {
                 renderer.tonemap_pass(&self.gpu.queue, &mut render_encoder);
             }
