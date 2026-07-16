@@ -208,6 +208,11 @@ pub fn render_menu_bar(
                     workspace.open_floating_panel(super::workspace::PanelType::View, ctx);
                 }
 
+                let solid_open = workspace.panel_exists(super::workspace::PanelType::SolidLighting);
+                if ui.selectable_label(solid_open, t!("menu.window_solid_lighting").as_ref()).clicked() {
+                    workspace.open_floating_panel(super::workspace::PanelType::SolidLighting, ctx);
+                }
+
                 // Transforms opens as floating window in docking system
                 let transforms_open = workspace.panel_exists(super::workspace::PanelType::Transforms);
                 if ui.selectable_label(transforms_open, t!("menu.window_transforms").as_ref()).clicked() {

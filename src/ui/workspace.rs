@@ -50,6 +50,8 @@ pub enum PanelType {
     Effects,
     /// Xaos editor panel (chaos-weighted transform transitions)
     XaosEditor,
+    /// Solid rendering & lighting (occlusion, shade pass, shadow maps)
+    SolidLighting,
     /// Signal panel (signals, audio, generators)
     Signal,
     /// Login dialog (email/password form)
@@ -86,6 +88,7 @@ impl std::fmt::Display for PanelType {
             PanelType::Effects => t!("panels.effects"),
             PanelType::XaosEditor => t!("panels.xaos_editor"),
             PanelType::Signal => t!("panels.signal"),
+            PanelType::SolidLighting => t!("panels.solid_lighting"),
             PanelType::LoginDialog => t!("login.title"),
             PanelType::SaveOnlineDialog => t!("api.save_dialog_title"),
             PanelType::Variations => t!("panels.variations"),
@@ -147,6 +150,7 @@ impl Workspace {
             PanelType::Effects => egui::vec2(350.0, 400.0),
             PanelType::XaosEditor => egui::vec2(500.0, 450.0),
             PanelType::Signal => egui::vec2(350.0, 450.0),
+            PanelType::SolidLighting => egui::vec2(350.0, 500.0),
             PanelType::LoginDialog => egui::vec2(380.0, 320.0),
             PanelType::SaveOnlineDialog => egui::vec2(400.0, 370.0),
             PanelType::Variations => egui::vec2(450.0, 500.0),

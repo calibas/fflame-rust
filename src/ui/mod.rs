@@ -23,6 +23,7 @@ mod performance;
 mod random_generator;
 pub mod response;
 mod settings;
+mod solid_panel;
 mod subflames;
 mod target_selector;
 mod tone_mapping;
