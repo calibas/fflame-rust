@@ -1221,6 +1221,7 @@ impl FlameRenderer {
             zoom,
             self.dof_focus_distance,
             self.dof_blur_strength,
+            self.surface_thickness,
         );
         true
     }
