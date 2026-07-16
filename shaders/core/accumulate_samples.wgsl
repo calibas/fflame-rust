@@ -78,7 +78,11 @@ struct AccumulateParams {
     full_width: u32,
     full_height: u32,
     shadow_count: u32,
-    _pad3: u32,
+    // Word offset of the 2-word occlusion-survival counter pair inside
+    // the shadow_maps binding (after the maps when they exist, 0 in the
+    // small stand-in buffer otherwise). See main_template.wgsl for why
+    // the renorm needs occlusion-only counters.
+    occ_stats_offset: u32,
     zoom: f32,
     rotation: f32,
     pan_x: f32,
@@ -213,9 +217,16 @@ fn accumulate_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let d_near = bitcast<f32>(near_bits);
         if (s.depth > d_near + ap.surface_thickness) {
             solid_weight = 1.0 - ap.solid_strength;
-            if (solid_weight <= 0.0) {
-                return;  // fully occluded — depth already recorded
-            }
+        }
+        // Occlusion-survival counters (subsampled, 4-bit fixed point) —
+        // must accumulate BEFORE the fully-occluded early-out so culled
+        // samples count as 0 (see main_template.wgsl).
+        if ((gid.x & 1023u) == 0u) {
+            atomicAdd(&shadow_maps[ap.occ_stats_offset + 0u], u32(round(solid_weight * 16.0)));
+            atomicAdd(&shadow_maps[ap.occ_stats_offset + 1u], 16u);
+        }
+        if (solid_weight <= 0.0) {
+            return;  // fully occluded — depth already recorded
         }
     }
 

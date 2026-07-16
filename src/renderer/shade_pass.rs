@@ -23,8 +23,8 @@ struct ShadeLight {
 }
 
 /// Mirrors WGSL `ShadeParams` (shade.wgsl) — 20 scalars + 4 camera
-/// vec4s + a scalar quad + shadow fit vec4 + a shadow scalar quad +
-/// 4 lights × 32 B = 320 bytes.
+/// vec4s + 2 scalar quads (shadow/ema/fog + background) + shadow fit
+/// vec4 + a shadow scalar quad + 4 lights × 32 B = 336 bytes.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct ShadeParams {
@@ -55,8 +55,12 @@ struct ShadeParams {
     cam_pos: [f32; 4],
     shadow_strength: f32,
     temporal_ema: f32,
-    _pad_sp0: f32,
-    _pad_sp1: f32,
+    fog_strength: f32,
+    fog_start: f32,
+    background_r: f32,
+    background_g: f32,
+    background_b: f32,
+    _pad_fog: f32,
     shadow_fit: [f32; 4],
     shadow_word_offset: u32,
     shadow_res: u32,
@@ -506,6 +510,9 @@ impl ShadePass {
         surface_thickness: f32,
         camera: (f32, f32, f32, [f32; 3]),
         shadow: Option<(u32, [f32; 3], f32)>,
+        // Post-lighting depth fog: (strength, start, background rgb).
+        // Pass strength 0 when the at-splat path owns fog.
+        fog: (f32, f32, [f32; 3]),
         temporal_ema: f32,
     ) {
         // Temporal blend ping-pong: write the back buffer while reading
@@ -534,6 +541,7 @@ impl ShadePass {
             self.height,
             camera,
             shadow,
+            fog,
             ema,
             Some(&output[self.output_front].1),
         );
@@ -573,6 +581,8 @@ impl ShadePass {
         // shadow-map lookup (world-space reconstruction).
         camera: (f32, f32, f32, [f32; 3]),
         shadow: Option<(u32, [f32; 3], f32)>,
+        // Post-lighting depth fog: (strength, start, background rgb).
+        fog: (f32, f32, [f32; 3]),
         temporal_ema: f32,
         prev_shade: Option<&TextureView>,
     ) {
@@ -642,8 +652,12 @@ impl ShadePass {
             cam_pos: [cam_pos[0], cam_pos[1], cam_pos[2], 0.0],
             shadow_strength: shading.shadow_strength,
             temporal_ema: if prev_shade.is_some() { temporal_ema.clamp(0.0, 0.95) } else { 0.0 },
-            _pad_sp0: 0.0,
-            _pad_sp1: 0.0,
+            fog_strength: fog.0,
+            fog_start: fog.1,
+            background_r: fog.2[0],
+            background_g: fog.2[1],
+            background_b: fog.2[2],
+            _pad_fog: 0.0,
             shadow_fit: match shadow {
                 Some((_, c, r)) => [c[0], c[1], c[2], r],
                 None => [0.0, 0.0, 0.0, 1.0],

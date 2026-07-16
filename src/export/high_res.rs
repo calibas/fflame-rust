@@ -205,6 +205,9 @@ pub struct HighResExporter {
     shadow_maps_buffer: Option<Buffer>,
     /// 16-byte stand-in for binding 3 when shadow maps are off.
     shadow_dummy_buffer: Buffer,
+    /// CPU-histogram path's exact occlusion counters (Σocc, Σ1);
+    /// None on the GPU-tiles path (counters live in the shadow buffer).
+    cpu_occ_stats: Option<(f64, f64)>,
     /// Frozen shadow fit (center, radius) — view-derived (the exporter
     /// has no bounds measurement).
     shadow_fit: ([f32; 3], f32),
@@ -1332,7 +1335,8 @@ impl HighResExporter {
         let shadow_maps_buffer = if shadow_wanted && tile_histograms_buffer.is_some() {
             Some(device.create_buffer(&BufferDescriptor {
                 label: Some("Export Shadow Maps"),
-                size: 4 * 1024 * 1024 * 4,
+                // + 8 bytes: occlusion-survival counter pair at the tail.
+                size: 4 * 1024 * 1024 * 4 + 8,
                 usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC,
                 mapped_at_creation: false,
             }))
@@ -1342,10 +1346,12 @@ impl HighResExporter {
             }
             None
         };
+        // Also the occlusion-counter home when shadow maps are absent —
+        // hence COPY_SRC.
         let shadow_dummy_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Export Shadow Dummy"),
             size: 16,
-            usage: BufferUsages::STORAGE,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
 
@@ -1394,6 +1400,7 @@ impl HighResExporter {
             shade_depth_buffer: None,
             shadow_maps_buffer,
             shadow_dummy_buffer,
+            cpu_occ_stats: None,
             shadow_fit,
             shadow_dirs,
             shadow_cam_rows,
@@ -1713,7 +1720,15 @@ impl HighResExporter {
                 camera_z: config.camera_z,
                 dof_focus_distance: config.dof_focus_distance,
                 dof_blur_strength: config.dof_blur_strength,
-                fog_strength: config.fog_strength,
+                fog_strength: if config.fog_strength > 0.0
+                    && config.solid_shading.active()
+                    && matches!(config.render_mode, crate::scene::transforms::RenderMode::ThreeD)
+                {
+                    // The shade pass owns fog (post-lighting).
+                    0.0
+                } else {
+                    config.fog_strength
+                },
                 fog_start: config.fog_start,
                 bits_per_transform: crate::gpu::buffers::bits_per_transform(config.flame.transforms.len() as u32),
                 path_map_style: config.path_map_style as u32,
@@ -1816,7 +1831,7 @@ impl HighResExporter {
                             full_width: self.width,
                             full_height: self.height,
                             shadow_count: if self.shadow_maps_buffer.is_some() { 4 } else { 0 },
-                            _pad3: 0,
+                            occ_stats_offset: if self.shadow_maps_buffer.is_some() { 4 * 1024 * 1024 } else { 0 },
                             zoom: self.shadow_view.0,
                             rotation: self.shadow_view.1,
                             pan_x: self.shadow_view.2,
@@ -1904,11 +1919,18 @@ impl HighResExporter {
                         let prime = dispatch == 0;
                         let solid_strength = self.solid_strength;
                         let surface_thickness = self.surface_thickness;
+                        // Occlusion-survival counters (exact on this
+                        // path): Σocc and Σ1 over plotted samples, for
+                        // the occlusion-only brightness renorm.
+                        let occ_num = std::sync::atomic::AtomicU64::new(0);
+                        let occ_den = std::sync::atomic::AtomicU64::new(0);
                         histogram
                             .par_chunks_mut(width_usize)
                             .zip(depth_near.par_chunks_mut(width_usize))
                             .enumerate()
                             .for_each(|(row_idx, (row_pixels, row_depth))| {
+                                let mut row_occ: u64 = 0;
+                                let mut row_n: u64 = 0;
                                 for sample in &row_samples[row_idx] {
                                     let x = sample.x as i32;
                                     if x >= 0 && x < width {
@@ -1920,11 +1942,15 @@ impl HighResExporter {
                                             continue;
                                         }
                                         let mut w = sample.weight;
+                                        let mut occ = 1.0f32;
                                         if sample.depth > row_depth[xi] + surface_thickness {
-                                            w *= 1.0 - solid_strength;
-                                            if w <= 0.0 {
-                                                continue;
-                                            }
+                                            occ = 1.0 - solid_strength;
+                                            w *= occ;
+                                        }
+                                        row_occ += (occ * 16.0).round() as u64;
+                                        row_n += 16;
+                                        if w <= 0.0 {
+                                            continue;
                                         }
                                         let pixel = &mut row_pixels[xi];
                                         let ws = color_scale_f * w;
@@ -1934,7 +1960,13 @@ impl HighResExporter {
                                         pixel.count += ws.floor() as f64 / cs;
                                     }
                                 }
+                                occ_num.fetch_add(row_occ, std::sync::atomic::Ordering::Relaxed);
+                                occ_den.fetch_add(row_n, std::sync::atomic::Ordering::Relaxed);
                             });
+                        let num = occ_num.load(std::sync::atomic::Ordering::Relaxed) as f64;
+                        let den = occ_den.load(std::sync::atomic::Ordering::Relaxed) as f64;
+                        let (pn, pd) = self.cpu_occ_stats.unwrap_or((0.0, 0.0));
+                        self.cpu_occ_stats = Some((pn + num, pd + den));
                     } else {
                     histogram
                         .par_chunks_mut(width_usize)
@@ -2007,14 +2039,23 @@ impl HighResExporter {
         // sample_density formula (Phase 8a).
         let total_iters_dispatched = num_dispatches * iterations_per_dispatch;
 
-        // Solid brightness renormalization (exact, CPU): accepted density
-        // over dispatched iterations — mirrors the interactive
-        // density-stats measurement.
+        // Solid brightness renormalization (exact): OCCLUSION-ONLY
+        // survival fraction from the dedicated counters — never the
+        // accumulated density, which folds artistic per-sample weights
+        // (far-fade, depth-density compensation) into the "culled"
+        // fraction and makes those dials shift global brightness.
         self.solid_density_fraction = if self.solid_enabled && self.solid_strength > 0.0 {
-            let accepted: f64 = histogram.par_iter().map(|p| p.count).sum();
-            let f = ((accepted / (total_iters_dispatched.max(1) as f64)) as f32).clamp(0.005, 1.0);
-            log::info!("High-res export: solid brightness renorm fraction {:.4}", f);
-            f
+            match self.read_occ_stats().await {
+                Some((num, den)) if den > 0.0 => {
+                    let f = ((num / den) as f32).clamp(0.005, 1.0);
+                    log::info!("High-res export: solid brightness renorm fraction {:.4} (occlusion-only)", f);
+                    f
+                }
+                _ => {
+                    log::warn!("High-res export: occlusion counters empty — brightness renorm skipped");
+                    1.0
+                }
+            }
         } else {
             1.0
         };
@@ -2109,6 +2150,43 @@ impl HighResExporter {
             }
         }
         self.shade_depth_buffer = Some(buf);
+    }
+
+    /// Occlusion-survival counter pair: GPU paths read the 2 words at
+    /// the tail of the shadow-maps buffer (or the stand-in); the CPU
+    /// path sums exactly during accumulation (`cpu_occ_stats`).
+    async fn read_occ_stats(&self) -> Option<(f64, f64)> {
+        if let Some((num, den)) = self.cpu_occ_stats {
+            return Some((num, den));
+        }
+        let (buf, word_off): (&Buffer, u64) = match &self.shadow_maps_buffer {
+            Some(b) => (b, 4 * 1024 * 1024),
+            None => (&self.shadow_dummy_buffer, 0),
+        };
+        let staging = self.device.create_buffer(&BufferDescriptor {
+            label: Some("Occ Stats Staging"),
+            size: 8,
+            usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut enc = self.device.create_command_encoder(&CommandEncoderDescriptor {
+            label: Some("Occ Stats Readback"),
+        });
+        enc.copy_buffer_to_buffer(buf, word_off * 4, &staging, 0, 8);
+        self.queue.submit(std::iter::once(enc.finish()));
+        let slice = staging.slice(..);
+        let (tx, rx) = futures::channel::oneshot::channel();
+        slice.map_async(MapMode::Read, move |result| {
+            tx.send(result).ok();
+        });
+        let _ = self.device.poll(PollType::Wait { submission_index: None, timeout: None });
+        rx.await.ok()?.ok()?;
+        let data = slice.get_mapped_range();
+        let num = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+        let den = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
+        drop(data);
+        staging.unmap();
+        Some((f64::from(num), f64::from(den)))
     }
 
     /// Read sample counter from GPU
@@ -2784,6 +2862,7 @@ impl HighResExporter {
                     self.shadow_maps_buffer.as_ref().map(|_| {
                         (self.width * self.height, self.shadow_fit.0, self.shadow_fit.1)
                     }),
+                    (config.fog_strength, config.fog_start, config.background_color),
                     0.0,
                     None,
                 );
@@ -3016,6 +3095,7 @@ impl HighResExporter {
                 self.shadow_maps_buffer.as_ref().map(|_| {
                     (self.width * self.height, self.shadow_fit.0, self.shadow_fit.1)
                 }),
+                (config.fog_strength, config.fog_start, config.background_color),
                 0.0,
                 None,
             );

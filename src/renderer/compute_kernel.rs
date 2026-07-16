@@ -238,7 +238,6 @@ pub struct FlameRenderer {
     shade_pass: crate::renderer::shade_pass::ShadePass, // Deferred shade pass (dispatched only when shading is active)
     dof_pass: crate::renderer::dof_pass::DofPass, // Post-process DoF (solid mode; at-splat DoF compiles out under SOLID)
     dof_dirty: bool, // DoF input (shade output / accumulator) changed since the last DoF dispatch
-    density_stats: crate::renderer::density_stats::DensityStats, // Accepted-density reduction (solid brightness renorm)
     solid_density_fraction: f32, // Measured accepted/dispatched fraction (1.0 = no correction); scales tonemap sample_density
     filter_radius: f32, // Spatial filter (Apo's `filter`): Gaussian sigma in pixels on histogram, 0 = off
     filter_blur_edges: f32, // Bilateral edge-handling [0..1]: 0 = preserve edges (default), 1 = uniform Gaussian
@@ -390,7 +389,6 @@ impl FlameRenderer {
             shade_pass: crate::renderer::shade_pass::ShadePass::new(device, width, height),
             dof_pass: crate::renderer::dof_pass::DofPass::new(device),
             dof_dirty: true,
-            density_stats: crate::renderer::density_stats::DensityStats::new(device),
             solid_density_fraction: 1.0,
             filter_radius: 0.0,
             filter_blur_edges: 0.0,
@@ -658,7 +656,7 @@ impl FlameRenderer {
             camera_z,
             dof_focus_distance: self.dof_focus_distance,
             dof_blur_strength: self.dof_blur_strength,
-            fog_strength: self.fog_strength,
+            fog_strength: self.atsplat_fog_strength(),
             fog_start: self.fog_start,
             bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
             path_map_style: self.path_map_style as u32,
@@ -1165,6 +1163,13 @@ impl FlameRenderer {
             } else {
                 None
             },
+            // Post-lighting fog (owned by the shade pass when active).
+            if self.fog_in_shade() {
+                (self.fog_strength, self.fog_start,
+                 [self.background_r, self.background_g, self.background_b])
+            } else {
+                (0.0, 0.0, [0.0; 3])
+            },
             // Temporal smoothing of the shade output: the shading tracks
             // genuinely drifting data during accumulation; raw per-frame
             // it strobes. Overwrite mode gets 0 — every frame is a fresh
@@ -1363,6 +1368,23 @@ impl FlameRenderer {
         &self.solid_shading
     }
 
+    /// Whether the SHADE pass owns depth fog (post-lighting) instead of
+    /// the at-splat path: fog + active lighting + 3D. The GpuParams
+    /// writes zero the at-splat fog when true; flipping this needs an
+    /// accumulation reset (gpu_updates escalates it) because at-splat
+    /// fog is baked into accumulated samples.
+    fn fog_in_shade(&self) -> bool {
+        self.fog_strength > 0.0
+            && self.solid_shading.active()
+            && matches!(self.current_render_mode, crate::scene::transforms::RenderMode::ThreeD)
+    }
+
+    /// At-splat fog strength for GpuParams: zero when the shade pass
+    /// owns fog.
+    fn atsplat_fog_strength(&self) -> f32 {
+        if self.fog_in_shade() { 0.0 } else { self.fog_strength }
+    }
+
     /// Whether shadow maps should capture for the current settings.
     pub fn shadow_capture_wanted(&self) -> bool {
         self.solid_shading.shadow_strength > 0.0
@@ -1443,10 +1465,11 @@ impl FlameRenderer {
     /// pumps the async measurement and encodes a fresh reduction every N
     /// frames while occlusion is actively culling. Call once per frame,
     /// after accumulate and before tonemap.
-    pub fn update_density_stats(&mut self, device: &Device, queue: &Queue, encoder: &mut CommandEncoder) {
+    pub fn update_density_stats(&mut self, device: &Device, _queue: &Queue, encoder: &mut CommandEncoder) {
         // Attractor-bounds tick (shadow-map auto-fit): async readback of
         // the 8-word tail. Applied to `measured_bounds` immediately; the
         // frozen fit only picks it up at the next reset (frozen per run).
+        let mut occ_words: Option<(u32, u32)> = None;
         if self.buffers.solid_depth_region {
             let off = self.bounds_tail_offset();
             if let Some(words) = self.bounds_stats.tick(device, encoder, &self.buffers.histogram_buffer, off) {
@@ -1454,6 +1477,7 @@ impl FlameRenderer {
                     self.measured_bounds = Some(b);
                     self.bounds_dirty = true;
                 }
+                occ_words = Some((words[6], words[7]));
             }
         }
         let active = self.solid_strength > 0.0
@@ -1463,13 +1487,20 @@ impl FlameRenderer {
             self.solid_density_fraction = 1.0;
             return;
         }
-        let accum_view = self.buffers.current_accumulation_view();
-        if let Some(sum) = self.density_stats.tick(device, queue, encoder, accum_view, self.width, self.height) {
-            let dispatched = (self.samples_in_buffer as f32).max(1.0);
-            let measured = (sum / dispatched).clamp(0.005, 1.0);
-            // EMA: brightness scalar — smooth over the measurement lag so
-            // convergence-driven fraction drift never pumps the image.
-            self.solid_density_fraction = self.solid_density_fraction * 0.7 + measured * 0.3;
+        // OCCLUSION-ONLY survival fraction from the tail counters (see
+        // main_template.wgsl) — never accumulated density, which folds
+        // artistic per-sample weights (far-fade, depth-density comp)
+        // into the "culled" fraction and makes those dials shift
+        // global brightness (field-audited).
+        if let Some((num, den)) = occ_words {
+            // The counters saturate around 17B iterations; freeze the
+            // fraction rather than let a saturated ratio drift.
+            if den > 0 && den < 3_000_000_000 {
+                let measured = (num as f32 / den as f32).clamp(0.005, 1.0);
+                // EMA: brightness scalar — smooth over the measurement
+                // lag so fraction drift never pumps the image.
+                self.solid_density_fraction = self.solid_density_fraction * 0.7 + measured * 0.3;
+            }
         }
     }
 
@@ -1483,14 +1514,16 @@ impl FlameRenderer {
             self.solid_density_fraction = 1.0;
             return;
         }
-        let accum_view = self.buffers.current_accumulation_view();
-        if let Some(sum) = self.density_stats.measure_blocking(device, queue, accum_view, self.width, self.height) {
-            let dispatched = (self.samples_in_buffer as f32).max(1.0);
-            self.solid_density_fraction = (sum / dispatched).clamp(0.005, 1.0);
-            log::info!(
-                "solid brightness renorm: accepted/dispatched = {:.4}",
-                self.solid_density_fraction
-            );
+        let off = self.bounds_tail_offset();
+        if let Some(words) = self.bounds_stats.read_blocking(device, queue, &self.buffers.histogram_buffer, off) {
+            let (num, den) = (words[6], words[7]);
+            if den > 0 {
+                self.solid_density_fraction = (num as f32 / den as f32).clamp(0.005, 1.0);
+                log::info!(
+                    "solid brightness renorm: occlusion survival = {:.4}",
+                    self.solid_density_fraction
+                );
+            }
         }
     }
 
@@ -1664,7 +1697,14 @@ impl FlameRenderer {
             camera_z: config.camera_z,
             dof_focus_distance: config.dof_focus_distance,
             dof_blur_strength: config.dof_blur_strength,
-            fog_strength: config.fog_strength,
+            fog_strength: if config.fog_strength > 0.0
+                && config.solid_shading.active()
+                && matches!(config.render_mode, crate::scene::transforms::RenderMode::ThreeD)
+            {
+                0.0
+            } else {
+                config.fog_strength
+            },
             fog_start: config.fog_start,
             bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
             path_map_style: self.path_map_style as u32,
@@ -1850,7 +1890,7 @@ impl FlameRenderer {
             camera_z,
             dof_focus_distance: self.dof_focus_distance,
             dof_blur_strength: self.dof_blur_strength,
-            fog_strength: self.fog_strength,
+            fog_strength: self.atsplat_fog_strength(),
             fog_start: self.fog_start,
             bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
             path_map_style: self.path_map_style as u32,
@@ -2102,7 +2142,7 @@ impl FlameRenderer {
             camera_z,
             dof_focus_distance: self.dof_focus_distance,
             dof_blur_strength: self.dof_blur_strength,
-            fog_strength: self.fog_strength,
+            fog_strength: self.atsplat_fog_strength(),
             fog_start: self.fog_start,
             bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
             path_map_style: self.path_map_style as u32,
@@ -2463,7 +2503,7 @@ impl FlameRenderer {
             camera_z,
             dof_focus_distance: self.dof_focus_distance,
             dof_blur_strength: self.dof_blur_strength,
-            fog_strength: self.fog_strength,
+            fog_strength: self.atsplat_fog_strength(),
             fog_start: self.fog_start,
             bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
             path_map_style: self.path_map_style as u32,
