@@ -131,6 +131,7 @@ impl App {
                 // requirement (lighting toggled on/off while
                 // solid_strength is 0), the histogram layout and shader
                 // must change — escalate to the full flame update.
+                let mut shading_forced_reset = false;
                 if actions.update_shading && !actions.update_flame {
                     let want_capture = (update_config.solid_strength > 0.0
                         || update_config.solid_shading.active())
@@ -149,9 +150,38 @@ impl App {
                             .lights
                             .iter()
                             .any(|l| l.enabled && l.intensity > 0.0);
+                    // Shadow maps are BAKED from geometry + light
+                    // direction: rotating a light (azimuth/elevation) or
+                    // toggling one invalidates its map, which only
+                    // re-accumulation can rebuild (field report: moved
+                    // lights kept stale shadows until a manual
+                    // re-render). Pure intensity scaling doesn't touch
+                    // the maps and stays a no-reset edit.
+                    let lights_moved_under_shadows = {
+                        let old_sh = renderer.solid_shading();
+                        let shadows_involved = want_capture
+                            && (old_sh.shadow_strength > 0.0
+                                || update_config.solid_shading.shadow_strength > 0.0);
+                        shadows_involved
+                            && old_sh
+                                .lights
+                                .iter()
+                                .zip(update_config.solid_shading.lights.iter())
+                                .any(|(a, b)| {
+                                    a.enabled != b.enabled
+                                        || a.azimuth != b.azimuth
+                                        || a.elevation != b.elevation
+                                        || (a.intensity > 0.0) != (b.intensity > 0.0)
+                                })
+                    };
                     if want_capture != renderer.has_solid_depth_region()
                         || want_shadows != renderer.shadow_capture_wanted()
+                        || lights_moved_under_shadows
                     {
+                        // Baked GPU state (shadow maps, depth region)
+                        // must rebuild from scratch — force the full
+                        // accumulation reset below.
+                        shading_forced_reset = true;
                         renderer.update_flame(
                             &self.gpu.device,
                             &self.gpu.queue,
@@ -293,7 +323,8 @@ impl App {
                 }
 
                 // Handle accumulation reset based on change type
-                let should_full_reset = actions.reset_accumulation || view_changed_by_keyboard;
+                let should_full_reset =
+                    actions.reset_accumulation || view_changed_by_keyboard || shading_forced_reset;
                 let has_view_or_color_change = actions.update_view || actions.update_palette;
 
                 if should_full_reset {
