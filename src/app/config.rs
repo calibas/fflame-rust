@@ -279,6 +279,9 @@ impl App {
         } else {
             (out_width, out_height)
         };
+        // Metadata embeds the ORIGINAL config for exact round-trip; the
+        // scaled copy (2× filter radius, 4× iterations) only renders.
+        let meta_config = config.clone();
         let config = if supersample {
             crate::export::supersample::scale_config_for_supersample(&config)
         } else {
@@ -318,7 +321,7 @@ impl App {
                 config.max_iterations,
                 if hist_size > max_binding { " — exceeds one binding" } else { " — long render, background + progress" },
             );
-            self.export_high_res_background(transparent, premultiplied, config, render_width, render_height, supersample);
+            self.export_high_res_background(transparent, premultiplied, config, meta_config, render_width, render_height, supersample);
             return;
         }
 
@@ -355,8 +358,8 @@ impl App {
                     output.total_iterations,
                     output.render_time_ms,
                     self.config_manager.system_settings().iterations_per_thread,
-                    config.speed_factor,
-                    &config,
+                    meta_config.speed_factor,
+                    &meta_config,
                 );
 
                 match crate::renderer::compute_kernel::encode_png_from_rgba(
@@ -410,7 +413,7 @@ impl App {
     /// when it doesn't. Used for both >binding sizes and long renders that want
     /// progress without freezing the UI.
     #[cfg(not(target_arch = "wasm32"))]
-    fn export_high_res_background(&mut self, transparent: bool, premultiplied: bool, config: FractalConfig, render_width: u32, render_height: u32, supersample: bool) {
+    fn export_high_res_background(&mut self, transparent: bool, premultiplied: bool, config: FractalConfig, meta_config: FractalConfig, render_width: u32, render_height: u32, supersample: bool) {
         use crate::export::HighResExporter;
         use crate::ui::{ExportKind, UiReporter};
 
@@ -490,7 +493,7 @@ impl App {
                 total_export_time_ms,
                 iterations_per_thread,
                 speed_factor,
-                &config,
+                &meta_config,
             );
 
             let png_data = match crate::renderer::compute_kernel::encode_png_from_rgba(out_width, out_height, rgba_data, Some(metadata)) {

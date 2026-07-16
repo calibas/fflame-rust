@@ -18,12 +18,13 @@
 //! legitimate bright detail spans the quad and keeps its median high,
 //! so it passes untouched.
 //!
-//! Known trade-offs (inherent, documented in the panel tooltip):
-//! - 4× buckets at the same iteration count ⇒ each holds ¼ the
-//!   density, so dim regions need more iterations for equal quality.
-//! - Memory is 4× pixels; the export panel budget accounts for it and
-//!   the oversized-render fallbacks (tiled / CPU histogram) engage as
-//!   usual.
+//! Cost model: iterations scale ×4 automatically (see
+//! `scale_config_for_supersample`) so each 2× bucket holds the same
+//! sample density as a 1× pixel — exact brightness parity with the 1×
+//! render, and the downsample averages away noise instead of averaging
+//! away the concave-log bias. Memory is 4× pixels; the export panel
+//! budget accounts for it and the oversized-render fallbacks (tiled /
+//! CPU histogram) engage as usual.
 
 use crate::config::FractalConfig;
 
@@ -34,13 +35,26 @@ const FIREFLY_RATIO: f32 = 4.0;
 /// near-black quads with ordinary speckle noise aren't crushed.
 const FIREFLY_OFFSET: f32 = 64.0;
 
-/// Per-parameter config adjustments for the 2× render. Everything in
-/// world/relative units is resolution-independent already; the spatial
-/// filter radius is expressed in HISTOGRAM PIXELS, so it must double to
-/// keep the same physical footprint on the final image.
+/// Per-parameter config adjustments for the 2× render.
+///
+/// - `filter_radius` is in HISTOGRAM PIXELS — doubles to keep the same
+///   physical footprint on the final image.
+/// - `max_iterations` QUADRUPLES: 4× the buckets must each hold the
+///   same sample density as a 1× pixel, or the concave log tonemap
+///   turns the extra per-bucket noise into a brightness LOSS (Jensen's
+///   inequality — field-reported as unacceptable dimming, worst in dim
+///   regions where buckets are noisiest). With ×4 iterations each 2×
+///   bucket is statistically identical to a 1× pixel, so brightness
+///   matches exactly and the downsample averages away noise instead of
+///   averaging away bias. This IS the advertised ~4× cost of 2× AA.
+///
+/// Everything else is world/relative units and resolution-independent.
+/// Callers must embed the ORIGINAL config in PNG metadata, not this
+/// scaled copy.
 pub fn scale_config_for_supersample(config: &FractalConfig) -> FractalConfig {
     let mut c = config.clone();
     c.filter_radius *= 2.0;
+    c.max_iterations = c.max_iterations.saturating_mul(4);
     c
 }
 
@@ -190,9 +204,12 @@ mod tests {
     }
 
     #[test]
-    fn filter_radius_scales() {
+    fn filter_radius_and_iterations_scale() {
         let mut c = FractalConfig::default();
         c.filter_radius = 1.5;
-        assert_eq!(scale_config_for_supersample(&c).filter_radius, 3.0);
+        c.max_iterations = 1_000_000;
+        let s = scale_config_for_supersample(&c);
+        assert_eq!(s.filter_radius, 3.0);
+        assert_eq!(s.max_iterations, 4_000_000);
     }
 }
