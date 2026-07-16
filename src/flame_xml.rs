@@ -135,6 +135,10 @@ fn parse_flame_element(
     // conversion so a JWF flame opens at the same magnification it
     // would in JWF.
     let mut cam_zoom_factor: f32 = 1.0;
+    // JWildfire solid-rendering block (`sld_render_*`): collected
+    // verbatim here, mapped onto our splat-native solid model after
+    // the attribute loop (see solid_shading_from_sld).
+    let mut sld_attrs: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     let mut saturation: f32 = crate::config::defaults::DEFAULT_SATURATION;
     let mut white_level: f32 = crate::config::defaults::DEFAULT_WHITE_LEVEL;
 
@@ -253,6 +257,9 @@ fn parse_flame_element(
             "soloxform" => {
                 // Solo transform index (0-indexed in Apophysis)
                 solo_xform = value.parse::<usize>().ok();
+            }
+            name if name.starts_with("sld_render_") => {
+                sld_attrs.insert(name.to_string(), value.to_string());
             }
             _ => {} // Ignore unknown attributes for now
         }
@@ -467,16 +474,20 @@ fn parse_flame_element(
         ToneCurve::linear()
     };
 
+    let solid_import = solid_shading_from_sld(&sld_attrs);
+
     Ok(FractalConfig {
         flame,
         // Scene-level render state (config-level since v3).
         render_mode,
         perspective_strength,
         preserve_z,
-        // Solid rendering is ours-only — .flame XML never carries it.
-        solid_strength: crate::config::DEFAULT_SOLID_STRENGTH,
+        // JWildfire's `sld_render_*` block maps onto our splat-native
+        // solid model where a correspondence exists (lights, material,
+        // AO intensity, shadows); everything else keeps our defaults.
+        solid_strength: solid_import.as_ref().map_or(crate::config::DEFAULT_SOLID_STRENGTH, |(ss, _)| *ss),
         surface_thickness: crate::config::DEFAULT_SURFACE_THICKNESS,
-        solid_shading: crate::config::SolidShadingSettings::default(),
+        solid_shading: solid_import.map_or_else(crate::config::SolidShadingSettings::default, |(_, sh)| sh),
         // Our own extensions; no .flame XML attribute (see FractalConfig docs).
         depth_density_compensation: 0.0,
         far_density_fade: 0.0,
@@ -1150,6 +1161,173 @@ fn eval_rational_bezier(t: f32, control_points: &[(f32, f32, f32); 4]) -> Option
 ///   - Variation **init params** (`_dx`, `_dy`, etc.) — these are
 ///     derived values our GPU recomputes on load, not user-facing, and
 ///     Apo doesn't have the concept.
+/// Map JWildfire's `sld_render_*` attribute block onto our solid
+/// rendering + lighting model. Returns None unless
+/// `sld_render_enabled="1"`.
+///
+/// Correspondences (from a JWildfire 8.50 solid flame; unknown
+/// semantics deliberately NOT guessed):
+/// - material 0 ambient/diffuse/phong/phong_size → our
+///   ambient/diffuse/specular/shininess (single global material; the
+///   per-xform `material` index has no home here).
+/// - `sld_render_ao_intensity` → ssao_strength when AO is enabled.
+///   JWF's AO radius/samples/falloff describe a different sampler —
+///   our screen-space radius keeps its default.
+/// - lights: `altitude`/`azimuth` are degrees → our
+///   elevation/azimuth; intensity + rgb map directly. JWF has no
+///   per-light enabled flag — existence up to the count is enabled.
+///   We hold 4 light slots; extra JWF lights are dropped with a warn.
+/// - shadows: any light with `shadows=1` (and shadow_type != OFF)
+///   turns our shadow maps on; strength = max of those lights'
+///   `shadow_intensity` (ours is global, JWF's per-light).
+/// - JWF solid is a hard surface: solid_strength = 1,
+///   shading_strength = 1.
+///
+/// Note the JWildfire-side attribute typos, preserved faithfully:
+/// `sld_render_ligtht_count` (light count) — we accept the corrected
+/// spelling too in case a future JWF fixes it.
+fn solid_shading_from_sld(
+    attrs: &std::collections::HashMap<String, String>,
+) -> Option<(f32, crate::config::SolidShadingSettings)> {
+    if attrs.get("sld_render_enabled").map(String::as_str) != Some("1") {
+        return None;
+    }
+    let getf = |k: &str| attrs.get(k).and_then(|v| v.parse::<f32>().ok());
+
+    let mut sh = crate::config::SolidShadingSettings::default();
+    sh.shading_strength = 1.0;
+    if let Some(v) = getf("sld_render_material_ambient0") {
+        sh.ambient = v.clamp(0.0, 1.0);
+    }
+    if let Some(v) = getf("sld_render_material_diffuse0") {
+        sh.diffuse = v.clamp(0.0, 2.0);
+    }
+    if let Some(v) = getf("sld_render_material_phong0") {
+        sh.specular = v.clamp(0.0, 2.0);
+    }
+    if let Some(v) = getf("sld_render_material_phong_size0") {
+        sh.shininess = v.clamp(1.0, 128.0);
+    }
+    let ao_enabled = attrs.get("sld_render_ao_enabled").map(String::as_str) == Some("1");
+    sh.ssao_strength = if ao_enabled {
+        getf("sld_render_ao_intensity").unwrap_or(0.6).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+
+    // JWF typo: `ligtht`. Accept the corrected spelling too.
+    let count = attrs
+        .get("sld_render_ligtht_count")
+        .or_else(|| attrs.get("sld_render_light_count"))
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(0);
+    if count > 4 {
+        log::warn!("JWF solid import: {} lights, keeping the first 4", count);
+    }
+    let shadow_off = attrs.get("sld_render_shadow_type").map(String::as_str) == Some("OFF");
+    let mut shadow_strength = 0.0f32;
+    for i in 0..4 {
+        let light = &mut sh.lights[i];
+        if i >= count {
+            light.enabled = false;
+            continue;
+        }
+        light.enabled = true;
+        if let Some(v) = getf(&format!("sld_render_light_azimuth{i}")) {
+            light.azimuth = v;
+        }
+        if let Some(v) = getf(&format!("sld_render_light_altitude{i}")) {
+            light.elevation = v.clamp(-90.0, 90.0);
+        }
+        if let Some(v) = getf(&format!("sld_render_light_intensity{i}")) {
+            light.intensity = v.max(0.0);
+        }
+        light.color = [
+            getf(&format!("sld_render_light_red{i}")).unwrap_or(1.0).clamp(0.0, 1.0),
+            getf(&format!("sld_render_light_green{i}")).unwrap_or(1.0).clamp(0.0, 1.0),
+            getf(&format!("sld_render_light_blue{i}")).unwrap_or(1.0).clamp(0.0, 1.0),
+        ];
+        let casts = attrs
+            .get(&format!("sld_render_light_shadows{i}"))
+            .map(String::as_str)
+            == Some("1");
+        if casts && !shadow_off {
+            let intensity = getf(&format!("sld_render_light_shadow_intensity{i}")).unwrap_or(0.8);
+            shadow_strength = shadow_strength.max(intensity.clamp(0.0, 1.0));
+        }
+    }
+    sh.shadow_strength = shadow_strength;
+
+    Some((1.0, sh))
+}
+
+/// Write our solid rendering + lighting as JWildfire's `sld_render_*`
+/// block (inverse of `solid_shading_from_sld`). Only enabled lights
+/// are exported (JWF has no per-light enabled flag — only a count), so
+/// they renumber to 0..n. The material's unmapped attributes get JWF's
+/// own defaults so JWF 8.50 parses the block exactly as it writes it —
+/// including its `ligtht`/`mappping`/`diif` attribute-name typos.
+fn write_solid_rendering(out: &mut String, config: &FractalConfig) {
+    let active = matches!(config.render_mode, crate::scene::transforms::RenderMode::ThreeD)
+        && (config.solid_strength > 0.0 || config.solid_shading.active());
+    if !active {
+        return;
+    }
+    let sh = &config.solid_shading;
+    out.push_str(" sld_render_enabled=\"1\"");
+    out.push_str(&format!(
+        " sld_render_ao_enabled=\"{}\"",
+        u8::from(sh.ssao_strength > 0.0)
+    ));
+    if sh.ssao_strength > 0.0 {
+        out.push_str(&format!(" sld_render_ao_intensity=\"{}\"", fmt_f32(sh.ssao_strength)));
+    }
+    let shadows_on = sh.shadow_strength > 0.0;
+    out.push_str(&format!(
+        " sld_render_shadow_type=\"{}\"",
+        if shadows_on { "FAST" } else { "OFF" }
+    ));
+    if shadows_on {
+        // Our splat-resolution maps are 1024² per light.
+        out.push_str(" sld_render_shadowmap_size=\"1024\"");
+    }
+    out.push_str(" sld_render_material_count=\"1\"");
+    out.push_str(&format!(" sld_render_material_ambient0=\"{}\"", fmt_f32(sh.ambient)));
+    out.push_str(&format!(" sld_render_material_diffuse0=\"{}\"", fmt_f32(sh.diffuse)));
+    out.push_str(&format!(" sld_render_material_phong0=\"{}\"", fmt_f32(sh.specular)));
+    out.push_str(&format!(" sld_render_material_phong_size0=\"{}\"", fmt_f32(sh.shininess)));
+    // JWF defaults for the material attrs we don't model (specular
+    // color, reflection map, diffuse response) — written so JWF's
+    // parser sees a complete material.
+    out.push_str(" sld_render_material_phong_red0=\"1.0\"");
+    out.push_str(" sld_render_material_phong_green0=\"1.0\"");
+    out.push_str(" sld_render_material_phong_blue0=\"1.0\"");
+    out.push_str(" sld_render_material_refl_map_intensity0=\"0.5\"");
+    out.push_str(" sld_render_material_refl_map_filename0=\"\"");
+    out.push_str(" sld_render_material_refl_mappping0=\"BLINN_NEWELL\"");
+    out.push_str(" sld_render_material_light_diif_func0=\"COSA_SQUARE\"");
+
+    let enabled: Vec<&crate::config::SolidLight> =
+        sh.lights.iter().filter(|l| l.enabled && l.intensity > 0.0).collect();
+    out.push_str(&format!(" sld_render_ligtht_count=\"{}\"", enabled.len()));
+    for (i, l) in enabled.iter().enumerate() {
+        out.push_str(&format!(" sld_render_light_altitude{i}=\"{}\"", fmt_f32(l.elevation)));
+        out.push_str(&format!(" sld_render_light_azimuth{i}=\"{}\"", fmt_f32(l.azimuth)));
+        out.push_str(&format!(" sld_render_light_intensity{i}=\"{}\"", fmt_f32(l.intensity)));
+        out.push_str(&format!(" sld_render_light_red{i}=\"{}\"", fmt_f32(l.color[0])));
+        out.push_str(&format!(" sld_render_light_green{i}=\"{}\"", fmt_f32(l.color[1])));
+        out.push_str(&format!(" sld_render_light_blue{i}=\"{}\"", fmt_f32(l.color[2])));
+        out.push_str(&format!(
+            " sld_render_light_shadows{i}=\"{}\"",
+            u8::from(shadows_on)
+        ));
+        out.push_str(&format!(
+            " sld_render_light_shadow_intensity{i}=\"{}\"",
+            fmt_f32(sh.shadow_strength)
+        ));
+    }
+}
+
 pub fn write_flame_xml(config: &FractalConfig) -> String {
     let mut out = String::with_capacity(8192);
     out.push_str("<flames name=\"");
@@ -1252,6 +1430,8 @@ fn write_single_flame(out: &mut String, config: &FractalConfig, flame: &Flame) {
     if config.dof_blur_strength.abs() > 1e-6 {
         out.push_str(&format!(" cam_dof=\"{}\"", fmt_f32(config.dof_blur_strength)));
     }
+    // JWildfire solid rendering + lighting (sld_render_* block).
+    write_solid_rendering(out, config);
     // Standard Apo attrs that the importer reads.
     out.push_str(" oversample=\"1\"");
     if config.filter_radius.abs() > 1e-6 {
@@ -2479,6 +2659,59 @@ mod tests {
         assert!((xaos[0][1] - 0.5).abs() < 1e-6);
         assert!((xaos[1][0] - 0.0).abs() < 1e-6);
         assert!((xaos[1][1] - 1.0).abs() < 1e-6);
+    }
+
+    /// JWildfire `sld_render_*` block (attribute names verbatim from a
+    /// JWF 8.50 solid flame, including the `ligtht` typo): import maps
+    /// onto solid_strength + SolidShadingSettings; export round-trips.
+    #[test]
+    fn jwf_solid_rendering_roundtrip() {
+        let xml = r#"<flame name="Solid" size="800 600" center="0 0" scale="200" cam_pitch="0.5" sld_render_enabled="1" sld_render_ao_enabled="1" sld_render_ao_intensity="0.6" sld_render_shadow_type="FAST" sld_render_shadowmap_size="4096" sld_render_material_count="1" sld_render_material_diffuse0="0.42" sld_render_material_ambient0="0.71" sld_render_material_phong0="0.75" sld_render_material_phong_size0="4.5" sld_render_ligtht_count="2" sld_render_light_altitude0="39.7" sld_render_light_azimuth0="3.44" sld_render_light_intensity0="0.8" sld_render_light_red0="1.0" sld_render_light_green0="0.9" sld_render_light_blue0="0.8" sld_render_light_shadows0="1" sld_render_light_shadow_intensity0="0.8" sld_render_light_altitude1="64.0" sld_render_light_azimuth1="55.0" sld_render_light_intensity1="0.6" sld_render_light_red1="1.0" sld_render_light_green1="1.0" sld_render_light_blue1="1.0" sld_render_light_shadows1="0" sld_render_light_shadow_intensity1="0.7">
+  <xform weight="0.5" color="0" coefs="1 0 0 1 0 0"/>
+  <palette count="256" format="RGB">000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF</palette>
+</flame>"#;
+        let configs = parse_flame_xml(xml).expect("parse");
+        let c = &configs[0];
+        assert_eq!(c.solid_strength, 1.0);
+        let sh = &c.solid_shading;
+        assert_eq!(sh.shading_strength, 1.0);
+        assert!((sh.ambient - 0.71).abs() < 1e-5);
+        assert!((sh.diffuse - 0.42).abs() < 1e-5);
+        assert!((sh.specular - 0.75).abs() < 1e-5);
+        assert!((sh.shininess - 4.5).abs() < 1e-5);
+        assert!((sh.ssao_strength - 0.6).abs() < 1e-5);
+        // Light 0 casts shadows at 0.8; light 1 doesn't — global max.
+        assert!((sh.shadow_strength - 0.8).abs() < 1e-5);
+        assert!(sh.lights[0].enabled && sh.lights[1].enabled);
+        assert!(!sh.lights[2].enabled && !sh.lights[3].enabled);
+        assert!((sh.lights[0].elevation - 39.7).abs() < 1e-4);
+        assert!((sh.lights[0].azimuth - 3.44).abs() < 1e-4);
+        assert!((sh.lights[0].intensity - 0.8).abs() < 1e-5);
+        assert!((sh.lights[0].color[1] - 0.9).abs() < 1e-5);
+        assert!((sh.lights[1].elevation - 64.0).abs() < 1e-4);
+
+        // Export → re-import round-trip.
+        let exported = write_flame_xml(c);
+        assert!(exported.contains("sld_render_enabled=\"1\""), "missing sld block: {}", exported);
+        assert!(exported.contains("sld_render_ligtht_count=\"2\""), "JWF light-count typo must be preserved: {}", exported);
+        let back = &parse_flame_xml(&exported).expect("reparse")[0];
+        let bh = &back.solid_shading;
+        assert_eq!(back.solid_strength, 1.0);
+        assert!((bh.ambient - 0.71).abs() < 1e-4);
+        assert!((bh.diffuse - 0.42).abs() < 1e-4);
+        assert!((bh.specular - 0.75).abs() < 1e-4);
+        assert!((bh.shininess - 4.5).abs() < 1e-4);
+        assert!((bh.ssao_strength - 0.6).abs() < 1e-4);
+        assert!((bh.shadow_strength - 0.8).abs() < 1e-4);
+        assert!(bh.lights[0].enabled && bh.lights[1].enabled && !bh.lights[2].enabled);
+        assert!((bh.lights[1].azimuth - 55.0).abs() < 1e-4);
+
+        // Non-solid flames must not emit the block.
+        let mut plain = c.clone();
+        plain.solid_strength = 0.0;
+        plain.solid_shading = crate::config::SolidShadingSettings::default();
+        let plain_xml = write_flame_xml(&plain);
+        assert!(!plain_xml.contains("sld_render"), "plain flame leaked sld block");
     }
 
     /// Real-world Apo file (`output/ship-on-the-sea.flame`, exported
