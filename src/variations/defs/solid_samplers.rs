@@ -8,8 +8,8 @@
 //! plotted. These variations attack the root: they emit points with
 //! guaranteed baseline density and real radial THICKNESS, so the
 //! surface exists everywhere — in the histogram, in the depth buffer,
-//! and in the Phase 2 density volume (normals/AO/shadows/repair all get
-//! a closed shell to work with).
+//! and in the shadow maps (normals/AO/shadows all get a closed shell
+//! to work with).
 //!
 //! Original to this project (no JWildfire/Apophysis counterpart).
 //!
@@ -88,8 +88,8 @@ fn variation_solid_sphere(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: p
 /// point of a spherical shell/ball as GEOMETRY ONLY — it seals the
 /// solid-rendering depth buffer (so the existing splat-time occlusion
 /// culls everything behind the emitted surface, at pixel resolution)
-/// and, when the Density Volume is enabled, the volume too. The chaos
-/// game, the plotted position, and the image colors are completely
+/// and the light-space shadow maps. The chaos game, the plotted
+/// position, and the image colors are completely
 /// untouched (the variation contributes zero to the variation sum; its
 /// weight merely activates it). Pair with plain `bubble` on the same
 /// transform: bubble paints the surface texture, this makes the sphere

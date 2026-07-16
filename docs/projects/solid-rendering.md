@@ -263,7 +263,7 @@ blocking measurement before the final tonemap. Fraction clamped to
 (transparent renders verified bit-identical). Self-calibrating for any
 solid_strength — partial occlusion measures its own partial fraction.
 
-## Phase 2 — density volume
+## Phase 2 — density volume (RETIRED — removed 2026-07-16, see queue item 3)
 
 Deliverable: world-space ∇ρ normals (stable under camera motion, no
 screen-space edge artifacts), volumetric AO, shadow rays toward lights, and
@@ -413,7 +413,7 @@ passes JWF.
   exists today), firefly clamp against the local neighborhood in the
   shade pass.
 
-## Phase 3 — volume-primary solid mode (IN PROGRESS)
+## Phase 3 — volume-primary solid mode (RETIRED — volume removed 2026-07-16)
 
 Decision (2026-07-12, after four field-feedback rounds on Phase 2): the
 depth-buffer renderer consulting the volume by rules was the inverted
@@ -575,10 +575,21 @@ Stage B (NEXT):
    compensation and far-density fade (per-sample weights interact with
    occlusion culling and the brightness renorm — verify no double
    counting).
-3. Density volume final disposition: now optional everywhere
-   (occlusion = depth culling, shadows = maps, AO/normals =
-   screen-space). Decide: keep as experimental toggle for gradient
-   normals / volumetric AO / haze, or retire the march compositor.
+3. Density volume final disposition: REMOVED (2026-07-16, user
+   decision). Occlusion = depth culling, shadows = light-space maps,
+   AO/normals = screen-space — the voxel grid no longer served any
+   feature at acceptable quality, and Volume Extent was the single
+   biggest performance drag (fine sparse grids defeat the march
+   early-out). Deleted: VOLUME shader flag + splat block,
+   volume_mip.wgsl, the shade march + voxel helpers, density-volume
+   buffer, VolumeEnabled/Extent/AutoFit/Closing config paths + UI.
+   Kept: attractor-bounds machinery (now feeds the shadow-map
+   auto-fit), sphere_volume / VolumeSideEmit (splats depth + shadow
+   maps directly). Bounds recording moved from the VOLUME block into
+   the SOLID block, so shadow auto-fit works for every solid flame.
+   Verified: volume-off scenes render byte-identical pre/post
+   removal; solid-volume regression scene repurposed as
+   solid-shadows.
 4. AA / supersampling quality pass: 2× supersampled export (render
    internal buffers at 2×, box-downsample before PNG) + firefly clamp
    in the shade pass. flam3-style oversample+filter is the reference.

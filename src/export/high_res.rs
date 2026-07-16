@@ -1725,14 +1725,6 @@ impl HighResExporter {
                 background_g: config.background_color[1],
                 background_b: config.background_color[2],
                 post_symmetry: (&config.flame.post_symmetry).into(),
-                // VOLUME is gated to the direct-histogram path; the
-                // sample-emit exporter never compiles it.
-                volume_dim: 0,
-                volume_extent: 0.0,
-                volume_center_x: 0.0,
-                volume_center_y: 0.0,
-                volume_center_z: 0.0,
-                _pad_volume: [0; 3],
                 // No shadow maps on the tiled sample-emit path (v1).
                 shadow_center_x: 0.0,
                 shadow_center_y: 0.0,
@@ -2775,7 +2767,6 @@ impl HighResExporter {
                     config.pan_y,
                     config.perspective_strength,
                     self.surface_thickness,
-                    self.solid_strength,
                     self.width,
                     self.height,
                     0,
@@ -2783,9 +2774,6 @@ impl HighResExporter {
                     sh,
                     (config.camera_rotation_x, config.camera_rotation_y, config.camera_bank,
                      [config.camera_x, config.camera_y, config.camera_z]),
-                    // Density volume rides the direct-histogram path only;
-                    // the tiled sample-emit exporter never builds one.
-                    None,
                     self.shadow_maps_buffer.as_ref().map(|_| {
                         (self.width * self.height, self.shadow_fit.0, self.shadow_fit.1)
                     }),
@@ -3011,7 +2999,6 @@ impl HighResExporter {
                 config.pan_y,
                 config.perspective_strength,
                 self.surface_thickness,
-                self.solid_strength,
                 self.width,
                 self.height,
                 0,
@@ -3019,8 +3006,6 @@ impl HighResExporter {
                 self.height,
                 (config.camera_rotation_x, config.camera_rotation_y, config.camera_bank,
                  [config.camera_x, config.camera_y, config.camera_z]),
-                // No volume on the exporter path (see strip shade above).
-                None,
                 self.shadow_maps_buffer.as_ref().map(|_| {
                     (self.width * self.height, self.shadow_fit.0, self.shadow_fit.1)
                 }),

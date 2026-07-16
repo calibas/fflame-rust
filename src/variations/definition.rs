@@ -122,28 +122,17 @@ pub enum Feature {
     /// is a discarded local — hiding inside a subflame is a no-op in v1.)
     CanHide,
 
-    /// The variation can mark an iteration's sample as VOLUME-ONLY: it
-    /// splats into the solid-rendering density volume (sealing geometry
-    /// for occlusion / lighting / shadows) but never into the image
-    /// histogram — so surface-fill samples don't dilute the image's
-    /// colors. The variation sets the per-thread private flag
-    /// `volume_fill_flag = true;` (declared by the builder when any
-    /// active variation lists this feature). Outside solid-volume
-    /// rendering (2D, volume off, sample-emit exports) such samples are
-    /// dropped entirely: fill only means something when a volume exists.
-    VolumeFill,
-
-    /// The variation emits an ADDITIONAL volume-only point as a pure
+    /// The variation emits an ADDITIONAL depth-only point as a pure
     /// side effect — the chaos game, the plotted position, and the
     /// image colors are completely untouched (the variation contributes
     /// zero to the sum; its weight only activates it). Each iteration
     /// the variation writes the side point to the builder-emitted
     /// per-thread `volume_side_point` and sets `volume_side_flag`; the
-    /// main loop splats it into the density volume (after the
-    /// transform's post-affine, with the iteration's palette color).
-    /// This is how a shell projection (e.g. bubble) gets interior /
-    /// sealed volume for occlusion, lighting and shadows WITHOUT
-    /// spending or altering any image samples. No volume → no-op.
+    /// main loop splats it (after the transform's post-affine) into the
+    /// solid depth buffer and the shadow maps. This is how a shell
+    /// projection (e.g. bubble) gets a sealed interior for occlusion
+    /// and shadows WITHOUT spending or altering any image samples.
+    /// No solid depth region → no-op.
     VolumeSideEmit,
 
     /// The variation is an **input-independent** blur: its output is the

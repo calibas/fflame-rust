@@ -111,20 +111,8 @@ impl FlamePipelines {
                     },
                     count: None,
                 },
-                // Density volume (storage, read-write) — Phase 2 solid
-                // rendering. Slot 6 was the old iteration_counts gap. Bound
-                // to a 4-byte dummy when the volume is disabled; the shader
-                // only declares it under the VOLUME builder flag.
-                BindGroupLayoutEntry {
-                    binding: 6,
-                    visibility: ShaderStages::COMPUTE,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
+                // (binding 6 is a historical gap — the old
+                // iteration_counts slot.)
                 // Path buffer (storage, read-write for PathMap color mode)
                 BindGroupLayoutEntry {
                     binding: 7,
@@ -743,12 +731,6 @@ impl FlamePipelines {
                 BindGroupEntry {
                     binding: 5,
                     resource: buffers.variation_params_buffer.as_entire_binding(),
-                },
-                // Density volume — real buffer when the volume is active,
-                // 4-byte dummy otherwise (the layout entry is unconditional).
-                BindGroupEntry {
-                    binding: 6,
-                    resource: buffers.volume_binding_buffer().as_entire_binding(),
                 },
                 // Use helper methods that return real or dummy buffers
                 BindGroupEntry {

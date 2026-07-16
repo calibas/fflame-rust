@@ -207,16 +207,16 @@ pub async fn render(
 
     queue.submit(std::iter::once(encoder.finish()));
 
-    // Volume auto-fit warmup: the cube placement needs the flame's real
+    // Shadow-fit warmup: the shadow-map fit needs the flame's real
     // bounds, which only the chaos game can reveal. Run a few batches,
-    // read the measured AABB back, re-freeze the placement, and restart
+    // read the measured AABB back, re-freeze the fit, and restart
     // accumulation — cheap relative to the full render, and without it a
-    // zoom-guessed cube chops off-view structure into box-face slabs.
-    if renderer.volume_active() {
+    // zoom-guessed fit wastes map resolution (or clips the attractor).
+    if renderer.shadow_capture_wanted() {
         let warmup_batches = 6u32;
         for _ in 0..warmup_batches {
             let mut enc = device.create_command_encoder(&CommandEncoderDescriptor {
-                label: Some("Volume Warmup"),
+                label: Some("Shadow Warmup"),
             });
             renderer.compute_pass(
                 &mut enc, queue, device, NUM_WORKGROUPS,
@@ -228,15 +228,15 @@ pub async fn render(
             );
             queue.submit(std::iter::once(enc.finish()));
         }
-        let changed = renderer.refresh_volume_placement_blocking(
+        let changed = renderer.refresh_shadow_placement_blocking(
             device, queue,
             job.config.zoom, job.config.pan_x, job.config.pan_y,
             job.config.camera_rotation_x, job.config.camera_rotation_y, job.config.camera_bank,
             [job.config.camera_x, job.config.camera_y, job.config.camera_z],
         );
-        log::info!("Volume warmup: placement {}", if changed { "refit to measured bounds" } else { "unchanged" });
+        log::info!("Shadow warmup: fit {}", if changed { "refit to measured bounds" } else { "unchanged" });
         let mut enc = device.create_command_encoder(&CommandEncoderDescriptor {
-            label: Some("Volume Warmup Reset"),
+            label: Some("Shadow Warmup Reset"),
         });
         renderer.reset(
             &mut enc, queue, job.iterations_per_thread,

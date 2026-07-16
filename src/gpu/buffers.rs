@@ -886,18 +886,6 @@ pub struct GpuParams {
     // doesn't compile in and these fields aren't read.
     pub post_symmetry: GpuPostSymmetry,
 
-    // Phase 2 density volume (solid rendering). Appended after the
-    // post_symmetry struct; 16 bytes to keep std140 sizing aligned.
-    // Only read when the VOLUME shader-builder flag is set.
-    // Mirror in shaders/core/header.wgsl.
-    pub volume_dim: u32,     // Grid resolution per axis (e.g. 192)
-    pub volume_extent: f32,  // World half-extent of the grid cube
-    // World-space center of the grid cube (view-fit mode tracks the
-    // world point at screen center; manual mode is the origin).
-    pub volume_center_x: f32,
-    pub volume_center_y: f32,
-    pub volume_center_z: f32,
-    pub _pad_volume: [u32; 3],
     // Light-space shadow maps (solid rendering Stage 2). The maps cover
     // the sphere of `shadow_radius` around `shadow_center` (frozen per
     // accumulation run from measured bounds). shadow_count = 0 disables
@@ -1259,17 +1247,6 @@ pub struct FlameBuffers {
     pub dummy_path_buffer: Buffer,
     pub dummy_filter_buffer: Buffer,
 
-    // Solid-rendering density volume (OPTIONAL): flat
-    // array<atomic<u32>>, 4 words per voxel (scaled R/G/B sums + count),
-    // volume_dim³ voxels, world-space, camera-independent. Bound at compute binding 6 when the VOLUME
-    // shader flag is set; dummy_volume_buffer otherwise. Persists across
-    // progressive batches like the accumulator (cleared on full reset,
-    // and per-frame in overwrite mode alongside the depth region).
-    pub density_volume_buffer: Option<Buffer>,
-    pub dummy_volume_buffer: Buffer,
-    // Voxels per axis of density_volume_buffer; 0 = volume disabled.
-    pub volume_dim: u32,
-
     // Xaos (chaos) transition weights buffer (OPTIONAL)
     // Layout: N × N matrix where N = num_transforms
     // Index: xaos_weights[src * num_transforms + dst]
@@ -1368,7 +1345,6 @@ impl FlameBuffers {
         if let Some(b) = &self.path_buffer { b.destroy(); }
         if let Some(b) = &self.path_filter_buffer { b.destroy(); }
         if let Some(b) = &self.xaos_buffer { b.destroy(); }
-        if let Some(b) = &self.density_volume_buffer { b.destroy(); }
         if let Some(b) = &self.accum_depth_buffer { b.destroy(); }
         if let Some(b) = &self.blur_splat_buffer { b.destroy(); }
         if let Some(b) = &self.blur_convolved_buffer { b.destroy(); }
@@ -1385,7 +1361,6 @@ impl FlameBuffers {
         self.histogram_blur_params_buffer_v.destroy();
         self.dummy_path_buffer.destroy();
         self.dummy_filter_buffer.destroy();
-        self.dummy_volume_buffer.destroy();
         self.dummy_xaos_buffer.destroy();
         self.dummy_blur_buffer.destroy();
         self.blur_kernel_weights_buffer.destroy();
@@ -1508,12 +1483,6 @@ impl FlameBuffers {
             surface_thickness: crate::config::DEFAULT_SURFACE_THICKNESS,
             depth_prime: 0,
             post_symmetry: GpuPostSymmetry::none(),
-            volume_dim: 0,
-            volume_extent: 2.5,
-            volume_center_x: 0.0,
-            volume_center_y: 0.0,
-            volume_center_z: 0.0,
-            _pad_volume: [0; 3],
             shadow_center_x: 0.0,
             shadow_center_y: 0.0,
             shadow_center_z: 0.0,
@@ -1664,14 +1633,6 @@ impl FlameBuffers {
         let dummy_xaos_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Dummy Xaos Buffer"),
             size: 4,  // Single f32
-            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        // Bound at compute binding 6 when the density volume is disabled.
-        let dummy_volume_buffer = device.create_buffer(&BufferDescriptor {
-            label: Some("Dummy Density Volume Buffer"),
-            size: 4,  // Single u32
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -1864,9 +1825,6 @@ impl FlameBuffers {
             path_filter_buffer,
             dummy_path_buffer,
             dummy_filter_buffer,
-            density_volume_buffer: None,  // Created on demand (set_density_volume)
-            dummy_volume_buffer,
-            volume_dim: 0,
             xaos_buffer: None,  // Created on demand when xaos is used
             dummy_xaos_buffer,
             blur_splat_buffer: None,  // Created on demand when analytic blur is active
@@ -1949,9 +1907,6 @@ impl FlameBuffers {
         // Clear histogram buffer (zero out all pixels)
         // Note: This is done via queue.write_buffer to avoid encoder ordering issues
         encoder.clear_buffer(&self.histogram_buffer, 0, None);
-        if let Some(ref vol) = self.density_volume_buffer {
-            encoder.clear_buffer(vol, 0, None);
-        }
         if let Some(ref ad) = self.accum_depth_buffer {
             encoder.clear_buffer(ad, 0, None);
         }
@@ -2021,7 +1976,7 @@ impl FlameBuffers {
         let words: u64 = if enabled { 5 } else { 4 };
         // Tail regions when the depth region exists:
         //  - 8 words: subsampled attractor-bounds atomics (6 used) for
-        //    the volume / shadow auto-fit;
+        //    the shadow-map auto-fit;
         //  - 4 light-space shadow maps (SHADOW_MAP_RES² words each,
         //    ordered-float atomicMax depth toward each light) — shadows
         //    at SPLAT resolution, written by the main pass, read by the
@@ -2039,8 +1994,8 @@ impl FlameBuffers {
                 "Histogram Buffer"
             }),
             size,
-            // COPY_SRC: the bounds tail (last 32 B) is read back for the
-            // volume auto-fit when the depth region exists.
+            // COPY_SRC: the bounds tail is read back for the shadow-map
+            // auto-fit when the depth region exists.
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
@@ -2059,41 +2014,6 @@ impl FlameBuffers {
         }
         self.solid_depth_region = enabled;
         true
-    }
-
-    /// Ensure the Phase 2 density volume does / does not exist at the
-    /// requested per-axis resolution. Recreates (or drops) the buffer when
-    /// the requirement changes — the CALLER must then recreate the compute
-    /// bind group and reset accumulation. Returns true when the buffer
-    /// changed. No-op (and no cost) when the state already matches, so
-    /// non-volume flames keep today's exact allocation.
-    pub fn set_density_volume(&mut self, device: &Device, enabled: bool, dim: u32) -> bool {
-        let want_dim = if enabled { dim } else { 0 };
-        if self.volume_dim == want_dim {
-            return false;
-        }
-        if let Some(b) = self.density_volume_buffer.take() {
-            b.destroy();
-        }
-        if want_dim > 0 {
-            // 4 × u32 per voxel: scaled R, G, B sums + raw count (same
-            // fixed-point scheme as the 2D histogram) — the volume is the
-            // volume-primary march's colored base coat, not just density.
-            let size = (want_dim as u64).pow(3) * 4 * std::mem::size_of::<u32>() as u64;
-            self.density_volume_buffer = Some(device.create_buffer(&BufferDescriptor {
-                label: Some("Density Volume Buffer"),
-                size,
-                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
-                mapped_at_creation: false,
-            }));
-        }
-        self.volume_dim = want_dim;
-        true
-    }
-
-    /// The buffer to bind at compute binding 6 (real volume or 4-byte dummy).
-    pub fn volume_binding_buffer(&self) -> &Buffer {
-        self.density_volume_buffer.as_ref().unwrap_or(&self.dummy_volume_buffer)
     }
 
     /// Clear histogram buffer only (before each batch for proper accumulation math).
@@ -2122,15 +2042,7 @@ impl FlameBuffers {
         if let Some(ref blur) = self.blur_splat_buffer {
             encoder.clear_buffer(blur, 0, None);
         }
-        // The density volume follows the depth region's lifecycle: it
-        // persists across progressive batches (world-space density keeps
-        // integrating), but in overwrite mode the fractal is changing frame
-        // to frame and stale voxel density would poison the volume-derived
-        // shading — reset it alongside the depth region.
         if reset_depth {
-            if let Some(ref vol) = self.density_volume_buffer {
-                encoder.clear_buffer(vol, 0, None);
-            }
             if let Some(ref ad) = self.accum_depth_buffer {
                 encoder.clear_buffer(ad, 0, None);
             }
@@ -2147,9 +2059,6 @@ impl FlameBuffers {
     /// Clear histogram and path buffers (convenience method for full reset)
     pub fn clear_histogram_and_paths(&self, encoder: &mut CommandEncoder) {
         encoder.clear_buffer(&self.histogram_buffer, 0, None);
-        if let Some(ref vol) = self.density_volume_buffer {
-            encoder.clear_buffer(vol, 0, None);
-        }
         if let Some(ref ad) = self.accum_depth_buffer {
             encoder.clear_buffer(ad, 0, None);
         }

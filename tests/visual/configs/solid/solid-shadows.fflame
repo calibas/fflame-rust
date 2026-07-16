@@ -1,6 +1,6 @@
 {
   "flame": {
-    "name": "solid-lit",
+    "name": "solid-shadows",
     "render_mode": "ThreeD",
     "perspective_strength": 0.15,
     "cam_pitch": 0.5,
@@ -304,8 +304,6 @@
         ]
       }
     ],
-    "volume_enabled": true,
-    "volume_extent": 2.5,
     "shadow_strength": 0.6
   }
 }

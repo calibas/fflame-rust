@@ -1,5 +1,4 @@
-// Solid-rendering deferred shade pass (Phase 1 lighting + Phase 2
-// density-volume consumption).
+// Solid-rendering deferred shade pass (splat-native lighting).
 //
 // Runs between accumulate and tonemap (via tonemap_pass_with_input, like
 // density effects): reads the accumulator (rgb = density-weighted mean
@@ -82,51 +81,26 @@ struct ShadeParams {
     // chaos game leaves in solid surfaces. Requires use_normal_tex.
     gap_fill: u32,
 
-    // ── Phase 2 density volume ──
     // Effective camera matrix rows (world→camera: cam = E·(w − cam_pos),
     // E orthonormal), so world = cam.x·row0 + cam.y·row1 + cam.z·row2 +
     // cam_pos. Host computes E exactly as project_3d_full does
     // (utilities.wgsl build_camera_matrix + camera_transform's transposed
-    // application). Only read when volume_dim > 0.
+    // application). Used by the shadow-map lookup (world-space
+    // reconstruction of the shaded point).
     cam_row0: vec4<f32>,
     cam_row1: vec4<f32>,
     cam_row2: vec4<f32>,
     cam_pos: vec4<f32>,
-    // World-space center of the grid cube (view-fit mode tracks the
-    // world point at screen center; manual mode is the origin).
-    vol_center: vec4<f32>,
-    // Grid resolution per axis; 0 = volume absent → every volume feature
-    // (gradient normals, volumetric AO, shadow march, occlusion repair)
-    // compiles to the Phase 1 behavior.
-    volume_dim: u32,
-    volume_extent: f32,
-    // Normalizer for raw voxel counts: rho_norm = count · this. Host
-    // bakes it from the accumulated splat total so rho_norm ≈ 1 marks
-    // "solid" density regardless of how long the render has run.
-    vol_density_scale: f32,
-    // Volume shadow-march strength (0 = off; host pre-multiplies by
-    // vol_trust).
+    // Shadow-map strength (0 = off).
     shadow_strength: f32,
-    // How well the grid resolves the current view, 0-1 (host-computed
-    // from voxels-across-the-visible-width). Every volume feature scales
-    // with it, so a too-coarse grid (manual extent on a zoomed-in scene)
-    // degrades gracefully to the Phase 1 look instead of stamping
-    // voxel-scale artifacts on the image.
-    vol_trust: f32,
     // Interactive temporal smoothing (0 = off): final = mix(current,
     // previous frame's shade output, this). During progressive
-    // accumulation the volume-derived shading tracks genuinely drifting
-    // data — per-frame raw it reads as patchy strobing; blended over
-    // ~7 frames it's a calm drift. Exports and the first post-reset
-    // frames pass 0.
+    // accumulation the shading tracks genuinely drifting data —
+    // per-frame raw it reads as patchy strobing; blended over ~7 frames
+    // it's a calm drift. Exports and the first post-reset frames pass 0.
     temporal_ema: f32,
-    // Volume-primary march: opacity dial (FractalConfig::solid_strength;
-    // 1 = hard surface, lower = translucent emission/absorption).
-    solid_strength: f32,
-    // Scene-mean per-pixel density (host: Σaccum.a / pixels) — the
-    // tonemap alpha assigned to base-coat-only pixels, and the detail
-    // layer's confidence scale.
-    base_alpha: f32,
+    _pad_sp0: f32,
+    _pad_sp1: f32,
 
     // Light-space shadow maps (Stage 2): ortho fit (xyz center,
     // w radius) matching the splat's frozen fit exactly.
@@ -157,30 +131,7 @@ struct ShadeParams {
 // 1×1 dummy when temporal_ema == 0 — never read then.
 @group(0) @binding(7) var prev_shade: texture_2d<f32>;
 
-// Phase 2 density fields, derived from the raw splat grid each shade by
-// volume_mip.wgsl (half resolution, raw-count scale, f32). The raw grid
-// is NOT sampled here: at view-fit resolution it carries per-voxel
-// Poisson noise (patchy lighting) and cell-faceted gradients
-// (rectangular shading blocks). Bound to 4-byte dummies when
-// volume_dim == 0 — never indexed then.
-// Smoothed (4³-window mean): gradient normals, AO taps, shadow march.
-@group(0) @binding(5) var<storage, read> vol_avg: array<f32>;
-// Morphologically closed max field: the volume-primary march's opacity
-// (σ) source — holes in the splatted shell up to ~2×volume_closing
-// half-res voxels read as sealed.
-@group(0) @binding(6) var<storage, read> vol_closed: array<f32>;
-// Half-res mean color (rgb in [0,1], w = mean count): the march's
-// base-coat color. 4-byte dummy when volume_dim == 0.
-@group(0) @binding(8) var<storage, read> vol_color: array<vec4<f32>>;
-// RAW splat grid (4 u32/voxel, count in word 3): the march's opacity
-// source at FULL grid resolution. Smoothed fields spread every hard
-// density boundary outward by ~half the smoothing window — above
-// hyper-dense regions that bleed renders as a cloudy rim protruding
-// from the surface (field-reported). Raw trilinear localizes the
-// surface to one raw voxel. 16-byte dummy when volume_dim == 0.
-@group(0) @binding(9) var<storage, read> vol_raw: array<u32>;
-
-// ── Phase 2 volume helpers (all callers gate on sp.volume_dim > 0) ──
+// ── Camera helpers (shadow-map lookup) ──
 
 fn cam_to_world(c: vec3<f32>) -> vec3<f32> {
     return c.x * sp.cam_row0.xyz + c.y * sp.cam_row1.xyz + c.z * sp.cam_row2.xyz
@@ -191,129 +142,6 @@ fn cam_to_world(c: vec3<f32>) -> vec3<f32> {
 fn dir_to_world(c: vec3<f32>) -> vec3<f32> {
     return c.x * sp.cam_row0.xyz + c.y * sp.cam_row1.xyz + c.z * sp.cam_row2.xyz;
 }
-fn dir_to_cam(w: vec3<f32>) -> vec3<f32> {
-    return vec3<f32>(dot(sp.cam_row0.xyz, w), dot(sp.cam_row1.xyz, w), dot(sp.cam_row2.xyz, w));
-}
-
-// Derived-field grid resolution per axis.
-fn vol_hd() -> u32 {
-    return max(sp.volume_dim / 2u, 1u);
-}
-
-// Trilinear normalized density from the CLOSED field — the
-// volume-primary march's opacity (σ) source.
-fn vol_closed_density(w: vec3<f32>) -> f32 {
-    let ve = sp.volume_extent;
-    let r = w - sp.vol_center.xyz;
-    if (abs(r.x) >= ve || abs(r.y) >= ve || abs(r.z) >= ve) {
-        return 0.0;
-    }
-    let hd = vol_hd();
-    let vd = i32(hd);
-    let g = (r / ve * 0.5 + vec3<f32>(0.5)) * f32(hd) - vec3<f32>(0.5);
-    let gf = floor(g);
-    let f = g - gf;
-    let i0 = vec3<i32>(gf);
-    var sum = 0.0;
-    for (var c = 0; c < 8; c = c + 1) {
-        let o = vec3<i32>(c & 1, (c >> 1) & 1, (c >> 2) & 1);
-        let i = clamp(i0 + o, vec3<i32>(0), vec3<i32>(vd - 1));
-        let wgt = mix(vec3<f32>(1.0) - f, f, vec3<f32>(o));
-        sum = sum + vol_closed[(u32(i.z) * hd + u32(i.y)) * hd + u32(i.x)]
-            * wgt.x * wgt.y * wgt.z;
-    }
-    return sum * sp.vol_density_scale;
-}
-
-// Trilinear base-coat color (rgb in [0,1]); zero outside the grid.
-fn vol_color_at(w: vec3<f32>) -> vec3<f32> {
-    let ve = sp.volume_extent;
-    let r = w - sp.vol_center.xyz;
-    if (abs(r.x) >= ve || abs(r.y) >= ve || abs(r.z) >= ve) {
-        return vec3<f32>(0.0);
-    }
-    let hd = vol_hd();
-    let vd = i32(hd);
-    let g = (r / ve * 0.5 + vec3<f32>(0.5)) * f32(hd) - vec3<f32>(0.5);
-    let gf = floor(g);
-    let f = g - gf;
-    let i0 = vec3<i32>(gf);
-    var csum = vec3<f32>(0.0);
-    var wsum = 0.0;
-    for (var c = 0; c < 8; c = c + 1) {
-        let o = vec3<i32>(c & 1, (c >> 1) & 1, (c >> 2) & 1);
-        let i = clamp(i0 + o, vec3<i32>(0), vec3<i32>(vd - 1));
-        let wgt0 = mix(vec3<f32>(1.0) - f, f, vec3<f32>(o));
-        let v = vol_color[(u32(i.z) * hd + u32(i.y)) * hd + u32(i.x)];
-        // Weight corners by their density too, so empty voxels don't
-        // drag the color toward black at shell boundaries.
-        let wgt = wgt0.x * wgt0.y * wgt0.z * (v.w + 1e-3);
-        csum = csum + v.rgb * wgt;
-        wsum = wsum + wgt;
-    }
-    return csum / max(wsum, 1e-6);
-}
-
-// Trilinear normalized density from the RAW grid (full resolution,
-// per-tap clamped) — the march's opacity source.
-fn vol_raw_density(w: vec3<f32>) -> f32 {
-    let ve = sp.volume_extent;
-    let r = w - sp.vol_center.xyz;
-    if (abs(r.x) >= ve || abs(r.y) >= ve || abs(r.z) >= ve) {
-        return 0.0;
-    }
-    let vd = sp.volume_dim;
-    let vdi = i32(vd);
-    let g = (r / ve * 0.5 + vec3<f32>(0.5)) * f32(vd) - vec3<f32>(0.5);
-    let gf = floor(g);
-    let f = g - gf;
-    let i0 = vec3<i32>(gf);
-    var sum = 0.0;
-    for (var c = 0; c < 8; c = c + 1) {
-        let o = vec3<i32>(c & 1, (c >> 1) & 1, (c >> 2) & 1);
-        let i = clamp(i0 + o, vec3<i32>(0), vec3<i32>(vdi - 1));
-        let wgt = mix(vec3<f32>(1.0) - f, f, vec3<f32>(o));
-        let cnt = f32(vol_raw[((u32(i.z) * vd + u32(i.y)) * vd + u32(i.x)) * 4u + 3u]);
-        // Per-tap opacity clamp: a 1000× filament is not 1000× solid.
-        sum = sum + min(cnt * sp.vol_density_scale, 8.0) * wgt.x * wgt.y * wgt.z;
-    }
-    return sum;
-}
-
-// Trilinear normalized density from the SMOOTHED field (gradient
-// normals, AO taps, shadow march); 0 outside.
-fn vol_density(w: vec3<f32>) -> f32 {
-    let ve = sp.volume_extent;
-    let r = w - sp.vol_center.xyz;
-    if (abs(r.x) >= ve || abs(r.y) >= ve || abs(r.z) >= ve) {
-        return 0.0;
-    }
-    let hd = vol_hd();
-    let vd = i32(hd);
-    let g = (r / ve * 0.5 + vec3<f32>(0.5)) * f32(hd) - vec3<f32>(0.5);
-    let gf = floor(g);
-    let f = g - gf;
-    let i0 = vec3<i32>(gf);
-    var sum = 0.0;
-    for (var c = 0; c < 8; c = c + 1) {
-        let o = vec3<i32>(c & 1, (c >> 1) & 1, (c >> 2) & 1);
-        let i = clamp(i0 + o, vec3<i32>(0), vec3<i32>(vd - 1));
-        let wgt = mix(vec3<f32>(1.0) - f, f, vec3<f32>(o));
-        sum = sum + vol_avg[(u32(i.z) * hd + u32(i.y)) * hd + u32(i.x)]
-            * wgt.x * wgt.y * wgt.z;
-    }
-    return sum * sp.vol_density_scale;
-}
-
-// Per-pixel hash in [0, 1) — decorrelates march sampling between
-// neighboring pixels so voxel-scale stepping reads as fine noise
-// instead of bands.
-fn shade_hash(px: i32, py: i32) -> f32 {
-    var h = u32(px) * 374761393u + u32(py) * 668265263u;
-    h = (h ^ (h >> 13u)) * 1274126177u;
-    return f32(h & 0xFFFFu) / 65536.0;
-}
-
 // Light-space shadow-map factor for light `li` at world position
 // `wpos` (lw = world-space direction TO the light): 1 = fully lit,
 // 0 = fully occluded. 4-tap PCF against the splat-resolution ortho
@@ -394,125 +222,6 @@ fn reconstruct(px: f32, py: f32, d: f32) -> vec3<f32> {
     return vec3<f32>(t * zr, -d);
 }
 
-// Volume-primary march: front-to-back emission/absorption through the
-// CLOSED density field with base-coat colors from the color field. This
-// IS the solid renderer's geometry and occlusion — "is there a surface
-// here" is an integral, never a threshold, so the hole/repair/banding
-// failure modes of reconciling a sparse depth buffer with a volume by
-// rules simply don't exist. The histogram's per-pixel detail is layered
-// on top by the caller (base coat from voxels, detail from iterations).
-struct MarchResult {
-    rgb: vec3<f32>,      // transmittance-weighted mean base color
-    coverage: f32,       // 1 − final transmittance
-    d_surf: f32,         // depth at opacity 0.5 (or weighted mean)
-    // Transmittance-weighted mean UNCLAMPED normalized density along
-    // the contributing path (1 ≈ solid). Restores the flame's
-    // log-density dynamic range in the tonemap: base-coat pixels
-    // through dust get proportionally lower alpha than the dense core
-    // instead of a flat scene-mean brightness.
-    density: f32,
-}
-
-fn volume_march(px: f32, py: f32, jitter: f32, d_cap: f32) -> MarchResult {
-    var res: MarchResult;
-    res.rgb = vec3<f32>(0.0);
-    res.coverage = 0.0;
-    res.d_surf = 3.0e38;
-    res.density = 0.0;
-    let o_c = reconstruct(px, py, 0.0);
-    let r_c = reconstruct(px, py, 1.0) - o_c;
-    let o_w = cam_to_world(o_c);
-    let r_w = dir_to_world(r_c);           // NOT unit length: param = depth
-    let ve = sp.volume_extent;
-    let o_rel = o_w - sp.vol_center.xyz;
-    var d0 = -3.0e38;
-    var d1 = 3.0e38;
-    for (var a = 0; a < 3; a = a + 1) {
-        let ro = o_rel[a];
-        let rd = r_w[a];
-        if (abs(rd) < 1e-12) {
-            if (abs(ro) >= ve) {
-                return res;
-            }
-            continue;
-        }
-        let t0 = (-ve - ro) / rd;
-        let t1 = (ve - ro) / rd;
-        d0 = max(d0, min(t0, t1));
-        d1 = min(d1, max(t0, t1));
-    }
-    // Pixels that already have surface data only need the march up to
-    // (just past) that surface — occlusion beyond it can't change the
-    // outcome. Roughly a 3× shade-cost cut on covered scenes
-    // (field-reported: volume + lighting tanked performance).
-    d1 = min(d1, d_cap);
-    if (d1 <= d0) {
-        return res;
-    }
-    // RAW-grid resolution march: full-dim voxels localize the surface
-    // 2× tighter than the smoothed half-res fields (and without their
-    // window bleed).
-    let voxel = 2.0 * ve / f32(sp.volume_dim);
-    let wlen = max(length(r_w), 1e-9);
-    let step_d = 1.0 * voxel / wlen;
-    // Opacity per voxel-length of solid density: solid_strength 1 makes
-    // a solid voxel saturate within ~a step (hard surface); lower values
-    // are translucent emission/absorption. Density is OPACITY-CLAMPED —
-    // solid is solid; a 1000× filament is not 1000× solid.
-    let sigma_k = mix(0.25, 4.0, clamp(sp.solid_strength, 0.0, 1.0));
-    var t_ = 1.0;
-    var csum = vec3<f32>(0.0);
-    var wsum = 0.0;
-    var dsum = 0.0;
-    var densum = 0.0;
-    var d = d0 + step_d * (0.25 + 0.5 * jitter);
-    for (var i = 0; i < 352; i = i + 1) {
-        if (d >= d1) {
-            break;
-        }
-        let w = o_w + r_w * d;
-        let sig_raw = vol_raw_density(w);
-        // Opacity transfer rides solid_strength. At 1 it approaches an
-        // ISO-SURFACE step at half-solid: the trilinear field ramps
-        // 0→solid across one voxel at every hard boundary, and rendering
-        // that ramp as translucent paints a voxel-wide glow fringe —
-        // 10-20 SCREEN pixels at close zoom (field-reported
-        // protrusions). A sharp transition at the 0.5 iso level
-        // localizes the surface sub-voxel, exactly like isosurface
-        // raymarchers on coarse grids. Low strengths keep the soft
-        // volumetric transfer (dust as haze).
-        let ss = clamp(sp.solid_strength, 0.0, 1.0);
-        let edge0 = mix(0.03, 0.45, ss);
-        let edge1 = mix(0.80, 0.58, ss);
-        let sig = min(sig_raw, 1.5) * smoothstep(edge0, edge1, sig_raw);
-        if (sig > 0.002) {
-            let a_step = 1.0 - exp(-sig * sigma_k);
-            let contrib = t_ * a_step;
-            csum = csum + vol_color_at(w) * contrib;
-            wsum = wsum + contrib;
-            dsum = dsum + d * contrib;
-            densum = densum + min(sig_raw, 8.0) * contrib;
-            t_ = t_ * (1.0 - a_step);
-            if (res.d_surf > 1.0e37 && t_ < 0.5) {
-                res.d_surf = d;
-            }
-            if (t_ < 0.01) {
-                break;
-            }
-        }
-        d = d + step_d;
-    }
-    res.coverage = 1.0 - t_;
-    if (wsum > 1e-6) {
-        res.rgb = csum / wsum;
-        res.density = densum / wsum;
-        if (res.d_surf > 1.0e37) {
-            res.d_surf = dsum / wsum;
-        }
-    }
-    return res;
-}
-
 // Final write with optional temporal blend against the previous
 // frame's shade output.
 fn shade_store(lx: i32, ly: i32, v: vec4<f32>) {
@@ -540,193 +249,7 @@ fn shade_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     var d = depth_at(px, py);
 
-    // ── Volume path (Phase 3): SCAFFOLDING, not visible geometry ─────
-    // The voxel grid supplies geometry (march depth + coverage),
-    // occlusion authority, normals, AO and shadows — but NEVER visible
-    // color. A 192³ grid cannot represent the sub-voxel filaments
-    // flames are made of without inflating them into voxel-thick lumpy
-    // tubes (field-reported), so every rendered color comes from
-    // PIXEL-space data: the pixel's own accumulation when it sits at or
-    // in front of the volume surface, or a ring fill from neighboring
-    // pixels anchored at the volume's depth (holes and occluded leaks).
-    // Pixels with no data and no nearby data pass through untouched —
-    // nothing is invented.
-    if (sp.volume_dim > 0u && sp.vol_trust > 0.0) {
-        let voxel = 2.0 * sp.volume_extent / f32(sp.volume_dim);
-        let vol_margin = max(6.0 * max(sp.surface_thickness, 0.001), 6.0 * voxel);
-        let d_cap = select(3.0e38, d + vol_margin * 3.0, d < 1.0e37);
-        let mr = volume_march(f32(px), f32(py), shade_hash(px, py), d_cap);
-        let cov = mr.coverage * sp.vol_trust;
-        let solid_here = cov >= 0.5 && mr.d_surf < 1.0e37;
-
-        var albedo2 = accum.rgb;
-        var alpha2 = accum.a;
-        var dgeo = d;
-        var own = false;
-        var fill_n = vec3<f32>(0.0);
-        var has_fill_n = false;
-        if (d < 1.0e37 && (!solid_here || d < mr.d_surf + vol_margin * 2.0)) {
-            // Own data, and it isn't occluded by a solid volume surface.
-            own = true;
-        }
-        if (!own) {
-            // Hole, or a leak (samples behind a solid surface): fill from
-            // neighboring PIXEL data near the volume's surface depth.
-            var found = false;
-            if (sp.use_normal_tex != 0u && solid_here) {
-                let win = max(vol_margin, max(sp.surface_thickness, 0.005) * 6.0);
-                for (var g = 1; g <= 3; g = g + 1) {
-                    var cnt = 0.0;
-                    var wsum = 0.0;
-                    var dsum = 0.0;
-                    var nsum = vec3<f32>(0.0);
-                    var asum_rgb = vec3<f32>(0.0);
-                    var asum_a = 0.0;
-                    for (var k = 0; k < 8; k = k + 1) {
-                        var ox = 0; var oy = 0;
-                        switch (k) {
-                            case 0: { ox = g; oy = 0; }
-                            case 1: { ox = -g; oy = 0; }
-                            case 2: { ox = 0; oy = g; }
-                            case 3: { ox = 0; oy = -g; }
-                            case 4: { ox = g; oy = g; }
-                            case 5: { ox = -g; oy = g; }
-                            case 6: { ox = g; oy = -g; }
-                            default: { ox = -g; oy = -g; }
-                        }
-                        let sx = px + ox;
-                        let sy = py + oy;
-                        if (sx < 0 || sy < 0 || sx >= i32(sp.width) || sy >= i32(sp.height)) {
-                            continue;
-                        }
-                        let nt = textureLoad(normal_tex, vec2<i32>(sx, sy), 0);
-                        // Members of the volume-anchored front surface only.
-                        if (nt.w > 1.0e37 || abs(nt.w - mr.d_surf) > win) {
-                            continue;
-                        }
-                        let acc_n = textureLoad(accum_tex, vec2<i32>(lx + ox, ly + oy), 0);
-                        let wn = acc_n.a;
-                        cnt = cnt + 1.0;
-                        wsum = wsum + wn;
-                        dsum = dsum + nt.w * wn;
-                        nsum = nsum + nt.xyz * wn;
-                        asum_rgb = asum_rgb + acc_n.rgb * wn;
-                        asum_a = asum_a + acc_n.a;
-                    }
-                    if (cnt >= 3.0 && wsum > 1e-6) {
-                        albedo2 = asum_rgb / wsum;
-                        alpha2 = asum_a / cnt;
-                        dgeo = dsum / wsum;
-                        let nl = length(nsum);
-                        if (nl > 1e-9) {
-                            fill_n = nsum / nl;
-                            has_fill_n = true;
-                        }
-                        found = true;
-                        break;
-                    }
-                }
-            }
-            if (!found) {
-                // No pixel evidence anywhere near — pass through
-                // untouched (background or the raw back structure).
-                shade_store(lx, ly, accum);
-                return;
-            }
-        }
-
-        let pos = reconstruct(f32(px), f32(py), dgeo);
-
-        // Normal: volume gradient (smooth field, camera-stable), screen
-        // normal folded in for own-data pixels when the chain exists.
-        let wpos = cam_to_world(pos);
-        let h = 2.0 * sp.volume_extent / f32(vol_hd());
-        let grad = vec3<f32>(
-            vol_density(wpos + vec3<f32>(h, 0.0, 0.0)) - vol_density(wpos - vec3<f32>(h, 0.0, 0.0)),
-            vol_density(wpos + vec3<f32>(0.0, h, 0.0)) - vol_density(wpos - vec3<f32>(0.0, h, 0.0)),
-            vol_density(wpos + vec3<f32>(0.0, 0.0, h)) - vol_density(wpos - vec3<f32>(0.0, 0.0, h)),
-        ) * 0.5;
-        let gl = length(grad);
-        var n = vec3<f32>(0.0, 0.0, 1.0);
-        var lit_conf = 0.0;
-        if (gl > 1e-6) {
-            n = dir_to_cam(-grad / gl);
-            if (n.z < 0.0) {
-                n = -n;
-            }
-            lit_conf = clamp(gl * 2.0 / max(vol_density(wpos), 0.25), 0.0, 1.0);
-        }
-        if (has_fill_n) {
-            n = normalize(mix(fill_n, n, clamp(lit_conf, 0.0, 0.5)));
-            lit_conf = max(lit_conf, 0.5);
-        } else if (own && sp.use_normal_tex != 0u) {
-            let nt = textureLoad(normal_tex, vec2<i32>(px, py), 0);
-            if (nt.w < 1.0e37 && length(nt.xyz) > 1e-6) {
-                n = normalize(mix(n, nt.xyz, 0.5));
-                lit_conf = max(lit_conf, 0.5);
-            }
-        }
-
-        // Volumetric AO (lifted + jittered taps on the smooth field).
-        var ao = 1.0;
-        if (sp.ssao_strength > 0.0) {
-            let w0 = wpos + dir_to_world(n) * h * 2.0;
-            let nw = dir_to_world(n);
-            let ja = shade_hash(px, py) * 6.2831853;
-            var t1 = cross(nw, vec3<f32>(0.0, 0.0, 1.0));
-            if (dot(t1, t1) < 1e-6) {
-                t1 = cross(nw, vec3<f32>(1.0, 0.0, 0.0));
-            }
-            t1 = normalize(t1);
-            let t2 = cross(nw, t1);
-            let jc = cos(ja);
-            let js = sin(ja);
-            let r1 = t1 * jc + t2 * js;
-            let r2 = t2 * jc - t1 * js;
-            let rr = max(sp.ssao_radius, 4.0 * h);
-            var occ = clamp(vol_density(w0 + nw * rr), 0.0, 1.0);
-            occ = occ + clamp(vol_density(w0 + normalize(nw + r1 * 1.2) * rr), 0.0, 1.0);
-            occ = occ + clamp(vol_density(w0 + normalize(nw - r1 * 1.2) * rr), 0.0, 1.0);
-            occ = occ + clamp(vol_density(w0 + normalize(nw + r2 * 1.2) * rr), 0.0, 1.0);
-            occ = occ + clamp(vol_density(w0 + normalize(nw - r2 * 1.2) * rr), 0.0, 1.0);
-            ao = 1.0 - sp.ssao_strength * sp.vol_trust * clamp(occ / 5.0, 0.0, 1.0);
-        }
-
-        // Blinn-Phong + opacity-clamped shadow march per light.
-        let v = normalize(-pos);
-        var lit = albedo2 * (sp.ambient * ao);
-        let do_shadow = sp.shadow_strength > 0.0;
-        let sh_origin = wpos + dir_to_world(n) * h * 1.5;
-        let sh_jitter = shade_hash(px, py);
-        for (var li = 0; li < 4; li = li + 1) {
-            let intensity = sp.lights[li].dir_intensity.w;
-            if (intensity <= 0.0) {
-                continue;
-            }
-            let l = sp.lights[li].dir_intensity.xyz;
-            let lcol = sp.lights[li].color.rgb * intensity;
-            let ndotl = max(dot(n, l), 0.0);
-            var shadow = 1.0;
-            if (do_shadow && ndotl > 0.0 && sp.shadow_count > 0u) {
-                // Splat-resolution shadow maps (Stage 2) — replaced the
-                // voxel-limited raw-grid march.
-                let lw = dir_to_world(l);
-                shadow = mix(1.0, shadow_map_factor(wpos, lw, u32(li)), sp.shadow_strength);
-            }
-            lit = lit + albedo2 * lcol * (sp.diffuse * ndotl * ao * shadow);
-            if (sp.specular > 0.0 && ndotl > 0.0) {
-                let hh = normalize(l + v);
-                let spec = pow(max(dot(n, hh), 0.0), max(sp.shininess, 1.0));
-                lit = lit + lcol * (sp.specular * spec * shadow);
-            }
-        }
-        let lm = clamp(sp.shading_strength, 0.0, 1.0) * lit_conf;
-        let rgb = mix(albedo2, lit, lm);
-        shade_store(lx, ly, vec4<f32>(rgb, alpha2));
-        return;
-    }
-
-    // ── Phase 1 path (volume off): depth-buffer shading ──────────────
+    // ── Depth-buffer shading (splat-native pipeline) ─────────────────
     var albedo = accum.rgb;
     var alpha_out = accum.a;
     var fill_normal = vec3<f32>(0.0);
@@ -905,9 +428,8 @@ fn shade_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
-    // Blinn-Phong with camera-space directional lights. Splat-resolution
-    // shadow maps apply here too (Stage 2) — the volume-off path gets
-    // shadows for the first time.
+    // Blinn-Phong with camera-space directional lights, plus
+    // splat-resolution shadow maps (Stage 2).
     let v = normalize(-pos);
     var lit = albedo * (sp.ambient * ao);
     let p1_shadows = sp.shadow_count > 0u && sp.shadow_strength > 0.0;
