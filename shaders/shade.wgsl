@@ -99,8 +99,18 @@ struct ShadeParams {
     // per-frame raw it reads as patchy strobing; blended over ~7 frames
     // it's a calm drift. Exports and the first post-reset frames pass 0.
     temporal_ema: f32,
-    _pad_sp0: f32,
-    _pad_sp1: f32,
+    // Depth fog, applied POST-LIGHTING (0 = off). When the shade pass
+    // runs, it owns fog — the host zeroes the at-splat fog so specular
+    // highlights and shadows sit UNDER the fog instead of being drawn
+    // on top of it (field-reported). Same formula as the at-splat
+    // version: factor = 1 − exp(−strength · max(depth − start, 0)).
+    fog_strength: f32,
+    fog_start: f32,
+    // Fog blend target (the scene background color).
+    background_r: f32,
+    background_g: f32,
+    background_b: f32,
+    _pad_fog: f32,
 
     // Light-space shadow maps (Stage 2): ortho fit (xyz center,
     // w radius) matching the splat's frozen fit exactly.
@@ -457,6 +467,14 @@ fn shade_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
-    let rgb = mix(albedo, lit, clamp(sp.shading_strength, 0.0, 1.0));
+    var rgb = mix(albedo, lit, clamp(sp.shading_strength, 0.0, 1.0));
+    // Depth fog AFTER lighting: distant lit surfaces (speculars,
+    // shadows and all) fade toward the background, like atmosphere —
+    // not the other way around.
+    if (sp.fog_strength > 0.0 && d < 1.0e37) {
+        let fog_factor = 1.0 - exp(-sp.fog_strength * max(d - sp.fog_start, 0.0));
+        let background = vec3<f32>(sp.background_r, sp.background_g, sp.background_b);
+        rgb = mix(rgb, background, fog_factor);
+    }
     shade_store(lx, ly, vec4<f32>(rgb, alpha_out));
 }

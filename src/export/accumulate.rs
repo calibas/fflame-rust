@@ -59,7 +59,9 @@ pub struct AccumulateParams {
     pub full_height: u32,
     /// 0 disables the shadow splat entirely.
     pub shadow_count: u32,
-    pub _pad3: u32,
+    /// Word offset of the occlusion-survival counter pair inside the
+    /// shadow_maps binding (after the maps, or 0 in the stand-in).
+    pub occ_stats_offset: u32,
     pub zoom: f32,
     pub rotation: f32,
     pub pan_x: f32,

@@ -174,9 +174,17 @@ impl App {
                                         || (a.intensity > 0.0) != (b.intensity > 0.0)
                                 })
                     };
+                    // Fog ownership (at-splat vs post-lighting in the
+                    // shade pass) flips with lighting: at-splat fog is
+                    // baked into accumulated samples, so the flip needs
+                    // a reset or fog doubles/vanishes until one.
+                    let fog_ownership_flip = update_config.fog_strength > 0.0
+                        && renderer.solid_shading().active()
+                            != update_config.solid_shading.active();
                     if want_capture != renderer.has_solid_depth_region()
                         || want_shadows != renderer.shadow_capture_wanted()
                         || lights_moved_under_shadows
+                        || fog_ownership_flip
                     {
                         // Baked GPU state (shadow maps, depth region)
                         // must rebuild from scratch — force the full

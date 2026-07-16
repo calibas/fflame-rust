@@ -792,6 +792,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 let near_ord = ~max(solid_prev, sd_enc);
                 let near_bits = select(~near_ord, near_ord ^ 0x80000000u, (near_ord & 0x80000000u) != 0u);
                 let d_near = bitcast<f32>(near_bits);
+                var solid_occ = 1.0;
                 if (params.depth_prime != 0u) {
                     // Priming batch right after a reset: record depth only,
                     // plot nothing — keeps interior ghosting out of the
@@ -800,7 +801,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 } else if (solid_d > d_near + params.surface_thickness) {
                     // Behind the surface shell: fade by solid_strength
                     // (1 = fully occluded, 0 = classic transparency).
-                    density_weight *= 1.0 - params.solid_strength;
+                    solid_occ = 1.0 - params.solid_strength;
+                    density_weight *= solid_occ;
                 }
                 // Light-space shadow maps (Stage 2): record this sample
                 // toward every enabled light. Accumulates during the
@@ -819,6 +821,22 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     atomicMax(&histogram[bbase + 3u], bounds_enc(-plot_pos.y));
                     atomicMax(&histogram[bbase + 4u], bounds_enc(plot_pos.z));
                     atomicMax(&histogram[bbase + 5u], bounds_enc(-plot_pos.z));
+                }
+                // Occlusion-survival counters (subsampled 1/1024
+                // threads, 4-bit fixed point) in tail words 6-7:
+                // Σ occlusion-factor and Σ 1 over PLOTTED samples. The
+                // brightness renorm divides these instead of the old
+                // Σ(accumulator alpha)/dispatched, which folded the
+                // ARTISTIC per-sample weights (far-fade, depth-density
+                // compensation) into the "culled" fraction — the
+                // tonemap then re-brightened the whole image against a
+                // far-fade dial and dimmed it against depth-comp
+                // (field-audited: fade 3.0 polluted the fraction by
+                // -13%, comp 1.0 by +6%).
+                if ((thread_id & 1023u) == 0u && params.depth_prime == 0u) {
+                    let obase = params.width * params.height * 5u;
+                    atomicAdd(&histogram[obase + 6u], u32(round(solid_occ * 16.0)));
+                    atomicAdd(&histogram[obase + 7u], 16u);
                 }
 {{else}}
                 // Sample-emit mode: this shader has no per-pixel state —
