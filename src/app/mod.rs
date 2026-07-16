@@ -440,6 +440,9 @@ pub struct App {
     /// Transparent PNG export uses premultiplied alpha (vs the default
     /// straight-alpha flatten-over-black reconstruction). Set in the Export panel.
     pub(super) png_export_premultiplied: bool,
+    /// 2× supersampled export (render at double resolution, box-filter
+    /// + firefly clamp down) — see export::supersample.
+    pub(super) png_export_supersample: bool,
 
     // Unified export status — shared with every background export thread (PNG
     // direct / high-res / video). Drives the global progress overlay and the
@@ -633,6 +636,7 @@ impl App {
             export_height,
             use_custom_export_size: false,  // Default to viewport size
             png_export_premultiplied: false,
+            png_export_supersample: false,
             export_status: Arc::new(Mutex::new(ExportStatus::default())),
             render_mode: RenderModeFSM::new(),
             histogram_frame_counter: 0,
@@ -1164,6 +1168,7 @@ impl App {
             &mut self.export_height,
             &mut self.use_custom_export_size,
             &mut self.png_export_premultiplied,
+            &mut self.png_export_supersample,
             &export_status,
             self.ui_hidden,
             &mut self.audio_manager,

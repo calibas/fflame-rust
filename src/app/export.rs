@@ -159,12 +159,23 @@ pub async fn export_headless(
     transparent: bool,
     premultiplied: bool,
     engine: ExportEngine,
+    supersample: bool,
 ) -> Result<bool, Box<dyn std::error::Error>> {
+    // 2× supersampling: render the WHOLE pipeline at 2W×2H (nothing in
+    // it knows) and box-filter the final tonemapped image down — see
+    // export::supersample for why the downsample must be post-tonemap.
+    let ss_config;
+    let (config, render_width, render_height) = if supersample {
+        ss_config = crate::export::supersample::scale_config_for_supersample(config);
+        (&ss_config, width * 2, height * 2)
+    } else {
+        (config, width, height)
+    };
     let max_binding = probe_max_binding_size().await
         .unwrap_or(128 * 1024 * 1024);
     let solid_active = config.solid_strength > 0.0
         && matches!(config.render_mode, crate::scene::transforms::RenderMode::ThreeD);
-    let hist_size = crate::export::histogram_size_bytes(width, height, solid_active);
+    let hist_size = crate::export::histogram_size_bytes(render_width, render_height, solid_active);
 
     // `Auto` routes by size; explicit variants force one engine (parity testing).
     let use_highres = match engine {
@@ -175,45 +186,51 @@ pub async fn export_headless(
     if engine == ExportEngine::FlameRenderer && hist_size > max_binding {
         log::warn!(
             "--engine flamerenderer forced at {}x{}, but histogram {} MB > binding {} MB — allocation will likely fail.",
-            width, height, hist_size / (1024 * 1024), max_binding / (1024 * 1024)
+            render_width, render_height, hist_size / (1024 * 1024), max_binding / (1024 * 1024)
         );
+    }
+
+    if supersample {
+        log::info!("2× supersampling: rendering {}x{} → {}x{}", render_width, render_height, width, height);
     }
 
     if use_highres {
         log::info!(
             "Routing through HighResExporter for {}x{} (histogram {} MB > device binding limit {} MB)",
-            width, height,
+            render_width, render_height,
             hist_size / (1024 * 1024),
             max_binding / (1024 * 1024)
         );
         return export_headless_cpu(
             config,
             output_path,
-            width,
-            height,
+            render_width,
+            render_height,
             test_category,
             iterations_per_thread,
             transparent,
             premultiplied,
+            supersample,
         )
         .await;
     }
 
     log::info!(
         "Routing through FlameRenderer for {}x{} (histogram {} MB ≤ device binding limit {} MB)",
-        width, height,
+        render_width, render_height,
         hist_size / (1024 * 1024),
         max_binding / (1024 * 1024)
     );
     export_headless_gpu(
         config,
         output_path,
-        width,
-        height,
+        render_width,
+        render_height,
         test_category,
         iterations_per_thread,
         transparent,
         premultiplied,
+        supersample,
     )
     .await
 }
@@ -250,6 +267,7 @@ async fn export_headless_gpu(
     iterations_per_thread: u32,
     transparent: bool,
     premultiplied: bool,
+    supersample: bool,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     use std::time::Instant;
 
@@ -325,10 +343,18 @@ async fn export_headless_gpu(
     // Calculate total export time
     let total_export_time_ms = export_start.elapsed().as_secs_f64() * 1000.0;
 
+    // 2× AA: box-filter + firefly clamp down to the requested size.
+    let (final_width, final_height, rgba) = if supersample {
+        let (fw, fh) = (result.width / 2, result.height / 2);
+        (fw, fh, crate::export::supersample::downsample_2x_firefly(&result.rgba_data, fw, fh))
+    } else {
+        (result.width, result.height, result.rgba_data)
+    };
+
     // Build metadata
     let mut metadata = crate::png_metadata::PngMetadata::from_app_state(
-        result.width,
-        result.height,
+        final_width,
+        final_height,
         result.total_iterations,
         total_export_time_ms,
         iterations_per_thread,
@@ -339,9 +365,9 @@ async fn export_headless_gpu(
 
     // Encode PNG with metadata
     let png_data = crate::renderer::compute_kernel::encode_png_from_rgba(
-        result.width,
-        result.height,
-        result.rgba_data,
+        final_width,
+        final_height,
+        rgba,
         Some(metadata),
     )?;
 
@@ -362,6 +388,7 @@ async fn export_headless_cpu(
     iterations_per_thread: u32,
     transparent: bool,
     premultiplied: bool,
+    supersample: bool,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     use crate::export::{ConsoleReporter, HighResExporter};
     use std::time::Instant;
@@ -384,10 +411,18 @@ async fn export_headless_cpu(
     // Calculate total export time
     let total_export_time_ms = export_start.elapsed().as_secs_f64() * 1000.0;
 
+    // 2× AA: box-filter + firefly clamp down to the requested size.
+    let (final_width, final_height, rgba_data) = if supersample {
+        let (fw, fh) = (width / 2, height / 2);
+        (fw, fh, crate::export::supersample::downsample_2x_firefly(&rgba_data, fw, fh))
+    } else {
+        (width, height, rgba_data)
+    };
+
     // Build metadata
     let mut metadata = crate::png_metadata::PngMetadata::from_app_state(
-        width,
-        height,
+        final_width,
+        final_height,
         total_iterations,
         total_export_time_ms,
         iterations_per_thread,
@@ -398,7 +433,7 @@ async fn export_headless_cpu(
 
     // Encode PNG with metadata
     let png_data =
-        crate::renderer::compute_kernel::encode_png_from_rgba(width, height, rgba_data, Some(metadata))?;
+        crate::renderer::compute_kernel::encode_png_from_rgba(final_width, final_height, rgba_data, Some(metadata))?;
 
     // Save to file
     std::fs::write(output_path, png_data)?;

@@ -269,7 +269,24 @@ impl App {
             return;
         }
 
-        println!("Exporting at custom size: {}×{}", self.export_width, self.export_height);
+        // 2× supersampling: everything below renders at doubled
+        // dimensions; the tonemapped result is box-filtered (+ firefly
+        // clamp) back down before the PNG encode.
+        let supersample = self.png_export_supersample;
+        let (out_width, out_height) = (self.export_width, self.export_height);
+        let (render_width, render_height) = if supersample {
+            (out_width * 2, out_height * 2)
+        } else {
+            (out_width, out_height)
+        };
+        let config = if supersample {
+            crate::export::supersample::scale_config_for_supersample(&config)
+        } else {
+            config
+        };
+
+        println!("Exporting at custom size: {}×{}{}", out_width, out_height,
+            if supersample { " (2× supersampled)" } else { "" });
 
         // Two independent decisions:
         //
@@ -291,17 +308,17 @@ impl App {
         let max_binding = self.gpu.device.limits().max_storage_buffer_binding_size as u64;
         let solid_active = config.solid_strength > 0.0
             && matches!(config.render_mode, crate::scene::transforms::RenderMode::ThreeD);
-        let hist_size = crate::export::histogram_size_bytes(self.export_width, self.export_height, solid_active);
+        let hist_size = crate::export::histogram_size_bytes(render_width, render_height, solid_active);
         let long_render = config.max_iterations > Self::BACKGROUND_EXPORT_ITER_THRESHOLD;
         if hist_size > max_binding || long_render {
             println!(
                 "  Routing through HighResExporter for {}x{} ({} MB histogram, {} iterations{})",
-                self.export_width, self.export_height,
+                render_width, render_height,
                 hist_size / (1024 * 1024),
                 config.max_iterations,
                 if hist_size > max_binding { " — exceeds one binding" } else { " — long render, background + progress" },
             );
-            self.export_high_res_background(transparent, premultiplied, config);
+            self.export_high_res_background(transparent, premultiplied, config, render_width, render_height, supersample);
             return;
         }
 
@@ -313,7 +330,7 @@ impl App {
         // limit route to HighResExporter (own device, tiled) above. Only the
         // completion/error toast is unified here — no live overlay, since the
         // frame is blocked through the render.
-        let job = RenderJob::new(&config, self.export_width, self.export_height)
+        let job = RenderJob::new(&config, render_width, render_height)
             .with_iterations_per_thread(self.config_manager.system_settings().iterations_per_thread)
             .with_burn_in(self.config_manager.system_settings().burn_in)
             .with_transparent(transparent)
@@ -325,9 +342,16 @@ impl App {
         let mut toast: Option<(String, bool)> = None;
         match result {
             Ok(output) => {
+                // 2× AA: box-filter + firefly clamp down to the target.
+                let (final_width, final_height, rgba) = if supersample {
+                    let (fw, fh) = (output.width / 2, output.height / 2);
+                    (fw, fh, crate::export::supersample::downsample_2x_firefly(&output.rgba_data, fw, fh))
+                } else {
+                    (output.width, output.height, output.rgba_data)
+                };
                 let metadata = crate::png_metadata::PngMetadata::from_app_state(
-                    output.width,
-                    output.height,
+                    final_width,
+                    final_height,
                     output.total_iterations,
                     output.render_time_ms,
                     self.config_manager.system_settings().iterations_per_thread,
@@ -336,9 +360,9 @@ impl App {
                 );
 
                 match crate::renderer::compute_kernel::encode_png_from_rgba(
-                    output.width,
-                    output.height,
-                    output.rgba_data,
+                    final_width,
+                    final_height,
+                    rgba,
                     Some(metadata),
                 ) {
                     Ok(png_data) => {
@@ -351,7 +375,7 @@ impl App {
                             match std::fs::write(&path, png_data) {
                                 Ok(()) => {
                                     println!("PNG exported to: {} ({}×{}, {:.2}s)",
-                                        path.display(), output.width, output.height, output.render_time_ms / 1000.0);
+                                        path.display(), final_width, final_height, output.render_time_ms / 1000.0);
                                     toast = Some((format!("PNG saved · {}",
                                         path.file_name().map(|n| n.to_string_lossy().into_owned())
                                             .unwrap_or_else(|| path.display().to_string())), false));
@@ -386,12 +410,13 @@ impl App {
     /// when it doesn't. Used for both >binding sizes and long renders that want
     /// progress without freezing the UI.
     #[cfg(not(target_arch = "wasm32"))]
-    fn export_high_res_background(&mut self, transparent: bool, premultiplied: bool, config: FractalConfig) {
+    fn export_high_res_background(&mut self, transparent: bool, premultiplied: bool, config: FractalConfig, render_width: u32, render_height: u32, supersample: bool) {
         use crate::export::HighResExporter;
         use crate::ui::{ExportKind, UiReporter};
 
-        let width = self.export_width;
-        let height = self.export_height;
+        let width = render_width;
+        let height = render_height;
+        let (out_width, out_height) = if supersample { (width / 2, height / 2) } else { (width, height) };
         let iterations_per_thread = self.config_manager.system_settings().iterations_per_thread;
         let speed_factor = config.speed_factor;
         let max_iterations = config.max_iterations;
@@ -416,7 +441,8 @@ impl App {
 
         // Initialize the unified export status (only after a destination is chosen).
         if let Ok(mut s) = self.export_status.lock() {
-            s.begin(ExportKind::Png, format!("Exporting PNG · {width}×{height}"));
+            s.begin(ExportKind::Png, format!("Exporting PNG · {out_width}×{out_height}{}",
+                if supersample { " · 2× AA" } else { "" }));
         }
 
         let status_arc = Arc::clone(&self.export_status);
@@ -450,9 +476,16 @@ impl App {
 
             let total_export_time_ms = export_start.elapsed().as_secs_f64() * 1000.0;
 
+            // 2× AA: box-filter + firefly clamp down to the target.
+            let rgba_data = if supersample {
+                crate::export::supersample::downsample_2x_firefly(&rgba_data, out_width, out_height)
+            } else {
+                rgba_data
+            };
+
             let metadata = crate::png_metadata::PngMetadata::from_app_state(
-                width,
-                height,
+                out_width,
+                out_height,
                 max_iterations,
                 total_export_time_ms,
                 iterations_per_thread,
@@ -460,7 +493,7 @@ impl App {
                 &config,
             );
 
-            let png_data = match crate::renderer::compute_kernel::encode_png_from_rgba(width, height, rgba_data, Some(metadata)) {
+            let png_data = match crate::renderer::compute_kernel::encode_png_from_rgba(out_width, out_height, rgba_data, Some(metadata)) {
                 Ok(d) => d,
                 Err(e) => {
                     eprintln!("Failed to encode PNG: {}", e);

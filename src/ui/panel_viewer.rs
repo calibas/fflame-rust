@@ -226,6 +226,7 @@ pub struct PanelContext<'a> {
     pub export_height: &'a mut u32,
     pub use_custom_export_size: &'a mut bool,
     pub png_export_premultiplied: &'a mut bool,
+    pub png_export_supersample: &'a mut bool,
     /// GPU `max_texture_dimension_2d` — per-axis ceiling for export size.
     pub max_export_dimension: u32,
     pub palette_editor: &'a mut crate::ui::palette_editor::PaletteEditor,
@@ -1487,6 +1488,7 @@ impl<'a> PanelViewer<'a> {
             self.context.export_height,
             self.context.use_custom_export_size,
             self.context.png_export_premultiplied,
+            self.context.png_export_supersample,
             self.context.config_manager,
             *self.context.fractal_viewport_size,
             self.context.export_active,
