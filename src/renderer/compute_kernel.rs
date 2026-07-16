@@ -193,6 +193,11 @@ pub struct FlameRenderer {
     /// view guess). A guess-based fit gets one tightening refit when the
     /// first real measurement lands; measured fits only refit on growth.
     frozen_fit_measured: bool,
+    /// The auto-refit already fired once this accumulation run. HARD
+    /// cap: however the bounds evolve, the auto-refit may interrupt a
+    /// run at most once — repeat interruptions are exactly the reset
+    /// loop the refit logic keeps re-growing (field-reported twice).
+    fit_refit_done: bool,
     /// Shade inputs changed since the last shade (accumulate ran,
     /// lighting edited, reset, ...). When false and the temporal blend
     /// has settled, run_shade_pass skips entirely — the previous output
@@ -349,6 +354,7 @@ impl FlameRenderer {
             bounds_dirty: false,
             frozen_shadow_fit: None,
             frozen_fit_measured: false,
+            fit_refit_done: false,
             shade_dirty: true,
             shade_settle: 0,
             color_mode: ColorMode::Palette,
@@ -1199,9 +1205,15 @@ impl FlameRenderer {
             return false;
         }
         self.bounds_dirty = false;
-        // Young runs only: a refit restarts accumulation — invisible at
-        // ~1 s in, enraging at 20 min in. Late growth keeps the current
-        // maps (worst case: the far tail renders unshadowed this run).
+        // At most ONE auto-refit per accumulation run, and only while
+        // the run is young: a refit restarts accumulation — invisible
+        // at ~1 s in, enraging at 20 min in. Later growth keeps the
+        // current maps (worst case: an off-fit tail renders unshadowed
+        // this run; the next natural reset re-freezes from the latest
+        // bounds anyway).
+        if self.fit_refit_done {
+            return false;
+        }
         let batches = self.samples_in_buffer / self.last_batch_samples.max(1);
         if batches > 64 {
             return false;
@@ -1224,10 +1236,15 @@ impl FlameRenderer {
             None => true,
         };
         if needs {
+            log::info!(
+                "Shadow auto-refit (once per run): {:?} -> {:?} (restarting accumulation)",
+                self.frozen_shadow_fit, new_fit
+            );
             self.frozen_shadow_fit = Some(new_fit);
             // bounds_dirty implied a fresh measurement, so the new fit
             // is measurement-derived.
             self.frozen_fit_measured = self.measured_bounds.is_some();
+            self.fit_refit_done = true;
         }
         needs
     }
@@ -1235,29 +1252,47 @@ impl FlameRenderer {
     /// Light-space shadow-map fit: cover the measured attractor bounds
     /// (bounding-sphere radius) — falls back to a view-derived guess
     /// until the first measurement lands. Frozen per accumulation run.
+    ///
+    /// The measured AABB is CLAMPED to a window of +/-12 view-extents
+    /// around the view center before the fit is derived. Chaos-game
+    /// attractors are heavy-tailed: rare far excursions keep growing
+    /// the raw min/max AABB for as long as the render runs, which both
+    /// starves the maps of resolution (one outlier at 1e6 spreads 1024^2
+    /// texels over nothing) and made the growth-refit re-trigger
+    /// forever (field-reported repeat resets). Inside the window the
+    /// fit is exact; outliers beyond it render with clamped-edge
+    /// shadow coverage — invisible, since they are far off-view too.
     #[allow(clippy::too_many_arguments)]
     fn shadow_placement(&self, zoom: f32, pan_x: f32, pan_y: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_bank: f32, camera_pos: [f32; 3]) -> ([f32; 3], f32) {
-        if let Some((mn, mx)) = self.measured_bounds {
-            let c = [
-                (mn[0] + mx[0]) * 0.5,
-                (mn[1] + mx[1]) * 0.5,
-                (mn[2] + mx[2]) * 0.5,
-            ];
-            let dx = mx[0] - mn[0];
-            let dy = mx[1] - mn[1];
-            let dz = mx[2] - mn[2];
-            let r = ((dx * dx + dy * dy + dz * dz).sqrt() * 0.5 * 1.1).max(1e-3);
-            return (c, r);
-        }
         let rows = crate::renderer::shade_pass::effective_camera_rows(
             camera_rotation_x, camera_rotation_y, camera_bank);
-        let mut center = camera_pos;
+        let mut view_center = camera_pos;
         for i in 0..3 {
-            center[i] += pan_x * rows[0][i] + pan_y * rows[1][i];
+            view_center[i] += pan_x * rows[0][i] + pan_y * rows[1][i];
         }
         let aspect = self.width.max(self.height).max(1) as f32
             / self.width.min(self.height).max(1) as f32;
-        (center, (4.0 * aspect / zoom.max(1e-6)).clamp(1e-3, 1e6))
+        let view_extent = (4.0 * aspect / zoom.max(1e-6)).clamp(1e-3, 1e6);
+        if let Some((mn, mx)) = self.measured_bounds {
+            let win = 12.0 * view_extent;
+            let mut cmn = [0.0f32; 3];
+            let mut cmx = [0.0f32; 3];
+            for i in 0..3 {
+                cmn[i] = mn[i].clamp(view_center[i] - win, view_center[i] + win);
+                cmx[i] = mx[i].clamp(view_center[i] - win, view_center[i] + win);
+            }
+            let c = [
+                (cmn[0] + cmx[0]) * 0.5,
+                (cmn[1] + cmx[1]) * 0.5,
+                (cmn[2] + cmx[2]) * 0.5,
+            ];
+            let dx = cmx[0] - cmn[0];
+            let dy = cmx[1] - cmn[1];
+            let dz = cmx[2] - cmn[2];
+            let r = ((dx * dx + dy * dy + dz * dz).sqrt() * 0.5 * 1.1).max(1e-3);
+            return (c, r);
+        }
+        (view_center, view_extent)
     }
 
     /// The renderer's CURRENT shading settings (pre-update state — used
@@ -1338,6 +1373,7 @@ impl FlameRenderer {
         };
         self.frozen_shadow_fit = Some(new_fit);
         self.frozen_fit_measured = self.measured_bounds.is_some();
+        self.fit_refit_done = false;
         changed
     }
 
@@ -1527,6 +1563,7 @@ impl FlameRenderer {
 
         self.frozen_shadow_fit = Some(self.shadow_placement(config.zoom, config.pan_x, config.pan_y, config.camera_rotation_x, config.camera_rotation_y, config.camera_bank, [config.camera_x, config.camera_y, config.camera_z]));
         self.frozen_fit_measured = self.measured_bounds.is_some();
+        self.fit_refit_done = false;
         let sh_fit = self.frozen_shadow_fit.unwrap();
         let sh_dirs = self.shadow_light_dirs(config.camera_rotation_x, config.camera_rotation_y, config.camera_bank);
         let params = GpuParams {
@@ -1631,6 +1668,7 @@ impl FlameRenderer {
         // bounds (splat texel coordinates must not move mid-run).
         self.frozen_shadow_fit = Some(self.shadow_placement(zoom, pan_x, pan_y, camera_rotation_x, camera_rotation_y, camera_bank, [camera_x, camera_y, camera_z]));
         self.frozen_fit_measured = self.measured_bounds.is_some();
+        self.fit_refit_done = false;
         let depth_changed = self.buffers.set_solid_depth_region(device, solid_enabled);
         if depth_changed {
             // Histogram buffer was recreated — every bind group that
