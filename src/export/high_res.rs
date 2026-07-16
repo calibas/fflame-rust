@@ -3051,6 +3051,7 @@ impl HighResExporter {
                     config.zoom,
                     config.dof_focus_distance,
                     config.dof_blur_strength,
+                    self.surface_thickness,
                 );
                 self.queue.submit(std::iter::once(dof_encoder.finish()));
                 log::info!("High-res export: applied post-process DoF");

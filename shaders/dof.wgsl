@@ -1,28 +1,50 @@
-// Post-process depth-of-field for solid rendering (gather blur).
+// Post-process depth-of-field for solid rendering — TRUE 2-D disk
+// gather (dense, adaptive radius). Four passes:
+//   1. coc_main  — per-pixel CoC from bilaterally smoothed depth
+//   2. max_main  — horizontal running max of the CoC field
+//   3. max_main  — vertical running max (⇒ dilated max-reach field)
+//   4. dof_main  — dense 2-D scatter-as-gather disk blur
 //
 // At-splat DoF is compiled out under SOLID by design: jittering plot
 // positions lands samples at pixels whose depth they don't belong to,
-// corrupting the nearest-depth buffer and the occlusion test. This pass
-// is the replacement: it runs between shade and tonemap on the HDR
-// pre-tonemap image (shade output when lighting is on, else the raw
-// accumulator), reading the same per-pixel nearest-depth region the
-// solid pipeline maintains.
+// corrupting the nearest-depth buffer and the occlusion test. This
+// pass chain is the replacement: it runs between shade and tonemap on
+// the HDR pre-tonemap image (shade output when lighting is on, else
+// the raw accumulator), reading the per-pixel nearest-depth region.
 //
-// Circle of confusion MATCHES the at-splat formula exactly so the DoF
-// sliders mean the same thing in both pipelines:
+// Quality lessons baked in (all field-reported):
+// - Sparse jittered taps (v1) = Monte-Carlo sand on flame-range data.
+// - Separable H+V passes (v2) = axis-aligned streaks: a
+//   VARIABLE-radius blur is not separable, and a flat 1-D kernel run
+//   twice has a square point spread. Only a dense 2-D disk matches
+//   the at-splat reference (uniform disk via sqrt(rand)·coc).
+// - The nearest-depth field carries shell-scale Monte-Carlo noise, so
+//   CoC comes from a bilaterally smoothed depth (coc_main); raw depth
+//   is still used for occlusion suppression so edges stay honest.
+//
+// The dense 2-D gather is O(R²) per pixel, so the loop bound adapts:
+// the dilated max-reach field (passes 2-3) bounds how far any light
+// can spread INTO each pixel — sharp regions loop a few taps, only
+// genuinely defocused areas pay the full disk.
+//
+// Circle of confusion MATCHES the at-splat formula so the DoF sliders
+// mean the same thing in both pipelines:
 //   camera_z = -d (stored depth is -camera_space.z, positive in front)
 //   coc_px   = |camera_z - focus| * strength * 0.1
 //              * min(width, height) * 0.25 * zoom
 //
-// Scatter-as-gather: each output pixel gathers a golden-angle spiral of
-// taps; a tap contributes when its OWN CoC disk reaches the center
-// (foreground naturally bleeds over silhouettes), weighted by
-// 1/(coc^2+1) for energy conservation (a sample's light spreads over
-// its disk area). Background taps behind an in-focus center are
-// suppressed to their coverage ratio so the background can't bleed over
-// sharp foreground edges. All four channels blur together — alpha
-// carries density for the tonemap's log math, and leaving it sharp
-// would re-sharpen brightness at blurred edges.
+// Scatter-as-gather: a tap SPREADS over its own CoC as a flat disk
+// with a soft rim, energy-normalized by its disk area (wider spreads
+// deposit less per pixel). Foreground bleeds over silhouettes
+// naturally; taps meaningfully BEHIND the center surface are
+// suppressed toward their sharpness ratio (background can't bleed
+// over sharp foreground edges), with a distance-lenient margin so a
+// sloped surface doesn't suppress its own far taps. Output is
+// renormalized ONLY when overcomplete: at coverage boundaries the
+// spread light partially fills the pixel and alpha fades with it, so
+// the log tonemap melts silhouettes exactly like at-splat DoF does.
+// All four channels blur together — alpha carries density for the
+// tonemap's log math; leaving it sharp would re-sharpen brightness.
 //
 // All reads are textureLoad / raw buffer indexing — WASM-clean.
 
@@ -32,22 +54,34 @@ struct DofParams {
     // Word offset of the depth region inside the bound buffer
     // (interactive = W*H*4; exporters may pass 0 for a dedicated one).
     depth_word_offset: u32,
-    // Tap count actually used (<= MAX_TAPS); host scales with radius.
-    taps: u32,
+    // CoC clamp in pixels (also the max-filter half-width).
+    radius: u32,
     // dof_focus_distance (camera_space.z units, matches at-splat).
     focus: f32,
     // dof_blur_strength * 0.1 * min(w,h) * 0.25 * zoom — the full
     // |camera_z - focus| -> pixels factor, host-precomputed.
     coc_scale: f32,
-    // CoC clamp in pixels (performance + firefly-smear guard).
-    max_radius: f32,
+    // Surface shell thickness (world units) — the bilateral depth
+    // window scale for the CoC prepass.
+    surface_thickness: f32,
     _pad0: f32,
+    // max_main direction: (1,0) then (0,1). Unused by coc/dof passes.
+    dir_x: i32,
+    dir_y: i32,
+    _pad1: i32,
+    _pad2: i32,
 }
 
 @group(0) @binding(0) var input_tex: texture_2d<f32>;
 @group(0) @binding(1) var<storage, read> depth_buf: array<u32>;
 @group(0) @binding(2) var<uniform> dp: DofParams;
 @group(0) @binding(3) var dof_out: texture_storage_2d<rgba32float, write>;
+// Smoothed CoC field (r = CoC px, g = 1 when the pixel has depth).
+// Passes that don't read it bind a stand-in.
+@group(0) @binding(4) var coc_tex: texture_2d<f32>;
+// Dilated max-reach field (r = neighborhood max CoC). Only dof_main
+// reads it; other passes bind a stand-in.
+@group(0) @binding(5) var max_tex: texture_2d<f32>;
 
 fn depth_at(px: i32, py: i32) -> f32 {
     if (px < 0 || py < 0 || px >= i32(dp.width) || py >= i32(dp.height)) {
@@ -62,23 +96,72 @@ fn depth_at(px: i32, py: i32) -> f32 {
     return bitcast<f32>(bits);
 }
 
-// CoC radius in pixels for stored depth d; empty pixels (no depth)
-// return 0 — they contribute no light of their own.
-fn coc_px(d: f32) -> f32 {
-    if (d > 1.0e37) {
-        return 0.0;
+fn coc_from_depth(d: f32) -> f32 {
+    return min(abs(-d - dp.focus) * dp.coc_scale, f32(dp.radius));
+}
+
+// ── Pass 1: CoC prepass ─────────────────────────────────────────────
+// Bilateral 9×9 depth mean (same-surface window, like normals.wgsl):
+// the raw nearest-depth field carries shell-scale Monte-Carlo noise
+// that would otherwise modulate the blur disk per pixel.
+@compute @workgroup_size(8, 8, 1)
+fn coc_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if (gid.x >= dp.width || gid.y >= dp.height) {
+        return;
     }
-    return min(abs(-d - dp.focus) * dp.coc_scale, dp.max_radius);
+    let px = i32(gid.x);
+    let py = i32(gid.y);
+    let d_c = depth_at(px, py);
+    if (d_c > 1.0e37) {
+        textureStore(dof_out, vec2<i32>(px, py), vec4<f32>(0.0, 0.0, 0.0, 0.0));
+        return;
+    }
+    let win = max(dp.surface_thickness * 4.0, 0.02 * (abs(d_c) + 1.0));
+    var dsum = 0.0;
+    var n = 0.0;
+    for (var oy = -4; oy <= 4; oy = oy + 1) {
+        for (var ox = -4; ox <= 4; ox = ox + 1) {
+            let nd = depth_at(px + ox, py + oy);
+            if (nd > 1.0e37 || abs(nd - d_c) > win) {
+                continue;
+            }
+            dsum = dsum + nd;
+            n = n + 1.0;
+        }
+    }
+    let d = dsum / max(n, 1.0);
+    textureStore(dof_out, vec2<i32>(px, py), vec4<f32>(coc_from_depth(d), 1.0, 0.0, 0.0));
 }
 
-// Per-pixel hash in [0, 1) — rotates/jitters the spiral so the fixed
-// tap pattern reads as fine noise instead of rings.
-fn dof_hash(px: i32, py: i32) -> f32 {
-    var h = u32(px) * 374761393u + u32(py) * 668265263u;
-    h = (h ^ (h >> 13u)) * 1274126177u;
-    return f32(h & 0xFFFFu) / 65536.0;
+// ── Passes 2+3: separable running max of the CoC field ──────────────
+// (A max filter IS separable.) Result: how far any neighbor's disk
+// could possibly reach into this pixel — the dof_main loop bound.
+@compute @workgroup_size(8, 8, 1)
+fn max_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if (gid.x >= dp.width || gid.y >= dp.height) {
+        return;
+    }
+    let px = i32(gid.x);
+    let py = i32(gid.y);
+    var m = 0.0;
+    let r = i32(dp.radius);
+    for (var i = -r; i <= r; i = i + 1) {
+        let sx = px + i * dp.dir_x;
+        let sy = py + i * dp.dir_y;
+        if (sx < 0 || sy < 0 || sx >= i32(dp.width) || sy >= i32(dp.height)) {
+            continue;
+        }
+        let v = textureLoad(coc_tex, vec2<i32>(sx, sy), 0);
+        // A disk at distance |i| reaches us only if its radius covers
+        // the distance — subtracting |i| tightens the bound (and lets
+        // fully sharp rows collapse to 0).
+        m = max(m, v.r - f32(abs(i)));
+    }
+    let g = textureLoad(coc_tex, vec2<i32>(px, py), 0).g;
+    textureStore(dof_out, vec2<i32>(px, py), vec4<f32>(max(m, textureLoad(coc_tex, vec2<i32>(px, py), 0).r), g, 0.0, 0.0));
 }
 
+// ── Pass 4: dense 2-D disk gather ───────────────────────────────────
 @compute @workgroup_size(8, 8, 1)
 fn dof_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (gid.x >= dp.width || gid.y >= dp.height) {
@@ -87,84 +170,72 @@ fn dof_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let px = i32(gid.x);
     let py = i32(gid.y);
     let center = textureLoad(input_tex, vec2<i32>(px, py), 0);
-    let d_c = depth_at(px, py);
-    let coc_c = coc_px(d_c);
 
-    // Search radius: the center's own CoC (out-of-focus pixels spread
-    // wide) OR nearby foreground bleed found by a sparse 8-probe ring —
-    // an in-focus pixel next to a blurred foreground edge must still
-    // gather that bleed.
-    var r_search = coc_c;
-    let probe_r = dp.max_radius * 0.7071;
-    for (var k = 0; k < 8; k = k + 1) {
-        let a = f32(k) * 0.7853981634; // 2*PI / 8
-        let ox = i32(round(cos(a) * probe_r));
-        let oy = i32(round(sin(a) * probe_r));
-        let cp = coc_px(depth_at(px + ox, py + oy));
-        // The probe's disk must reach us to matter.
-        let dist = sqrt(f32(ox * ox + oy * oy));
-        if (cp >= dist * 0.5) {
-            r_search = max(r_search, cp);
-        }
-    }
-    r_search = min(r_search, dp.max_radius);
-
-    if (r_search < 0.5) {
-        // Fully sharp neighborhood — pass through.
+    // Adaptive loop bound: nothing can reach us from beyond the
+    // dilated max-reach (+rim slack).
+    let reach_in = textureLoad(max_tex, vec2<i32>(px, py), 0).r;
+    let rr = i32(ceil(min(reach_in + 1.5, f32(dp.radius) + 1.5)));
+    if (rr < 1) {
         textureStore(dof_out, vec2<i32>(px, py), center);
         return;
     }
 
-    // Behind-margin for background suppression: taps meaningfully
-    // behind the center's surface can't bleed over it beyond their
-    // coverage ratio.
+    let d_c = depth_at(px, py);
+    let coc_c = textureLoad(coc_tex, vec2<i32>(px, py), 0).r;
+    // Behind-margin base for background suppression (depth-relative).
     let behind = 0.05 * (abs(d_c) + 1.0);
 
-    let jitter = dof_hash(px, py);
     var csum = vec4<f32>(0.0);
     var wsum = 0.0;
-    let n = i32(dp.taps);
-    for (var i = 0; i < n; i = i + 1) {
-        // Golden-angle spiral, jitter-rotated per pixel.
-        let fi = (f32(i) + jitter) / f32(n);
-        let ang = f32(i) * 2.3999632297 + jitter * 6.2831853;
-        let rad = sqrt(fi) * r_search;
-        let ox = i32(round(cos(ang) * rad));
-        let oy = i32(round(sin(ang) * rad));
-        let sx = px + ox;
+    for (var oy = -rr; oy <= rr; oy = oy + 1) {
         let sy = py + oy;
-        if (sx < 0 || sy < 0 || sx >= i32(dp.width) || sy >= i32(dp.height)) {
+        if (sy < 0 || sy >= i32(dp.height)) {
             continue;
         }
-        let d_t = depth_at(sx, sy);
-        if (d_t > 1.0e37) {
-            // Empty pixel: no light to spread.
-            continue;
+        for (var ox = -rr; ox <= rr; ox = ox + 1) {
+            let sx = px + ox;
+            if (sx < 0 || sx >= i32(dp.width)) {
+                continue;
+            }
+            let ct = textureLoad(coc_tex, vec2<i32>(sx, sy), 0);
+            if (ct.g < 0.5) {
+                // Empty pixel: no light to spread.
+                continue;
+            }
+            // Flat disk with a soft rim — the at-splat kernel shape.
+            let reach = ct.r;
+            let rim = clamp(reach * 0.5, 0.71, 1.5);
+            let dist = sqrt(f32(ox * ox + oy * oy));
+            if (dist > reach + rim) {
+                continue;
+            }
+            // Energy conservation: the disk's light spreads over its
+            // area (π·reach² + 1 keeps the sharp case sane: a reach-0
+            // tap deposits everything in its own pixel).
+            var w = clamp((reach + rim - dist) / rim, 0.0, 1.0)
+                / (3.14159265 * reach * reach + 1.0);
+            // Background suppression, distance-lenient: a tap behind
+            // the center surface contributes at most the center's own
+            // blur ratio; the margin grows with distance so a sloped
+            // surface's far taps aren't treated as background.
+            if (d_c < 1.0e37) {
+                let d_t = depth_at(sx, sy);
+                if (d_t < 1.0e37 && d_t > d_c + behind * (1.0 + 0.25 * dist)) {
+                    w = w * clamp((coc_c + 0.5) / (reach + 0.5), 0.0, 1.0);
+                }
+            }
+            csum = csum + textureLoad(input_tex, vec2<i32>(sx, sy), 0) * w;
+            wsum = wsum + w;
         }
-        let dist = sqrt(f32(ox * ox + oy * oy));
-        let coc_t = coc_px(d_t);
-        // Coverage: the tap's blur disk must reach the center pixel
-        // (+0.5 so in-focus taps still cover their own pixel).
-        var w = clamp(coc_t + 0.5 - dist, 0.0, 1.0);
-        if (w <= 0.0) {
-            continue;
-        }
-        // Energy conservation: light spreads over the disk area.
-        w = w / (coc_t * coc_t + 1.0);
-        // Background suppression: a tap behind the center surface
-        // contributes at most the center's own blur ratio (sharp
-        // foreground edges stay sharp against a blurred background).
-        if (d_t > d_c + behind) {
-            w = w * clamp((coc_c + 0.5) / (coc_t + 0.5), 0.0, 1.0);
-        }
-        let s = textureLoad(input_tex, vec2<i32>(sx, sy), 0);
-        csum = csum + s * w;
-        wsum = wsum + w;
     }
 
     if (wsum < 1e-6) {
         textureStore(dof_out, vec2<i32>(px, py), center);
         return;
     }
-    textureStore(dof_out, vec2<i32>(px, py), csum / wsum);
+    // Renormalize ONLY when overcomplete: at coverage boundaries the
+    // spread light partially fills the pixel; letting rgb+alpha fade
+    // there is what melts silhouettes (the log tonemap dims fading
+    // density, matching the at-splat reference).
+    textureStore(dof_out, vec2<i32>(px, py), csum / max(wsum, 1.0));
 }
