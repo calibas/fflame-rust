@@ -236,6 +236,8 @@ pub struct FlameRenderer {
     needs_depth_prime: bool, // Next compute batch records depth only (set on reset while solid)
     solid_shading: crate::config::SolidShadingSettings, // Phase 1 lighting (shade pass); active() => depth capture even at solid_strength 0
     shade_pass: crate::renderer::shade_pass::ShadePass, // Deferred shade pass (dispatched only when shading is active)
+    dof_pass: crate::renderer::dof_pass::DofPass, // Post-process DoF (solid mode; at-splat DoF compiles out under SOLID)
+    dof_dirty: bool, // DoF input (shade output / accumulator) changed since the last DoF dispatch
     density_stats: crate::renderer::density_stats::DensityStats, // Accepted-density reduction (solid brightness renorm)
     solid_density_fraction: f32, // Measured accepted/dispatched fraction (1.0 = no correction); scales tonemap sample_density
     filter_radius: f32, // Spatial filter (Apo's `filter`): Gaussian sigma in pixels on histogram, 0 = off
@@ -386,6 +388,8 @@ impl FlameRenderer {
             needs_depth_prime: false,
             solid_shading: crate::config::SolidShadingSettings::default(),
             shade_pass: crate::renderer::shade_pass::ShadePass::new(device, width, height),
+            dof_pass: crate::renderer::dof_pass::DofPass::new(device),
+            dof_dirty: true,
             density_stats: crate::renderer::density_stats::DensityStats::new(device),
             solid_density_fraction: 1.0,
             filter_radius: 0.0,
@@ -585,6 +589,7 @@ impl FlameRenderer {
         // blending against it would motion-ghost).
         self.shade_pass.reset_temporal();
         self.shade_dirty = true;
+        self.dof_dirty = true;
 
         // Clear accumulation buffers
         self.buffers.clear_all(encoder, queue);
@@ -771,6 +776,7 @@ impl FlameRenderer {
     /// Run accumulation pass to blend new samples with previous accumulation
     pub fn accumulate_pass(&mut self, encoder: &mut CommandEncoder, queue: &Queue, device: &Device, samples_this_frame: u64) {
         self.shade_dirty = true;
+        self.dof_dirty = true;
         self.samples_accumulated += samples_this_frame;
 
         // Update effective_iterations (for brightness) only when NOT in overwrite mode
@@ -1136,6 +1142,9 @@ impl FlameRenderer {
         } else {
             self.shade_settle -= 1;
         }
+        // The shade output is about to change (settling counts too) —
+        // any DoF built on it is stale.
+        self.dof_dirty = true;
         let sh_fit = self.frozen_shadow_fit.unwrap_or_else(|| self.shadow_placement(zoom, pan_x, pan_y, camera_rotation_x, camera_rotation_y, camera_bank, [camera_x, camera_y, camera_z]));
         self.shade_pass.run(
             device,
@@ -1170,6 +1179,57 @@ impl FlameRenderer {
         self.shade_pass.output_view()
     }
 
+    /// Post-process depth of field (solid mode). At-splat DoF is
+    /// compiled out under SOLID (position jitter corrupts the
+    /// nearest-depth buffer); this gather blur replaces it, running on
+    /// the HDR pre-tonemap image (shade output when lighting is on,
+    /// else the accumulator) using the depth region. Returns whether
+    /// the DoF output should feed the tonemap. Zero cost when off.
+    pub fn run_dof_pass(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        encoder: &mut CommandEncoder,
+        shade_ran: bool,
+        zoom: f32,
+    ) -> bool {
+        let active = self.dof_blur_strength > 0.0
+            && self.buffers.solid_depth_region
+            && matches!(self.current_render_mode, crate::scene::transforms::RenderMode::ThreeD);
+        if !active {
+            return false;
+        }
+        if !self.dof_dirty {
+            // Input unchanged — the previous output is still exact.
+            return true;
+        }
+        self.dof_dirty = false;
+        let input: &TextureView = if shade_ran {
+            self.shade_pass.output_view()
+        } else {
+            self.buffers.current_accumulation_view()
+        };
+        self.dof_pass.run(
+            device,
+            queue,
+            encoder,
+            input,
+            &self.buffers.histogram_buffer,
+            self.width * self.height * 4, // depth region inside the histogram
+            self.width,
+            self.height,
+            zoom,
+            self.dof_focus_distance,
+            self.dof_blur_strength,
+        );
+        true
+    }
+
+    /// DoF output view (valid after `run_dof_pass` returned true).
+    pub fn dof_output_view(&self) -> &TextureView {
+        self.dof_pass.output_view()
+    }
+
     /// Lightweight lighting update: refresh the shade-pass settings
     /// WITHOUT touching iteration state. Only valid when the change
     /// doesn't flip the depth-capture requirement — the caller checks
@@ -1181,6 +1241,7 @@ impl FlameRenderer {
         // would lag/ghost the edit — restart the temporal history.
         self.shade_pass.reset_temporal();
         self.shade_dirty = true;
+        self.dof_dirty = true;
     }
 
     /// Whether the histogram currently carries the solid depth region.
@@ -1525,6 +1586,7 @@ impl FlameRenderer {
         // runs in overwrite mode where the blend is disabled).
         self.shade_pass.reset_temporal();
         self.shade_dirty = true;
+        self.dof_dirty = true;
         let solid_enabled = (config.solid_strength > 0.0 || self.solid_shading.active())
             && matches!(config.render_mode, crate::scene::transforms::RenderMode::ThreeD);
         let rebind = self.buffers.set_solid_depth_region(device, solid_enabled);

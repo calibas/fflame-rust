@@ -16,7 +16,7 @@ use crate::config::ConfigManager;
 /// depth-ownership tracker (8 B); lighting adds the shade-output
 /// ping-pong and the normal ping-pong (4× Rgba32Float = 64 B). These
 /// dominate on WASM, where the FlameRenderer holds the whole image.
-fn export_bytes_per_pixel(spatial_filter: bool, solid: bool, lighting: bool) -> u64 {
+fn export_bytes_per_pixel(spatial_filter: bool, solid: bool, lighting: bool, dof: bool) -> u64 {
     let mut b = 52;
     if spatial_filter {
         b += 16;
@@ -26,6 +26,10 @@ fn export_bytes_per_pixel(spatial_filter: bool, solid: bool, lighting: bool) -> 
     }
     if lighting {
         b += 64;
+    }
+    if dof {
+        // Post-process DoF output texture (Rgba32Float).
+        b += 16;
     }
     b
 }
@@ -40,11 +44,11 @@ fn export_bytes_per_pixel(spatial_filter: bool, solid: bool, lighting: bool) -> 
 /// confirmed-working peak: 8000² with no spatial filter. On desktop, large
 /// in-app exports tile through HighResExporter with bounded memory, so a fixed
 /// generous cap (400 MP = 20000²) applies regardless of features.
-fn max_export_pixels(spatial_filter: bool, solid: bool, lighting: bool) -> u64 {
+fn max_export_pixels(spatial_filter: bool, solid: bool, lighting: bool, dof: bool) -> u64 {
     #[cfg(target_arch = "wasm32")]
     {
         const EXPORT_GPU_BUDGET_BYTES: u64 = 3_328_000_000;
-        EXPORT_GPU_BUDGET_BYTES / export_bytes_per_pixel(spatial_filter, solid, lighting)
+        EXPORT_GPU_BUDGET_BYTES / export_bytes_per_pixel(spatial_filter, solid, lighting, dof)
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -54,7 +58,7 @@ fn max_export_pixels(spatial_filter: bool, solid: bool, lighting: bool) -> u64 {
         // path), tonemap/shade tile in strips, and the depth buffer is
         // gated against one storage binding. A flat generous cap on
         // total pixels is therefore still honest with solid/lighting on.
-        let _ = (spatial_filter, solid, lighting);
+        let _ = (spatial_filter, solid, lighting, dof);
         400_000_000
     }
 }
@@ -134,13 +138,13 @@ pub fn render_export_content(
     // `filter`) adds a full-res scratch buffer, so it lowers the max export
     // size — most on WASM, where the whole image lives in VRAM.
     let spatial_filter = config_manager.active_config().filter_radius > 0.0;
-    let (solid_on, lighting_on) = {
+    let (solid_on, lighting_on, dof_on) = {
         let c = config_manager.active_config();
         let solid = c.solid_strength > 0.0
             && matches!(c.render_mode, crate::scene::transforms::RenderMode::ThreeD);
-        (solid, solid && c.solid_shading.active())
+        (solid, solid && c.solid_shading.active(), solid && c.dof_blur_strength > 0.0)
     };
-    let max_px = max_export_pixels(spatial_filter, solid_on, lighting_on);
+    let max_px = max_export_pixels(spatial_filter, solid_on, lighting_on, dof_on);
     // Per-axis widget ceiling: the GPU's max texture size (the pixel budget
     // constrains the product within it). Guard against a degenerate 0.
     let dim_ceiling = max_export_dimension.max(MIN_EXPORT_DIM);
@@ -218,7 +222,7 @@ mod tests {
     #[test]
     fn budget_clamp_caps_total_pixels() {
         let max_dim = 32768;
-        let max_px = max_export_pixels(false, false, false); // desktop: 400 MP
+        let max_px = max_export_pixels(false, false, false, false); // desktop: 400 MP
         // Over budget at this height → width shrinks so the product fits.
         let mut w = 30000;
         clamp_to_budget(&mut w, 20000, max_dim, max_px);
@@ -244,12 +248,13 @@ mod tests {
 
     #[test]
     fn spatial_filter_raises_per_pixel_cost() {
-        assert_eq!(export_bytes_per_pixel(false, false, false), 52);
-        assert_eq!(export_bytes_per_pixel(true, false, false), 68);
-        assert!(export_bytes_per_pixel(true, false, false) > export_bytes_per_pixel(false, false, false));
+        assert_eq!(export_bytes_per_pixel(false, false, false, false), 52);
+        assert_eq!(export_bytes_per_pixel(true, false, false, false), 68);
+        assert!(export_bytes_per_pixel(true, false, false, false) > export_bytes_per_pixel(false, false, false, false));
         // Solid adds the depth word + accum-depth tracker; lighting adds
         // the shade-output and normal ping-pongs.
-        assert_eq!(export_bytes_per_pixel(false, true, false), 60);
-        assert_eq!(export_bytes_per_pixel(false, true, true), 124);
+        assert_eq!(export_bytes_per_pixel(false, true, false, false), 60);
+        assert_eq!(export_bytes_per_pixel(false, true, true, false), 124);
+        assert_eq!(export_bytes_per_pixel(false, true, true, true), 140);
     }
 }

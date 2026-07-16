@@ -375,7 +375,18 @@ pub async fn render(
         job.config.camera_y,
         job.config.camera_z,
     );
-    let pre_tonemap_view = if shade_ran {
+    // Post-process DoF (solid mode) between shade and density
+    // effects/tonemap — same ordering as the interactive frame.
+    let dof_ran = renderer.run_dof_pass(
+        device,
+        queue,
+        &mut tonemap_encoder,
+        shade_ran,
+        job.config.zoom,
+    );
+    let pre_tonemap_view = if dof_ran {
+        renderer.dof_output_view()
+    } else if shade_ran {
         renderer.shade_output_view()
     } else {
         renderer.get_accumulation_view()
@@ -393,18 +404,18 @@ pub async fn render(
         if density_ran {
             if let Some(density_output) = effect_chain.get_density_output() {
                 renderer.tonemap_pass_with_input(device, queue, &mut tonemap_encoder, density_output);
-            } else if shade_ran {
-                renderer.tonemap_pass_with_input(device, queue, &mut tonemap_encoder, renderer.shade_output_view());
+            } else if dof_ran || shade_ran {
+                renderer.tonemap_pass_with_input(device, queue, &mut tonemap_encoder, pre_tonemap_view);
             } else {
                 renderer.tonemap_pass(queue, &mut tonemap_encoder);
             }
-        } else if shade_ran {
-            renderer.tonemap_pass_with_input(device, queue, &mut tonemap_encoder, renderer.shade_output_view());
+        } else if dof_ran || shade_ran {
+            renderer.tonemap_pass_with_input(device, queue, &mut tonemap_encoder, pre_tonemap_view);
         } else {
             renderer.tonemap_pass(queue, &mut tonemap_encoder);
         }
-    } else if shade_ran {
-        renderer.tonemap_pass_with_input(device, queue, &mut tonemap_encoder, renderer.shade_output_view());
+    } else if dof_ran || shade_ran {
+        renderer.tonemap_pass_with_input(device, queue, &mut tonemap_encoder, pre_tonemap_view);
     } else {
         renderer.tonemap_pass(queue, &mut tonemap_encoder);
     }
