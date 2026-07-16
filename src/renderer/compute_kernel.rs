@@ -176,18 +176,14 @@ pub struct FlameRenderer {
     /// mode goes ~N× dimmer than steady-state for N drag frames.
     samples_in_buffer: u64,
     /// Samples of the most recent compute batch — the unit for the
-    /// volume trust ramp's "how many batches deep are we" estimate.
+    /// auto-refit's "how many batches deep are we" estimate.
     last_batch_samples: u64,
-    /// Attractor-bounds readback (volume auto-fit).
+    /// Attractor-bounds readback (shadow-map auto-fit).
     bounds_stats: crate::renderer::density_stats::BoundsTracker,
     /// Last decoded world AABB of plotted samples. Persists across
     /// resets as "last known" — the placement frozen at each reset uses
     /// it, and fresh measurements replace it as they arrive.
     measured_bounds: Option<([f32; 3], [f32; 3])>,
-    /// Volume placement (center, extent) FROZEN at the last accumulation
-    /// reset. Splat coordinates depend on it, so it must not move
-    /// mid-run even as new bounds measurements arrive.
-    frozen_vol_placement: Option<([f32; 3], f32)>,
     /// A fresh bounds measurement arrived since the placement froze.
     bounds_dirty: bool,
     /// Light-space shadow-map fit (center, radius) FROZEN at the last
@@ -253,13 +249,6 @@ pub struct FlameRenderer {
 }
 
 impl FlameRenderer {
-    /// Phase 2 density-volume grid resolution per axis. Desktop 192
-    /// (~28 MB), WASM 128 (~8 MB) — inside one storage binding everywhere.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub const VOLUME_DIM: u32 = 192;
-    #[cfg(target_arch = "wasm32")]
-    pub const VOLUME_DIM: u32 = 128;
-
     /// Create new FlameRenderer with default palette size (256)
     pub fn new(
         device: &Device,
@@ -353,7 +342,6 @@ impl FlameRenderer {
             last_batch_samples: 0,
             bounds_stats: crate::renderer::density_stats::BoundsTracker::new(device),
             measured_bounds: None,
-            frozen_vol_placement: None,
             bounds_dirty: false,
             frozen_shadow_fit: None,
             shade_dirty: true,
@@ -423,9 +411,6 @@ impl FlameRenderer {
             && matches!(self.current_render_mode, crate::scene::transforms::RenderMode::ThreeD);
         self.buffers.set_solid_depth_region(device, solid_enabled);
         self.needs_depth_prime = solid_enabled;
-        // Same for the density volume — resolution-independent, but the
-        // fresh FlameBuffers dropped it.
-        self.buffers.set_density_volume(device, self.volume_active(), Self::VOLUME_DIM);
         self.shade_pass.resize(device, width, height);
 
         // Recreating variation_params_buffer wipes the init-derived slots
@@ -557,9 +542,6 @@ impl FlameRenderer {
                 && !preserve_z,
             solid_enabled: (self.solid_strength > 0.0 || self.solid_shading.active())
                 && matches!(render_mode, crate::scene::transforms::RenderMode::ThreeD),
-            volume_enabled: self.solid_shading.volume_enabled
-                && (self.solid_strength > 0.0 || self.solid_shading.active())
-                && matches!(render_mode, crate::scene::transforms::RenderMode::ThreeD),
             attachment_cap: flame.attachment_cap() as u32,
             // No inlining for incremental updates (would trigger too many shader rebuilds)
             inlined_transforms: None,
@@ -623,7 +605,6 @@ impl FlameRenderer {
             0
         };
 
-        let vol_fit = self.frozen_vol_placement.unwrap_or_else(|| self.volume_placement(zoom, pan_x, pan_y, camera_rotation_x, camera_rotation_y, camera_bank, [camera_x, camera_y, camera_z]));
         let sh_fit = self.frozen_shadow_fit.unwrap_or_else(|| self.shadow_placement(zoom, pan_x, pan_y, camera_rotation_x, camera_rotation_y, camera_bank, [camera_x, camera_y, camera_z]));
         let sh_dirs = self.shadow_light_dirs(camera_rotation_x, camera_rotation_y, camera_bank);
         let params = GpuParams {
@@ -673,12 +654,6 @@ impl FlameRenderer {
             background_g: self.background_g,
             background_b: self.background_b,
             post_symmetry: (&self.post_symmetry).into(),
-            volume_dim: if self.volume_active() { Self::VOLUME_DIM } else { 0 },
-            volume_extent: vol_fit.1,
-            volume_center_x: vol_fit.0[0],
-            volume_center_y: vol_fit.0[1],
-            volume_center_z: vol_fit.0[2],
-            _pad_volume: [0; 3],
             shadow_center_x: sh_fit.0[0],
             shadow_center_y: sh_fit.0[1],
             shadow_center_z: sh_fit.0[2],
@@ -1150,53 +1125,7 @@ impl FlameRenderer {
         } else {
             self.shade_settle -= 1;
         }
-        // Phase 2: hand the density volume (when active) to the shade
-        // pass — gradient normals, volumetric AO, shadow march, and
-        // occlusion repair all key off it.
-        let vol_fit = self.frozen_vol_placement.unwrap_or_else(|| self.volume_placement(zoom, pan_x, pan_y, camera_rotation_x, camera_rotation_y, camera_bank, [camera_x, camera_y, camera_z]));
         let sh_fit = self.frozen_shadow_fit.unwrap_or_else(|| self.shadow_placement(zoom, pan_x, pan_y, camera_rotation_x, camera_rotation_y, camera_bank, [camera_x, camera_y, camera_z]));
-        // Volume trust: voxels of the DERIVED (half-res) grid across the
-        // visible width. Auto-fit yields ~48 (trust 1); a manual extent
-        // much larger than the view collapses it toward 0 and the shade
-        // pass fades every volume feature out instead of stamping
-        // voxel-scale artifacts on the image.
-        let vol_trust = {
-            let hd = (self.buffers.volume_dim / 2).max(1) as f32;
-            let voxel = 2.0 * vol_fit.1 / hd;
-            let aspect = self.width.max(self.height).max(1) as f32
-                / self.width.min(self.height).max(1) as f32;
-            let visible = 4.0 * aspect / zoom.max(1e-6);
-            let geometric = ((visible / voxel.max(1e-9) - 12.0) / 24.0).clamp(0.0, 1.0);
-            // Statistical ramp: a volume holding only a batch or two is
-            // mostly Poisson noise — repair/normals driven by it strobe
-            // violently (worst in the overwrite window, which clears the
-            // volume EVERY frame). Fade the features in over the first
-            // ~dozen batches instead; drags fall back to the Phase 1
-            // look, matching how overwrite degrades everything else.
-            let batches = self.samples_in_buffer as f32
-                / (self.last_batch_samples.max(1) as f32);
-            geometric * (batches / 12.0).clamp(0.0, 1.0)
-        };
-        let volume = if self.volume_active() && self.buffers.volume_dim > 0 {
-            self.buffers.density_volume_buffer.as_ref().map(|buf| {
-                crate::renderer::shade_pass::VolumeShadeInput {
-                    buffer: buf,
-                    dim: self.buffers.volume_dim,
-                    extent: vol_fit.1,
-                    splats: self.samples_in_buffer as f32,
-                    center: vol_fit.0,
-                    closing: self.solid_shading.volume_closing,
-                    trust: vol_trust,
-                    // Scene-mean per-pixel density: dispatched iterations
-                    // × the measured survival fraction, per pixel.
-                    base_alpha: (self.samples_in_buffer as f32 * self.solid_density_fraction
-                        / ((self.width * self.height).max(1) as f32))
-                        .max(1e-3),
-                }
-            })
-        } else {
-            None
-        };
         self.shade_pass.run(
             device,
             queue,
@@ -1210,19 +1139,16 @@ impl FlameRenderer {
             pan_y,
             self.perspective_strength,
             self.surface_thickness,
-            self.solid_strength,
             (camera_rotation_x, camera_rotation_y, camera_bank, [camera_x, camera_y, camera_z]),
-            volume.as_ref(),
             if self.shadow_capture_wanted() && self.buffers.solid_depth_region {
                 Some((self.buffers.shadow_map_word_offset(), sh_fit.0, sh_fit.1))
             } else {
                 None
             },
-            // Temporal smoothing of the shade output: the volume-derived
-            // shading tracks genuinely drifting data during accumulation
-            // (repaired pixels ride the front shell's relative density);
-            // raw per-frame it strobes. Overwrite mode gets 0 — every
-            // frame is a fresh single-batch preview.
+            // Temporal smoothing of the shade output: the shading tracks
+            // genuinely drifting data during accumulation; raw per-frame
+            // it strobes. Overwrite mode gets 0 — every frame is a fresh
+            // single-batch preview.
             if self.overwrite_mode { 0.0 } else { 0.85 },
         );
         true
@@ -1252,66 +1178,13 @@ impl FlameRenderer {
     }
 
 
-    /// Density-volume placement. View-fit mode (default) centers the
-    /// cube on the world point at screen center (camera-space
-    /// (pan_x, pan_y, 0) mapped through the inverse camera rotation) and
-    /// sizes it to 2x the visible half-width at the focal plane - voxels
-    /// track what the user actually sees instead of wasting the grid on
-    /// off-screen world (a fixed cube leaves a zoomed-in object spanning
-    /// a handful of voxels: blocky normals/AO, dead occlusion repair).
-    /// Camera/zoom/pan changes reset accumulation, which clears and
-    /// re-splats the volume, so tracking the view is free. Manual mode:
-    /// origin-centered volume_extent cube.
+    /// Interactive shadow-fit auto-refit: when a fresh bounds
+    /// measurement materially moves the fit AND the run is still young
+    /// (a refit restarts accumulation — invisible at ~1 s in, enraging
+    /// at 20 min in), re-freeze and report true so the caller resets.
     #[allow(clippy::too_many_arguments)]
-    fn volume_placement(&self, zoom: f32, pan_x: f32, pan_y: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_bank: f32, camera_pos: [f32; 3]) -> ([f32; 3], f32) {
-        if !self.solid_shading.volume_auto_fit {
-            return ([0.0; 3], self.solid_shading.volume_extent);
-        }
-        let aspect = self.width.max(self.height).max(1) as f32
-            / self.width.min(self.height).max(1) as f32;
-        // Visible camera-space half-width at the focal plane is
-        // 2*aspect/zoom (see shade.wgsl reconstruct()); 2x headroom
-        // covers depth and perspective spread.
-        let view_extent = (4.0 * aspect / zoom.max(1e-6)).clamp(1e-3, 1e6);
-        // Preferred: fit the cube to the MEASURED attractor bounds (the
-        // running AABB the splat maintains). Tighter than the view when
-        // the flame is small — empty space beyond the attractor needs no
-        // voxels, and every halving of the extent doubles the base
-        // coat's effective resolution. Capped at 12x the view fit so a
-        // wildly sprawling attractor can't starve the visible region.
-        let rows = crate::renderer::shade_pass::effective_camera_rows(
-            camera_rotation_x, camera_rotation_y, camera_bank);
-        let mut view_center = camera_pos;
-        for i in 0..3 {
-            view_center[i] += pan_x * rows[0][i] + pan_y * rows[1][i];
-        }
-        if let Some((mn, mx)) = self.measured_bounds {
-            let c = [
-                (mn[0] + mx[0]) * 0.5,
-                (mn[1] + mx[1]) * 0.5,
-                (mn[2] + mx[2]) * 0.5,
-            ];
-            let half = ((mx[0] - mn[0]).max(mx[1] - mn[1]).max(mx[2] - mn[2]) * 0.5 * 1.15)
-                .max(1e-3);
-            // Zoomed IN past the flame's size, track the VIEWED region:
-            // covering the whole flame would spend voxels on off-screen
-            // structure and coarsen the visible surface. Zoomed out,
-            // cover the flame.
-            if half <= view_extent {
-                return (c, half.max(view_extent * 0.05));
-            }
-            return (view_center, view_extent.min(half).min(view_extent * 12.0));
-        }
-        (view_center, view_extent)
-    }
-
-    /// Interactive volume auto-refit: when a fresh bounds measurement
-    /// materially moves the placement AND the run is still young (a
-    /// refit restarts accumulation — invisible at ~1 s in, enraging at
-    /// 20 min in), re-freeze and report true so the caller resets.
-    #[allow(clippy::too_many_arguments)]
-    pub fn maybe_refit_volume(&mut self, zoom: f32, pan_x: f32, pan_y: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_bank: f32, camera_pos: [f32; 3]) -> bool {
-        if !self.bounds_dirty || !self.volume_active() {
+    pub fn maybe_refit_shadow(&mut self, zoom: f32, pan_x: f32, pan_y: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_bank: f32, camera_pos: [f32; 3]) -> bool {
+        if !self.bounds_dirty || !self.shadow_capture_wanted() {
             return false;
         }
         self.bounds_dirty = false;
@@ -1319,19 +1192,18 @@ impl FlameRenderer {
         if batches > 64 {
             return false;
         }
-        let new_fit = self.volume_placement(zoom, pan_x, pan_y, camera_rotation_x, camera_rotation_y, camera_bank, camera_pos);
-        let material = match self.frozen_vol_placement {
-            Some((c, e)) => {
+        let new_fit = self.shadow_placement(zoom, pan_x, pan_y, camera_rotation_x, camera_rotation_y, camera_bank, camera_pos);
+        let material = match self.frozen_shadow_fit {
+            Some((c, r)) => {
                 let dc = (c[0] - new_fit.0[0]).abs()
                     .max((c[1] - new_fit.0[1]).abs())
                     .max((c[2] - new_fit.0[2]).abs());
-                dc > e * 0.1 || (new_fit.1 - e).abs() > e * 0.1
+                dc > r * 0.1 || (new_fit.1 - r).abs() > r * 0.1
             }
             None => true,
         };
         if material {
-            self.frozen_vol_placement = Some(new_fit);
-            self.frozen_shadow_fit = Some(self.shadow_placement(zoom, pan_x, pan_y, camera_rotation_x, camera_rotation_y, camera_bank, camera_pos));
+            self.frozen_shadow_fit = Some(new_fit);
         }
         material
     }
@@ -1385,11 +1257,8 @@ impl FlameRenderer {
     fn shadow_light_dirs(&self, camera_rotation_x: f32, camera_rotation_y: f32, camera_bank: f32) -> (u32, [[f32; 4]; 4]) {
         let mut dirs = [[0.0f32; 4]; 4];
         if !self.shadow_capture_wanted() {
-            log::warn!("SHDBG: capture off (strength {} solid {} mode {:?})",
-                self.solid_shading.shadow_strength, self.solid_strength, self.current_render_mode);
             return (0, dirs);
         }
-        log::warn!("SHDBG: capture ON");
         let rows = crate::renderer::shade_pass::effective_camera_rows(
             camera_rotation_x, camera_rotation_y, camera_bank);
         for (i, l) in self.solid_shading.lights.iter().enumerate().take(4) {
@@ -1416,43 +1285,35 @@ impl FlameRenderer {
         (self.width as u64) * (self.height as u64) * 5 * 4
     }
 
-    /// Blocking bounds measurement + placement refresh (export warmup:
-    /// run a few batches, call this, reset, render for real — the cube
-    /// then covers the actual flame). Returns true when the placement
-    /// changed materially.
+    /// Blocking bounds measurement + shadow-fit refresh (export warmup:
+    /// run a few batches, call this, reset, render for real — the maps
+    /// then cover the actual flame). Returns true when the fit changed
+    /// materially.
     #[allow(clippy::too_many_arguments)]
-    pub fn refresh_volume_placement_blocking(&mut self, device: &Device, queue: &Queue, zoom: f32, pan_x: f32, pan_y: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_bank: f32, camera_pos: [f32; 3]) -> bool {
-        if !(self.volume_active() && self.buffers.solid_depth_region) {
+    pub fn refresh_shadow_placement_blocking(&mut self, device: &Device, queue: &Queue, zoom: f32, pan_x: f32, pan_y: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_bank: f32, camera_pos: [f32; 3]) -> bool {
+        if !(self.shadow_capture_wanted() && self.buffers.solid_depth_region) {
             return false;
         }
         let off = self.bounds_tail_offset();
         if let Some(words) = self.bounds_stats.read_blocking(device, queue, &self.buffers.histogram_buffer, off) {
             match crate::renderer::density_stats::decode_bounds(&words) {
                 Some(b) => {
-                    log::debug!("Volume bounds measured: min {:?} max {:?}", b.0, b.1);
+                    log::debug!("Attractor bounds measured: min {:?} max {:?}", b.0, b.1);
                     self.measured_bounds = Some(b);
                 }
-                None => log::debug!("Volume bounds not available yet"),
+                None => log::debug!("Attractor bounds not available yet"),
             }
         }
-        let new_fit = self.volume_placement(zoom, pan_x, pan_y, camera_rotation_x, camera_rotation_y, camera_bank, camera_pos);
-        let changed = match self.frozen_vol_placement {
-            Some((c, e)) => {
+        let new_fit = self.shadow_placement(zoom, pan_x, pan_y, camera_rotation_x, camera_rotation_y, camera_bank, camera_pos);
+        let changed = match self.frozen_shadow_fit {
+            Some((c, r)) => {
                 let dc = (c[0] - new_fit.0[0]).abs().max((c[1] - new_fit.0[1]).abs()).max((c[2] - new_fit.0[2]).abs());
-                dc > e * 0.05 || (e - new_fit.1).abs() > e * 0.05
+                dc > r * 0.05 || (r - new_fit.1).abs() > r * 0.05
             }
             None => true,
         };
-        self.frozen_vol_placement = Some(new_fit);
+        self.frozen_shadow_fit = Some(new_fit);
         changed
-    }
-
-    /// Whether the Phase 2 density volume should be compiled + bound for
-    /// the current state (mirrors the VOLUME shader-builder gate).
-    pub fn volume_active(&self) -> bool {
-        self.solid_shading.volume_enabled
-            && (self.solid_strength > 0.0 || self.solid_shading.active())
-            && matches!(self.current_render_mode, crate::scene::transforms::RenderMode::ThreeD)
     }
 
     /// Interactive-path density-stats tick (solid brightness renorm):
@@ -1460,10 +1321,10 @@ impl FlameRenderer {
     /// frames while occlusion is actively culling. Call once per frame,
     /// after accumulate and before tonemap.
     pub fn update_density_stats(&mut self, device: &Device, queue: &Queue, encoder: &mut CommandEncoder) {
-        // Attractor-bounds tick (volume auto-fit): async readback of the
-        // 8-word tail. Applied to `measured_bounds` immediately; the
-        // PLACEMENT only picks it up at the next reset (frozen per run).
-        if self.volume_active() && self.buffers.solid_depth_region {
+        // Attractor-bounds tick (shadow-map auto-fit): async readback of
+        // the 8-word tail. Applied to `measured_bounds` immediately; the
+        // frozen fit only picks it up at the next reset (frozen per run).
+        if self.buffers.solid_depth_region {
             let off = self.bounds_tail_offset();
             if let Some(words) = self.bounds_stats.tick(device, encoder, &self.buffers.histogram_buffer, off) {
                 if let Some(b) = crate::renderer::density_stats::decode_bounds(&words) {
@@ -1605,10 +1466,7 @@ impl FlameRenderer {
         self.shade_dirty = true;
         let solid_enabled = (config.solid_strength > 0.0 || self.solid_shading.active())
             && matches!(config.render_mode, crate::scene::transforms::RenderMode::ThreeD);
-        let volume_enabled = self.solid_shading.volume_enabled && solid_enabled
-            && matches!(config.render_mode, crate::scene::transforms::RenderMode::ThreeD);
-        let mut rebind = self.buffers.set_solid_depth_region(device, solid_enabled);
-        rebind |= self.buffers.set_density_volume(device, volume_enabled, Self::VOLUME_DIM);
+        let rebind = self.buffers.set_solid_depth_region(device, solid_enabled);
         if rebind {
             self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
             self.accumulate_bind_group = self.pipelines.create_accumulate_bind_group(device, &self.buffers);
@@ -1642,9 +1500,7 @@ impl FlameRenderer {
         // Update transform tracking
         self.num_transforms = config.flame.transforms.len() as u32;
 
-        self.frozen_vol_placement = Some(self.volume_placement(config.zoom, config.pan_x, config.pan_y, config.camera_rotation_x, config.camera_rotation_y, config.camera_bank, [config.camera_x, config.camera_y, config.camera_z]));
         self.frozen_shadow_fit = Some(self.shadow_placement(config.zoom, config.pan_x, config.pan_y, config.camera_rotation_x, config.camera_rotation_y, config.camera_bank, [config.camera_x, config.camera_y, config.camera_z]));
-        let vol_fit = self.frozen_vol_placement.unwrap();
         let sh_fit = self.frozen_shadow_fit.unwrap();
         let sh_dirs = self.shadow_light_dirs(config.camera_rotation_x, config.camera_rotation_y, config.camera_bank);
         let params = GpuParams {
@@ -1694,12 +1550,6 @@ impl FlameRenderer {
             background_g: config.background_color[1],
             background_b: config.background_color[2],
             post_symmetry: (&config.flame.post_symmetry).into(),
-            volume_dim: if self.volume_active() { Self::VOLUME_DIM } else { 0 },
-            volume_extent: vol_fit.1,
-            volume_center_x: vol_fit.0[0],
-            volume_center_y: vol_fit.0[1],
-            volume_center_z: vol_fit.0[2],
-            _pad_volume: [0; 3],
             shadow_center_x: sh_fit.0[0],
             shadow_center_y: sh_fit.0[1],
             shadow_center_z: sh_fit.0[2],
@@ -1751,17 +1601,13 @@ impl FlameRenderer {
         // no-op multiplier there), so transparent flames can be lit.
         let solid_enabled = (solid_strength > 0.0 || self.solid_shading.active())
             && matches!(render_mode, crate::scene::transforms::RenderMode::ThreeD);
-        // Reset point: re-freeze the volume placement from the latest
-        // measured bounds (splat coordinates must not move mid-run).
-        self.frozen_vol_placement = Some(self.volume_placement(zoom, pan_x, pan_y, camera_rotation_x, camera_rotation_y, camera_bank, [camera_x, camera_y, camera_z]));
+        // Reset point: re-freeze the shadow fit from the latest measured
+        // bounds (splat texel coordinates must not move mid-run).
         self.frozen_shadow_fit = Some(self.shadow_placement(zoom, pan_x, pan_y, camera_rotation_x, camera_rotation_y, camera_bank, [camera_x, camera_y, camera_z]));
         let depth_changed = self.buffers.set_solid_depth_region(device, solid_enabled);
-        let volume_enabled = self.solid_shading.volume_enabled && solid_enabled
-            && matches!(render_mode, crate::scene::transforms::RenderMode::ThreeD);
-        let volume_changed = self.buffers.set_density_volume(device, volume_enabled, Self::VOLUME_DIM);
-        if depth_changed || volume_changed {
-            // Histogram / volume buffer was recreated — every bind group
-            // that references it must be too.
+        if depth_changed {
+            // Histogram buffer was recreated — every bind group that
+            // references it must be too.
             self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
             self.accumulate_bind_group = self.pipelines.create_accumulate_bind_group(device, &self.buffers);
             self.histogram_blur_h_bind_group = self.pipelines.create_histogram_blur_h_bind_group(device, &self.buffers);
@@ -1839,7 +1685,6 @@ impl FlameRenderer {
         // Update transform tracking
         self.num_transforms = flame.transforms.len() as u32;
 
-        let vol_fit = self.frozen_vol_placement.unwrap_or_else(|| self.volume_placement(zoom, pan_x, pan_y, camera_rotation_x, camera_rotation_y, camera_bank, [camera_x, camera_y, camera_z]));
         let sh_fit = self.frozen_shadow_fit.unwrap_or_else(|| self.shadow_placement(zoom, pan_x, pan_y, camera_rotation_x, camera_rotation_y, camera_bank, [camera_x, camera_y, camera_z]));
         let sh_dirs = self.shadow_light_dirs(camera_rotation_x, camera_rotation_y, camera_bank);
         let params = GpuParams {
@@ -1889,12 +1734,6 @@ impl FlameRenderer {
             background_g: self.background_g,
             background_b: self.background_b,
             post_symmetry: (&self.post_symmetry).into(),
-            volume_dim: if self.volume_active() { Self::VOLUME_DIM } else { 0 },
-            volume_extent: vol_fit.1,
-            volume_center_x: vol_fit.0[0],
-            volume_center_y: vol_fit.0[1],
-            volume_center_z: vol_fit.0[2],
-            _pad_volume: [0; 3],
             shadow_center_x: sh_fit.0[0],
             shadow_center_y: sh_fit.0[1],
             shadow_center_z: sh_fit.0[2],
@@ -2098,7 +1937,6 @@ impl FlameRenderer {
     pub fn update_iterations(&mut self, queue: &Queue, iterations_per_thread: u32, burn_in: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_bank: f32, camera_x: f32, camera_y: f32, camera_z: f32, speed_factor: f32) {
         self.burn_in = burn_in;
 
-        let vol_fit = self.frozen_vol_placement.unwrap_or_else(|| self.volume_placement(zoom, pan_x, pan_y, camera_rotation_x, camera_rotation_y, camera_bank, [camera_x, camera_y, camera_z]));
         let sh_fit = self.frozen_shadow_fit.unwrap_or_else(|| self.shadow_placement(zoom, pan_x, pan_y, camera_rotation_x, camera_rotation_y, camera_bank, [camera_x, camera_y, camera_z]));
         let sh_dirs = self.shadow_light_dirs(camera_rotation_x, camera_rotation_y, camera_bank);
         let params = GpuParams {
@@ -2148,12 +1986,6 @@ impl FlameRenderer {
             background_g: self.background_g,
             background_b: self.background_b,
             post_symmetry: (&self.post_symmetry).into(),
-            volume_dim: if self.volume_active() { Self::VOLUME_DIM } else { 0 },
-            volume_extent: vol_fit.1,
-            volume_center_x: vol_fit.0[0],
-            volume_center_y: vol_fit.0[1],
-            volume_center_z: vol_fit.0[2],
-            _pad_volume: [0; 3],
             shadow_center_x: sh_fit.0[0],
             shadow_center_y: sh_fit.0[1],
             shadow_center_z: sh_fit.0[2],
@@ -2466,7 +2298,6 @@ impl FlameRenderer {
         self.color_mode = color_mode;
 
         // Update params to reflect new color mode
-        let vol_fit = self.frozen_vol_placement.unwrap_or_else(|| self.volume_placement(zoom, pan_x, pan_y, camera_rotation_x, camera_rotation_y, camera_bank, [camera_x, camera_y, camera_z]));
         let sh_fit = self.frozen_shadow_fit.unwrap_or_else(|| self.shadow_placement(zoom, pan_x, pan_y, camera_rotation_x, camera_rotation_y, camera_bank, [camera_x, camera_y, camera_z]));
         let sh_dirs = self.shadow_light_dirs(camera_rotation_x, camera_rotation_y, camera_bank);
         let params = GpuParams {
@@ -2516,12 +2347,6 @@ impl FlameRenderer {
             background_g: self.background_g,
             background_b: self.background_b,
             post_symmetry: (&self.post_symmetry).into(),
-            volume_dim: if self.volume_active() { Self::VOLUME_DIM } else { 0 },
-            volume_extent: vol_fit.1,
-            volume_center_x: vol_fit.0[0],
-            volume_center_y: vol_fit.0[1],
-            volume_center_z: vol_fit.0[2],
-            _pad_volume: [0; 3],
             shadow_center_x: sh_fit.0[0],
             shadow_center_y: sh_fit.0[1],
             shadow_center_z: sh_fit.0[2],

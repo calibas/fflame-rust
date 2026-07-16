@@ -621,37 +621,9 @@ pub struct SolidShadingSettings {
     /// pixels whose neighbor ring agrees it's one surface — closes the
     /// see-through pinholes sparse chaos-game coverage leaves in solids.
     pub gap_fill: u32,
-    /// Phase 2: world-space density volume (3D grid the chaos game splats
-    /// into alongside the histogram). Powers gradient normals, volumetric
-    /// AO/shadows, and coverage-independent occlusion repair. Costs one
-    /// extra atomicAdd per sample + the grid memory (~28 MB desktop).
-    pub volume_enabled: bool,
-    /// Half-extent of the volume's world-space cube (the grid covers
-    /// [-extent, extent]^3 centered on the origin). Flames typically live
-    /// within ~2; enlarge for sprawling scenes (coarser voxels).
-    pub volume_extent: f32,
-    /// Auto-fit the volume to the VIEW (default): centered on the world
-    /// point at screen center, sized from zoom so voxels stay ~1/100th
-    /// of the visible width at any magnification. A fixed world cube
-    /// wastes the entire grid when zoomed in (voxels larger than the
-    /// visible object → blocky normals/AO, dead occlusion repair).
-    /// Camera/zoom/pan changes already reset accumulation — which clears
-    /// and re-splats the volume — so tracking the view costs nothing.
-    /// When false, volume_extent is used as a manual world half-extent
-    /// centered on the origin.
-    pub volume_auto_fit: bool,
-    /// Morphological closing radius for the volume's occlusion field
-    /// (0-2 half-res voxels, 0 = off): dilate-then-erode seals holes in
-    /// the splatted density up to ~2x this radius before the occlusion /
-    /// repair ray march reads it, so see-through pinholes in genuinely
-    /// sparse shells read as sealed surface. Erosion undoes the
-    /// dilation's silhouette inflation everywhere except inside holes.
-    /// This INVENTS surface where the IFS measure has none - it's an
-    /// artistic dial, not recovery of real data.
-    pub volume_closing: u32,
-    /// Volume shadow-march strength (0 = off): each light's diffuse +
-    /// specular is attenuated by the density integrated along a ray
-    /// marched toward it through the volume. Needs volume_enabled.
+    /// Shadow-map strength (0 = off): each light's diffuse + specular
+    /// is attenuated by its light-space shadow map (splat-resolution
+    /// depth maps baked during accumulation).
     pub shadow_strength: f32,
     /// Up to 4 directional lights. Light 0 defaults enabled once
     /// shading is turned on via the UI (the config default is all-off,
@@ -671,10 +643,6 @@ impl Default for SolidShadingSettings {
             ssao_radius: 0.15,
             normal_smoothing: 1,
             gap_fill: 0,
-            volume_enabled: false,
-            volume_extent: 2.5,
-            volume_auto_fit: true,
-            volume_closing: 1,
             shadow_strength: 0.0,
             lights: [
                 SolidLight { enabled: true, ..SolidLight::default() },

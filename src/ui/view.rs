@@ -514,67 +514,9 @@ pub fn render_view_content(
                     );
                 }
 
-                // Phase 2: world-space density volume (∇ρ normals, AO,
-                // shadows, occlusion repair). Toggling reallocates the
-                // voxel grid and resets iterations.
-                let mut volume_enabled = config.solid_shading.volume_enabled;
-                let response = ui.checkbox(&mut volume_enabled, t!("view.volume_enabled").as_ref())
-                    .on_hover_text(t!("view.tooltip_volume_enabled"));
-                if response.changed() {
-                    let _ = config_manager.update_param(
-                        ConfigPath::VolumeEnabled,
-                        volume_enabled.into()
-                    );
-                }
-                if volume_enabled {
-                    let mut auto_fit = config.solid_shading.volume_auto_fit;
-                    let response = ui.checkbox(&mut auto_fit, t!("view.volume_auto_fit").as_ref())
-                        .on_hover_text(t!("view.tooltip_volume_auto_fit"));
-                    if response.changed() {
-                        let _ = config_manager.update_param(
-                            ConfigPath::VolumeAutoFit,
-                            auto_fit.into()
-                        );
-                    }
-                    let mut closing = config.solid_shading.volume_closing as f32;
-                    let response = ui.add(
-                        super::VkbSlider::new(&mut closing, 0.0..=2.0)
-                            .text(t!("view.volume_closing").as_ref())
-                            .step_by(1.0)
-                    ).on_hover_text(t!("view.tooltip_volume_closing"));
-                    if response.changed() {
-                        let _ = config_manager.update_param(
-                            ConfigPath::VolumeClosing,
-                            closing.into()
-                        );
-                    }
-                    if !auto_fit {
-                        // Volume features (incl. shadows) fade with grid
-                        // resolution vs the view — a manual extent much
-                        // larger than the visible area disables them.
-                        ui.label(
-                            egui::RichText::new(t!("view.volume_manual_hint"))
-                                .small()
-                                .weak(),
-                        );
-                        let mut volume_extent = config.solid_shading.volume_extent;
-                        let response = ui.add(
-                            super::VkbSlider::new(&mut volume_extent, 0.01..=20.0)
-                                .text(t!("view.volume_extent").as_ref())
-                                .step_by(0.1)
-                        ).on_hover_text(t!("view.tooltip_volume_extent"));
-                        if response.changed() {
-                            let _ = config_manager.update_param(
-                                ConfigPath::VolumeExtent,
-                                volume_extent.into()
-                            );
-                        }
-                    }
-                }
-
-                // Phase 1: deferred lighting (shade pass). Works with or
-                // without occlusion — any nonzero shading strength turns
-                // on the depth capture by itself.
+                // Deferred lighting (shade pass). Works with or without
+                // occlusion — any nonzero shading strength turns on the
+                // depth capture by itself.
                 ui.add_space(8.0);
                 ui.label(t!("view.lighting_section").as_ref());
 
@@ -602,8 +544,7 @@ pub fn render_view_content(
                         (ConfigPath::SsaoRadius, "view.ssao_radius", shading.ssao_radius, 0.01..=1.0, 0.01),
                         (ConfigPath::NormalSmoothing, "view.normal_smoothing", shading.normal_smoothing as f32, 0.0..=3.0, 1.0),
                         (ConfigPath::GapFill, "view.gap_fill", shading.gap_fill as f32, 0.0..=3.0, 1.0),
-                        // Splat-resolution shadow maps (Stage 2) — works
-                        // with or without the density volume.
+                        // Splat-resolution shadow maps (Stage 2).
                         (ConfigPath::SolidShadowStrength, "view.shadow_strength", shading.shadow_strength, 0.0..=1.0, 0.01),
                     ];
                     for (path, label, value, range, step) in global_sliders {

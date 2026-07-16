@@ -1980,12 +1980,12 @@ impl App {
                 log::debug!("Rendering complete: max_iterations reached");
             }
 
-            // Volume auto-fit: when the first real bounds measurement
-            // lands (early in a run), re-freeze the cube placement and
-            // restart accumulation so the volume covers the actual flame
+            // Shadow-map auto-fit: when the first real bounds measurement
+            // lands (early in a run), re-freeze the shadow fit and
+            // restart accumulation so the maps cover the actual flame
             // instead of a zoom guess. Only fires while the run is young.
             if should_iterate
-                && renderer.maybe_refit_volume(
+                && renderer.maybe_refit_shadow(
                     final_config.zoom,
                     final_config.pan_x,
                     final_config.pan_y,

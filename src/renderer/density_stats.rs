@@ -241,13 +241,13 @@ impl DensityStats {
     }
 }
 
-/// Attractor-bounds readback (volume auto-fit).
+/// Attractor-bounds readback (shadow-map auto-fit).
 ///
 /// The main pass's VOLUME block maintains a running world-space AABB of
 /// plotted samples (subsampled ordered-float atomicMax, 8-word tail after
 /// the histogram's depth region). This tracker copies those 32 bytes back
 /// (async on the interactive path, blocking for exports) so
-/// `FlameRenderer::volume_placement` can fit the cube to the FLAME
+/// `FlameRenderer::shadow_placement` can fit the maps to the FLAME
 /// instead of guessing from zoom.
 pub struct BoundsTracker {
     readback: Buffer,

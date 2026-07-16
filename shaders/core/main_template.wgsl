@@ -123,11 +123,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // iteration's splat (the chaos game still advances). See the
         // CanHide feature + the gate after the transform chain below.
         var should_hide = false;
-{{#if HAS_VOLUME_FILL}}
-        // Reset the volume-only routing flag (variations with
-        // Feature::VolumeFill set it during the transform chain).
-        volume_fill_flag = false;
-{{/if}}
 {{#if HAS_VOLUME_SIDE}}
         // Reset the side-emission flag (Feature::VolumeSideEmit).
         volume_side_flag = false;
@@ -496,16 +491,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             }
 {{/if}}
 
-{{#if HAS_VOLUME_FILL}}
-            // Volume-only samples: seal geometry in the density volume
-            // without touching the image (fill without diluting colors).
-            // When no volume exists (2D / volume off / sample-emit), the
-            // sample is simply dropped — fill has no other meaning.
-            let volume_fill_sample = volume_fill_flag && should_plot;
-            if (volume_fill_flag) {
-                should_plot = false;
-            }
-{{/if}}
 {{#if HAS_VOLUME_SIDE}}
 {{#if RENDER_3D}}
             // Side-emitted geometry (Feature::VolumeSideEmit): an
@@ -546,24 +531,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 }
 {{/if}}
 {{/if}}
-{{#if VOLUME}}
-                // Density-volume deposit (kept for volume-based shading
-                // when the volume is enabled).
-                let ve_s = params.volume_extent;
-                let srel = svp - vec3<f32>(
-                    params.volume_center_x, params.volume_center_y, params.volume_center_z);
-                if (abs(srel.x) < ve_s && abs(srel.y) < ve_s && abs(srel.z) < ve_s) {
-                    let vd_s = params.volume_dim;
-                    let sx = min(u32((srel.x / ve_s * 0.5 + 0.5) * f32(vd_s)), vd_s - 1u);
-                    let sy = min(u32((srel.y / ve_s * 0.5 + 0.5) * f32(vd_s)), vd_s - 1u);
-                    let sz = min(u32((srel.z / ve_s * 0.5 + 0.5) * f32(vd_s)), vd_s - 1u);
-                    let si = ((sz * vd_s + sy) * vd_s + sx) * 4u;
-                    atomicAdd(&density_volume[si + 0u], u32(clamp(base_final_color.r, 0.0, 1.0) * 100.0));
-                    atomicAdd(&density_volume[si + 1u], u32(clamp(base_final_color.g, 0.0, 1.0) * 100.0));
-                    atomicAdd(&density_volume[si + 2u], u32(clamp(base_final_color.b, 0.0, 1.0) * 100.0));
-                    atomicAdd(&density_volume[si + 3u], 1u);
-                }
-{{/if}}
             }
 {{/if}}
 {{/if}}
@@ -586,52 +553,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             // path always plots at weight 1.
             var density_weight = 1.0;
 
-{{#if VOLUME}}
-            // Phase 3: RGBA density-volume splat — WORLD space (pre-camera),
-            // so the grid is camera-independent and every sample contributes
-            // regardless of which pixel (if any) it lands on. Color rides
-            // along (same fixed-point scheme as the 2D histogram) so the
-            // volume can serve as the BASE COAT for the volume-primary
-            // march: voxels fill ~1000× faster than pixels, giving a
-            // complete, hole-free colored surface long before per-pixel
-            // coverage converges.
-            // Gated on should_plot: opacity-0 (hidden / solo'd-out)
-            // transforms must not leave ghost geometry in the volume.
-            // Volume-only fill samples pass this gate too — that's their
-            // entire purpose.
-            if (should_plot{{#if HAS_VOLUME_FILL}} || volume_fill_sample{{/if}}) {
-                let ve = params.volume_extent;
-                let vrel = plot_pos - vec3<f32>(
-                    params.volume_center_x, params.volume_center_y, params.volume_center_z);
-                if (abs(vrel.x) < ve && abs(vrel.y) < ve && abs(vrel.z) < ve) {
-                    let vd = params.volume_dim;
-                    let vx = min(u32((vrel.x / ve * 0.5 + 0.5) * f32(vd)), vd - 1u);
-                    let vy = min(u32((vrel.y / ve * 0.5 + 0.5) * f32(vd)), vd - 1u);
-                    let vz = min(u32((vrel.z / ve * 0.5 + 0.5) * f32(vd)), vd - 1u);
-                    let vi = ((vz * vd + vy) * vd + vx) * 4u;
-                    let vscale = 100.0;
-                    atomicAdd(&density_volume[vi + 0u], u32(clamp(base_final_color.r, 0.0, 1.0) * vscale));
-                    atomicAdd(&density_volume[vi + 1u], u32(clamp(base_final_color.g, 0.0, 1.0) * vscale));
-                    atomicAdd(&density_volume[vi + 2u], u32(clamp(base_final_color.b, 0.0, 1.0) * vscale));
-                    atomicAdd(&density_volume[vi + 3u], 1u);
-                }
-                // Attractor bounds (subsampled 1/16 threads): ordered-float
-                // atomicMax over the six per-axis extremes, written to the
-                // 8-word tail after the depth region. Feeds the next
-                // placement's auto-fit so the cube covers the FLAME, not a
-                // guess from zoom (a too-small cube chops surrounding
-                // structure into box-face slabs).
-                if ((thread_id & 15u) == 0u) {
-                    let bbase = params.width * params.height * 5u;
-                    atomicMax(&histogram[bbase + 0u], bounds_enc(plot_pos.x));
-                    atomicMax(&histogram[bbase + 1u], bounds_enc(-plot_pos.x));
-                    atomicMax(&histogram[bbase + 2u], bounds_enc(plot_pos.y));
-                    atomicMax(&histogram[bbase + 3u], bounds_enc(-plot_pos.y));
-                    atomicMax(&histogram[bbase + 4u], bounds_enc(plot_pos.z));
-                    atomicMax(&histogram[bbase + 5u], bounds_enc(-plot_pos.z));
-                }
-            }
-{{/if}}
 
             // Convert to pixel coordinates
 {{#if RENDER_3D}}
@@ -886,6 +807,18 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 // priming batch too (it's depth-only data).
                 if (params.shadow_count > 0u) {
                     shadow_map_splat(plot_pos);
+                }
+                // Attractor bounds (subsampled 1/16 threads): running
+                // world AABB in the 8-word tail after the depth region —
+                // feeds the shadow-map auto-fit.
+                if ((thread_id & 15u) == 0u) {
+                    let bbase = params.width * params.height * 5u;
+                    atomicMax(&histogram[bbase + 0u], bounds_enc(plot_pos.x));
+                    atomicMax(&histogram[bbase + 1u], bounds_enc(-plot_pos.x));
+                    atomicMax(&histogram[bbase + 2u], bounds_enc(plot_pos.y));
+                    atomicMax(&histogram[bbase + 3u], bounds_enc(-plot_pos.y));
+                    atomicMax(&histogram[bbase + 4u], bounds_enc(plot_pos.z));
+                    atomicMax(&histogram[bbase + 5u], bounds_enc(-plot_pos.z));
                 }
 {{else}}
                 // Sample-emit mode: this shader has no per-pixel state —

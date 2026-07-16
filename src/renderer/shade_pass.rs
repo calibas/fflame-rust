@@ -1,4 +1,4 @@
-//! Solid-rendering deferred shade pass (Phase 1).
+//! Solid-rendering deferred shade pass (splat-native lighting).
 //!
 //! Host side of `shaders/shade.wgsl`: reads the current accumulator + the
 //! depth region inside the histogram buffer, writes a shaded Rgba32Float
@@ -22,8 +22,9 @@ struct ShadeLight {
     color: [f32; 4],
 }
 
-/// Mirrors WGSL `ShadeParams` (shade.wgsl) — 20 scalars + 6 vec4s +
-/// 4 lights × 32 B = 304 bytes.
+/// Mirrors WGSL `ShadeParams` (shade.wgsl) — 20 scalars + 4 camera
+/// vec4s + a scalar quad + shadow fit vec4 + a shadow scalar quad +
+/// 4 lights × 32 B = 320 bytes.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct ShadeParams {
@@ -47,37 +48,21 @@ struct ShadeParams {
     tex_height: u32,
     use_normal_tex: u32,
     gap_fill: u32,
-    // Phase 2 camera + volume block (see shade.wgsl ShadeParams).
+    // Camera + shadow block (see shade.wgsl ShadeParams).
     cam_row0: [f32; 4],
     cam_row1: [f32; 4],
     cam_row2: [f32; 4],
     cam_pos: [f32; 4],
-    vol_center: [f32; 4],
-    volume_dim: u32,
-    volume_extent: f32,
-    vol_density_scale: f32,
     shadow_strength: f32,
-    vol_trust: f32,
     temporal_ema: f32,
-    solid_strength: f32,
-    base_alpha: f32,
+    _pad_sp0: f32,
+    _pad_sp1: f32,
     shadow_fit: [f32; 4],
     shadow_word_offset: u32,
     shadow_res: u32,
     shadow_count: u32,
     _pad_sm: u32,
     lights: [ShadeLight; 4],
-}
-
-/// Mirrors WGSL `MipParams` (volume_mip.wgsl).
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct MipParams {
-    dim: u32,
-    half_dim: u32,
-    radius: u32,
-    /// Pre-smoothing per-voxel count cap (see volume_mip.wgsl).
-    clamp_raw: f32,
 }
 
 /// Mirrors WGSL `AtrousParams` (atrous.wgsl).
@@ -92,33 +77,6 @@ struct AtrousParams {
     _pad1: f32,
     _pad2: f32,
     _pad3: f32,
-}
-
-/// Phase 2 density-volume inputs for the shade pass. Camera values are
-/// the same (radian) values the main compute pass receives — the shade
-/// pass rebuilds the identical world→camera rotation to invert it.
-pub struct VolumeShadeInput<'a> {
-    pub buffer: &'a Buffer,
-    pub dim: u32,
-    pub extent: f32,
-    /// Total samples splatted into the volume (≈ samples in the
-    /// histogram) — normalizes voxel counts to an iteration-invariant
-    /// density scale.
-    pub splats: f32,
-    /// World-space center of the grid cube (must match what the splat
-    /// used — FlameRenderer::volume_placement is the single source).
-    pub center: [f32; 3],
-    /// Morphological closing radius (half-res voxels, 0-2). See
-    /// volume_mip.wgsl.
-    pub closing: u32,
-    /// 0-1: how well the grid resolves the current view (host-computed
-    /// from voxels across the visible width). Scales every volume
-    /// shading feature.
-    pub trust: f32,
-    /// Scene-mean per-pixel accumulated density (Σaccum.a / pixels) —
-    /// the tonemap alpha for base-coat-only pixels and the detail
-    /// layer's confidence scale.
-    pub base_alpha: f32,
 }
 
 /// Effective world→camera rotation rows, replicating EXACTLY what the
@@ -173,20 +131,6 @@ pub struct ShadePass {
     normal_texs: Option<(u32, u32, [(Texture, TextureView); 2])>,
     /// 1×1 stand-in bound when the inline-normal path is used.
     dummy_normal: (Texture, TextureView),
-    /// 4-byte stand-in bound at bindings 5/6 when no density volume
-    /// exists (read-read aliasing of one dummy is fine).
-    dummy_volume: Buffer,
-    // Volume derivation (volume_mip.wgsl): raw splat grid → half-res
-    // smoothed (avg) + morphologically closed fields, rebuilt each shade.
-    mip_reduce_pipeline: ComputePipeline,
-    mip_dilate_pipeline: ComputePipeline,
-    mip_erode_pipeline: ComputePipeline,
-    mip_bgl: BindGroupLayout,
-    mip_params: Buffer,
-    /// (raw dim, [avg, vmax, tmp, closed, color]) — allocated on first
-    /// volume shade, recreated when the raw dim changes. `color` is
-    /// hd³ × vec4<f32> (base-coat rgb + mean count).
-    vol_derived: Option<(u32, [Buffer; 5])>,
     /// Full-image output ping-pong (interactive path; two textures so
     /// the temporal blend can read last frame's result while writing
     /// this frame's). Absent for pipeline-only users (exporters bring
@@ -207,7 +151,6 @@ impl ShadePass {
         let mut this = Self::new(device, 1, 1);
         this.output = None;
         this.normal_texs = None;
-        this.vol_derived = None;
         this.width = 0;
         this.height = 0;
         this
@@ -277,28 +220,6 @@ impl ShadePass {
                     },
                     count: None,
                 },
-                // 5: smoothed half-res density (4-byte dummy when absent)
-                BindGroupLayoutEntry {
-                    binding: 5,
-                    visibility: ShaderStages::COMPUTE,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                // 6: closed half-res density (4-byte dummy when absent)
-                BindGroupLayoutEntry {
-                    binding: 6,
-                    visibility: ShaderStages::COMPUTE,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
                 // 7: previous frame's shade output (temporal blend;
                 // 1×1 dummy when off)
                 BindGroupLayoutEntry {
@@ -308,28 +229,6 @@ impl ShadePass {
                         sample_type: TextureSampleType::Float { filterable: false },
                         view_dimension: TextureViewDimension::D2,
                         multisampled: false,
-                    },
-                    count: None,
-                },
-                // 8: half-res base-coat color (4-byte dummy when absent)
-                BindGroupLayoutEntry {
-                    binding: 8,
-                    visibility: ShaderStages::COMPUTE,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                // 9: RAW splat grid (march opacity; dummy when absent)
-                BindGroupLayoutEntry {
-                    binding: 9,
-                    visibility: ShaderStages::COMPUTE,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
                     },
                     count: None,
                 },
@@ -470,111 +369,6 @@ impl ShadePass {
             Self::create_atrous_params(device, 2),
         ];
         let dummy_normal = Self::create_normal_tex(device, 1, 1, "Shade Dummy Normal");
-        let dummy_volume = device.create_buffer(&BufferDescriptor {
-            label: Some("Shade Dummy Volume"),
-            // 16 bytes: binding 8 is array<vec4<f32>> (16-byte element),
-            // and one dummy serves bindings 5/6/8 when the volume is off.
-            size: 16,
-            usage: BufferUsages::STORAGE,
-            mapped_at_creation: false,
-        });
-
-        // ── Volume derivation pipelines (reduce / dilate / erode) ──
-        let mip_shader = device.create_shader_module(ShaderModuleDescriptor {
-            label: Some("Volume Mip Shader"),
-            source: ShaderSource::Wgsl(include_str!("../../shaders/volume_mip.wgsl").into()),
-        });
-        let mip_bgl = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: Some("Volume Mip Bind Group Layout"),
-            entries: &[
-                BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: ShaderStages::COMPUTE,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: ShaderStages::COMPUTE,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: ShaderStages::COMPUTE,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: ShaderStages::COMPUTE,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                BindGroupLayoutEntry {
-                    binding: 4,
-                    visibility: ShaderStages::COMPUTE,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                // 5: half-res base-coat color (reduce writes; the
-                // dilate/erode passes bind it unused).
-                BindGroupLayoutEntry {
-                    binding: 5,
-                    visibility: ShaderStages::COMPUTE,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
-        });
-        let mip_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-            label: Some("Volume Mip Pipeline Layout"),
-            bind_group_layouts: &[Some(&mip_bgl)],
-            immediate_size: 0,
-        });
-        let mip_pipeline = |entry: &str, label: &str| {
-            device.create_compute_pipeline(&ComputePipelineDescriptor {
-                label: Some(label),
-                layout: Some(&mip_layout),
-                module: &mip_shader,
-                entry_point: Some(entry),
-                compilation_options: Default::default(),
-                cache: None,
-            })
-        };
-        let mip_reduce_pipeline = mip_pipeline("reduce_main", "Volume Reduce Pipeline");
-        let mip_dilate_pipeline = mip_pipeline("dilate_main", "Volume Dilate Pipeline");
-        let mip_erode_pipeline = mip_pipeline("erode_main", "Volume Erode Pipeline");
-        let mip_params = device.create_buffer(&BufferDescriptor {
-            label: Some("Volume Mip Params"),
-            size: std::mem::size_of::<MipParams>() as u64,
-            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
 
         let output = Some([
             Self::create_output(device, width, height),
@@ -600,13 +394,6 @@ impl ShadePass {
             atrous_params,
             normal_texs,
             dummy_normal,
-            dummy_volume,
-            mip_reduce_pipeline,
-            mip_dilate_pipeline,
-            mip_erode_pipeline,
-            mip_bgl,
-            mip_params,
-            vol_derived: None,
             output,
             output_front: 0,
             output_has_history: false,
@@ -698,36 +485,6 @@ impl ShadePass {
         self.output_has_history = false;
     }
 
-    /// Allocate (or re-size) the half-res derived-volume buffers
-    /// (smoothed + closing chain) for a raw grid of `dim`. Must run
-    /// before a `run_region` that receives a volume — the dispatch
-    /// itself is `&self` (exporters share it) so it cannot allocate.
-    pub fn ensure_vol_derived(&mut self, device: &Device, dim: u32) {
-        if dim == 0 {
-            return;
-        }
-        if matches!(&self.vol_derived, Some((d, _)) if *d == dim) {
-            return;
-        }
-        let hd = (dim / 2).max(1);
-        let size = u64::from(hd).pow(3) * 4;
-        let mk = |label: &str, sz: u64| {
-            device.create_buffer(&BufferDescriptor {
-                label: Some(label),
-                size: sz,
-                usage: BufferUsages::STORAGE,
-                mapped_at_creation: false,
-            })
-        };
-        self.vol_derived = Some((dim, [
-            mk("Volume Avg", size),
-            mk("Volume Max", size),
-            mk("Volume Closing Tmp", size),
-            mk("Volume Closed", size),
-            mk("Volume Base Color", size * 4),
-        ]));
-    }
-
     /// Interactive-path dispatch: full image, depth region inside the
     /// histogram binding, internal output texture. The caller guarantees
     /// the depth region exists and this runs after the frame's
@@ -747,15 +504,10 @@ impl ShadePass {
         pan_y: f32,
         perspective_strength: f32,
         surface_thickness: f32,
-        solid_strength: f32,
         camera: (f32, f32, f32, [f32; 3]),
-        volume: Option<&VolumeShadeInput>,
         shadow: Option<(u32, [f32; 3], f32)>,
         temporal_ema: f32,
     ) {
-        if let Some(v) = volume {
-            self.ensure_vol_derived(device, v.dim);
-        }
         // Temporal blend ping-pong: write the back buffer while reading
         // the front (last frame). No history → blend weight 0.
         let back = 1 - self.output_front;
@@ -775,14 +527,12 @@ impl ShadePass {
             pan_y,
             perspective_strength,
             surface_thickness,
-            solid_strength,
             self.width,
             self.height,
             self.width * self.height * 4, // depth region inside the histogram
             0,
             self.height,
             camera,
-            volume,
             shadow,
             ema,
             Some(&output[self.output_front].1),
@@ -813,19 +563,15 @@ impl ShadePass {
         pan_y: f32,
         perspective_strength: f32,
         surface_thickness: f32,
-        solid_strength: f32,
         full_width: u32,
         full_height: u32,
         depth_word_offset: u32,
         tex_y0: u32,
         tex_height: u32,
         // (camera_rotation_x, camera_rotation_y, camera_bank, camera_pos)
-        // — the shade pass's world↔camera transform. Needed by the
-        // volume features AND the shadow-map lookup; must not depend on
-        // the volume being enabled (that dependency zeroed the camera
-        // rows with the volume off and broke every world-space lookup).
+        // — the shade pass's world↔camera transform, needed by the
+        // shadow-map lookup (world-space reconstruction).
         camera: (f32, f32, f32, [f32; 3]),
-        volume: Option<&VolumeShadeInput>,
         shadow: Option<(u32, [f32; 3], f32)>,
         temporal_ema: f32,
         prev_shade: Option<&TextureView>,
@@ -865,110 +611,8 @@ impl ShadePass {
             _ => None,
         };
 
-        // Derive the smoothed + closed half-res fields the shade shader
-        // actually samples (see volume_mip.wgsl for why raw is unusable).
-        // The buffers must already exist (`ensure_vol_derived`, called by
-        // run()); a caller that skipped it gets the volume features
-        // silently disabled rather than out-of-bounds sampling.
-        let mut vol_avg_buffer: &Buffer = &self.dummy_volume;
-        let mut vol_closed_buffer: &Buffer = &self.dummy_volume;
-        let mut vol_color_buffer: &Buffer = &self.dummy_volume;
-        let mut vol_raw_buffer: &Buffer = &self.dummy_volume;
-        let mut vol_ready = false;
-        if let Some(v) = volume {
-            if v.dim > 0 {
-                let hd = (v.dim / 2).max(1);
-                let prepared = matches!(&self.vol_derived, Some((d, _)) if *d == v.dim);
-                if !prepared {
-                    log::warn!("ShadePass: derived volume buffers not prepared; volume shading skipped");
-                }
-                if prepared {
-                vol_ready = true;
-                let (_, bufs) = self.vol_derived.as_ref().unwrap();
-                let (avg, vmax, tmp, closed, colorb) =
-                    (&bufs[0], &bufs[1], &bufs[2], &bufs[3], &bufs[4]);
-                let closing = v.closing.min(2);
-                // 8× the solid threshold in raw counts: normalized scale
-                // is dim³/(splats·8), so "normalized 8" = 64·splats/dim³.
-                let clamp_raw = (64.0 * f64::from(v.splats.max(1.0))
-                    / (v.dim as f64).powi(3)) as f32;
-                queue.write_buffer(&self.mip_params, 0, bytemuck::bytes_of(&MipParams {
-                    dim: v.dim,
-                    half_dim: hd,
-                    radius: closing.max(1),
-                    clamp_raw: clamp_raw.max(1.0),
-                }));
-                let groups = hd.div_ceil(4);
-                let mip_bg = |src: &Buffer, out_a: &Buffer, out_b: &Buffer, src_f: &Buffer, out_c: &Buffer, label: &str| {
-                    device.create_bind_group(&BindGroupDescriptor {
-                        label: Some(label),
-                        layout: &self.mip_bgl,
-                        entries: &[
-                            BindGroupEntry { binding: 0, resource: src.as_entire_binding() },
-                            BindGroupEntry { binding: 1, resource: self.mip_params.as_entire_binding() },
-                            BindGroupEntry { binding: 2, resource: out_a.as_entire_binding() },
-                            BindGroupEntry { binding: 3, resource: out_b.as_entire_binding() },
-                            BindGroupEntry { binding: 4, resource: src_f.as_entire_binding() },
-                            BindGroupEntry { binding: 5, resource: out_c.as_entire_binding() },
-                        ],
-                    })
-                };
-                // reduce: raw → avg + vmax (src_f slot needs a distinct,
-                // unused buffer — tmp).
-                let reduce_bg = mip_bg(v.buffer, avg, vmax, tmp, colorb, "Volume Reduce BG");
-                // dilate: vmax → tmp; erode: tmp → closed. out_b and
-                // out_c are written by neither entry point — bind
-                // distinct scratch to satisfy aliasing rules.
-                let dilate_bg = mip_bg(v.buffer, tmp, closed, vmax, colorb, "Volume Dilate BG");
-                let erode_bg = mip_bg(v.buffer, closed, vmax, tmp, colorb, "Volume Erode BG");
-                {
-                    let mut pass = encoder.begin_compute_pass(&ComputePassDescriptor {
-                        label: Some("Volume Derive Pass"),
-                        timestamp_writes: None,
-                    });
-                    pass.set_pipeline(&self.mip_reduce_pipeline);
-                    pass.set_bind_group(0, &reduce_bg, &[]);
-                    pass.dispatch_workgroups(groups, groups, groups);
-                    if closing > 0 {
-                        pass.set_pipeline(&self.mip_dilate_pipeline);
-                        pass.set_bind_group(0, &dilate_bg, &[]);
-                        pass.dispatch_workgroups(groups, groups, groups);
-                        pass.set_pipeline(&self.mip_erode_pipeline);
-                        pass.set_bind_group(0, &erode_bg, &[]);
-                        pass.dispatch_workgroups(groups, groups, groups);
-                    }
-                }
-                vol_avg_buffer = avg;
-                // Closing off: the march's σ source is the plain
-                // half-res max field.
-                vol_closed_buffer = if closing > 0 { closed } else { vmax };
-                vol_color_buffer = colorb;
-                vol_raw_buffer = v.buffer;
-                }
-            }
-        }
-
-        // Phase 2 volume inputs. Density normalizer: rho_norm = 1 marks
-        // "solid" at 8× the uniform-spread per-voxel mean — concentrated
-        // fractal surfaces sit far above it, Poisson noise far below.
         let cam_rows = effective_camera_rows(camera.0, camera.1, camera.2);
         let cam_pos = camera.3;
-        let (vol_dim, vol_extent, vol_scale, vol_center, vol_trust, vol_base_alpha) = match volume {
-            Some(v) if v.dim > 0 && vol_ready => {
-                let voxels = (v.dim as f64).powi(3);
-                let scale = (voxels / (f64::from(v.splats.max(1.0)) * 8.0)) as f32;
-                (
-                    v.dim,
-                    v.extent,
-                    scale,
-                    v.center,
-                    v.trust.clamp(0.0, 1.0),
-                    v.base_alpha.max(1e-6),
-                )
-            }
-            _ => (0, 0.0, 0.0, [0.0; 3], 0.0, 1.0),
-        };
-
 
         let params = ShadeParams {
             width: full_width,
@@ -996,17 +640,10 @@ impl ShadePass {
             cam_row1: [cam_rows[1][0], cam_rows[1][1], cam_rows[1][2], 0.0],
             cam_row2: [cam_rows[2][0], cam_rows[2][1], cam_rows[2][2], 0.0],
             cam_pos: [cam_pos[0], cam_pos[1], cam_pos[2], 0.0],
-            vol_center: [vol_center[0], vol_center[1], vol_center[2], 0.0],
-            volume_dim: vol_dim,
-            volume_extent: vol_extent,
-            vol_density_scale: vol_scale,
-            // Splat-resolution shadow maps don't depend on voxel
-            // quality — no vol_trust fade (that was the march era).
             shadow_strength: shading.shadow_strength,
-            vol_trust,
             temporal_ema: if prev_shade.is_some() { temporal_ema.clamp(0.0, 0.95) } else { 0.0 },
-            solid_strength,
-            base_alpha: vol_base_alpha,
+            _pad_sp0: 0.0,
+            _pad_sp1: 0.0,
             shadow_fit: match shadow {
                 Some((_, c, r)) => [c[0], c[1], c[2], r],
                 None => [0.0, 0.0, 0.0, 1.0],
@@ -1105,26 +742,10 @@ impl ShadePass {
                     ),
                 },
                 BindGroupEntry {
-                    binding: 5,
-                    resource: vol_avg_buffer.as_entire_binding(),
-                },
-                BindGroupEntry {
-                    binding: 6,
-                    resource: vol_closed_buffer.as_entire_binding(),
-                },
-                BindGroupEntry {
                     binding: 7,
                     resource: BindingResource::TextureView(
                         prev_shade.unwrap_or(&self.dummy_normal.1),
                     ),
-                },
-                BindGroupEntry {
-                    binding: 8,
-                    resource: vol_color_buffer.as_entire_binding(),
-                },
-                BindGroupEntry {
-                    binding: 9,
-                    resource: vol_raw_buffer.as_entire_binding(),
                 },
             ],
         });

@@ -117,17 +117,6 @@ struct Params {
     surface_thickness: f32,  // Depth shell accepted as "the surface" (world units)
     depth_prime: u32,        // 1 = depth-priming batch (record depth, plot nothing)
     post_symmetry: PostSymmetry,  // Plot-time symmetry (gated by HAS_POST_SYMMETRY)
-    // Phase 2 density volume (solid rendering) — only read when the
-    // VOLUME builder flag is set. Mirror in src/gpu/buffers.rs.
-    volume_dim: u32,     // Grid resolution per axis
-    volume_extent: f32,  // World half-extent of the grid cube
-    // World-space center of the grid cube (view-fit).
-    volume_center_x: f32,
-    volume_center_y: f32,
-    volume_center_z: f32,
-    _pad_volume0: u32,
-    _pad_volume1: u32,
-    _pad_volume2: u32,
     // Light-space shadow maps (solid rendering Stage 2): ortho fit +
     // world-space light directions. shadow_count = 0 disables the
     // splat at runtime. Mirror in src/gpu/buffers.rs.
@@ -246,22 +235,16 @@ struct SampleCounter {
 // Sample stream: shader writes one entry per plotted point.
 @group(0) @binding(2) var<storage, read_write> samples: array<Sample>;
 {{/if}}
-{{#if VOLUME}}
-// Phase 2 density volume: flat world-space grid (volume_dim^3 atomic
-// counts, x-fastest). Splatted alongside the histogram; consumed by the
-// shade pass for gradient normals / AO / shadows / occlusion repair.
-// Reuses the reserved binding slot 6 (ex iteration_counts).
-@group(0) @binding(6) var<storage, read_write> density_volume: array<atomic<u32>>;
-
+{{#if SOLID}}
+{{#if OUTPUT_HISTOGRAM_DIRECT}}
 // Ordered-float encoding for the attractor-bounds atomicMax tail
 // (monotone: enc(a) < enc(b) <=> a < b; 0 is the "no data" sentinel).
+// The running AABB feeds the shadow-map auto-fit.
 fn bounds_enc(v: f32) -> u32 {
     let b = bitcast<u32>(v);
     return select(b | 0x80000000u, ~b, (b & 0x80000000u) != 0u);
 }
-{{/if}}
-{{#if SOLID}}
-{{#if OUTPUT_HISTOGRAM_DIRECT}}
+
 // Light-space shadow-map splat (solid rendering Stage 2). Each of up
 // to 4 enabled lights owns a SHADOW_MAP_RES² ortho depth map in the
 // histogram tail (after the depth region + bounds words): the map

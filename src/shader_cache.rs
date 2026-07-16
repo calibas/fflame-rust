@@ -116,7 +116,6 @@ impl ShaderCache {
             has_analytic_blur: flame.analytic_blur_active(&crate::variations::global_registry(), RenderMode::TwoD),
             flatten_z_per_iter: false,
             solid_enabled: false,
-            volume_enabled: false,
             attachment_cap: flame.attachment_cap() as u32,
             inlined_transforms: None,
             cumulative_weights: None,
@@ -295,8 +294,6 @@ impl ShaderCache {
                 );
                 constants.solid_enabled = config.solid_strength > 0.0
                     && matches!(config.render_mode, crate::scene::transforms::RenderMode::ThreeD);
-                constants.volume_enabled = config.solid_shading.volume_enabled
-                    && matches!(config.render_mode, crate::scene::transforms::RenderMode::ThreeD);
                 constants
             }
         } else {
@@ -322,8 +319,6 @@ impl ShaderCache {
                 flatten_z_per_iter: matches!(config.render_mode, crate::scene::transforms::RenderMode::ThreeD)
                     && !config.preserve_z,
                 solid_enabled: config.solid_strength > 0.0
-                    && matches!(config.render_mode, crate::scene::transforms::RenderMode::ThreeD),
-                volume_enabled: config.solid_shading.volume_enabled
                     && matches!(config.render_mode, crate::scene::transforms::RenderMode::ThreeD),
                 attachment_cap: config.flame.attachment_cap() as u32,
                 inlined_transforms: None,

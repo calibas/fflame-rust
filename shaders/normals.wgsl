@@ -35,15 +35,14 @@ struct ShadeParams {
     tex_height: u32,
     _pad0: u32,           // use_normal_tex (unused here)
     _pad1: u32,           // gap_fill (unused here)
-    // Phase 2 camera + volume block (unused here; layout must match
-    // shade.wgsl — same buffer): 5 camera/volume vec4s + 4 scalars.
+    // Camera + shadow block (unused here; layout must match shade.wgsl —
+    // same buffer): 4 camera vec4s + a scalar quad (shadow_strength,
+    // temporal_ema, pads) + shadow fit vec4 + shadow scalar quad.
     _pad_cam0: vec4<f32>,
     _pad_cam1: vec4<f32>,
     _pad_cam2: vec4<f32>,
     _pad_cam3: vec4<f32>,
-    _pad_cam4: vec4<f32>,
-    _pad_vol: vec4<f32>,
-    _pad_vol2: vec4<f32>,
+    _pad_sp: vec4<f32>,
     _pad_sm0: vec4<f32>,
     _pad_sm1: vec4<f32>,
     lights: array<ShadeLight, 4>,

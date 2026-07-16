@@ -655,12 +655,6 @@ fn apply_config_value(
         // static in the exported video while previewing fine in-app.
         (ConfigPath::SolidStrength, ConfigValue::Float(v)) => config.solid_strength = *v,
         (ConfigPath::SurfaceThickness, ConfigValue::Float(v)) => config.surface_thickness = *v,
-        (ConfigPath::VolumeEnabled, ConfigValue::Bool(v)) => config.solid_shading.volume_enabled = *v,
-        (ConfigPath::VolumeExtent, ConfigValue::Float(v)) => config.solid_shading.volume_extent = *v,
-        (ConfigPath::VolumeAutoFit, ConfigValue::Bool(v)) => config.solid_shading.volume_auto_fit = *v,
-        (ConfigPath::VolumeClosing, ConfigValue::Float(v)) => {
-            config.solid_shading.volume_closing = (v.round().max(0.0) as u32).min(2);
-        }
         (ConfigPath::SolidShadowStrength, ConfigValue::Float(v)) => config.solid_shading.shadow_strength = *v,
         (ConfigPath::ShadingStrength, ConfigValue::Float(v)) => config.solid_shading.shading_strength = *v,
         (ConfigPath::SolidAmbient, ConfigValue::Float(v)) => config.solid_shading.ambient = *v,
