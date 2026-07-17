@@ -295,7 +295,7 @@ transform:
   solo: "Solo"
   linked_attachments: "Linked XForms"
   final_attachments: "Final XForms"
-  no_attachments_pool_empty: "(pool is empty — add a transform above)"
+  no_attachments_pool_empty: "None found — add a transform below"
 
   # Affine parameters
   affine_a: "a:"
