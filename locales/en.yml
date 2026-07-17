@@ -548,6 +548,10 @@ tonemap:
   highlights: "Highlights"
   saturation: "Saturation"
   hue_shift: "Hue Shift"
+  advanced: "Advanced"
+
+  # Spatial Filter (Apophysis per-sample Gaussian)
+  spatial_filter: "Spatial Filter"
 
   # Alpha Blending
   alpha_blending: "Alpha Blending (Background)"

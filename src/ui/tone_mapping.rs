@@ -185,26 +185,6 @@ pub fn render_colors_content(
     egui::CollapsingHeader::new(t!("tonemap.title"))
         .default_open(true)
         .show(ui, |ui| {
-            ui.label(t!("tonemap.mode"));
-            let current_tonemap_mode = config_manager.active_config().tonemap_mode;
-            ui.horizontal(|ui| {
-                if ui.selectable_label(matches!(current_tonemap_mode, ToneMapMode::Linear), t!("tonemap.mode_linear")).clicked() {
-                    if let Ok(update) = config_manager.update_param(ConfigPath::TonemapMode, ToneMapMode::Linear.into()) {
-                        max_update = max_update.max(update);
-                    }
-                }
-                if ui.selectable_label(matches!(current_tonemap_mode, ToneMapMode::Logarithmic), t!("tonemap.mode_log")).clicked() {
-                    if let Ok(update) = config_manager.update_param(ConfigPath::TonemapMode, ToneMapMode::Logarithmic.into()) {
-                        max_update = max_update.max(update);
-                    }
-                }
-                if ui.selectable_label(matches!(current_tonemap_mode, ToneMapMode::DensityVisualization), t!("tonemap.mode_density")).clicked() {
-                    if let Ok(update) = config_manager.update_param(ConfigPath::TonemapMode, ToneMapMode::DensityVisualization.into()) {
-                        max_update = max_update.max(update);
-                    }
-                }
-            });
-
             // Preset dropdown — snaps brightness/curve fields to a named
             // "look" without touching the flame, palette, or background.
             // Each selection is one batch update (single undo step).
@@ -276,72 +256,111 @@ pub fn render_colors_content(
                 max_update = max_update.max(result.update_type);
             }
 
-            // Highlight handling — how channels exceeding 1.0 after exposure
-            // are mapped back into [0,1]. Sits at the bottom of the tonemap
-            // section so it's the last thing the user reaches for after
-            // tuning exposure/gamma/brightness.
-            let current_highlight_mode = config_manager.active_config().highlight_mode;
-            let selected_label = match current_highlight_mode {
-                HighlightMode::Clip => t!("tonemap.highlight_clip"),
-                HighlightMode::MaxNorm => t!("tonemap.highlight_maxnorm"),
-                HighlightMode::Reinhard => t!("tonemap.highlight_reinhard"),
-                HighlightMode::Filmic => t!("tonemap.highlight_filmic"),
-            };
-            ui.horizontal(|ui| {
-                ui.label(t!("tonemap.highlight_mode"));
-                egui::ComboBox::from_id_salt("tonemap_highlight_mode_combo")
-                    .selected_text(selected_label)
-                    .show_ui(ui, |ui| {
-                        for (mode, label, tooltip) in [
-                            (HighlightMode::Clip,     t!("tonemap.highlight_clip"),     t!("tonemap.tooltip_highlight_clip")),
-                            (HighlightMode::MaxNorm,  t!("tonemap.highlight_maxnorm"),  t!("tonemap.tooltip_highlight_maxnorm")),
-                            (HighlightMode::Reinhard, t!("tonemap.highlight_reinhard"), t!("tonemap.tooltip_highlight_reinhard")),
-                            (HighlightMode::Filmic,   t!("tonemap.highlight_filmic"),   t!("tonemap.tooltip_highlight_filmic")),
-                        ] {
-                            let resp = ui.selectable_label(current_highlight_mode == mode, label)
-                                .on_hover_text(tooltip);
-                            if resp.clicked() {
-                                if let Ok(update) = config_manager.update_param(ConfigPath::HighlightMode, mode.into()) {
-                                    max_update = max_update.max(update);
-                                }
-                            }
-                        }
-                    });
-            });
-
             ui.separator();
-            egui::CollapsingHeader::new(t!("tonemap.alpha_blending"))
+
+            // Advanced tone-mapping controls — collapsed by default. Holds
+            // the render-mode selector, highlight clipping, and the
+            // alpha-blending / spatial-filter subsections.
+            egui::CollapsingHeader::new(t!("tonemap.advanced"))
                 .default_open(false)
                 .show(ui, |ui| {
-                    ui.label(t!("tonemap.alpha_blending_desc"));
+                    // Tone Map Mode (Linear / Logarithmic / Density) — a
+                    // combo box, matching the Highlight Clipping selector.
+                    let current_tonemap_mode = config_manager.active_config().tonemap_mode;
+                    let mode_label = match current_tonemap_mode {
+                        ToneMapMode::Linear => t!("tonemap.mode_linear"),
+                        ToneMapMode::Logarithmic => t!("tonemap.mode_log"),
+                        ToneMapMode::DensityVisualization => t!("tonemap.mode_density"),
+                    };
+                    ui.horizontal(|ui| {
+                        ui.label(t!("tonemap.mode"));
+                        egui::ComboBox::from_id_salt("tonemap_mode_combo")
+                            .selected_text(mode_label)
+                            .show_ui(ui, |ui| {
+                                for (mode, label) in [
+                                    (ToneMapMode::Linear, t!("tonemap.mode_linear")),
+                                    (ToneMapMode::Logarithmic, t!("tonemap.mode_log")),
+                                    (ToneMapMode::DensityVisualization, t!("tonemap.mode_density")),
+                                ] {
+                                    if ui.selectable_label(current_tonemap_mode == mode, label).clicked() {
+                                        if let Ok(update) = config_manager.update_param(ConfigPath::TonemapMode, mode.into()) {
+                                            max_update = max_update.max(update);
+                                        }
+                                    }
+                                }
+                            });
+                    });
 
-                    if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::AlphaBlendLow, 0.0..=1.0, t!("tonemap.alpha_blend_low").as_ref(), Some(t!("tonemap.tooltip_alpha_blend_low").as_ref())) {
-                        max_update = max_update.max(result.update_type);
-                    }
+                    // Highlight handling — how channels exceeding 1.0 after
+                    // exposure are mapped back into [0,1].
+                    let current_highlight_mode = config_manager.active_config().highlight_mode;
+                    let selected_label = match current_highlight_mode {
+                        HighlightMode::Clip => t!("tonemap.highlight_clip"),
+                        HighlightMode::MaxNorm => t!("tonemap.highlight_maxnorm"),
+                        HighlightMode::Reinhard => t!("tonemap.highlight_reinhard"),
+                        HighlightMode::Filmic => t!("tonemap.highlight_filmic"),
+                    };
+                    ui.horizontal(|ui| {
+                        ui.label(t!("tonemap.highlight_mode"));
+                        egui::ComboBox::from_id_salt("tonemap_highlight_mode_combo")
+                            .selected_text(selected_label)
+                            .show_ui(ui, |ui| {
+                                for (mode, label, tooltip) in [
+                                    (HighlightMode::Clip,     t!("tonemap.highlight_clip"),     t!("tonemap.tooltip_highlight_clip")),
+                                    (HighlightMode::MaxNorm,  t!("tonemap.highlight_maxnorm"),  t!("tonemap.tooltip_highlight_maxnorm")),
+                                    (HighlightMode::Reinhard, t!("tonemap.highlight_reinhard"), t!("tonemap.tooltip_highlight_reinhard")),
+                                    (HighlightMode::Filmic,   t!("tonemap.highlight_filmic"),   t!("tonemap.tooltip_highlight_filmic")),
+                                ] {
+                                    let resp = ui.selectable_label(current_highlight_mode == mode, label)
+                                        .on_hover_text(tooltip);
+                                    if resp.clicked() {
+                                        if let Ok(update) = config_manager.update_param(ConfigPath::HighlightMode, mode.into()) {
+                                            max_update = max_update.max(update);
+                                        }
+                                    }
+                                }
+                            });
+                    });
 
-                    if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::AlphaBlendHigh, 0.0..=1.0, t!("tonemap.alpha_blend_high").as_ref(), Some(t!("tonemap.tooltip_alpha_blend_high").as_ref())) {
-                        max_update = max_update.max(result.update_type);
-                    }
+                    ui.separator();
 
-                    if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::DensityScale, 0.01..=10.0, t!("tonemap.density_scale").as_ref(), Some(t!("tonemap.tooltip_density_scale").as_ref())) {
-                        max_update = max_update.max(result.update_type);
-                    }
+                    // Alpha Blending — background edge blending + density scale.
+                    egui::CollapsingHeader::new(t!("tonemap.alpha_blending"))
+                        .default_open(false)
+                        .show(ui, |ui| {
+                            ui.label(t!("tonemap.alpha_blending_desc"));
 
-                    // Spatial filter — Apo's per-sample Gaussian (filter
+                            if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::AlphaBlendLow, 0.0..=1.0, t!("tonemap.alpha_blend_low").as_ref(), Some(t!("tonemap.tooltip_alpha_blend_low").as_ref())) {
+                                max_update = max_update.max(result.update_type);
+                            }
+
+                            if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::AlphaBlendHigh, 0.0..=1.0, t!("tonemap.alpha_blend_high").as_ref(), Some(t!("tonemap.tooltip_alpha_blend_high").as_ref())) {
+                                max_update = max_update.max(result.update_type);
+                            }
+
+                            if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::DensityScale, 0.01..=10.0, t!("tonemap.density_scale").as_ref(), Some(t!("tonemap.tooltip_density_scale").as_ref())) {
+                                max_update = max_update.max(result.update_type);
+                            }
+                        });
+
+                    // Spatial Filter — Apo's per-sample Gaussian (filter
                     // attribute in .flame XML). Applied to the per-batch
                     // histogram before accumulate, so it smooths
                     // per-iteration grain in linear color+density space.
                     // 0 disables. Typical Apo values: 0.3–1.5.
-                    if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::FilterRadius, 0.0..=5.0, "Spatial Filter", Some("Gaussian sigma (pixels) applied to the histogram before accumulation. Apophysis-style per-sample smoothing.")) {
-                        max_update = max_update.max(result.update_type);
-                    }
-                    // Bilateral edge handling for the spatial filter.
-                    // 0 = preserve edges (hot pixels stay sharp), 1 =
-                    // uniform Gaussian (current pre-bilateral behavior,
-                    // muddies highlights).
-                    if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::FilterBlurEdges, 0.0..=1.0, "Blur Edges", Some("0 preserves edges and highlights; 1 blurs uniformly across the spatial filter kernel (muddies highlights).")) {
-                        max_update = max_update.max(result.update_type);
-                    }
+                    egui::CollapsingHeader::new(t!("tonemap.spatial_filter"))
+                        .default_open(false)
+                        .show(ui, |ui| {
+                            if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::FilterRadius, 0.0..=5.0, "Spatial Filter", Some("Gaussian sigma (pixels) applied to the histogram before accumulation. Apophysis-style per-sample smoothing.")) {
+                                max_update = max_update.max(result.update_type);
+                            }
+                            // Bilateral edge handling for the spatial filter.
+                            // 0 = preserve edges (hot pixels stay sharp), 1 =
+                            // uniform Gaussian (muddies highlights).
+                            if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::FilterBlurEdges, 0.0..=1.0, "Blur Edges", Some("0 preserves edges and highlights; 1 blurs uniformly across the spatial filter kernel (muddies highlights).")) {
+                                max_update = max_update.max(result.update_type);
+                            }
+                        });
                 });
         });
 
