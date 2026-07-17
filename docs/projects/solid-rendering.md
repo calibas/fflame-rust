@@ -248,7 +248,17 @@ specular. The milestone where same-palette shapes become legible.
 - [ ] Visual regression scenes: single light, multi-light, SSAO-only,
       solid_strength sweep.
 
-### Brightness renormalization (landed with Phase 1)
+### Brightness renormalization (landed with Phase 1; measurement replaced 2026-07-16)
+
+> CURRENT MECHANISM: dedicated occlusion-survival counters (Σ
+> occlusion-factor, Σ 1 over plotted samples; subsampled 4-bit fixed
+> point) in the histogram bounds-tail words 6-7 (interactive), the
+> shadow-buffer tail (GPU-tiles export) or exact CPU sums
+> (CPU-histogram export). The Σalpha reduction described below was
+> RETIRED — it folded the artistic per-sample weights (far-fade,
+> depth-density compensation) and off-screen loss into the "culled"
+> fraction (see the depth-effects audit commit). Original text kept for
+> the design record:
 
 Hard occlusion culls most dispatched samples, but the tonemap normalizes
 by dispatched iterations — solids rendered dark by exactly the culled
@@ -414,6 +424,11 @@ passes JWF.
   shade pass.
 
 ## Phase 3 — volume-primary solid mode (RETIRED — volume removed 2026-07-16)
+
+> Everything below this heading up to "Remaining queue" is the
+> historical design log of the volume era. `Feature::VolumeFill` and
+> the volume march no longer exist; only `sphere_volume`'s side-emit
+> (depth + shadow-map splats) survived the removal.
 
 Decision (2026-07-12, after four field-feedback rounds on Phase 2): the
 depth-buffer renderer consulting the volume by rules was the inverted
