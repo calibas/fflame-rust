@@ -17,7 +17,7 @@ use egui_wgpu::wgpu::*;
 
 /// Parameters uniform consumed by `accumulate_samples.wgsl`. Layout
 /// must match the WGSL `AccumulateParams` struct exactly — ordered for
-/// std140 with explicit padding to round to 32 bytes (a multiple of 16,
+/// std140 with explicit padding to round to 48 bytes (a multiple of 16,
 /// the std140 minimum stride for uniforms).
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -40,8 +40,46 @@ pub struct AccumulateParams {
     /// — must be the same value the iterate dispatch wrote with so
     /// post-tonemap densities are proportional.
     pub color_scale: f32,
+    /// Solid rendering occlusion strength (0 = off). When active the
+    /// bound histogram region carries one extra u32 per pixel at offset
+    /// bound_width*bound_height*4 (the nearest-depth region) and the
+    /// scatter gates each sample against it.
+    pub solid_strength: f32,
+    /// Solid rendering: world-space thickness of the accepted depth shell.
+    pub surface_thickness: f32,
+    /// 1 = depth-priming dispatch (record depth only, plot nothing).
+    pub depth_prime: u32,
     pub _pad0: u32,
     pub _pad1: u32,
+    pub _pad2: u32,
+    // ── Light-space shadow maps (Stage 2, export path) ──
+    /// Full-image dimensions (sample coords are full-image pixels; the
+    /// world reconstruction needs the whole view transform).
+    pub full_width: u32,
+    pub full_height: u32,
+    /// 0 disables the shadow splat entirely.
+    pub shadow_count: u32,
+    /// Word offset of the occlusion-survival counter pair inside the
+    /// shadow_maps binding (after the maps, or 0 in the stand-in).
+    pub occ_stats_offset: u32,
+    pub zoom: f32,
+    pub rotation: f32,
+    pub pan_x: f32,
+    pub pan_y: f32,
+    pub persp: f32,
+    pub _pad4: f32,
+    pub _pad5: f32,
+    pub _pad6: f32,
+    /// Effective world→camera rotation rows + camera position
+    /// (shade_pass::effective_camera_rows).
+    pub cam_row0: [f32; 4],
+    pub cam_row1: [f32; 4],
+    pub cam_row2: [f32; 4],
+    pub cam_pos: [f32; 4],
+    /// xyz = map center, w = bounding radius.
+    pub shadow_fit: [f32; 4],
+    /// xyz = world direction TO each light, w = enabled.
+    pub shadow_dirs: [[f32; 4]; 4],
 }
 
 /// Threads per workgroup along x. Must match the `@workgroup_size` in
@@ -53,10 +91,12 @@ pub fn accumulate_dispatch_groups(sample_count: u32) -> u32 {
     (sample_count + ACCUMULATE_WORKGROUP_SIZE - 1) / ACCUMULATE_WORKGROUP_SIZE
 }
 
-/// Bind-group layout for the accumulate pipeline. Three bindings:
+/// Bind-group layout for the accumulate pipeline. Four bindings:
 ///   - 0: sample stream (storage, read)
 ///   - 1: AccumulateParams (uniform)
 ///   - 2: histogram region (storage, read_write atomic u32)
+///   - 3: light-space shadow maps (storage, read_write atomic u32;
+///        16-byte dummy when shadow_count == 0)
 pub fn create_bind_group_layout(device: &Device) -> BindGroupLayout {
     device.create_bind_group_layout(&BindGroupLayoutDescriptor {
         label: Some("Accumulate Bind Group Layout"),
@@ -83,6 +123,16 @@ pub fn create_bind_group_layout(device: &Device) -> BindGroupLayout {
             },
             BindGroupLayoutEntry {
                 binding: 2,
+                visibility: ShaderStages::COMPUTE,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Storage { read_only: false },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            BindGroupLayoutEntry {
+                binding: 3,
                 visibility: ShaderStages::COMPUTE,
                 ty: BindingType::Buffer {
                     ty: BufferBindingType::Storage { read_only: false },
@@ -128,9 +178,10 @@ mod tests {
 
     #[test]
     fn accumulate_params_size_matches_wgsl() {
-        // WGSL struct AccumulateParams: 4 u32 + 1 u32 + 1 f32 + 2 u32 padding = 32 bytes.
-        // std140 uniform layout pads to a multiple of 16; 32 satisfies.
-        assert_eq!(std::mem::size_of::<AccumulateParams>(), 32);
+        // 48 bytes of original fields + 48 bytes of shadow-map scalars
+        // + 5 vec4 (camera rows/pos + fit) + 4 vec4 light dirs
+        // = 48 + 48 + 80 + 64 = 240 bytes (multiple of 16 for std140).
+        assert_eq!(std::mem::size_of::<AccumulateParams>(), 240);
     }
 
     #[test]

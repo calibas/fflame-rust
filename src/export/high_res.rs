@@ -34,7 +34,9 @@ pub struct Sample {
     /// Scales the sample's contribution to all four histogram
     /// channels — mirror of the WGSL `Sample.weight` field.
     pub weight: f32,
-    pub _pad2: f32,
+    /// Solid rendering: camera-space depth (positive = in front). Only
+    /// meaningful when the iterate shader was built with SOLID; 0 otherwise.
+    pub depth: f32,
     pub _pad3: f32,
 }
 
@@ -74,15 +76,19 @@ pub struct TileLayout {
     pub tile_height: u32,
     pub image_width: u32,
     pub image_height: u32,
+    /// 4 (RGBD) normally; 5 with solid rendering — each tile's span then
+    /// ends with one u32/pixel of nearest-depth region (the scatter shader
+    /// indexes it at bound_width*bound_height*4 + pixel_idx).
+    pub words_per_pixel: u32,
 }
 
 impl TileLayout {
     /// Byte offset of `tile_idx` inside the concatenated buffer.
-    /// Each tile is `tile_width × tile_height × 16` bytes (4 u32 per
-    /// pixel: R, G, B, density).
+    /// Each tile spans `tile_width × tile_height × words_per_pixel × 4`
+    /// bytes (RGBD, plus the depth word under solid rendering).
     pub fn tile_byte_offset(&self, tile_idx: u32) -> u64 {
         let tile_pixels = (self.image_width as u64) * (self.tile_height as u64);
-        (tile_idx as u64) * tile_pixels * 16
+        (tile_idx as u64) * tile_pixels * (self.words_per_pixel as u64) * 4
     }
 
     /// Y-coordinate of the first row of `tile_idx` in full-image
@@ -182,6 +188,39 @@ pub struct HighResExporter {
     render_mode: RenderMode,
     samples_per_dispatch: u64,
     iterations_per_thread: u32,
+    // Solid rendering (Phase 0): occlusion state mirrored from the config.
+    // solid_enabled = strength > 0 && 3D; drives the SOLID iterate shader,
+    // the 5-words/px tile spans, and the scatter-pass gating.
+    solid_enabled: bool,
+    solid_strength: f32,
+    surface_thickness: f32,
+    /// Shade pass (pipeline only) — present when the config wants lighting.
+    shade_pass: Option<crate::renderer::shade_pass::ShadePass>,
+    /// Full-image encoded depth gathered before the tile buffer is freed.
+    shade_depth_buffer: Option<Buffer>,
+    // Light-space shadow maps (Stage 2, GPU-tiled path): written by the
+    // scatter pass, copied into shade_depth_buffer's tail before the
+    // shade. None on the CPU-histogram path (no maps, v1) or when
+    // shadows are off.
+    shadow_maps_buffer: Option<Buffer>,
+    /// 16-byte stand-in for binding 3 when shadow maps are off.
+    shadow_dummy_buffer: Buffer,
+    /// CPU-histogram path's exact occlusion counters (Σocc, Σ1);
+    /// None on the GPU-tiles path (counters live in the shadow buffer).
+    cpu_occ_stats: Option<(f64, f64)>,
+    /// Frozen shadow fit (center, radius) — view-derived (the exporter
+    /// has no bounds measurement).
+    shadow_fit: ([f32; 3], f32),
+    /// Per-slot world light dirs (w = enabled) + camera rows/pos for
+    /// the scatter's world reconstruction.
+    shadow_dirs: [[f32; 4]; 4],
+    shadow_cam_rows: [[f32; 3]; 3],
+    shadow_cam_pos: [f32; 3],
+    /// View-transform inputs the scatter needs to reconstruct world
+    /// positions from (pixel, depth) samples.
+    shadow_view: (f32, f32, f32, f32, f32), // zoom, rotation, pan_x, pan_y, persp
+    /// Accepted/dispatched fraction for solid brightness renormalization.
+    solid_density_fraction: f32,
 }
 
 impl HighResExporter {
@@ -941,16 +980,27 @@ impl HighResExporter {
         //                  routing this is unreachable, but a future
         //                  caller hitting HighResExporter::new for a
         //                  small image (e.g. testing) shouldn't crash.
-        let strategy = crate::export::pick_strategy(width, height, &device.limits());
+        let solid_enabled = config.solid_strength > 0.0
+            && matches!(config.render_mode, RenderMode::ThreeD);
+        let hist_words: u64 = if solid_enabled { 5 } else { 4 };
+        let strategy = crate::export::pick_strategy(width, height, &device.limits(), solid_enabled);
         let device_limits = device.limits();
-        let total_hist_size = (width as u64) * (height as u64) * 16; // 4× u32 per pixel
+        let total_hist_size = (width as u64) * (height as u64) * hist_words * 4;
 
         let mut tile_histograms_buffer: Option<Buffer> = None;
         let mut tile_layout: Option<TileLayout> = None;
 
+        // `max_buffer_size` is what the DRIVER permits for one buffer —
+        // modern drivers report values far beyond physically-free VRAM,
+        // and an allocation that doesn't fit is a FATAL wgpu OOM
+        // (field-reported: 19200×10800 solid = a 3.9 GB histogram
+        // panicking in-app). Cap the GPU-tiles histogram at a
+        // conservative budget; anything larger takes the CPU-histogram
+        // path, which is slower but memory-bounded.
+        const GPU_HISTOGRAM_BUDGET: u64 = 2_560 * 1024 * 1024;
         match strategy {
             crate::export::RenderStrategy::ParallelTiles { tiles_y, tile_height, .. } => {
-                if total_hist_size <= device_limits.max_buffer_size as u64 {
+                if total_hist_size <= (device_limits.max_buffer_size as u64).min(GPU_HISTOGRAM_BUDGET) {
                     log::info!(
                         "High-res export: GPU accumulate (ParallelTiles) — {}x{}, \
                          {} tile{} of {} rows × {} cols, {} MB total",
@@ -970,14 +1020,15 @@ impl HighResExporter {
                         tile_height,
                         image_width: width,
                         image_height: height,
+                        words_per_pixel: hist_words as u32,
                     });
                 } else {
                     log::info!(
                         "High-res export: CPU accumulate fallback ({}x{}, \
-                         total {} MB > max_buffer_size {} MB — too big for one GPU buffer)",
+                         total {} MB > GPU histogram cap {} MB — bounded-memory path)",
                         width, height,
                         total_hist_size / (1024 * 1024),
-                        device_limits.max_buffer_size / (1024 * 1024),
+                        (device_limits.max_buffer_size as u64).min(GPU_HISTOGRAM_BUDGET) / (1024 * 1024),
                     );
                 }
             }
@@ -1015,6 +1066,7 @@ impl HighResExporter {
                         tile_height: height,
                         image_width: width,
                         image_height: height,
+                        words_per_pixel: hist_words as u32,
                     });
                 } else {
                     log::warn!(
@@ -1232,6 +1284,77 @@ impl HighResExporter {
             ..Default::default()
         });
 
+        // Built before the struct literal moves `device` into the field.
+        let shade_pass = if solid_enabled && config.solid_shading.active() {
+            Some(crate::renderer::shade_pass::ShadePass::new_pipeline_only(&device))
+        } else {
+            None
+        };
+
+        // ── Light-space shadow maps (Stage 2) ──
+        let shadow_cam_rows = crate::renderer::shade_pass::effective_camera_rows(
+            config.camera_rotation_x,
+            config.camera_rotation_y,
+            config.camera_bank,
+        );
+        let shadow_cam_pos = [config.camera_x, config.camera_y, config.camera_z];
+        let mut shadow_dirs = [[0.0f32; 4]; 4];
+        let mut any_light = false;
+        for (i, l) in config.solid_shading.lights.iter().enumerate().take(4) {
+            if !(l.enabled && l.intensity > 0.0) {
+                continue;
+            }
+            any_light = true;
+            let az = l.azimuth.to_radians();
+            let el = l.elevation.to_radians();
+            let c = [el.cos() * az.sin(), el.sin(), el.cos() * az.cos()];
+            let mut w = [0.0f32; 3];
+            for k in 0..3 {
+                w[k] = c[0] * shadow_cam_rows[0][k]
+                    + c[1] * shadow_cam_rows[1][k]
+                    + c[2] * shadow_cam_rows[2][k];
+            }
+            shadow_dirs[i] = [w[0], w[1], w[2], 1.0];
+        }
+        let shadow_wanted =
+            solid_enabled && config.solid_shading.shadow_strength > 0.0 && any_light;
+        // View-derived fit (no bounds measurement on this path): center
+        // on the world point at screen center, radius = the view fit.
+        let aspect = width.max(height).max(1) as f32 / width.min(height).max(1) as f32;
+        let mut fit_center = shadow_cam_pos;
+        for k in 0..3 {
+            fit_center[k] += config.pan_x * shadow_cam_rows[0][k]
+                + config.pan_y * shadow_cam_rows[1][k];
+        }
+        let shadow_fit = (
+            fit_center,
+            (4.0 * aspect / config.zoom.max(1e-6)).clamp(1e-3, 1e6),
+        );
+        // Maps only on the GPU-tiled path (the CPU-histogram fallback
+        // has no scatter dispatch to write them, v1).
+        let shadow_maps_buffer = if shadow_wanted && tile_histograms_buffer.is_some() {
+            Some(device.create_buffer(&BufferDescriptor {
+                label: Some("Export Shadow Maps"),
+                // + 8 bytes: occlusion-survival counter pair at the tail.
+                size: 4 * 1024 * 1024 * 4 + 8,
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            }))
+        } else {
+            if shadow_wanted {
+                log::warn!("High-res export: shadow maps unavailable on the CPU-histogram path");
+            }
+            None
+        };
+        // Also the occlusion-counter home when shadow maps are absent —
+        // hence COPY_SRC.
+        let shadow_dummy_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Export Shadow Dummy"),
+            size: 16,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+
         Ok(Self {
             device,
             queue,
@@ -1270,6 +1393,26 @@ impl HighResExporter {
             accumulation_sampler,
             render_mode: config.render_mode,
             samples_per_dispatch,
+            solid_enabled,
+            solid_strength: config.solid_strength,
+            surface_thickness: config.surface_thickness,
+            shade_pass,
+            shade_depth_buffer: None,
+            shadow_maps_buffer,
+            shadow_dummy_buffer,
+            cpu_occ_stats: None,
+            shadow_fit,
+            shadow_dirs,
+            shadow_cam_rows,
+            shadow_cam_pos,
+            shadow_view: (
+                config.zoom,
+                config.rotation,
+                config.pan_x,
+                config.pan_y,
+                config.perspective_strength,
+            ),
+            solid_density_fraction: 1.0,
             iterations_per_thread,
         })
     }
@@ -1288,6 +1431,14 @@ impl HighResExporter {
         // incrementally per-dispatch.
         let num_pixels = (self.width as usize) * (self.height as usize);
         let mut histogram: Vec<HistogramPixel> = vec![HistogramPixel::default(); num_pixels];
+        // Solid rendering (CPU accumulate path): per-pixel nearest depth,
+        // persisted across dispatches like the GPU depth regions. The CPU
+        // path is sequential per row, so its gating is deterministic.
+        let mut depth_near: Vec<f32> = if self.solid_enabled && self.tile_histograms_buffer.is_none() {
+            vec![f32::INFINITY; num_pixels]
+        } else {
+            Vec::new()
+        };
 
         // GPU accumulate path uses this scale to widen the [0,1] sample
         // RGB into u32 atomic-add precision; we divide back by it on
@@ -1443,7 +1594,7 @@ impl HighResExporter {
                     let offset = layout.tile_byte_offset(tile_idx);
                     let tile_pixels = (layout.image_width as u64)
                         * (layout.tile_actual_height(tile_idx) as u64);
-                    let size = tile_pixels * 16;
+                    let size = tile_pixels * (layout.words_per_pixel as u64) * 4;
                     self.device.create_bind_group(&BindGroupDescriptor {
                         label: Some("Export Accumulate Bind Group (Tile)"),
                         layout: &self.accumulate_bind_group_layout,
@@ -1463,6 +1614,14 @@ impl HighResExporter {
                                     offset,
                                     size: std::num::NonZeroU64::new(size),
                                 }),
+                            },
+                            BindGroupEntry {
+                                binding: 3,
+                                resource: self
+                                    .shadow_maps_buffer
+                                    .as_ref()
+                                    .unwrap_or(&self.shadow_dummy_buffer)
+                                    .as_entire_binding(),
                             },
                         ],
                     })
@@ -1545,7 +1704,12 @@ impl HighResExporter {
                 depth_density_compensation: config.depth_density_compensation,
                 far_density_fade: config.far_density_fade,
                 far_density_fade_start: config.far_density_fade_start,
-                _pad_before_post_symmetry: [0; 3],
+                // Solid rendering unsupported on the tiled/sample-emit
+                // export path (Phase 0 scope: direct-histogram only) —
+                // constants gate SOLID off there, so these are inert.
+                solid_strength: 0.0,
+                surface_thickness: crate::config::DEFAULT_SURFACE_THICKNESS,
+                depth_prime: 0,
                 camera_rotation_x: config.camera_rotation_x,
                 camera_rotation_y: config.camera_rotation_y,
                 camera_bank: config.camera_bank,
@@ -1556,7 +1720,15 @@ impl HighResExporter {
                 camera_z: config.camera_z,
                 dof_focus_distance: config.dof_focus_distance,
                 dof_blur_strength: config.dof_blur_strength,
-                fog_strength: config.fog_strength,
+                fog_strength: if config.fog_strength > 0.0
+                    && config.solid_shading.active()
+                    && matches!(config.render_mode, crate::scene::transforms::RenderMode::ThreeD)
+                {
+                    // The shade pass owns fog (post-lighting).
+                    0.0
+                } else {
+                    config.fog_strength
+                },
                 fog_start: config.fog_start,
                 bits_per_transform: crate::gpu::buffers::bits_per_transform(config.flame.transforms.len() as u32),
                 path_map_style: config.path_map_style as u32,
@@ -1567,7 +1739,15 @@ impl HighResExporter {
                 background_r: config.background_color[0],
                 background_g: config.background_color[1],
                 background_b: config.background_color[2],
-post_symmetry: (&config.flame.post_symmetry).into(),
+                post_symmetry: (&config.flame.post_symmetry).into(),
+                // No shadow maps on the tiled sample-emit path (v1).
+                shadow_center_x: 0.0,
+                shadow_center_y: 0.0,
+                shadow_center_z: 0.0,
+                shadow_radius: 1.0,
+                shadow_count: 0,
+                _pad_shadow: [0; 3],
+                shadow_dirs: [[0.0; 4]; 4],
             };
             self.queue
                 .write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));
@@ -1639,8 +1819,33 @@ post_symmetry: (&config.flame.post_symmetry).into(),
                             bound_height: layout.tile_actual_height(tile_idx_u32),
                             sample_count,
                             color_scale: color_scale_f,
+                            solid_strength: if self.solid_enabled { self.solid_strength } else { 0.0 },
+                            surface_thickness: self.surface_thickness,
+                            // First dispatch primes the depth region (depth
+                            // only, nothing plotted) — mirrors the interactive
+                            // renderer's post-reset priming.
+                            depth_prime: u32::from(self.solid_enabled && dispatch == 0),
                             _pad0: 0,
                             _pad1: 0,
+                            _pad2: 0,
+                            full_width: self.width,
+                            full_height: self.height,
+                            shadow_count: if self.shadow_maps_buffer.is_some() { 4 } else { 0 },
+                            occ_stats_offset: if self.shadow_maps_buffer.is_some() { 4 * 1024 * 1024 } else { 0 },
+                            zoom: self.shadow_view.0,
+                            rotation: self.shadow_view.1,
+                            pan_x: self.shadow_view.2,
+                            pan_y: self.shadow_view.3,
+                            persp: self.shadow_view.4,
+                            _pad4: 0.0,
+                            _pad5: 0.0,
+                            _pad6: 0.0,
+                            cam_row0: [self.shadow_cam_rows[0][0], self.shadow_cam_rows[0][1], self.shadow_cam_rows[0][2], 0.0],
+                            cam_row1: [self.shadow_cam_rows[1][0], self.shadow_cam_rows[1][1], self.shadow_cam_rows[1][2], 0.0],
+                            cam_row2: [self.shadow_cam_rows[2][0], self.shadow_cam_rows[2][1], self.shadow_cam_rows[2][2], 0.0],
+                            cam_pos: [self.shadow_cam_pos[0], self.shadow_cam_pos[1], self.shadow_cam_pos[2], 0.0],
+                            shadow_fit: [self.shadow_fit.0[0], self.shadow_fit.0[1], self.shadow_fit.0[2], self.shadow_fit.1],
+                            shadow_dirs: self.shadow_dirs,
                         };
                         self.queue.write_buffer(
                             &self.accumulate_params_buffer,
@@ -1705,6 +1910,64 @@ post_symmetry: (&config.flame.post_symmetry).into(),
                     }
 
                     let cs = color_scale_f as f64;
+                    if self.solid_enabled {
+                        // Solid rendering: nearest-depth gating, mirroring the
+                        // GPU scatter (update depth FIRST so a pixel's own
+                        // nearest sample always passes; prime dispatch records
+                        // depth only). Rows are independent, samples within a
+                        // row process in readback order — deterministic.
+                        let prime = dispatch == 0;
+                        let solid_strength = self.solid_strength;
+                        let surface_thickness = self.surface_thickness;
+                        // Occlusion-survival counters (exact on this
+                        // path): Σocc and Σ1 over plotted samples, for
+                        // the occlusion-only brightness renorm.
+                        let occ_num = std::sync::atomic::AtomicU64::new(0);
+                        let occ_den = std::sync::atomic::AtomicU64::new(0);
+                        histogram
+                            .par_chunks_mut(width_usize)
+                            .zip(depth_near.par_chunks_mut(width_usize))
+                            .enumerate()
+                            .for_each(|(row_idx, (row_pixels, row_depth))| {
+                                let mut row_occ: u64 = 0;
+                                let mut row_n: u64 = 0;
+                                for sample in &row_samples[row_idx] {
+                                    let x = sample.x as i32;
+                                    if x >= 0 && x < width {
+                                        let xi = x as usize;
+                                        if sample.depth < row_depth[xi] {
+                                            row_depth[xi] = sample.depth;
+                                        }
+                                        if prime {
+                                            continue;
+                                        }
+                                        let mut w = sample.weight;
+                                        let mut occ = 1.0f32;
+                                        if sample.depth > row_depth[xi] + surface_thickness {
+                                            occ = 1.0 - solid_strength;
+                                            w *= occ;
+                                        }
+                                        row_occ += (occ * 16.0).round() as u64;
+                                        row_n += 16;
+                                        if w <= 0.0 {
+                                            continue;
+                                        }
+                                        let pixel = &mut row_pixels[xi];
+                                        let ws = color_scale_f * w;
+                                        pixel.r += (sample.r.clamp(0.0, 1.0) * ws).floor() as f64 / cs;
+                                        pixel.g += (sample.g.clamp(0.0, 1.0) * ws).floor() as f64 / cs;
+                                        pixel.b += (sample.b.clamp(0.0, 1.0) * ws).floor() as f64 / cs;
+                                        pixel.count += ws.floor() as f64 / cs;
+                                    }
+                                }
+                                occ_num.fetch_add(row_occ, std::sync::atomic::Ordering::Relaxed);
+                                occ_den.fetch_add(row_n, std::sync::atomic::Ordering::Relaxed);
+                            });
+                        let num = occ_num.load(std::sync::atomic::Ordering::Relaxed) as f64;
+                        let den = occ_den.load(std::sync::atomic::Ordering::Relaxed) as f64;
+                        let (pn, pd) = self.cpu_occ_stats.unwrap_or((0.0, 0.0));
+                        self.cpu_occ_stats = Some((pn + num, pd + den));
+                    } else {
                     histogram
                         .par_chunks_mut(width_usize)
                         .enumerate()
@@ -1731,6 +1994,7 @@ post_symmetry: (&config.flame.post_symmetry).into(),
                                 }
                             }
                         });
+                    }
 
                     total_samples_accumulated += samples.len() as u64;
                 }
@@ -1753,6 +2017,10 @@ post_symmetry: (&config.flame.post_symmetry).into(),
             self.fold_analytic_blur(&mut histogram, color_scale_f).await?;
         }
 
+        // Solid shading: gather the full-image depth (per-tile regions /
+        // CPU depth vec) BEFORE the tile buffer is freed below.
+        self.prepare_shade_depth(&depth_near);
+
         // Free the GPU tile histogram (up to ~2 GB) now that it's all in the
         // CPU `histogram` Vec — the tonemap + color-effect passes below
         // allocate their own full-res textures, so releasing this first gives
@@ -1770,11 +2038,155 @@ post_symmetry: (&config.flame.post_symmetry).into(),
         // not the user-passed target — feed that to the scale-invariant
         // sample_density formula (Phase 8a).
         let total_iters_dispatched = num_dispatches * iterations_per_dispatch;
+
+        // Solid brightness renormalization (exact): OCCLUSION-ONLY
+        // survival fraction from the dedicated counters — never the
+        // accumulated density, which folds artistic per-sample weights
+        // (far-fade, depth-density compensation) into the "culled"
+        // fraction and makes those dials shift global brightness.
+        self.solid_density_fraction = if self.solid_enabled && self.solid_strength > 0.0 {
+            match self.read_occ_stats().await {
+                Some((num, den)) if den > 0.0 => {
+                    let f = ((num / den) as f32).clamp(0.005, 1.0);
+                    log::info!("High-res export: solid brightness renorm fraction {:.4} (occlusion-only)", f);
+                    f
+                }
+                _ => {
+                    log::warn!("High-res export: occlusion counters empty — brightness renorm skipped");
+                    1.0
+                }
+            }
+        } else {
+            1.0
+        };
+
         let pixels = self.tonemap_gpu(&histogram, config, transparent, premultiplied, total_iters_dispatched).await?;
 
         reporter.progress(1.0, "Encoding…");
 
         Ok(pixels)
+    }
+
+    /// Gather the full-image encoded depth for the shade pass — from the
+    /// per-tile depth regions (GPU path) or the CPU depth vec — BEFORE the
+    /// tile histogram buffer is freed. Disables shading (with a warning)
+    /// when no depth source exists or the buffer exceeds one binding.
+    fn prepare_shade_depth(&mut self, cpu_depth: &[f32]) {
+        self.shade_depth_buffer = None;
+        if self.shade_pass.is_none() {
+            return;
+        }
+        let map_bytes: u64 = if self.shadow_maps_buffer.is_some() {
+            4 * 1024 * 1024 * 4
+        } else {
+            0
+        };
+        let bytes = (self.width as u64) * (self.height as u64) * 4 + map_bytes;
+        if bytes > self.device.limits().max_storage_buffer_binding_size as u64 {
+            log::warn!(
+                "High-res export: skipping lighting — depth buffer {} MB exceeds one storage binding",
+                bytes / (1024 * 1024)
+            );
+            self.shade_pass = None;
+            return;
+        }
+        let buf = self.device.create_buffer(&BufferDescriptor {
+            label: Some("Export Shade Depth"),
+            size: bytes,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        // Shadow maps ride the tail (word offset W·H) so the shade
+        // pass reaches them through the same binding as the depth.
+        if let Some(maps) = self.shadow_maps_buffer.as_ref() {
+            let mut enc = self.device.create_command_encoder(&CommandEncoderDescriptor {
+                label: Some("Export Shadow Map Gather"),
+            });
+            enc.copy_buffer_to_buffer(
+                maps,
+                0,
+                &buf,
+                (self.width as u64) * (self.height as u64) * 4,
+                map_bytes,
+            );
+            self.queue.submit(std::iter::once(enc.finish()));
+        }
+        match (self.tile_histograms_buffer.as_ref(), self.tile_layout) {
+            (Some(hist), Some(layout)) if layout.words_per_pixel > 4 => {
+                let mut encoder = self.device.create_command_encoder(&CommandEncoderDescriptor {
+                    label: Some("Export Shade Depth Gather"),
+                });
+                let mut dst: u64 = 0;
+                for tile_idx in 0..layout.num_tiles {
+                    let rows = layout.tile_actual_height(tile_idx) as u64;
+                    let tile_pixels = (layout.image_width as u64) * rows;
+                    let src = layout.tile_byte_offset(tile_idx) + tile_pixels * 16;
+                    encoder.copy_buffer_to_buffer(hist, src, &buf, dst, tile_pixels * 4);
+                    dst += tile_pixels * 4;
+                }
+                self.queue.submit(std::iter::once(encoder.finish()));
+            }
+            _ if !cpu_depth.is_empty() => {
+                // CPU accumulate path: encode world depths into the shader's
+                // inverted ordered-float format (INFINITY = empty = 0).
+                let words: Vec<u32> = cpu_depth
+                    .par_iter()
+                    .map(|d| {
+                        if !d.is_finite() {
+                            0u32
+                        } else {
+                            let b = d.to_bits();
+                            let ord = if b & 0x8000_0000 != 0 { !b } else { b | 0x8000_0000 };
+                            !ord
+                        }
+                    })
+                    .collect();
+                self.queue.write_buffer(&buf, 0, bytemuck::cast_slice(&words));
+            }
+            _ => {
+                log::warn!("High-res export: no depth source for lighting — rendering unlit");
+                self.shade_pass = None;
+                return;
+            }
+        }
+        self.shade_depth_buffer = Some(buf);
+    }
+
+    /// Occlusion-survival counter pair: GPU paths read the 2 words at
+    /// the tail of the shadow-maps buffer (or the stand-in); the CPU
+    /// path sums exactly during accumulation (`cpu_occ_stats`).
+    async fn read_occ_stats(&self) -> Option<(f64, f64)> {
+        if let Some((num, den)) = self.cpu_occ_stats {
+            return Some((num, den));
+        }
+        let (buf, word_off): (&Buffer, u64) = match &self.shadow_maps_buffer {
+            Some(b) => (b, 4 * 1024 * 1024),
+            None => (&self.shadow_dummy_buffer, 0),
+        };
+        let staging = self.device.create_buffer(&BufferDescriptor {
+            label: Some("Occ Stats Staging"),
+            size: 8,
+            usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut enc = self.device.create_command_encoder(&CommandEncoderDescriptor {
+            label: Some("Occ Stats Readback"),
+        });
+        enc.copy_buffer_to_buffer(buf, word_off * 4, &staging, 0, 8);
+        self.queue.submit(std::iter::once(enc.finish()));
+        let slice = staging.slice(..);
+        let (tx, rx) = futures::channel::oneshot::channel();
+        slice.map_async(MapMode::Read, move |result| {
+            tx.send(result).ok();
+        });
+        let _ = self.device.poll(PollType::Wait { submission_index: None, timeout: None });
+        rx.await.ok()?.ok()?;
+        let data = slice.get_mapped_range();
+        let num = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+        let den = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
+        drop(data);
+        staging.unmap();
+        Some((f64::from(num), f64::from(den)))
     }
 
     /// Read sample counter from GPU
@@ -1856,7 +2268,31 @@ post_symmetry: (&config.flame.post_symmetry).into(),
         let mut encoder = self.device.create_command_encoder(&CommandEncoderDescriptor {
             label: Some("Export GPU Histogram Readback Encoder"),
         });
-        encoder.copy_buffer_to_buffer(hist, 0, &readback, 0, bytes);
+        match self.tile_layout {
+            Some(layout) if layout.words_per_pixel > 4 => {
+                // Solid rendering: each tile's span ends with its depth
+                // region — gather only the RGBD words, packed contiguously
+                // into the readback buffer (row order is preserved because
+                // tiles are horizontal slices in image order).
+                let mut dst: u64 = 0;
+                for tile_idx in 0..layout.num_tiles {
+                    let rgbd_bytes = (layout.image_width as u64)
+                        * (layout.tile_actual_height(tile_idx) as u64)
+                        * 16;
+                    encoder.copy_buffer_to_buffer(
+                        hist,
+                        layout.tile_byte_offset(tile_idx),
+                        &readback,
+                        dst,
+                        rgbd_bytes,
+                    );
+                    dst += rgbd_bytes;
+                }
+            }
+            _ => {
+                encoder.copy_buffer_to_buffer(hist, 0, &readback, 0, bytes);
+            }
+        }
         self.queue.submit(std::iter::once(encoder.finish()));
 
         let slice = readback.slice(..);
@@ -2107,7 +2543,9 @@ post_symmetry: (&config.flame.post_symmetry).into(),
         let area = (self.width as f32 * self.height as f32) / (pixels_per_unit_zoomed * pixels_per_unit_zoomed);
 
         let total_pixels = (self.width as f32) * (self.height as f32);
-        let sample_density = ((total_iterations as f32) / total_pixels.max(1.0)).max(1e-6);
+        let sample_density = ((total_iterations as f32) * self.solid_density_fraction
+            / total_pixels.max(1.0))
+            .max(1e-6);
 
         let tonemap_mode = match config.tonemap_mode {
             crate::scene::tonemap::ToneMapMode::Linear => 0u32,
@@ -2373,6 +2811,67 @@ post_symmetry: (&config.flame.post_symmetry).into(),
             );
             let strip_accum_view = strip_accum.create_view(&TextureViewDescriptor::default());
 
+            // Solid shading per strip: full-image depth buffer + this
+            // strip's albedo rows (the shade pass reads the accumulator
+            // only at its own pixel, so strips shade identically to a
+            // one-shot — see shade.wgsl region params).
+            if y0 == 0 && config.dof_blur_strength > 0.0
+                && matches!(config.render_mode, crate::scene::transforms::RenderMode::ThreeD)
+            {
+                // A gather blur can't run per strip without aprons —
+                // taps would cross strip boundaries and seam.
+                log::warn!("Post-process DoF is not yet supported on the tiled export path — skipped");
+            }
+            let mut strip_shade: Option<(Texture, TextureView)> = None;
+            if let (Some(shade), Some(depth)) = (self.shade_pass.as_ref(), self.shade_depth_buffer.as_ref()) {
+                let tex = self.try_create_texture(&TextureDescriptor {
+                    label: Some("Export Strip Shaded"),
+                    size: Extent3d { width: self.width, height: sh, depth_or_array_layers: 1 },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: TextureDimension::D2,
+                    format: TextureFormat::Rgba32Float,
+                    usage: TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                }).await?;
+                let view = tex.create_view(&TextureViewDescriptor::default());
+                let mut shade_encoder = self.device.create_command_encoder(&CommandEncoderDescriptor {
+                    label: Some("Export Strip Shade Encoder"),
+                });
+                shade.run_region(
+                    &self.device,
+                    &self.queue,
+                    &mut shade_encoder,
+                    &strip_accum_view,
+                    depth,
+                    &view,
+                    &config.solid_shading,
+                    config.zoom,
+                    config.rotation,
+                    config.pan_x,
+                    config.pan_y,
+                    config.perspective_strength,
+                    self.surface_thickness,
+                    self.width,
+                    self.height,
+                    0,
+                    y0,
+                    sh,
+                    (config.camera_rotation_x, config.camera_rotation_y, config.camera_bank,
+                     [config.camera_x, config.camera_y, config.camera_z]),
+                    self.shadow_maps_buffer.as_ref().map(|_| {
+                        (self.width * self.height, self.shadow_fit.0, self.shadow_fit.1)
+                    }),
+                    (config.fog_strength, config.fog_start, config.background_color),
+                    0.0,
+                    None,
+                );
+                self.queue.submit(std::iter::once(shade_encoder.finish()));
+                strip_shade = Some((tex, view));
+            }
+            let strip_input_view: &TextureView =
+                strip_shade.as_ref().map(|(_, v)| v).unwrap_or(&strip_accum_view);
+
             // Per-strip height: the shader's `uv.y * height` then maps onto
             // these `sh` rows. width/area/sample_density stay global.
             tonemap_params.height = sh;
@@ -2394,7 +2893,7 @@ post_symmetry: (&config.flame.post_symmetry).into(),
                 label: Some("Export Tonemap Bind Group (strip)"),
                 layout: &self.tonemap_bind_group_layout,
                 entries: &[
-                    BindGroupEntry { binding: 0, resource: BindingResource::TextureView(&strip_accum_view) },
+                    BindGroupEntry { binding: 0, resource: BindingResource::TextureView(strip_input_view) },
                     BindGroupEntry { binding: 1, resource: BindingResource::Sampler(&self.accumulation_sampler) },
                     BindGroupEntry { binding: 2, resource: self.tonemap_params_buffer.as_entire_binding() },
                     BindGroupEntry { binding: 3, resource: BindingResource::TextureView(&curve_lut_view) },
@@ -2553,6 +3052,99 @@ post_symmetry: (&config.flame.post_symmetry).into(),
 
         let accumulation_view = accumulation_texture.create_view(&TextureViewDescriptor::default());
 
+        // Solid shading (Phase 1): shade the accumulation into a separate
+        // texture and feed THAT to density effects / tonemap — the same
+        // ordering the interactive frame uses.
+        let mut shade_holder: Option<(Texture, TextureView)> = None;
+        if let (Some(shade), Some(depth)) = (self.shade_pass.as_ref(), self.shade_depth_buffer.as_ref()) {
+            let tex = self.try_create_texture(&TextureDescriptor {
+                label: Some("Export Shaded Accumulation"),
+                size: Extent3d { width: self.width, height: self.height, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: TextureDimension::D2,
+                format: TextureFormat::Rgba32Float,
+                usage: TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            }).await?;
+            let view = tex.create_view(&TextureViewDescriptor::default());
+            let mut shade_encoder = self.device.create_command_encoder(&CommandEncoderDescriptor {
+                label: Some("Export Shade Encoder"),
+            });
+            shade.run_region(
+                &self.device,
+                &self.queue,
+                &mut shade_encoder,
+                &accumulation_view,
+                depth,
+                &view,
+                &config.solid_shading,
+                config.zoom,
+                config.rotation,
+                config.pan_x,
+                config.pan_y,
+                config.perspective_strength,
+                self.surface_thickness,
+                self.width,
+                self.height,
+                0,
+                0,
+                self.height,
+                (config.camera_rotation_x, config.camera_rotation_y, config.camera_bank,
+                 [config.camera_x, config.camera_y, config.camera_z]),
+                self.shadow_maps_buffer.as_ref().map(|_| {
+                    (self.width * self.height, self.shadow_fit.0, self.shadow_fit.1)
+                }),
+                (config.fog_strength, config.fog_start, config.background_color),
+                0.0,
+                None,
+            );
+            self.queue.submit(std::iter::once(shade_encoder.finish()));
+            log::info!("High-res export: applied solid lighting (shade pass)");
+            shade_holder = Some((tex, view));
+        }
+
+        // Post-process DoF (solid mode): between shade and density
+        // effects/tonemap, same ordering as the interactive frame. Needs
+        // the per-pixel depth buffer (present whenever solid shading
+        // ran on this path).
+        let mut dof_holder: Option<crate::renderer::dof_pass::DofPass> = None;
+        if config.dof_blur_strength > 0.0
+            && matches!(config.render_mode, crate::scene::transforms::RenderMode::ThreeD)
+        {
+            if let Some(depth) = self.shade_depth_buffer.as_ref() {
+                let input_view: &TextureView =
+                    shade_holder.as_ref().map(|(_, v)| v).unwrap_or(&accumulation_view);
+                let mut dp = crate::renderer::dof_pass::DofPass::new(&self.device);
+                let mut dof_encoder = self.device.create_command_encoder(&CommandEncoderDescriptor {
+                    label: Some("Export DoF Encoder"),
+                });
+                dp.run(
+                    &self.device,
+                    &self.queue,
+                    &mut dof_encoder,
+                    input_view,
+                    depth,
+                    0, // dedicated depth buffer: depth at word offset 0
+                    self.width,
+                    self.height,
+                    config.zoom,
+                    config.dof_focus_distance,
+                    config.dof_blur_strength,
+                    self.surface_thickness,
+                );
+                self.queue.submit(std::iter::once(dof_encoder.finish()));
+                log::info!("High-res export: applied post-process DoF");
+                dof_holder = Some(dp);
+            } else {
+                log::warn!("High-res export: DoF requested but no depth buffer (solid rendering off) — skipped");
+            }
+        }
+        let base_accum_view: &TextureView = match &dof_holder {
+            Some(dp) => dp.output_view(),
+            None => shade_holder.as_ref().map(|(_, v)| v).unwrap_or(&accumulation_view),
+        };
+
         // ===== Step 3: Set up tonemap params =====
         // Calculate area and sample_density matching GPU formula
         let zoom = config.zoom;
@@ -2569,7 +3161,9 @@ post_symmetry: (&config.flame.post_symmetry).into(),
         // yields a scale-invariant `density × k2` so brightness doesn't
         // drift with sample count.
         let total_pixels = (self.width as f32) * (self.height as f32);
-        let sample_density = ((total_iterations as f32) / total_pixels.max(1.0)).max(1e-6);
+        let sample_density = ((total_iterations as f32) * self.solid_density_fraction
+            / total_pixels.max(1.0))
+            .max(1e-6);
 
         let tonemap_mode = match config.tonemap_mode {
             crate::scene::tonemap::ToneMapMode::Linear => 0u32,
@@ -2682,7 +3276,7 @@ post_symmetry: (&config.flame.post_symmetry).into(),
                     &self.device,
                     &self.queue,
                     &mut density_encoder,
-                    &accumulation_view,
+                    base_accum_view,
                     &config.density_effects,
                 );
                 self.queue.submit(std::iter::once(density_encoder.finish()));
@@ -2711,7 +3305,7 @@ post_symmetry: (&config.flame.post_symmetry).into(),
         let tonemap_input_view: &TextureView = density_chain
             .as_ref()
             .and_then(|c| c.get_density_output())
-            .unwrap_or(&accumulation_view);
+            .unwrap_or(base_accum_view);
 
         // ===== Step 4: Create bind group and output texture =====
         let curve_lut_view = self.curve_lut_texture.create_view(&TextureViewDescriptor::default());

@@ -83,10 +83,17 @@ pub fn load_configs_from_dir(dir: &Path) -> Vec<FractalConfig> {
     configs
 }
 
-/// Load a single fractal config preset from a file
+/// Load a single fractal config preset from a file.
+///
+/// Goes through `FractalConfig::from_json` (NOT raw serde) so version
+/// migrations run — a raw deserialize of a pre-v3 file drops
+/// `flame.render_mode` (ignored unknown field) and renders the scene
+/// in 2D (field-caught: batch CLI exports of an old 3D solid scene
+/// came out flat/unlit while single-file exports, which migrated,
+/// were correct).
 pub fn load_config(path: &Path) -> Result<FractalConfig, Box<dyn std::error::Error>> {
     let json = std::fs::read_to_string(path)?;
-    let config = serde_json::from_str(&json)?;
+    let config = FractalConfig::from_json(&json)?;
     Ok(config)
 }
 

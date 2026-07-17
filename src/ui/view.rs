@@ -482,6 +482,7 @@ pub fn render_view_content(
                         far_fade_start.into()
                     );
                 }
+
             });
     }
 

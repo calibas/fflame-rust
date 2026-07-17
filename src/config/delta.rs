@@ -226,6 +226,24 @@ pub enum ConfigPath {
     PerspectiveStrength,
     DepthDensityCompensation,
     FarDensityFade,
+    SolidStrength,
+    SurfaceThickness,
+    SolidShadowStrength,
+    // Solid rendering Phase 1: deferred lighting (shade pass).
+    ShadingStrength,
+    SolidAmbient,
+    SolidDiffuse,
+    SolidSpecular,
+    SolidShininess,
+    SsaoStrength,
+    SsaoRadius,
+    NormalSmoothing,
+    GapFill,
+    /// Enable/disable one of the 4 shade-pass lights.
+    SolidLightEnabled { index: usize },
+    /// Parameter of one shade-pass light: "azimuth", "elevation",
+    /// "intensity", "color_r", "color_g", "color_b".
+    SolidLightParam { index: usize, param: String },
     FarDensityFadeStart,
     /// Xaos (chaos) weight for transition from src transform to dst transform
     /// Modifies the probability of selecting dst when coming from src
@@ -752,6 +770,20 @@ impl Display for ConfigPath {
             ConfigPath::PerspectiveStrength => write!(f, "Perspective Strength"),
             ConfigPath::DepthDensityCompensation => write!(f, "Depth Density Compensation"),
             ConfigPath::FarDensityFade => write!(f, "Far Density Fade"),
+            ConfigPath::SolidStrength => write!(f, "Solid Strength"),
+            ConfigPath::SurfaceThickness => write!(f, "Surface Thickness"),
+            ConfigPath::SolidShadowStrength => write!(f, "Shadow Strength"),
+            ConfigPath::ShadingStrength => write!(f, "Shading Strength"),
+            ConfigPath::SolidAmbient => write!(f, "Ambient Light"),
+            ConfigPath::SolidDiffuse => write!(f, "Diffuse Light"),
+            ConfigPath::SolidSpecular => write!(f, "Specular"),
+            ConfigPath::SolidShininess => write!(f, "Shininess"),
+            ConfigPath::SsaoStrength => write!(f, "SSAO Strength"),
+            ConfigPath::SsaoRadius => write!(f, "SSAO Radius"),
+            ConfigPath::NormalSmoothing => write!(f, "Normal Smoothing"),
+            ConfigPath::GapFill => write!(f, "Gap Fill"),
+            ConfigPath::SolidLightEnabled { index } => write!(f, "Light {} Enabled", index + 1),
+            ConfigPath::SolidLightParam { index, param } => write!(f, "Light {} {}", index + 1, param),
             ConfigPath::FarDensityFadeStart => write!(f, "Far Density Fade Start"),
             ConfigPath::Xaos { src, dst } => {
                 write!(f, "Xaos {} → {}", src + 1, dst + 1)
@@ -1182,6 +1214,20 @@ impl ConfigPath {
             ConfigPath::PerspectiveStrength => I18nKey::simple("history.param.perspective_strength"),
             ConfigPath::DepthDensityCompensation => I18nKey::simple("history.param.depth_density_compensation"),
             ConfigPath::FarDensityFade => I18nKey::simple("history.param.far_density_fade"),
+            ConfigPath::SolidStrength => I18nKey::simple("history.param.solid_strength"),
+            ConfigPath::SurfaceThickness => I18nKey::simple("history.param.surface_thickness"),
+            ConfigPath::SolidShadowStrength => I18nKey::simple("history.param.shadow_strength"),
+            ConfigPath::ShadingStrength => I18nKey::simple("history.param.shading_strength"),
+            ConfigPath::SolidAmbient => I18nKey::simple("history.param.solid_ambient"),
+            ConfigPath::SolidDiffuse => I18nKey::simple("history.param.solid_diffuse"),
+            ConfigPath::SolidSpecular => I18nKey::simple("history.param.solid_specular"),
+            ConfigPath::SolidShininess => I18nKey::simple("history.param.solid_shininess"),
+            ConfigPath::SsaoStrength => I18nKey::simple("history.param.ssao_strength"),
+            ConfigPath::SsaoRadius => I18nKey::simple("history.param.ssao_radius"),
+            ConfigPath::NormalSmoothing => I18nKey::simple("history.param.normal_smoothing"),
+            ConfigPath::GapFill => I18nKey::simple("history.param.gap_fill"),
+            ConfigPath::SolidLightEnabled { .. } => I18nKey::simple("history.param.solid_light_enabled"),
+            ConfigPath::SolidLightParam { .. } => I18nKey::simple("history.param.solid_light_param"),
             ConfigPath::FarDensityFadeStart => I18nKey::simple("history.param.far_density_fade_start"),
             ConfigPath::Xaos { src, dst } => I18nKey::with_params(
                 "history.param.xaos",
@@ -1980,6 +2026,7 @@ pub enum UpdateType {
     None,            // No update needed
     ViewOnly,        // Just update view transform (zoom, pan, rotation)
     ToneMappingOnly, // Re-run tonemap pass (exposure, gamma)
+    ShadingOnly,     // Refresh the solid-rendering shade pass params (lighting) — no reset, no re-accumulation
     ColorOnly,       // Re-run color accumulation (palette, color mode)
     IterationReset,  // Full reset - clear accumulation, restart iterations
 }
@@ -2017,9 +2064,31 @@ impl ConfigPath {
             | ConfigPath::FogStrength
             | ConfigPath::FogStart
             | ConfigPath::FarDensityFade
+            | ConfigPath::SolidStrength
+            | ConfigPath::SurfaceThickness
             | ConfigPath::FarDensityFadeStart
             | ConfigPath::FilterRadius
             | ConfigPath::FilterBlurEdges => UpdateType::IterationReset,
+
+            // Solid-rendering LIGHTING: the shade pass runs after
+            // accumulation, so lighting never invalidates accumulated
+            // data — refresh the renderer's shading copy and let the
+            // per-frame shade+tonemap pick it up. The one structural
+            // case (a change flipping the depth-capture requirement,
+            // e.g. lighting toggled on while solid_strength is 0) is
+            // escalated by the app layer to a full flame update.
+            ConfigPath::ShadingStrength
+            | ConfigPath::SolidAmbient
+            | ConfigPath::SolidDiffuse
+            | ConfigPath::SolidSpecular
+            | ConfigPath::SolidShininess
+            | ConfigPath::SsaoStrength
+            | ConfigPath::SsaoRadius
+            | ConfigPath::NormalSmoothing
+            | ConfigPath::GapFill
+            | ConfigPath::SolidShadowStrength
+            | ConfigPath::SolidLightEnabled { .. }
+            | ConfigPath::SolidLightParam { .. } => UpdateType::ShadingOnly,
 
             // Tone mapping - re-run tonemap shader
             ConfigPath::Exposure
@@ -2383,6 +2452,20 @@ impl ConfigPath {
             ConfigPath::PerspectiveStrength => "PerspectiveStrength".to_string(),
             ConfigPath::DepthDensityCompensation => "DepthDensityCompensation".to_string(),
             ConfigPath::FarDensityFade => "FarDensityFade".to_string(),
+            ConfigPath::SolidStrength => "SolidStrength".to_string(),
+            ConfigPath::SurfaceThickness => "SurfaceThickness".to_string(),
+            ConfigPath::SolidShadowStrength => "SolidShadowStrength".to_string(),
+            ConfigPath::ShadingStrength => "ShadingStrength".to_string(),
+            ConfigPath::SolidAmbient => "SolidAmbient".to_string(),
+            ConfigPath::SolidDiffuse => "SolidDiffuse".to_string(),
+            ConfigPath::SolidSpecular => "SolidSpecular".to_string(),
+            ConfigPath::SolidShininess => "SolidShininess".to_string(),
+            ConfigPath::SsaoStrength => "SsaoStrength".to_string(),
+            ConfigPath::SsaoRadius => "SsaoRadius".to_string(),
+            ConfigPath::NormalSmoothing => "NormalSmoothing".to_string(),
+            ConfigPath::GapFill => "GapFill".to_string(),
+            ConfigPath::SolidLightEnabled { index } => format!("SolidLight.{}.enabled", index),
+            ConfigPath::SolidLightParam { index, param } => format!("SolidLight.{}.{}", index, param),
             ConfigPath::FarDensityFadeStart => "FarDensityFadeStart".to_string(),
             ConfigPath::Xaos { src, dst } => format!("Xaos.{}.{}", src, dst),
             ConfigPath::SoloTransform => "SoloTransform".to_string(),
@@ -2499,6 +2582,18 @@ impl ConfigPath {
             "PerspectiveStrength" => return Some(ConfigPath::PerspectiveStrength),
             "DepthDensityCompensation" => return Some(ConfigPath::DepthDensityCompensation),
             "FarDensityFade" => return Some(ConfigPath::FarDensityFade),
+            "SolidStrength" => return Some(ConfigPath::SolidStrength),
+            "SurfaceThickness" => return Some(ConfigPath::SurfaceThickness),
+            "SolidShadowStrength" => return Some(ConfigPath::SolidShadowStrength),
+            "ShadingStrength" => return Some(ConfigPath::ShadingStrength),
+            "SolidAmbient" => return Some(ConfigPath::SolidAmbient),
+            "SolidDiffuse" => return Some(ConfigPath::SolidDiffuse),
+            "SolidSpecular" => return Some(ConfigPath::SolidSpecular),
+            "SolidShininess" => return Some(ConfigPath::SolidShininess),
+            "SsaoStrength" => return Some(ConfigPath::SsaoStrength),
+            "SsaoRadius" => return Some(ConfigPath::SsaoRadius),
+            "NormalSmoothing" => return Some(ConfigPath::NormalSmoothing),
+            "GapFill" => return Some(ConfigPath::GapFill),
             "FarDensityFadeStart" => return Some(ConfigPath::FarDensityFadeStart),
             "SoloTransform" => return Some(ConfigPath::SoloTransform),
             "PostSymmetryType" => return Some(ConfigPath::PostSymmetryType),
@@ -2713,6 +2808,14 @@ impl ConfigPath {
         }
 
         // Effect paths: DensityEffect.{index}.{Enabled|param} or ColorEffect.{index}.{Enabled|param}
+        if parts.len() == 3 && parts[0] == "SolidLight" {
+            if let Ok(index) = parts[1].parse::<usize>() {
+                if parts[2] == "enabled" {
+                    return Some(ConfigPath::SolidLightEnabled { index });
+                }
+                return Some(ConfigPath::SolidLightParam { index, param: parts[2].to_string() });
+            }
+        }
         if parts.len() == 3 && parts[0] == "DensityEffect" {
             if let Ok(index) = parts[1].parse::<usize>() {
                 if parts[2] == "Enabled" {
@@ -2829,6 +2932,19 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::BlendFactor
         | ConfigPath::PerspectiveStrength
         | ConfigPath::DepthDensityCompensation
+        | ConfigPath::SolidStrength
+        | ConfigPath::SurfaceThickness
+        | ConfigPath::ShadingStrength
+        | ConfigPath::SolidAmbient
+        | ConfigPath::SolidDiffuse
+        | ConfigPath::SolidSpecular
+        | ConfigPath::SolidShininess
+        | ConfigPath::SsaoStrength
+        | ConfigPath::SsaoRadius
+        | ConfigPath::NormalSmoothing
+        | ConfigPath::GapFill
+        | ConfigPath::SolidShadowStrength
+        | ConfigPath::SolidLightParam { .. }
         | ConfigPath::FarDensityFade
         | ConfigPath::FarDensityFadeStart
         | ConfigPath::TransformWeight { .. }
@@ -2936,7 +3052,8 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::FinalTransformPostAffineEnabled { .. }
         | ConfigPath::SystemVsyncEnabled
         | ConfigPath::SystemShowHelpOnStartup
-        | ConfigPath::PreserveZ => {
+        | ConfigPath::PreserveZ
+        => {
             json.as_bool().map(ConfigValue::Bool)
         }
 
@@ -3029,7 +3146,8 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
 
         // Effect enabled flags (bool)
         ConfigPath::DensityEffectEnabled { .. }
-        | ConfigPath::ColorEffectEnabled { .. } => {
+        | ConfigPath::ColorEffectEnabled { .. }
+        | ConfigPath::SolidLightEnabled { .. } => {
             json.as_bool().map(ConfigValue::Bool)
         }
 
@@ -3385,6 +3503,21 @@ mod tests {
             ConfigPath::PerspectiveStrength,
             ConfigPath::DepthDensityCompensation,
             ConfigPath::FarDensityFade,
+            ConfigPath::SolidStrength,
+            ConfigPath::SurfaceThickness,
+            ConfigPath::SolidShadowStrength,
+            ConfigPath::ShadingStrength,
+            ConfigPath::SolidAmbient,
+            ConfigPath::SolidDiffuse,
+            ConfigPath::SolidSpecular,
+            ConfigPath::SolidShininess,
+            ConfigPath::SsaoStrength,
+            ConfigPath::SsaoRadius,
+            ConfigPath::NormalSmoothing,
+            ConfigPath::GapFill,
+            ConfigPath::SolidLightEnabled { index: 2 },
+            ConfigPath::SolidLightParam { index: 1, param: "azimuth".to_string() },
+            ConfigPath::SolidLightParam { index: 3, param: "color_b".to_string() },
             ConfigPath::FarDensityFadeStart,
             ConfigPath::Xaos { src: 0, dst: 1 },
             ConfigPath::Xaos { src: 3, dst: 7 },

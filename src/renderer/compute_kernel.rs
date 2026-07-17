@@ -175,6 +175,38 @@ pub struct FlameRenderer {
     /// stays put → tonemap reads scale-mismatched data → preview
     /// mode goes ~N× dimmer than steady-state for N drag frames.
     samples_in_buffer: u64,
+    /// Samples of the most recent compute batch — the unit for the
+    /// auto-refit's "how many batches deep are we" estimate.
+    last_batch_samples: u64,
+    /// Attractor-bounds readback (shadow-map auto-fit).
+    bounds_stats: crate::renderer::density_stats::BoundsTracker,
+    /// Last decoded world AABB of plotted samples. Persists across
+    /// resets as "last known" — the placement frozen at each reset uses
+    /// it, and fresh measurements replace it as they arrive.
+    measured_bounds: Option<([f32; 3], [f32; 3])>,
+    /// A fresh bounds measurement arrived since the placement froze.
+    bounds_dirty: bool,
+    /// Light-space shadow-map fit (center, radius) FROZEN at the last
+    /// accumulation reset — splat texel coordinates depend on it.
+    frozen_shadow_fit: Option<([f32; 3], f32)>,
+    /// Whether frozen_shadow_fit was derived from MEASURED bounds (vs a
+    /// view guess). A guess-based fit gets one tightening refit when the
+    /// first real measurement lands; measured fits only refit on growth.
+    frozen_fit_measured: bool,
+    /// The auto-refit already fired once this accumulation run. HARD
+    /// cap: however the bounds evolve, the auto-refit may interrupt a
+    /// run at most once — repeat interruptions are exactly the reset
+    /// loop the refit logic keeps re-growing (field-reported twice).
+    fit_refit_done: bool,
+    /// Shade inputs changed since the last shade (accumulate ran,
+    /// lighting edited, reset, ...). When false and the temporal blend
+    /// has settled, run_shade_pass skips entirely — the previous output
+    /// texture is still exact. The march + normals chain + AO + shadows
+    /// are NOT cheap; without this they burned GPU every frame even
+    /// after rendering completed (field-reported).
+    shade_dirty: bool,
+    /// Temporal-blend settle countdown after the last dirty shade.
+    shade_settle: u32,
     color_mode: ColorMode,
     path_map_style: PathMapStyle,
     path_capture_mode: PathCaptureMode,
@@ -199,6 +231,14 @@ pub struct FlameRenderer {
     dof_blur_strength: f32, // DOF: Blur amount (0.0 = disabled)
     fog_strength: f32, // Depth fog: exponential fog density (0.0 = disabled)
     fog_start: f32, // Depth fog: distance where fog begins
+    solid_strength: f32, // Solid rendering: occlusion strength (0 = off)
+    surface_thickness: f32, // Solid rendering: depth shell (world units)
+    needs_depth_prime: bool, // Next compute batch records depth only (set on reset while solid)
+    solid_shading: crate::config::SolidShadingSettings, // Phase 1 lighting (shade pass); active() => depth capture even at solid_strength 0
+    shade_pass: crate::renderer::shade_pass::ShadePass, // Deferred shade pass (dispatched only when shading is active)
+    dof_pass: crate::renderer::dof_pass::DofPass, // Post-process DoF (solid mode; at-splat DoF compiles out under SOLID)
+    dof_dirty: bool, // DoF input (shade output / accumulator) changed since the last DoF dispatch
+    solid_density_fraction: f32, // Measured accepted/dispatched fraction (1.0 = no correction); scales tonemap sample_density
     filter_radius: f32, // Spatial filter (Apo's `filter`): Gaussian sigma in pixels on histogram, 0 = off
     filter_blur_edges: f32, // Bilateral edge-handling [0..1]: 0 = preserve edges (default), 1 = uniform Gaussian
     background_r: f32, // Background color R (for depth fog)
@@ -309,6 +349,15 @@ impl FlameRenderer {
             total_iterations: 0,
             effective_iterations: 0,
             samples_in_buffer: 0,
+            last_batch_samples: 0,
+            bounds_stats: crate::renderer::density_stats::BoundsTracker::new(device),
+            measured_bounds: None,
+            bounds_dirty: false,
+            frozen_shadow_fit: None,
+            frozen_fit_measured: false,
+            fit_refit_done: false,
+            shade_dirty: true,
+            shade_settle: 0,
             color_mode: ColorMode::Palette,
             path_map_style: PathMapStyle::default(),
             path_capture_mode: PathCaptureMode::default(),
@@ -333,6 +382,14 @@ impl FlameRenderer {
             dof_blur_strength: crate::config::DEFAULT_DOF_BLUR_STRENGTH,
             fog_strength: crate::config::DEFAULT_FOG_STRENGTH,
             fog_start: crate::config::DEFAULT_FOG_START,
+            solid_strength: crate::config::DEFAULT_SOLID_STRENGTH,
+            surface_thickness: crate::config::DEFAULT_SURFACE_THICKNESS,
+            needs_depth_prime: false,
+            solid_shading: crate::config::SolidShadingSettings::default(),
+            shade_pass: crate::renderer::shade_pass::ShadePass::new(device, width, height),
+            dof_pass: crate::renderer::dof_pass::DofPass::new(device),
+            dof_dirty: true,
+            solid_density_fraction: 1.0,
             filter_radius: 0.0,
             filter_blur_edges: 0.0,
             background_r: 0.0,
@@ -360,6 +417,14 @@ impl FlameRenderer {
         // Recreate buffers with new size (preserve palette_size)
         let palette_size = self.buffers.palette_size();
         self.buffers = FlameBuffers::with_palette_size(device, queue, width, height, flame, palette_size);
+
+        // Re-apply the solid depth region — fresh buffers default to none.
+        // Bind groups referencing the histogram are recreated just below.
+        let solid_enabled = (self.solid_strength > 0.0 || self.solid_shading.active())
+            && matches!(self.current_render_mode, crate::scene::transforms::RenderMode::ThreeD);
+        self.buffers.set_solid_depth_region(device, solid_enabled);
+        self.needs_depth_prime = solid_enabled;
+        self.shade_pass.resize(device, width, height);
 
         // Recreating variation_params_buffer wipes the init-derived slots
         // (slots N..N+M, written by the init dispatch). User-param slots
@@ -488,6 +553,8 @@ impl FlameRenderer {
             has_analytic_blur: flame.analytic_blur_active(&crate::variations::global_registry(), render_mode),
             flatten_z_per_iter: matches!(render_mode, crate::scene::transforms::RenderMode::ThreeD)
                 && !preserve_z,
+            solid_enabled: (self.solid_strength > 0.0 || self.solid_shading.active())
+                && matches!(render_mode, crate::scene::transforms::RenderMode::ThreeD),
             attachment_cap: flame.attachment_cap() as u32,
             // No inlining for incremental updates (would trigger too many shader rebuilds)
             inlined_transforms: None,
@@ -508,9 +575,19 @@ impl FlameRenderer {
 
     /// Reset accumulation buffer and sample count (full reset including effective iterations)
     pub fn reset(&mut self, encoder: &mut CommandEncoder, queue: &Queue, _iterations_per_thread: u32, _zoom: f32, _pan_x: f32, _pan_y: f32, _rotation: f32, _camera_rotation_x: f32, _camera_rotation_y: f32, _camera_bank: f32, _camera_x: f32, _camera_y: f32, _camera_z: f32, _speed_factor: f32) {
+        // Solid rendering: the depth region is about to be cleared —
+        // record depth only on the first batch after this reset.
+        self.needs_depth_prime = (self.solid_strength > 0.0 || self.solid_shading.active())
+            && matches!(self.current_render_mode, crate::scene::transforms::RenderMode::ThreeD);
         self.reset_iteration_counter();
         // Reset effective_iterations when doing a full reset (buffer cleared)
         self.effective_iterations = 0;
+        // Shade temporal history belongs to the pre-reset accumulation
+        // (and, in video export, to the PREVIOUS animation frame —
+        // blending against it would motion-ghost).
+        self.shade_pass.reset_temporal();
+        self.shade_dirty = true;
+        self.dof_dirty = true;
 
         // Clear accumulation buffers
         self.buffers.clear_all(encoder, queue);
@@ -530,6 +607,20 @@ impl FlameRenderer {
         // 0.0 = orthographic (flat), higher values = increasing perspective
 
         let seed = self.get_rng_seed();
+
+        // Depth-priming: the first batch after a full reset (while solid
+        // rendering is active) records depth only — the SOLID shader path
+        // zeroes every sample's plot weight — so the accumulator never
+        // ingests interior samples gated against an empty depth buffer.
+        let depth_prime_flag: u32 = if self.needs_depth_prime {
+            self.needs_depth_prime = false;
+            1
+        } else {
+            0
+        };
+
+        let sh_fit = self.frozen_shadow_fit.unwrap_or_else(|| self.shadow_placement(zoom, pan_x, pan_y, camera_rotation_x, camera_rotation_y, camera_bank, [camera_x, camera_y, camera_z]));
+        let sh_dirs = self.shadow_light_dirs(camera_rotation_x, camera_rotation_y, camera_bank);
         let params = GpuParams {
             num_transforms: self.num_transforms,
             iterations_per_thread,
@@ -552,7 +643,9 @@ impl FlameRenderer {
             depth_density_compensation: self.depth_density_compensation,
             far_density_fade: self.far_density_fade,
             far_density_fade_start: self.far_density_fade_start,
-            _pad_before_post_symmetry: [0; 3],
+            solid_strength: self.solid_strength,
+            surface_thickness: self.surface_thickness,
+            depth_prime: depth_prime_flag,
             camera_rotation_x,
             camera_rotation_y,
             camera_bank,
@@ -563,7 +656,7 @@ impl FlameRenderer {
             camera_z,
             dof_focus_distance: self.dof_focus_distance,
             dof_blur_strength: self.dof_blur_strength,
-            fog_strength: self.fog_strength,
+            fog_strength: self.atsplat_fog_strength(),
             fog_start: self.fog_start,
             bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
             path_map_style: self.path_map_style as u32,
@@ -574,7 +667,14 @@ impl FlameRenderer {
             background_r: self.background_r,
             background_g: self.background_g,
             background_b: self.background_b,
-post_symmetry: (&self.post_symmetry).into(),
+            post_symmetry: (&self.post_symmetry).into(),
+            shadow_center_x: sh_fit.0[0],
+            shadow_center_y: sh_fit.0[1],
+            shadow_center_z: sh_fit.0[2],
+            shadow_radius: sh_fit.1,
+            shadow_count: sh_dirs.0,
+            _pad_shadow: [0; 3],
+            shadow_dirs: sh_dirs.1,
         };
         self.buffers.update_params(queue, &params);
 
@@ -610,9 +710,12 @@ post_symmetry: (&self.post_symmetry).into(),
             self.total_iterations += samples_this_frame;
         }
 
-        // Clear histogram buffer before each batch (needed for proper accumulation math)
+        // Clear histogram buffer before each batch (needed for proper accumulation
+        // math). In overwrite mode the solid depth region resets with it — the
+        // fractal is changing between frames, so the OLD shape's surface must not
+        // occlude the NEW shape's samples (see FlameBuffers::clear_histogram).
         if clear_histogram {
-            self.buffers.clear_histogram(encoder);
+            self.buffers.clear_histogram(encoder, self.overwrite_mode);
         }
         // Clear path buffer only on full reset (view change, flame change, etc.)
         // Path buffer persists across batches to accumulate path data for all pixels
@@ -670,6 +773,8 @@ post_symmetry: (&self.post_symmetry).into(),
 
     /// Run accumulation pass to blend new samples with previous accumulation
     pub fn accumulate_pass(&mut self, encoder: &mut CommandEncoder, queue: &Queue, device: &Device, samples_this_frame: u64) {
+        self.shade_dirty = true;
+        self.dof_dirty = true;
         self.samples_accumulated += samples_this_frame;
 
         // Update effective_iterations (for brightness) only when NOT in overwrite mode
@@ -687,8 +792,10 @@ post_symmetry: (&self.post_symmetry).into(),
         // would drop ~N× across N drag frames.
         if self.overwrite_mode {
             self.samples_in_buffer = samples_this_frame;
+            self.last_batch_samples = samples_this_frame;
         } else {
             self.samples_in_buffer += samples_this_frame;
+            self.last_batch_samples = samples_this_frame;
         }
 
         // Pick blend mode + rate for the accumulate shader. See
@@ -722,6 +829,11 @@ post_symmetry: (&self.post_symmetry).into(),
             background_g: self.background_color[1],
             background_b: self.background_color[2],
             _pad1: 0.0,
+            surface_thickness: self.surface_thickness,
+            has_depth: u32::from(
+                self.buffers.solid_depth_region && self.buffers.accum_depth_buffer.is_some(),
+            ),
+            _pad2: [0; 2],
         };
 
         self.buffers.update_accumulate_params(queue, &params);
@@ -870,7 +982,13 @@ post_symmetry: (&self.post_symmetry).into(),
         // promise (sample_density should track total_iterations
         // linearly through any iter count); 1e-6 is small enough to
         // never bind in practice.
-        let sample_density = ((self.samples_in_buffer as f32) / total_pixels.max(1.0)).max(1e-6);
+        // Solid brightness renormalization: hard occlusion culls most
+        // dispatched samples; scale the normalization density by the
+        // MEASURED accepted fraction (1.0 when solid is off) so solids
+        // tone-map at the brightness their surviving samples deserve.
+        let sample_density = ((self.samples_in_buffer as f32) * self.solid_density_fraction
+            / total_pixels.max(1.0))
+            .max(1e-6);
         let offset = std::mem::offset_of!(TonemapParams, sample_density) as u64;
         queue.write_buffer(
             &self.buffers.tonemap_params_buffer,
@@ -982,6 +1100,433 @@ post_symmetry: (&self.post_symmetry).into(),
         self.buffers.current_accumulation_view()
     }
 
+    /// Solid-rendering shade pass (Phase 1). Dispatches when lighting is
+    /// active and the depth region exists; returns whether it ran (the
+    /// caller then feeds `shade_output_view()` to density effects /
+    /// tonemap instead of the accumulator). Zero cost when off — nothing
+    /// is dispatched.
+    #[allow(clippy::too_many_arguments)]
+    pub fn run_shade_pass(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        encoder: &mut CommandEncoder,
+        zoom: f32,
+        rotation: f32,
+        pan_x: f32,
+        pan_y: f32,
+        camera_rotation_x: f32,
+        camera_rotation_y: f32,
+        camera_bank: f32,
+        camera_x: f32,
+        camera_y: f32,
+        camera_z: f32,
+    ) -> bool {
+        let lit = self.solid_shading.active()
+            && matches!(self.current_render_mode, crate::scene::transforms::RenderMode::ThreeD)
+            && self.buffers.solid_depth_region;
+        if !lit {
+            return false;
+        }
+        // Inputs unchanged and the temporal blend has settled: the
+        // previous shade output is still exact — skip the whole chain.
+        if !self.shade_dirty && self.shade_settle == 0 {
+            return true;
+        }
+        if self.shade_dirty {
+            self.shade_dirty = false;
+            // ~2 blend time-constants at ema 0.85.
+            self.shade_settle = 16;
+        } else {
+            self.shade_settle -= 1;
+        }
+        // The shade output is about to change (settling counts too) —
+        // any DoF built on it is stale.
+        self.dof_dirty = true;
+        let sh_fit = self.frozen_shadow_fit.unwrap_or_else(|| self.shadow_placement(zoom, pan_x, pan_y, camera_rotation_x, camera_rotation_y, camera_bank, [camera_x, camera_y, camera_z]));
+        self.shade_pass.run(
+            device,
+            queue,
+            encoder,
+            self.buffers.current_accumulation_view(),
+            &self.buffers.histogram_buffer,
+            &self.solid_shading,
+            zoom,
+            rotation,
+            pan_x,
+            pan_y,
+            self.perspective_strength,
+            self.surface_thickness,
+            (camera_rotation_x, camera_rotation_y, camera_bank, [camera_x, camera_y, camera_z]),
+            if self.shadow_capture_wanted() && self.buffers.solid_depth_region {
+                Some((self.buffers.shadow_map_word_offset(), sh_fit.0, sh_fit.1))
+            } else {
+                None
+            },
+            // Post-lighting fog (owned by the shade pass when active).
+            if self.fog_in_shade() {
+                (self.fog_strength, self.fog_start,
+                 [self.background_r, self.background_g, self.background_b])
+            } else {
+                (0.0, 0.0, [0.0; 3])
+            },
+            // Temporal smoothing of the shade output: the shading tracks
+            // genuinely drifting data during accumulation; raw per-frame
+            // it strobes. Overwrite mode gets 0 — every frame is a fresh
+            // single-batch preview.
+            if self.overwrite_mode { 0.0 } else { 0.85 },
+        );
+        true
+    }
+
+    /// Shaded output view (valid after `run_shade_pass` returned true).
+    pub fn shade_output_view(&self) -> &TextureView {
+        self.shade_pass.output_view()
+    }
+
+    /// Post-process depth of field (solid mode). At-splat DoF is
+    /// compiled out under SOLID (position jitter corrupts the
+    /// nearest-depth buffer); this gather blur replaces it, running on
+    /// the HDR pre-tonemap image (shade output when lighting is on,
+    /// else the accumulator) using the depth region. Returns whether
+    /// the DoF output should feed the tonemap. Zero cost when off.
+    pub fn run_dof_pass(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        encoder: &mut CommandEncoder,
+        shade_ran: bool,
+        zoom: f32,
+    ) -> bool {
+        let active = self.dof_blur_strength > 0.0
+            && self.buffers.solid_depth_region
+            && matches!(self.current_render_mode, crate::scene::transforms::RenderMode::ThreeD);
+        if !active {
+            return false;
+        }
+        if !self.dof_dirty {
+            // Input unchanged — the previous output is still exact.
+            return true;
+        }
+        self.dof_dirty = false;
+        let input: &TextureView = if shade_ran {
+            self.shade_pass.output_view()
+        } else {
+            self.buffers.current_accumulation_view()
+        };
+        self.dof_pass.run(
+            device,
+            queue,
+            encoder,
+            input,
+            &self.buffers.histogram_buffer,
+            self.width * self.height * 4, // depth region inside the histogram
+            self.width,
+            self.height,
+            zoom,
+            self.dof_focus_distance,
+            self.dof_blur_strength,
+            self.surface_thickness,
+        );
+        true
+    }
+
+    /// DoF output view (valid after `run_dof_pass` returned true).
+    pub fn dof_output_view(&self) -> &TextureView {
+        self.dof_pass.output_view()
+    }
+
+    /// Lightweight lighting update: refresh the shade-pass settings
+    /// WITHOUT touching iteration state. Only valid when the change
+    /// doesn't flip the depth-capture requirement — the caller checks
+    /// `has_solid_depth_region()` against the desired state and
+    /// escalates to `update_flame` when they differ.
+    pub fn set_solid_shading(&mut self, shading: crate::config::SolidShadingSettings) {
+        self.solid_shading = shading;
+        // Lighting changed: blending the new look against the old one
+        // would lag/ghost the edit — restart the temporal history.
+        self.shade_pass.reset_temporal();
+        self.shade_dirty = true;
+        self.dof_dirty = true;
+    }
+
+    /// Whether the histogram currently carries the solid depth region.
+    pub fn has_solid_depth_region(&self) -> bool {
+        self.buffers.solid_depth_region
+    }
+
+
+    /// Interactive shadow-fit auto-refit: re-freeze (and report true so
+    /// the caller resets accumulation) ONLY when the measured attractor
+    /// extends beyond the frozen fit's coverage — clipped geometry casts
+    /// no shadow, so growth is a correctness refit. Shrinkage NEVER
+    /// refits: an oversized map merely wastes resolution, and every
+    /// natural reset re-freezes from the latest bounds anyway (free
+    /// tightening). A symmetric "changed by >10%" test here caused an
+    /// infinite reset loop (field-reported at ~250M iterations): each
+    /// reset clears the bounds tail, the fresh run's PARTIAL AABB reads
+    /// as a material shrink, refit resets again, ad infinitum.
+    #[allow(clippy::too_many_arguments)]
+    pub fn maybe_refit_shadow(&mut self, zoom: f32, pan_x: f32, pan_y: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_bank: f32, camera_pos: [f32; 3]) -> bool {
+        if !self.bounds_dirty || !self.shadow_capture_wanted() {
+            return false;
+        }
+        self.bounds_dirty = false;
+        // At most ONE auto-refit per accumulation run, and only while
+        // the run is young: a refit restarts accumulation — invisible
+        // at ~1 s in, enraging at 20 min in. Later growth keeps the
+        // current maps (worst case: an off-fit tail renders unshadowed
+        // this run; the next natural reset re-freezes from the latest
+        // bounds anyway).
+        if self.fit_refit_done {
+            return false;
+        }
+        let batches = self.samples_in_buffer / self.last_batch_samples.max(1);
+        if batches > 64 {
+            return false;
+        }
+        let new_fit = self.shadow_placement(zoom, pan_x, pan_y, camera_rotation_x, camera_rotation_y, camera_bank, camera_pos);
+        let needs = match self.frozen_shadow_fit {
+            // A view-guess fit tightens ONCE when the first real
+            // measurement lands (can't loop: the refit below marks the
+            // fit measured, and measured fits only refit on growth).
+            Some(_) if !self.frozen_fit_measured => true,
+            Some((c, r)) => {
+                // New bounding sphere not contained in the frozen one
+                // (5% hysteresis so boundary noise can't retrigger).
+                let d = ((c[0] - new_fit.0[0]).powi(2)
+                    + (c[1] - new_fit.0[1]).powi(2)
+                    + (c[2] - new_fit.0[2]).powi(2))
+                    .sqrt();
+                d + new_fit.1 > r * 1.05
+            }
+            None => true,
+        };
+        if needs {
+            log::info!(
+                "Shadow auto-refit (once per run): {:?} -> {:?} (restarting accumulation)",
+                self.frozen_shadow_fit, new_fit
+            );
+            self.frozen_shadow_fit = Some(new_fit);
+            // bounds_dirty implied a fresh measurement, so the new fit
+            // is measurement-derived.
+            self.frozen_fit_measured = self.measured_bounds.is_some();
+            self.fit_refit_done = true;
+        }
+        needs
+    }
+
+    /// Light-space shadow-map fit: cover the measured attractor bounds
+    /// (bounding-sphere radius) — falls back to a view-derived guess
+    /// until the first measurement lands. Frozen per accumulation run.
+    ///
+    /// The measured AABB is CLAMPED to a window of +/-12 view-extents
+    /// around the view center before the fit is derived. Chaos-game
+    /// attractors are heavy-tailed: rare far excursions keep growing
+    /// the raw min/max AABB for as long as the render runs, which both
+    /// starves the maps of resolution (one outlier at 1e6 spreads 1024^2
+    /// texels over nothing) and made the growth-refit re-trigger
+    /// forever (field-reported repeat resets). Inside the window the
+    /// fit is exact; outliers beyond it render with clamped-edge
+    /// shadow coverage — invisible, since they are far off-view too.
+    #[allow(clippy::too_many_arguments)]
+    fn shadow_placement(&self, zoom: f32, pan_x: f32, pan_y: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_bank: f32, camera_pos: [f32; 3]) -> ([f32; 3], f32) {
+        let rows = crate::renderer::shade_pass::effective_camera_rows(
+            camera_rotation_x, camera_rotation_y, camera_bank);
+        let mut view_center = camera_pos;
+        for i in 0..3 {
+            view_center[i] += pan_x * rows[0][i] + pan_y * rows[1][i];
+        }
+        let aspect = self.width.max(self.height).max(1) as f32
+            / self.width.min(self.height).max(1) as f32;
+        let view_extent = (4.0 * aspect / zoom.max(1e-6)).clamp(1e-3, 1e6);
+        if let Some((mn, mx)) = self.measured_bounds {
+            let win = 12.0 * view_extent;
+            let mut cmn = [0.0f32; 3];
+            let mut cmx = [0.0f32; 3];
+            for i in 0..3 {
+                cmn[i] = mn[i].clamp(view_center[i] - win, view_center[i] + win);
+                cmx[i] = mx[i].clamp(view_center[i] - win, view_center[i] + win);
+            }
+            let c = [
+                (cmn[0] + cmx[0]) * 0.5,
+                (cmn[1] + cmx[1]) * 0.5,
+                (cmn[2] + cmx[2]) * 0.5,
+            ];
+            let dx = cmx[0] - cmn[0];
+            let dy = cmx[1] - cmn[1];
+            let dz = cmx[2] - cmn[2];
+            let r = ((dx * dx + dy * dy + dz * dz).sqrt() * 0.5 * 1.1).max(1e-3);
+            return (c, r);
+        }
+        (view_center, view_extent)
+    }
+
+    /// The renderer's CURRENT shading settings (pre-update state — used
+    /// by gpu_updates to detect shadow-relevant light changes).
+    pub fn solid_shading(&self) -> &crate::config::SolidShadingSettings {
+        &self.solid_shading
+    }
+
+    /// Whether the SHADE pass owns depth fog (post-lighting) instead of
+    /// the at-splat path: fog + active lighting + 3D. The GpuParams
+    /// writes zero the at-splat fog when true; flipping this needs an
+    /// accumulation reset (gpu_updates escalates it) because at-splat
+    /// fog is baked into accumulated samples.
+    fn fog_in_shade(&self) -> bool {
+        self.fog_strength > 0.0
+            && self.solid_shading.active()
+            && matches!(self.current_render_mode, crate::scene::transforms::RenderMode::ThreeD)
+    }
+
+    /// At-splat fog strength for GpuParams: zero when the shade pass
+    /// owns fog.
+    fn atsplat_fog_strength(&self) -> f32 {
+        if self.fog_in_shade() { 0.0 } else { self.fog_strength }
+    }
+
+    /// Whether shadow maps should capture for the current settings.
+    pub fn shadow_capture_wanted(&self) -> bool {
+        self.solid_shading.shadow_strength > 0.0
+            && (self.solid_strength > 0.0 || self.solid_shading.active())
+            && matches!(self.current_render_mode, crate::scene::transforms::RenderMode::ThreeD)
+            && self.solid_shading.lights.iter().any(|l| l.enabled && l.intensity > 0.0)
+    }
+
+    /// Per-slot world-space light directions (xyz; w = enabled) plus the
+    /// runtime shadow_count gate (4 when capturing, 0 otherwise). Slot
+    /// order matches the lights array so the shade lookup maps
+    /// light i ↔ map i directly.
+    fn shadow_light_dirs(&self, camera_rotation_x: f32, camera_rotation_y: f32, camera_bank: f32) -> (u32, [[f32; 4]; 4]) {
+        let mut dirs = [[0.0f32; 4]; 4];
+        if !self.shadow_capture_wanted() {
+            return (0, dirs);
+        }
+        let rows = crate::renderer::shade_pass::effective_camera_rows(
+            camera_rotation_x, camera_rotation_y, camera_bank);
+        for (i, l) in self.solid_shading.lights.iter().enumerate().take(4) {
+            if !(l.enabled && l.intensity > 0.0) {
+                continue;
+            }
+            let az = l.azimuth.to_radians();
+            let el = l.elevation.to_radians();
+            // Camera-space direction TO the light (same formula as the
+            // shade pass), rotated to world by E^T.
+            let c = [el.cos() * az.sin(), el.sin(), el.cos() * az.cos()];
+            let mut w = [0.0f32; 3];
+            for k in 0..3 {
+                w[k] = c[0] * rows[0][k] + c[1] * rows[1][k] + c[2] * rows[2][k];
+            }
+            dirs[i] = [w[0], w[1], w[2], 1.0];
+        }
+        (4, dirs)
+    }
+
+    /// Byte offset of the attractor-bounds tail in the histogram buffer
+    /// (only meaningful when the depth region exists).
+    fn bounds_tail_offset(&self) -> u64 {
+        (self.width as u64) * (self.height as u64) * 5 * 4
+    }
+
+    /// Blocking bounds measurement + shadow-fit refresh (export warmup:
+    /// run a few batches, call this, reset, render for real — the maps
+    /// then cover the actual flame). Returns true when the fit changed
+    /// materially.
+    #[allow(clippy::too_many_arguments)]
+    pub fn refresh_shadow_placement_blocking(&mut self, device: &Device, queue: &Queue, zoom: f32, pan_x: f32, pan_y: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_bank: f32, camera_pos: [f32; 3]) -> bool {
+        if !(self.shadow_capture_wanted() && self.buffers.solid_depth_region) {
+            return false;
+        }
+        let off = self.bounds_tail_offset();
+        if let Some(words) = self.bounds_stats.read_blocking(device, queue, &self.buffers.histogram_buffer, off) {
+            match crate::renderer::density_stats::decode_bounds(&words) {
+                Some(b) => {
+                    log::debug!("Attractor bounds measured: min {:?} max {:?}", b.0, b.1);
+                    self.measured_bounds = Some(b);
+                }
+                None => log::debug!("Attractor bounds not available yet"),
+            }
+        }
+        let new_fit = self.shadow_placement(zoom, pan_x, pan_y, camera_rotation_x, camera_rotation_y, camera_bank, camera_pos);
+        let changed = match self.frozen_shadow_fit {
+            Some((c, r)) => {
+                let dc = (c[0] - new_fit.0[0]).abs().max((c[1] - new_fit.0[1]).abs()).max((c[2] - new_fit.0[2]).abs());
+                dc > r * 0.05 || (r - new_fit.1).abs() > r * 0.05
+            }
+            None => true,
+        };
+        self.frozen_shadow_fit = Some(new_fit);
+        self.frozen_fit_measured = self.measured_bounds.is_some();
+        self.fit_refit_done = false;
+        changed
+    }
+
+    /// Interactive-path density-stats tick (solid brightness renorm):
+    /// pumps the async measurement and encodes a fresh reduction every N
+    /// frames while occlusion is actively culling. Call once per frame,
+    /// after accumulate and before tonemap.
+    pub fn update_density_stats(&mut self, device: &Device, _queue: &Queue, encoder: &mut CommandEncoder) {
+        // Attractor-bounds tick (shadow-map auto-fit): async readback of
+        // the 8-word tail. Applied to `measured_bounds` immediately; the
+        // frozen fit only picks it up at the next reset (frozen per run).
+        let mut occ_words: Option<(u32, u32)> = None;
+        if self.buffers.solid_depth_region {
+            let off = self.bounds_tail_offset();
+            if let Some(words) = self.bounds_stats.tick(device, encoder, &self.buffers.histogram_buffer, off) {
+                if let Some(b) = crate::renderer::density_stats::decode_bounds(&words) {
+                    self.measured_bounds = Some(b);
+                    self.bounds_dirty = true;
+                }
+                occ_words = Some((words[6], words[7]));
+            }
+        }
+        let active = self.solid_strength > 0.0
+            && matches!(self.current_render_mode, crate::scene::transforms::RenderMode::ThreeD)
+            && self.buffers.solid_depth_region;
+        if !active {
+            self.solid_density_fraction = 1.0;
+            return;
+        }
+        // OCCLUSION-ONLY survival fraction from the tail counters (see
+        // main_template.wgsl) — never accumulated density, which folds
+        // artistic per-sample weights (far-fade, depth-density comp)
+        // into the "culled" fraction and makes those dials shift
+        // global brightness (field-audited).
+        if let Some((num, den)) = occ_words {
+            // The counters saturate around 17B iterations; freeze the
+            // fraction rather than let a saturated ratio drift.
+            if den > 0 && den < 3_000_000_000 {
+                let measured = (num as f32 / den as f32).clamp(0.005, 1.0);
+                // EMA: brightness scalar — smooth over the measurement
+                // lag so fraction drift never pumps the image.
+                self.solid_density_fraction = self.solid_density_fraction * 0.7 + measured * 0.3;
+            }
+        }
+    }
+
+    /// Exact (blocking) density-fraction measurement for one-shot renders
+    /// (CLI export) — sets the fraction the final tonemap will use.
+    pub fn apply_exact_density_fraction(&mut self, device: &Device, queue: &Queue) {
+        let active = self.solid_strength > 0.0
+            && matches!(self.current_render_mode, crate::scene::transforms::RenderMode::ThreeD)
+            && self.buffers.solid_depth_region;
+        if !active {
+            self.solid_density_fraction = 1.0;
+            return;
+        }
+        let off = self.bounds_tail_offset();
+        if let Some(words) = self.bounds_stats.read_blocking(device, queue, &self.buffers.histogram_buffer, off) {
+            let (num, den) = (words[6], words[7]);
+            if den > 0 {
+                self.solid_density_fraction = (num as f32 / den as f32).clamp(0.005, 1.0);
+                log::info!(
+                    "solid brightness renorm: occlusion survival = {:.4}",
+                    self.solid_density_fraction
+                );
+            }
+        }
+    }
+
     /// Debug: Read back scale buffer and compute statistics
     // Note: debug_scale_stats() removed - scale_buffer no longer exists
 
@@ -1061,6 +1606,33 @@ post_symmetry: (&self.post_symmetry).into(),
         self.post_symmetry = config.flame.post_symmetry.clone();
         self.burn_in = burn_in;
 
+        // 4b. Solid rendering: sync state + histogram depth region.
+        // Depth capture activates for occlusion OR lighting (see update_flame).
+        self.solid_strength = config.solid_strength;
+        self.surface_thickness = config.surface_thickness;
+        self.solid_shading = config.solid_shading.clone();
+        // load_config is a full reset point: drop the shade temporal
+        // history and force a fresh shade. The VIDEO EXPORT path loads a
+        // config per frame WITHOUT calling reset() — with the history
+        // kept, the temporal blend mixed ~85% of the PREVIOUS animation
+        // frame into each new one (field-reported smearing/trails on
+        // moving fractals; in-app was immune because interactive motion
+        // runs in overwrite mode where the blend is disabled).
+        self.shade_pass.reset_temporal();
+        self.shade_dirty = true;
+        self.dof_dirty = true;
+        let solid_enabled = (config.solid_strength > 0.0 || self.solid_shading.active())
+            && matches!(config.render_mode, crate::scene::transforms::RenderMode::ThreeD);
+        let rebind = self.buffers.set_solid_depth_region(device, solid_enabled);
+        if rebind {
+            self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
+            self.accumulate_bind_group = self.pipelines.create_accumulate_bind_group(device, &self.buffers);
+            self.histogram_blur_h_bind_group = self.pipelines.create_histogram_blur_h_bind_group(device, &self.buffers);
+            self.histogram_blur_v_bind_group = self.pipelines.create_histogram_blur_v_bind_group(device, &self.buffers);
+        }
+        // load_config resets accumulation — prime depth on the next batch.
+        self.needs_depth_prime = solid_enabled;
+
         // 5. Update palette size (recreates texture + bind groups if changed)
         if self.set_palette_size(device, queue, &config.flame, config.palette_size) {
             log::info!("Palette size changed to {} during config load", config.palette_size);
@@ -1085,6 +1657,11 @@ post_symmetry: (&self.post_symmetry).into(),
         // Update transform tracking
         self.num_transforms = config.flame.transforms.len() as u32;
 
+        self.frozen_shadow_fit = Some(self.shadow_placement(config.zoom, config.pan_x, config.pan_y, config.camera_rotation_x, config.camera_rotation_y, config.camera_bank, [config.camera_x, config.camera_y, config.camera_z]));
+        self.frozen_fit_measured = self.measured_bounds.is_some();
+        self.fit_refit_done = false;
+        let sh_fit = self.frozen_shadow_fit.unwrap();
+        let sh_dirs = self.shadow_light_dirs(config.camera_rotation_x, config.camera_rotation_y, config.camera_bank);
         let params = GpuParams {
             num_transforms: self.num_transforms,
             iterations_per_thread,
@@ -1107,7 +1684,9 @@ post_symmetry: (&self.post_symmetry).into(),
             depth_density_compensation: self.depth_density_compensation,
             far_density_fade: self.far_density_fade,
             far_density_fade_start: self.far_density_fade_start,
-            _pad_before_post_symmetry: [0; 3],
+            solid_strength: self.solid_strength,
+            surface_thickness: self.surface_thickness,
+            depth_prime: 0,
             camera_rotation_x: config.camera_rotation_x,
             camera_rotation_y: config.camera_rotation_y,
             camera_bank: config.camera_bank,
@@ -1118,7 +1697,14 @@ post_symmetry: (&self.post_symmetry).into(),
             camera_z: config.camera_z,
             dof_focus_distance: config.dof_focus_distance,
             dof_blur_strength: config.dof_blur_strength,
-            fog_strength: config.fog_strength,
+            fog_strength: if config.fog_strength > 0.0
+                && config.solid_shading.active()
+                && matches!(config.render_mode, crate::scene::transforms::RenderMode::ThreeD)
+            {
+                0.0
+            } else {
+                config.fog_strength
+            },
             fog_start: config.fog_start,
             bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
             path_map_style: self.path_map_style as u32,
@@ -1129,7 +1715,14 @@ post_symmetry: (&self.post_symmetry).into(),
             background_r: config.background_color[0],
             background_g: config.background_color[1],
             background_b: config.background_color[2],
-post_symmetry: (&config.flame.post_symmetry).into(),
+            post_symmetry: (&config.flame.post_symmetry).into(),
+            shadow_center_x: sh_fit.0[0],
+            shadow_center_y: sh_fit.0[1],
+            shadow_center_z: sh_fit.0[2],
+            shadow_radius: sh_fit.1,
+            shadow_count: sh_dirs.0,
+            _pad_shadow: [0; 3],
+            shadow_dirs: sh_dirs.1,
         };
         self.buffers.update_params(queue, &params);
 
@@ -1162,7 +1755,37 @@ post_symmetry: (&config.flame.post_symmetry).into(),
     }
 
     /// Update the flame being rendered
-    pub fn update_flame(&mut self, device: &Device, queue: &Queue, flame: &Flame, iterations_per_thread: u32, burn_in: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_bank: f32, camera_x: f32, camera_y: f32, camera_z: f32, speed_factor: f32, dof_focus_distance: f32, dof_blur_strength: f32, fog_strength: f32, fog_start: f32, background_color: [f32; 3], filter_radius: f32, filter_blur_edges: f32, render_mode: crate::scene::transforms::RenderMode, perspective_strength: f32, depth_density_compensation: f32, far_density_fade: f32, far_density_fade_start: f32, preserve_z: bool) {
+    pub fn update_flame(&mut self, device: &Device, queue: &Queue, flame: &Flame, iterations_per_thread: u32, burn_in: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_bank: f32, camera_x: f32, camera_y: f32, camera_z: f32, speed_factor: f32, dof_focus_distance: f32, dof_blur_strength: f32, fog_strength: f32, fog_start: f32, background_color: [f32; 3], filter_radius: f32, filter_blur_edges: f32, render_mode: crate::scene::transforms::RenderMode, perspective_strength: f32, depth_density_compensation: f32, far_density_fade: f32, far_density_fade_start: f32, preserve_z: bool, solid_strength: f32, surface_thickness: f32, solid_shading: crate::config::SolidShadingSettings) {
+        // Solid rendering state must be set BEFORE build_shader_constants
+        // below (it feeds ShaderConstants::solid_enabled) and before the
+        // histogram depth-region toggle.
+        self.solid_strength = solid_strength;
+        self.surface_thickness = surface_thickness;
+        self.solid_shading = solid_shading;
+        // Depth capture activates for occlusion OR lighting: the shade pass
+        // needs the depth region even when solid_strength is 0 (gating is a
+        // no-op multiplier there), so transparent flames can be lit.
+        let solid_enabled = (solid_strength > 0.0 || self.solid_shading.active())
+            && matches!(render_mode, crate::scene::transforms::RenderMode::ThreeD);
+        // Reset point: re-freeze the shadow fit from the latest measured
+        // bounds (splat texel coordinates must not move mid-run).
+        self.frozen_shadow_fit = Some(self.shadow_placement(zoom, pan_x, pan_y, camera_rotation_x, camera_rotation_y, camera_bank, [camera_x, camera_y, camera_z]));
+        self.frozen_fit_measured = self.measured_bounds.is_some();
+        self.fit_refit_done = false;
+        let depth_changed = self.buffers.set_solid_depth_region(device, solid_enabled);
+        if depth_changed {
+            // Histogram buffer was recreated — every bind group that
+            // references it must be too.
+            self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
+            self.accumulate_bind_group = self.pipelines.create_accumulate_bind_group(device, &self.buffers);
+            self.histogram_blur_h_bind_group = self.pipelines.create_histogram_blur_h_bind_group(device, &self.buffers);
+            self.histogram_blur_v_bind_group = self.pipelines.create_histogram_blur_v_bind_group(device, &self.buffers);
+        }
+        if depth_changed {
+            // Fresh (zeroed) depth region: prime before plotting again.
+            self.needs_depth_prime = solid_enabled;
+        }
+
         // Check if shaders need to be recompiled (variations or constants changed)
         let constants = self.build_shader_constants(flame, render_mode, preserve_z);
         let path_features_enabled = self.color_mode == ColorMode::PathMap
@@ -1230,6 +1853,8 @@ post_symmetry: (&config.flame.post_symmetry).into(),
         // Update transform tracking
         self.num_transforms = flame.transforms.len() as u32;
 
+        let sh_fit = self.frozen_shadow_fit.unwrap_or_else(|| self.shadow_placement(zoom, pan_x, pan_y, camera_rotation_x, camera_rotation_y, camera_bank, [camera_x, camera_y, camera_z]));
+        let sh_dirs = self.shadow_light_dirs(camera_rotation_x, camera_rotation_y, camera_bank);
         let params = GpuParams {
             num_transforms: self.num_transforms,
             iterations_per_thread,
@@ -1252,7 +1877,9 @@ post_symmetry: (&config.flame.post_symmetry).into(),
             depth_density_compensation: self.depth_density_compensation,
             far_density_fade: self.far_density_fade,
             far_density_fade_start: self.far_density_fade_start,
-            _pad_before_post_symmetry: [0; 3],
+            solid_strength: self.solid_strength,
+            surface_thickness: self.surface_thickness,
+            depth_prime: 0,
             camera_rotation_x,
             camera_rotation_y,
             camera_bank,
@@ -1263,7 +1890,7 @@ post_symmetry: (&config.flame.post_symmetry).into(),
             camera_z,
             dof_focus_distance: self.dof_focus_distance,
             dof_blur_strength: self.dof_blur_strength,
-            fog_strength: self.fog_strength,
+            fog_strength: self.atsplat_fog_strength(),
             fog_start: self.fog_start,
             bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
             path_map_style: self.path_map_style as u32,
@@ -1274,7 +1901,14 @@ post_symmetry: (&config.flame.post_symmetry).into(),
             background_r: self.background_r,
             background_g: self.background_g,
             background_b: self.background_b,
-post_symmetry: (&self.post_symmetry).into(),
+            post_symmetry: (&self.post_symmetry).into(),
+            shadow_center_x: sh_fit.0[0],
+            shadow_center_y: sh_fit.0[1],
+            shadow_center_z: sh_fit.0[2],
+            shadow_radius: sh_fit.1,
+            shadow_count: sh_dirs.0,
+            _pad_shadow: [0; 3],
+            shadow_dirs: sh_dirs.1,
         };
 
         self.buffers.update_params(queue, &params);
@@ -1471,6 +2105,8 @@ post_symmetry: (&self.post_symmetry).into(),
     pub fn update_iterations(&mut self, queue: &Queue, iterations_per_thread: u32, burn_in: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_bank: f32, camera_x: f32, camera_y: f32, camera_z: f32, speed_factor: f32) {
         self.burn_in = burn_in;
 
+        let sh_fit = self.frozen_shadow_fit.unwrap_or_else(|| self.shadow_placement(zoom, pan_x, pan_y, camera_rotation_x, camera_rotation_y, camera_bank, [camera_x, camera_y, camera_z]));
+        let sh_dirs = self.shadow_light_dirs(camera_rotation_x, camera_rotation_y, camera_bank);
         let params = GpuParams {
             num_transforms: self.num_transforms,
             iterations_per_thread,
@@ -1493,7 +2129,9 @@ post_symmetry: (&self.post_symmetry).into(),
             depth_density_compensation: self.depth_density_compensation,
             far_density_fade: self.far_density_fade,
             far_density_fade_start: self.far_density_fade_start,
-            _pad_before_post_symmetry: [0; 3],
+            solid_strength: self.solid_strength,
+            surface_thickness: self.surface_thickness,
+            depth_prime: 0,
             camera_rotation_x,
             camera_rotation_y,
             camera_bank,
@@ -1504,7 +2142,7 @@ post_symmetry: (&self.post_symmetry).into(),
             camera_z,
             dof_focus_distance: self.dof_focus_distance,
             dof_blur_strength: self.dof_blur_strength,
-            fog_strength: self.fog_strength,
+            fog_strength: self.atsplat_fog_strength(),
             fog_start: self.fog_start,
             bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
             path_map_style: self.path_map_style as u32,
@@ -1515,7 +2153,14 @@ post_symmetry: (&self.post_symmetry).into(),
             background_r: self.background_r,
             background_g: self.background_g,
             background_b: self.background_b,
-post_symmetry: (&self.post_symmetry).into(),
+            post_symmetry: (&self.post_symmetry).into(),
+            shadow_center_x: sh_fit.0[0],
+            shadow_center_y: sh_fit.0[1],
+            shadow_center_z: sh_fit.0[2],
+            shadow_radius: sh_fit.1,
+            shadow_count: sh_dirs.0,
+            _pad_shadow: [0; 3],
+            shadow_dirs: sh_dirs.1,
         };
         self.buffers.update_params(queue, &params);
     }
@@ -1821,6 +2466,8 @@ post_symmetry: (&self.post_symmetry).into(),
         self.color_mode = color_mode;
 
         // Update params to reflect new color mode
+        let sh_fit = self.frozen_shadow_fit.unwrap_or_else(|| self.shadow_placement(zoom, pan_x, pan_y, camera_rotation_x, camera_rotation_y, camera_bank, [camera_x, camera_y, camera_z]));
+        let sh_dirs = self.shadow_light_dirs(camera_rotation_x, camera_rotation_y, camera_bank);
         let params = GpuParams {
             num_transforms: self.num_transforms,
             iterations_per_thread,
@@ -1843,7 +2490,9 @@ post_symmetry: (&self.post_symmetry).into(),
             depth_density_compensation: self.depth_density_compensation,
             far_density_fade: self.far_density_fade,
             far_density_fade_start: self.far_density_fade_start,
-            _pad_before_post_symmetry: [0; 3],
+            solid_strength: self.solid_strength,
+            surface_thickness: self.surface_thickness,
+            depth_prime: 0,
             camera_rotation_x,
             camera_rotation_y,
             camera_bank,
@@ -1854,7 +2503,7 @@ post_symmetry: (&self.post_symmetry).into(),
             camera_z,
             dof_focus_distance: self.dof_focus_distance,
             dof_blur_strength: self.dof_blur_strength,
-            fog_strength: self.fog_strength,
+            fog_strength: self.atsplat_fog_strength(),
             fog_start: self.fog_start,
             bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
             path_map_style: self.path_map_style as u32,
@@ -1865,7 +2514,14 @@ post_symmetry: (&self.post_symmetry).into(),
             background_r: self.background_r,
             background_g: self.background_g,
             background_b: self.background_b,
-post_symmetry: (&self.post_symmetry).into(),
+            post_symmetry: (&self.post_symmetry).into(),
+            shadow_center_x: sh_fit.0[0],
+            shadow_center_y: sh_fit.0[1],
+            shadow_center_z: sh_fit.0[2],
+            shadow_radius: sh_fit.1,
+            shadow_count: sh_dirs.0,
+            _pad_shadow: [0; 3],
+            shadow_dirs: sh_dirs.1,
         };
         self.buffers.update_params(queue, &params);
     }

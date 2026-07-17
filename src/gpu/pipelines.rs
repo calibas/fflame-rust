@@ -111,9 +111,8 @@ impl FlamePipelines {
                     },
                     count: None,
                 },
-                // binding 6 intentionally unused (was iteration_counts;
-                // feature removed). Kept as a gap rather than renumbered to
-                // avoid disturbing the entries past it.
+                // (binding 6 is a historical gap — the old
+                // iteration_counts slot.)
                 // Path buffer (storage, read-write for PathMap color mode)
                 BindGroupLayoutEntry {
                     binding: 7,
@@ -349,6 +348,18 @@ impl FlamePipelines {
                     visibility: ShaderStages::COMPUTE,
                     ty: BindingType::Buffer {
                         ty: BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // 4: accumulator depth-ownership tracker (solid
+                // rendering depth-tightening reset; dummy when off)
+                BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: false },
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
@@ -721,8 +732,6 @@ impl FlamePipelines {
                     binding: 5,
                     resource: buffers.variation_params_buffer.as_entire_binding(),
                 },
-                // binding 6 intentionally unused in histogram-direct mode
-                // (was iteration_counts; feature removed).
                 // Use helper methods that return real or dummy buffers
                 BindGroupEntry {
                     binding: 7,
@@ -877,6 +886,14 @@ impl FlamePipelines {
                 BindGroupEntry {
                     binding: 3,
                     resource: buffers.accumulate_params_buffer.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 4,
+                    resource: buffers
+                        .accum_depth_buffer
+                        .as_ref()
+                        .unwrap_or(&buffers.dummy_xaos_buffer)
+                        .as_entire_binding(),
                 },
             ],
         })

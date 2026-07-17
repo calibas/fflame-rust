@@ -28,6 +28,7 @@ impl App {
             || actions.update_tone_curve
             || actions.update_view
             || actions.rebuild_shader
+            || actions.update_shading
             || view_changed_by_keyboard;
 
         if needs_update {
@@ -116,7 +117,116 @@ impl App {
                         update_config.far_density_fade,
                         update_config.far_density_fade_start,
                         update_config.preserve_z,
+                        update_config.solid_strength,
+                        update_config.surface_thickness,
+                        update_config.solid_shading.clone(),
                     );
+                }
+
+                // Lightweight lighting update: the shade pass is
+                // post-accumulation, so lighting edits keep every
+                // accumulated iteration — just refresh the renderer's
+                // copy; the per-frame shade+tonemap re-render does the
+                // rest. EXCEPTION: when the edit flips the depth-capture
+                // requirement (lighting toggled on/off while
+                // solid_strength is 0), the histogram layout and shader
+                // must change — escalate to the full flame update.
+                let mut shading_forced_reset = false;
+                if actions.update_shading && !actions.update_flame {
+                    let want_capture = (update_config.solid_strength > 0.0
+                        || update_config.solid_shading.active())
+                        && matches!(
+                            update_config.render_mode,
+                            crate::scene::transforms::RenderMode::ThreeD
+                        );
+                    // Shadow-map capture rides the main pass: flipping it
+                    // (Shadow Strength 0 ↔ >0, lights toggled) needs the
+                    // full update path so the splat starts/stops writing
+                    // the maps — same escalation as the depth-capture flip.
+                    let want_shadows = want_capture
+                        && update_config.solid_shading.shadow_strength > 0.0
+                        && update_config
+                            .solid_shading
+                            .lights
+                            .iter()
+                            .any(|l| l.enabled && l.intensity > 0.0);
+                    // Shadow maps are BAKED from geometry + light
+                    // direction: rotating a light (azimuth/elevation) or
+                    // toggling one invalidates its map, which only
+                    // re-accumulation can rebuild (field report: moved
+                    // lights kept stale shadows until a manual
+                    // re-render). Pure intensity scaling doesn't touch
+                    // the maps and stays a no-reset edit.
+                    let lights_moved_under_shadows = {
+                        let old_sh = renderer.solid_shading();
+                        let shadows_involved = want_capture
+                            && (old_sh.shadow_strength > 0.0
+                                || update_config.solid_shading.shadow_strength > 0.0);
+                        shadows_involved
+                            && old_sh
+                                .lights
+                                .iter()
+                                .zip(update_config.solid_shading.lights.iter())
+                                .any(|(a, b)| {
+                                    a.enabled != b.enabled
+                                        || a.azimuth != b.azimuth
+                                        || a.elevation != b.elevation
+                                        || (a.intensity > 0.0) != (b.intensity > 0.0)
+                                })
+                    };
+                    // Fog ownership (at-splat vs post-lighting in the
+                    // shade pass) flips with lighting: at-splat fog is
+                    // baked into accumulated samples, so the flip needs
+                    // a reset or fog doubles/vanishes until one.
+                    let fog_ownership_flip = update_config.fog_strength > 0.0
+                        && renderer.solid_shading().active()
+                            != update_config.solid_shading.active();
+                    if want_capture != renderer.has_solid_depth_region()
+                        || want_shadows != renderer.shadow_capture_wanted()
+                        || lights_moved_under_shadows
+                        || fog_ownership_flip
+                    {
+                        // Baked GPU state (shadow maps, depth region)
+                        // must rebuild from scratch — force the full
+                        // accumulation reset below.
+                        shading_forced_reset = true;
+                        renderer.update_flame(
+                            &self.gpu.device,
+                            &self.gpu.queue,
+                            render_source,
+                            self.config_manager.system_settings().iterations_per_thread,
+                            self.config_manager.system_settings().burn_in,
+                            update_config.zoom,
+                            update_config.pan_x,
+                            update_config.pan_y,
+                            update_config.rotation,
+                            update_config.camera_rotation_x,
+                            update_config.camera_rotation_y,
+                            update_config.camera_bank,
+                            update_config.camera_x,
+                            update_config.camera_y,
+                            update_config.camera_z,
+                            update_config.speed_factor,
+                            update_config.dof_focus_distance,
+                            update_config.dof_blur_strength,
+                            update_config.fog_strength,
+                            update_config.fog_start,
+                            update_config.background_color,
+                            update_config.filter_radius,
+                            update_config.filter_blur_edges,
+                            update_config.render_mode,
+                            update_config.perspective_strength,
+                            update_config.depth_density_compensation,
+                            update_config.far_density_fade,
+                            update_config.far_density_fade_start,
+                            update_config.preserve_z,
+                            update_config.solid_strength,
+                            update_config.surface_thickness,
+                            update_config.solid_shading.clone(),
+                        );
+                    } else {
+                        renderer.set_solid_shading(update_config.solid_shading.clone());
+                    }
                 }
 
                 // Update view parameters (includes view changes and iteration changes)
@@ -221,7 +331,8 @@ impl App {
                 }
 
                 // Handle accumulation reset based on change type
-                let should_full_reset = actions.reset_accumulation || view_changed_by_keyboard;
+                let should_full_reset =
+                    actions.reset_accumulation || view_changed_by_keyboard || shading_forced_reset;
                 let has_view_or_color_change = actions.update_view || actions.update_palette;
 
                 if should_full_reset {
