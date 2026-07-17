@@ -94,7 +94,6 @@ menu:
 help:
   title: "Help"
   welcome_heading: "Welcome to the Fractal Art Editor (FAE)"
-  intro_fractal_flames: "This program allows you to create Fractal Flames. It can be a bit complex to use at first, and if you'd like to learn more we're creating tutorials."
   getting_started_heading: "Getting Started"
   presets_description: "Existing fractals you can use as a starting point."
   open_preset_browser: "Open Preset Library"

@@ -14,9 +14,6 @@ pub fn render_help_panel_content(
         ui.heading(t!("help.welcome_heading"));
         ui.add_space(8.0);
 
-        ui.label(t!("help.intro_fractal_flames"));
-        ui.add_space(4.0);
-
         // Getting Started section
         ui.heading(t!("help.getting_started_heading"));
         ui.separator();
