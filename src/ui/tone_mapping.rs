@@ -168,6 +168,16 @@ fn render_curve_editor(
     max_update
 }
 
+/// Paint a small green "enabled" dot just to the right of a collapsed
+/// section header's title, so the feature's on-state is visible without
+/// expanding it. `header_rect` is the `CollapsingHeader`'s header
+/// response rect — title-width here, since the app uses the default
+/// frameless collapsing header, so `right()` sits just past the title.
+fn paint_enabled_dot(ui: &egui::Ui, header_rect: egui::Rect) {
+    let center = egui::pos2(header_rect.right() + 7.0, header_rect.center().y);
+    ui.painter().circle_filled(center, 4.0, egui::Color32::from_rgb(60, 200, 90));
+}
+
 /// Render the Colors panel content (tone mapping, color mode, palette)
 ///
 /// This is the panel version without the Window wrapper.
@@ -364,8 +374,10 @@ pub fn render_colors_content(
                 });
         });
 
-    // Section 2: Tone Curve
-    egui::CollapsingHeader::new(t!("tonemap.curve"))
+    // Section 2: Tone Curve. Title shows " - Enabled" when collapsed and
+    // the curve is on.
+    let curve_enabled = config_manager.active_config().use_curve;
+    let curve_resp = egui::CollapsingHeader::new(t!("tonemap.curve"))
         .default_open(false)
         .show(ui, |ui| {
             let mut temp_use_curve = config_manager.active_config().use_curve;
@@ -409,9 +421,14 @@ pub fn render_colors_content(
                 max_update = max_update.max(curve_update);
             });
         });
+    // Green dot on a collapsed header = the tone curve is on.
+    if curve_enabled && curve_resp.fully_closed() {
+        paint_enabled_dot(ui, curve_resp.header_response.rect);
+    }
 
-    // Section 3: Density Histogram with Levels controls
-    egui::CollapsingHeader::new(t!("tonemap.histogram"))
+    // Section 3: Density Levels (histogram + levels controls).
+    let levels_enabled = config_manager.active_config().levels_enabled;
+    let levels_resp = egui::CollapsingHeader::new(t!("tonemap.histogram"))
         .default_open(false)
         .show(ui, |ui| {
             // Render histogram visualization with levels markers from config
@@ -423,6 +440,10 @@ pub fn render_colors_content(
             let levels_update = render_levels_controls_managed(ui, config_manager, histogram);
             max_update = max_update.max(levels_update);
         });
+    // Green dot on a collapsed header = levels are on.
+    if levels_enabled && levels_resp.fully_closed() {
+        paint_enabled_dot(ui, levels_resp.header_response.rect);
+    }
 
     // Section 4: Color & Appearance
     egui::CollapsingHeader::new(t!("tonemap.color_appearance"))
