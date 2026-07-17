@@ -70,12 +70,31 @@ struct AccumulateParams {
     background_g: f32,
     background_b: f32,
     _pad1: f32,
+    // Solid rendering: depth-tightening reset (see below). Only read
+    // when has_depth != 0 (the histogram carries the depth region and
+    // accum_depth is a real buffer).
+    surface_thickness: f32,
+    has_depth: u32,
+    _pad2: u32,
+    _pad3: u32,
 }
 
 @group(0) @binding(0) var previous_accumulation: texture_2d<f32>;
 @group(0) @binding(1) var<storage, read> histogram: array<u32>;
 @group(0) @binding(2) var output_texture: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(3) var<uniform> params: AccumulateParams;
+// Solid rendering: the depth (encoded, nearest-wins) that this pixel's
+// ACCUMULATED data belongs to. 0 = none. 4-byte dummy when has_depth
+// == 0 — never indexed then.
+@group(0) @binding(4) var<storage, read_write> accum_depth: array<u32>;
+
+// Decode the splat path's inverted ordered-float depth encoding
+// (0 handled by callers).
+fn decode_depth(enc: u32) -> f32 {
+    let ord = ~enc;
+    let bits = select(~ord, ord ^ 0x80000000u, (ord & 0x80000000u) != 0u);
+    return bitcast<f32>(bits);
+}
 
 @compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -91,7 +110,34 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // a separate clear pass.
     let is_overwrite_mode = params.blend_factor >= 0.99;
     let prev_raw = textureLoad(previous_accumulation, pixel, 0);
-    let prev = select(prev_raw, vec4<f32>(0.0), is_overwrite_mode);
+    var prev = select(prev_raw, vec4<f32>(0.0), is_overwrite_mode);
+
+    // Solid rendering: DEPTH-TIGHTENING RESET. Under progressive
+    // sampling of a sparse front surface, a pixel can accumulate the
+    // structure BEHIND it for a long time before its first
+    // front-surface sample arrives and snaps the nearest depth closer.
+    // The history then belongs to a surface that is now known to be
+    // occluded — blending it in poisons the color for hundreds of
+    // batches (and makes the shade pass's occlusion repair pop when it
+    // hands the pixel back to "own data"). Discard it instead: the
+    // pixel restarts cleanly from its first front-surface samples.
+    if (params.has_depth != 0u && !is_overwrite_mode) {
+        let pi = global_id.y * params.width + global_id.x;
+        let denc = histogram[params.width * params.height * 4u + pi];
+        if (denc != 0u) {
+            let penc = accum_depth[pi];
+            if (penc != 0u && denc > penc) {
+                let d_new = decode_depth(denc);
+                let d_old = decode_depth(penc);
+                if (d_old - d_new > max(params.surface_thickness, 0.001) * 1.5) {
+                    prev = vec4<f32>(0.0);
+                }
+            }
+            // Track the nearest depth the accumulated data represents
+            // (encoding: larger = nearer).
+            accum_depth[pi] = max(denc, penc);
+        }
+    }
 
     // Read this batch's contributions to this pixel from the
     // histogram. Compute shader stores 4× u32 per pixel: scaled R, G,

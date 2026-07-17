@@ -108,14 +108,27 @@ struct Params {
     background_r: f32,  // Background color R (for depth fog)
     background_g: f32,  // Background color G (for depth fog)
     background_b: f32,  // Background color B (for depth fog)
-    // std140 alignment pad — the scalar fields above total 37 × 4 =
-    // 148 bytes, and `post_symmetry` is a struct so std140 requires
-    // it to start at a 16-byte boundary. 12 bytes of pad land it at
-    // 160. Mirror in `src/gpu/buffers.rs`.
-    _pad0_before_post_symmetry: u32,
-    _pad1_before_post_symmetry: u32,
-    _pad2_before_post_symmetry: u32,
+    // Solid rendering (Phase 0). These three fields occupy what used to be
+    // the 12-byte std140 pad before `post_symmetry` (37 scalars × 4 = 148
+    // bytes; the struct must start at a 16-byte boundary = 160), so the
+    // layout is unchanged. Only read when the SOLID builder flag is set.
+    // Mirror in `src/gpu/buffers.rs`.
+    solid_strength: f32,     // Occlusion strength: 0 = off (transparent), 1 = hard surface
+    surface_thickness: f32,  // Depth shell accepted as "the surface" (world units)
+    depth_prime: u32,        // 1 = depth-priming batch (record depth, plot nothing)
     post_symmetry: PostSymmetry,  // Plot-time symmetry (gated by HAS_POST_SYMMETRY)
+    // Light-space shadow maps (solid rendering Stage 2): ortho fit +
+    // world-space light directions. shadow_count = 0 disables the
+    // splat at runtime. Mirror in src/gpu/buffers.rs.
+    shadow_center_x: f32,
+    shadow_center_y: f32,
+    shadow_center_z: f32,
+    shadow_radius: f32,
+    shadow_count: u32,
+    _pad_shadow0: u32,
+    _pad_shadow1: u32,
+    _pad_shadow2: u32,
+    shadow_dirs: array<vec4<f32>, 4>,
 }
 
 // Plot-time symmetry. Matches `GpuPostSymmetry` in src/gpu/buffers.rs.
@@ -221,6 +234,58 @@ struct SampleCounter {
 {{else}}
 // Sample stream: shader writes one entry per plotted point.
 @group(0) @binding(2) var<storage, read_write> samples: array<Sample>;
+{{/if}}
+{{#if SOLID}}
+{{#if OUTPUT_HISTOGRAM_DIRECT}}
+// Ordered-float encoding for the attractor-bounds atomicMax tail
+// (monotone: enc(a) < enc(b) <=> a < b; 0 is the "no data" sentinel).
+// The running AABB feeds the shadow-map auto-fit.
+fn bounds_enc(v: f32) -> u32 {
+    let b = bitcast<u32>(v);
+    return select(b | 0x80000000u, ~b, (b & 0x80000000u) != 0u);
+}
+
+// Light-space shadow-map splat (solid rendering Stage 2). Each of up
+// to 4 enabled lights owns a SHADOW_MAP_RES² ortho depth map in the
+// histogram tail (after the depth region + bounds words): the map
+// stores the ordered-float MAX of dot(p − center, L) per texel — the
+// occluder closest to the light. Written for every plotted sample and
+// every side-emitted point, so shadows resolve at SPLAT resolution
+// (the goal a voxel grid could never deliver). Runtime-gated by
+// shadow_count, so toggling Shadow Strength needs no shader rebuild.
+fn shadow_map_splat(p: vec3<f32>) {
+    let rel = p - vec3<f32>(params.shadow_center_x, params.shadow_center_y, params.shadow_center_z);
+    for (var li = 0u; li < params.shadow_count; li = li + 1u) {
+        let ld = params.shadow_dirs[li];
+        if (ld.w < 0.5) {
+            continue;
+        }
+        let l_dir = ld.xyz;
+        // Deterministic ortho basis around the light direction (the
+        // shade pass rebuilds the identical basis for the lookup).
+        var bu = cross(l_dir, vec3<f32>(0.0, 0.0, 1.0));
+        if (dot(bu, bu) < 1e-6) {
+            bu = cross(l_dir, vec3<f32>(1.0, 0.0, 0.0));
+        }
+        bu = normalize(bu);
+        let bv = cross(l_dir, bu);
+        let r = max(params.shadow_radius, 1e-6);
+        let mu = dot(rel, bu) / r * 0.5 + 0.5;
+        let mv = dot(rel, bv) / r * 0.5 + 0.5;
+        if (mu < 0.0 || mu >= 1.0 || mv < 0.0 || mv >= 1.0) {
+            continue;
+        }
+        let res = 1024u;
+        let tx = min(u32(mu * f32(res)), res - 1u);
+        let ty = min(u32(mv * f32(res)), res - 1u);
+        let dl = dot(rel, l_dir);
+        let db = bitcast<u32>(dl);
+        let de = select(db | 0x80000000u, ~db, (db & 0x80000000u) != 0u);
+        let slot = params.width * params.height * 5u + 8u + li * (res * res) + ty * res + tx;
+        atomicMax(&histogram[slot], de);
+    }
+}
+{{/if}}
 {{/if}}
 @group(0) @binding(3) var palette_texture: texture_2d<f32>;
 @group(0) @binding(4) var palette_sampler: sampler;

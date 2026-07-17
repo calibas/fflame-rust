@@ -11,6 +11,7 @@
 
 mod high_res;
 pub mod accumulate;
+pub mod supersample;
 
 pub use high_res::*;
 
@@ -47,9 +48,12 @@ impl ExportReporter for ConsoleReporter {
 }
 
 /// Histogram buffer size in bytes for a full-resolution image: 4 channels
-/// (R, G, B, density) × 4 bytes per u32 = 16 bytes per pixel.
-pub fn histogram_size_bytes(width: u32, height: u32) -> u64 {
-    (width as u64) * (height as u64) * 16
+/// (R, G, B, density) × 4 bytes per u32 = 16 bytes per pixel, plus one
+/// u32 per pixel for the solid-rendering nearest-depth region when solid
+/// rendering is active (see docs/projects/solid-rendering.md).
+pub fn histogram_size_bytes(width: u32, height: u32, solid: bool) -> u64 {
+    let bytes_per_pixel: u64 = if solid { 20 } else { 16 };
+    (width as u64) * (height as u64) * bytes_per_pixel
 }
 
 /// Render strategy chosen at runtime based on resolution + device limits.
@@ -104,8 +108,9 @@ pub enum RenderStrategy {
 /// `tile_height = floor(max_binding_size / (width × 16))`. This keeps
 /// the row-major pixel layout intact, so tile boundaries are
 /// horizontal slices and stitching is a contiguous memcpy.
-pub fn pick_strategy(width: u32, height: u32, limits: &Limits) -> RenderStrategy {
-    let total_bytes = histogram_size_bytes(width, height);
+pub fn pick_strategy(width: u32, height: u32, limits: &Limits, solid: bool) -> RenderStrategy {
+    let bytes_per_pixel: u64 = if solid { 20 } else { 16 };
+    let total_bytes = histogram_size_bytes(width, height, solid);
     let max_binding = limits.max_storage_buffer_binding_size as u64;
     let max_buffer = limits.max_buffer_size as u64;
 
@@ -116,7 +121,7 @@ pub fn pick_strategy(width: u32, height: u32, limits: &Limits) -> RenderStrategy
     // Tile by rows so the layout matches the flat row-major histogram
     // the rest of the pipeline already speaks. Tile height is chosen
     // so each tile's region fits one storage-buffer binding.
-    let bytes_per_row = (width as u64) * 16;
+    let bytes_per_row = (width as u64) * bytes_per_pixel;
     // Each tile's accumulate binding sits at `tile_idx * tile_height *
     // bytes_per_row`, which must respect `min_storage_buffer_offset_alignment`
     // (256 on most desktops). Round tile_height DOWN to a multiple of
@@ -187,17 +192,17 @@ mod strategy_tests {
     fn small_resolutions_pick_direct() {
         let l = typical_limits();
         // 1080p, 1440p, 4K(UHD), 4096² all need verification
-        assert!(matches!(pick_strategy(1920, 1080, &l), RenderStrategy::Direct));
-        assert!(matches!(pick_strategy(2560, 1440, &l), RenderStrategy::Direct));
+        assert!(matches!(pick_strategy(1920, 1080, &l, false), RenderStrategy::Direct));
+        assert!(matches!(pick_strategy(2560, 1440, &l, false), RenderStrategy::Direct));
         // 3840×2160 = 127 MB, just under 128 MB
-        assert!(matches!(pick_strategy(3840, 2160, &l), RenderStrategy::Direct));
+        assert!(matches!(pick_strategy(3840, 2160, &l, false), RenderStrategy::Direct));
     }
 
     #[test]
     fn just_over_threshold_picks_tiles() {
         let l = typical_limits();
         // 4096² = 256 MB, doesn't fit one 128 MB binding → tiled.
-        let s = pick_strategy(4096, 4096, &l);
+        let s = pick_strategy(4096, 4096, &l, false);
         assert!(!matches!(s, RenderStrategy::Direct));
     }
 
@@ -209,7 +214,7 @@ mod strategy_tests {
             max_buffer_size: 1024 * 1024 * 1024, // 1 GB
             ..typical_limits()
         };
-        let s = pick_strategy(7680, 4320, &l);
+        let s = pick_strategy(7680, 4320, &l, false);
         match s {
             RenderStrategy::ParallelTiles {
                 tiles_x,
@@ -236,14 +241,14 @@ mod strategy_tests {
         // be one buffer → SerialTiles, which the routing treats as
         // CPU-fallback per parallel-tiles.md.
         let l = typical_limits();
-        let s = pick_strategy(7680, 4320, &l);
+        let s = pick_strategy(7680, 4320, &l, false);
         assert!(matches!(s, RenderStrategy::SerialTiles { .. }));
     }
 
     #[test]
     fn tile_layout_is_row_major() {
         let l = typical_limits();
-        let s = pick_strategy(8000, 8000, &l);
+        let s = pick_strategy(8000, 8000, &l, false);
         match s {
             RenderStrategy::ParallelTiles {
                 tiles_x,
@@ -268,7 +273,7 @@ mod strategy_tests {
         // each tile under max_storage_buffer_binding_size.
         let l = typical_limits();
         for (w, h) in [(4096, 4096), (8000, 8000), (16000, 16000)] {
-            let s = pick_strategy(w, h, &l);
+            let s = pick_strategy(w, h, &l, false);
             if let RenderStrategy::ParallelTiles {
                 tile_width,
                 tile_height,
@@ -310,7 +315,7 @@ mod strategy_tests {
             (10001, 10001),
             (4096, 8192),
         ] {
-            match pick_strategy(w, h, &l) {
+            match pick_strategy(w, h, &l, false) {
                 RenderStrategy::ParallelTiles { tile_width, tile_height, .. }
                 | RenderStrategy::SerialTiles { tile_width, tile_height, .. } => {
                     let stride = (tile_width as u64) * (tile_height as u64) * 16;

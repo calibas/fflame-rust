@@ -123,6 +123,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // iteration's splat (the chaos game still advances). See the
         // CanHide feature + the gate after the transform chain below.
         var should_hide = false;
+{{#if HAS_VOLUME_SIDE}}
+        // Reset the side-emission flag (Feature::VolumeSideEmit).
+        volume_side_flag = false;
+{{/if}}
 
         // Analytic-blur mean-splat accumulator: the selected transform's
         // analytic-blur variation (if any) writes its weighted offset
@@ -487,6 +491,49 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             }
 {{/if}}
 
+{{#if HAS_VOLUME_SIDE}}
+{{#if RENDER_3D}}
+            // Side-emitted geometry (Feature::VolumeSideEmit): an
+            // ADDITIONAL geometry-only deposit — the plotted sample and
+            // the image colors are completely untouched. The transform's
+            // post-affine is applied so a moved/scaled shell carries its
+            // geometry along; the final chain and post-symmetry are NOT
+            // applied (documented limitation). Honors opacity.
+            if (volume_side_flag && should_plot) {
+                var svp = volume_side_point;
+{{#if HAS_POST_AFFINE}}
+                if (xform.post_enabled > 0.5) {
+                    svp = apply_post_affine(xform, svp);
+                }
+{{/if}}
+{{#if SOLID}}
+{{#if OUTPUT_HISTOGRAM_DIRECT}}
+                // DEPTH-ONLY splat: seal the camera depth buffer so the
+                // splat-time occlusion culls anything behind the emitted
+                // surface — pixel-resolution occlusion with no volume
+                // required. Sealed-but-unsampled pixels render dark (an
+                // honest "solid object, not yet textured") and fill in
+                // with real texture as samples arrive.
+                {
+                    let sproj = project_3d_full(svp);
+                    if (sproj.pixel.x >= 0 && sproj.pixel.x < i32(params.width) &&
+                        sproj.pixel.y >= 0 && sproj.pixel.y < i32(params.height)) {
+                        let s_d = -sproj.camera_space.z;
+                        let s_bits = bitcast<u32>(s_d);
+                        let s_ord = select(s_bits | 0x80000000u, ~s_bits, (s_bits & 0x80000000u) != 0u);
+                        let s_idx = u32(sproj.pixel.y) * params.width + u32(sproj.pixel.x);
+                        atomicMax(&histogram[params.width * params.height * 4u + s_idx], ~s_ord);
+                    }
+                }
+                // ...and the emitted geometry casts shadows too.
+                if (params.shadow_count > 0u) {
+                    shadow_map_splat(svp);
+                }
+{{/if}}
+{{/if}}
+            }
+{{/if}}
+{{/if}}
             for (var sym_k: u32 = 0u; sym_k < sym_count; sym_k = sym_k + 1u) {
 {{#if HAS_POST_SYMMETRY}}
 {{#if RENDER_3D}}
@@ -506,9 +553,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             // path always plots at weight 1.
             var density_weight = 1.0;
 
+
             // Convert to pixel coordinates
 {{#if RENDER_3D}}
-            var pixel = world_to_pixel_3d(plot_pos);
+            // One projection per plotted copy: pixel + the camera-space
+            // position it came from. camera_space.z feeds every per-sample
+            // depth consumer below (depth-density, DoF, far fade, fog) —
+            // each block previously rebuilt an equivalent camera matrix.
+            let proj = project_3d_full(plot_pos);
+            var pixel = proj.pixel;
+            let camera_space = proj.camera_space;
 
             // Depth-density compensation (radiance-preserving splats).
             // Perspective magnifies a structure at camera depth z by
@@ -522,15 +576,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             // the perspective singularity and to keep far samples from
             // truncating to zero in the u32 histogram.
             if (params.depth_density_compensation > 0.0 && abs(params.perspective_strength) > 1e-6) {
-                let camera_matrix = build_camera_matrix(
-                    // Same slot mapping as project_3d_to_2d_apophysis;
-                    // only z matters here and z is roll-invariant.
-                    -params.rotation,
-                    -params.camera_rotation_x,
-                    -params.camera_bank,
-                     params.camera_rotation_y,
-                );
-                let camera_space = camera_transform(plot_pos, camera_matrix, vec3<f32>(params.camera_x, params.camera_y, params.camera_z));
                 let zr = 1.0 - params.perspective_strength * camera_space.z;
                 // Behind-camera / near-singularity samples keep weight
                 // 1 — they're clipped by apply_perspective anyway.
@@ -539,22 +584,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 }
             }
 
+{{#if SOLID}}
+            // DoF is compiled out in solid mode: the at-splat position
+            // jitter would land samples at pixels whose depth they don't
+            // belong to, corrupting the nearest-depth buffer AND the
+            // occlusion test. Post-DoF from the depth buffer is the
+            // planned replacement (docs/projects/solid-rendering.md,
+            // Phase 3).
+{{else}}
             // Apply depth of field blur (3D mode only)
             if (params.dof_blur_strength > 0.0) {
-                // Transform to camera space to get depth along view direction.
-                // 4-angle matrix per JWildfire's createProjectionMatrix —
-                // see utilities.wgsl `build_camera_matrix`. The negated
-                // yaw mirrors JWildfire's caller-side `-getCamYaw()`.
-                let camera_matrix = build_camera_matrix(
-                    // Same yaw↔roll slot swap + sign convention as
-                    // project_3d_to_2d_apophysis. See its call site
-                    // for the empirical-tuning derivation.
-                    -params.rotation,            // matrix yaw  ← our roll
-                    -params.camera_rotation_x,   // pitch
-                    -params.camera_bank,        // bank
-                     params.camera_rotation_y,   // matrix roll ← our yaw
-                );
-                let camera_space = camera_transform(plot_pos, camera_matrix, vec3<f32>(params.camera_x, params.camera_y, params.camera_z));
                 let depth = camera_space.z;  // Z in camera space = depth from camera
 
                 // Calculate blur amount based on distance from focus plane (in world units).
@@ -585,6 +624,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     i32(round(sin(angle) * radius))
                 );
             }
+{{/if}}
 {{else}}
             let pixel = world_to_pixel(plot_pos);
 {{/if}}
@@ -729,6 +769,84 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 {{/if}}
 
 {{#if RENDER_3D}}
+{{#if SOLID}}
+                // ── Solid rendering (Phase 0): nearest-depth occlusion ──
+                let solid_d = -camera_space.z;  // positive = in front of the camera
+{{#if OUTPUT_HISTOGRAM_DIRECT}}
+                // Depth region: one u32 per pixel at offset W*H*4 inside the
+                // histogram buffer (same binding — the buffer is allocated
+                // with the extra region only when this shader is built).
+                //
+                // Encoding: IEEE-754 bits made monotone (sign-flip trick),
+                // then INVERTED, so numerically LARGER encodings are NEARER
+                // samples and 0 means "no sample yet". A plain zero-clear
+                // therefore initializes the region, and `atomicMax` tracks
+                // the nearest depth. (NaN depths encode small and lose the
+                // max — harmlessly ignored.)
+                let sd_bits = bitcast<u32>(solid_d);
+                let sd_ord = select(sd_bits | 0x80000000u, ~sd_bits, (sd_bits & 0x80000000u) != 0u);
+                let sd_enc = ~sd_ord;
+                let solid_slot = params.width * params.height * 4u + pixel_idx;
+                let solid_prev = atomicMax(&histogram[solid_slot], sd_enc);
+                var solid_occ = 1.0;
+                if (params.depth_prime != 0u) {
+                    // Priming batch right after a reset: record depth only,
+                    // plot nothing — keeps interior ghosting out of the
+                    // accumulator while the depth buffer converges.
+                    density_weight = 0.0;
+                } else {
+                    // Decode the nearest depth seen so far (incl. this sample).
+                    let near_ord = ~max(solid_prev, sd_enc);
+                    let near_bits = select(~near_ord, near_ord ^ 0x80000000u, (near_ord & 0x80000000u) != 0u);
+                    let d_near = bitcast<f32>(near_bits);
+                    if (solid_d > d_near + params.surface_thickness) {
+                        // Behind the surface shell: fade by solid_strength
+                        // (1 = fully occluded, 0 = classic transparency).
+                        solid_occ = 1.0 - params.solid_strength;
+                        density_weight *= solid_occ;
+                    }
+                }
+                // Light-space shadow maps (Stage 2): record this sample
+                // toward every enabled light. Accumulates during the
+                // priming batch too (it's depth-only data).
+                if (params.shadow_count > 0u) {
+                    shadow_map_splat(plot_pos);
+                }
+                // Attractor bounds (subsampled 1/16 threads): running
+                // world AABB in the 8-word tail after the depth region —
+                // feeds the shadow-map auto-fit.
+                if ((thread_id & 15u) == 0u) {
+                    let bbase = params.width * params.height * 5u;
+                    atomicMax(&histogram[bbase + 0u], bounds_enc(plot_pos.x));
+                    atomicMax(&histogram[bbase + 1u], bounds_enc(-plot_pos.x));
+                    atomicMax(&histogram[bbase + 2u], bounds_enc(plot_pos.y));
+                    atomicMax(&histogram[bbase + 3u], bounds_enc(-plot_pos.y));
+                    atomicMax(&histogram[bbase + 4u], bounds_enc(plot_pos.z));
+                    atomicMax(&histogram[bbase + 5u], bounds_enc(-plot_pos.z));
+                }
+                // Occlusion-survival counters (subsampled 1/1024
+                // threads, 4-bit fixed point) in tail words 6-7:
+                // Σ occlusion-factor and Σ 1 over PLOTTED samples. The
+                // brightness renorm divides these instead of the old
+                // Σ(accumulator alpha)/dispatched, which folded the
+                // ARTISTIC per-sample weights (far-fade, depth-density
+                // compensation) into the "culled" fraction — the
+                // tonemap then re-brightened the whole image against a
+                // far-fade dial and dimmed it against depth-comp
+                // (field-audited: fade 3.0 polluted the fraction by
+                // -13%, comp 1.0 by +6%).
+                if ((thread_id & 1023u) == 0u && params.depth_prime == 0u) {
+                    let obase = params.width * params.height * 5u;
+                    atomicAdd(&histogram[obase + 6u], u32(round(solid_occ * 16.0)));
+                    atomicAdd(&histogram[obase + 7u], 16u);
+                }
+{{else}}
+                // Sample-emit mode: this shader has no per-pixel state —
+                // solid_d rides the Sample's spare slot below, and the tile
+                // scatter pass (accumulate_samples.wgsl) owns the depth
+                // region, the priming batch, and the occlusion gating.
+{{/if}}
+{{/if}}
                 // Far density fade (3D mode only): genuinely thin out
                 // far samples by scaling their histogram DENSITY
                 // weight, unlike fog which recolors at full density.
@@ -740,15 +858,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 // Composes multiplicatively with the depth-density
                 // compensation weight above.
                 if (params.far_density_fade > 0.0) {
-                    let camera_matrix = build_camera_matrix(
-                        // Same slot mapping as project_3d_to_2d_apophysis;
-                        // only z matters here and z is roll-invariant.
-                        -params.rotation,
-                        -params.camera_rotation_x,
-                        -params.camera_bank,
-                         params.camera_rotation_y,
-                    );
-                    let camera_space = camera_transform(plot_pos, camera_matrix, vec3<f32>(params.camera_x, params.camera_y, params.camera_z));
                     let zdist = params.far_density_fade_start - camera_space.z;
                     if (zdist > 0.0) {
                         density_weight *= exp(-zdist * zdist * params.far_density_fade);
@@ -757,18 +866,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
                 // Apply depth fog (3D mode only, blend toward background color)
                 if (params.fog_strength > 0.0) {
-                    // Get camera-space depth — same 4-angle matrix as DoF above.
                     // In camera space, objects in front have negative Z (looking
                     // down -Z axis); negate to get positive depth.
-                    let camera_matrix = build_camera_matrix(
-                        // Same yaw↔roll slot swap + sign convention
-                        // as utilities.wgsl `project_3d_to_2d_apophysis`.
-                        -params.rotation,           // matrix yaw  ← our roll
-                        -params.camera_rotation_x,  // pitch
-                        -params.camera_bank,        // bank
-                         params.camera_rotation_y,  // matrix roll ← our yaw
-                    );
-                    let camera_space = camera_transform(plot_pos, camera_matrix, vec3<f32>(params.camera_x, params.camera_y, params.camera_z));
                     let fog_depth = -camera_space.z;  // Negate: distant objects have larger depth
 
                     // Exponential fog: fog_factor increases with distance beyond fog_start
@@ -787,6 +886,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 // Gated by OUTPUT_HISTOGRAM_DIRECT. See
                 // docs/projects/unified-render-pipeline.md.
                 //
+{{#if SOLID}}
+                // Occluded (weight 0) and priming samples skip the histogram
+                // atomics entirely — their depth write above already happened.
+                if (density_weight > 0.0) {
+{{/if}}
                 // Write RGB as 4× u32 (unpacked, full 32-bit precision).
                 let base_idx = pixel_idx * 4u;  // 4 words per pixel (R, G, B, density)
 
@@ -812,6 +916,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 atomicAdd(&histogram[base_idx + 1u], g_u32);
                 atomicAdd(&histogram[base_idx + 2u], b_u32);
                 atomicAdd(&histogram[base_idx + 3u], density_u32);
+{{#if SOLID}}
+                }
+{{/if}}
 {{else}}
                 // Sample-emit path (multi-tile render). Stream one Sample
                 // per plotted point to a buffer; a host-driven accumulate
@@ -832,7 +939,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                         clamp(final_color.r, 0.0, 1.0),
                         clamp(final_color.g, 0.0, 1.0),
                         clamp(final_color.b, 0.0, 1.0),
+{{#if SOLID}}
+                        // Camera-space depth in the first spare slot — the
+                        // tile scatter pass gates against its depth region.
+                        density_weight, solid_d, 0.0
+{{else}}
                         density_weight, 0.0, 0.0
+{{/if}}
                     );
                 }
 {{/if}}

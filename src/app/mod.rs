@@ -440,6 +440,9 @@ pub struct App {
     /// Transparent PNG export uses premultiplied alpha (vs the default
     /// straight-alpha flatten-over-black reconstruction). Set in the Export panel.
     pub(super) png_export_premultiplied: bool,
+    /// 2× supersampled export (render at double resolution, box-filter
+    /// + firefly clamp down) — see export::supersample.
+    pub(super) png_export_supersample: bool,
 
     // Unified export status — shared with every background export thread (PNG
     // direct / high-res / video). Drives the global progress overlay and the
@@ -633,6 +636,7 @@ impl App {
             export_height,
             use_custom_export_size: false,  // Default to viewport size
             png_export_premultiplied: false,
+            png_export_supersample: false,
             export_status: Arc::new(Mutex::new(ExportStatus::default())),
             render_mode: RenderModeFSM::new(),
             histogram_frame_counter: 0,
@@ -1164,6 +1168,7 @@ impl App {
             &mut self.export_height,
             &mut self.use_custom_export_size,
             &mut self.png_export_premultiplied,
+            &mut self.png_export_supersample,
             &export_status,
             self.ui_hidden,
             &mut self.audio_manager,
@@ -1341,10 +1346,19 @@ impl App {
                 // custom-size path reports through the unified export status).
                 let mut viewport_toast: Option<(String, bool)> = None;
 
-                // Check if we need custom-size export
-                if self.use_custom_export_size {
-                    // Custom-size export: create temporary renderer at export dimensions
-                    self.export_custom_size(transparent, self.png_export_premultiplied, export_config, render_time_ms);
+                // Check if we need custom-size export. 2× AA also routes
+                // through the custom-size machinery (at viewport dims):
+                // the viewport fast path below reads back the LIVE
+                // renderer's texture and can't supersample.
+                if self.use_custom_export_size || self.png_export_supersample {
+                    let (ow, oh) = if self.use_custom_export_size {
+                        (self.export_width, self.export_height)
+                    } else {
+                        // Viewport-size export: match what the user sees.
+                        let (vw, vh) = self.fractal_viewport_size;
+                        (vw.max(64), vh.max(64))
+                    };
+                    self.export_custom_size(transparent, self.png_export_premultiplied, export_config, render_time_ms, ow, oh);
                 } else if let Some(ref mut renderer) = self.flame_renderer {
                     // Viewport-size export: use current renderer
                     let total_iterations = renderer.total_iterations();
@@ -1980,6 +1994,40 @@ impl App {
                 log::debug!("Rendering complete: max_iterations reached");
             }
 
+            // Shadow-map auto-fit: when the first real bounds measurement
+            // lands (early in a run), re-freeze the shadow fit and
+            // restart accumulation so the maps cover the actual flame
+            // instead of a zoom guess. Only fires while the run is young.
+            if should_iterate
+                && renderer.maybe_refit_shadow(
+                    final_config.zoom,
+                    final_config.pan_x,
+                    final_config.pan_y,
+                    final_config.camera_rotation_x,
+                    final_config.camera_rotation_y,
+                    final_config.camera_bank,
+                    [final_config.camera_x, final_config.camera_y, final_config.camera_z],
+                )
+            {
+                renderer.reset(
+                    &mut render_encoder,
+                    &self.gpu.queue,
+                    self.config_manager.system_settings().iterations_per_thread,
+                    final_config.zoom,
+                    final_config.pan_x,
+                    final_config.pan_y,
+                    final_config.rotation,
+                    final_config.camera_rotation_x,
+                    final_config.camera_rotation_y,
+                    final_config.camera_bank,
+                    final_config.camera_x,
+                    final_config.camera_y,
+                    final_config.camera_z,
+                    final_config.speed_factor,
+                );
+                self.frames_since_accumulation = 0;
+            }
+
             if should_iterate {
                 const NUM_WORKGROUPS: u32 = 128;
 
@@ -2056,23 +2104,66 @@ impl App {
             // Reset effect slot counter for this frame (allows multiple effects with unique params)
             self.effect_chain.reset_slots();
 
+            // Solid brightness renormalization: measure the accepted
+            // density every few frames while occlusion culls (async, EMA-
+            // smoothed) so hard solids tone-map at full brightness.
+            renderer.update_density_stats(&self.gpu.device, &self.gpu.queue, &mut render_encoder);
+
+            // Solid-rendering shade pass (lighting/SSAO on the depth buffer)
+            // — runs before density effects; both consume HDR pre-tonemap data.
+            let shade_ran = renderer.run_shade_pass(
+                &self.gpu.device,
+                &self.gpu.queue,
+                &mut render_encoder,
+                final_config.zoom,
+                final_config.rotation,
+                final_config.pan_x,
+                final_config.pan_y,
+                final_config.camera_rotation_x,
+                final_config.camera_rotation_y,
+                final_config.camera_bank,
+                final_config.camera_x,
+                final_config.camera_y,
+                final_config.camera_z,
+            );
+            // Post-process DoF (solid mode) sits between shade and
+            // density effects/tonemap.
+            let dof_ran = renderer.run_dof_pass(
+                &self.gpu.device,
+                &self.gpu.queue,
+                &mut render_encoder,
+                shade_ran,
+                final_config.zoom,
+            );
+            let pre_tonemap_view = if dof_ran {
+                renderer.dof_output_view()
+            } else if shade_ran {
+                renderer.shade_output_view()
+            } else {
+                renderer.get_accumulation_view()
+            };
+
             // Run density effects (before tonemap, on HDR accumulation data)
             let density_effects_ran = self.effect_chain.run_density_effects(
                 &self.gpu.device,
                 &self.gpu.queue,
                 &mut render_encoder,
-                renderer.get_accumulation_view(),
+                pre_tonemap_view,
                 &final_config.density_effects,
             );
 
-            // Render to internal fractal texture with tone mapping
-            // If density effects ran, use their output; otherwise use accumulation directly
+            // Render to internal fractal texture with tone mapping.
+            // Input priority: density-effect output > shade output > accumulator.
             if density_effects_ran {
                 if let Some(density_output) = self.effect_chain.get_density_output() {
                     renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut render_encoder, density_output);
+                } else if dof_ran || shade_ran {
+                    renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut render_encoder, pre_tonemap_view);
                 } else {
                     renderer.tonemap_pass(&self.gpu.queue, &mut render_encoder);
                 }
+            } else if dof_ran || shade_ran {
+                renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut render_encoder, pre_tonemap_view);
             } else {
                 renderer.tonemap_pass(&self.gpu.queue, &mut render_encoder);
             }

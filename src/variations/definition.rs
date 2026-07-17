@@ -122,6 +122,19 @@ pub enum Feature {
     /// is a discarded local — hiding inside a subflame is a no-op in v1.)
     CanHide,
 
+    /// The variation emits an ADDITIONAL depth-only point as a pure
+    /// side effect — the chaos game, the plotted position, and the
+    /// image colors are completely untouched (the variation contributes
+    /// zero to the sum; its weight only activates it). Each iteration
+    /// the variation writes the side point to the builder-emitted
+    /// per-thread `volume_side_point` and sets `volume_side_flag`; the
+    /// main loop splats it (after the transform's post-affine) into the
+    /// solid depth buffer and the shadow maps. This is how a shell
+    /// projection (e.g. bubble) gets a sealed interior for occlusion
+    /// and shadows WITHOUT spending or altering any image samples.
+    /// No solid depth region → no-op.
+    VolumeSideEmit,
+
     /// The variation is an **input-independent** blur: its output is the
     /// input point plus a random offset whose distribution does NOT depend
     /// on the input position (e.g. `blur`, `gaussian_blur` — a random disc /

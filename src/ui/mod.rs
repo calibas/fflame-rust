@@ -23,6 +23,7 @@ mod performance;
 mod random_generator;
 pub mod response;
 mod settings;
+mod solid_panel;
 mod subflames;
 mod target_selector;
 mod tone_mapping;
@@ -669,6 +670,7 @@ impl EguiLayer {
         export_height: &mut u32,
         use_custom_export_size: &mut bool,
         png_export_premultiplied: &mut bool,
+        png_export_supersample: &mut bool,
         export_status: &export_status::ExportStatus,
         fullscreen_mode: bool,
         audio_manager: &mut crate::audio::AudioManager,
@@ -1030,6 +1032,7 @@ impl EguiLayer {
                         export_height,
                         use_custom_export_size,
                         png_export_premultiplied,
+                        png_export_supersample,
                         max_export_dimension: device.limits().max_texture_dimension_2d,
                         palette_editor: &mut self.palette_editor,
                         palette_export_json: &mut palette_export_json,

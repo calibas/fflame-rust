@@ -1,0 +1,309 @@
+{
+  "flame": {
+    "name": "solid-shadows",
+    "render_mode": "ThreeD",
+    "perspective_strength": 0.15,
+    "cam_pitch": 0.5,
+    "cam_yaw": 0.4,
+    "transforms": [
+      {
+        "a": 1.0,
+        "b": 0.0,
+        "c": 0.0,
+        "d": 1.0,
+        "e": 0.0,
+        "f": 0.0,
+        "g": 0.0,
+        "color": 0.0,
+        "color_speed": 0.5,
+        "opacity": 1.0,
+        "direct_color": 0.0,
+        "variations": {
+          "quaternion_linear": 1.0
+        },
+        "variation_params": {
+          "quaternion_linear.m00": 0.5,
+          "quaternion_linear.m01": 0.0,
+          "quaternion_linear.m02": 0.0,
+          "quaternion_linear.m03": 0.0,
+          "quaternion_linear.m10": 0.0,
+          "quaternion_linear.m11": 0.5,
+          "quaternion_linear.m12": 0.0,
+          "quaternion_linear.m13": 0.0,
+          "quaternion_linear.m20": 0.0,
+          "quaternion_linear.m21": 0.0,
+          "quaternion_linear.m22": 0.5,
+          "quaternion_linear.m23": 0.0,
+          "quaternion_linear.m30": 0.0,
+          "quaternion_linear.m31": 0.0,
+          "quaternion_linear.m32": 0.0,
+          "quaternion_linear.m33": 0.5,
+          "quaternion_linear.tx": 0.5,
+          "quaternion_linear.ty": 0.5,
+          "quaternion_linear.tz": 0.5,
+          "quaternion_linear.tw": -0.22360679774997896,
+          "quaternion_linear.projection": 0.0,
+          "quaternion_linear.w_color": 0.0
+        },
+        "weight": 1.0
+      },
+      {
+        "a": 1.0,
+        "b": 0.0,
+        "c": 0.0,
+        "d": 1.0,
+        "e": 0.0,
+        "f": 0.0,
+        "g": 0.0,
+        "color": 0.25,
+        "color_speed": 0.5,
+        "opacity": 1.0,
+        "direct_color": 0.0,
+        "variations": {
+          "quaternion_linear": 1.0
+        },
+        "variation_params": {
+          "quaternion_linear.m00": 0.5,
+          "quaternion_linear.m01": 0.0,
+          "quaternion_linear.m02": 0.0,
+          "quaternion_linear.m03": 0.0,
+          "quaternion_linear.m10": 0.0,
+          "quaternion_linear.m11": 0.5,
+          "quaternion_linear.m12": 0.0,
+          "quaternion_linear.m13": 0.0,
+          "quaternion_linear.m20": 0.0,
+          "quaternion_linear.m21": 0.0,
+          "quaternion_linear.m22": 0.5,
+          "quaternion_linear.m23": 0.0,
+          "quaternion_linear.m30": 0.0,
+          "quaternion_linear.m31": 0.0,
+          "quaternion_linear.m32": 0.0,
+          "quaternion_linear.m33": 0.5,
+          "quaternion_linear.tx": 0.5,
+          "quaternion_linear.ty": -0.5,
+          "quaternion_linear.tz": -0.5,
+          "quaternion_linear.tw": -0.22360679774997896,
+          "quaternion_linear.projection": 0.0,
+          "quaternion_linear.w_color": 0.0
+        },
+        "weight": 1.0
+      },
+      {
+        "a": 1.0,
+        "b": 0.0,
+        "c": 0.0,
+        "d": 1.0,
+        "e": 0.0,
+        "f": 0.0,
+        "g": 0.0,
+        "color": 0.5,
+        "color_speed": 0.5,
+        "opacity": 1.0,
+        "direct_color": 0.0,
+        "variations": {
+          "quaternion_linear": 1.0
+        },
+        "variation_params": {
+          "quaternion_linear.m00": 0.5,
+          "quaternion_linear.m01": 0.0,
+          "quaternion_linear.m02": 0.0,
+          "quaternion_linear.m03": 0.0,
+          "quaternion_linear.m10": 0.0,
+          "quaternion_linear.m11": 0.5,
+          "quaternion_linear.m12": 0.0,
+          "quaternion_linear.m13": 0.0,
+          "quaternion_linear.m20": 0.0,
+          "quaternion_linear.m21": 0.0,
+          "quaternion_linear.m22": 0.5,
+          "quaternion_linear.m23": 0.0,
+          "quaternion_linear.m30": 0.0,
+          "quaternion_linear.m31": 0.0,
+          "quaternion_linear.m32": 0.0,
+          "quaternion_linear.m33": 0.5,
+          "quaternion_linear.tx": -0.5,
+          "quaternion_linear.ty": 0.5,
+          "quaternion_linear.tz": -0.5,
+          "quaternion_linear.tw": -0.22360679774997896,
+          "quaternion_linear.projection": 0.0,
+          "quaternion_linear.w_color": 0.0
+        },
+        "weight": 1.0
+      },
+      {
+        "a": 1.0,
+        "b": 0.0,
+        "c": 0.0,
+        "d": 1.0,
+        "e": 0.0,
+        "f": 0.0,
+        "g": 0.0,
+        "color": 0.75,
+        "color_speed": 0.5,
+        "opacity": 1.0,
+        "direct_color": 0.0,
+        "variations": {
+          "quaternion_linear": 1.0
+        },
+        "variation_params": {
+          "quaternion_linear.m00": 0.5,
+          "quaternion_linear.m01": 0.0,
+          "quaternion_linear.m02": 0.0,
+          "quaternion_linear.m03": 0.0,
+          "quaternion_linear.m10": 0.0,
+          "quaternion_linear.m11": 0.5,
+          "quaternion_linear.m12": 0.0,
+          "quaternion_linear.m13": 0.0,
+          "quaternion_linear.m20": 0.0,
+          "quaternion_linear.m21": 0.0,
+          "quaternion_linear.m22": 0.5,
+          "quaternion_linear.m23": 0.0,
+          "quaternion_linear.m30": 0.0,
+          "quaternion_linear.m31": 0.0,
+          "quaternion_linear.m32": 0.0,
+          "quaternion_linear.m33": 0.5,
+          "quaternion_linear.tx": -0.5,
+          "quaternion_linear.ty": -0.5,
+          "quaternion_linear.tz": 0.5,
+          "quaternion_linear.tw": -0.22360679774997896,
+          "quaternion_linear.projection": 0.0,
+          "quaternion_linear.w_color": 0.0
+        },
+        "weight": 1.0
+      },
+      {
+        "a": 1.0,
+        "b": 0.0,
+        "c": 0.0,
+        "d": 1.0,
+        "e": 0.0,
+        "f": 0.0,
+        "g": 0.0,
+        "color": 1.0,
+        "color_speed": 0.5,
+        "opacity": 1.0,
+        "direct_color": 0.0,
+        "variations": {
+          "quaternion_linear": 1.0
+        },
+        "variation_params": {
+          "quaternion_linear.m00": 0.5,
+          "quaternion_linear.m01": 0.0,
+          "quaternion_linear.m02": 0.0,
+          "quaternion_linear.m03": 0.0,
+          "quaternion_linear.m10": 0.0,
+          "quaternion_linear.m11": 0.5,
+          "quaternion_linear.m12": 0.0,
+          "quaternion_linear.m13": 0.0,
+          "quaternion_linear.m20": 0.0,
+          "quaternion_linear.m21": 0.0,
+          "quaternion_linear.m22": 0.5,
+          "quaternion_linear.m23": 0.0,
+          "quaternion_linear.m30": 0.0,
+          "quaternion_linear.m31": 0.0,
+          "quaternion_linear.m32": 0.0,
+          "quaternion_linear.m33": 0.5,
+          "quaternion_linear.tx": 0.0,
+          "quaternion_linear.ty": 0.0,
+          "quaternion_linear.tz": 0.0,
+          "quaternion_linear.tw": 0.8944271909999159,
+          "quaternion_linear.projection": 0.0,
+          "quaternion_linear.w_color": 0.0
+        },
+        "weight": 1.0
+      }
+    ]
+  },
+  "gamma": 2.2,
+  "brightness": 6.0,
+  "max_iterations": 12000000,
+  "zoom": 1.5,
+  "version": 1,
+  "deterministic_rng": true,
+  "palette": {
+    "name": "reg",
+    "stops": [
+      {
+        "color": [
+          0.2,
+          0.4,
+          0.9
+        ],
+        "position": 0.0
+      },
+      {
+        "color": [
+          0.9,
+          0.5,
+          0.1
+        ],
+        "position": 0.5
+      },
+      {
+        "color": [
+          0.9,
+          0.2,
+          0.6
+        ],
+        "position": 1.0
+      }
+    ]
+  },
+  "solid_strength": 1.0,
+  "surface_thickness": 0.04,
+  "solid_shading": {
+    "shading_strength": 1.0,
+    "ambient": 0.15,
+    "diffuse": 1.1,
+    "specular": 0.5,
+    "shininess": 40.0,
+    "ssao_strength": 0.7,
+    "ssao_radius": 0.15,
+    "lights": [
+      {
+        "enabled": true,
+        "azimuth": 45.0,
+        "elevation": 30.0,
+        "intensity": 1.2,
+        "color": [
+          1.0,
+          0.97,
+          0.9
+        ]
+      },
+      {
+        "enabled": true,
+        "azimuth": -75.0,
+        "elevation": -5.0,
+        "intensity": 0.35,
+        "color": [
+          0.55,
+          0.65,
+          1.0
+        ]
+      },
+      {
+        "enabled": false,
+        "azimuth": 0.0,
+        "elevation": 0.0,
+        "intensity": 1.0,
+        "color": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      {
+        "enabled": false,
+        "azimuth": 0.0,
+        "elevation": 0.0,
+        "intensity": 1.0,
+        "color": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      }
+    ],
+    "shadow_strength": 0.6
+  }
+}

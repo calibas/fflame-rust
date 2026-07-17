@@ -207,6 +207,47 @@ pub async fn render(
 
     queue.submit(std::iter::once(encoder.finish()));
 
+    // Shadow-fit warmup: the shadow-map fit needs the flame's real
+    // bounds, which only the chaos game can reveal. Run a few batches,
+    // read the measured AABB back, re-freeze the fit, and restart
+    // accumulation — cheap relative to the full render, and without it a
+    // zoom-guessed fit wastes map resolution (or clips the attractor).
+    if renderer.shadow_capture_wanted() {
+        let warmup_batches = 6u32;
+        for _ in 0..warmup_batches {
+            let mut enc = device.create_command_encoder(&CommandEncoderDescriptor {
+                label: Some("Shadow Warmup"),
+            });
+            renderer.compute_pass(
+                &mut enc, queue, device, NUM_WORKGROUPS,
+                job.iterations_per_thread, job.burn_in,
+                job.config.zoom, job.config.pan_x, job.config.pan_y, job.config.rotation,
+                job.config.camera_rotation_x, job.config.camera_rotation_y, job.config.camera_bank,
+                job.config.camera_x, job.config.camera_y, job.config.camera_z,
+                job.config.speed_factor, true, false,
+            );
+            queue.submit(std::iter::once(enc.finish()));
+        }
+        let changed = renderer.refresh_shadow_placement_blocking(
+            device, queue,
+            job.config.zoom, job.config.pan_x, job.config.pan_y,
+            job.config.camera_rotation_x, job.config.camera_rotation_y, job.config.camera_bank,
+            [job.config.camera_x, job.config.camera_y, job.config.camera_z],
+        );
+        log::info!("Shadow warmup: fit {}", if changed { "refit to measured bounds" } else { "unchanged" });
+        let mut enc = device.create_command_encoder(&CommandEncoderDescriptor {
+            label: Some("Shadow Warmup Reset"),
+        });
+        renderer.reset(
+            &mut enc, queue, job.iterations_per_thread,
+            job.config.zoom, job.config.pan_x, job.config.pan_y, job.config.rotation,
+            job.config.camera_rotation_x, job.config.camera_rotation_y, job.config.camera_bank,
+            job.config.camera_x, job.config.camera_y, job.config.camera_z,
+            job.config.speed_factor,
+        );
+        queue.submit(std::iter::once(enc.finish()));
+    }
+
     // Render loop
     let mut total_rendered = 0u64;
     let mut batch_frame_count = 0u32;
@@ -313,24 +354,68 @@ pub async fn render(
     // Reset effect slot counter (allows multiple effects with unique params in same submit)
     effect_chain.reset_slots();
 
+    // Solid brightness renormalization: exact accepted-density measurement
+    // before the single final tonemap.
+    renderer.apply_exact_density_fraction(device, queue);
+
+    // Solid-rendering shade pass — same ordering as the interactive frame:
+    // shade, then density effects, then tonemap.
+    let shade_ran = renderer.run_shade_pass(
+        device,
+        queue,
+        &mut tonemap_encoder,
+        job.config.zoom,
+        job.config.rotation,
+        job.config.pan_x,
+        job.config.pan_y,
+        job.config.camera_rotation_x,
+        job.config.camera_rotation_y,
+        job.config.camera_bank,
+        job.config.camera_x,
+        job.config.camera_y,
+        job.config.camera_z,
+    );
+    // Post-process DoF (solid mode) between shade and density
+    // effects/tonemap — same ordering as the interactive frame.
+    let dof_ran = renderer.run_dof_pass(
+        device,
+        queue,
+        &mut tonemap_encoder,
+        shade_ran,
+        job.config.zoom,
+    );
+    let pre_tonemap_view = if dof_ran {
+        renderer.dof_output_view()
+    } else if shade_ran {
+        renderer.shade_output_view()
+    } else {
+        renderer.get_accumulation_view()
+    };
+
     if has_density_effects {
         let density_ran = effect_chain.run_density_effects(
             device,
             queue,
             &mut tonemap_encoder,
-            renderer.get_accumulation_view(),
+            pre_tonemap_view,
             &job.config.density_effects,
         );
 
         if density_ran {
             if let Some(density_output) = effect_chain.get_density_output() {
                 renderer.tonemap_pass_with_input(device, queue, &mut tonemap_encoder, density_output);
+            } else if dof_ran || shade_ran {
+                renderer.tonemap_pass_with_input(device, queue, &mut tonemap_encoder, pre_tonemap_view);
             } else {
                 renderer.tonemap_pass(queue, &mut tonemap_encoder);
             }
+        } else if dof_ran || shade_ran {
+            renderer.tonemap_pass_with_input(device, queue, &mut tonemap_encoder, pre_tonemap_view);
         } else {
             renderer.tonemap_pass(queue, &mut tonemap_encoder);
         }
+    } else if dof_ran || shade_ran {
+        renderer.tonemap_pass_with_input(device, queue, &mut tonemap_encoder, pre_tonemap_view);
     } else {
         renderer.tonemap_pass(queue, &mut tonemap_encoder);
     }

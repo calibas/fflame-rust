@@ -75,7 +75,7 @@ pub fn desktop_main() {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub fn export_mode(input: &str, output: &str, width: Option<u32>, height: Option<u32>, category: Option<String>, iterations_per_thread: Option<u32>, dump_shader: bool, transparent: bool, premultiplied: bool, engine: crate::app::export::ExportEngine) {
+pub fn export_mode(input: &str, output: &str, width: Option<u32>, height: Option<u32>, category: Option<String>, iterations_per_thread: Option<u32>, dump_shader: bool, transparent: bool, premultiplied: bool, engine: crate::app::export::ExportEngine, supersample: bool) {
     env_logger::init();
     if dump_shader {
         shader_builder_v2::enable_shader_dump();
@@ -83,7 +83,7 @@ pub fn export_mode(input: &str, output: &str, width: Option<u32>, height: Option
     // Enable inlined constants for CLI export - compiles flame data as shader constants
     // for maximum performance (eliminates buffer reads, enables dead code elimination)
     shader_builder_v2::enable_inlined_constants();
-    pollster::block_on(export_async(input, output, width, height, category, iterations_per_thread, transparent, premultiplied, engine)).expect("Export failed");
+    pollster::block_on(export_async(input, output, width, height, category, iterations_per_thread, transparent, premultiplied, engine, supersample)).expect("Export failed");
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -105,7 +105,7 @@ pub fn export_animation_mode(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-async fn export_async(input: &str, output: &str, width: Option<u32>, height: Option<u32>, category: Option<String>, iterations_per_thread: Option<u32>, transparent: bool, premultiplied: bool, engine: crate::app::export::ExportEngine) -> Result<(), Box<dyn std::error::Error>> {
+async fn export_async(input: &str, output: &str, width: Option<u32>, height: Option<u32>, category: Option<String>, iterations_per_thread: Option<u32>, transparent: bool, premultiplied: bool, engine: crate::app::export::ExportEngine, supersample: bool) -> Result<(), Box<dyn std::error::Error>> {
     use std::path::Path;
 
     println!("Fractal Flame Batch Export");
@@ -163,7 +163,7 @@ async fn export_async(input: &str, output: &str, width: Option<u32>, height: Opt
 
         // Call the existing PNG export logic from app
         // We'll need to add a headless export helper
-        let success = app::export_headless(config, &output_file, w, h, category.clone(), ipt, transparent, premultiplied, engine).await?;
+        let success = app::export_headless(config, &output_file, w, h, category.clone(), ipt, transparent, premultiplied, engine, supersample).await?;
 
         if success {
             println!("  ✓ Saved to {}", output_file.display());

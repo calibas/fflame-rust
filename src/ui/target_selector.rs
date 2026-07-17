@@ -367,6 +367,24 @@ fn get_view_items() -> Vec<TargetItem> {
         TargetItem::new(ConfigPath::DofBlurStrength, "DOF Blur Strength"),
         TargetItem::new(ConfigPath::FogStrength, "Fog Density"),
         TargetItem::new(ConfigPath::FogStart, "Fog Start"),
+        // Solid rendering + lighting (shade pass) — all animatable;
+        // lighting params don't even reset accumulation (ShadingOnly).
+        TargetItem::new(ConfigPath::SolidStrength, "Solid Strength"),
+        TargetItem::new(ConfigPath::SurfaceThickness, "Surface Thickness"),
+        TargetItem::new(ConfigPath::ShadingStrength, "Shading Strength"),
+        TargetItem::new(ConfigPath::SolidAmbient, "Ambient Light"),
+        TargetItem::new(ConfigPath::SolidDiffuse, "Diffuse Light"),
+        TargetItem::new(ConfigPath::SolidSpecular, "Specular"),
+        TargetItem::new(ConfigPath::SolidShininess, "Shininess"),
+        TargetItem::new(ConfigPath::SsaoStrength, "SSAO Strength"),
+        TargetItem::new(ConfigPath::SsaoRadius, "SSAO Radius"),
+        TargetItem::new(ConfigPath::SolidShadowStrength, "Shadow Strength"),
+        TargetItem::new(ConfigPath::SolidLightParam { index: 0, param: "azimuth".to_string() }, "Light 1 Azimuth"),
+        TargetItem::new(ConfigPath::SolidLightParam { index: 0, param: "elevation".to_string() }, "Light 1 Elevation"),
+        TargetItem::new(ConfigPath::SolidLightParam { index: 0, param: "intensity".to_string() }, "Light 1 Intensity"),
+        TargetItem::new(ConfigPath::SolidLightParam { index: 1, param: "azimuth".to_string() }, "Light 2 Azimuth"),
+        TargetItem::new(ConfigPath::SolidLightParam { index: 1, param: "elevation".to_string() }, "Light 2 Elevation"),
+        TargetItem::new(ConfigPath::SolidLightParam { index: 1, param: "intensity".to_string() }, "Light 2 Intensity"),
     ]
 }
 

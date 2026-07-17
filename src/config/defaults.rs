@@ -56,6 +56,10 @@ pub const DEFAULT_DOF_BLUR_STRENGTH: f32 = 0.0; // 0.0 = disabled, up to ~10.0 f
 pub const DEFAULT_FOG_STRENGTH: f32 = 0.0; // 0.0 = disabled, exponential fog density
 pub const DEFAULT_FOG_START: f32 = 0.0; // Depth where fog begins (camera-space Z)
 
+// Solid rendering (Phase 0: nearest-depth occlusion)
+pub const DEFAULT_SOLID_STRENGTH: f32 = 0.0; // 0.0 = off (classic transparency), 1.0 = hard surface
+pub const DEFAULT_SURFACE_THICKNESS: f32 = 0.02; // Depth shell treated as "the surface" (world units)
+
 // Other
 pub const DEFAULT_MAX_ITERATIONS: u64 = 1_000_000_000;
 pub const DEFAULT_SPEED_FACTOR: f32 = 0.5;

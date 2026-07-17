@@ -650,6 +650,44 @@ fn apply_config_value(
         (ConfigPath::FogStrength, ConfigValue::Float(v)) => config.fog_strength = *v,
         (ConfigPath::FogStart, ConfigValue::Float(v)) => config.fog_start = *v,
 
+        // Solid rendering + lighting — FractalConfig-level; without these
+        // arms an animated light (e.g. a Light-2 azimuth sweep) renders
+        // static in the exported video while previewing fine in-app.
+        (ConfigPath::SolidStrength, ConfigValue::Float(v)) => config.solid_strength = *v,
+        (ConfigPath::SurfaceThickness, ConfigValue::Float(v)) => config.surface_thickness = *v,
+        (ConfigPath::SolidShadowStrength, ConfigValue::Float(v)) => config.solid_shading.shadow_strength = *v,
+        (ConfigPath::ShadingStrength, ConfigValue::Float(v)) => config.solid_shading.shading_strength = *v,
+        (ConfigPath::SolidAmbient, ConfigValue::Float(v)) => config.solid_shading.ambient = *v,
+        (ConfigPath::SolidDiffuse, ConfigValue::Float(v)) => config.solid_shading.diffuse = *v,
+        (ConfigPath::SolidSpecular, ConfigValue::Float(v)) => config.solid_shading.specular = *v,
+        (ConfigPath::SolidShininess, ConfigValue::Float(v)) => config.solid_shading.shininess = *v,
+        (ConfigPath::SsaoStrength, ConfigValue::Float(v)) => config.solid_shading.ssao_strength = *v,
+        (ConfigPath::SsaoRadius, ConfigValue::Float(v)) => config.solid_shading.ssao_radius = *v,
+        (ConfigPath::NormalSmoothing, ConfigValue::Float(v)) => {
+            config.solid_shading.normal_smoothing = (v.round().max(0.0) as u32).min(3);
+        }
+        (ConfigPath::GapFill, ConfigValue::Float(v)) => {
+            config.solid_shading.gap_fill = (v.round().max(0.0) as u32).min(3);
+        }
+        (ConfigPath::SolidLightEnabled { index }, ConfigValue::Bool(v)) => {
+            if let Some(light) = config.solid_shading.lights.get_mut(*index) {
+                light.enabled = *v;
+            }
+        }
+        (ConfigPath::SolidLightParam { index, param }, ConfigValue::Float(v)) => {
+            if let Some(light) = config.solid_shading.lights.get_mut(*index) {
+                match param.as_str() {
+                    "azimuth" => light.azimuth = *v,
+                    "elevation" => light.elevation = *v,
+                    "intensity" => light.intensity = *v,
+                    "color_r" => light.color[0] = *v,
+                    "color_g" => light.color[1] = *v,
+                    "color_b" => light.color[2] = *v,
+                    _ => {}
+                }
+            }
+        }
+
         // Filter (density estimation) — FractalConfig-level, were missing.
         (ConfigPath::FilterRadius, ConfigValue::Float(v)) => config.filter_radius = *v,
         (ConfigPath::FilterBlurEdges, ConfigValue::Float(v)) => config.filter_blur_edges = *v,
@@ -1811,11 +1849,36 @@ pub async fn export_animation_fast(
         )
         .await;
 
+        // Solid rendering finalize — mirrors the interactive frame and the
+        // CLI export: exact brightness renormalization for occluded
+        // renders, then the shade pass (lighting/SSAO), then tonemap from
+        // the shaded output.
+        renderer.apply_exact_density_fraction(&device, &queue);
+
         // Tonemap
         let mut tonemap_encoder = device.create_command_encoder(&CommandEncoderDescriptor {
             label: Some("Tonemap"),
         });
-        renderer.tonemap_pass(&queue, &mut tonemap_encoder);
+        let shade_ran = renderer.run_shade_pass(
+            &device,
+            &queue,
+            &mut tonemap_encoder,
+            frame_config.zoom,
+            frame_config.rotation,
+            frame_config.pan_x,
+            frame_config.pan_y,
+            frame_config.camera_rotation_x,
+            frame_config.camera_rotation_y,
+            frame_config.camera_bank,
+            frame_config.camera_x,
+            frame_config.camera_y,
+            frame_config.camera_z,
+        );
+        if shade_ran {
+            renderer.tonemap_pass_with_input(&device, &queue, &mut tonemap_encoder, renderer.shade_output_view());
+        } else {
+            renderer.tonemap_pass(&queue, &mut tonemap_encoder);
+        }
         queue.submit(std::iter::once(tonemap_encoder.finish()));
 
         // Run color effects if enabled

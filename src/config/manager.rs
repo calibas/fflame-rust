@@ -202,6 +202,11 @@ pub struct UpdateAction {
     /// Needed when: active variations change
     pub rebuild_shader: bool,
 
+    /// Refresh the solid-rendering shade-pass parameters (lighting).
+    /// Post-accumulate only: no reset, no overwrite mode, no flame
+    /// update — the per-frame shade+tonemap re-render picks it up.
+    pub update_shading: bool,
+
     /// One of the six animation-tracked lists changed shape (add /
     /// delete / reorder of a transform pool, subflame, or effect).
     /// The App layer's animation update code checks this and calls
@@ -233,6 +238,13 @@ impl UpdateAction {
                 ..Default::default()
             },
 
+            UpdateType::ShadingOnly => Self {
+                update_shading: true,
+                // No reset — the shade pass is post-accumulation, so
+                // lighting edits keep every accumulated iteration.
+                ..Default::default()
+            },
+
             UpdateType::ColorOnly => Self {
                 update_palette: true,
                 reset_accumulation: false, // Never reset - use overwrite mode for smooth updates
@@ -246,6 +258,7 @@ impl UpdateAction {
                 update_tone_curve: true,
                 reset_accumulation: false, // Don't reset - use overwrite mode for smooth transition
                 rebuild_shader: false, // TODO: detect variation changes
+                update_shading: true, // Full updates refresh shading state too (update_flame carries it)
                 structural_changed: false, // Only set by explicit structural mutation sites
             },
         }
@@ -259,6 +272,7 @@ impl UpdateAction {
         self.update_tone_curve |= other.update_tone_curve;
         self.update_view |= other.update_view;
         self.rebuild_shader |= other.rebuild_shader;
+        self.update_shading |= other.update_shading;
         self.structural_changed |= other.structural_changed;
     }
 }
@@ -2041,6 +2055,35 @@ impl ConfigManager {
             ConfigPath::PerspectiveStrength => Ok(config.perspective_strength.into()),
             ConfigPath::DepthDensityCompensation => Ok(config.depth_density_compensation.into()),
             ConfigPath::FarDensityFade => Ok(config.far_density_fade.into()),
+            ConfigPath::SolidStrength => Ok(config.solid_strength.into()),
+            ConfigPath::SurfaceThickness => Ok(config.surface_thickness.into()),
+            ConfigPath::SolidShadowStrength => Ok(config.solid_shading.shadow_strength.into()),
+            ConfigPath::ShadingStrength => Ok(config.solid_shading.shading_strength.into()),
+            ConfigPath::SolidAmbient => Ok(config.solid_shading.ambient.into()),
+            ConfigPath::SolidDiffuse => Ok(config.solid_shading.diffuse.into()),
+            ConfigPath::SolidSpecular => Ok(config.solid_shading.specular.into()),
+            ConfigPath::SolidShininess => Ok(config.solid_shading.shininess.into()),
+            ConfigPath::SsaoStrength => Ok(config.solid_shading.ssao_strength.into()),
+            ConfigPath::SsaoRadius => Ok(config.solid_shading.ssao_radius.into()),
+            ConfigPath::NormalSmoothing => Ok((config.solid_shading.normal_smoothing as f32).into()),
+            ConfigPath::GapFill => Ok((config.solid_shading.gap_fill as f32).into()),
+            ConfigPath::SolidLightEnabled { index } => {
+                let l = config.solid_shading.lights.get(*index).ok_or(ConfigError::InvalidIndex)?;
+                Ok(l.enabled.into())
+            }
+            ConfigPath::SolidLightParam { index, param } => {
+                let l = config.solid_shading.lights.get(*index).ok_or(ConfigError::InvalidIndex)?;
+                let v = match param.as_str() {
+                    "azimuth" => l.azimuth,
+                    "elevation" => l.elevation,
+                    "intensity" => l.intensity,
+                    "color_r" => l.color[0],
+                    "color_g" => l.color[1],
+                    "color_b" => l.color[2],
+                    _ => return Err(ConfigError::InvalidIndex),
+                };
+                Ok(v.into())
+            }
             ConfigPath::FarDensityFadeStart => Ok(config.far_density_fade_start.into()),
 
             // Effects
@@ -2799,6 +2842,61 @@ impl ConfigManager {
             }
             ConfigPath::FarDensityFade => {
                 self.current.far_density_fade = value.try_into()?;
+            }
+            ConfigPath::SolidStrength => {
+                self.current.solid_strength = value.try_into()?;
+            }
+            ConfigPath::SurfaceThickness => {
+                self.current.surface_thickness = value.try_into()?;
+            }
+            ConfigPath::SolidShadowStrength => {
+                self.current.solid_shading.shadow_strength = value.try_into()?;
+            }
+            ConfigPath::ShadingStrength => {
+                self.current.solid_shading.shading_strength = value.try_into()?;
+            }
+            ConfigPath::SolidAmbient => {
+                self.current.solid_shading.ambient = value.try_into()?;
+            }
+            ConfigPath::SolidDiffuse => {
+                self.current.solid_shading.diffuse = value.try_into()?;
+            }
+            ConfigPath::SolidSpecular => {
+                self.current.solid_shading.specular = value.try_into()?;
+            }
+            ConfigPath::SolidShininess => {
+                self.current.solid_shading.shininess = value.try_into()?;
+            }
+            ConfigPath::SsaoStrength => {
+                self.current.solid_shading.ssao_strength = value.try_into()?;
+            }
+            ConfigPath::SsaoRadius => {
+                self.current.solid_shading.ssao_radius = value.try_into()?;
+            }
+            ConfigPath::NormalSmoothing => {
+                let v: f32 = value.try_into()?;
+                self.current.solid_shading.normal_smoothing = (v.round().max(0.0) as u32).min(3);
+            }
+            ConfigPath::GapFill => {
+                let v: f32 = value.try_into()?;
+                self.current.solid_shading.gap_fill = (v.round().max(0.0) as u32).min(3);
+            }
+            ConfigPath::SolidLightEnabled { index } => {
+                let l = self.current.solid_shading.lights.get_mut(*index).ok_or(ConfigError::InvalidIndex)?;
+                l.enabled = value.try_into()?;
+            }
+            ConfigPath::SolidLightParam { index, param } => {
+                let l = self.current.solid_shading.lights.get_mut(*index).ok_or(ConfigError::InvalidIndex)?;
+                let v: f32 = value.try_into()?;
+                match param.as_str() {
+                    "azimuth" => l.azimuth = v,
+                    "elevation" => l.elevation = v,
+                    "intensity" => l.intensity = v,
+                    "color_r" => l.color[0] = v,
+                    "color_g" => l.color[1] = v,
+                    "color_b" => l.color[2] = v,
+                    _ => return Err(ConfigError::InvalidIndex),
+                }
             }
             ConfigPath::FarDensityFadeStart => {
                 self.current.far_density_fade_start = value.try_into()?;
