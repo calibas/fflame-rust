@@ -260,7 +260,7 @@ impl App {
     // caller (app/mod.rs PNG-export handler) is itself wasm-gated, so on WASM
     // this would only ever be compiled, never called.
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn export_custom_size(&mut self, transparent: bool, premultiplied: bool, config: FractalConfig, _render_time_ms: f64) {
+    pub fn export_custom_size(&mut self, transparent: bool, premultiplied: bool, config: FractalConfig, _render_time_ms: f64, out_width: u32, out_height: u32) {
         use crate::renderer::{render, NoProgress, RenderJob};
 
         // Check if already exporting
@@ -273,7 +273,6 @@ impl App {
         // dimensions; the tonemapped result is box-filtered (+ firefly
         // clamp) back down before the PNG encode.
         let supersample = self.png_export_supersample;
-        let (out_width, out_height) = (self.export_width, self.export_height);
         let (render_width, render_height) = if supersample {
             (out_width * 2, out_height * 2)
         } else {

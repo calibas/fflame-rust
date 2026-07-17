@@ -1346,10 +1346,19 @@ impl App {
                 // custom-size path reports through the unified export status).
                 let mut viewport_toast: Option<(String, bool)> = None;
 
-                // Check if we need custom-size export
-                if self.use_custom_export_size {
-                    // Custom-size export: create temporary renderer at export dimensions
-                    self.export_custom_size(transparent, self.png_export_premultiplied, export_config, render_time_ms);
+                // Check if we need custom-size export. 2× AA also routes
+                // through the custom-size machinery (at viewport dims):
+                // the viewport fast path below reads back the LIVE
+                // renderer's texture and can't supersample.
+                if self.use_custom_export_size || self.png_export_supersample {
+                    let (ow, oh) = if self.use_custom_export_size {
+                        (self.export_width, self.export_height)
+                    } else {
+                        // Viewport-size export: match what the user sees.
+                        let (vw, vh) = self.fractal_viewport_size;
+                        (vw.max(64), vh.max(64))
+                    };
+                    self.export_custom_size(transparent, self.png_export_premultiplied, export_config, render_time_ms, ow, oh);
                 } else if let Some(ref mut renderer) = self.flame_renderer {
                     // Viewport-size export: use current renderer
                     let total_iterations = renderer.total_iterations();
