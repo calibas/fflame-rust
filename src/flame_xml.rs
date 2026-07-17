@@ -957,6 +957,17 @@ fn apply_fx_priorities(
 fn variation_param_from_xml(var_name: &str, param_name: &str, value: f32) -> f32 {
     match (var_name, param_name) {
         ("radial_blur", "angle") => value * 180.0,
+        // The *plot_wf variations plot a baked formula chosen by
+        // `preset_id`. JWF's `preset_id = -1` means "use the custom
+        // `formula` string" — which we can't evaluate, so importing it
+        // verbatim renders the transform at the origin (a dead flame).
+        // Clamp -1 → 0 on import: the flame still renders, and preset 0
+        // is JWF's own default, so there's a chance it matches.
+        (
+            "yplot2d_wf" | "yplot3d_wf" | "parplot2d_wf" | "polarplot2d_wf"
+            | "polarplot3d_wf",
+            "preset_id",
+        ) if value < 0.0 => 0.0,
         _ => value,
     }
 }
@@ -2019,6 +2030,37 @@ mod tests {
         assert_eq!(xform2.get_variation_param_or_default("blob", "high", &global_registry()), 1.5);
         assert_eq!(xform2.get_variation_param_or_default("blob", "low", &global_registry()), 0.8);
         assert_eq!(xform2.get_variation_param_or_default("blob", "waves", &global_registry()), 6.0);
+    }
+
+    /// JWF's `*plot_wf` variations use `preset_id = -1` to mean "custom
+    /// formula string" — which we can't evaluate, so it plots at the
+    /// origin (dead flame). Import clamps -1 → 0 (JWF's default preset)
+    /// so the flame renders; a valid preset_id passes through unchanged.
+    #[test]
+    fn test_plot_wf_preset_id_clamped_on_import() {
+        let xml = r#"
+<flames name="test">
+<flame name="Plot Test" size="800 600" center="0 0" scale="200">
+   <xform weight="1" color="0" yplot2d_wf="0.5" yplot2d_wf_preset_id="-1" coefs="1 0 0 1 0 0" opacity="1" />
+   <xform weight="1" color="0" polarplot3d_wf="0.5" polarplot3d_wf_preset_id="4" coefs="1 0 0 1 0 0" opacity="1" />
+</flame>
+</flames>
+        "#;
+
+        let config = &parse_flame_xml(xml).expect("parse")[0];
+
+        // preset_id = -1 (custom formula) clamped to 0.
+        let x0 = &config.flame.transforms[0];
+        assert_eq!(
+            x0.get_variation_param_or_default("yplot2d_wf", "preset_id", &global_registry()),
+            0.0
+        );
+        // A real preset survives untouched.
+        let x1 = &config.flame.transforms[1];
+        assert_eq!(
+            x1.get_variation_param_or_default("polarplot3d_wf", "preset_id", &global_registry()),
+            4.0
+        );
     }
 
     #[test]
