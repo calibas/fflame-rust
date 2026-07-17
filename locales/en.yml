@@ -414,7 +414,7 @@ view:
   light_elevation: "Elevation"
   light_intensity: "Intensity"
   tooltip_shading_strength: "Deferred lighting on the depth surface (0 = off).\nBlends the classic emissive flame color toward a lit surface: normals from depth, ambient + up to 4 directional lights, SSAO.\nWorks with Solid Strength 0 too - lighting alone activates the depth buffer.\n3D mode only."
-  tooltip_shadow_strength: "Volume shadow march (0 = off): attenuates each light by the density between the surface and the light.\nRequires the Density Volume - does nothing without it."
+  tooltip_shadow_strength: "Light-space shadow maps: each light's diffuse and specular are attenuated by its splat-resolution shadow map (0 = off).\nMaps bake during accumulation - moving a light restarts the render."
   fly_mode_settings: "Fly Mode Settings"
   fly_camera_mode: "Camera mode:"
   fly_camera_mode_free_look: "Free-look"

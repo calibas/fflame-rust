@@ -1430,8 +1430,13 @@ fn write_single_flame(out: &mut String, config: &FractalConfig, flame: &Flame) {
     if config.dof_blur_strength.abs() > 1e-6 {
         out.push_str(&format!(" cam_dof=\"{}\"", fmt_f32(config.dof_blur_strength)));
     }
-    // JWildfire solid rendering + lighting (sld_render_* block).
-    write_solid_rendering(out, config);
+    // JWildfire solid rendering + lighting (sld_render_* block) —
+    // top-level flame only (subflame <flame> elements are IFS payloads;
+    // carrying scene-level solid attrs there would set solid mode on
+    // the child if opened standalone in JWF).
+    if std::ptr::eq(flame, &config.flame) {
+        write_solid_rendering(out, config);
+    }
     // Standard Apo attrs that the importer reads.
     out.push_str(" oversample=\"1\"");
     if config.filter_radius.abs() > 1e-6 {
