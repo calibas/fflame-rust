@@ -28,6 +28,10 @@ pub fn render_menu_bar(
                     menu_actions.file.save_config = true;
                 }
 
+                if ui.button(t!("menu.export_flame_xml")).clicked() {
+                    menu_actions.file.export_flame_xml = true;
+                }
+
                 ui.separator();
 
                 // Fractal Browser (presets, batch results, files)
@@ -72,15 +76,6 @@ pub fn render_menu_bar(
 
                 if ui.button(t!("menu.export")).clicked() {
                     workspace.open_floating_panel(super::workspace::PanelType::Export, ctx);
-                }
-
-                ui.separator();
-
-                if ui.button(t!("menu.import_flame_xml")).clicked() {
-                    menu_actions.file.import_flame_xml = true;
-                }
-                if ui.button(t!("menu.export_flame_xml")).clicked() {
-                    menu_actions.file.export_flame_xml = true;
                 }
 
                 ui.separator();
