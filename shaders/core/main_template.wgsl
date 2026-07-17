@@ -788,21 +788,23 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 let sd_enc = ~sd_ord;
                 let solid_slot = params.width * params.height * 4u + pixel_idx;
                 let solid_prev = atomicMax(&histogram[solid_slot], sd_enc);
-                // Decode the nearest depth seen so far (including this sample).
-                let near_ord = ~max(solid_prev, sd_enc);
-                let near_bits = select(~near_ord, near_ord ^ 0x80000000u, (near_ord & 0x80000000u) != 0u);
-                let d_near = bitcast<f32>(near_bits);
                 var solid_occ = 1.0;
                 if (params.depth_prime != 0u) {
                     // Priming batch right after a reset: record depth only,
                     // plot nothing — keeps interior ghosting out of the
                     // accumulator while the depth buffer converges.
                     density_weight = 0.0;
-                } else if (solid_d > d_near + params.surface_thickness) {
-                    // Behind the surface shell: fade by solid_strength
-                    // (1 = fully occluded, 0 = classic transparency).
-                    solid_occ = 1.0 - params.solid_strength;
-                    density_weight *= solid_occ;
+                } else {
+                    // Decode the nearest depth seen so far (incl. this sample).
+                    let near_ord = ~max(solid_prev, sd_enc);
+                    let near_bits = select(~near_ord, near_ord ^ 0x80000000u, (near_ord & 0x80000000u) != 0u);
+                    let d_near = bitcast<f32>(near_bits);
+                    if (solid_d > d_near + params.surface_thickness) {
+                        // Behind the surface shell: fade by solid_strength
+                        // (1 = fully occluded, 0 = classic transparency).
+                        solid_occ = 1.0 - params.solid_strength;
+                        density_weight *= solid_occ;
+                    }
                 }
                 // Light-space shadow maps (Stage 2): record this sample
                 // toward every enabled light. Accumulates during the
