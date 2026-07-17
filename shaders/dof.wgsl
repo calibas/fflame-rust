@@ -157,8 +157,8 @@ fn max_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // fully sharp rows collapse to 0).
         m = max(m, v.r - f32(abs(i)));
     }
-    let g = textureLoad(coc_tex, vec2<i32>(px, py), 0).g;
-    textureStore(dof_out, vec2<i32>(px, py), vec4<f32>(max(m, textureLoad(coc_tex, vec2<i32>(px, py), 0).r), g, 0.0, 0.0));
+    let c = textureLoad(coc_tex, vec2<i32>(px, py), 0);
+    textureStore(dof_out, vec2<i32>(px, py), vec4<f32>(max(m, c.r), c.g, 0.0, 0.0));
 }
 
 // ── Pass 4: dense 2-D disk gather ───────────────────────────────────
