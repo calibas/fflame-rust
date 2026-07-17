@@ -522,7 +522,7 @@ levels:
 
 # Tone Mapping
 tonemap:
-  histogram: "Density Histogram"
+  histogram: "Density Levels"
   title: "Tone Mapping"
   mode: "Tone Map Mode"
   mode_linear: "Linear"
