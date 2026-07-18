@@ -108,12 +108,14 @@ help:
   zoom_plus_minus: "  + / -      - Zoom in/out"
   zoom_numpad: "  Numpad +/-  - Zoom in/out"
   full_screen: "  F        - Full Screen Mode"
+  fly_mode: "  F2       - Toggle Fly Mode"
   editing: "Editing:"
   undo_shortcut: "  Ctrl+Z   - Undo"
   redo_shortcut: "  Ctrl+Y   - Redo"
   mouse_controls: "Mouse Controls:"
   drag_pan: "  Drag     - Pan view"
   wheel_zoom: "  Wheel    - Zoom (toward cursor)"
+  alt_drag_rotate: "  Alt-Drag - Rotate view"
 
 # Panel Titles (used in tabs and window titles)
 solid:
