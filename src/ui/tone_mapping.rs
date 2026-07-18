@@ -211,17 +211,22 @@ pub fn render_colors_content(
                                     (ConfigPath::GammaThreshold, preset.gamma_threshold.into()),
                                     (ConfigPath::Brightness, preset.brightness.into()),
                                     (ConfigPath::Vibrancy, preset.vibrancy.into()),
-                                    // TODO: add `white_level` to TonemapPreset (currently
-                                    // omitted so applying a preset doesn't reset the user's
-                                    // highlights tuning — see tonemap-highlights.md).
+                                    (ConfigPath::WhiteLevel, preset.white_level.into()),
                                     (ConfigPath::Saturation, preset.saturation.into()),
                                     (ConfigPath::HueShift, preset.hue_shift.into()),
+                                    (ConfigPath::TonemapMode, preset.tonemap_mode.into()),
+                                    (ConfigPath::HighlightMode, preset.highlight_mode.into()),
                                     (ConfigPath::UseCurve, preset.use_curve.into()),
+                                    // Tone curve SHAPE (constructor called here);
+                                    // a preset fully owns the curve.
+                                    (ConfigPath::TonemapCurve, (preset.tone_curve)().into()),
+                                    (ConfigPath::LevelsEnabled, preset.levels_enabled.into()),
                                     (ConfigPath::LevelsLow, preset.levels_low.into()),
                                     (ConfigPath::LevelsHigh, preset.levels_high.into()),
                                     (ConfigPath::LevelsGamma, preset.levels_gamma.into()),
                                     (ConfigPath::AlphaBlendLow, preset.alpha_blend_low.into()),
                                     (ConfigPath::AlphaBlendHigh, preset.alpha_blend_high.into()),
+                                    (ConfigPath::DensityScale, preset.density_scale.into()),
                                 ];
                                 match config_manager.update_batch(changes, format!("Apply tonemap preset: {}", preset.name)) {
                                     Ok(update) => max_update = max_update.max(update),

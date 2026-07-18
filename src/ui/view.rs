@@ -180,8 +180,6 @@ pub fn render_view_content(
 
     }
 
-    ui.separator();
-
     // 3D Camera rotation controls (only visible in 3D mode)
     if matches!(config.render_mode, RenderMode::ThreeD) {
         ui.separator();
