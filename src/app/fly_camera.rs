@@ -302,7 +302,10 @@ impl App {
     }
 
     /// Apply a mouse-drag delta as a camera rotation, per the
-    /// configured fly-camera mode (see module docs):
+    /// configured fly-camera mode (see module docs). Driven either by
+    /// fly-mode mouse-look or by an Alt+drag in the viewport — both
+    /// funnel their delta through `UiResponse::fly_mouse_drag`, so this
+    /// runs regardless of whether fly mode is active.
     ///
     /// **FreeLook** — the drag vector maps to a single rotation
     /// about the camera-space axis perpendicular to it (exponential
@@ -338,9 +341,10 @@ impl App {
     /// dependence on `persp_strength · z`, but for typical fly-mode
     /// pan ≤ a couple of units it's not noticeable.
     pub fn apply_fly_mouse_look(&mut self, drag_dx: f32, drag_dy: f32) {
-        if !self.fly_mode {
-            return;
-        }
+        // No fly-mode gate: the caller only supplies a delta for an
+        // intentional look gesture (fly-mode drag, or viewport Alt+drag),
+        // and the math below is a pure camera-angle transform that holds
+        // outside fly mode too.
         if drag_dx == 0.0 && drag_dy == 0.0 {
             return;
         }

@@ -61,6 +61,7 @@ pub fn render_keyboard_shortcuts_content(ui: &mut egui::Ui) {
     ui.label(t!("help.zoom_plus_minus"));
     ui.label(t!("help.zoom_numpad"));
     ui.label(t!("help.full_screen"));
+    ui.label(t!("help.fly_mode"));
 
     ui.separator();
     ui.label(t!("help.editing"));
@@ -71,4 +72,5 @@ pub fn render_keyboard_shortcuts_content(ui: &mut egui::Ui) {
     ui.label(t!("help.mouse_controls"));
     ui.label(t!("help.drag_pan"));
     ui.label(t!("help.wheel_zoom"));
+    ui.label(t!("help.alt_drag_rotate"));
 }

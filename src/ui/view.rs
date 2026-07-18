@@ -81,7 +81,7 @@ pub fn render_view_content(
     // is rotation-aware in 2D and identity in 3D (see
     // FractalConfig::screen_delta_to_pan_frame).
     ui.horizontal(|ui| {
-        ui.add_space(30.0);
+        ui.add_space(36.0);
         if ui.button("  ^  ").clicked() {
             let (dx, dy) = config.screen_delta_to_pan_frame(0.0, -pan_step);
             let _ = config_manager.update_param(
