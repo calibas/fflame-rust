@@ -387,8 +387,6 @@ fn render_jwf_plane_section(
         .id_salt(format!("{}_{}_{}", plane.id_salt(), xref.pool_kind(), index))
         .default_open(false)
         .show(ui, |ui| {
-            ui.label(t!(plane.tooltip_key()));
-
             // Reset button — restores identity. The GPU's
             // `plane_flags` recompute on upload, so resetting drops
             // this plane back to the flat path automatically; same
@@ -448,7 +446,10 @@ fn render_jwf_plane_section(
                 render_cell(ui, transform, config_manager, 4, "e");
                 render_cell(ui, transform, config_manager, 5, "f");
             });
-        });
+        })
+        // Tooltip on the section title (hover the collapsible header).
+        .header_response
+        .on_hover_text(t!(plane.tooltip_key()));
 
     max_update
 }
