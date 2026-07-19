@@ -885,6 +885,16 @@ impl I18nKey {
     }
 }
 
+/// A–F letter for a JWildfire plane-affine coefficient position, so a
+/// plane-coef history entry reads "Transform 1 -> ZX Affine C" like the
+/// XY affine entries. The plane array is stored in JWF order
+/// `[00, 01, 10, 11, 20, 21]` = `[a, c, b, d, e, f]` (see
+/// `Transform::plane_to_triangle_apophysis`), so positions 1 and 2 are
+/// `c`/`b`, not `b`/`c` — matching the Transform panel's cell labels.
+fn plane_coef_letter(position: u8) -> &'static str {
+    ["A", "C", "B", "D", "E", "F"].get(position as usize).copied().unwrap_or("?")
+}
+
 impl ConfigPath {
     /// Convert to an i18n key for translation
     /// Returns an I18nKey struct with the key and any parameters needed for interpolation
@@ -1064,19 +1074,19 @@ impl ConfigPath {
             // panel shows them as e.g. "Transform 2 → YZ Coef [4]".
             ConfigPath::TransformYzCoefs { index, position } => I18nKey::with_params(
                 "history.param.transform_yz_coefs",
-                vec![("index", (index + 1).to_string()), ("position", position.to_string())],
+                vec![("index", (index + 1).to_string()), ("param", plane_coef_letter(*position).to_string())],
             ),
             ConfigPath::TransformZxCoefs { index, position } => I18nKey::with_params(
                 "history.param.transform_zx_coefs",
-                vec![("index", (index + 1).to_string()), ("position", position.to_string())],
+                vec![("index", (index + 1).to_string()), ("param", plane_coef_letter(*position).to_string())],
             ),
             ConfigPath::TransformYzPostCoefs { index, position } => I18nKey::with_params(
                 "history.param.transform_yz_post_coefs",
-                vec![("index", (index + 1).to_string()), ("position", position.to_string())],
+                vec![("index", (index + 1).to_string()), ("param", plane_coef_letter(*position).to_string())],
             ),
             ConfigPath::TransformZxPostCoefs { index, position } => I18nKey::with_params(
                 "history.param.transform_zx_post_coefs",
-                vec![("index", (index + 1).to_string()), ("position", position.to_string())],
+                vec![("index", (index + 1).to_string()), ("param", plane_coef_letter(*position).to_string())],
             ),
 
             // Linked Transform pool
@@ -1098,19 +1108,19 @@ impl ConfigPath {
             // reuse below.
             ConfigPath::LinkedTransformYzCoefs { index, position } => I18nKey::with_params(
                 "history.param.transform_yz_coefs",
-                vec![("index", (index + 1).to_string()), ("position", position.to_string())],
+                vec![("index", (index + 1).to_string()), ("param", plane_coef_letter(*position).to_string())],
             ),
             ConfigPath::LinkedTransformZxCoefs { index, position } => I18nKey::with_params(
                 "history.param.transform_zx_coefs",
-                vec![("index", (index + 1).to_string()), ("position", position.to_string())],
+                vec![("index", (index + 1).to_string()), ("param", plane_coef_letter(*position).to_string())],
             ),
             ConfigPath::LinkedTransformYzPostCoefs { index, position } => I18nKey::with_params(
                 "history.param.transform_yz_post_coefs",
-                vec![("index", (index + 1).to_string()), ("position", position.to_string())],
+                vec![("index", (index + 1).to_string()), ("param", plane_coef_letter(*position).to_string())],
             ),
             ConfigPath::LinkedTransformZxPostCoefs { index, position } => I18nKey::with_params(
                 "history.param.transform_zx_post_coefs",
-                vec![("index", (index + 1).to_string()), ("position", position.to_string())],
+                vec![("index", (index + 1).to_string()), ("param", plane_coef_letter(*position).to_string())],
             ),
             ConfigPath::LinkedTransformVariation { index, variation } => I18nKey::with_params(
                 "history.param.transform_variation",
@@ -1162,19 +1172,19 @@ impl ConfigPath {
             ),
             ConfigPath::FinalTransformYzCoefs { index, position } => I18nKey::with_params(
                 "history.param.transform_yz_coefs",
-                vec![("index", (index + 1).to_string()), ("position", position.to_string())],
+                vec![("index", (index + 1).to_string()), ("param", plane_coef_letter(*position).to_string())],
             ),
             ConfigPath::FinalTransformZxCoefs { index, position } => I18nKey::with_params(
                 "history.param.transform_zx_coefs",
-                vec![("index", (index + 1).to_string()), ("position", position.to_string())],
+                vec![("index", (index + 1).to_string()), ("param", plane_coef_letter(*position).to_string())],
             ),
             ConfigPath::FinalTransformYzPostCoefs { index, position } => I18nKey::with_params(
                 "history.param.transform_yz_post_coefs",
-                vec![("index", (index + 1).to_string()), ("position", position.to_string())],
+                vec![("index", (index + 1).to_string()), ("param", plane_coef_letter(*position).to_string())],
             ),
             ConfigPath::FinalTransformZxPostCoefs { index, position } => I18nKey::with_params(
                 "history.param.transform_zx_post_coefs",
-                vec![("index", (index + 1).to_string()), ("position", position.to_string())],
+                vec![("index", (index + 1).to_string()), ("param", plane_coef_letter(*position).to_string())],
             ),
             ConfigPath::FinalTransformVariation { index, variation } => I18nKey::with_params(
                 "history.param.transform_variation",
