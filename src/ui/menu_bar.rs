@@ -457,7 +457,15 @@ pub fn render_menu_bar(
                     .stroke(egui::Stroke::new(1.0, fly_color))
                     .gap(2.0);
                 ui.style_mut().spacing.button_padding = egui::vec2(5.0, 0.0);
-                if ui.add(fly_button).on_hover_text(t!("view.tooltip_fly_mode")).clicked() {
+                // Fly mode is 3D-only — disabled (greyed) in 2D.
+                let fly_enabled = !menu_state.render_mode_2d;
+                let resp = ui.add_enabled(fly_enabled, fly_button);
+                let resp = if fly_enabled {
+                    resp.on_hover_text(t!("view.tooltip_fly_mode"))
+                } else {
+                    resp.on_disabled_hover_text(t!("menu.fly_mode_requires_3d"))
+                };
+                if resp.clicked() {
                     menu_actions.fly_mode_toggle = true;
                 }
             });

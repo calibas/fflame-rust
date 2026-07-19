@@ -295,10 +295,26 @@ impl App {
     /// Toggle fly mode on/off. Resets the held-keys set and the
     /// delta-time anchor so re-entering fly mode after a pause
     /// doesn't apply stale state.
+    ///
+    /// Fly mode is 3D-only: a request to ENABLE it in 2D is ignored
+    /// (the menu / View-panel buttons are disabled there and F2 becomes
+    /// a no-op). Disabling always works.
     pub fn toggle_fly_mode(&mut self) {
+        if !self.fly_mode && !self.render_mode_is_3d() {
+            return;
+        }
         self.fly_mode = !self.fly_mode;
         self.fly_keys_held.clear();
         self.fly_last_update = None;
+    }
+
+    /// Whether the active config is in 3D render mode (fly mode's
+    /// precondition).
+    pub(crate) fn render_mode_is_3d(&self) -> bool {
+        matches!(
+            self.config_manager.active_config().render_mode,
+            crate::scene::transforms::RenderMode::ThreeD
+        )
     }
 
     /// Apply a mouse-drag delta as a camera rotation, per the
@@ -486,6 +502,14 @@ impl App {
     /// so the next press starts a fresh delta-time window instead
     /// of integrating a huge gap.
     pub fn update_fly_camera(&mut self) {
+        // Fly mode is 3D-only: drop it if the render mode became 2D by
+        // ANY path (View menu, panel, preset/config load, undo, ...).
+        // Runs every frame, so the switch is caught wherever it happens.
+        if self.fly_mode && !self.render_mode_is_3d() {
+            self.fly_mode = false;
+            self.fly_keys_held.clear();
+            self.fly_last_update = None;
+        }
         if !self.fly_mode {
             return;
         }
