@@ -11,6 +11,7 @@ menu:
   fractal: "Fractal"
   rendering: "Rendering"
   fly_mode: "Fly Mode"
+  fly_mode_requires_3d: "Fly Mode requires 3D render mode"
   window: "Window"
   help: "Help"
 
