@@ -10,6 +10,7 @@ menu:
   view: "View"
   fractal: "Fractal"
   rendering: "Rendering"
+  fly_mode: "Fly Mode"
   window: "Window"
   help: "Help"
 

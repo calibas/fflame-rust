@@ -899,6 +899,7 @@ impl EguiLayer {
             flame_name: config_manager.config().flame.name.clone(),
             auth_email: read_auth_email(config_manager),
             api_connectivity: self.api_connectivity,
+            fly_mode_active,
         };
 
         // Log ConfigManager state at start of UI render
@@ -978,6 +979,11 @@ impl EguiLayer {
                     #[cfg(not(target_arch = "wasm32"))]
                     window,
                 );
+            }
+
+            // Menu-bar Fly Mode button shares the viewport's toggle path.
+            if menu_actions.fly_mode_toggle {
+                fly_mode_toggle_requested = true;
             }
 
             // All windows are now dockable panels (see Windows menu)

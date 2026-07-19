@@ -442,6 +442,24 @@ pub fn render_menu_bar(
                         }
                     }
                 }
+
+                // Fly Mode toggle — floats right near the account. A grey
+                // outline when off; the outline AND text turn green when on
+                // (transparent fill either way, so it reads as an outline).
+                let (fly_color, fly_text) = if menu_state.fly_mode_active {
+                    let green = egui::Color32::from_rgb(60, 180, 75);
+                    (green, egui::RichText::new(t!("menu.fly_mode")).color(green))
+                } else {
+                    (egui::Color32::from_gray(110), egui::RichText::new(t!("menu.fly_mode")))
+                };
+                let fly_button = egui::Button::new(fly_text)
+                    .fill(egui::Color32::TRANSPARENT)
+                    .stroke(egui::Stroke::new(1.0, fly_color))
+                    .gap(2.0);
+                ui.style_mut().spacing.button_padding = egui::vec2(5.0, 0.0);
+                if ui.add(fly_button).on_hover_text(t!("view.tooltip_fly_mode")).clicked() {
+                    menu_actions.fly_mode_toggle = true;
+                }
             });
             } // available_width >= 500.0
         });
