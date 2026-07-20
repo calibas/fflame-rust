@@ -1553,8 +1553,11 @@ impl ShaderBuilder {
         }
 
         // 7e. Regular 4-polytope vertex tables for the `polychoron`
-        //     chaos-game variation.
-        let needs_polychora = active.iter().any(|(name, _)| name == "polychoron");
+        //     chaos-game variation, plus the Menger Tesseract 4-gap
+        //     point set used by `menger`'s third dimension mode.
+        let needs_polychora = active.iter().any(|(name, _)| {
+            matches!(name.as_str(), "polychoron" | "menger")
+        });
         if needs_polychora {
             shader.push_str(include_str!("../shaders/core/polychora.wgsl"));
             shader.push('\n');
