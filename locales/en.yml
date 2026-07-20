@@ -10,6 +10,8 @@ menu:
   view: "View"
   fractal: "Fractal"
   rendering: "Rendering"
+  fly_mode: "Fly Mode"
+  fly_mode_requires_3d: "Fly Mode requires 3D render mode"
   window: "Window"
   help: "Help"
 
@@ -94,7 +96,6 @@ menu:
 help:
   title: "Help"
   welcome_heading: "Welcome to the Fractal Art Editor (FAE)"
-  intro_fractal_flames: "This program allows you to create Fractal Flames. It can be a bit complex to use at first, and if you'd like to learn more we're creating tutorials."
   getting_started_heading: "Getting Started"
   presets_description: "Existing fractals you can use as a starting point."
   open_preset_browser: "Open Preset Library"
@@ -109,12 +110,14 @@ help:
   zoom_plus_minus: "  + / -      - Zoom in/out"
   zoom_numpad: "  Numpad +/-  - Zoom in/out"
   full_screen: "  F        - Full Screen Mode"
+  fly_mode: "  F2       - Toggle Fly Mode"
   editing: "Editing:"
   undo_shortcut: "  Ctrl+Z   - Undo"
   redo_shortcut: "  Ctrl+Y   - Redo"
   mouse_controls: "Mouse Controls:"
   drag_pan: "  Drag     - Pan view"
   wheel_zoom: "  Wheel    - Zoom (toward cursor)"
+  alt_drag_rotate: "  Alt-Drag - Rotate view"
 
 # Panel Titles (used in tabs and window titles)
 solid:
@@ -295,7 +298,7 @@ transform:
   solo: "Solo"
   linked_attachments: "Linked XForms"
   final_attachments: "Final XForms"
-  no_attachments_pool_empty: "(pool is empty — add a transform above)"
+  no_attachments_pool_empty: "None found — add a transform below"
 
   # Affine parameters
   affine_a: "a:"
@@ -523,7 +526,7 @@ levels:
 
 # Tone Mapping
 tonemap:
-  histogram: "Density Histogram"
+  histogram: "Density Levels"
   title: "Tone Mapping"
   mode: "Tone Map Mode"
   mode_linear: "Linear"
@@ -549,6 +552,10 @@ tonemap:
   highlights: "Highlights"
   saturation: "Saturation"
   hue_shift: "Hue Shift"
+  advanced: "Advanced"
+
+  # Spatial Filter (Apophysis per-sample Gaussian)
+  spatial_filter: "Spatial Filter"
 
   # Alpha Blending
   alpha_blending: "Alpha Blending (Background)"
@@ -717,10 +724,10 @@ history:
     levels_midtones: "Levels Midtones"
 
     # Effects (post-processing)
-    density_effect_enabled: "Density Effect %{index} → Enabled"
-    density_effect_param: "Density Effect %{index} → %{param}"
-    color_effect_enabled: "Color Effect %{index} → Enabled"
-    color_effect_param: "Color Effect %{index} → %{param}"
+    density_effect_enabled: "Density Effect %{index} -> Enabled"
+    density_effect_param: "Density Effect %{index} -> %{param}"
+    color_effect_enabled: "Color Effect %{index} -> Enabled"
+    color_effect_param: "Color Effect %{index} -> %{param}"
 
     # Color
     color_mode: "Color Mode"
@@ -750,34 +757,38 @@ history:
 
     # Transforms
     transform_count: "Transform Count"
-    transform_weight: "Transform %{index} → Weight"
-    transform_color: "Transform %{index} → Color"
-    transform_color_speed: "Transform %{index} → Color Speed"
-    transform_opacity: "Transform %{index} → Opacity"
-    transform_direct_color: "Transform %{index} → Direct Color"
-    transform_affine: "Transform %{index} → Affine %{param}"
-    transform_post_affine_enabled: "Transform %{index} → Post-Affine Enabled"
-    transform_post_affine: "Transform %{index} → Post-Affine %{param}"
-    transform_variation: "Transform %{index} → %{variation} variation"
-    transform_variation_priority: "Transform %{index} → %{variation} phase"
-    transform_variation_order: "Transform %{index} → Variation Order"
-    transform_variation_param: "Transform %{index} → %{variation} → %{param}"
-    transform_origin_x: "Transform %{index} → Origin X"
-    transform_origin_y: "Transform %{index} → Origin Y"
-    transform_rotation: "Transform %{index} → Rotation"
-    transform_scale: "Transform %{index} → Scale"
+    transform_weight: "Transform %{index} -> Weight"
+    transform_color: "Transform %{index} -> Color"
+    transform_color_speed: "Transform %{index} -> Color Speed"
+    transform_opacity: "Transform %{index} -> Opacity"
+    transform_direct_color: "Transform %{index} -> Direct Color"
+    transform_affine: "Transform %{index} -> Affine %{param}"
+    transform_post_affine_enabled: "Transform %{index} -> Post-Affine Enabled"
+    transform_post_affine: "Transform %{index} -> Post-Affine %{param}"
+    transform_variation: "Transform %{index} -> %{variation} variation"
+    transform_variation_priority: "Transform %{index} -> %{variation} phase"
+    transform_variation_order: "Transform %{index} -> Variation Order"
+    transform_variation_param: "Transform %{index} -> %{variation} -> %{param}"
+    transform_origin_x: "Transform %{index} -> Origin X"
+    transform_origin_y: "Transform %{index} -> Origin Y"
+    transform_rotation: "Transform %{index} -> Rotation"
+    transform_scale: "Transform %{index} -> Scale"
+    transform_zx_coefs: "Transform %{index} -> ZX Affine %{param}"
+    transform_zx_post_coefs: "Transform %{index} -> ZX Post-Affine %{param}"
+    transform_yz_coefs: "Transform %{index} -> YZ Affine %{param}"
+    transform_yz_post_coefs: "Transform %{index} -> YZ Post-Affine %{param}"
 
     # Final Transform
-    final_transform_enabled: "Final Transform → Enabled"
-    final_transform_affine: "Final Transform → Affine %{param}"
-    final_transform_post_affine_enabled: "Final Transform → Post-Affine Enabled"
-    final_transform_post_affine: "Final Transform → Post-Affine %{param}"
-    final_transform_variation: "Final Transform → %{variation} variation"
-    final_transform_variation_param: "Final Transform → %{variation} → %{param}"
-    final_transform_origin_x: "Final Transform → Origin X"
-    final_transform_origin_y: "Final Transform → Origin Y"
-    final_transform_rotation: "Final Transform → Rotation"
-    final_transform_scale: "Final Transform → Scale"
+    final_transform_enabled: "Final Transform -> Enabled"
+    final_transform_affine: "Final Transform -> Affine %{param}"
+    final_transform_post_affine_enabled: "Final Transform -> Post-Affine Enabled"
+    final_transform_post_affine: "Final Transform -> Post-Affine %{param}"
+    final_transform_variation: "Final Transform -> %{variation} variation"
+    final_transform_variation_param: "Final Transform -> %{variation} -> %{param}"
+    final_transform_origin_x: "Final Transform -> Origin X"
+    final_transform_origin_y: "Final Transform -> Origin Y"
+    final_transform_rotation: "Final Transform -> Rotation"
+    final_transform_scale: "Final Transform -> Scale"
 
     # Flame
     render_mode: "Render Mode"
@@ -1022,7 +1033,7 @@ browser:
   online_loading_list: "Loading flames..."
   online_loading_flame: "Loading flame..."
   online_empty: "No flames saved online"
-  online_empty_hint: "Use File → Save Online to upload a flame"
+  online_empty_hint: "Use File -> Save Online to upload a flame"
   online_delete: "Delete"
   online_deleting: "Deleting..."
   search_placeholder: "Search by name..."
@@ -1510,7 +1521,7 @@ tooltips:
   transform_edit_triangle: "Select in Triangle Editor"
   transform_clone: "Create a copy"
   transform_delete: "Delete"
-  transform_add_linked: "Add a Linked transform.\nLinked transforms run inside the dynamics; attach them to normals via Advanced → Linked XForms."
+  transform_add_linked: "Add a Linked transform.\nLinked transforms run inside the dynamics; attach them to normals via Advanced -> Linked XForms."
   transform_add_final: "Add a Final transform.\nFinal transforms are post-iteration view filters and auto-attach to every normal."
   remove_variation: "Remove variation"
   final_transform_help: "Post-processing transform applied once to every point after iteration loop.\nUsed for framing, positioning, or global effects."

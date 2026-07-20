@@ -28,6 +28,10 @@ pub fn render_menu_bar(
                     menu_actions.file.save_config = true;
                 }
 
+                if ui.button(t!("menu.export_flame_xml")).clicked() {
+                    menu_actions.file.export_flame_xml = true;
+                }
+
                 ui.separator();
 
                 // Fractal Browser (presets, batch results, files)
@@ -72,15 +76,6 @@ pub fn render_menu_bar(
 
                 if ui.button(t!("menu.export")).clicked() {
                     workspace.open_floating_panel(super::workspace::PanelType::Export, ctx);
-                }
-
-                ui.separator();
-
-                if ui.button(t!("menu.import_flame_xml")).clicked() {
-                    menu_actions.file.import_flame_xml = true;
-                }
-                if ui.button(t!("menu.export_flame_xml")).clicked() {
-                    menu_actions.file.export_flame_xml = true;
                 }
 
                 ui.separator();
@@ -446,6 +441,32 @@ pub fn render_menu_bar(
                             workspace.open_floating_panel(super::workspace::PanelType::LoginDialog, ctx);
                         }
                     }
+                }
+
+                // Fly Mode toggle — floats right near the account. A grey
+                // outline when off; the outline AND text turn green when on
+                // (transparent fill either way, so it reads as an outline).
+                let (fly_color, fly_text) = if menu_state.fly_mode_active {
+                    let green = egui::Color32::from_rgb(60, 180, 75);
+                    (green, egui::RichText::new(t!("menu.fly_mode")).color(green))
+                } else {
+                    (egui::Color32::from_gray(110), egui::RichText::new(t!("menu.fly_mode")))
+                };
+                let fly_button = egui::Button::new(fly_text)
+                    .fill(egui::Color32::TRANSPARENT)
+                    .stroke(egui::Stroke::new(1.0, fly_color))
+                    .gap(2.0);
+                ui.style_mut().spacing.button_padding = egui::vec2(5.0, 0.0);
+                // Fly mode is 3D-only — disabled (greyed) in 2D.
+                let fly_enabled = !menu_state.render_mode_2d;
+                let resp = ui.add_enabled(fly_enabled, fly_button);
+                let resp = if fly_enabled {
+                    resp.on_hover_text(t!("view.tooltip_fly_mode"))
+                } else {
+                    resp.on_disabled_hover_text(t!("menu.fly_mode_requires_3d"))
+                };
+                if resp.clicked() {
+                    menu_actions.fly_mode_toggle = true;
                 }
             });
             } // available_width >= 500.0

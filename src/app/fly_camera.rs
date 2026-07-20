@@ -295,14 +295,33 @@ impl App {
     /// Toggle fly mode on/off. Resets the held-keys set and the
     /// delta-time anchor so re-entering fly mode after a pause
     /// doesn't apply stale state.
+    ///
+    /// Fly mode is 3D-only: a request to ENABLE it in 2D is ignored
+    /// (the menu / View-panel buttons are disabled there and F2 becomes
+    /// a no-op). Disabling always works.
     pub fn toggle_fly_mode(&mut self) {
+        if !self.fly_mode && !self.render_mode_is_3d() {
+            return;
+        }
         self.fly_mode = !self.fly_mode;
         self.fly_keys_held.clear();
         self.fly_last_update = None;
     }
 
+    /// Whether the active config is in 3D render mode (fly mode's
+    /// precondition).
+    pub(crate) fn render_mode_is_3d(&self) -> bool {
+        matches!(
+            self.config_manager.active_config().render_mode,
+            crate::scene::transforms::RenderMode::ThreeD
+        )
+    }
+
     /// Apply a mouse-drag delta as a camera rotation, per the
-    /// configured fly-camera mode (see module docs):
+    /// configured fly-camera mode (see module docs). Driven either by
+    /// fly-mode mouse-look or by an Alt+drag in the viewport — both
+    /// funnel their delta through `UiResponse::fly_mouse_drag`, so this
+    /// runs regardless of whether fly mode is active.
     ///
     /// **FreeLook** — the drag vector maps to a single rotation
     /// about the camera-space axis perpendicular to it (exponential
@@ -338,9 +357,10 @@ impl App {
     /// dependence on `persp_strength · z`, but for typical fly-mode
     /// pan ≤ a couple of units it's not noticeable.
     pub fn apply_fly_mouse_look(&mut self, drag_dx: f32, drag_dy: f32) {
-        if !self.fly_mode {
-            return;
-        }
+        // No fly-mode gate: the caller only supplies a delta for an
+        // intentional look gesture (fly-mode drag, or viewport Alt+drag),
+        // and the math below is a pure camera-angle transform that holds
+        // outside fly mode too.
         if drag_dx == 0.0 && drag_dy == 0.0 {
             return;
         }
@@ -482,6 +502,14 @@ impl App {
     /// so the next press starts a fresh delta-time window instead
     /// of integrating a huge gap.
     pub fn update_fly_camera(&mut self) {
+        // Fly mode is 3D-only: drop it if the render mode became 2D by
+        // ANY path (View menu, panel, preset/config load, undo, ...).
+        // Runs every frame, so the switch is caught wherever it happens.
+        if self.fly_mode && !self.render_mode_is_3d() {
+            self.fly_mode = false;
+            self.fly_keys_held.clear();
+            self.fly_last_update = None;
+        }
         if !self.fly_mode {
             return;
         }

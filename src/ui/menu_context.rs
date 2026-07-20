@@ -54,6 +54,8 @@ pub struct MenuActions {
     pub edit: EditMenuActions,
     pub view: ViewMenuActions,
     pub rendering: RenderingMenuActions,
+    /// Menu-bar Fly Mode toggle button was clicked this frame.
+    pub fly_mode_toggle: bool,
 }
 
 /// Read-only state needed by menus to determine enabled/disabled state
@@ -74,4 +76,7 @@ pub struct MenuState {
     pub flame_name: String,
     pub auth_email: Option<String>,
     pub api_connectivity: crate::api::ApiConnectivity,
+    /// Fly Mode currently active — drives the menu-bar toggle's green
+    /// highlight.
+    pub fly_mode_active: bool,
 }

@@ -1070,7 +1070,7 @@ impl<'a> PanelViewer<'a> {
 
             match touch_gesture {
                 Some(TouchGesture::Pan(delta)) => {
-                    self.handle_fractal_drag(delta, available_size);
+                    self.handle_fractal_drag(delta, available_size, false);
                 }
                 Some(TouchGesture::Pinch { zoom_delta, translation, midpoint }) => {
                     self.handle_fractal_pinch_zoom(zoom_delta, translation, midpoint, response.rect, available_size);
@@ -1078,10 +1078,13 @@ impl<'a> PanelViewer<'a> {
                 None => {}
             }
 
-            // Handle mouse drag for panning (skip during touch to avoid double-handling)
+            // Handle mouse drag: pans, or looks (pitch/yaw) while Alt is
+            // held — like fly-mode mouse-look. Skipped during touch to
+            // avoid double-handling.
             if !touch_active && response.dragged_by(egui::PointerButton::Primary) {
                 let drag_delta = response.drag_delta();
-                self.handle_fractal_drag(drag_delta, available_size);
+                let alt = ui.input(|i| i.modifiers.alt);
+                self.handle_fractal_drag(drag_delta, available_size, alt);
             }
 
             // Handle mouse wheel for zooming
@@ -1122,13 +1125,13 @@ impl<'a> PanelViewer<'a> {
         }
     }
 
-    /// Handle fractal panning via mouse drag. When fly mode is active
-    /// the drag becomes a look-around delta instead of a pan —
-    /// recorded into `fly_mouse_drag` for the App to consume after
-    /// the UI render. In all other cases the existing pan behavior
-    /// applies.
-    fn handle_fractal_drag(&mut self, drag_delta: egui::Vec2, panel_size: egui::Vec2) {
-        if self.context.fly_mode_active {
+    /// Handle a fractal drag. It becomes a camera look-around (pitch/
+    /// yaw) instead of a pan when fly mode is active OR `look` is set
+    /// (viewport Alt+drag) — recorded into `fly_mouse_drag` for the App
+    /// to consume after the UI render, identical to fly-mode mouse-look.
+    /// Otherwise the drag pans.
+    fn handle_fractal_drag(&mut self, drag_delta: egui::Vec2, panel_size: egui::Vec2, look: bool) {
+        if self.context.fly_mode_active || look {
             let prev = self.context.fly_mouse_drag.unwrap_or((0.0, 0.0));
             *self.context.fly_mouse_drag = Some((prev.0 + drag_delta.x, prev.1 + drag_delta.y));
         } else {
