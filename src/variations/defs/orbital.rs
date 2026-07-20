@@ -51,7 +51,7 @@ use crate::variations::{
 use crate::param;
 
 pub static ORBITAL: VariationDef = VariationDef {
-    name: "orbital",
+    name: "electron_orbital",
     aliases: &[],
     display_name: "Electron Orbital",
     // Advanced2D (not Full3D) so the 2D slice body isn't filtered out
