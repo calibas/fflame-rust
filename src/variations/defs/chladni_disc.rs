@@ -33,6 +33,12 @@
 //! for every mode in the exposed parameter range, far below visual
 //! relevance.
 //!
+//! Direct color (`dc_mode` + the transform's Direct Color slider):
+//! *Distance* colors by first-order distance to the nodal set,
+//! *Amplitude* by the signed vibration phase of the region, *Mode Mix*
+//! by which of the two interfering modes dominates locally — same
+//! semantics as [`chladni`](super::chladni).
+//!
 //! No JWildfire/Apophysis equivalent — original to this project.
 
 use crate::variations::{
@@ -47,7 +53,7 @@ pub static CHLADNI_DISC: VariationDef = VariationDef {
     display_name: "Chladni Disc",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    features: &[Feature::NeedsRng],
+    features: &[Feature::NeedsRng, Feature::WritesColor],
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
@@ -65,6 +71,8 @@ pub static CHLADNI_DISC: VariationDef = VariationDef {
         param!("steps", "Steps", int, 3.0, 1.0, 6.0, "Newton iterations toward the nodal set per call. 1 is soft and halo-like; 3+ lands points crisply on the figure."),
         param!("strength", "Strength", float, 0.9, 0.0, 1.0, "Blend between the untouched input point (0) and the fully projected point (1)."),
         param!("jitter", "Jitter", float, 0.0, 0.0, 0.2, "Isotropic random offset added after projection — a sand-grain look. 0 keeps the nodal curves razor thin."),
+        param!("dc_mode", "Color Mode", enum, 0, &["Off", "Distance", "Amplitude", "Mode Mix"], "Direct-color source, applied through the transform's Direct Color slider. Distance: palette position 1 on the nodal curves fading to 0 away from them (great at low Strength). Amplitude: colors the regions between curves by signed vibration phase — adjacent regions of a real plate vibrate in opposite phase. Mode Mix: colors along the figure by the two modes' signed push-pull balance (varies along the nodal curves, unlike a ratio which is constant on them)."),
+        param!("dc_scale", "Color Scale", float, 1.0, 0.1, 4.0, "Contrast for the direct-color modes: Distance falloff sharpness, Amplitude saturation. No effect when Color Mode is Off."),
     ],
     wgsl_2d: WGSL_2D,
     wgsl_3d: WGSL_3D,
@@ -211,7 +219,7 @@ fn chladni_disc_project(p: vec2<f32>, n1: i32, k1: f32, ph1: f32, a: f32, n2: i3
     return q;
 }
 
-fn variation_chladni_disc(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
+fn variation_chladni_disc(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec2<f32> {
     let n1 = i32(get_param(xform_id, variation_id, 0u));
     let m1 = get_param(xform_id, variation_id, 1u);
     let n2 = i32(get_param(xform_id, variation_id, 2u));
@@ -224,11 +232,45 @@ fn variation_chladni_disc(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: p
     let steps = i32(get_param(xform_id, variation_id, 9u));
     let strength = get_param(xform_id, variation_id, 10u);
     let jitter = get_param(xform_id, variation_id, 11u);
+    let dc_mode = u32(get_param(xform_id, variation_id, 12u));
+    let dc_scale = get_param(xform_id, variation_id, 13u);
 
     let k1 = chladni_disc_mode_k(n1, m1, radius);
     let k2 = chladni_disc_mode_k(n2, m2, radius);
 
     let q = chladni_disc_project(p, n1, k1, ph1, a, n2, k2, ph2, b, steps);
+
+    // Direct color — evaluated at the incoming point, so it reflects
+    // where the point was relative to the figure, not the (near-zero)
+    // residual after projection.
+    if (dc_mode != 0u) {
+        let r0 = max(length(p), 1e-6);
+        let th0 = atan2(p.y, p.x);
+        let f1 = chladni_disc_mode(r0, th0, n1, k1, ph1);
+        let f2 = chladni_disc_mode(r0, th0, n2, k2, ph2);
+        let fd = a * f1 + b * f2;
+        if (dc_mode == 1u) {
+            let ct = p.x / r0;
+            let st = p.y / r0;
+            let g = vec2<f32>(fd.y * ct - fd.z / r0 * st, fd.y * st + fd.z / r0 * ct);
+            let dist = abs(fd.x) / (length(g) + 1e-6);
+            let cell = 3.14159265359 / max(k1, k2);
+            *vc = exp(-6.0 * dc_scale * dist / cell);
+        } else if (dc_mode == 2u) {
+            // J_n's first-peak amplitude is ~0.6 — close enough for a
+            // color normalization.
+            let f_norm = 0.6 * (abs(a) + abs(b)) + 1e-6;
+            *vc = 0.5 + 0.5 * tanh(2.0 * dc_scale * fd.x / f_norm);
+        } else {
+            // Signed difference of the two modes: on the nodal set they
+            // cancel (a*f1 = -b*f2), so the difference equals 2*a*f1
+            // and varies along the figure — a ratio would be a
+            // constant 0.5 everywhere on the attractor.
+            let f_norm = 0.6 * (abs(a) + abs(b)) + 1e-6;
+            *vc = 0.5 + 0.5 * tanh(2.0 * dc_scale * (a * f1.x - b * f2.x) / f_norm);
+        }
+    }
+
     var out = mix(p, q, strength);
     if (jitter > 0.0) {
         out = out + vec2<f32>(rng_nextf(rng) - 0.5, rng_nextf(rng) - 0.5) * (2.0 * jitter);
@@ -373,7 +415,7 @@ fn chladni_disc_project(p: vec2<f32>, n1: i32, k1: f32, ph1: f32, a: f32, n2: i3
     return q;
 }
 
-fn variation_chladni_disc(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
+fn variation_chladni_disc(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec3<f32> {
     let n1 = i32(get_param(xform_id, variation_id, 0u));
     let m1 = get_param(xform_id, variation_id, 1u);
     let n2 = i32(get_param(xform_id, variation_id, 2u));
@@ -386,11 +428,45 @@ fn variation_chladni_disc(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: p
     let steps = i32(get_param(xform_id, variation_id, 9u));
     let strength = get_param(xform_id, variation_id, 10u);
     let jitter = get_param(xform_id, variation_id, 11u);
+    let dc_mode = u32(get_param(xform_id, variation_id, 12u));
+    let dc_scale = get_param(xform_id, variation_id, 13u);
 
     let k1 = chladni_disc_mode_k(n1, m1, radius);
     let k2 = chladni_disc_mode_k(n2, m2, radius);
 
     let q = chladni_disc_project(p.xy, n1, k1, ph1, a, n2, k2, ph2, b, steps);
+
+    // Direct color — evaluated at the incoming point, so it reflects
+    // where the point was relative to the figure, not the (near-zero)
+    // residual after projection.
+    if (dc_mode != 0u) {
+        let r0 = max(length(p.xy), 1e-6);
+        let th0 = atan2(p.xy.y, p.xy.x);
+        let f1 = chladni_disc_mode(r0, th0, n1, k1, ph1);
+        let f2 = chladni_disc_mode(r0, th0, n2, k2, ph2);
+        let fd = a * f1 + b * f2;
+        if (dc_mode == 1u) {
+            let ct = p.xy.x / r0;
+            let st = p.xy.y / r0;
+            let g = vec2<f32>(fd.y * ct - fd.z / r0 * st, fd.y * st + fd.z / r0 * ct);
+            let dist = abs(fd.x) / (length(g) + 1e-6);
+            let cell = 3.14159265359 / max(k1, k2);
+            *vc = exp(-6.0 * dc_scale * dist / cell);
+        } else if (dc_mode == 2u) {
+            // J_n's first-peak amplitude is ~0.6 — close enough for a
+            // color normalization.
+            let f_norm = 0.6 * (abs(a) + abs(b)) + 1e-6;
+            *vc = 0.5 + 0.5 * tanh(2.0 * dc_scale * fd.x / f_norm);
+        } else {
+            // Signed difference of the two modes: on the nodal set they
+            // cancel (a*f1 = -b*f2), so the difference equals 2*a*f1
+            // and varies along the figure — a ratio would be a
+            // constant 0.5 everywhere on the attractor.
+            let f_norm = 0.6 * (abs(a) + abs(b)) + 1e-6;
+            *vc = 0.5 + 0.5 * tanh(2.0 * dc_scale * (a * f1.x - b * f2.x) / f_norm);
+        }
+    }
+
     var out = mix(p.xy, q, strength);
     if (jitter > 0.0) {
         out = out + vec2<f32>(rng_nextf(rng) - 0.5, rng_nextf(rng) - 0.5) * (2.0 * jitter);
