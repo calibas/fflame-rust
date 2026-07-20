@@ -40,6 +40,8 @@ use crate::variations::{
 };
 use crate::param;
 
+/// # Authors
+/// - Roger Bagula
 pub static MENGER: VariationDef = VariationDef {
     name: "menger",
     aliases: &[],
@@ -52,7 +54,7 @@ pub static MENGER: VariationDef = VariationDef {
     state_count: 0,
     wgsl_state_init: None,
     parameters: &[
-        param!("dim", "Dimension", enum, 0, &["3D Sponge", "4D Tesseract"], "3D Sponge iterates the classic Menger IFS in xyz. 4D Tesseract iterates in xyzw (the 4th coordinate rides the per-thread w register) and plots the orthographic shadow — combine with the XW/YW/ZW rotations to see genuine 4D structure. In 2D render mode both give the Sierpinski carpet."),
+        param!("dim", "Dimension", enum, 0, &["3D Sponge", "4D Tesseract", "Tesseract 4-Gap", "Tesseract 4-Gap 4D"], "3D Sponge iterates the classic Menger IFS in xyz. 4D Tesseract iterates in xyzw (the 4th coordinate rides the per-thread w register) and plots the orthographic shadow — combine with the XW/YW/ZW rotations to see genuine 4D structure. Tesseract 4-Gap is Roger Bagula's 96-point cube-within-cube construction (nested corner shells + 4 points per edge, contraction 1/5.33) — a 3D fractal that reads like a tesseract projection; Hole Rule and the rotations don't apply to it. Tesseract 4-Gap 4D applies the same recipe to the actual tesseract (224 points in R⁴, original extension) — genuinely 4D, so the XW/YW/ZW rotations and W coloring work. In 2D render mode all give the Sierpinski carpet."),
         param!("rule", "Hole Rule", int, 1.0, 0.0, 3.0, "Maximum zero-coordinates a kept sub-cell may have. 0 = corners only (Cantor dust), 1 = the classic Menger construction, 2+ = fatter sponges where only the most central cells are removed."),
         param!("size", "Size", float, 1.0, 0.1, 4.0, "Half-extent of the fractal: the attractor spans ±size in every axis."),
         param!("steps", "Steps", int, 2.0, 1.0, 4.0, "IFS rounds per call — each round contracts by 1/3 toward a random kept cell. At 2 every iteration contracts by 1/9, sharpening the attractor much faster for the same iteration budget."),
@@ -159,6 +161,68 @@ fn variation_menger(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
             *vc = fract(point_w * dc_scale);
         }
         return q;
+    }
+
+    if (dim == 2u) {
+        // Menger Tesseract "4-gap" (Roger Bagula,
+        // Menger_Tesseract7_4gap_...nb): chaos game on a 96-point
+        // cube-within-cube set (POLYCHORA_VERTS tail; see
+        // shaders/core/polychora.wgsl) with the construction's
+        // defining contraction 1/5.33 — dimension log 96 / log 5.33
+        // ≈ 2.728. A 3D fractal (w passes through); rule and the 4D
+        // rotations don't apply.
+        let rc = polychora_menger4gap_range();
+        let k = 0.18761726;
+        var q = p;
+        var code = 0.0;
+        for (var st = 0; st < steps; st = st + 1) {
+            let idx = min(u32(rng_nextf(rng) * f32(rc.y)), rc.y - 1u);
+            let v = POLYCHORA_VERTS[rc.x + idx];
+            q = k * q + (1.0 - k) * size * v.xyz;
+            code = (f32(idx) + 0.5) / f32(rc.y);
+        }
+        point_w_out = point_w;
+        if (dc_mode == 1u) {
+            *vc = fract(code * dc_scale);
+        } else if (dc_mode == 2u) {
+            *vc = fract(point_w * dc_scale);
+        }
+        return q;
+    }
+
+    if (dim == 3u) {
+        // True-4D 4-gap (original extension of Bagula's recipe to the
+        // tesseract): 224 points in R^4, contraction 1/5.33. Honest 4D
+        // state via the w register; the XW/YW/ZW rotations rotate the
+        // point set (uniform contraction commutes with rotations, so
+        // this rotates the whole attractor).
+        let d2r = 0.01745329252;
+        let axw = get_param(xform_id, variation_id, 4u) * d2r;
+        let ayw = get_param(xform_id, variation_id, 5u) * d2r;
+        let azw = get_param(xform_id, variation_id, 6u) * d2r;
+        let cxw = cos(axw); let sxw = sin(axw);
+        let cyw = cos(ayw); let syw = sin(ayw);
+        let czw = cos(azw); let szw = sin(azw);
+        let rc = polychora_menger4gap4d_range();
+        let k = 0.18761726;
+        var q = vec4<f32>(p, point_w);
+        var code = 0.0;
+        for (var st = 0; st < steps; st = st + 1) {
+            let idx = min(u32(rng_nextf(rng) * f32(rc.y)), rc.y - 1u);
+            var v = POLYCHORA_VERTS[rc.x + idx] * size;
+            v = vec4<f32>(cxw * v.x - sxw * v.w, v.y, v.z, sxw * v.x + cxw * v.w);
+            v = vec4<f32>(v.x, cyw * v.y - syw * v.w, v.z, syw * v.y + cyw * v.w);
+            v = vec4<f32>(v.x, v.y, czw * v.z - szw * v.w, szw * v.z + czw * v.w);
+            q = k * q + (1.0 - k) * v;
+            code = (f32(idx) + 0.5) / f32(rc.y);
+        }
+        point_w_out = q.w;
+        if (dc_mode == 1u) {
+            *vc = fract(code * dc_scale);
+        } else if (dc_mode == 2u) {
+            *vc = fract(q.w * dc_scale);
+        }
+        return q.xyz;
     }
 
     // 4D Menger tesseract: honest 4D state via the w register; the
