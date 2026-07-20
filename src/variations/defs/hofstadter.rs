@@ -100,30 +100,51 @@ fn hofstadter_best_rational(alpha: f32, qmax: i32, w: f32) -> vec2<f32> {
     return vec2<f32>(best_p, best_q);
 }
 
-// ln|tr(product of q transfer matrices)| at Chambers' phase, with
-// per-factor renormalization against f32 overflow.
-fn hofstadter_ln_disc(e: f32, p: f32, q: f32, lambda: f32) -> f32 {
+// Discriminant of the q-step transfer product at Chambers' phase:
+// vec3(ln|tr|, d(ln|tr|)/dE, sign(tr)). The energy derivative is
+// accumulated analytically alongside the product (product rule:
+// D_k = T' M_{k-1} + T_k D_{k-1}, with T' = [[1,0],[0,0]]) — one pass
+// instead of finite differences, exact even where high-q bands are
+// thinner than any FD step. Renormalization (shared scale for M and D
+// so their ratio stays intact) guards f32 overflow; the scale cancels
+// in tr'/tr and is added back onto ln|tr|.
+fn hofstadter_disc(e: f32, p: f32, q: f32, lambda: f32) -> vec3<f32> {
     let two_pi = 6.28318530718;
     let theta = 3.14159265359 / (2.0 * q);
     var m00 = 1.0; var m01 = 0.0;
     var m10 = 0.0; var m11 = 1.0;
+    var d00 = 0.0; var d01 = 0.0;
+    var d10 = 0.0; var d11 = 0.0;
     var scale = 0.0;
     let iq = i32(q);
     for (var j = 0; j < iq; j = j + 1) {
         let v = e - 2.0 * lambda * cos(two_pi * p * f32(j) / q + theta);
         let n00 = v * m00 - m10;
         let n01 = v * m01 - m11;
+        let e00 = m00 + v * d00 - d10;
+        let e01 = m01 + v * d01 - d11;
+        d10 = d00; d11 = d01;
+        d00 = e00; d01 = e01;
         m10 = m00; m11 = m01;
         m00 = n00; m01 = n01;
-        let mag = max(max(abs(m00), abs(m01)), max(abs(m10), abs(m11)));
+        let mag = max(
+            max(max(abs(m00), abs(m01)), max(abs(m10), abs(m11))),
+            max(max(abs(d00), abs(d01)), max(abs(d10), abs(d11))),
+        );
         if (mag > 1e10) {
             let inv = 1.0 / mag;
             m00 = m00 * inv; m01 = m01 * inv;
             m10 = m10 * inv; m11 = m11 * inv;
+            d00 = d00 * inv; d01 = d01 * inv;
+            d10 = d10 * inv; d11 = d11 * inv;
             scale = scale + log(mag);
         }
     }
-    return log(abs(m00 + m11) + 1e-20) + scale;
+    let tr = m00 + m11;
+    let trp = d00 + d11;
+    let sgn = select(-1.0, 1.0, tr >= 0.0);
+    let dln = trp / (sgn * max(abs(tr), 1e-12));
+    return vec3<f32>(log(abs(tr) + 1e-20) + scale, dln, sgn);
 }
 
 // Band-edge threshold ln(2 + 2*lambda^q), overflow-stable.
@@ -160,18 +181,18 @@ fn variation_hofstadter(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr
     let ln_thr = hofstadter_ln_threshold(fq, lambda);
 
     // 1D Newton along energy onto the band edge; inside a band
-    // (g <= 0) the point stays where it is.
-    let h = max(0.02 / fq, 1e-4);
+    // (g <= 0) the point stays where it is. Value + exact derivative
+    // come from one transfer-product pass.
     let max_step = 4.0 / fq;
-    let g0 = hofstadter_ln_disc(e, fp, fq, lambda) - ln_thr;
-    var g = g0;
+    var g0 = 0.0;
     for (var i = 0; i < steps; i = i + 1) {
+        let d = hofstadter_disc(e, fp, fq, lambda);
+        let g = d.x - ln_thr;
+        if (i == 0) { g0 = g; }
         if (g <= 0.0) { break; }
-        let dg = (hofstadter_ln_disc(e + h, fp, fq, lambda) - hofstadter_ln_disc(e - h, fp, fq, lambda)) / (2.0 * h);
-        var step = g * dg / (dg * dg + 1e-6);
+        var step = g * d.y / (d.y * d.y + 1e-6);
         step = clamp(step, -max_step, max_step);
         e = e - step;
-        g = hofstadter_ln_disc(e, fp, fq, lambda) - ln_thr;
     }
 
     if (dc_mode == 1u) {
@@ -216,30 +237,51 @@ fn hofstadter_best_rational(alpha: f32, qmax: i32, w: f32) -> vec2<f32> {
     return vec2<f32>(best_p, best_q);
 }
 
-// ln|tr(product of q transfer matrices)| at Chambers' phase, with
-// per-factor renormalization against f32 overflow.
-fn hofstadter_ln_disc(e: f32, p: f32, q: f32, lambda: f32) -> f32 {
+// Discriminant of the q-step transfer product at Chambers' phase:
+// vec3(ln|tr|, d(ln|tr|)/dE, sign(tr)). The energy derivative is
+// accumulated analytically alongside the product (product rule:
+// D_k = T' M_{k-1} + T_k D_{k-1}, with T' = [[1,0],[0,0]]) — one pass
+// instead of finite differences, exact even where high-q bands are
+// thinner than any FD step. Renormalization (shared scale for M and D
+// so their ratio stays intact) guards f32 overflow; the scale cancels
+// in tr'/tr and is added back onto ln|tr|.
+fn hofstadter_disc(e: f32, p: f32, q: f32, lambda: f32) -> vec3<f32> {
     let two_pi = 6.28318530718;
     let theta = 3.14159265359 / (2.0 * q);
     var m00 = 1.0; var m01 = 0.0;
     var m10 = 0.0; var m11 = 1.0;
+    var d00 = 0.0; var d01 = 0.0;
+    var d10 = 0.0; var d11 = 0.0;
     var scale = 0.0;
     let iq = i32(q);
     for (var j = 0; j < iq; j = j + 1) {
         let v = e - 2.0 * lambda * cos(two_pi * p * f32(j) / q + theta);
         let n00 = v * m00 - m10;
         let n01 = v * m01 - m11;
+        let e00 = m00 + v * d00 - d10;
+        let e01 = m01 + v * d01 - d11;
+        d10 = d00; d11 = d01;
+        d00 = e00; d01 = e01;
         m10 = m00; m11 = m01;
         m00 = n00; m01 = n01;
-        let mag = max(max(abs(m00), abs(m01)), max(abs(m10), abs(m11)));
+        let mag = max(
+            max(max(abs(m00), abs(m01)), max(abs(m10), abs(m11))),
+            max(max(abs(d00), abs(d01)), max(abs(d10), abs(d11))),
+        );
         if (mag > 1e10) {
             let inv = 1.0 / mag;
             m00 = m00 * inv; m01 = m01 * inv;
             m10 = m10 * inv; m11 = m11 * inv;
+            d00 = d00 * inv; d01 = d01 * inv;
+            d10 = d10 * inv; d11 = d11 * inv;
             scale = scale + log(mag);
         }
     }
-    return log(abs(m00 + m11) + 1e-20) + scale;
+    let tr = m00 + m11;
+    let trp = d00 + d11;
+    let sgn = select(-1.0, 1.0, tr >= 0.0);
+    let dln = trp / (sgn * max(abs(tr), 1e-12));
+    return vec3<f32>(log(abs(tr) + 1e-20) + scale, dln, sgn);
 }
 
 // Band-edge threshold ln(2 + 2*lambda^q), overflow-stable.
@@ -273,17 +315,16 @@ fn variation_hofstadter(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
     let fq = pq.y;
     let ln_thr = hofstadter_ln_threshold(fq, lambda);
 
-    let h = max(0.02 / fq, 1e-4);
     let max_step = 4.0 / fq;
-    let g0 = hofstadter_ln_disc(e, fp, fq, lambda) - ln_thr;
-    var g = g0;
+    var g0 = 0.0;
     for (var i = 0; i < steps; i = i + 1) {
+        let d = hofstadter_disc(e, fp, fq, lambda);
+        let g = d.x - ln_thr;
+        if (i == 0) { g0 = g; }
         if (g <= 0.0) { break; }
-        let dg = (hofstadter_ln_disc(e + h, fp, fq, lambda) - hofstadter_ln_disc(e - h, fp, fq, lambda)) / (2.0 * h);
-        var step = g * dg / (dg * dg + 1e-6);
+        var step = g * d.y / (d.y * d.y + 1e-6);
         step = clamp(step, -max_step, max_step);
         e = e - step;
-        g = hofstadter_ln_disc(e, fp, fq, lambda) - ln_thr;
     }
 
     if (dc_mode == 1u) {
