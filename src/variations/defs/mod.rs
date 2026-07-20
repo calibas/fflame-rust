@@ -143,6 +143,7 @@ mod mandelbrot;
 mod crackle;
 mod dc_perlin;
 mod szubieta;
+mod chladni;
 mod glsl_fractals;
 mod glsl_tilings;
 mod glsl_fields;
@@ -314,6 +315,7 @@ pub use mandelbrot::*;
 pub use crackle::*;
 pub use dc_perlin::*;
 pub use szubieta::*;
+pub use chladni::*;
 pub use glsl_fractals::*;
 pub use glsl_tilings::*;
 pub use glsl_fields::*;
@@ -1157,4 +1159,5 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     // consumed image samples — replaced by the side-emitting
     // sphere_volume). Tail position, so no stable IDs shifted.
     &SPHERE_VOLUME,
+    &CHLADNI,
 ];
