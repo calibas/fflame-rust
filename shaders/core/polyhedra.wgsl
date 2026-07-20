@@ -5,82 +5,247 @@
 // symbols.
 //
 // Every solid is normalized to CIRCUMRADIUS 1 and centered at the
-// origin. The radial support function r(dir) — the distance from the
-// center to the surface along unit direction `dir` — is
-// min over faces of d_i / (n_i · dir), which for these symmetric
-// solids reduces to abs()/max() closed forms (verified to 4e-16
-// against brute-force face enumeration by scratchpad polyhedra_gen).
-// The star tetrahedron is the union of two point-reflected tetrahedra
-// (star-shaped about the center), so its radial is the max of theirs.
+// origin. Faces are stored as vec4(unit normal, support distance) in
+// one flat array (generated + verified to ~4e-16 by the polyhedra_gen
+// scratchpad script); the radial support function along unit `dir` is
+// r(dir) = 1 / max_i((n_i . dir)+ / d_i).
+//
+// Two artistic controls hook into the same evaluation:
+//   * bevel — replaces the hard max with a face-center-normalized
+//     p-norm smooth max: edges and corners round off continuously
+//     while face centers stay exactly at distance d.
+//   * stellation — mixes the denominator toward the SECOND-largest
+//     face dot. Stellations lie in the same extended face planes as
+//     the core solid (in 2D: pentagon -> pentagram), so this grows
+//     true flat-faced spikes: dodecahedron -> small stellated
+//     dodecahedron, octahedron -> stella octangula, etc. Spike ridges
+//     stay sharp even under bevel (the mix target is the hard second
+//     max — arguably the right look). The cube's face planes are
+//     parallel, so its "stellation" diverges along the axes; a radius
+//     cap (6x circumradius) keeps that and similar degenerate spikes
+//     finite.
 //
 // Shape ids (must match the defs' enum order):
 //   0 Tetrahedron        1 Cube               2 Octahedron
 //   3 Dodecahedron       4 Icosahedron        5 Star Tetrahedron
 //   6 Cuboctahedron      7 Rhombic Dodecahedron
 //   8 Truncated Octahedron
+// The star tetrahedron is the union of two point-reflected tetrahedra
+// (star-shaped about the center): r = max of the two tetra radials.
 
-fn polyhedra_radial_tetra(dir: vec3<f32>) -> f32 {
-    // Vertices {(1,1,1),(1,-1,-1),(-1,1,-1),(-1,-1,1)}/sqrt3; face
-    // normals are the negated vertex directions, inradius 1/3.
-    let s = 0.57735026919;
-    let m = max(
-        max(-(dir.x + dir.y + dir.z), -(dir.x - dir.y - dir.z)),
-        max(-(-dir.x + dir.y - dir.z), -(-dir.x - dir.y + dir.z)),
-    ) * s;
-    return 0.33333333333 / max(m, 1e-6);
+const POLYHEDRA_FACES: array<vec4<f32>, 90> = array<vec4<f32>, 90>(
+    vec4<f32>(-0.577350269, -0.577350269, -0.577350269, 0.333333333),
+    vec4<f32>(-0.577350269, 0.577350269, 0.577350269, 0.333333333),
+    vec4<f32>(0.577350269, -0.577350269, 0.577350269, 0.333333333),
+    vec4<f32>(0.577350269, 0.577350269, -0.577350269, 0.333333333),
+    vec4<f32>(1.000000000, 0.000000000, 0.000000000, 0.577350269),
+    vec4<f32>(-1.000000000, 0.000000000, 0.000000000, 0.577350269),
+    vec4<f32>(0.000000000, 1.000000000, 0.000000000, 0.577350269),
+    vec4<f32>(0.000000000, -1.000000000, 0.000000000, 0.577350269),
+    vec4<f32>(0.000000000, 0.000000000, 1.000000000, 0.577350269),
+    vec4<f32>(0.000000000, 0.000000000, -1.000000000, 0.577350269),
+    vec4<f32>(-0.577350269, -0.577350269, -0.577350269, 0.577350269),
+    vec4<f32>(-0.577350269, -0.577350269, 0.577350269, 0.577350269),
+    vec4<f32>(-0.577350269, 0.577350269, -0.577350269, 0.577350269),
+    vec4<f32>(-0.577350269, 0.577350269, 0.577350269, 0.577350269),
+    vec4<f32>(0.577350269, -0.577350269, -0.577350269, 0.577350269),
+    vec4<f32>(0.577350269, -0.577350269, 0.577350269, 0.577350269),
+    vec4<f32>(0.577350269, 0.577350269, -0.577350269, 0.577350269),
+    vec4<f32>(0.577350269, 0.577350269, 0.577350269, 0.577350269),
+    vec4<f32>(0.000000000, -0.525731112, -0.850650808, 0.794654472),
+    vec4<f32>(0.000000000, -0.525731112, 0.850650808, 0.794654472),
+    vec4<f32>(0.000000000, 0.525731112, -0.850650808, 0.794654472),
+    vec4<f32>(0.000000000, 0.525731112, 0.850650808, 0.794654472),
+    vec4<f32>(-0.850650808, 0.000000000, -0.525731112, 0.794654472),
+    vec4<f32>(-0.850650808, 0.000000000, 0.525731112, 0.794654472),
+    vec4<f32>(0.850650808, 0.000000000, -0.525731112, 0.794654472),
+    vec4<f32>(0.850650808, 0.000000000, 0.525731112, 0.794654472),
+    vec4<f32>(-0.525731112, -0.850650808, 0.000000000, 0.794654472),
+    vec4<f32>(-0.525731112, 0.850650808, 0.000000000, 0.794654472),
+    vec4<f32>(0.525731112, -0.850650808, 0.000000000, 0.794654472),
+    vec4<f32>(0.525731112, 0.850650808, 0.000000000, 0.794654472),
+    vec4<f32>(-0.577350269, -0.577350269, -0.577350269, 0.794654472),
+    vec4<f32>(-0.577350269, -0.577350269, 0.577350269, 0.794654472),
+    vec4<f32>(-0.577350269, 0.577350269, -0.577350269, 0.794654472),
+    vec4<f32>(-0.577350269, 0.577350269, 0.577350269, 0.794654472),
+    vec4<f32>(0.577350269, -0.577350269, -0.577350269, 0.794654472),
+    vec4<f32>(0.577350269, -0.577350269, 0.577350269, 0.794654472),
+    vec4<f32>(0.577350269, 0.577350269, -0.577350269, 0.794654472),
+    vec4<f32>(0.577350269, 0.577350269, 0.577350269, 0.794654472),
+    vec4<f32>(0.000000000, -0.934172359, -0.356822090, 0.794654472),
+    vec4<f32>(0.000000000, -0.934172359, 0.356822090, 0.794654472),
+    vec4<f32>(0.000000000, 0.934172359, -0.356822090, 0.794654472),
+    vec4<f32>(0.000000000, 0.934172359, 0.356822090, 0.794654472),
+    vec4<f32>(-0.356822090, 0.000000000, -0.934172359, 0.794654472),
+    vec4<f32>(-0.356822090, 0.000000000, 0.934172359, 0.794654472),
+    vec4<f32>(0.356822090, 0.000000000, -0.934172359, 0.794654472),
+    vec4<f32>(0.356822090, 0.000000000, 0.934172359, 0.794654472),
+    vec4<f32>(-0.934172359, -0.356822090, 0.000000000, 0.794654472),
+    vec4<f32>(-0.934172359, 0.356822090, 0.000000000, 0.794654472),
+    vec4<f32>(0.934172359, -0.356822090, 0.000000000, 0.794654472),
+    vec4<f32>(0.934172359, 0.356822090, 0.000000000, 0.794654472),
+    vec4<f32>(1.000000000, 0.000000000, 0.000000000, 0.707106781),
+    vec4<f32>(-1.000000000, 0.000000000, 0.000000000, 0.707106781),
+    vec4<f32>(0.000000000, 1.000000000, 0.000000000, 0.707106781),
+    vec4<f32>(0.000000000, -1.000000000, 0.000000000, 0.707106781),
+    vec4<f32>(0.000000000, 0.000000000, 1.000000000, 0.707106781),
+    vec4<f32>(0.000000000, 0.000000000, -1.000000000, 0.707106781),
+    vec4<f32>(-0.577350269, -0.577350269, -0.577350269, 0.816496581),
+    vec4<f32>(-0.577350269, -0.577350269, 0.577350269, 0.816496581),
+    vec4<f32>(-0.577350269, 0.577350269, -0.577350269, 0.816496581),
+    vec4<f32>(-0.577350269, 0.577350269, 0.577350269, 0.816496581),
+    vec4<f32>(0.577350269, -0.577350269, -0.577350269, 0.816496581),
+    vec4<f32>(0.577350269, -0.577350269, 0.577350269, 0.816496581),
+    vec4<f32>(0.577350269, 0.577350269, -0.577350269, 0.816496581),
+    vec4<f32>(0.577350269, 0.577350269, 0.577350269, 0.816496581),
+    vec4<f32>(-0.707106781, -0.707106781, 0.000000000, 0.707106781),
+    vec4<f32>(-0.707106781, 0.000000000, -0.707106781, 0.707106781),
+    vec4<f32>(-0.707106781, 0.000000000, 0.707106781, 0.707106781),
+    vec4<f32>(-0.707106781, 0.707106781, 0.000000000, 0.707106781),
+    vec4<f32>(0.000000000, -0.707106781, -0.707106781, 0.707106781),
+    vec4<f32>(0.000000000, -0.707106781, 0.707106781, 0.707106781),
+    vec4<f32>(0.000000000, 0.707106781, -0.707106781, 0.707106781),
+    vec4<f32>(0.000000000, 0.707106781, 0.707106781, 0.707106781),
+    vec4<f32>(0.707106781, -0.707106781, 0.000000000, 0.707106781),
+    vec4<f32>(0.707106781, 0.000000000, -0.707106781, 0.707106781),
+    vec4<f32>(0.707106781, 0.000000000, 0.707106781, 0.707106781),
+    vec4<f32>(0.707106781, 0.707106781, 0.000000000, 0.707106781),
+    vec4<f32>(1.000000000, 0.000000000, 0.000000000, 0.894427191),
+    vec4<f32>(-1.000000000, 0.000000000, 0.000000000, 0.894427191),
+    vec4<f32>(0.000000000, 1.000000000, 0.000000000, 0.894427191),
+    vec4<f32>(0.000000000, -1.000000000, 0.000000000, 0.894427191),
+    vec4<f32>(0.000000000, 0.000000000, 1.000000000, 0.894427191),
+    vec4<f32>(0.000000000, 0.000000000, -1.000000000, 0.894427191),
+    vec4<f32>(-0.577350269, -0.577350269, -0.577350269, 0.774596669),
+    vec4<f32>(-0.577350269, -0.577350269, 0.577350269, 0.774596669),
+    vec4<f32>(-0.577350269, 0.577350269, -0.577350269, 0.774596669),
+    vec4<f32>(-0.577350269, 0.577350269, 0.577350269, 0.774596669),
+    vec4<f32>(0.577350269, -0.577350269, -0.577350269, 0.774596669),
+    vec4<f32>(0.577350269, -0.577350269, 0.577350269, 0.774596669),
+    vec4<f32>(0.577350269, 0.577350269, -0.577350269, 0.774596669),
+    vec4<f32>(0.577350269, 0.577350269, 0.577350269, 0.774596669),
+);
+
+// (offset, count) into POLYHEDRA_FACES per shape id; the star
+// tetrahedron (5) uses the tetra range on +dir and -dir.
+fn polyhedra_face_range(shape: u32) -> vec2<u32> {
+    switch shape {
+        case 0u, 5u: { return vec2<u32>(0u, 4u); }
+        case 1u: { return vec2<u32>(4u, 6u); }
+        case 2u: { return vec2<u32>(10u, 8u); }
+        case 3u: { return vec2<u32>(18u, 12u); }
+        case 4u: { return vec2<u32>(30u, 20u); }
+        case 6u: { return vec2<u32>(50u, 14u); }
+        case 7u: { return vec2<u32>(64u, 12u); }
+        case 8u: { return vec2<u32>(76u, 14u); }
+        default: { return vec2<u32>(4u, 6u); }
+    }
 }
 
-fn polyhedra_radial(dir: vec3<f32>, shape: u32) -> f32 {
-    let a = abs(dir);
-    let phi = 1.61803398875;
-    var r = 1.0;
-    switch shape {
-        case 0u: {
-            r = polyhedra_radial_tetra(dir);
+// Support denominators along `dir` for one convex face range:
+// vec2(max of s_i = (n_i . dir)+ / d_i — smooth-maxed when bevel > 0 —
+// and the hard second-largest s_i, the stellation target).
+fn polyhedra_denom(dir: vec3<f32>, off: u32, cnt: u32, bevel: f32) -> vec2<f32> {
+    var m1 = 0.0;
+    var m2 = 0.0;
+    var imax = 0u;
+    for (var i = 0u; i < cnt; i = i + 1u) {
+        let f = POLYHEDRA_FACES[off + i];
+        let s = max(dot(f.xyz, dir), 0.0) / f.w;
+        if (s > m1) {
+            m2 = m1;
+            m1 = s;
+            imax = i;
+        } else if (s > m2) {
+            m2 = s;
         }
-        case 1u: { // cube: 6 axis faces, d = 1/sqrt3
-            r = 0.57735026919 / max(max(a.x, a.y), max(a.z, 1e-6));
+    }
+    var m = m1;
+    var m2_eff = m2;
+    if (bevel > 0.0) {
+        // p-norm smooth max (terms scaled by m1 so pow stays in
+        // (0, 1]), normalized by the same p-norm evaluated along face
+        // 0's normal so face centers keep their exact distance — the
+        // bevel only cuts edges and corners inward.
+        let p = mix(24.0, 3.0, clamp(bevel, 0.0, 1.0));
+        // Second-max p-norm sums are accumulated WITHOUT the max term
+        // (psum2 / qsum2) rather than as "full sum - 1": at high p the
+        // non-max terms are ~1e-7 or smaller and the subtraction
+        // cancels to zero in f32, tearing the spike surface apart at
+        // low bevel values.
+        var psum2 = 0.0;
+        var qsum2 = 0.0;
+        var qm1 = 0.0;
+        var qm2 = 0.0;
+        let n0 = POLYHEDRA_FACES[off].xyz;
+        let d0 = POLYHEDRA_FACES[off].w;
+        for (var i = 0u; i < cnt; i = i + 1u) {
+            let f = POLYHEDRA_FACES[off + i];
+            let s = max(dot(f.xyz, dir), 0.0) / f.w;
+            if (i != imax) {
+                psum2 = psum2 + pow(max(s / m1, 1e-6), p);
+            }
+            let q = max(dot(f.xyz, n0), 0.0) / f.w;
+            if (i != 0u) {
+                qsum2 = qsum2 + pow(max(q * d0, 1e-6), p);
+            }
+            if (q > qm1) {
+                qm2 = qm1;
+                qm1 = q;
+            } else if (q > qm2) {
+                qm2 = q;
+            }
         }
-        case 2u: { // octahedron: 8 diagonal faces, d*sqrt3 = 1
-            r = 1.0 / max(a.x + a.y + a.z, 1e-6);
+        // Smooth max of the core (the max term contributes exactly 1).
+        m = m1 * pow(1.0 + psum2, 1.0 / p) / pow(1.0 + qsum2, 1.0 / p);
+
+        // Smooth SECOND max, so bevel also rounds the stellation's
+        // spike tips and reentrant ridges. Rescaling by the hard
+        // second max at n0 (qm2) keeps the spike-tip length exactly at
+        // the unbeveled stellation height.
+        let raw2 = m1 * pow(max(psum2, 1e-30), 1.0 / p);
+        let ref2 = (1.0 / d0) * pow(max(qsum2, 1e-30), 1.0 / p);
+        if (qm2 > 1e-6 && ref2 > 1e-9) {
+            m2_eff = raw2 * (qm2 / ref2);
+        } else {
+            // Degenerate stellation (cube: no second positive face at
+            // the tip direction) — leave the raw smooth second max.
+            m2_eff = raw2;
         }
-        case 3u: { // dodecahedron: 12 faces along icosa vertex dirs (0,±1,±phi)
-            let m = max(a.y + phi * a.z, max(a.z + phi * a.x, a.x + phi * a.y)) * 0.52573111212;
-            r = 0.79465447230 / max(m, 1e-6);
-        }
-        case 4u: { // icosahedron: 8 diagonal + 12 cyclic (0,±phi,±1/phi) faces
-            let m1 = a.x + a.y + a.z;
-            let m2 = max(phi * a.y + a.z / phi, max(phi * a.z + a.x / phi, phi * a.x + a.y / phi));
-            r = 0.79465447230 / max(max(m1, m2) * 0.57735026919, 1e-6);
-        }
-        case 5u: { // star tetrahedron (stella octangula): union of two tetras
-            r = max(polyhedra_radial_tetra(dir), polyhedra_radial_tetra(-dir));
-        }
-        case 6u: { // cuboctahedron: 6 square (axis) + 8 triangle (diagonal) faces
-            let m1 = max(max(a.x, a.y), a.z);
-            let m2 = (a.x + a.y + a.z) * 0.57735026919;
-            r = min(0.70710678119 / max(m1, 1e-6), 0.81649658093 / max(m2, 1e-6));
-        }
-        case 7u: { // rhombic dodecahedron: 12 faces along (±1,±1,0) perms
-            let m = max(a.x + a.y, max(a.y + a.z, a.z + a.x)) * 0.70710678119;
-            r = 0.70710678119 / max(m, 1e-6);
-        }
-        case 8u: { // truncated octahedron: 6 square (axis) + 8 hex (diagonal) faces
-            let m1 = max(max(a.x, a.y), a.z);
-            let m2 = (a.x + a.y + a.z) * 0.57735026919;
-            r = min(0.89442719100 / max(m1, 1e-6), 0.77459666924 / max(m2, 1e-6));
-        }
-        default: { // fallback: unit sphere
-            r = 1.0;
-        }
+    }
+    return vec2<f32>(m, m2_eff);
+}
+
+// Radial distance for one convex face range, with the stellation mix
+// done in RADIUS space (mixing denominators back-loads all the spike
+// growth near stellation = 1; radius mixing makes the slider feel
+// linear). The 6x-circumradius cap keeps degenerate spikes (the
+// cube's parallel face planes) finite.
+fn polyhedra_radial_one(dir: vec3<f32>, off: u32, cnt: u32, bevel: f32, stellation: f32) -> f32 {
+    let d = polyhedra_denom(dir, off, cnt, bevel);
+    var r = 1.0 / max(d.x, 1e-6);
+    if (stellation > 0.0) {
+        let r_spike = min(1.0 / max(d.y, 1e-6), 6.0);
+        r = mix(r, r_spike, clamp(stellation, 0.0, 1.0));
+    }
+    return min(r, 6.0);
+}
+
+fn polyhedra_radial(dir: vec3<f32>, shape: u32, bevel: f32, stellation: f32) -> f32 {
+    let rc = polyhedra_face_range(shape);
+    var r = polyhedra_radial_one(dir, rc.x, rc.y, bevel, stellation);
+    if (shape == 5u) {
+        // Star tetrahedron: union of the tetra and its point
+        // reflection -> max of the two radials.
+        r = max(r, polyhedra_radial_one(-dir, rc.x, rc.y, bevel, stellation));
     }
     return r;
 }
 
 // Map a world-space direction into the solid's local frame. The solid
-// is rotated by intrinsic Euler angles Rz(rz)·Ry(ry)·Rx(rx) (degrees),
+// is rotated by intrinsic Euler angles Rz(rz)*Ry(ry)*Rx(rx) (degrees),
 // so sampling its radial function along world `dir` evaluates along
-// R⁻¹·dir = Rx(−rx)·Ry(−ry)·Rz(−rz)·dir.
+// R^-1 dir = Rx(-rx)*Ry(-ry)*Rz(-rz)*dir.
 fn polyhedra_inverse_rotate(dir: vec3<f32>, rx: f32, ry: f32, rz: f32) -> vec3<f32> {
     let d2r = 0.01745329252;
     var d = dir;
