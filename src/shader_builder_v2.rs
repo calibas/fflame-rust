@@ -1552,6 +1552,14 @@ impl ShaderBuilder {
             shader.push('\n');
         }
 
+        // 7e. Regular 4-polytope vertex tables for the `polychoron`
+        //     chaos-game variation.
+        let needs_polychora = active.iter().any(|(name, _)| name == "polychoron");
+        if needs_polychora {
+            shader.push_str(include_str!("../shaders/core/polychora.wgsl"));
+            shader.push('\n');
+        }
+
         // 8. Per-flame packed get_param (must come before utilities, which
         //    references it in some places via inlined comments). The packed
         //    version replaces the fixed-stride version that used to live in

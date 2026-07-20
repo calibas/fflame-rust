@@ -151,6 +151,7 @@ mod hofstadter;
 mod hofstadter3d;
 mod polyhedra_project;
 mod menger;
+mod polychoron;
 mod glsl_fractals;
 mod glsl_tilings;
 mod glsl_fields;
@@ -330,6 +331,7 @@ pub use hofstadter::*;
 pub use hofstadter3d::*;
 pub use polyhedra_project::*;
 pub use menger::*;
+pub use polychoron::*;
 pub use glsl_fractals::*;
 pub use glsl_tilings::*;
 pub use glsl_fields::*;
@@ -1182,4 +1184,5 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &POLYHEDRON,
     &POLYHEDRON_VOLUME,
     &MENGER,
+    &POLYCHORON,
 ];
