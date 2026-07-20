@@ -166,7 +166,7 @@ fn orbital_u_ref(n: i32, l: i32, ms: i32, size: f32) -> f32 {
     return u;
 }
 
-fn variation_orbital(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec3<f32> {
+fn variation_electron_orbital(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec3<f32> {
     let n = max(i32(get_param(xform_id, variation_id, 0u)), 1);
     let l = clamp(i32(get_param(xform_id, variation_id, 1u)), 0, n - 1);
     let ms = clamp(i32(get_param(xform_id, variation_id, 2u)), -l, l);
@@ -305,7 +305,7 @@ fn orbital_u_ref(n: i32, l: i32, ms: i32, size: f32) -> f32 {
     return u;
 }
 
-fn variation_orbital(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec2<f32> {
+fn variation_electron_orbital(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec2<f32> {
     let n = max(i32(get_param(xform_id, variation_id, 0u)), 1);
     let l = clamp(i32(get_param(xform_id, variation_id, 1u)), 0, n - 1);
     let ms = clamp(i32(get_param(xform_id, variation_id, 2u)), -l, l);
