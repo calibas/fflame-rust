@@ -146,6 +146,7 @@ mod szubieta;
 mod chladni;
 mod chladni_disc;
 mod cymatics3d;
+mod orbital;
 mod glsl_fractals;
 mod glsl_tilings;
 mod glsl_fields;
@@ -320,6 +321,7 @@ pub use szubieta::*;
 pub use chladni::*;
 pub use chladni_disc::*;
 pub use cymatics3d::*;
+pub use orbital::*;
 pub use glsl_fractals::*;
 pub use glsl_tilings::*;
 pub use glsl_fields::*;
@@ -1166,4 +1168,5 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &CHLADNI,
     &CHLADNI_DISC,
     &CYMATICS3D,
+    &ORBITAL,
 ];
