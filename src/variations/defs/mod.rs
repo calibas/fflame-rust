@@ -144,6 +144,7 @@ mod crackle;
 mod dc_perlin;
 mod szubieta;
 mod chladni;
+mod chladni_disc;
 mod glsl_fractals;
 mod glsl_tilings;
 mod glsl_fields;
@@ -316,6 +317,7 @@ pub use crackle::*;
 pub use dc_perlin::*;
 pub use szubieta::*;
 pub use chladni::*;
+pub use chladni_disc::*;
 pub use glsl_fractals::*;
 pub use glsl_tilings::*;
 pub use glsl_fields::*;
@@ -1160,4 +1162,5 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     // sphere_volume). Tail position, so no stable IDs shifted.
     &SPHERE_VOLUME,
     &CHLADNI,
+    &CHLADNI_DISC,
 ];
