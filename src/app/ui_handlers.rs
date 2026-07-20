@@ -722,23 +722,48 @@ impl App {
         if ui_response.config_load_file_requested {
             #[cfg(not(target_arch = "wasm32"))]
             {
-                // Desktop: synchronous file dialog
+                // Desktop: synchronous file dialog. Open accepts both our
+                // native JSON `.fflame` and Apophysis/JWildfire XML
+                // `.flame` — the extension picks the parse path.
                 if let Some(path) = rfd::FileDialog::new()
                     .set_parent(self.window.as_ref())
-                    .add_filter("Fractal Flame Config", &["fflame"])
+                    .add_filter("Fractal Flame", &["fflame", "flame"])
+                    .add_filter("Fractal Flame Config (.fflame)", &["fflame"])
+                    .add_filter("Apophysis Flame (.flame)", &["flame"])
                     .pick_file()
                 {
-                    match FractalConfig::load_multi_from_file(&path) {
+                    let is_xml = path
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .is_some_and(|e| e.eq_ignore_ascii_case("flame"));
+                    // Both paths produce Vec<FractalConfig> so the
+                    // single/multi handling below is shared.
+                    let parsed: Result<Vec<FractalConfig>, String> = if is_xml {
+                        std::fs::read_to_string(&path)
+                            .map_err(|e| format!("read failed: {e}"))
+                            .and_then(|xml| {
+                                crate::flame_xml::parse_flame_xml(&xml)
+                                    .map_err(|e| format!("XML parse failed: {e}"))
+                            })
+                    } else {
+                        FractalConfig::load_multi_from_file(&path).map_err(|e| e.to_string())
+                    };
+                    let action = if is_xml {
+                        "history.action.import_flame_xml"
+                    } else {
+                        "history.action.load_config"
+                    };
+                    match parsed {
                         Ok(configs) => {
                             if configs.is_empty() {
                                 eprintln!("No configurations found in file");
                             } else if configs.len() == 1 {
                                 // Single config: load directly
                                 let config = configs.into_iter().next().unwrap();
-                                if let Err(e) = self.load_config_with_undo(config, "history.action.load_config".to_string(), None) {
+                                if let Err(e) = self.load_config_with_undo(config, action.to_string(), None) {
                                     eprintln!("Failed to load config: {}", e);
                                 } else {
-                                    println!("Config loaded from: {}", path.display());
+                                    println!("Opened: {}", path.display());
                                 }
                             } else {
                                 // Multiple configs: load first one and open File Browser
@@ -746,14 +771,20 @@ impl App {
                                     .and_then(|n| n.to_str())
                                     .unwrap_or("file")
                                     .to_string();
-                                println!("Found {} configs in {}, loading first and opening Fractal Browser", configs.len(), filename);
+                                println!("Found {} flames in {}, loading first and opening Fractal Browser", configs.len(), filename);
 
-                                // Load all configs into Fractal Browser (Files tab)
-                                self.egui_layer.load_file_into_fractal_browser(path.clone());
+                                // Load all into the Fractal Browser (Files
+                                // tab). XML is already parsed; JSON loads by
+                                // path so the browser owns re-parsing.
+                                if is_xml {
+                                    self.egui_layer.load_batch_into_fractal_browser(configs.clone());
+                                } else {
+                                    self.egui_layer.load_file_into_fractal_browser(path.clone());
+                                }
 
                                 // Load the first config
                                 let first_config = configs.into_iter().next().unwrap();
-                                if let Err(e) = self.load_config_with_undo(first_config, "history.action.load_config".to_string(), None) {
+                                if let Err(e) = self.load_config_with_undo(first_config, action.to_string(), None) {
                                     eprintln!("Failed to load config: {}", e);
                                 }
 
@@ -763,7 +794,7 @@ impl App {
                             }
                         }
                         Err(e) => {
-                            eprintln!("Failed to load config: {}", e);
+                            eprintln!("Failed to open file: {}", e);
                         }
                     }
                 }
@@ -771,9 +802,11 @@ impl App {
 
             #[cfg(target_arch = "wasm32")]
             {
-                // WASM: native file picker - no extra dialogs
+                // WASM: native file picker accepting both types. The
+                // pickup (handle_animation_requests) content-sniffs XML
+                // vs JSON since the browser gives us only the file text.
                 let ctx = self.egui_layer.ctx.clone();
-                super::trigger_browser_file_picker(".fflame", ctx, "pending_config_load_raw");
+                super::trigger_browser_file_picker(".fflame,.flame", ctx, "pending_config_load_raw");
             }
         }
 
@@ -1081,20 +1114,39 @@ impl App {
         // Check for pending config/Apophysis imports from WASM async file dialogs
         #[cfg(target_arch = "wasm32")]
         {
-            // Check for pending config load (raw JSON text from native file picker)
-            if let Some(json) = self.egui_layer.ctx.data_mut(|data| {
+            // Check for pending Open (raw text from the native file
+            // picker — either JSON `.fflame` or XML `.flame`). The browser
+            // hands us only the file text, so sniff the first non-space
+            // char: `<` ⇒ XML, otherwise JSON.
+            if let Some(text) = self.egui_layer.ctx.data_mut(|data| {
                 data.remove_temp::<String>(egui::Id::new("pending_config_load_raw"))
             }) {
-                match FractalConfig::from_json(&json) {
-                    Ok(config) => {
-                        if let Err(e) = self.load_config_with_undo(config, "history.action.load_config".to_string(), None) {
-                            log::error!("Failed to load config: {}", e);
-                        } else {
-                            log::info!("Config loaded successfully");
+                let is_xml = text.trim_start().starts_with('<');
+                if is_xml {
+                    match crate::flame_xml::parse_flame_xml(&text) {
+                        Ok(configs) => {
+                            if let Some(config) = configs.into_iter().next() {
+                                if let Err(e) = self.load_config_with_undo(config, "history.action.import_flame_xml".to_string(), None) {
+                                    log::error!("Failed to import Apophysis flame: {}", e);
+                                } else {
+                                    log::info!("Apophysis flame imported successfully");
+                                }
+                            } else {
+                                log::error!("No flames found in Apophysis file");
+                            }
                         }
+                        Err(e) => log::error!("Failed to parse Apophysis XML: {}", e),
                     }
-                    Err(e) => {
-                        log::error!("Failed to parse config JSON: {}", e);
+                } else {
+                    match FractalConfig::from_json(&text) {
+                        Ok(config) => {
+                            if let Err(e) = self.load_config_with_undo(config, "history.action.load_config".to_string(), None) {
+                                log::error!("Failed to load config: {}", e);
+                            } else {
+                                log::info!("Config loaded successfully");
+                            }
+                        }
+                        Err(e) => log::error!("Failed to parse config JSON: {}", e),
                     }
                 }
             }

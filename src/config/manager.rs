@@ -3414,7 +3414,15 @@ impl ConfigManager {
             || before.post_e != after.post_e || before.post_f != after.post_f
             || before.post_g != after.post_g
             || before.post_affine_enabled != after.post_affine_enabled;
-        let changed = pre_changed || post_changed;
+        // JWildfire YZ/ZX plane affines + post-affines. Without these,
+        // a plane-only Triangle Editor drag (XY untouched) reads as
+        // "no change" and its snapshot is dropped — so the edit applies
+        // to the config but never lands in the undo history.
+        let plane_changed = before.yz_coefs != after.yz_coefs
+            || before.zx_coefs != after.zx_coefs
+            || before.yz_post_coefs != after.yz_post_coefs
+            || before.zx_post_coefs != after.zx_post_coefs;
+        let changed = pre_changed || post_changed || plane_changed;
 
         if !changed {
             log::debug!("Modify session commit: no changes detected, skipping snapshot");

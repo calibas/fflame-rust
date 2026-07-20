@@ -899,6 +899,7 @@ impl EguiLayer {
             flame_name: config_manager.config().flame.name.clone(),
             auth_email: read_auth_email(config_manager),
             api_connectivity: self.api_connectivity,
+            fly_mode_active,
         };
 
         // Log ConfigManager state at start of UI render
@@ -978,6 +979,11 @@ impl EguiLayer {
                     #[cfg(not(target_arch = "wasm32"))]
                     window,
                 );
+            }
+
+            // Menu-bar Fly Mode button shares the viewport's toggle path.
+            if menu_actions.fly_mode_toggle {
+                fly_mode_toggle_requested = true;
             }
 
             // All windows are now dockable panels (see Windows menu)
@@ -1230,11 +1236,22 @@ impl EguiLayer {
                                 // full rect/size so scaling matches between the
                                 // two regions.
                                 if response.dragged_by(egui::PointerButton::Primary) {
-                                    panel_viewer::pan_fractal_view(
-                                        config_manager,
-                                        response.drag_delta(),
-                                        leaf_size,
-                                    );
+                                    // Pan, or look (pitch/yaw) when fly mode
+                                    // is active or Alt is held — same
+                                    // fly_mouse_drag channel the viewport
+                                    // body uses.
+                                    let alt = ui.input(|i| i.modifiers.alt);
+                                    if fly_mode_active || alt {
+                                        let d = response.drag_delta();
+                                        let prev = fly_mouse_drag.unwrap_or((0.0, 0.0));
+                                        fly_mouse_drag = Some((prev.0 + d.x, prev.1 + d.y));
+                                    } else {
+                                        panel_viewer::pan_fractal_view(
+                                            config_manager,
+                                            response.drag_delta(),
+                                            leaf_size,
+                                        );
+                                    }
                                 }
                                 if response.hovered() {
                                     let scroll_delta = ui.input(|i| i.smooth_scroll_delta.y);

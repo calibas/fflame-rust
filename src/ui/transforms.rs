@@ -387,8 +387,6 @@ fn render_jwf_plane_section(
         .id_salt(format!("{}_{}_{}", plane.id_salt(), xref.pool_kind(), index))
         .default_open(false)
         .show(ui, |ui| {
-            ui.label(t!(plane.tooltip_key()));
-
             // Reset button — restores identity. The GPU's
             // `plane_flags` recompute on upload, so resetting drops
             // this plane back to the flat path automatically; same
@@ -448,7 +446,10 @@ fn render_jwf_plane_section(
                 render_cell(ui, transform, config_manager, 4, "e");
                 render_cell(ui, transform, config_manager, 5, "f");
             });
-        });
+        })
+        // Tooltip on the section title (hover the collapsible header).
+        .header_response
+        .on_hover_text(t!(plane.tooltip_key()));
 
     max_update
 }
@@ -752,7 +753,7 @@ fn render_variations_section(
             if section.is_empty() {
                 continue;
             }
-            ui.label(t!(headers[slot]));
+            ui.label(egui::RichText::new(t!(headers[slot])).color(Color32::WHITE));
             let section_len = section.len();
             for (pos, (name, weight, movable, bucket)) in section.iter().enumerate() {
                 let (update, delete, reorder) = render_enabled_variation(
@@ -1218,6 +1219,13 @@ fn render_pool_member_block(
         state.set_open(open);
     }
 
+    // Extra outer margin around an OPEN, outlined section so adjacent
+    // colored borders don't touch (paired with the trailing space below).
+    let outlined = opts.header_color.is_some() && state.is_open();
+    if outlined {
+        ui.add_space(1.0);
+    }
+
     let header_response = ui.horizontal(|ui| {
         let _icon_response = state.show_toggle_button(ui, egui::collapsing_header::paint_default_icon);
         let header_text = egui::RichText::new(opts.header_text.clone()).strong().size(14.0);
@@ -1234,28 +1242,39 @@ fn render_pool_member_block(
         text_response
     });
 
-    if header_response.inner.clicked() {
-        state.toggle(ui);
-    }
+    let mut want_toggle = header_response.inner.clicked();
 
     // When collapsed, show a compact variation summary under the name
-    // (e.g. "pre_blur, bubble") — smaller, indented, light grey.
+    // (e.g. "pre_blur, bubble") — smaller, indented, light grey. Clicking
+    // the summary expands the section too, matching a click on the name.
     if !state.is_open() {
         let registry = crate::variations::global_registry();
         let names = transform.ordered_variation_names(&registry);
         if !names.is_empty() {
             ui.horizontal(|ui| {
                 ui.add_space(35.0);
-                ui.label(
-                    egui::RichText::new(names.join(", "))
-                        .size(11.0)
-                        .color(egui::Color32::from_gray(160)),
-                );
+                let summary = ui
+                    .add(
+                        egui::Label::new(
+                            egui::RichText::new(names.join(", "))
+                                .size(11.0)
+                                .color(egui::Color32::from_gray(160)),
+                        )
+                        .sense(egui::Sense::click()),
+                    )
+                    .on_hover_cursor(egui::CursorIcon::PointingHand);
+                if summary.clicked() {
+                    want_toggle = true;
+                }
             });
         }
     }
 
-    state.show_body_indented(&header_response.response, ui, |ui| {
+    if want_toggle {
+        state.toggle(ui);
+    }
+
+    let body = state.show_body_indented(&header_response.response, ui, |ui| {
         egui::Frame::new()
             .inner_margin(egui::Margin { left: 0, right: 5, top: 5, bottom: 5 })
             .show(ui, |ui| {
@@ -1395,12 +1414,35 @@ fn render_pool_member_block(
             });
     });
 
+    // Outline the whole expanded section in the transform's colour code,
+    // so an open transform is grouped and identifiable at a glance. Drawn
+    // around the union of the header row and the body (both rendered
+    // above). The 5px leading/trailing spacing keeps adjacent open
+    // sections' borders from touching.
+    if state.is_open() {
+        if let Some(color) = opts.header_color {
+            let mut rect = header_response.response.rect;
+            if let Some(b) = &body {
+                rect = rect.union(b.response.rect);
+            }
+            ui.painter().rect_stroke(
+                rect.expand(1.0),
+                4.0,
+                egui::Stroke::new(1.5, color),
+                egui::StrokeKind::Outside,
+            );
+            // Trailing half of the open section's outer margin.
+            ui.add_space(5.0);
+        }
+    }
+
     PoolMemberBlock { update, delete_requested, clone_requested }
 }
 
-/// Render the per-normal "Linked XForms" or "Final XForms" subsection: one
-/// row per pool member with a checkbox (toggle attach) and ↑/↓ buttons that
-/// reorder the attachment within this normal's execution list.
+/// Render the per-normal "Linked XForms" or "Final XForms" subsection: a
+/// collapsible section with one row per pool member — a checkbox (toggle
+/// attach) and ^/v buttons that reorder the attachment within this
+/// normal's execution list.
 ///
 /// `attachments` is the ordered list of pool indices already attached to
 /// this normal; `pool_size` is the size of the linked/final pool. On user
@@ -1417,60 +1459,65 @@ fn render_attachment_subsection(
 ) {
     use crate::ui::response::{AttachmentEdit, AttachmentOp};
 
-    ui.label(t!(label_key));
-    if pool_size == 0 {
-        ui.label(egui::RichText::new(t!("transform.no_attachments_pool_empty"))
-            .italics()
-            .weak());
-        return;
-    }
-
     let pool_kind_tag = match kind {
         crate::ui::response::AttachmentKind::Linked => "linked",
         crate::ui::response::AttachmentKind::Final => "final",
     };
 
-    // Walk the pool order (0..pool_size) so unattached items remain visible
-    // and can be toggled on. For attached items we also draw reorder buttons.
-    for pool_idx in 0..pool_size {
-        let attached_pos = attachments.iter().position(|&a| a == pool_idx);
-        let is_attached = attached_pos.is_some();
+    egui::CollapsingHeader::new(t!(label_key))
+        .id_salt(format!("attach_{}_{}", pool_kind_tag, normal_index))
+        .default_open(false)
+        .show(ui, |ui| {
+            if pool_size == 0 {
+                ui.label(egui::RichText::new(t!("transform.no_attachments_pool_empty"))
+                    .italics()
+                    .weak());
+                return;
+            }
 
-        ui.push_id((pool_kind_tag, normal_index, pool_idx), |ui| {
-            ui.horizontal(|ui| {
-                let mut checked = is_attached;
-                let label = format!("{} {}", match kind {
-                    crate::ui::response::AttachmentKind::Linked => "Linked",
-                    crate::ui::response::AttachmentKind::Final => "Final",
-                }, pool_idx + 1);
-                if ui.checkbox(&mut checked, label).changed() {
-                    *out = Some(AttachmentEdit {
-                        normal_index,
-                        kind,
-                        op: AttachmentOp::Toggle(pool_idx),
+            // Walk the pool order (0..pool_size) so unattached items remain
+            // visible and can be toggled on. Attached items also get reorder
+            // buttons.
+            for pool_idx in 0..pool_size {
+                let attached_pos = attachments.iter().position(|&a| a == pool_idx);
+                let is_attached = attached_pos.is_some();
+
+                ui.push_id((pool_kind_tag, normal_index, pool_idx), |ui| {
+                    ui.horizontal(|ui| {
+                        let mut checked = is_attached;
+                        let label = format!("{} {}", match kind {
+                            crate::ui::response::AttachmentKind::Linked => "Linked",
+                            crate::ui::response::AttachmentKind::Final => "Final",
+                        }, pool_idx + 1);
+                        if ui.checkbox(&mut checked, label).changed() {
+                            *out = Some(AttachmentEdit {
+                                normal_index,
+                                kind,
+                                op: AttachmentOp::Toggle(pool_idx),
+                            });
+                        }
+                        if let Some(pos) = attached_pos {
+                            // Show execution position within this normal's chain.
+                            ui.label(egui::RichText::new(format!("#{}", pos + 1)).weak().small());
+                            let can_up = pos > 0;
+                            let can_down = pos + 1 < attachments.len();
+                            if ui.add_enabled(can_up, egui::Button::new("^").small()).clicked() {
+                                *out = Some(AttachmentEdit {
+                                    normal_index,
+                                    kind,
+                                    op: AttachmentOp::MoveUp(pool_idx),
+                                });
+                            }
+                            if ui.add_enabled(can_down, egui::Button::new("v").small()).clicked() {
+                                *out = Some(AttachmentEdit {
+                                    normal_index,
+                                    kind,
+                                    op: AttachmentOp::MoveDown(pool_idx),
+                                });
+                            }
+                        }
                     });
-                }
-                if let Some(pos) = attached_pos {
-                    // Show execution position within this normal's chain.
-                    ui.label(egui::RichText::new(format!("#{}", pos + 1)).weak().small());
-                    let can_up = pos > 0;
-                    let can_down = pos + 1 < attachments.len();
-                    if ui.add_enabled(can_up, egui::Button::new("↑").small()).clicked() {
-                        *out = Some(AttachmentEdit {
-                            normal_index,
-                            kind,
-                            op: AttachmentOp::MoveUp(pool_idx),
-                        });
-                    }
-                    if ui.add_enabled(can_down, egui::Button::new("↓").small()).clicked() {
-                        *out = Some(AttachmentEdit {
-                            normal_index,
-                            kind,
-                            op: AttachmentOp::MoveDown(pool_idx),
-                        });
-                    }
-                }
-            });
+                });
+            }
         });
-    }
 }
