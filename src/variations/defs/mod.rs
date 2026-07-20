@@ -148,6 +148,7 @@ mod chladni_disc;
 mod cymatics3d;
 mod orbital;
 mod hofstadter;
+mod hofstadter3d;
 mod glsl_fractals;
 mod glsl_tilings;
 mod glsl_fields;
@@ -324,6 +325,7 @@ pub use chladni_disc::*;
 pub use cymatics3d::*;
 pub use orbital::*;
 pub use hofstadter::*;
+pub use hofstadter3d::*;
 pub use glsl_fractals::*;
 pub use glsl_tilings::*;
 pub use glsl_fields::*;
@@ -1172,4 +1174,5 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &CYMATICS3D,
     &ORBITAL,
     &HOFSTADTER,
+    &HOFSTADTER3D,
 ];
