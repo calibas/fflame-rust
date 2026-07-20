@@ -1540,6 +1540,18 @@ impl ShaderBuilder {
             shader.push('\n');
         }
 
+        // 7d. Polyhedron radial-support helpers — shared by the
+        //     `polyhedron` surface projection and `polyhedron_volume`
+        //     occluder so the pair can coexist in one flame without
+        //     duplicate symbols.
+        let needs_polyhedra = active.iter().any(|(name, _)| {
+            matches!(name.as_str(), "polyhedron" | "polyhedron_volume")
+        });
+        if needs_polyhedra {
+            shader.push_str(include_str!("../shaders/core/polyhedra.wgsl"));
+            shader.push('\n');
+        }
+
         // 8. Per-flame packed get_param (must come before utilities, which
         //    references it in some places via inlined comments). The packed
         //    version replaces the fixed-stride version that used to live in
