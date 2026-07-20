@@ -26,10 +26,21 @@ use egui_wgpu::wgpu::*;
 /// instead of guessing from zoom.
 pub struct BoundsTracker {
     readback: Buffer,
-    completed: Arc<Mutex<Option<[u32; 8]>>>,
+    /// Result of the last map_async: Some(true) = mapped and readable.
+    /// The callback records ONLY this flag — it must never touch the
+    /// buffer itself, because callbacks can fire from a poll AFTER the
+    /// device has been lost and the buffer destroyed (the surface-
+    /// recovery path polls the dying device to flush work; a queued
+    /// Ok-callback then panics in get_mapped_range). The read happens
+    /// in `tick`, which owns the buffer and checks device health first.
+    completed: Arc<Mutex<Option<bool>>>,
     map_in_flight: bool,
     map_pending_submit: bool,
     frames_since_dispatch: u32,
+    /// Set when the device errored mid-map: the buffer's state is
+    /// unknowable, so the tracker permanently stops touching it (the
+    /// renderer is about to be rebuilt anyway).
+    dead: bool,
 }
 
 fn bounds_dec(enc: u32) -> f32 {
@@ -70,6 +81,7 @@ impl BoundsTracker {
             map_in_flight: false,
             map_pending_submit: false,
             frames_since_dispatch: 0,
+            dead: false,
         }
     }
 
@@ -82,28 +94,38 @@ impl BoundsTracker {
         histogram: &Buffer,
         tail_offset: u64,
     ) -> Option<[u32; 8]> {
-        let _ = device.poll(PollType::Poll);
-        let result = self.completed.lock().ok().and_then(|mut g| g.take());
-        if result.is_some() {
-            self.readback.unmap();
+        if self.dead {
+            return None;
+        }
+        let poll_ok = device.poll(PollType::Poll).is_ok();
+        let map_ok = self.completed.lock().ok().and_then(|mut g| g.take());
+        let mut result = None;
+        if let Some(ok) = map_ok {
+            if !poll_ok {
+                // Device errored while a map was outstanding — the
+                // buffer may already be destroyed. Never touch it again.
+                self.dead = true;
+                return None;
+            }
+            if ok {
+                let data = self.readback.slice(..).get_mapped_range();
+                let mut words = [0u32; 8];
+                for (i, w) in words.iter_mut().enumerate() {
+                    *w = u32::from_le_bytes([data[i * 4], data[i * 4 + 1], data[i * 4 + 2], data[i * 4 + 3]]);
+                }
+                drop(data);
+                result = Some(words);
+                self.readback.unmap();
+            }
             self.map_in_flight = false;
         }
         if self.map_pending_submit && !self.map_in_flight {
             self.map_pending_submit = false;
             self.map_in_flight = true;
             let completed = Arc::clone(&self.completed);
-            let buffer = self.readback.clone();
             self.readback.slice(..).map_async(MapMode::Read, move |res| {
-                if res.is_ok() {
-                    let data = buffer.slice(..).get_mapped_range();
-                    let mut words = [0u32; 8];
-                    for (i, w) in words.iter_mut().enumerate() {
-                        *w = u32::from_le_bytes([data[i * 4], data[i * 4 + 1], data[i * 4 + 2], data[i * 4 + 3]]);
-                    }
-                    drop(data);
-                    if let Ok(mut g) = completed.lock() {
-                        *g = Some(words);
-                    }
+                if let Ok(mut g) = completed.lock() {
+                    *g = Some(res.is_ok());
                 }
             });
         }
@@ -133,8 +155,13 @@ impl BoundsTracker {
         self.readback.slice(..).map_async(MapMode::Read, move |res| {
             let _ = tx.send(res.is_ok());
         });
-        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
-        if !rx.recv().unwrap_or(false) {
+        // A failed poll means the device errored with the map
+        // outstanding — the buffer may be destroyed, so don't touch it
+        // even if the map callback reported Ok before the loss.
+        let poll_ok = device
+            .poll(PollType::Wait { submission_index: None, timeout: None })
+            .is_ok();
+        if !poll_ok || !rx.recv().unwrap_or(false) {
             return None;
         }
         let words = {
