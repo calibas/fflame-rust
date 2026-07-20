@@ -74,6 +74,8 @@ pub static POLYHEDRON: VariationDef = VariationDef {
         param!("rx", "Rotate X", angle, 0.0, "Rotation of the solid about the X axis, in degrees."),
         param!("ry", "Rotate Y", angle, 0.0, "Rotation of the solid about the Y axis, in degrees."),
         param!("rz", "Rotate Z", angle, 0.0, "Rotation of the solid about the Z axis, in degrees. Applied as Rz·Ry·Rx."),
+        param!("bevel", "Bevel", float, 0.0, 0.0, 1.0, "Rounds edges and corners (face-center-normalized smooth max): 0 = razor-sharp, 1 = marshmallow. Face centers stay put — only edges are cut."),
+        param!("stellation", "Stellation", float, 0.0, 0.0, 1.0, "Grows true flat-faced spikes in the solid's extended face planes: dodecahedron → small stellated dodecahedron, octahedron → stella octangula. The cube's parallel faces make its spikes degenerate (radius-capped prisms along the axes)."),
     ],
     // 2D: bubble's disc squeeze, warped by the solid's z = 0
     // cross-section — the plane maps into a polygon-shaped disc.
@@ -87,13 +89,15 @@ fn variation_polyhedron(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<
     let rx = get_param(xform_id, variation_id, 6u);
     let ry = get_param(xform_id, variation_id, 7u);
     let rz = get_param(xform_id, variation_id, 8u);
+    let bevel = get_param(xform_id, variation_id, 9u);
+    let stellation = get_param(xform_id, variation_id, 10u);
 
     let r2 = dot(p, p);
     let rr = r2 / 4.0 + 1.0;
     let s2 = p / rr;
     let len = max(length(s2), 1e-9);
     let dl = polyhedra_inverse_rotate(vec3<f32>(s2 / len, 0.0), rx, ry, rz);
-    var rad = polyhedra_radial(dl, shape);
+    var rad = polyhedra_radial(dl, shape, bevel, stellation);
     rad = mix(rad, 1.0, spherify);
     return vec2<f32>(cx, cy) + s2 * (rad * size);
 }
@@ -109,6 +113,8 @@ fn variation_polyhedron(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<
     let rx = get_param(xform_id, variation_id, 6u);
     let ry = get_param(xform_id, variation_id, 7u);
     let rz = get_param(xform_id, variation_id, 8u);
+    let bevel = get_param(xform_id, variation_id, 9u);
+    let stellation = get_param(xform_id, variation_id, 10u);
 
     // Bubble's exact sphere map (Apophysis): the output is exactly the
     // unit sphere, so it doubles as the projection direction.
@@ -117,7 +123,7 @@ fn variation_polyhedron(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<
     let s = vec3<f32>(p.x / rr, p.y / rr, 2.0 / rr - 1.0);
 
     let dl = polyhedra_inverse_rotate(s, rx, ry, rz);
-    var rad = polyhedra_radial(dl, shape);
+    var rad = polyhedra_radial(dl, shape, bevel, stellation);
     rad = mix(rad, 1.0, spherify);
     return vec3<f32>(cx, cy, cz) + s * (rad * size);
 }
@@ -145,6 +151,8 @@ pub static POLYHEDRON_VOLUME: VariationDef = VariationDef {
         param!("rx", "Rotate X", angle, 0.0, "Rotation about X, degrees (match the paired polyhedron)."),
         param!("ry", "Rotate Y", angle, 0.0, "Rotation about Y, degrees."),
         param!("rz", "Rotate Z", angle, 0.0, "Rotation about Z, degrees. Applied as Rz·Ry·Rx."),
+        param!("bevel", "Bevel", float, 0.0, 0.0, 1.0, "Edge rounding — match the paired polyhedron's bevel so the sealed volume matches the surface."),
+        param!("stellation", "Stellation", float, 0.0, 0.0, 1.0, "Spike growth — match the paired polyhedron's stellation."),
     ],
     // 2D: no volume exists — same no-op as sphere_volume.
     wgsl_2d: r#"
@@ -163,6 +171,8 @@ fn variation_polyhedron_volume(p: vec3<f32>, xform_id: u32, variation_id: u32, r
     let rx = get_param(xform_id, variation_id, 6u);
     let ry = get_param(xform_id, variation_id, 7u);
     let rz = get_param(xform_id, variation_id, 8u);
+    let bevel = get_param(xform_id, variation_id, 9u);
+    let stellation = get_param(xform_id, variation_id, 10u);
 
     // Uniform direction on the sphere.
     let z = rng_nextf(rng) * 2.0 - 1.0;
@@ -174,7 +184,7 @@ fn variation_polyhedron_volume(p: vec3<f32>, xform_id: u32, variation_id: u32, r
     // surface-conformal shell position (cube-root radial like
     // sphere_volume keeps thick shells depth-uniform).
     let dl = polyhedra_inverse_rotate(dir, rx, ry, rz);
-    let rmax = polyhedra_radial(dl, shape) * size;
+    let rmax = polyhedra_radial(dl, shape, bevel, stellation) * size;
     let ri = 1.0 - thickness;
     let ri3 = ri * ri * ri;
     let r = rmax * pow(mix(ri3, 1.0, rng_nextf(rng)), 0.33333333);
