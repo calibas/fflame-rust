@@ -38,14 +38,22 @@
 //! [`chladni`](super::chladni) on the same transform to also gather
 //! points onto the wave's nodal lines.
 //!
-//! In 2D render mode the variation shows the **slice** of the 3D nodal
-//! set at `z = slice_z` (Heightfield has nothing to show in 2D and
-//! passes through). With sine walls the `z = 0` plane is itself nodal,
-//! so a zero slice degenerates to "everything is a node"; the cosine
-//! default has no such special planes.
+//! **Slicing** (`slice_z` + `slice_thickness`): in 2D render mode the
+//! variation shows the planar slice of the 3D nodal set at
+//! `z = slice_z`; thickness > 0 samples each point's slice z within
+//! the slab, superimposing nearby slices like an X-ray projection.
+//! In 3D Nodal Surface mode thickness > 0 confines the attractor to
+//! the z-slab via alternating projection (Newton step, then z-clamp —
+//! each iteration ends with the clamp so results stay inside);
+//! thickness 0 leaves the full volume unrestricted. Heightfield has
+//! nothing to slice and passes through in 2D. With sine walls the
+//! `z = 0` plane is itself nodal, so a zero slice degenerates to
+//! "everything is a node"; the cosine default has no such planes.
 //!
-//! Direct color: *Distance* and *Amplitude*, same semantics as
-//! `chladni` (Heightfield's Amplitude colors by wave height).
+//! Direct color: *Distance* and *Amplitude* (same semantics as
+//! `chladni`; Heightfield's Amplitude colors by wave height), plus
+//! *Depth* — colors by the output z (the sampled slice z in 2D), which
+//! reveals depth structure and colors slab slices by position.
 //!
 //! No JWildfire/Apophysis equivalent — original to this project.
 
@@ -82,11 +90,12 @@ pub static CYMATICS3D: VariationDef = VariationDef {
         param!("mode", "Mode", enum, 0, &["Nodal Surface", "Heightfield"], "Nodal Surface: Newton-project points onto the 3D nodal surfaces of the resonator (the 3D sand-on-a-plate analogue; pairs well with solid rendering). Heightfield: displace z toward the 2D plate field — a standing water-wave surface; x/y pass through."),
         param!("walls", "Walls", enum, 0, &["Antinode (Free)", "Node (Fixed)"], "Boundary condition of the wave basis. Antinode (cosine): coordinate planes are antinodes — the nodal set is purely curved surfaces, like a real free-edged plate. Node (sine): the origin planes and their period grid are themselves nodes — adds flat planes through the pattern."),
         param!("height", "Height", float, 0.5, -2.0, 2.0, "Heightfield mode only: amplitude of the z displacement."),
-        param!("slice_z", "Slice Z", float, 0.25, -2.0, 2.0, "2D render mode only: z position of the slice through the 3D nodal set. With Node (sine) walls avoid multiples of size — those planes are themselves nodal and the slice degenerates."),
+        param!("slice_z", "Slice Z", float, 0.25, -2.0, 2.0, "Slice position. 2D render mode: z of the planar slice through the 3D nodal set. 3D Nodal Surface mode with Slice Thickness > 0: center of the z-slab the attractor is confined to. With Node (sine) walls avoid multiples of size — those planes are themselves nodal and the slice degenerates."),
+        param!("slice_thickness", "Slice Thickness", float, 0.0, 0.0, 2.0, "Slab thickness around Slice Z. 2D render mode: 0 cuts a razor-thin plane; > 0 samples each point's slice z randomly within the slab — an X-ray-style projection through it. 3D Nodal Surface mode: 0 disables slicing (full volume); > 0 confines the attractor to the slab."),
         param!("steps", "Steps", int, 3.0, 1.0, 6.0, "Newton iterations toward the nodal surface per call (Nodal Surface mode). 1 is soft; 3+ lands points crisply on the surface."),
         param!("strength", "Strength", float, 0.9, 0.0, 1.0, "Nodal Surface: blend between the untouched input point (0) and the fully projected point (1). Heightfield: blend between the input z and the wave surface — 1 lands points exactly on the surface."),
         param!("jitter", "Jitter", float, 0.0, 0.0, 0.2, "Isotropic random offset added after projection — grain thickness for the surfaces. 0 keeps them razor thin."),
-        param!("dc_mode", "Color Mode", enum, 0, &["Off", "Distance", "Amplitude"], "Direct-color source, applied through the transform's Direct Color slider. Distance: palette position 1 on the nodal set fading to 0 away from it. Amplitude: signed field value — anti-phase regions of the resonator get opposite palette ends (in Heightfield mode this colors by wave height)."),
+        param!("dc_mode", "Color Mode", enum, 0, &["Off", "Distance", "Amplitude", "Depth"], "Direct-color source, applied through the transform's Direct Color slider. Distance: palette position 1 on the nodal set fading to 0 away from it. Amplitude: signed field value — anti-phase regions of the resonator get opposite palette ends (in Heightfield mode this colors by wave height). Depth: colors by the output point's z — reveals depth structure of the surfaces (in 2D, the sampled slice z)."),
         param!("dc_scale", "Color Scale", float, 1.0, 0.1, 4.0, "Contrast for the direct-color modes: Distance falloff sharpness, Amplitude saturation."),
     ],
     wgsl_2d: WGSL_2D,
@@ -148,11 +157,13 @@ fn variation_cymatics3d(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
     let mode = u32(get_param(xform_id, variation_id, 7u));
     let cos_basis = get_param(xform_id, variation_id, 8u) < 0.5;
     let height = get_param(xform_id, variation_id, 9u);
-    let steps = i32(get_param(xform_id, variation_id, 11u));
-    let strength = get_param(xform_id, variation_id, 12u);
-    let jitter = get_param(xform_id, variation_id, 13u);
-    let dc_mode = u32(get_param(xform_id, variation_id, 14u));
-    let dc_scale = get_param(xform_id, variation_id, 15u);
+    let slice_z = get_param(xform_id, variation_id, 10u);
+    let slice_thickness = get_param(xform_id, variation_id, 11u);
+    let steps = i32(get_param(xform_id, variation_id, 12u));
+    let strength = get_param(xform_id, variation_id, 13u);
+    let jitter = get_param(xform_id, variation_id, 14u);
+    let dc_mode = u32(get_param(xform_id, variation_id, 15u));
+    let dc_scale = get_param(xform_id, variation_id, 16u);
 
     let pi = 3.14159265359;
     // Longest nodal-cell dimension (smallest mode number).
@@ -189,6 +200,13 @@ fn variation_cymatics3d(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
         }
     } else {
         // Nodal Surface: damped-Newton projection onto f = 0 in 3D.
+        // With slice_thickness > 0 the attractor is confined to a
+        // z-slab around slice_z by alternating projection: Newton step
+        // toward the surface, then clamp z into the slab. Each
+        // iteration ends with the clamp, so the result is always
+        // inside the slab and (where the surface crosses it) on the
+        // surface.
+        let half_t = 0.5 * slice_thickness;
         let max_step = 0.5 * cell;
         var q = p;
         for (var i = 0; i < steps; i = i + 1) {
@@ -200,18 +218,26 @@ fn variation_cymatics3d(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
                 step = step * (max_step / sl);
             }
             q = q - step;
-        }
-        if (dc_mode != 0u) {
-            let fd = cymatics3d_field(p, m, n, l, a, b, c, size, cos_basis);
-            if (dc_mode == 1u) {
-                let dist = abs(fd.x) / (length(fd.yzw) + 1e-6);
-                *vc = exp(-6.0 * dc_scale * dist / cell);
-            } else {
-                let f_norm = abs(a) + abs(b) + abs(c) + 1e-6;
-                *vc = 0.5 + 0.5 * tanh(2.0 * dc_scale * fd.x / f_norm);
+            if (half_t > 0.0) {
+                q.z = clamp(q.z, slice_z - half_t, slice_z + half_t);
             }
         }
+        if (dc_mode == 1u) {
+            let fd = cymatics3d_field(p, m, n, l, a, b, c, size, cos_basis);
+            let dist = abs(fd.x) / (length(fd.yzw) + 1e-6);
+            *vc = exp(-6.0 * dc_scale * dist / cell);
+        } else if (dc_mode == 2u) {
+            let fd = cymatics3d_field(p, m, n, l, a, b, c, size, cos_basis);
+            let f_norm = abs(a) + abs(b) + abs(c) + 1e-6;
+            *vc = 0.5 + 0.5 * tanh(2.0 * dc_scale * fd.x / f_norm);
+        }
         out = mix(p, q, strength);
+    }
+
+    // Depth color — uses the OUTPUT z (post-projection / heightfield),
+    // so it reflects where the point landed, not where it came from.
+    if (dc_mode == 3u) {
+        *vc = 0.5 + 0.5 * tanh(2.0 * dc_scale * out.z / size);
     }
 
     if (jitter > 0.0) {
@@ -266,11 +292,12 @@ fn variation_cymatics3d(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr
     let mode = u32(get_param(xform_id, variation_id, 7u));
     let cos_basis = get_param(xform_id, variation_id, 8u) < 0.5;
     let slice_z = get_param(xform_id, variation_id, 10u);
-    let steps = i32(get_param(xform_id, variation_id, 11u));
-    let strength = get_param(xform_id, variation_id, 12u);
-    let jitter = get_param(xform_id, variation_id, 13u);
-    let dc_mode = u32(get_param(xform_id, variation_id, 14u));
-    let dc_scale = get_param(xform_id, variation_id, 15u);
+    let slice_thickness = get_param(xform_id, variation_id, 11u);
+    let steps = i32(get_param(xform_id, variation_id, 12u));
+    let strength = get_param(xform_id, variation_id, 13u);
+    let jitter = get_param(xform_id, variation_id, 14u);
+    let dc_mode = u32(get_param(xform_id, variation_id, 15u));
+    let dc_scale = get_param(xform_id, variation_id, 16u);
 
     // Heightfield has no 2D projection — pass through.
     if (mode == 1u) {
@@ -280,11 +307,16 @@ fn variation_cymatics3d(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr
     let cell = size / max(min(min(m, n), l), 1e-3);
     let max_step = 0.5 * cell;
 
-    // Project within the z = slice_z plane onto the slice of the 3D
+    // Slice z for this point: exact plane at thickness 0, or sampled
+    // uniformly within the slab — superimposing nearby slices like an
+    // X-ray projection through it.
+    let z_eval = slice_z + (rng_nextf(rng) - 0.5) * slice_thickness;
+
+    // Project within the z = z_eval plane onto the slice of the 3D
     // nodal set — the in-plane gradient components only.
     var q = p;
     for (var i = 0; i < steps; i = i + 1) {
-        let fd = cymatics3d_field(vec3<f32>(q, slice_z), m, n, l, a, b, c, size, cos_basis);
+        let fd = cymatics3d_field(vec3<f32>(q, z_eval), m, n, l, a, b, c, size, cos_basis);
         let g = fd.yz;
         var step = fd.x * g / (dot(g, g) + 1e-6);
         let sl = length(step);
@@ -294,15 +326,18 @@ fn variation_cymatics3d(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr
         q = q - step;
     }
 
-    if (dc_mode != 0u) {
-        let fd = cymatics3d_field(vec3<f32>(p, slice_z), m, n, l, a, b, c, size, cos_basis);
-        if (dc_mode == 1u) {
-            let dist = abs(fd.x) / (length(fd.yz) + 1e-6);
-            *vc = exp(-6.0 * dc_scale * dist / cell);
-        } else {
-            let f_norm = abs(a) + abs(b) + abs(c) + 1e-6;
-            *vc = 0.5 + 0.5 * tanh(2.0 * dc_scale * fd.x / f_norm);
-        }
+    if (dc_mode == 1u) {
+        let fd = cymatics3d_field(vec3<f32>(p, z_eval), m, n, l, a, b, c, size, cos_basis);
+        let dist = abs(fd.x) / (length(fd.yz) + 1e-6);
+        *vc = exp(-6.0 * dc_scale * dist / cell);
+    } else if (dc_mode == 2u) {
+        let fd = cymatics3d_field(vec3<f32>(p, z_eval), m, n, l, a, b, c, size, cos_basis);
+        let f_norm = abs(a) + abs(b) + abs(c) + 1e-6;
+        *vc = 0.5 + 0.5 * tanh(2.0 * dc_scale * fd.x / f_norm);
+    } else if (dc_mode == 3u) {
+        // Depth: the sampled slice z — with thickness > 0 this colors
+        // each superimposed slice by its position in the slab.
+        *vc = 0.5 + 0.5 * tanh(2.0 * dc_scale * z_eval / size);
     }
 
     var out = mix(p, q, strength);
