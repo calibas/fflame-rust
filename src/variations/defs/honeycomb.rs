@@ -75,6 +75,7 @@ pub static HONEYCOMB: VariationDef = VariationDef {
         param!("color_speed", "Color Speed", float, 0.5, 0.0, 1.0, "Mirror mode: how hard each reflection pulls the color register toward its mirror's palette position (low = long blends, 1 = hard assignment). Steps mode: how much of the palette the walk traverses — 1 sweeps the whole palette from first shell to the mean walk depth."),
         param!("seed", "Seed", enum, 0, &["Input", "Vertices", "Edges", "Faces"], "What the group walk stamps through the honeycomb. Input: the incoming flame measure (compose freely — any Wythoff decoration). Vertices: the honeycomb vertex — an array of dots. Edges: random points on the vertex-to-edge-center geodesic — the full ball-and-stick edge skeleton, the classic look of published honeycomb renders. Faces: random points on the orthoscheme's face triangle — the cell walls."),
         param!("thickness", "Thickness", float, 0.0, 0.0, 0.5, "Seed modes only: perturbs the seed before it lands on the hyperboloid, turning vertices into balls, edges into tubes, faces into slabs. The walk is isometric, so the tubes stay crisp and shrink toward the boundary exactly like the cells do — hyperbolically true thickness, unlike a plot-space jitter (which would also accumulate through the fed-forward walk)."),
+        param!("variant", "Variant", enum, 0, &["Normal", "Rectified", "Truncated", "Bitruncated", "Cantellated", "Cantitruncated", "Runcitruncated", "Runcicantellated", "Omnitruncated"], "Wythoff variant of the honeycomb (seed modes only): which Coxeter-diagram nodes are ringed. The generator point sits ON every unringed mirror and equidistant from every ringed one; Vertices/Edges/Faces then stamp the chosen variant's elements. Normal = the plain {p,q,r}; Omnitruncated rings all four nodes. Input mode ignores this — there the flame itself is the generator."),
     ],
     wgsl_2d: WGSL_2D,
     wgsl_3d: WGSL_3D,
@@ -148,6 +149,7 @@ fn variation_honeycomb(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
 
     let seed_mode = u32(get_param(xform_id, variation_id, 9u));
     let thickness = get_param(xform_id, variation_id, 10u);
+    let variant = u32(get_param(xform_id, variation_id, 11u));
     var depth = get_state(xform_id, variation_id, 1u);
 
     // Seed modes RESEED only occasionally: the walk continues from the
@@ -158,33 +160,78 @@ fn variation_honeycomb(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
     // shell of images.
     var x: vec4<f32>;
     if (seed_mode != 0u && rng_nextf(rng) < 0.1) {
-        // Canonical seeds from the orthoscheme corners C_i (the corner
-        // lying ON every mirror except i). C3 is the origin (cell
-        // center); C0 is the honeycomb vertex. A point of the corner
-        // simplex, pushed through the group, stamps the corresponding
-        // element everywhere: C0 alone = vertex array, the C0-C1
-        // segment = the full edge skeleton, the C0-C1-C2 triangle =
-        // the cell walls. Geodesic sampling = Minkowski chord mix
-        // renormalized onto the hyperboloid; the max() guard keeps
-        // ideal corners (paracompact combos) finite.
-        // Unified corner formulas (valid in all three n2/n3 cases):
-        // with C.w = 1, <C,n3> = 0 gives C.z = w3/z3, then <C,n2> = 0
-        // gives C.y = (w2 - z2*zc)/y2, and <C,n1> = 0 gives C.x.
-        let zc = w3 / z3;
-        let y2s = select(y2, -1e-6, abs(y2) < 1e-6);
-        let yc = (w2 - z2 * zc) / y2s;
-        let c0m = vec4<f32>(s1 * yc / max(cp, 1e-6), yc, zc, 1.0);
-        let c1m = vec4<f32>(0.0, yc, zc, 1.0);
-        let c2m = vec4<f32>(0.0, 0.0, zc, 1.0);
-        var m = c0m;
-        if (seed_mode == 2u) {
-            m = mix(c0m, c1m, rng_nextf(rng));
-        } else if (seed_mode == 3u) {
-            let u = rng_nextf(rng);
-            let v = rng_nextf(rng) * (1.0 - u);
-            m = c0m + u * (c1m - c0m) + v * (c2m - c0m);
+        // Wythoff construction: the variant's ring mask says which
+        // mirrors the generator point P is pushed OFF (equidistantly);
+        // P lies ON every unringed mirror. Vertices = orbit of P;
+        // each ringed mirror i contributes an edge orbit whose chamber
+        // half is the geodesic P -> foot(P, mirror i); one further
+        // projection spans a face fragment. For the Normal mask {0}
+        // this reproduces the orthoscheme corners exactly (P = C0,
+        // foot = C1, double projection = C2). Geodesic sampling =
+        // Minkowski chord mix renormalized onto the hyperboloid; the
+        // max() guards keep ideal elements (paracompact combos)
+        // finite.
+        var mask = 1u;
+        switch variant {
+            case 1u: { mask = 2u; }   // rectified        o-x-o-o
+            case 2u: { mask = 3u; }   // truncated        x-x-o-o
+            case 3u: { mask = 6u; }   // bitruncated      o-x-x-o
+            case 4u: { mask = 5u; }   // cantellated      x-o-x-o
+            case 5u: { mask = 7u; }   // cantitruncated   x-x-x-o
+            case 6u: { mask = 11u; }  // runcitruncated   x-x-o-x
+            case 7u: { mask = 13u; }  // runcicantellated x-o-x-x
+            case 8u: { mask = 15u; }  // omnitruncated    x-x-x-x
+            default: { mask = 1u; }   // normal           x-o-o-o
         }
-        x = m / sqrt(max(-(m.x * m.x + m.y * m.y + m.z * m.z - m.w * m.w), 1e-6));
+        // Solve <P,n_i> = -1 (ringed) / 0 (unringed) down the
+        // mirrors' triangular structure.
+        let rc0 = select(0.0, -1.0, (mask & 1u) != 0u);
+        let rc1 = select(0.0, -1.0, (mask & 2u) != 0u);
+        let rc2 = select(0.0, -1.0, (mask & 4u) != 0u);
+        let rc3 = select(0.0, -1.0, (mask & 8u) != 0u);
+        let px = rc0;
+        let py = (rc1 + cp * px) / s1;
+        let b2 = rc2 - y2 * py;
+        var dd = w2 * z3 - z2 * w3;
+        if (abs(dd) < 1e-6) { dd = select(-1e-6, 1e-6, dd >= 0.0); }
+        let pz = (w2 * rc3 - w3 * b2) / dd;
+        let pw = (z2 * rc3 - z3 * b2) / dd;
+        var pm = vec4<f32>(px, py, pz, pw);
+        if (pm.w < 0.0) { pm = -pm; }
+        let wp = pm / sqrt(max(-honeycomb_mdot(pm, pm), 1e-6));
+        var m = wp;
+        if (seed_mode >= 2u) {
+            // Random ringed mirror -> edge foot (P projected onto it).
+            let nring = f32(countOneBits(mask));
+            var pick = i32(min(rng_nextf(rng) * nring, nring - 0.5));
+            var mi = 0u;
+            for (var i = 0u; i < 4u; i = i + 1u) {
+                if ((mask & (1u << i)) != 0u) {
+                    if (pick == 0) { mi = i; break; }
+                    pick = pick - 1;
+                }
+            }
+            var f1 = wp - honeycomb_mdot(wp, mirrors[mi]) * mirrors[mi];
+            f1 = f1 / sqrt(max(-honeycomb_mdot(f1, f1), 1e-6));
+            if (seed_mode == 2u) {
+                m = mix(wp, f1, rng_nextf(rng));
+            } else {
+                // Face fragment: project the foot onto a second,
+                // nondegenerate mirror.
+                var mj = (mi + 1u + min(u32(rng_nextf(rng) * 3.0), 2u)) % 4u;
+                for (var ttry = 0u; ttry < 3u; ttry = ttry + 1u) {
+                    if (mj != mi && abs(honeycomb_mdot(f1, mirrors[mj])) > 1e-4) { break; }
+                    mj = (mj + 1u) % 4u;
+                    if (mj == mi) { mj = (mj + 1u) % 4u; }
+                }
+                var f2 = f1 - honeycomb_mdot(f1, mirrors[mj]) * mirrors[mj];
+                f2 = f2 / sqrt(max(-honeycomb_mdot(f2, f2), 1e-6));
+                let u = rng_nextf(rng);
+                let v = rng_nextf(rng) * (1.0 - u);
+                m = wp + u * (f1 - wp) + v * (f2 - wp);
+            }
+        }
+        x = m / sqrt(max(-honeycomb_mdot(m, m), 1e-6));
         if (thickness > 0.0) {
             // Geodesic offset in the tangent space: move exact
             // hyperbolic distance `thickness` along a random tangent
@@ -300,6 +347,7 @@ fn variation_honeycomb(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<
     let dc_mode = u32(get_param(xform_id, variation_id, 6u));
     let dc_scale = get_param(xform_id, variation_id, 7u);
     let color_speed = get_param(xform_id, variation_id, 8u);
+    let variant = u32(get_param(xform_id, variation_id, 11u));
 
     // Triangle-group [p,q] mirrors in R^(2,1) — the {p,q} tiling of
     // the hyperbolic disc (hyperbolic iff 1/p + 1/q < 1/2; other
@@ -322,22 +370,59 @@ fn variation_honeycomb(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<
 
     var x: vec3<f32>;
     if (seed_mode != 0u && rng_nextf(rng) < 0.1) {
-        // Triangle-group corners: C2 = origin (tile center), C1 = edge
-        // center, C0 = tiling vertex. Edges mode draws the tiling's
-        // edge skeleton; Faces fills the tiles.
-        let yc = w2 / y2;
-        let c0m = vec3<f32>(s1 * yc / max(cp, 1e-6), yc, 1.0);
-        let c1m = vec3<f32>(0.0, yc, 1.0);
-        let c2m = vec3<f32>(0.0, 0.0, 1.0);
-        var m = c0m;
-        if (seed_mode == 2u) {
-            m = mix(c0m, c1m, rng_nextf(rng));
-        } else if (seed_mode == 3u) {
-            let u = rng_nextf(rng);
-            let v = rng_nextf(rng) * (1.0 - u);
-            m = c0m + u * (c1m - c0m) + v * (c2m - c0m);
+        // Wythoff construction on the triangle group (see the 3D
+        // body); the variant's low three ring bits apply.
+        var mask = 1u;
+        switch variant {
+            case 1u: { mask = 2u; }
+            case 2u: { mask = 3u; }
+            case 3u: { mask = 6u; }
+            case 4u: { mask = 5u; }
+            case 5u, 8u: { mask = 7u; }
+            case 6u: { mask = 3u; }
+            case 7u: { mask = 5u; }
+            default: { mask = 1u; }
         }
-        x = m / sqrt(max(-(m.x * m.x + m.y * m.y - m.z * m.z), 1e-6));
+        let rc0 = select(0.0, -1.0, (mask & 1u) != 0u);
+        let rc1 = select(0.0, -1.0, (mask & 2u) != 0u);
+        let rc2 = select(0.0, -1.0, (mask & 4u) != 0u);
+        let px = rc0;
+        let py = (rc1 + cp * px) / s1;
+        let w2s = max(w2, 1e-6);
+        let pt = (y2 * py - rc2) / w2s;
+        var pm = vec3<f32>(px, py, pt);
+        if (pm.z < 0.0) { pm = -pm; }
+        let wp = pm / sqrt(max(-honeycomb_mdot2(pm, pm), 1e-6));
+        var m = wp;
+        if (seed_mode >= 2u) {
+            let nring = f32(countOneBits(mask));
+            var pick = i32(min(rng_nextf(rng) * nring, nring - 0.5));
+            var mi = 0u;
+            for (var i = 0u; i < 3u; i = i + 1u) {
+                if ((mask & (1u << i)) != 0u) {
+                    if (pick == 0) { mi = i; break; }
+                    pick = pick - 1;
+                }
+            }
+            var f1 = wp - honeycomb_mdot2(wp, mirrors[mi]) * mirrors[mi];
+            f1 = f1 / sqrt(max(-honeycomb_mdot2(f1, f1), 1e-6));
+            if (seed_mode == 2u) {
+                m = mix(wp, f1, rng_nextf(rng));
+            } else {
+                var mj = (mi + 1u + min(u32(rng_nextf(rng) * 2.0), 1u)) % 3u;
+                for (var ttry = 0u; ttry < 2u; ttry = ttry + 1u) {
+                    if (mj != mi && abs(honeycomb_mdot2(f1, mirrors[mj])) > 1e-4) { break; }
+                    mj = (mj + 1u) % 3u;
+                    if (mj == mi) { mj = (mj + 1u) % 3u; }
+                }
+                var f2 = f1 - honeycomb_mdot2(f1, mirrors[mj]) * mirrors[mj];
+                f2 = f2 / sqrt(max(-honeycomb_mdot2(f2, f2), 1e-6));
+                let u = rng_nextf(rng);
+                let v = rng_nextf(rng) * (1.0 - u);
+                m = wp + u * (f1 - wp) + v * (f2 - wp);
+            }
+        }
+        x = m / sqrt(max(-honeycomb_mdot2(m, m), 1e-6));
         if (thickness > 0.0) {
             // Geodesic tangent offset — see the 3D body. In 2D the
             // random radius keeps the ribbon FILLED (a solid 2D ribbon
