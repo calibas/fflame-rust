@@ -69,7 +69,7 @@ pub static HONEYCOMB: VariationDef = VariationDef {
         param!("r", "R", int, 4.0, 2.0, 8.0, "Third Schläfli number: cells around each edge. 4 = order-4 dodecahedral honeycomb at the defaults. Ignored in 2D render mode."),
         param!("size", "Size", float, 1.0, 0.1, 4.0, "Radius of the ball model in world units."),
         param!("steps", "Steps", int, 2.0, 1.0, 8.0, "Random mirror reflections per call. More steps walk deeper into the group per iteration (finer boundary detail for the same budget); even counts favor orientation-preserving words."),
-        param!("projection", "Projection", enum, 0, &["Poincaré", "Beltrami–Klein"], "Ball model for the plotted (and fed-forward) point. Poincaré is conformal — cells shrink smoothly toward the boundary sphere. Beltrami–Klein is projective — mirror planes render as flat planes, cells as straight-edged polyhedra."),
+        param!("projection", "Projection", enum, 0, &["Poincaré", "Beltrami–Klein", "Half-Space"], "Model of hyperbolic space for the plotted (and fed-forward) point. Poincaré: conformal ball — cells shrink toward the boundary sphere. Beltrami–Klein: projective ball — straight geodesics, flat cell walls. Half-Space: the honeycomb fills the region above an infinite floor plane, cells shrinking toward the floor and growing overhead (the classic 'honeycomb over a plane' renders; upper half-PLANE in 2D)."),
         param!("dc_mode", "Color Mode", enum, 0, &["Off", "Mirror", "Depth", "Steps"], "Direct-color source (needs the transform's Direct Color > 0). Mirror: each of the 4 orthoscheme mirrors acts like a transform with its own palette position, blended through a persistent color register at Color Speed. Depth: color by the output z (2D: disc radius). Steps: palette position sweeps start-to-end across the walk depth since the last reseed — the first shells get the first palette colors, the deepest get the last. Color Speed 1 spans the full palette over the mean walk length; Color Scale adds wrap cycles. (Seed modes; in Input mode depth never resets, so everything saturates at the final color.)"),
         param!("dc_scale", "Color Scale", float, 1.0, 0.1, 8.0, "Palette-index multiplier for the Mirror colors (wrapped with fract)."),
         param!("color_speed", "Color Speed", float, 0.5, 0.0, 1.0, "Mirror mode: how hard each reflection pulls the color register toward its mirror's palette position (low = long blends, 1 = hard assignment). Steps mode: how much of the palette the walk traverses — 1 sweeps the whole palette from first shell to the mean walk depth."),
@@ -184,6 +184,17 @@ fn variation_honeycomb(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
             // Beltrami-Klein: t = 1/sqrt(1-r^2), xyz = b*t.
             let t = 1.0 / sqrt(max(1.0 - r2, 1e-9));
             x = vec4<f32>(b * t, t);
+        } else if (projection == 2u) {
+            // Upper half-space (u,v,w), w = height above the floor
+            // plane (z in world coords, folded positive): x = u/w,
+            // y = v/w, t - z = 1/w, t + z from <X,X> = -1.
+            let hb = p / size;
+            let w = max(abs(hb.z), 1e-6);
+            let hx = hb.x / w;
+            let hy = hb.y / w;
+            let s2 = hb.x * hb.x + hb.y * hb.y + w * w;
+            let t = (1.0 + s2) / (2.0 * w);
+            x = vec4<f32>(hx, hy, t - 1.0 / w, t);
         } else {
             // Poincare: t = (1+r^2)/(1-r^2), xyz = 2b/(1-r^2).
             let d = max(1.0 - r2, 1e-9);
@@ -218,6 +229,11 @@ fn variation_honeycomb(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
     var out: vec3<f32>;
     if (projection == 1u) {
         out = (x.xyz / t) * size;
+    } else if (projection == 2u) {
+        // Hyperboloid -> upper half-space: w = 1/(t - z), u = x*w,
+        // v = y*w. t > |z| on the upper sheet, so t - z > 0.
+        let iw = max(x.w - x.z, 1e-6);
+        out = vec3<f32>(x.x / iw, x.y / iw, 1.0 / iw) * size;
     } else {
         out = (x.xyz / (1.0 + t)) * size;
     }
@@ -312,6 +328,14 @@ fn variation_honeycomb(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<
         if (projection == 1u) {
             let t = 1.0 / sqrt(max(1.0 - r2, 1e-9));
             x = vec3<f32>(b * t, t);
+        } else if (projection == 2u) {
+            // Upper half-plane: (u, w>0), x = u/w, t - y = 1/w.
+            let hb = p / size;
+            let w = max(abs(hb.y), 1e-6);
+            let hx = hb.x / w;
+            let s2 = hb.x * hb.x + w * w;
+            let t = (1.0 + s2) / (2.0 * w);
+            x = vec3<f32>(hx, t - 1.0 / w, t);
         } else {
             let d = max(1.0 - r2, 1e-9);
             x = vec3<f32>(2.0 * b / d, (1.0 + r2) / d);
@@ -343,6 +367,9 @@ fn variation_honeycomb(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<
     var out: vec2<f32>;
     if (projection == 1u) {
         out = (x.xy / t) * size;
+    } else if (projection == 2u) {
+        let iw = max(x.z - x.y, 1e-6);
+        out = vec2<f32>(x.x / iw, 1.0 / iw) * size;
     } else {
         out = (x.xy / (1.0 + t)) * size;
     }
