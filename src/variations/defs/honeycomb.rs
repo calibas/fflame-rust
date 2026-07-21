@@ -59,7 +59,9 @@ pub static HONEYCOMB: VariationDef = VariationDef {
     init_param_count: 0,
     wgsl_init: None,
     // State slot 0: the color register for the Mirror color mode.
-    state_count: 1,
+    // State slot 1: walk depth (word length since last reseed) for the
+    // Steps color mode.
+    state_count: 2,
     wgsl_state_init: None,
     parameters: &[
         param!("p", "P", int, 5.0, 2.0, 8.0, "First Schläfli number: the cell's face polygon ({5,3,4} = dodecahedral cells). Compact hyperbolic honeycombs: {5,3,4}, {4,3,5}, {3,5,3}, {5,3,5}. Other combinations still run — as spherical/Euclidean/non-discrete kaleidoscopes."),
@@ -68,10 +70,11 @@ pub static HONEYCOMB: VariationDef = VariationDef {
         param!("size", "Size", float, 1.0, 0.1, 4.0, "Radius of the ball model in world units."),
         param!("steps", "Steps", int, 2.0, 1.0, 8.0, "Random mirror reflections per call. More steps walk deeper into the group per iteration (finer boundary detail for the same budget); even counts favor orientation-preserving words."),
         param!("projection", "Projection", enum, 0, &["Poincaré", "Beltrami–Klein"], "Ball model for the plotted (and fed-forward) point. Poincaré is conformal — cells shrink smoothly toward the boundary sphere. Beltrami–Klein is projective — mirror planes render as flat planes, cells as straight-edged polyhedra."),
-        param!("dc_mode", "Color Mode", enum, 0, &["Off", "Mirror"], "Direct-color source (needs the transform's Direct Color > 0). Mirror: each of the 4 orthoscheme mirrors acts like a transform with its own palette position, blended through a persistent color register at Color Speed."),
+        param!("dc_mode", "Color Mode", enum, 0, &["Off", "Mirror", "Depth", "Steps"], "Direct-color source (needs the transform's Direct Color > 0). Mirror: each of the 4 orthoscheme mirrors acts like a transform with its own palette position, blended through a persistent color register at Color Speed. Depth: color by the output z (2D: disc radius). Steps: color by how many reflections deep the walk is since its last reseed — paints the honeycomb shell by shell (seed modes; in Input mode the depth never resets and the palette cycles)."),
         param!("dc_scale", "Color Scale", float, 1.0, 0.1, 8.0, "Palette-index multiplier for the Mirror colors (wrapped with fract)."),
         param!("color_speed", "Color Speed", float, 0.5, 0.0, 1.0, "Mirror color mode: how hard each reflection pulls the color register toward its mirror's palette position. Low = long trajectory blends, 1 = hard per-mirror assignment."),
         param!("seed", "Seed", enum, 0, &["Input", "Vertices", "Edges", "Faces"], "What the group walk stamps through the honeycomb. Input: the incoming flame measure (compose freely — any Wythoff decoration). Vertices: the honeycomb vertex — an array of dots. Edges: random points on the vertex-to-edge-center geodesic — the full ball-and-stick edge skeleton, the classic look of published honeycomb renders. Faces: random points on the orthoscheme's face triangle — the cell walls."),
+        param!("thickness", "Thickness", float, 0.0, 0.0, 0.5, "Seed modes only: perturbs the seed before it lands on the hyperboloid, turning vertices into balls, edges into tubes, faces into slabs. The walk is isometric, so the tubes stay crisp and shrink toward the boundary exactly like the cells do — hyperbolically true thickness, unlike a plot-space jitter (which would also accumulate through the fed-forward walk)."),
     ],
     wgsl_2d: WGSL_2D,
     wgsl_3d: WGSL_3D,
@@ -115,6 +118,8 @@ fn variation_honeycomb(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
     );
 
     let seed_mode = u32(get_param(xform_id, variation_id, 9u));
+    let thickness = get_param(xform_id, variation_id, 10u);
+    var depth = get_state(xform_id, variation_id, 1u);
 
     // Seed modes RESEED only occasionally: the walk continues from the
     // fed-forward point (already on the seeded skeleton) most calls, so
@@ -146,6 +151,25 @@ fn variation_honeycomb(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
             m = c0m + u * (c1m - c0m) + v * (c2m - c0m);
         }
         x = m / sqrt(max(-(m.x * m.x + m.y * m.y + m.z * m.z - m.w * m.w), 1e-6));
+        if (thickness > 0.0) {
+            // Geodesic offset in the tangent space: move exact
+            // hyperbolic distance `thickness` along a random tangent
+            // direction (x' = cosh(T)x + sinh(T)u). This is a true
+            // metric sphere SHELL around the seed — uniform tube
+            // radius everywhere and all mass exactly at distance T
+            // (hard walls). Offsetting in chordal coordinates instead
+            // rescales with position (uneven thickness) and smears the
+            // radial component into a translucent fill.
+            let zz = rng_nextf(rng) * 2.0 - 1.0;
+            let ph = rng_nextf(rng) * 6.28318530718;
+            let rxy = sqrt(max(1.0 - zz * zz, 0.0));
+            let d = vec3<f32>(rxy * cos(ph), rxy * sin(ph), zz);
+            let c = dot(d, x.xyz);
+            var u = vec4<f32>(d, 0.0) + c * x;
+            u = u / sqrt(1.0 + c * c);
+            x = cosh(thickness) * x + sinh(thickness) * u;
+        }
+        depth = 0.0;
     } else {
         // Lift ball -> hyperboloid (x^2+y^2+z^2-t^2 = -1, t > 0).
         // Points outside the ball are folded in by inversion through
@@ -188,11 +212,21 @@ fn variation_honeycomb(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
     }
 
     // Project back with the same model.
+    depth = depth + f32(steps);
+    set_state(xform_id, variation_id, 1u, depth);
     let t = max(x.w, 1.0);
+    var out: vec3<f32>;
     if (projection == 1u) {
-        return (x.xyz / t) * size;
+        out = (x.xyz / t) * size;
+    } else {
+        out = (x.xyz / (1.0 + t)) * size;
     }
-    return (x.xyz / (1.0 + t)) * size;
+    if (dc_mode == 2u) {
+        *vc = 0.5 + 0.5 * tanh(2.0 * dc_scale * out.z / size);
+    } else if (dc_mode == 3u) {
+        *vc = fract(depth * dc_scale * 0.0625);
+    }
+    return out;
 }
 "#;
 
@@ -227,6 +261,8 @@ fn variation_honeycomb(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<
     );
 
     let seed_mode = u32(get_param(xform_id, variation_id, 9u));
+    let thickness = get_param(xform_id, variation_id, 10u);
+    var depth = get_state(xform_id, variation_id, 1u);
 
     var x: vec3<f32>;
     if (seed_mode != 0u && rng_nextf(rng) < 0.1) {
@@ -246,6 +282,20 @@ fn variation_honeycomb(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<
             m = c0m + u * (c1m - c0m) + v * (c2m - c0m);
         }
         x = m / sqrt(max(-(m.x * m.x + m.y * m.y - m.z * m.z), 1e-6));
+        if (thickness > 0.0) {
+            // Geodesic tangent offset — see the 3D body. In 2D the
+            // random radius keeps the ribbon FILLED (a solid 2D ribbon
+            // projects to itself, so a filled disc reads better than a
+            // hollow ring here).
+            let ph = rng_nextf(rng) * 6.28318530718;
+            let d = vec2<f32>(cos(ph), sin(ph));
+            let tt = thickness * sqrt(rng_nextf(rng));
+            let c = dot(d, x.xy);
+            var u = vec3<f32>(d, 0.0) + c * x;
+            u = u / sqrt(1.0 + c * c);
+            x = cosh(tt) * x + sinh(tt) * u;
+        }
+        depth = 0.0;
     } else {
         var b = p / size;
         var r2 = dot(b, b);
@@ -281,10 +331,20 @@ fn variation_honeycomb(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<
         *vc = creg;
     }
 
+    depth = depth + f32(steps);
+    set_state(xform_id, variation_id, 1u, depth);
     let t = max(x.z, 1.0);
+    var out: vec2<f32>;
     if (projection == 1u) {
-        return (x.xy / t) * size;
+        out = (x.xy / t) * size;
+    } else {
+        out = (x.xy / (1.0 + t)) * size;
     }
-    return (x.xy / (1.0 + t)) * size;
+    if (dc_mode == 2u) {
+        *vc = fract(length(out) / size * dc_scale);
+    } else if (dc_mode == 3u) {
+        *vc = fract(depth * dc_scale * 0.0625);
+    }
+    return out;
 }
 "#;
