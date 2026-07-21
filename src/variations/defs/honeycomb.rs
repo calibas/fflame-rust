@@ -107,13 +107,42 @@ fn variation_honeycomb(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
     let cr = cos(pi / max(sr, 2.0));
     let s1 = sqrt(max(1.0 - cp * cp, 1e-6));
     let y2 = -cq / s1;
-    let z2 = sqrt(max(1.0 - y2 * y2, 1e-6));
-    let z3 = -cr / z2;
-    let w3 = sqrt(max(z3 * z3 - 1.0, 0.0));
+    // Completing n2/n3 depends on the [p,q] cell subgroup's geometry
+    // (a = 1 - y2^2 is, up to sign, the determinant of its 3x3 Gram):
+    //   a > 0  — spherical cell polyhedron (all compact honeycombs):
+    //            n2 stays spacelike in z, n3 carries the timelike part.
+    //   a < 0  — hyperbolic-tiling cells ({6,4,3}, {7,3,r}, ...): n2
+    //            itself needs the timelike component.
+    //   a ~ 0  — Euclidean cells ({6,3,r} — the paracompact family):
+    //            n2 is null-adjacent; z2 = w2 = 1 picks a frame, and
+    //            n3 follows from (z3-w3)(z3+w3) = 1 with
+    //            z2*z3 - w2*w3 = -cr.
+    // The old code assumed the first case and clamped the rest into
+    // garbage — p >= 6 never matched published renders.
+    let a = 1.0 - y2 * y2;
+    var z2 = 0.0;
+    var w2 = 0.0;
+    var z3 = 0.0;
+    var w3 = 0.0;
+    if (a > 1e-4) {
+        z2 = sqrt(a);
+        z3 = -cr / z2;
+        w3 = sqrt(max(z3 * z3 - 1.0, 0.0));
+    } else if (a < -1e-4) {
+        w2 = sqrt(-a);
+        w3 = cr / w2;
+        z3 = sqrt(1.0 + w3 * w3);
+    } else {
+        z2 = 1.0;
+        w2 = 1.0;
+        let crs = max(cr, 1e-3);
+        z3 = -0.5 * (crs + 1.0 / crs);
+        w3 = 0.5 * (crs - 1.0 / crs);
+    }
     var mirrors = array<vec4<f32>, 4>(
         vec4<f32>(1.0, 0.0, 0.0, 0.0),
         vec4<f32>(-cp, s1, 0.0, 0.0),
-        vec4<f32>(0.0, y2, z2, 0.0),
+        vec4<f32>(0.0, y2, z2, w2),
         vec4<f32>(0.0, 0.0, z3, w3),
     );
 
@@ -138,9 +167,14 @@ fn variation_honeycomb(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
         // the cell walls. Geodesic sampling = Minkowski chord mix
         // renormalized onto the hyperboloid; the max() guard keeps
         // ideal corners (paracompact combos) finite.
+        // Unified corner formulas (valid in all three n2/n3 cases):
+        // with C.w = 1, <C,n3> = 0 gives C.z = w3/z3, then <C,n2> = 0
+        // gives C.y = (w2 - z2*zc)/y2, and <C,n1> = 0 gives C.x.
         let zc = w3 / z3;
-        let c0m = vec4<f32>(s1 * (-z2 * zc / y2) / max(cp, 1e-6), -z2 * zc / y2, zc, 1.0);
-        let c1m = vec4<f32>(0.0, -z2 * zc / y2, zc, 1.0);
+        let y2s = select(y2, -1e-6, abs(y2) < 1e-6);
+        let yc = (w2 - z2 * zc) / y2s;
+        let c0m = vec4<f32>(s1 * yc / max(cp, 1e-6), yc, zc, 1.0);
+        let c1m = vec4<f32>(0.0, yc, zc, 1.0);
         let c2m = vec4<f32>(0.0, 0.0, zc, 1.0);
         var m = c0m;
         if (seed_mode == 2u) {
