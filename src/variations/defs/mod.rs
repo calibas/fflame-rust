@@ -153,6 +153,7 @@ mod polyhedra_project;
 mod menger;
 mod polychoron;
 mod honeycomb;
+mod honeycomb4d;
 mod glsl_fractals;
 mod glsl_tilings;
 mod glsl_fields;
@@ -334,6 +335,7 @@ pub use polyhedra_project::*;
 pub use menger::*;
 pub use polychoron::*;
 pub use honeycomb::*;
+pub use honeycomb4d::*;
 pub use glsl_fractals::*;
 pub use glsl_tilings::*;
 pub use glsl_fields::*;
@@ -1188,4 +1190,5 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &MENGER,
     &POLYCHORON,
     &HONEYCOMB,
+    &HONEYCOMB4D,
 ];
