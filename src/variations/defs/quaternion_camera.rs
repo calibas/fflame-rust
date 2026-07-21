@@ -53,6 +53,7 @@ pub static QUATERNION_CAMERA: VariationDef = VariationDef {
         param!("rot_zw", "Rotate ZW", unlimited_float, 0.0, -3.1416, 3.1416, "Rotation of the (z, w) plane in radians."),
         param!("persp", "Perspective", float, 1.0, 0.0, 4.0, "4D perspective strength: p' = xyz / (1 - persp*w) after the eye transform — a pinhole on the w axis. 0 = orthographic (drop w). Higher = stronger w-foreshortening and a closer eye; points behind the eye are hidden."),
         param!("w_depth", "W to Depth", unlimited_float, 0.0, -2.0, 2.0, "Shear the camera-space w into the plotted DEPTH: z' = z + w_depth*w (before the perspective divide). This hands w to the engine's entire per-sample depth stack — DoF blur, depth fog, far-density fade, depth-density compensation — so their existing View-panel sliders become 4th-dimension effects: w-driven blur, w-driven dimming/fade. 0 = off."),
+        param!("model", "Hyperbolic Model", enum, 0, &["Off", "Poincaré H3", "Half-Space H3", "Poincaré H4", "Half-Space H4"], "Hyperbolic model conversion applied BEFORE the eye/rotation/projection pipeline. Feed it Beltrami–Klein coordinates (the honeycomb variations' Klein projection — Klein is information-preserving, so the camera can re-derive any model from it). H3 modes convert xyz and pass w through; H4 modes convert the full (xyz, w) 4-ball — Half-Space H4 puts the height in w, ready for the pinhole and W-to-Depth stages. Off = plain 4D camera."),
     ],
     wgsl_2d: WGSL_2D,
     wgsl_3d: WGSL_3D,
@@ -67,8 +68,41 @@ fn variation_quaternion_camera(p: vec2<f32>, xform_id: u32, variation_id: u32, h
 
 const WGSL_3D: &str = r#"
 fn variation_quaternion_camera(p: vec3<f32>, xform_id: u32, variation_id: u32, hide: ptr<function, bool>) -> vec3<f32> {
+    // Optional hyperbolic model conversion (input = Beltrami-Klein
+    // coordinates; Klein determines the hyperboloid point exactly:
+    // t = 1/sqrt(1 - |b|^2)). Runs before the camera pipeline so the
+    // eye/rotations/pinhole view the converted model space.
+    var qin = vec4<f32>(p, point_w);
+    let model = u32(get_param(xform_id, variation_id, 9u));
+    if (model == 1u || model == 2u) {
+        // H3: convert xyz, pass w through.
+        let b = qin.xyz;
+        let r2 = min(dot(b, b), 1.0 - 1e-6);
+        let t = 1.0 / sqrt(1.0 - r2);
+        if (model == 1u) {
+            // Klein -> Poincare: b * t/(1+t).
+            qin = vec4<f32>(b * (t / (1.0 + t)), qin.w);
+        } else {
+            // Klein -> upper half-space: floor plane from the -z pole.
+            let dz = max(1.0 - b.z, 1e-6);
+            qin = vec4<f32>(b.x / dz, b.y / dz, 1.0 / (t * dz), qin.w);
+        }
+    } else if (model == 3u || model == 4u) {
+        // H4: convert the full 4-ball.
+        let b4 = qin;
+        let r2 = min(dot(b4, b4), 1.0 - 1e-6);
+        let t = 1.0 / sqrt(1.0 - r2);
+        if (model == 3u) {
+            qin = b4 * (t / (1.0 + t));
+        } else {
+            // Half-space: height (from the -w pole) goes to w.
+            let dw = max(1.0 - b4.w, 1e-6);
+            qin = vec4<f32>(b4.x / dw, b4.y / dw, b4.z / dw, 1.0 / (t * dw));
+        }
+    }
+
     // Full 4D point relative to the 4D eye.
-    var q = vec4<f32>(p, point_w) - vec4<f32>(
+    var q = qin - vec4<f32>(
         get_param(xform_id, variation_id, 0u),
         get_param(xform_id, variation_id, 1u),
         get_param(xform_id, variation_id, 2u),
