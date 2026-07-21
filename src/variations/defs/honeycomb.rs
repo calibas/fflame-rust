@@ -241,13 +241,28 @@ fn variation_honeycomb(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
             // (hard walls). Offsetting in chordal coordinates instead
             // rescales with position (uneven thickness) and smears the
             // radial component into a translucent fill.
+            // Uniform direction via a Minkowski-orthonormal tangent
+            // frame. Projecting a random EUCLIDEAN direction (the
+            // previous approach) biases toward the position's own
+            // spatial direction once the seed sits deep in the ball —
+            // exactly where the Wythoff variants put it — squashing
+            // the tubes along one axis.
+            var e1 = vec4<f32>(1.0, 0.0, 0.0, 0.0);
+            e1 = e1 + honeycomb_mdot(e1, x) * x;
+            e1 = e1 / sqrt(max(honeycomb_mdot(e1, e1), 1e-6));
+            var e2 = vec4<f32>(0.0, 1.0, 0.0, 0.0);
+            e2 = e2 + honeycomb_mdot(e2, x) * x;
+            e2 = e2 - honeycomb_mdot(e2, e1) * e1;
+            e2 = e2 / sqrt(max(honeycomb_mdot(e2, e2), 1e-6));
+            var e3 = vec4<f32>(0.0, 0.0, 1.0, 0.0);
+            e3 = e3 + honeycomb_mdot(e3, x) * x;
+            e3 = e3 - honeycomb_mdot(e3, e1) * e1;
+            e3 = e3 - honeycomb_mdot(e3, e2) * e2;
+            e3 = e3 / sqrt(max(honeycomb_mdot(e3, e3), 1e-6));
             let zz = rng_nextf(rng) * 2.0 - 1.0;
             let ph = rng_nextf(rng) * 6.28318530718;
             let rxy = sqrt(max(1.0 - zz * zz, 0.0));
-            let d = vec3<f32>(rxy * cos(ph), rxy * sin(ph), zz);
-            let c = dot(d, x.xyz);
-            var u = vec4<f32>(d, 0.0) + c * x;
-            u = u / sqrt(1.0 + c * c);
+            let u = (rxy * cos(ph)) * e1 + (rxy * sin(ph)) * e2 + zz * e3;
             x = cosh(thickness) * x + sinh(thickness) * u;
         }
         depth = 0.0;
@@ -429,11 +444,16 @@ fn variation_honeycomb(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<
             // projects to itself, so a filled disc reads better than a
             // hollow ring here).
             let ph = rng_nextf(rng) * 6.28318530718;
-            let d = vec2<f32>(cos(ph), sin(ph));
             let tt = thickness * sqrt(rng_nextf(rng));
-            let c = dot(d, x.xy);
-            var u = vec3<f32>(d, 0.0) + c * x;
-            u = u / sqrt(1.0 + c * c);
+            // Minkowski-orthonormal tangent frame (see the 3D body).
+            var e1 = vec3<f32>(1.0, 0.0, 0.0);
+            e1 = e1 + honeycomb_mdot2(e1, x) * x;
+            e1 = e1 / sqrt(max(honeycomb_mdot2(e1, e1), 1e-6));
+            var e2 = vec3<f32>(0.0, 1.0, 0.0);
+            e2 = e2 + honeycomb_mdot2(e2, x) * x;
+            e2 = e2 - honeycomb_mdot2(e2, e1) * e1;
+            e2 = e2 / sqrt(max(honeycomb_mdot2(e2, e2), 1e-6));
+            let u = cos(ph) * e1 + sin(ph) * e2;
             x = cosh(tt) * x + sinh(tt) * u;
         }
         depth = 0.0;
