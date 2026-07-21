@@ -154,6 +154,7 @@ mod menger;
 mod polychoron;
 mod honeycomb;
 mod honeycomb4d;
+mod quasiconformal;
 mod glsl_fractals;
 mod glsl_tilings;
 mod glsl_fields;
@@ -336,6 +337,7 @@ pub use menger::*;
 pub use polychoron::*;
 pub use honeycomb::*;
 pub use honeycomb4d::*;
+pub use quasiconformal::*;
 pub use glsl_fractals::*;
 pub use glsl_tilings::*;
 pub use glsl_fields::*;
@@ -1191,4 +1193,5 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &POLYCHORON,
     &HONEYCOMB,
     &HONEYCOMB4D,
+    &QUASICONFORMAL,
 ];
