@@ -201,20 +201,62 @@ fn variation_honeycomb4d(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: pt
             // Geodesic tangent offset (see honeycomb): random spatial
             // direction projected to the tangent space, then
             // x' = cosh(T)x + sinh(T)u.
-            let zz = rng_nextf(rng) * 2.0 - 1.0;
-            let ph = rng_nextf(rng) * 6.28318530718;
-            let ph2 = rng_nextf(rng) * 6.28318530718;
-            let rxy = sqrt(max(1.0 - zz * zz, 0.0));
-            var d = vec4<f32>(rxy * cos(ph) * cos(ph2), rxy * sin(ph) * cos(ph2), zz * cos(ph2), sin(ph2));
-            d = d / max(length(d), 1e-6);
-            let c = dot(d, xs);
-            let us = d + c * xs;
-            let ut = c * xt;
-            let un = sqrt(max(dot(us, us) - ut * ut, 1e-6));
+            // Minkowski-orthonormal tangent frame + uniform S^3
+            // direction (Marsaglia). Projecting a Euclidean direction
+            // biases toward the seed's own spatial direction at depth
+            // — exactly where the Wythoff variants sit — squashing
+            // the tubes (see honeycomb).
+            var e1s = vec4<f32>(1.0, 0.0, 0.0, 0.0);
+            var e1t = 0.0;
+            var cd = honeycomb4d_mdot(e1s, e1t, xs, xt);
+            e1s = e1s + cd * xs; e1t = e1t + cd * xt;
+            nn = sqrt(max(honeycomb4d_mdot(e1s, e1t, e1s, e1t), 1e-6));
+            e1s = e1s / nn; e1t = e1t / nn;
+            var e2s = vec4<f32>(0.0, 1.0, 0.0, 0.0);
+            var e2t = 0.0;
+            cd = honeycomb4d_mdot(e2s, e2t, xs, xt);
+            e2s = e2s + cd * xs; e2t = e2t + cd * xt;
+            cd = honeycomb4d_mdot(e2s, e2t, e1s, e1t);
+            e2s = e2s - cd * e1s; e2t = e2t - cd * e1t;
+            nn = sqrt(max(honeycomb4d_mdot(e2s, e2t, e2s, e2t), 1e-6));
+            e2s = e2s / nn; e2t = e2t / nn;
+            var e3s = vec4<f32>(0.0, 0.0, 1.0, 0.0);
+            var e3t = 0.0;
+            cd = honeycomb4d_mdot(e3s, e3t, xs, xt);
+            e3s = e3s + cd * xs; e3t = e3t + cd * xt;
+            cd = honeycomb4d_mdot(e3s, e3t, e1s, e1t);
+            e3s = e3s - cd * e1s; e3t = e3t - cd * e1t;
+            cd = honeycomb4d_mdot(e3s, e3t, e2s, e2t);
+            e3s = e3s - cd * e2s; e3t = e3t - cd * e2t;
+            nn = sqrt(max(honeycomb4d_mdot(e3s, e3t, e3s, e3t), 1e-6));
+            e3s = e3s / nn; e3t = e3t / nn;
+            var e4s = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+            var e4t = 0.0;
+            cd = honeycomb4d_mdot(e4s, e4t, xs, xt);
+            e4s = e4s + cd * xs; e4t = e4t + cd * xt;
+            cd = honeycomb4d_mdot(e4s, e4t, e1s, e1t);
+            e4s = e4s - cd * e1s; e4t = e4t - cd * e1t;
+            cd = honeycomb4d_mdot(e4s, e4t, e2s, e2t);
+            e4s = e4s - cd * e2s; e4t = e4t - cd * e2t;
+            cd = honeycomb4d_mdot(e4s, e4t, e3s, e3t);
+            e4s = e4s - cd * e3s; e4t = e4t - cd * e3t;
+            nn = sqrt(max(honeycomb4d_mdot(e4s, e4t, e4s, e4t), 1e-6));
+            e4s = e4s / nn; e4t = e4t / nn;
+            let uu = rng_nextf(rng);
+            let th1 = rng_nextf(rng) * 6.28318530718;
+            let th2 = rng_nextf(rng) * 6.28318530718;
+            let ra = sqrt(1.0 - uu);
+            let rb = sqrt(uu);
+            let d1 = ra * cos(th1);
+            let d2 = ra * sin(th1);
+            let d3 = rb * cos(th2);
+            let d4 = rb * sin(th2);
+            let us = d1 * e1s + d2 * e2s + d3 * e3s + d4 * e4s;
+            let ut = d1 * e1t + d2 * e2t + d3 * e3t + d4 * e4t;
             let ch = cosh(thickness);
             let sh = sinh(thickness);
-            xs = ch * xs + sh * us / un;
-            xt = ch * xt + sh * ut / un;
+            xs = ch * xs + sh * us;
+            xt = ch * xt + sh * ut;
         }
         depth = 0.0;
     } else {
@@ -388,11 +430,16 @@ fn variation_honeycomb4d(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: pt
         if (thickness > 0.0) {
             // Geodesic tangent offset, disc-filled (see honeycomb 2D).
             let ph = rng_nextf(rng) * 6.28318530718;
-            let d = vec2<f32>(cos(ph), sin(ph));
             let tt = thickness * sqrt(rng_nextf(rng));
-            let c = dot(d, x.xy);
-            var u = vec3<f32>(d, 0.0) + c * x;
-            u = u / sqrt(1.0 + c * c);
+            // Minkowski-orthonormal tangent frame (see honeycomb).
+            var e1 = vec3<f32>(1.0, 0.0, 0.0);
+            e1 = e1 + honeycomb4d_mdot2(e1, x) * x;
+            e1 = e1 / sqrt(max(honeycomb4d_mdot2(e1, e1), 1e-6));
+            var e2 = vec3<f32>(0.0, 1.0, 0.0);
+            e2 = e2 + honeycomb4d_mdot2(e2, x) * x;
+            e2 = e2 - honeycomb4d_mdot2(e2, e1) * e1;
+            e2 = e2 / sqrt(max(honeycomb4d_mdot2(e2, e2), 1e-6));
+            let u = cos(ph) * e1 + sin(ph) * e2;
             x = cosh(tt) * x + sinh(tt) * u;
         }
         depth = 0.0;
