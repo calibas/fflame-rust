@@ -51,7 +51,9 @@ pub static MENGER: VariationDef = VariationDef {
     features: &[Feature::NeedsRng, Feature::NeedsW, Feature::WritesColor, Feature::AlwaysZ],
     init_param_count: 0,
     wgsl_init: None,
-    state_count: 0,
+    // State slot 0: the internal color register for the Flame color
+    // mode (zero-init; converges within a few picks).
+    state_count: 1,
     wgsl_state_init: None,
     parameters: &[
         param!("dim", "Dimension", enum, 0, &["3D Sponge", "4D Tesseract", "Tesseract 4-Gap", "Tesseract 4-Gap 4D"], "3D Sponge iterates the classic Menger IFS in xyz. 4D Tesseract iterates in xyzw (the 4th coordinate rides the per-thread w register) and plots the orthographic shadow — combine with the XW/YW/ZW rotations to see genuine 4D structure. Tesseract 4-Gap is Roger Bagula's 96-point cube-within-cube construction (nested corner shells + 4 points per edge, contraction 1/5.33) — a 3D fractal that reads like a tesseract projection; Hole Rule and the rotations don't apply to it. Tesseract 4-Gap 4D applies the same recipe to the actual tesseract (224 points in R⁴, original extension) — genuinely 4D, so the XW/YW/ZW rotations and W coloring work. In 2D render mode all give the Sierpinski carpet."),
@@ -61,8 +63,9 @@ pub static MENGER: VariationDef = VariationDef {
         param!("rot_xw", "Rotate XW", angle, 0.0, "4D Tesseract mode: rotation in the x–w plane, degrees. Rotates the entire 4D attractor before its shadow is taken."),
         param!("rot_yw", "Rotate YW", angle, 0.0, "4D Tesseract mode: rotation in the y–w plane, degrees."),
         param!("rot_zw", "Rotate ZW", angle, 0.0, "4D Tesseract mode: rotation in the z–w plane, degrees."),
-        param!("dc_mode", "Color Mode", enum, 0, &["Off", "Cell", "W"], "Direct-color source (needs the transform's Direct Color > 0). Cell: color by the last sub-cell chosen — the per-transform palette spread a 20/48-transform bank would have had. W: color by the 4th coordinate — the 4D depth strata (4D mode)."),
+        param!("dc_mode", "Color Mode", enum, 0, &["Off", "Cell", "W"], "Direct-color source (needs the transform's Direct Color > 0). Cell: every internal pick acts like a transform with its own palette position — a persistent per-thread color register blends toward each pick's color at Color Speed, exactly the engine's own color evolution (Color Speed 1 = hard per-cell patches). W: color by the 4th coordinate — the 4D depth strata (4D mode)."),
         param!("dc_scale", "Color Scale", float, 1.0, 0.1, 8.0, "Palette-index multiplier for the color modes (wrapped with fract)."),
+        param!("color_speed", "Color Speed", float, 0.5, 0.0, 1.0, "Cell color mode: how hard each internal pick pulls the running color register toward its own palette position — the engine's per-transform color speed, contained in the variation. Low values = long smooth blends of trajectory history, 1 = hard per-pick assignment (the classic patchwork)."),
     ],
     wgsl_2d: WGSL_2D,
     wgsl_3d: WGSL_3D,
@@ -89,15 +92,21 @@ fn variation_menger(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
     let steps = i32(get_param(xform_id, variation_id, 3u));
     let dc_mode = u32(get_param(xform_id, variation_id, 7u));
     let dc_scale = get_param(xform_id, variation_id, 8u);
+    let color_speed = get_param(xform_id, variation_id, 9u);
 
     var q = p;
+    var creg = get_state(xform_id, variation_id, 0u);
     var code = 0.0;
     for (var s = 0; s < steps; s = s + 1) {
         let cell = menger_pick2(rng, rule);
         q = q / 3.0 + (2.0 * size / 3.0) * cell;
         code = ((cell.x + 1.0) * 3.0 + (cell.y + 1.0) + 0.5) / 9.0;
+        if (dc_mode == 1u) { creg = mix(creg, fract(code * dc_scale), color_speed); }
     }
-    if (dc_mode != 0u) {
+    if (dc_mode == 1u) {
+        set_state(xform_id, variation_id, 0u, creg);
+        *vc = creg;
+    } else if (dc_mode == 2u) {
         *vc = fract(code * dc_scale);
     }
     return q;
@@ -144,19 +153,23 @@ fn variation_menger(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
     let steps = i32(get_param(xform_id, variation_id, 3u));
     let dc_mode = u32(get_param(xform_id, variation_id, 7u));
     let dc_scale = get_param(xform_id, variation_id, 8u);
+    let color_speed = get_param(xform_id, variation_id, 9u);
 
     if (dim == 0u) {
         // 3D Menger sponge.
         var q = p;
-        var code = 0.0;
+        var creg = get_state(xform_id, variation_id, 0u);
+    var code = 0.0;
         for (var s = 0; s < steps; s = s + 1) {
             let cell = menger_pick3(rng, rule);
             q = q / 3.0 + (2.0 * size / 3.0) * cell;
             code = (((cell.x + 1.0) * 3.0 + (cell.y + 1.0)) * 3.0 + (cell.z + 1.0) + 0.5) / 27.0;
+            if (dc_mode == 1u) { creg = mix(creg, fract(code * dc_scale), color_speed); }
         }
         point_w_out = point_w;
         if (dc_mode == 1u) {
-            *vc = fract(code * dc_scale);
+            set_state(xform_id, variation_id, 0u, creg);
+            *vc = creg;
         } else if (dc_mode == 2u) {
             *vc = fract(point_w * dc_scale);
         }
@@ -174,16 +187,19 @@ fn variation_menger(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
         let rc = polychora_menger4gap_range();
         let k = 0.18761726;
         var q = p;
-        var code = 0.0;
+        var creg = get_state(xform_id, variation_id, 0u);
+    var code = 0.0;
         for (var st = 0; st < steps; st = st + 1) {
             let idx = min(u32(rng_nextf(rng) * f32(rc.y)), rc.y - 1u);
             let v = POLYCHORA_VERTS[rc.x + idx];
             q = k * q + (1.0 - k) * size * v.xyz;
             code = (f32(idx) + 0.5) / f32(rc.y);
+            if (dc_mode == 1u) { creg = mix(creg, fract(code * dc_scale), color_speed); }
         }
         point_w_out = point_w;
         if (dc_mode == 1u) {
-            *vc = fract(code * dc_scale);
+            set_state(xform_id, variation_id, 0u, creg);
+            *vc = creg;
         } else if (dc_mode == 2u) {
             *vc = fract(point_w * dc_scale);
         }
@@ -206,7 +222,8 @@ fn variation_menger(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
         let rc = polychora_menger4gap4d_range();
         let k = 0.18761726;
         var q = vec4<f32>(p, point_w);
-        var code = 0.0;
+        var creg = get_state(xform_id, variation_id, 0u);
+    var code = 0.0;
         for (var st = 0; st < steps; st = st + 1) {
             let idx = min(u32(rng_nextf(rng) * f32(rc.y)), rc.y - 1u);
             var v = POLYCHORA_VERTS[rc.x + idx] * size;
@@ -215,10 +232,12 @@ fn variation_menger(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
             v = vec4<f32>(v.x, v.y, czw * v.z - szw * v.w, szw * v.z + czw * v.w);
             q = k * q + (1.0 - k) * v;
             code = (f32(idx) + 0.5) / f32(rc.y);
+            if (dc_mode == 1u) { creg = mix(creg, fract(code * dc_scale), color_speed); }
         }
         point_w_out = q.w;
         if (dc_mode == 1u) {
-            *vc = fract(code * dc_scale);
+            set_state(xform_id, variation_id, 0u, creg);
+            *vc = creg;
         } else if (dc_mode == 2u) {
             *vc = fract(q.w * dc_scale);
         }
@@ -238,6 +257,7 @@ fn variation_menger(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
     let czw = cos(azw); let szw = sin(azw);
 
     var q = vec4<f32>(p, point_w);
+    var creg = get_state(xform_id, variation_id, 0u);
     var code = 0.0;
     for (var s = 0; s < steps; s = s + 1) {
         let cell = menger_pick4(rng, rule);
@@ -247,10 +267,12 @@ fn variation_menger(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
         off = vec4<f32>(off.x, off.y, czw * off.z - szw * off.w, szw * off.z + czw * off.w);
         q = q / 3.0 + off;
         code = ((((cell.x + 1.0) * 3.0 + (cell.y + 1.0)) * 3.0 + (cell.z + 1.0)) * 3.0 + (cell.w + 1.0) + 0.5) / 81.0;
+        if (dc_mode == 1u) { creg = mix(creg, fract(code * dc_scale), color_speed); }
     }
     point_w_out = q.w;
     if (dc_mode == 1u) {
-        *vc = fract(code * dc_scale);
+        set_state(xform_id, variation_id, 0u, creg);
+        *vc = creg;
     } else if (dc_mode == 2u) {
         *vc = fract(q.w * dc_scale);
     }

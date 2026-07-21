@@ -46,7 +46,9 @@ pub static POLYCHORON: VariationDef = VariationDef {
     features: &[Feature::NeedsRng, Feature::NeedsW, Feature::WritesColor, Feature::AlwaysZ],
     init_param_count: 0,
     wgsl_init: None,
-    state_count: 0,
+    // State slot 0: the internal color register for the Flame color
+    // mode (zero-init; converges within a few picks).
+    state_count: 1,
     wgsl_state_init: None,
     parameters: &[
         param!("shape", "Shape", enum, 2, &["5-Cell", "8-Cell (Tesseract)", "16-Cell", "24-Cell", "120-Cell", "600-Cell"], "Which regular 4-polytope's vertices to play the chaos game on. 16-Cell is the hyper-octahedron, 120-Cell the hyper-dodecahedron (600 vertices), 600-Cell the hyper-icosahedron (120 vertices); the 24-Cell is unique to 4D."),
@@ -56,8 +58,9 @@ pub static POLYCHORON: VariationDef = VariationDef {
         param!("rot_xw", "Rotate XW", angle, 20.0, "Rotation in the x–w plane, degrees. Rotates the entire 4D gasket before its shadow is taken — without any 4D rotation, axis-aligned shapes cast degenerate shadows."),
         param!("rot_yw", "Rotate YW", angle, 12.0, "Rotation in the y–w plane, degrees."),
         param!("rot_zw", "Rotate ZW", angle, 7.0, "Rotation in the z–w plane, degrees."),
-        param!("dc_mode", "Color Mode", enum, 0, &["Off", "Cell", "W"], "Direct-color source (needs the transform's Direct Color > 0). Cell: color by the chosen vertex index. W: color by the 4th coordinate — depth strata of the 4D shadow."),
+        param!("dc_mode", "Color Mode", enum, 0, &["Off", "Cell", "W"], "Direct-color source (needs the transform's Direct Color > 0). Cell: every vertex acts like a transform with its own palette position — a persistent per-thread color register blends toward each pick's color at Color Speed, exactly the engine's own color evolution (Color Speed 1 = hard per-vertex assignment). W: color by the 4th coordinate — depth strata of the 4D shadow."),
         param!("dc_scale", "Color Scale", float, 1.0, 0.1, 8.0, "Palette-index multiplier for the color modes (wrapped with fract)."),
+        param!("color_speed", "Color Speed", float, 0.5, 0.0, 1.0, "Cell color mode: how hard each internal pick pulls the running color register toward its own palette position — the engine's per-transform color speed, contained in the variation. Low values = long smooth blends of trajectory history, 1 = hard per-pick assignment (the classic patchwork)."),
     ],
     wgsl_2d: WGSL_2D,
     wgsl_3d: WGSL_3D,
@@ -71,18 +74,24 @@ fn variation_polychoron(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr
     let steps = i32(get_param(xform_id, variation_id, 3u));
     let dc_mode = u32(get_param(xform_id, variation_id, 7u));
     let dc_scale = get_param(xform_id, variation_id, 8u);
+    let color_speed = get_param(xform_id, variation_id, 9u);
 
     // 2D: chaos game on the xy shadow of the vertex table.
     let rc = polychora_range(shape);
     var q = p;
+    var creg = get_state(xform_id, variation_id, 0u);
     var code = 0.0;
     for (var i = 0; i < steps; i = i + 1) {
         let idx = min(u32(rng_nextf(rng) * f32(rc.y)), rc.y - 1u);
         let v = POLYCHORA_VERTS[rc.x + idx];
         q = s * q + (1.0 - s) * size * v.xy;
         code = (f32(idx) + 0.5) / f32(rc.y);
+        if (dc_mode == 1u) { creg = mix(creg, fract(code * dc_scale), color_speed); }
     }
-    if (dc_mode != 0u) {
+    if (dc_mode == 1u) {
+        set_state(xform_id, variation_id, 0u, creg);
+        *vc = creg;
+    } else if (dc_mode == 2u) {
         *vc = fract(code * dc_scale);
     }
     return q;
@@ -101,6 +110,7 @@ fn variation_polychoron(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
     let azw = get_param(xform_id, variation_id, 6u) * d2r;
     let dc_mode = u32(get_param(xform_id, variation_id, 7u));
     let dc_scale = get_param(xform_id, variation_id, 8u);
+    let color_speed = get_param(xform_id, variation_id, 9u);
 
     let cxw = cos(axw); let sxw = sin(axw);
     let cyw = cos(ayw); let syw = sin(ayw);
@@ -108,6 +118,7 @@ fn variation_polychoron(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
 
     let rc = polychora_range(shape);
     var q = vec4<f32>(p, point_w);
+    var creg = get_state(xform_id, variation_id, 0u);
     var code = 0.0;
     for (var i = 0; i < steps; i = i + 1) {
         let idx = min(u32(rng_nextf(rng) * f32(rc.y)), rc.y - 1u);
@@ -120,10 +131,12 @@ fn variation_polychoron(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
         v = vec4<f32>(v.x, v.y, czw * v.z - szw * v.w, szw * v.z + czw * v.w);
         q = s * q + (1.0 - s) * v;
         code = (f32(idx) + 0.5) / f32(rc.y);
+        if (dc_mode == 1u) { creg = mix(creg, fract(code * dc_scale), color_speed); }
     }
     point_w_out = q.w;
     if (dc_mode == 1u) {
-        *vc = fract(code * dc_scale);
+        set_state(xform_id, variation_id, 0u, creg);
+        *vc = creg;
     } else if (dc_mode == 2u) {
         *vc = fract(q.w * dc_scale);
     }
