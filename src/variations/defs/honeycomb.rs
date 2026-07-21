@@ -70,9 +70,9 @@ pub static HONEYCOMB: VariationDef = VariationDef {
         param!("size", "Size", float, 1.0, 0.1, 4.0, "Radius of the ball model in world units."),
         param!("steps", "Steps", int, 2.0, 1.0, 8.0, "Random mirror reflections per call. More steps walk deeper into the group per iteration (finer boundary detail for the same budget); even counts favor orientation-preserving words."),
         param!("projection", "Projection", enum, 0, &["Poincaré", "Beltrami–Klein"], "Ball model for the plotted (and fed-forward) point. Poincaré is conformal — cells shrink smoothly toward the boundary sphere. Beltrami–Klein is projective — mirror planes render as flat planes, cells as straight-edged polyhedra."),
-        param!("dc_mode", "Color Mode", enum, 0, &["Off", "Mirror", "Depth", "Steps"], "Direct-color source (needs the transform's Direct Color > 0). Mirror: each of the 4 orthoscheme mirrors acts like a transform with its own palette position, blended through a persistent color register at Color Speed. Depth: color by the output z (2D: disc radius). Steps: color by how many reflections deep the walk is since its last reseed — paints the honeycomb shell by shell (seed modes; in Input mode the depth never resets and the palette cycles)."),
+        param!("dc_mode", "Color Mode", enum, 0, &["Off", "Mirror", "Depth", "Steps"], "Direct-color source (needs the transform's Direct Color > 0). Mirror: each of the 4 orthoscheme mirrors acts like a transform with its own palette position, blended through a persistent color register at Color Speed. Depth: color by the output z (2D: disc radius). Steps: palette position sweeps start-to-end across the walk depth since the last reseed — the first shells get the first palette colors, the deepest get the last. Color Speed 1 spans the full palette over the mean walk length; Color Scale adds wrap cycles. (Seed modes; in Input mode depth never resets, so everything saturates at the final color.)"),
         param!("dc_scale", "Color Scale", float, 1.0, 0.1, 8.0, "Palette-index multiplier for the Mirror colors (wrapped with fract)."),
-        param!("color_speed", "Color Speed", float, 0.5, 0.0, 1.0, "Mirror color mode: how hard each reflection pulls the color register toward its mirror's palette position. Low = long trajectory blends, 1 = hard per-mirror assignment."),
+        param!("color_speed", "Color Speed", float, 0.5, 0.0, 1.0, "Mirror mode: how hard each reflection pulls the color register toward its mirror's palette position (low = long blends, 1 = hard assignment). Steps mode: how much of the palette the walk traverses — 1 sweeps the whole palette from first shell to the mean walk depth."),
         param!("seed", "Seed", enum, 0, &["Input", "Vertices", "Edges", "Faces"], "What the group walk stamps through the honeycomb. Input: the incoming flame measure (compose freely — any Wythoff decoration). Vertices: the honeycomb vertex — an array of dots. Edges: random points on the vertex-to-edge-center geodesic — the full ball-and-stick edge skeleton, the classic look of published honeycomb renders. Faces: random points on the orthoscheme's face triangle — the cell walls."),
         param!("thickness", "Thickness", float, 0.0, 0.0, 0.5, "Seed modes only: perturbs the seed before it lands on the hyperboloid, turning vertices into balls, edges into tubes, faces into slabs. The walk is isometric, so the tubes stay crisp and shrink toward the boundary exactly like the cells do — hyperbolically true thickness, unlike a plot-space jitter (which would also accumulate through the fed-forward walk)."),
     ],
@@ -224,7 +224,13 @@ fn variation_honeycomb(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
     if (dc_mode == 2u) {
         *vc = 0.5 + 0.5 * tanh(2.0 * dc_scale * out.z / size);
     } else if (dc_mode == 3u) {
-        *vc = fract(depth * dc_scale * 0.0625);
+        // Palette position sweeps 0 -> 1 across the MEAN walk length
+        // (10 calls at 10% reseed probability x steps reflections per
+        // call); deeper outliers clamp at the final color. Color Speed
+        // scales the sweep (1 = full palette over the mean walk),
+        // dc_scale adds wrap cycles.
+        let t = clamp(depth * color_speed / (10.0 * f32(steps)), 0.0, 1.0);
+        *vc = fract(min(t * dc_scale, 0.999));
     }
     return out;
 }
@@ -343,7 +349,13 @@ fn variation_honeycomb(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<
     if (dc_mode == 2u) {
         *vc = fract(length(out) / size * dc_scale);
     } else if (dc_mode == 3u) {
-        *vc = fract(depth * dc_scale * 0.0625);
+        // Palette position sweeps 0 -> 1 across the MEAN walk length
+        // (10 calls at 10% reseed probability x steps reflections per
+        // call); deeper outliers clamp at the final color. Color Speed
+        // scales the sweep (1 = full palette over the mean walk),
+        // dc_scale adds wrap cycles.
+        let t = clamp(depth * color_speed / (10.0 * f32(steps)), 0.0, 1.0);
+        *vc = fract(min(t * dc_scale, 0.999));
     }
     return out;
 }
