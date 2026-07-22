@@ -1563,6 +1563,13 @@ impl ShaderBuilder {
             shader.push('\n');
         }
 
+        // 7f. SU(3)-reduced Mobius group table (Bagula) for `su3_mobius`.
+        let needs_su3 = active.iter().any(|(name, _)| name == "su3_mobius");
+        if needs_su3 {
+            shader.push_str(include_str!("../shaders/core/su3_mobius.wgsl"));
+            shader.push('\n');
+        }
+
         // 8. Per-flame packed get_param (must come before utilities, which
         //    references it in some places via inlined comments). The packed
         //    version replaces the fixed-stride version that used to live in
