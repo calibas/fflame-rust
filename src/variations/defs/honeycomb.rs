@@ -64,9 +64,9 @@ pub static HONEYCOMB: VariationDef = VariationDef {
     state_count: 2,
     wgsl_state_init: None,
     parameters: &[
-        param!("p", "P", int, 5.0, 2.0, 8.0, "First Schläfli number: the cell's face polygon ({5,3,4} = dodecahedral cells). Compact hyperbolic honeycombs: {5,3,4}, {4,3,5}, {3,5,3}, {5,3,5}. Other combinations still run — as spherical/Euclidean/non-discrete kaleidoscopes."),
-        param!("q", "Q", int, 3.0, 2.0, 8.0, "Second Schläfli number: faces around each cell vertex ({p,q} is the cell polyhedron). In 2D render mode {p,q} is the tiling itself."),
-        param!("r", "R", int, 4.0, 2.0, 8.0, "Third Schläfli number: cells around each edge. 4 = order-4 dodecahedral honeycomb at the defaults. Ignored in 2D render mode."),
+        param!("p", "P", int, 5.0, 2.0, 12.0, "First Schläfli number: the cell's face polygon ({5,3,4} = dodecahedral cells). Compact hyperbolic honeycombs: {5,3,4}, {4,3,5}, {3,5,3}, {5,3,5}. Other combinations still run — as spherical/Euclidean/non-discrete kaleidoscopes."),
+        param!("q", "Q", int, 3.0, 2.0, 12.0, "Second Schläfli number: faces around each cell vertex ({p,q} is the cell polyhedron). In 2D render mode (p,q,r) is the general Fuchsian triangle group."),
+        param!("r", "R", int, 4.0, 2.0, 12.0, "Third Schläfli number: cells around each edge (3D). In 2D render mode this is the THIRD triangle angle: the group becomes the general (p,q,r) triangle group (angles pi/p, pi/q, pi/r) — r = 2 gives the standard {p,q} tiling, r > 2 the full Fuchsian triangle groups like (2,3,12)."),
         param!("size", "Size", float, 1.0, 0.1, 4.0, "Radius of the ball model in world units."),
         param!("steps", "Steps", int, 2.0, 1.0, 8.0, "Random mirror reflections per call. More steps walk deeper into the group per iteration (finer boundary detail for the same budget); even counts favor orientation-preserving words."),
         param!("projection", "Projection", enum, 0, &["Poincaré", "Beltrami–Klein", "Half-Space"], "Model of hyperbolic space for the plotted (and fed-forward) point. Poincaré: conformal ball — cells shrink toward the boundary sphere. Beltrami–Klein: projective ball — straight geodesics, flat cell walls. Half-Space: the honeycomb fills the region above an infinite floor plane, cells shrinking toward the floor and growing overhead (the classic 'honeycomb over a plane' renders; upper half-PLANE in 2D)."),
@@ -356,6 +356,7 @@ fn honeycomb_mdot2(a: vec3<f32>, b: vec3<f32>) -> f32 {
 fn variation_honeycomb(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec2<f32> {
     let sp = get_param(xform_id, variation_id, 0u);
     let sq = get_param(xform_id, variation_id, 1u);
+    let sr = get_param(xform_id, variation_id, 2u);
     let size = max(get_param(xform_id, variation_id, 3u), 1e-6);
     let steps = i32(get_param(xform_id, variation_id, 4u));
     let projection = u32(get_param(xform_id, variation_id, 5u));
@@ -364,19 +365,23 @@ fn variation_honeycomb(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<
     let color_speed = get_param(xform_id, variation_id, 8u);
     let variant = u32(get_param(xform_id, variation_id, 11u));
 
-    // Triangle-group [p,q] mirrors in R^(2,1) — the {p,q} tiling of
-    // the hyperbolic disc (hyperbolic iff 1/p + 1/q < 1/2; other
-    // combos degrade via the same clamps as 3D).
+    // General (p,q,r) triangle-group mirrors in R^(2,1): the three
+    // mirror-pair angles are pi/p (n0,n1), pi/q (n1,n2), pi/r (n0,n2)
+    // — the reflection group of the (p,q,r) hyperbolic triangle
+    // (hyperbolic iff 1/p+1/q+1/r < 1). r = 2 makes n0 ⊥ n2 and
+    // recovers the {p,q} tiling's (2,p,q) group exactly.
     let pi = 3.14159265359;
     let cp = cos(pi / max(sp, 2.0));
     let cq = cos(pi / max(sq, 2.0));
+    let cr = cos(pi / max(sr, 2.0));
     let s1 = sqrt(max(1.0 - cp * cp, 1e-6));
-    let y2 = -cq / s1;
-    let w2 = sqrt(max(y2 * y2 - 1.0, 0.0));
+    let n2x = -cr;
+    let n2y = (-cq - cp * cr) / s1;
+    let w2 = sqrt(max(n2x * n2x + n2y * n2y - 1.0, 0.0));
     var mirrors = array<vec3<f32>, 3>(
         vec3<f32>(1.0, 0.0, 0.0),
         vec3<f32>(-cp, s1, 0.0),
-        vec3<f32>(0.0, y2, w2),
+        vec3<f32>(n2x, n2y, w2),
     );
 
     let seed_mode = u32(get_param(xform_id, variation_id, 9u));
@@ -404,7 +409,7 @@ fn variation_honeycomb(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<
         let px = rc0;
         let py = (rc1 + cp * px) / s1;
         let w2s = max(w2, 1e-6);
-        let pt = (y2 * py - rc2) / w2s;
+        let pt = (n2x * px + n2y * py - rc2) / w2s;
         var pm = vec3<f32>(px, py, pt);
         if (pm.z < 0.0) { pm = -pm; }
         let wp = pm / sqrt(max(-honeycomb_mdot2(pm, pm), 1e-6));

@@ -47,10 +47,10 @@ pub static HONEYCOMB4D: VariationDef = VariationDef {
     state_count: 2,
     wgsl_state_init: None,
     parameters: &[
-        param!("p", "P", int, 5.0, 2.0, 8.0, "First Schläfli number. Compact hyperbolic H⁴ honeycombs: {5,3,3,4}, {5,3,3,5}, {4,3,3,5}, {3,3,3,5}, {5,3,3,3}; {4,3,3,4} is the Euclidean tesseractic honeycomb. Other combinations degrade to spherical/Euclidean/non-discrete kaleidoscopes."),
-        param!("q", "Q", int, 3.0, 2.0, 8.0, "Second Schläfli number ({p,q,r} is the 4-polytope cell)."),
-        param!("r", "R", int, 3.0, 2.0, 8.0, "Third Schläfli number."),
-        param!("s", "S", int, 4.0, 2.0, 8.0, "Fourth Schläfli number: cells around each 2-face."),
+        param!("p", "P", int, 5.0, 2.0, 12.0, "First Schläfli number. Compact hyperbolic H⁴ honeycombs: {5,3,3,4}, {5,3,3,5}, {4,3,3,5}, {3,3,3,5}, {5,3,3,3}; {4,3,3,4} is the Euclidean tesseractic honeycomb. Other combinations degrade to spherical/Euclidean/non-discrete kaleidoscopes."),
+        param!("q", "Q", int, 3.0, 2.0, 12.0, "Second Schläfli number ({p,q,r} is the 4-polytope cell)."),
+        param!("r", "R", int, 3.0, 2.0, 12.0, "Third Schläfli number (4D). In 2D render mode this is the third triangle angle — (p,q,r) becomes the general Fuchsian triangle group; r = 2 gives the {p,q} tiling."),
+        param!("s", "S", int, 4.0, 2.0, 12.0, "Fourth Schläfli number: cells around each 2-face."),
         param!("size", "Size", float, 1.0, 0.1, 4.0, "Radius of the 4-ball model in world units."),
         param!("steps", "Steps", int, 2.0, 1.0, 8.0, "Random mirror reflections per call (5 mirrors)."),
         param!("projection", "Projection", enum, 0, &["Poincaré", "Beltrami–Klein", "Half-Space"], "Model of H⁴ for the plotted (and fed-forward) 4-ball point; the xyz shadow is plotted and the 4th ball coordinate rides the per-thread w register. Half-Space uses the 4th coordinate as the height above the floor hyperplane."),
@@ -347,6 +347,7 @@ fn honeycomb4d_mdot2(a: vec3<f32>, b: vec3<f32>) -> f32 {
 fn variation_honeycomb4d(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec2<f32> {
     let sp = get_param(xform_id, variation_id, 0u);
     let sq = get_param(xform_id, variation_id, 1u);
+    let sr = get_param(xform_id, variation_id, 2u);
     let size = max(get_param(xform_id, variation_id, 4u), 1e-6);
     let steps = i32(get_param(xform_id, variation_id, 5u));
     let projection = u32(get_param(xform_id, variation_id, 6u));
@@ -355,16 +356,20 @@ fn variation_honeycomb4d(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: pt
     let color_speed = get_param(xform_id, variation_id, 9u);
     var depth = get_state(xform_id, variation_id, 1u);
 
+    // General (p,q,r) triangle group in 2D render mode (r = 2 recovers
+    // the {p,q} tiling); see honeycomb. s is unused here.
     let pi = 3.14159265359;
     let cp = cos(pi / max(sp, 2.0));
     let cq = cos(pi / max(sq, 2.0));
+    let cr = cos(pi / max(sr, 2.0));
     let s1 = sqrt(max(1.0 - cp * cp, 1e-6));
-    let y2 = -cq / s1;
-    let w2 = sqrt(max(y2 * y2 - 1.0, 0.0));
+    let n2x = -cr;
+    let n2y = (-cq - cp * cr) / s1;
+    let w2 = sqrt(max(n2x * n2x + n2y * n2y - 1.0, 0.0));
     var mirrors = array<vec3<f32>, 3>(
         vec3<f32>(1.0, 0.0, 0.0),
         vec3<f32>(-cp, s1, 0.0),
-        vec3<f32>(0.0, y2, w2),
+        vec3<f32>(n2x, n2y, w2),
     );
 
     let seed_mode = u32(get_param(xform_id, variation_id, 10u));
@@ -393,7 +398,7 @@ fn variation_honeycomb4d(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: pt
         let px = rc0;
         let py = (rc1 + cp * px) / s1;
         let w2s = max(w2, 1e-6);
-        let pt = (y2 * py - rc2) / w2s;
+        let pt = (n2x * px + n2y * py - rc2) / w2s;
         var pm = vec3<f32>(px, py, pt);
         if (pm.z < 0.0) { pm = -pm; }
         let wp = pm / sqrt(max(-honeycomb4d_mdot2(pm, pm), 1e-6));
