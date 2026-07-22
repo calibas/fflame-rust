@@ -56,6 +56,8 @@ pub static SU3_MOBIUS: VariationDef = VariationDef {
         param!("dc_mode", "Color Mode", enum, 0, &["Off", "Generator"], "Direct-color source (needs the transform's Direct Color > 0). Generator: each of the 16 group elements has its own palette position, blended through a persistent color register at Color Speed — colors the three quark disks by which subgroup's generators reach them."),
         param!("dc_scale", "Color Scale", float, 1.0, 0.1, 8.0, "Palette-index multiplier for the Generator color (wrapped with fract)."),
         param!("color_speed", "Color Speed", float, 0.5, 0.0, 1.0, "How hard each generator pulls the color register toward its own palette position. Low = long blends of orbit history, 1 = hard per-generator assignment."),
+        param!("conj_angle", "Conjugator Angle", angle, 45.0, "The triquasiconformal rotation θ in the conjugator C = dk·s0·qf(θ). Bagula's value is 45° (the '45' in the title); sweeping it deforms the whole limit set — the three disks breathe and reshape."),
+        param!("qc_strength", "QC Strength", float, 1.0, 0.0, 2.0, "Quasiconformal deformation δ in dk = [[1+iδ,1],[1,1−iδ]]. 1 = Bagula's group (loxodromic, the fractal limit set); toward 0 the generators lose their quasiconformal stretch and the limit set collapses; > 1 exaggerates it."),
     ],
     wgsl_2d: WGSL_2D,
     wgsl_3d: WGSL_3D,
@@ -67,6 +69,10 @@ fn variation_su3_mobius(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr
     let dc_mode = u32(get_param(xform_id, variation_id, 1u));
     let dc_scale = get_param(xform_id, variation_id, 2u);
     let color_speed = get_param(xform_id, variation_id, 3u);
+    let theta = get_param(xform_id, variation_id, 4u) * 0.01745329252;
+    let delta = get_param(xform_id, variation_id, 5u);
+    let cj = su3_conjugator(theta, delta);
+    let cji = su3_matinv(cj);
 
     var k = min(u32(rng_nextf(rng) * 16.0), 15u);
     if (avoid) {
@@ -84,7 +90,7 @@ fn variation_su3_mobius(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr
         set_state(xform_id, variation_id, 1u, creg);
         *vc = creg;
     }
-    return su3_mobius_apply(k, p);
+    return su3_mobius_apply(k, p, cj, cji);
 }
 "#;
 
@@ -94,6 +100,10 @@ fn variation_su3_mobius(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
     let dc_mode = u32(get_param(xform_id, variation_id, 1u));
     let dc_scale = get_param(xform_id, variation_id, 2u);
     let color_speed = get_param(xform_id, variation_id, 3u);
+    let theta = get_param(xform_id, variation_id, 4u) * 0.01745329252;
+    let delta = get_param(xform_id, variation_id, 5u);
+    let cj = su3_conjugator(theta, delta);
+    let cji = su3_matinv(cj);
 
     var k = min(u32(rng_nextf(rng) * 16.0), 15u);
     if (avoid) {
@@ -110,6 +120,6 @@ fn variation_su3_mobius(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
         set_state(xform_id, variation_id, 1u, creg);
         *vc = creg;
     }
-    return vec3<f32>(su3_mobius_apply(k, p.xy), p.z);
+    return vec3<f32>(su3_mobius_apply(k, p.xy, cj, cji), p.z);
 }
 "#;
