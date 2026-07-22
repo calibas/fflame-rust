@@ -1563,10 +1563,10 @@ impl ShaderBuilder {
             shader.push('\n');
         }
 
-        // 7f. SU(3)-reduced Mobius group table (Bagula) for `su3_mobius`.
-        let needs_su3 = active.iter().any(|(name, _)| name == "su3_mobius");
-        if needs_su3 {
-            shader.push_str(include_str!("../shaders/core/su3_mobius.wgsl"));
+        // 7f. SU(n) Mobius group tables (Bagula) for `su_mobius`.
+        let needs_su = active.iter().any(|(name, _)| name == "su_mobius");
+        if needs_su {
+            shader.push_str(include_str!("../shaders/core/su_mobius.wgsl"));
             shader.push('\n');
         }
 
