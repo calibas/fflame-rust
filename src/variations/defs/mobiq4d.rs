@@ -55,6 +55,7 @@ pub static MOBIQ4D: VariationDef = VariationDef {
         param!("qdx", "qd.x", unlimited_float, 0.0, -10.0, 10.0, "i component of quaternion D."),
         param!("qdy", "qd.y", unlimited_float, 0.0, -10.0, 10.0, "j component of quaternion D."),
         param!("qdz", "qd.z", unlimited_float, 0.0, -10.0, 10.0, "k component of quaternion D."),
+        param!("k_input", "K Input", float, 1.0, 0.0, 1.0, "How much of the per-thread w register feeds the quaternion's k input. 1 = the honest 4D group action; 0 = the xyz output reproduces classic mobiq EXACTLY (the k output still writes to w). Animating 0→1 morphs continuously from the classic projection's fuzz to the group action's crisp limit sets."),
     ],
     init_param_count: 0,
     wgsl_init: None,
@@ -128,7 +129,8 @@ fn variation_mobiq4d(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
     let tx = p.x;
     let xx = p.y;
     let yy = p.z;
-    let zz = point_w;
+    let k_in = get_param(xform_id, variation_id, 16u);
+    let zz = point_w * k_in;
 
     let nt = qat * tx - qax * xx - qay * yy - qaz * zz + qbt;
     let nx = qat * xx + qax * tx + qay * zz - qaz * yy + qbx;

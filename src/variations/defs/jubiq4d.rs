@@ -57,10 +57,11 @@ pub static JUBIQ4D: VariationDef = VariationDef {
         param!("qdx", "QD x", unlimited_float, 0.0, -10.0, 10.0, "Möbius denominator quaternion D, i component."),
         param!("qdy", "QD y", unlimited_float, 0.0, -10.0, 10.0, "Möbius denominator quaternion D, j component."),
         param!("qdz", "QD z", unlimited_float, 0.0, -10.0, 10.0, "Möbius denominator quaternion D, k component."),
+        param!("k_input", "K Input", float, 1.0, 0.0, 1.0, "How much of the per-thread w register feeds the quaternion's k input. 1 = the honest 4D Möbius stage; 0 = xyz output reproduces classic jubiQ exactly (k output still writes to w). Animate for a projection→group-action morph."),
     ],
     init_param_count: 2,
     wgsl_init: Some(r#"
-fn init_jubiq4d(user: array<f32, 24>) -> array<f32, 2> {
+fn init_jubiq4d(user: array<f32, 25>) -> array<f32, 2> {
     let power = user[0];
     let dist = user[1];
     let safe_power = select(power, 1e-30, abs(power) < 1e-30);
@@ -102,8 +103,8 @@ fn variation_jubiq4d(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<fu
     let qdx = get_param(xform_id, variation_id, 21u);
     let qdy = get_param(xform_id, variation_id, 22u);
     let qdz = get_param(xform_id, variation_id, 23u);
-    let abs_n = get_param(xform_id, variation_id, 24u);
-    let cn = get_param(xform_id, variation_id, 25u);
+    let abs_n = get_param(xform_id, variation_id, 25u);
+    let cn = get_param(xform_id, variation_id, 26u);
     let two_pi = 6.28318530717959;
 
     let t2 = p.x; let x2 = p.y;
@@ -164,11 +165,12 @@ fn variation_jubiq4d(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fu
     let qdx = get_param(xform_id, variation_id, 21u);
     let qdy = get_param(xform_id, variation_id, 22u);
     let qdz = get_param(xform_id, variation_id, 23u);
-    let abs_n = get_param(xform_id, variation_id, 24u);
-    let cn = get_param(xform_id, variation_id, 25u);
+    let abs_n = get_param(xform_id, variation_id, 25u);
+    let cn = get_param(xform_id, variation_id, 26u);
     let two_pi = 6.28318530717959;
 
-    let t2 = p.x; let x2 = p.y; let y2 = p.z; let z2 = point_w;
+    let k_in = get_param(xform_id, variation_id, 24u);
+    let t2 = p.x; let x2 = p.y; let y2 = p.z; let z2 = point_w * k_in;
     let nt = qat * t2 - qax * x2 - qay * y2 - qaz * z2 + qbt;
     let nx = qat * x2 + qax * t2 + qay * z2 - qaz * y2 + qbx;
     let ny = qat * y2 - qax * z2 + qay * t2 + qaz * x2 + qby;
