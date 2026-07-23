@@ -29,6 +29,21 @@
 //! tables (in `shaders/core/su_mobius.wgsl`) are the only thing a new
 //! SU(n) member would add.
 //!
+//! - **Fuchsian Triangle** — Bagula's "3group triangle ⟨2,3,12⟩"
+//!   (`two_Programs_McMullen_Nylander_3group_triangle2312_*.nb`): three
+//!   exact generators `s1 = [[3,-1],[1,0]]` (hyperbolic),
+//!   `s2 = [[e^{2πi/3},3],[0,e^{-2πi/3}]]` (elliptic order 3),
+//!   `s3 = rotate-like [[cos,i·sin],[i·sin,cos]](2π/12)` (elliptic,
+//!   fixes ±1) + inverses, computed in the init pass from the Tri
+//!   sliders (trace / q / r / shear = the notebook's own constants
+//!   3 / 3 / 12 / 3). The McMullen program is literally this chaos
+//!   game (`RandomChoice[generators]` orbit of z₀ = 0); the elliptic
+//!   orbits paint the circles, the hyperbolic element scatters them
+//!   fractally — the swiss-cheese packing. The notebook applies no
+//!   conjugation (its s0/qf are vestigial), so our conjugator Möbius-
+//!   warps the picture — circles stay circles (the "even → uneven"
+//!   deformation).
+//!
 //! `avoid_reversal` skips a generator's inverse right after it (no
 //! `g·g⁻¹` backtracking; the inverse of local index j is
 //! `(j + count/2) mod count`), drifting through the limit set instead
@@ -58,7 +73,7 @@ pub static SU_MOBIUS: VariationDef = VariationDef {
     state_count: 2,
     wgsl_state_init: None,
     parameters: &[
-        param!("group", "Group", enum, 1, &["SU(2) 6-Group", "SU(3) Reduced", "SU(5) Reduced", "SU(3) Custom", "SU(4) Reduced", "SU(2) Custom", "SU(4) Custom"], "Which SU(n) generator set. SU(2) 6-Group (12 generators) — set Angle 0 / Hyper Angle 45 for Bagula's hypertriquasiconformal Apollonian disk. SU(3) Reduced (16 generators) — Angle 45 / Hyper 0 (the defaults) for the three-quark-disk limit set. SU(5) Reduced (48 gens, our reduction) — pair with Symmetry 4-Fold. Custom groups (SU(2)/SU(3)/SU(4)) compute their reduction LIVE from the Reduce A/B/C/D + Plug sliders (init pass) — dial the reduction tensor and the pole-plug to explore the infinite SU(n) family and the circle packing. SU(4) Reduced is a baked our-reduction (30 gens)."),
+        param!("group", "Group", enum, 1, &["SU(2) 6-Group", "SU(3) Reduced", "SU(5) Reduced", "SU(3) Custom", "SU(4) Reduced", "SU(2) Custom", "SU(4) Custom", "Fuchsian Triangle"], "Which generator set. SU(2) 6-Group (12 generators) — set Angle 0 / Hyper Angle 45 for Bagula's hypertriquasiconformal Apollonian disk. SU(3) Reduced (16 generators) — Angle 45 / Hyper 0 (the defaults) for the three-quark-disk limit set. SU(5) Reduced (48 gens, our reduction) — pair with Symmetry 4-Fold. Custom groups (SU(2)/SU(3)/SU(4)) compute their reduction LIVE from the Reduce A/B/C/D + Plug sliders (init pass) — dial the reduction tensor and the pole-plug to explore the infinite SU(n) family and the circle packing. SU(4) Reduced is a baked our-reduction (30 gens). Fuchsian Triangle is Bagula's ⟨2,3,12⟩ 3-generator Kleinian group (McMullen/Nylander programs): one hyperbolic + two elliptic generators (Tri Trace / Order Q / Order R / Shear sliders) + inverses, computed live in the init pass — the swiss-cheese circle packing. The notebook applies no conjugation, so the Angle/Hyper/QC sliders are inactive here; warp the packing with a post or final Möbius/quasiconformal transform instead."),
         param!("avoid_reversal", "Avoid Reversal", bool, true, "Skip a generator's inverse immediately after applying it (no g·g⁻¹ cancellation), so the orbit drifts through the limit set instead of dithering on a small subset. Off = all generators equally likely every call."),
         param!("conj_angle", "Angle", angle, 45.0, "Elliptic rotation θ in the conjugator qf = rotate(θ + iη). SU(3)'s triquasiconformal '45'. Sweeping it deforms the whole limit set."),
         param!("conj_hyper", "Hyper Angle", angle, 0.0, "HYPERBOLIC rotation η (imaginary angle) in qf = rotate(θ + iη) — the 'hyper' in SU(2)'s hypertriquasiconformal. 45° with Angle 0 is Bagula's SU(2) 6-group; nonzero η bends the group loxodromically, compacting lattices toward Apollonian disks."),
@@ -77,6 +92,10 @@ pub static SU_MOBIUS: VariationDef = VariationDef {
         param!("red_d_re", "Reduce D re", unlimited_float, -1.0, -4.0, 4.0, "SU(4) Custom mode: real part of reduction entry d (the 4th tensor column). Unused by SU(2)/SU(3) Custom."),
         param!("red_d_im", "Reduce D im", unlimited_float, 0.0, -4.0, 4.0, "Imag part of reduction entry d."),
         param!("red_plug", "Plug", float, 2.0, 0.0, 4.0, "SU(3) Custom mode: trace added to the traceless reduced matrices to plug their Möbius poles. 2 makes them parabolic → Apollonian circle packing; 0 leaves them as pole-y involutions; the circles live near 2."),
+        param!("tri_trace", "Tri Trace", unlimited_float, 3.0, -4.0, 4.0, "Fuchsian Triangle mode: trace of the first generator s1 = [[t,-1],[1,0]]. |t| > 2 is hyperbolic (Bagula's 3 — spreads the elliptic circles fractally), t = 2 parabolic, t = 2·cos(π/n) elliptic of order n. Ignored by the SU(n) groups."),
+        param!("tri_q", "Tri Order Q", int, 3.0, 1.0, 24.0, "Fuchsian Triangle mode: order of the second generator s2 = [[e^{2πi/q}, shear],[0, e^{-2πi/q}]] — an elliptic rotation of order q (Bagula's 3). Its orbits paint the mid-scale circles."),
+        param!("tri_r", "Tri Order R", int, 12.0, 1.0, 24.0, "Fuchsian Triangle mode: order of the third generator s3 — the elliptic rotation by 2π/r fixing ±1 (Bagula's 12, the ⟨2,3,12⟩ 30° angle). Its orbits paint the fine circle rings."),
+        param!("tri_shear", "Tri Shear", unlimited_float, 3.0, -4.0, 4.0, "Fuchsian Triangle mode: the off-diagonal shear in s2 (Bagula's 3). Pushes s2's two fixed points apart — 0 makes s2 a pure diagonal rotation about 0/∞."),
     ],
     init_param_count: 240,
     wgsl_init: Some(WGSL_INIT),
@@ -85,7 +104,7 @@ pub static SU_MOBIUS: VariationDef = VariationDef {
 };
 
 const WGSL_INIT: &str = r#"
-fn init_su_mobius(user: array<f32, 19>) -> array<f32, 240> {
+fn init_su_mobius(user: array<f32, 23>) -> array<f32, 240> {
     let group = u32(user[0]);
     let a = vec2<f32>(user[10], user[11]); let b = vec2<f32>(user[12], user[13]);
     let c = vec2<f32>(user[14], user[15]); let d = vec2<f32>(user[16], user[17]);
@@ -331,6 +350,48 @@ fn init_su_mobius(user: array<f32, 19>) -> array<f32, 240> {
             out[232u]=nd.x; out[233u]=nd.y; out[234u]=-nb.x; out[235u]=-nb.y; out[236u]=-nc.x; out[237u]=-nc.y; out[238u]=na.x; out[239u]=na.y;
         }
     }
+    if (group == 7u) {
+        // Bagula's "3group triangle <2,3,12>" Kleinian generators
+        // (two_Programs_McMullen_Nylander_3group_triangle2312_*.nb):
+        //   s1 = [[3,-1],[1,0]]                        trace 3  -> hyperbolic
+        //   s2 = [[e^{2pi i/3}, 3],[0, e^{-2pi i/3}]]  trace -1 -> elliptic order 3
+        //   s3 = [[cos(2pi/12), i sin],[i sin, cos]]   trace v3 -> elliptic, fixes +-1
+        // plus inverses (6 generators, McMullen random orbit of z0 = 0). NOT
+        // a von Dyck presentation (no product relations; a cocompact triangle
+        // rotation group's limit set would be a round circle) — the elliptic
+        // orbits paint the circles, the hyperbolic element arranges them
+        // fractally: the swiss-cheese packing. Generalized along the
+        // notebook's own constants: the s1 trace (3), the two angles
+        // (2pi/q, 2pi/r), and the s2 shear (3). All three matrices have
+        // det = 1 identically for every slider value, so no plug/normalize.
+        let pi = 3.14159265359;
+        let t1 = user[19];
+        let aq = 2.0 * pi / max(user[20], 1.0);
+        let ar = 2.0 * pi / max(user[21], 1.0);
+        let sh = user[22];
+        var ga: array<vec2<f32>, 3>;
+        var gb: array<vec2<f32>, 3>;
+        var gc: array<vec2<f32>, 3>;
+        var gd: array<vec2<f32>, 3>;
+        // s1 = [[t1, -1], [1, 0]]
+        ga[0] = vec2<f32>(t1, 0.0); gb[0] = vec2<f32>(-1.0, 0.0);
+        gc[0] = vec2<f32>(1.0, 0.0); gd[0] = vec2<f32>(0.0, 0.0);
+        // s2 = [[e^{i aq}, sh], [0, e^{-i aq}]]
+        ga[1] = vec2<f32>(cos(aq), sin(aq)); gb[1] = vec2<f32>(sh, 0.0);
+        gc[1] = vec2<f32>(0.0, 0.0); gd[1] = vec2<f32>(cos(aq), -sin(aq));
+        // s3 = [[cos(ar), i sin(ar)], [i sin(ar), cos(ar)]]
+        ga[2] = vec2<f32>(cos(ar), 0.0); gb[2] = vec2<f32>(0.0, sin(ar));
+        gc[2] = vec2<f32>(0.0, sin(ar)); gd[2] = vec2<f32>(cos(ar), 0.0);
+        for (var i = 0u; i < 3u; i = i + 1u) {
+            let na = ga[i]; let nb = gb[i]; let nc = gc[i]; let nd = gd[i];
+            let o = i * 8u; let oi = 24u + i * 8u;
+            out[o] = na.x; out[o + 1u] = na.y; out[o + 2u] = nb.x; out[o + 3u] = nb.y;
+            out[o + 4u] = nc.x; out[o + 5u] = nc.y; out[o + 6u] = nd.x; out[o + 7u] = nd.y;
+            // inverse of a det-1 matrix: [[d,-b],[-c,a]]
+            out[oi] = nd.x; out[oi + 1u] = nd.y; out[oi + 2u] = -nb.x; out[oi + 3u] = -nb.y;
+            out[oi + 4u] = -nc.x; out[oi + 5u] = -nc.y; out[oi + 6u] = na.x; out[oi + 7u] = na.y;
+        }
+    }
     return out;
 }
 "#;
@@ -350,8 +411,17 @@ fn variation_su_mobius(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<
     let rc = su_group_range(group);
     let cnt = rc.y;
     let half = cnt / 2u;
-    let cj = su_conjugator(theta, eta, delta);
-    let cji = su_matinv(cj);
+    // Fuchsian Triangle (group 7): Bagula's triangle notebook applies NO
+    // conjugation (its s0/qf cells are vestigial), so use the identity —
+    // conjugating the group is exactly equivalent to post-warping the
+    // picture with C, which a post/final Möbius or quasiconformal
+    // transform does compositionally.
+    var cj = SuMat(vec2<f32>(1.0, 0.0), vec2<f32>(0.0, 0.0), vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 0.0));
+    var cji = cj;
+    if (group != 7u) {
+        cj = su_conjugator(theta, eta, delta);
+        cji = su_matinv(cj);
+    }
 
     var k = min(u32(rng_nextf(rng) * f32(cnt)), cnt - 1u);
     if (avoid) {
@@ -370,8 +440,8 @@ fn variation_su_mobius(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<
     }
     let gidx = rc.x + k;
     var out: vec2<f32>;
-    if (group == 3u || group == 5u || group == 6u) {
-        let bo = 19u + k * 8u;   // init-derived base matrix, 19 = user param count
+    if (group == 3u || group == 5u || group == 6u || group == 7u) {
+        let bo = 23u + k * 8u;   // init-derived base matrix, 23 = user param count
         let ba = SuMat(
             vec2<f32>(get_param(xform_id, variation_id, bo), get_param(xform_id, variation_id, bo + 1u)),
             vec2<f32>(get_param(xform_id, variation_id, bo + 2u), get_param(xform_id, variation_id, bo + 3u)),
@@ -409,8 +479,13 @@ fn variation_su_mobius(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
     let rc = su_group_range(group);
     let cnt = rc.y;
     let half = cnt / 2u;
-    let cj = su_conjugator(theta, eta, delta);
-    let cji = su_matinv(cj);
+    // Group 7 skips conjugation — see the 2D body.
+    var cj = SuMat(vec2<f32>(1.0, 0.0), vec2<f32>(0.0, 0.0), vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 0.0));
+    var cji = cj;
+    if (group != 7u) {
+        cj = su_conjugator(theta, eta, delta);
+        cji = su_matinv(cj);
+    }
 
     var k = min(u32(rng_nextf(rng) * f32(cnt)), cnt - 1u);
     if (avoid) {
@@ -430,8 +505,8 @@ fn variation_su_mobius(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
     let gidx = rc.x + k;
     let space = u32(get_param(xform_id, variation_id, 8u));
     var out: vec3<f32>;
-    if (group == 3u || group == 5u || group == 6u) {
-        let bo = 19u + k * 8u;
+    if (group == 3u || group == 5u || group == 6u || group == 7u) {
+        let bo = 23u + k * 8u;
         let ba = SuMat(
             vec2<f32>(get_param(xform_id, variation_id, bo), get_param(xform_id, variation_id, bo + 1u)),
             vec2<f32>(get_param(xform_id, variation_id, bo + 2u), get_param(xform_id, variation_id, bo + 3u)),

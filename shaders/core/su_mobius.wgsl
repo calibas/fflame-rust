@@ -119,6 +119,7 @@ fn su_group_range(group: u32) -> vec2<u32> {
         case 4u: { return vec2<u32>(74u, 30u); }
         case 5u: { return vec2<u32>(0u, 6u); }
         case 6u: { return vec2<u32>(0u, 30u); }
+        case 7u: { return vec2<u32>(0u, 6u); }
         default: { return vec2<u32>(12u, 16u); }
     }
 }
