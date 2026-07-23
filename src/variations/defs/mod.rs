@@ -155,8 +155,12 @@ mod polychoron;
 mod honeycomb;
 mod honeycomb4d;
 mod quasiconformal;
+mod apollonian_gasket;
 mod fuchsian_triangle;
+mod hecke_group;
 mod jacobian_cubic;
+mod lorentz_mobius;
+mod schottky_group;
 mod su_mobius;
 mod glsl_fractals;
 mod glsl_tilings;
@@ -341,8 +345,12 @@ pub use polychoron::*;
 pub use honeycomb::*;
 pub use honeycomb4d::*;
 pub use quasiconformal::*;
+pub use apollonian_gasket::*;
 pub use fuchsian_triangle::*;
+pub use hecke_group::*;
 pub use jacobian_cubic::*;
+pub use lorentz_mobius::*;
+pub use schottky_group::*;
 pub use su_mobius::*;
 pub use glsl_fractals::*;
 pub use glsl_tilings::*;
@@ -1203,4 +1211,8 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &SU_MOBIUS,
     &FUCHSIAN_TRIANGLE,
     &JACOBIAN_CUBIC,
+    &LORENTZ_MOBIUS,
+    &APOLLONIAN_GASKET,
+    &HECKE_GROUP,
+    &SCHOTTKY_GROUP,
 ];
