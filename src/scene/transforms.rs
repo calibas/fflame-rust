@@ -1386,6 +1386,42 @@ impl<'de> Deserialize<'de> for Transform {
                     }
                 }
 
+                // Canonicalize aliased variation names (e.g. `su3_mobius` →
+                // `su_mobius`, `jacobian_cubic` → `jacobian_counterexample`)
+                // across every name-keyed field, so `.fflame` configs saved
+                // under a pre-rename name keep their weights, params,
+                // priorities, and ordering. XML import canonicalizes at parse
+                // time; this is the JSON-config equivalent. Without the
+                // param-key rewrite an aliased flame would still COMPILE the
+                // right variation (registry `get` resolves aliases) but its
+                // packed param slots would read as all zeros.
+                let registry = crate::variations::global_registry();
+                let variations: HashMap<String, f32> = variations
+                    .ok_or_else(|| de::Error::missing_field("variations"))?
+                    .into_iter()
+                    .map(|(k, v)| (registry.resolve_alias(&k).to_string(), v))
+                    .collect();
+                let variation_params: HashMap<String, f32> = variation_params
+                    .unwrap_or_else(HashMap::<String, f32>::new)
+                    .into_iter()
+                    .map(|(k, v)| match k.split_once('.') {
+                        Some((name, param)) => {
+                            (format!("{}.{}", registry.resolve_alias(name), param), v)
+                        }
+                        None => (k, v),
+                    })
+                    .collect();
+                let variation_priorities: HashMap<String, i32> = variation_priorities
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|(k, v)| (registry.resolve_alias(&k).to_string(), v))
+                    .collect();
+                let variation_order: Vec<String> = variation_order
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|k| registry.resolve_alias(&k).to_string())
+                    .collect();
+
                 Ok(Transform {
                     // ID is assigned by the post-deserialize `fixup_ids`
                     // pass (see `config::fractal_config`). Leaving it 0
@@ -1399,10 +1435,10 @@ impl<'de> Deserialize<'de> for Transform {
                     f: f.ok_or_else(|| de::Error::missing_field("f"))?,
                     g: g.unwrap_or(0.0),
                     weight: weight.ok_or_else(|| de::Error::missing_field("weight"))?,
-                    variations: variations.ok_or_else(|| de::Error::missing_field("variations"))?,
-                    variation_params: variation_params.unwrap_or_else(HashMap::new), // Default to empty if missing
-                    variation_priorities: variation_priorities.unwrap_or_default(), // Absent in old files
-                    variation_order: variation_order.unwrap_or_default(), // Absent in old files
+                    variations,
+                    variation_params,
+                    variation_priorities,
+                    variation_order,
                     color: color.ok_or_else(|| de::Error::missing_field("color"))?,
                     color_speed: color_speed.unwrap_or(0.0), // Default to 0.0 for backward compatibility
                     opacity: opacity.unwrap_or(1.0), // Default to 1.0 for backward compatibility
@@ -1439,6 +1475,30 @@ impl<'de> Deserialize<'de> for Transform {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `.fflame` JSON with a pre-rename variation name must canonicalize
+    /// across every name-keyed field at deserialize time — without the
+    /// param-key rewrite the variation compiles but its packed param
+    /// slots read as zeros.
+    #[test]
+    fn test_deserialize_canonicalizes_variation_aliases() {
+        let json = r#"{
+            "a": 1.0, "b": 0.0, "c": 0.0, "d": 1.0, "e": 0.0, "f": 0.0,
+            "weight": 1.0, "color": 0.5,
+            "variations": {"jacobian_cubic": 1.0, "su3_mobius": 0.5},
+            "variation_params": {"jacobian_cubic.scale": 2.0, "su3_mobius.group": 1.0},
+            "variation_order": ["jacobian_cubic", "su3_mobius"],
+            "variation_priorities": {"jacobian_cubic": 1}
+        }"#;
+        let t: Transform = serde_json::from_str(json).unwrap();
+        assert_eq!(t.get_variation("jacobian_counterexample"), 1.0);
+        assert_eq!(t.get_variation("su_mobius"), 0.5);
+        assert!(!t.variations.contains_key("jacobian_cubic"));
+        assert_eq!(t.variation_params["jacobian_counterexample.scale"], 2.0);
+        assert_eq!(t.variation_params["su_mobius.group"], 1.0);
+        assert_eq!(t.variation_order, vec!["jacobian_counterexample", "su_mobius"]);
+        assert_eq!(t.variation_priorities["jacobian_counterexample"], 1);
+    }
 
     #[test]
     fn test_named_variations() {

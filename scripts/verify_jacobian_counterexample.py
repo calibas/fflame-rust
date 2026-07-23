@@ -1,8 +1,8 @@
-"""Verification of every formula in src/variations/defs/jacobian_cubic.rs:
+"""Verification of every formula in src/variations/defs/jacobian_counterexample.rs:
 the constant Jacobian, the weighted-homogeneous reduction to (a,b), the
 depressed fiber cubic, and the closed-form 3-branch inverse (numeric
 3-preimage check). Requires sympy, mpmath, numpy.
-Run: python scripts/verify_jacobian_cubic.py"""
+Run: python scripts/verify_jacobian_counterexample.py"""
 
 # Part 1: symbolic identities.
 # 1. det DF == -2 (constant)

@@ -156,9 +156,10 @@ mod honeycomb;
 mod honeycomb4d;
 mod quasiconformal;
 mod apollonian_gasket;
+mod cubic_julia;
 mod fuchsian_triangle;
 mod hecke_group;
-mod jacobian_cubic;
+mod jacobian_counterexample;
 mod lorentz_mobius;
 mod schottky_group;
 mod su_mobius;
@@ -346,9 +347,10 @@ pub use honeycomb::*;
 pub use honeycomb4d::*;
 pub use quasiconformal::*;
 pub use apollonian_gasket::*;
+pub use cubic_julia::*;
 pub use fuchsian_triangle::*;
 pub use hecke_group::*;
-pub use jacobian_cubic::*;
+pub use jacobian_counterexample::*;
 pub use lorentz_mobius::*;
 pub use schottky_group::*;
 pub use su_mobius::*;
@@ -1210,9 +1212,10 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &QUASICONFORMAL,
     &SU_MOBIUS,
     &FUCHSIAN_TRIANGLE,
-    &JACOBIAN_CUBIC,
+    &JACOBIAN_COUNTEREXAMPLE,
     &LORENTZ_MOBIUS,
     &APOLLONIAN_GASKET,
     &HECKE_GROUP,
     &SCHOTTKY_GROUP,
+    &CUBIC_JULIA,
 ];

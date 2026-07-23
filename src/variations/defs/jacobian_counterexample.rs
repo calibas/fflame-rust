@@ -1,4 +1,4 @@
-//! `jacobian_cubic` — inverse-branch IFS of the Jacobian-conjecture
+//! `jacobian_counterexample` — inverse-branch IFS of the Jacobian-conjecture
 //! counterexample map (original).
 //!
 //! The polynomial map F: ℂ³→ℂ³
@@ -13,7 +13,7 @@
 //! counterexample to the Jacobian conjecture (announced July 2026;
 //! verified symbolically here: the determinant, the 3 preimages, and
 //! every reduction identity below — see
-//! `scripts/verify_jacobian_cubic.py`). It is weighted-homogeneous
+//! `scripts/verify_jacobian_counterexample.py`). It is weighted-homogeneous
 //! under `(x,y,z) ↦ (λ⁻¹x, λy, λ²z)`, so the whole dynamics descends
 //! to the weight-0 coordinates `a = xy`, `b = x²z`: with `c = 2−3a−b`
 //! and `V = (1+a)²b + a²(3a+4)`,
@@ -83,10 +83,12 @@ use crate::variations::{
 };
 use crate::param;
 
-pub static JACOBIAN_CUBIC: VariationDef = VariationDef {
-    name: "jacobian_cubic",
-    aliases: &[],
-    display_name: "Jacobian Cubic",
+pub static JACOBIAN_COUNTEREXAMPLE: VariationDef = VariationDef {
+    name: "jacobian_counterexample",
+    // Shipped briefly as `jacobian_cubic`; the map is degree 4/6 (the
+    // "cubic" was the 3-sheeted fiber), so the honest name won.
+    aliases: &["jacobian_cubic"],
+    display_name: "Jacobian Counterexample",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
     features: &[Feature::NeedsRng, Feature::NeedsW, Feature::WritesColor, Feature::AlwaysZ],
@@ -222,7 +224,7 @@ fn jcubic_map(ab: vec4<f32>, mode: u32, k: u32, jul: vec4<f32>) -> vec4<f32> {
     return vec4<f32>(a, b);
 }
 
-fn variation_jacobian_cubic(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec2<f32> {
+fn variation_jacobian_counterexample(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec2<f32> {
     let mode = u32(get_param(xform_id, variation_id, 0u));
     let scale = max(get_param(xform_id, variation_id, 1u), 1e-6);
     let ctr = vec2<f32>(get_param(xform_id, variation_id, 2u), get_param(xform_id, variation_id, 3u));
@@ -372,7 +374,7 @@ fn jcubic_map(ab: vec4<f32>, mode: u32, k: u32, jul: vec4<f32>) -> vec4<f32> {
     return vec4<f32>(a, b);
 }
 
-fn variation_jacobian_cubic(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec3<f32> {
+fn variation_jacobian_counterexample(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec3<f32> {
     let mode = u32(get_param(xform_id, variation_id, 0u));
     let scale = max(get_param(xform_id, variation_id, 1u), 1e-6);
     let ctr = vec2<f32>(get_param(xform_id, variation_id, 2u), get_param(xform_id, variation_id, 3u));
