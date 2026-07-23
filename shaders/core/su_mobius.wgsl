@@ -164,4 +164,9 @@ fn su_mobius_apply3(idx: u32, p3: vec3<f32>, cj: SuMat, cji: SuMat) -> vec3<f32>
 fn su_apply_m3(base: SuMat, p3: vec3<f32>, cj: SuMat, cji: SuMat) -> vec3<f32> { let m=su_matmul(su_matmul(cj, base), cji); let qa=vec4<f32>(m.a,0.0,0.0); let qb=vec4<f32>(m.b,0.0,0.0); let qc=vec4<f32>(m.c,0.0,0.0); let qd=vec4<f32>(m.d,0.0,0.0); let q=vec4<f32>(p3.x,p3.y,abs(p3.z)+1e-4,0.0); let r=su_qmul(su_qmul(qa,q)+qb, su_qinv(su_qmul(qc,q)+qd)); return r.xyz; }
 // Un-conjugated apply (fuchsian_triangle: generators are used raw).
 fn su_apply_plain(m: SuMat, z: vec2<f32>) -> vec2<f32> { return su_cdiv(su_cmul(m.a,z)+m.b, su_cmul(m.c,z)+m.d); }
+// Anti-Mobius apply: z -> m(conj z) -- orientation-REVERSING isometries
+// (reflections, glide reflections) for the NEC/full-triangle groups. The
+// Poincare extension of conj is (x,y,t) -> (x,-y,t).
+fn su_apply_anti(m: SuMat, z: vec2<f32>) -> vec2<f32> { return su_apply_plain(m, vec2<f32>(z.x, -z.y)); }
 fn su_apply_plain3(m: SuMat, p3: vec3<f32>) -> vec3<f32> { let qa=vec4<f32>(m.a,0.0,0.0); let qb=vec4<f32>(m.b,0.0,0.0); let qc=vec4<f32>(m.c,0.0,0.0); let qd=vec4<f32>(m.d,0.0,0.0); let q=vec4<f32>(p3.x,p3.y,abs(p3.z)+1e-4,0.0); let r=su_qmul(su_qmul(qa,q)+qb, su_qinv(su_qmul(qc,q)+qd)); return r.xyz; }
+fn su_apply_anti3(m: SuMat, p3: vec3<f32>) -> vec3<f32> { return su_apply_plain3(m, vec3<f32>(p3.x, -p3.y, p3.z)); }

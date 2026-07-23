@@ -163,6 +163,8 @@ mod jacobian_counterexample;
 mod lorentz_mobius;
 mod schottky_group;
 mod su_custom;
+mod surface_group;
+mod von_dyck;
 mod su_mobius;
 mod glsl_fractals;
 mod glsl_tilings;
@@ -355,6 +357,8 @@ pub use jacobian_counterexample::*;
 pub use lorentz_mobius::*;
 pub use schottky_group::*;
 pub use su_custom::*;
+pub use surface_group::*;
+pub use von_dyck::*;
 pub use su_mobius::*;
 pub use glsl_fractals::*;
 pub use glsl_tilings::*;
@@ -1221,4 +1225,6 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &SCHOTTKY_GROUP,
     &CUBIC_JULIA,
     &SU_CUSTOM,
+    &VON_DYCK,
+    &SURFACE_GROUP,
 ];
