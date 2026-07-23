@@ -57,7 +57,7 @@ pub static SU_MOBIUS: VariationDef = VariationDef {
     display_name: "SU(n) Möbius",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    features: &[Feature::NeedsRng, Feature::WritesColor],
+    features: &[Feature::NeedsRng, Feature::WritesColor, Feature::NeedsMobiusLib],
     // Slot 0: previous generator index (avoid_reversal). Slot 1: color
     // register for the Generator color mode.
     state_count: 2,

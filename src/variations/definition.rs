@@ -175,6 +175,28 @@ pub enum Feature {
     /// must not mutate the parent's w. Deliberately specific rather than a
     /// general per-thread scratch pool — that's a separate project.
     NeedsW,
+
+    /// The variation calls into the shared SL(2,ℂ) Möbius-group library
+    /// (`shaders/core/su_mobius.wgsl`). When any active variation lists
+    /// this, the builder injects the library once into the shader:
+    ///
+    /// * `SuMat` — a 2×2 complex matrix (four `vec2<f32>` entries) with
+    ///   `su_cmul` / `su_cdiv` / `su_matmul` / `su_matinv`;
+    /// * `su_conjugator(θ, η, δ)` — Bagula's triquasiconformal
+    ///   conjugation `C = dk(δ)·s0·qf(θ+iη)`;
+    /// * `su_mobius_apply` / `su_apply_m` (conjugated) and
+    ///   `su_apply_plain` (raw) — the Möbius action
+    ///   `z ↦ (Az+B)/(Cz+D)` on ℂ;
+    /// * `su_qmul` / `su_qinv` and the `*3` variants — the quaternion
+    ///   Poincaré extension (SL(2,ℂ) acting on upper-half-space
+    ///   `x + yi + t·j` as the isometry group of hyperbolic 3-space);
+    /// * the baked SU(n) generator tables (`SU_MOBIUS_BASE`,
+    ///   `su_group_range`, `su_base`).
+    ///
+    /// Used by the Kleinian-group family (`su_mobius`,
+    /// `fuchsian_triangle`, …). Purely a code-injection flag — it does
+    /// not change the variation's generated signature or dispatch.
+    NeedsMobiusLib,
 }
 
 /// Static definition of a variation
