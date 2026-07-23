@@ -1563,15 +1563,17 @@ impl ShaderBuilder {
             shader.push('\n');
         }
 
-        // 7f. SU(n) / SL(2,C) Mobius machinery (Bagula) — the SuMat helpers,
-        //     conjugator, quaternion Poincaré extension, and baked group
-        //     tables. Shared by `su_mobius` (the SU(n) family) and
-        //     `fuchsian_triangle` (the ⟨2,3,12⟩ Kleinian triangle group);
-        //     pulled in once for either.
-        let needs_su = active
-            .iter()
-            .any(|(name, _)| matches!(name.as_str(), "su_mobius" | "fuchsian_triangle"));
-        if needs_su {
+        // 7f. SL(2,C) Mobius-group machinery (Bagula) — the SuMat helpers,
+        //     conjugator, quaternion Poincaré extension, and baked SU(n)
+        //     tables. Feature-driven: injected once when any active
+        //     variation declares `Feature::NeedsMobiusLib` (the Kleinian
+        //     family — su_mobius, fuchsian_triangle, …).
+        let needs_mobius_lib = active.iter().any(|(name, _)| {
+            self.registry
+                .get(name)
+                .is_some_and(|info| info.has_feature(Feature::NeedsMobiusLib))
+        });
+        if needs_mobius_lib {
             shader.push_str(include_str!("../shaders/core/su_mobius.wgsl"));
             shader.push('\n');
         }
@@ -2807,6 +2809,42 @@ mod tests {
         assert!(
             !shader_2d.contains("var<private> point_w"),
             "point_w must NOT be emitted in the 2D pipeline"
+        );
+    }
+
+    /// `Feature::NeedsMobiusLib` injects the shared SL(2,C) Möbius library
+    /// exactly when an active variation declares it — variation defs, not a
+    /// name list in the builder, control access.
+    #[test]
+    fn mobius_lib_injected_only_for_feature() {
+        use crate::scene::transforms::{Flame, Transform};
+        let registry = crate::variations::global_registry().clone();
+        let builder = ShaderBuilder::new(registry);
+        let constants = ShaderConstants::default();
+
+        // fuchsian_triangle declares NeedsMobiusLib → SuMat machinery present.
+        let mut flame = Flame::new();
+        let mut xform = Transform::new();
+        xform.variations.insert("fuchsian_triangle".to_string(), 1.0);
+        flame.transforms.push(xform);
+        let mut active = HashMap::new();
+        active.insert("fuchsian_triangle".to_string(), 1.0);
+        let shader = builder.build_from_template(&flame, &active, false, false, false, true, &constants);
+        assert!(shader.contains("struct SuMat"), "Möbius lib must be injected");
+        assert!(shader.contains("fn su_apply_plain("), "Möbius lib helpers present");
+
+        // A flame without any NeedsMobiusLib variation must NOT get the lib.
+        let mut plain = Flame::new();
+        let mut t = Transform::new();
+        t.variations.insert("linear".to_string(), 1.0);
+        plain.transforms.push(t);
+        let mut plain_active = HashMap::new();
+        plain_active.insert("linear".to_string(), 1.0);
+        let plain_shader =
+            builder.build_from_template(&plain, &plain_active, false, false, false, true, &constants);
+        assert!(
+            !plain_shader.contains("struct SuMat"),
+            "Möbius lib must NOT be injected without the feature"
         );
     }
 
