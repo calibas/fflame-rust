@@ -27,6 +27,7 @@ mod affine_ports;
 mod dc;
 mod hypertile;
 mod classic_2d;
+mod mobiq4d;
 mod mobius_extended;
 mod circle_blur;
 mod numbered_extras;
@@ -120,6 +121,7 @@ mod dc_carpet3d_misc;
 mod dc_tc_read;
 mod vibration2_misc;
 mod gridout3d_misc;
+mod jubiq4d;
 mod jubiq_misc;
 mod supershape3d_misc;
 mod wz_lost_variations;
@@ -223,6 +225,7 @@ pub use affine_ports::*;
 pub use dc::*;
 pub use hypertile::*;
 pub use classic_2d::*;
+pub use mobiq4d::*;
 pub use mobius_extended::*;
 pub use circle_blur::*;
 pub use numbered_extras::*;
@@ -316,6 +319,7 @@ pub use dc_carpet3d_misc::*;
 pub use dc_tc_read::*;
 pub use vibration2_misc::*;
 pub use gridout3d_misc::*;
+pub use jubiq4d::*;
 pub use jubiq_misc::*;
 pub use supershape3d_misc::*;
 pub use wz_lost_variations::*;
@@ -1227,4 +1231,6 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &SU_CUSTOM,
     &VON_DYCK,
     &SURFACE_GROUP,
+    &MOBIQ4D,
+    &JUBIQ4D,
 ];
