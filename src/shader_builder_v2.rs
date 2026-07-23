@@ -1563,8 +1563,14 @@ impl ShaderBuilder {
             shader.push('\n');
         }
 
-        // 7f. SU(n) Mobius group tables (Bagula) for `su_mobius`.
-        let needs_su = active.iter().any(|(name, _)| name == "su_mobius");
+        // 7f. SU(n) / SL(2,C) Mobius machinery (Bagula) — the SuMat helpers,
+        //     conjugator, quaternion Poincaré extension, and baked group
+        //     tables. Shared by `su_mobius` (the SU(n) family) and
+        //     `fuchsian_triangle` (the ⟨2,3,12⟩ Kleinian triangle group);
+        //     pulled in once for either.
+        let needs_su = active
+            .iter()
+            .any(|(name, _)| matches!(name.as_str(), "su_mobius" | "fuchsian_triangle"));
         if needs_su {
             shader.push_str(include_str!("../shaders/core/su_mobius.wgsl"));
             shader.push('\n');

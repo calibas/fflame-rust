@@ -119,7 +119,6 @@ fn su_group_range(group: u32) -> vec2<u32> {
         case 4u: { return vec2<u32>(74u, 30u); }
         case 5u: { return vec2<u32>(0u, 6u); }
         case 6u: { return vec2<u32>(0u, 30u); }
-        case 7u: { return vec2<u32>(0u, 6u); }
         default: { return vec2<u32>(12u, 16u); }
     }
 }
@@ -140,3 +139,6 @@ fn su_qmul(a: vec4<f32>, b: vec4<f32>) -> vec4<f32> { return vec4<f32>(a.x*b.x-a
 fn su_qinv(a: vec4<f32>) -> vec4<f32> { let n=dot(a,a)+1e-30; return vec4<f32>(a.x,-a.y,-a.z,-a.w)/n; }
 fn su_mobius_apply3(idx: u32, p3: vec3<f32>, cj: SuMat, cji: SuMat) -> vec3<f32> { let m=su_matmul(su_matmul(cj, su_base(idx)), cji); let qa=vec4<f32>(m.a,0.0,0.0); let qb=vec4<f32>(m.b,0.0,0.0); let qc=vec4<f32>(m.c,0.0,0.0); let qd=vec4<f32>(m.d,0.0,0.0); let q=vec4<f32>(p3.x,p3.y,abs(p3.z)+1e-4,0.0); let r=su_qmul(su_qmul(qa,q)+qb, su_qinv(su_qmul(qc,q)+qd)); return r.xyz; }
 fn su_apply_m3(base: SuMat, p3: vec3<f32>, cj: SuMat, cji: SuMat) -> vec3<f32> { let m=su_matmul(su_matmul(cj, base), cji); let qa=vec4<f32>(m.a,0.0,0.0); let qb=vec4<f32>(m.b,0.0,0.0); let qc=vec4<f32>(m.c,0.0,0.0); let qd=vec4<f32>(m.d,0.0,0.0); let q=vec4<f32>(p3.x,p3.y,abs(p3.z)+1e-4,0.0); let r=su_qmul(su_qmul(qa,q)+qb, su_qinv(su_qmul(qc,q)+qd)); return r.xyz; }
+// Un-conjugated apply (fuchsian_triangle: generators are used raw).
+fn su_apply_plain(m: SuMat, z: vec2<f32>) -> vec2<f32> { return su_cdiv(su_cmul(m.a,z)+m.b, su_cmul(m.c,z)+m.d); }
+fn su_apply_plain3(m: SuMat, p3: vec3<f32>) -> vec3<f32> { let qa=vec4<f32>(m.a,0.0,0.0); let qb=vec4<f32>(m.b,0.0,0.0); let qc=vec4<f32>(m.c,0.0,0.0); let qd=vec4<f32>(m.d,0.0,0.0); let q=vec4<f32>(p3.x,p3.y,abs(p3.z)+1e-4,0.0); let r=su_qmul(su_qmul(qa,q)+qb, su_qinv(su_qmul(qc,q)+qd)); return r.xyz; }

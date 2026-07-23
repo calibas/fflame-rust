@@ -155,6 +155,7 @@ mod polychoron;
 mod honeycomb;
 mod honeycomb4d;
 mod quasiconformal;
+mod fuchsian_triangle;
 mod su_mobius;
 mod glsl_fractals;
 mod glsl_tilings;
@@ -339,6 +340,7 @@ pub use polychoron::*;
 pub use honeycomb::*;
 pub use honeycomb4d::*;
 pub use quasiconformal::*;
+pub use fuchsian_triangle::*;
 pub use su_mobius::*;
 pub use glsl_fractals::*;
 pub use glsl_tilings::*;
@@ -1197,4 +1199,5 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &HONEYCOMB4D,
     &QUASICONFORMAL,
     &SU_MOBIUS,
+    &FUCHSIAN_TRIANGLE,
 ];
