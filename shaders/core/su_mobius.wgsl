@@ -131,16 +131,17 @@ const SU_MOBIUS_BASE: array<vec4<f32>, 248> = array<vec4<f32>, 248>(
     vec4<f32>(0.0000000, 0.0000000, 1.0000000, -0.0000000), vec4<f32>(-1.0000000, 0.0000000, 1.0000000, 0.0000000),
 );
 
+// Baked-group index -> (table offset, generator count) for su_mobius:
+// 0 SU(2) 6-group, 1 SU(3) reduced, 2 SU(4) reduced, 3 SU(5) reduced,
+// 4 SO(5) reduced. (su_custom computes its groups in the init pass and
+// does not consult this table.)
 fn su_group_range(group: u32) -> vec2<u32> {
     switch group {
         case 0u: { return vec2<u32>(0u, 12u); }
         case 1u: { return vec2<u32>(12u, 16u); }
-        case 2u: { return vec2<u32>(28u, 46u); }
-        case 3u: { return vec2<u32>(0u, 16u); }
-        case 4u: { return vec2<u32>(74u, 30u); }
-        case 5u: { return vec2<u32>(0u, 6u); }
-        case 6u: { return vec2<u32>(0u, 30u); }
-        case 7u: { return vec2<u32>(104u, 20u); }
+        case 2u: { return vec2<u32>(74u, 30u); }
+        case 3u: { return vec2<u32>(28u, 46u); }
+        case 4u: { return vec2<u32>(104u, 20u); }
         default: { return vec2<u32>(12u, 16u); }
     }
 }

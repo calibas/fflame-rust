@@ -162,6 +162,7 @@ mod hecke_group;
 mod jacobian_counterexample;
 mod lorentz_mobius;
 mod schottky_group;
+mod su_custom;
 mod su_mobius;
 mod glsl_fractals;
 mod glsl_tilings;
@@ -353,6 +354,7 @@ pub use hecke_group::*;
 pub use jacobian_counterexample::*;
 pub use lorentz_mobius::*;
 pub use schottky_group::*;
+pub use su_custom::*;
 pub use su_mobius::*;
 pub use glsl_fractals::*;
 pub use glsl_tilings::*;
@@ -1218,4 +1220,5 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &HECKE_GROUP,
     &SCHOTTKY_GROUP,
     &CUBIC_JULIA,
+    &SU_CUSTOM,
 ];
