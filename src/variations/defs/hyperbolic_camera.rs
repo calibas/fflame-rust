@@ -58,8 +58,8 @@ pub static HYPERBOLIC_CAMERA: VariationDef = VariationDef {
     state_count: 0,
     wgsl_state_init: None,
     parameters: &[
-        param!("in_model", "In Model", enum, 0, &["Poincaré", "Beltrami-Klein", "Half-Space", "Hyperboloid", "Planar Disk"], "How the incoming point is interpreted as a point of hyperbolic space. Poincaré: conformal ball/disk (the Möbius-family native). Beltrami-Klein: projective ball/disk. Half-Space: upper half-space, height = z (3D) or y (2D) — the Kleinian H3 convention. Hyperboloid: raw Minkowski spatial part. Planar Disk (3D): xy is a 2D Poincaré DISK and z is discarded — feeds a planar-space hyperbolic variation (e.g. von_dyck Planar) in as a flat tiling on the ball's equatorial plane, ready to be tilted and boosted through H3."),
-        param!("out_model", "Out Model", enum, 0, &["Poincaré", "Beltrami-Klein", "Half-Space", "Hyperboloid"], "The model the point is re-projected into for output. Converting Poincaré → Klein straightens tiling edges into chords; → Half-Space unrolls the disk against a boundary plane; → Hyperboloid gives the unbounded funnel."),
+        param!("in_model", "In Model", enum, 0, &["Poincaré", "Beltrami-Klein", "Half-Space", "Hyperboloid", "Planar Disk", "Equidistant", "Band"], "How the incoming point is interpreted as a point of hyperbolic space. Poincaré: conformal ball/disk (the Möbius-family native). Beltrami-Klein: projective ball/disk. Half-Space: upper half-space, height = z (3D) or y (2D) — the Kleinian H3 convention. Hyperboloid: raw Minkowski spatial part (the Gans model). Equidistant: exponential-map/azimuthal chart — Euclidean radius = true hyperbolic distance from center (no boundary crush). Band: the conformal strip model, log of the half-plane (2D; in 3D reads as Half-Space). Planar Disk (3D): xy is a 2D Poincaré DISK and z is discarded — feeds a planar-space hyperbolic variation (e.g. von_dyck Planar) in as a flat tiling on the ball's equatorial plane, ready to be tilted and boosted through H3."),
+        param!("out_model", "Out Model", enum, 0, &["Poincaré", "Beltrami-Klein", "Half-Space", "Hyperboloid", "Equidistant", "Band"], "The model the point is re-projected into for output. Converting Poincaré → Klein straightens tiling edges into chords; → Half-Space unrolls the disk against a boundary plane; → Hyperboloid gives the unbounded funnel (Gans model); → Equidistant keeps hyperbolic distances radially true (tilings stay readable far from center); → Band unrolls the plane into an infinite conformal frieze ribbon (2D; in 3D falls back to Half-Space)."),
         param!("tx", "Translate X", unlimited_float, 0.0, -4.0, 4.0, "Hyperbolic translation along x, in units of hyperbolic distance (rapidity of the Lorentz boost). Moving the observer: the scene slides toward the opposite boundary, crowding conformally."),
         param!("ty", "Translate Y", unlimited_float, 0.0, -4.0, 4.0, "Hyperbolic translation along y."),
         param!("tz", "Translate Z", unlimited_float, 0.0, -4.0, 4.0, "Hyperbolic translation along z (3D render mode only)."),
@@ -101,6 +101,22 @@ fn hycam_to_hyp2(u_in: vec2<f32>, model: u32) -> vec3<f32> {
         let t = (1.0 + s2) / (2.0 * w);
         return vec3<f32>(hx, t - 1.0 / w, t);
     }
+    if (model == 5u) {
+        // Equidistant: Euclidean radius = hyperbolic distance.
+        let d = length(u);
+        if (d < 1e-9) { return vec3<f32>(0.0, 0.0, 1.0); }
+        return vec3<f32>((sinh(d) / d) * u, cosh(d));
+    }
+    if (model == 6u) {
+        // Band (conformal strip |y| < pi/2): half-plane z = e^{x + i(y + pi/2)}.
+        let by = clamp(u.y, -1.5507, 1.5507);
+        let ex = exp(clamp(u.x, -20.0, 20.0));
+        let hp = ex * vec2<f32>(-sin(by), cos(by));
+        let w = max(hp.y, 1e-6);
+        let s2 = hp.x * hp.x + w * w;
+        let t = (1.0 + s2) / (2.0 * w);
+        return vec3<f32>(hp.x / w, t - 1.0 / w, t);
+    }
     // Hyperboloid: spatial part given, time reconstructed.
     return vec3<f32>(u, sqrt(1.0 + dot(u, u)));
 }
@@ -112,6 +128,19 @@ fn hycam_from_hyp2(h: vec3<f32>, model: u32) -> vec2<f32> {
     if (model == 2u) {
         let iw = max(t - h.y, 1e-6);
         return vec2<f32>(h.x / iw, 1.0 / iw);
+    }
+    if (model == 4u) {
+        // Equidistant.
+        let sn = length(h.xy);
+        if (sn < 1e-9) { return vec2<f32>(0.0, 0.0); }
+        let d = acosh(t);
+        return (d / sn) * h.xy;
+    }
+    if (model == 5u) {
+        // Band: half-plane -> w = log z, recentered to |y| < pi/2.
+        let iw = max(t - h.y, 1e-6);
+        let hp = vec2<f32>(h.x / iw, 1.0 / iw);
+        return vec2<f32>(0.5 * log(max(dot(hp, hp), 1e-20)), atan2(hp.y, hp.x) - 1.5707963);
     }
     return h.xy;
 }
@@ -172,6 +201,20 @@ fn hycam_to_hyp3(u_in: vec3<f32>, model: u32) -> vec4<f32> {
         let t = (1.0 + s2) / (2.0 * w);
         return vec4<f32>(hx, t - 1.0 / w, t);
     }
+    if (model == 5u) {
+        // Equidistant: Euclidean radius = hyperbolic distance.
+        let d = length(u);
+        if (d < 1e-9) { return vec4<f32>(0.0, 0.0, 0.0, 1.0); }
+        return vec4<f32>((sinh(d) / d) * u, cosh(d));
+    }
+    if (model == 6u) {
+        // Band is 2D-only: read as Half-Space in 3D.
+        let w = max(abs(u.z), 1e-6);
+        let hx = u.xy / w;
+        let s2 = dot(u.xy, u.xy) + w * w;
+        let t = (1.0 + s2) / (2.0 * w);
+        return vec4<f32>(hx, t - 1.0 / w, t);
+    }
     return vec4<f32>(u, sqrt(1.0 + dot(u, u)));
 }
 
@@ -179,9 +222,17 @@ fn hycam_from_hyp3(h: vec4<f32>, model: u32) -> vec3<f32> {
     let t = max(h.w, 1.0);
     if (model == 0u) { return h.xyz / (1.0 + t); }
     if (model == 1u) { return h.xyz / t; }
-    if (model == 2u) {
+    if (model == 2u || model == 5u) {
+        // (Band is 2D-only: falls back to Half-Space here.)
         let iw = max(t - h.z, 1e-6);
         return vec3<f32>(h.xy / iw, 1.0 / iw);
+    }
+    if (model == 4u) {
+        // Equidistant.
+        let sn = length(h.xyz);
+        if (sn < 1e-9) { return vec3<f32>(0.0, 0.0, 0.0); }
+        let d = acosh(t);
+        return (d / sn) * h.xyz;
     }
     return h.xyz;
 }
