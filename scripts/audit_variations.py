@@ -33,6 +33,13 @@ STATIC_RE = re.compile(
 )
 PARAM_RE = re.compile(r"param!\(", re.MULTILINE)
 AUTHOR_LINE_RE = re.compile(r"^[ \t]*///[ \t]*-[ \t]+(.+?)[ \t]*$", re.MULTILINE)
+# A variation may build its `parameters` slice through a local macro
+# (e.g. `fractwf_params!(...)`), whose common `param!()` calls live in the
+# macro *definition*, not the call site. Match a macro definition so we can
+# count the params it expands to, and match a `parameters: NAME!(` call so
+# we can attribute them back to the variation.
+MACRO_DEF_RE = re.compile(r"^macro_rules!\s+(\w+)\s*\{", re.MULTILINE)
+PARAM_MACRO_CALL_RE = re.compile(r"parameters:\s*(\w+)!\s*\(")
 
 
 def find_macro_close(text: str, open_paren_idx: int) -> int:
@@ -102,11 +109,59 @@ def split_top_level(inner: str) -> list[str]:
     return args
 
 
+def find_brace_close(text: str, open_brace_idx: int) -> int:
+    """Find matching `}` for the `{` at `open_brace_idx`, ignoring string contents."""
+    depth = 1
+    i = open_brace_idx + 1
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if c == '"':
+            i += 1
+            while i < n:
+                if text[i] == "\\":
+                    i += 2
+                    continue
+                if text[i] == '"':
+                    i += 1
+                    break
+                i += 1
+            continue
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    return -1
+
+
+def scan_param_macros(text: str) -> dict[str, tuple[int, int]]:
+    """Map each `macro_rules! NAME` to the (total, with_desc) `param!()` calls
+    in its body, so variations that expand params through the macro can be
+    credited with them (the audit parses source text, not macro expansions)."""
+    macros: dict[str, tuple[int, int]] = {}
+    for m in MACRO_DEF_RE.finditer(text):
+        open_brace = text.index("{", m.end() - 1)
+        close_brace = find_brace_close(text, open_brace)
+        if close_brace == -1:
+            continue
+        macros[m.group(1)] = count_param_desc(text[open_brace:close_brace])
+    return macros
+
+
 def count_param_desc(block: str) -> tuple[int, int]:
     """Return (total_params, params_with_description) in the parameters block."""
     total = 0
     with_desc = 0
     for m in PARAM_RE.finditer(block):
+        # Skip `param!(` mentioned inside a `//` line comment (e.g. prose
+        # about the macro) — a `//` earlier on the same line means the
+        # match is commentary, not a real parameter declaration.
+        line_start = block.rfind("\n", 0, m.start()) + 1
+        if "//" in block[line_start:m.start()]:
+            continue
         open_idx = m.end() - 1  # the `(` of `param!(`
         close_idx = find_macro_close(block, open_idx)
         if close_idx == -1:
@@ -154,6 +209,7 @@ def main() -> int:
         if path.name == "mod.rs":
             continue
         text = path.read_text(encoding="utf-8", errors="replace")
+        param_macros = scan_param_macros(text)
         for m in STATIC_RE.finditer(text):
             doc_block = m.group(1) or ""
             name = m.group(2)
@@ -173,6 +229,13 @@ def main() -> int:
                 block_end = len(text)
             static_block = text[block_start:block_end]
             param_total, param_desc = count_param_desc(static_block)
+            # Credit params expanded through a local `parameters: NAME!(...)`
+            # macro — count_param_desc only sees the call-site (custom) params.
+            macro_call = PARAM_MACRO_CALL_RE.search(static_block)
+            if macro_call and macro_call.group(1) in param_macros:
+                mt, md = param_macros[macro_call.group(1)]
+                param_total += mt
+                param_desc += md
             defined[name] = {
                 "file": path.name,
                 "has_doc": bool(doc_block.strip()),
