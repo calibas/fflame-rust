@@ -27,12 +27,20 @@
 //!   |rule| steps, no expansion stored.
 //! - The R rectangle-fill pass is relational post-processing over the
 //!   whole segment set (per-thread infeasible); the Fill param is the
-//!   chaos-game approximation: a fraction of samples fill the
-//!   len-by-len cell on a per-segment hashed side of their segment,
-//!   and the Cell color mode assigns each unit-lattice cell one flat
-//!   palette color (lines drop to palette position 0 — put black
-//!   there), recovering the colored-rectangles-with-black-lines look.
-//!   Fill Inset leaves the white gutters.
+//!   chaos-game equivalent: a fill sample runs the descent TWICE and,
+//!   when the two segments are parallel, overlapping in span, and
+//!   within Fill Span of each other, fills the rectangle
+//!   between them — both dimensions come from actually-drawn lines,
+//!   so cells are true squares and longer rectangles, bounded by real
+//!   lines on two sides (and only sometimes all four), with line
+//!   samples drawing over the fills, as in the R output. The Cell
+//!   color mode gives each rectangle one flat palette color (lines
+//!   drop to palette position 0 — put black there); Fill Inset leaves
+//!   the white gutters. The second segment is sampled as a SIBLING of
+//!   the first (replaying its descent, re-randomizing only the bottom
+//!   level or two) — uniform independent pairs almost never lie
+//!   adjacent in a drawing of thousands of segments, siblings usually
+//!   do.
 //! - The rule is generated deterministically from the Seed param (the
 //!   R script uses session randomness). Bracket insertion is clean;
 //!   the R insertion loop `c(v1[1:k], b, v1[k:n])` duplicates one
@@ -65,12 +73,13 @@ pub static MONDRIANOMIES: VariationDef = VariationDef {
         param!("drift", "Length Drift", float, 1.0, 0.9, 1.1, "Segment length = drift^d, where d counts segments drawn before this one (saved/restored with the bracket stack) — the source's ds = jitter(1). Exactly 1 gives the pure unit grid; small deviations make the grid drift and shear apart exponentially with drawing order."),
         param!("size", "Size", float, 0.1, 0.001, 2.0, "Output scale. Drawings span tens of units at unit segment length; 0.1 fits typical seeds near the frame."),
         param!("thickness", "Thickness", float, 0.0, 0.0, 0.5, "Jitter radius fattening the line skeleton into strokes (in un-scaled drawing units)."),
-        param!("dc_mode", "Color Mode", enum, 0, &["Off", "Sequence", "Depth", "Angle", "Cell"], "Direct-color source. Sequence: palette position follows drawing order (the R script cycles its five Mondrian colors by rectangle id — use DC Scale for the cycle count). Depth: colors by the segment counter d (the length-drift driver). Angle: four flat colors by segment direction. Cell: fills colored by a hash of the unit-lattice cell they land in — every sample in a cell gets the same flat color regardless of which segment painted it (the Mondrian mode; needs Fill > 0, best at Length Drift 1). DC Scale >= 2 quantizes to that many flat palette colors (5 = the classic Mondrian five, matching the R id %% 5); below 2 the hash is continuous. Line samples go to palette position 0 — put black at the palette start for the authentic black-lines-over-colored-rects look."),
+        param!("dc_mode", "Color Mode", enum, 0, &["Off", "Sequence", "Depth", "Angle", "Cell"], "Direct-color source. Sequence: palette position follows drawing order (the R script cycles its five Mondrian colors by rectangle id — use DC Scale for the cycle count). Depth: colors by the segment counter d (the length-drift driver). Angle: four flat colors by segment direction. Cell: each filled rectangle takes one flat color from a hash of its bounds — every sample agrees no matter which segment pair spanned it (the Mondrian mode; needs Fill > 0). DC Scale >= 2 quantizes to that many flat palette colors (5 = the classic Mondrian five, matching the R id %% 5); below 2 the hash is continuous. Line samples go to palette position 0 — put black at the palette start for the authentic black-lines-over-colored-rects look."),
         param!("color_speed", "Color Speed", float, 0.5, 0.0, 1.0, "Depth mode: palette advance per drawn segment (cyclic — wraps instead of saturating)."),
         param!("dc_scale", "DC Scale", float, 1.0, 0.0, 20.0, "Sequence mode: how many palette cycles across the whole drawing. Depth/Angle: extra multiplier on the palette position. Cell mode: >= 2 quantizes fills to that many flat palette colors (5 = the Mondrian five)."),
         param!("center", "Center", bool, true, "Recenter using the mean of the four axiom waypoints (the drawing starts at the turtle origin and wanders)."),
-        param!("fill", "Fill", float, 0.0, 0.0, 1.0, "Fraction of samples that fill the cell beside their segment instead of drawing its line (0 = pure skeleton, 1 = pure fill). Each segment fills the len-by-len cell on one side, chosen by a per-segment hash so the fill is stable. The R original detects and fills enclosed rectangles relationally; this is the per-thread approximation — with the Cell color mode it recovers the flat-colored-cells Mondrian look."),
-        param!("inset", "Fill Inset", float, 0.04, 0.0, 0.2, "Shrinks each filled cell inward by this fraction, leaving unpainted gutters between cells — the white borders of a Mondrian canvas."),
+        param!("fill", "Fill", float, 0.0, 0.0, 1.0, "Fraction of samples that attempt a rectangle fill instead of drawing a line (0 = pure skeleton). A fill picks a SECOND independent segment; if the two are parallel, overlap in span, and sit within Fill Span of each other, the rectangle between them is filled — width = the drawn lines' actual overlap, height = their actual separation, so cells come out as true squares and longer rectangles bounded by real lines (mirroring the R script's detected rectangles). Non-qualifying pairs fall back to drawing a line, so effective fill density also depends on Depth (more segments = more parallel pairs)."),
+        param!("inset", "Fill Inset", float, 0.04, 0.0, 0.2, "Shrinks each filled rectangle inward by this fraction of its span, leaving unpainted gutters along the bounding lines — the white borders of a Mondrian canvas."),
+        param!("fill_span", "Fill Span", float, 2.0, 1.0, 6.0, "How far apart (in segment lengths) two parallel drawn lines may be and still span a fill. 1 keeps only the tightest cells; larger values admit longer rectangles between more distant lines."),
     ],
     // Derived layout (base = 11 user params):
     //   +0        rule length (≤ 32)
@@ -101,7 +110,7 @@ fn mnd_rot_i(v: vec2<f32>, ang: u32) -> vec2<f32> {
     return v;
 }
 
-fn init_mondrianomies(user: array<f32, 11>) -> array<f32, 62> {
+fn init_mondrianomies(user: array<f32, 12>) -> array<f32, 62> {
     var out: array<f32, 62>;
     let depth = clamp(u32(user[1]), 1u, 5u);
     let ds = clamp(user[2], 0.5, 2.0);
@@ -248,33 +257,35 @@ fn mnd_rot(v: vec2<f32>, ang: u32) -> vec2<f32> {
     return v;
 }
 
-fn mnd_point(xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec2<f32> {
-    let bo = 11u;
-    let depth = clamp(u32(get_param(xform_id, variation_id, 1u)), 1u, 5u);
-    let ds = clamp(get_param(xform_id, variation_id, 2u), 0.5, 2.0);
-    let size = get_param(xform_id, variation_id, 3u);
-    let thickness = get_param(xform_id, variation_id, 4u);
-    let dc_mode = u32(get_param(xform_id, variation_id, 5u));
-    let color_speed = get_param(xform_id, variation_id, 6u);
-    let dc_scale = get_param(xform_id, variation_id, 7u);
-    let centered = get_param(xform_id, variation_id, 8u) > 0.5;
-    let fillp = get_param(xform_id, variation_id, 9u);
-    let inset = clamp(get_param(xform_id, variation_id, 10u), 0.0, 0.45);
-    let rl = u32(get_param(xform_id, variation_id, bo));
-    let ftot = max(u32(get_param(xform_id, variation_id, bo + 35u)), 1u);
-    let lnds = log(ds);
-
+// One uniform random segment of the expanded L-system, by descent
+// through the derivation tree (see the module docs): at each level
+// pick a uniform target F among the rule's F's and compose the prefix
+// transforms before it; level 1's target is the drawn segment.
+// Returns [p0.x, p0.y, len, angle (0..3), bpos, d] — the shader
+// builder's fn-splitter drops top-level structs, so a plain array.
+// `ch` records the descent choices (slot 5 = axiom arm, slot k-1 =
+// level-k target); levels <= rb re-randomize and write back, levels
+// above rb replay the stored choice. rb = 6 -> fully random; small rb
+// -> a SIBLING of the stored path (same parent expansion, so nearby).
+fn mnd_segment(xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, depth: u32, lnds: f32, rl: u32, ftot: u32, ch: ptr<function, array<u32, 6>>, rb: u32) -> array<f32, 6> {
+    let bo = 12u;
     var pp = vec2<f32>(0.0, 0.0);
     var ang = 0u;
     var d = 0.0;
-    // Tree position in drawing order (for the Sequence color mode):
+    // Tree position in drawing order (Sequence color / side hashes):
     // string order within the rule IS drawing order, so the mixed-radix
     // digits (i0, t_k...) index segments in the order the pen visits them.
     var bpos = 0.0;
     var bden = 1.0;
 
     // Axiom F-F-F-F: pick which of the four arms, compose the prefix.
-    let i0 = min(u32(rng_nextf(rng) * 4.0), 3u);
+    var i0: u32;
+    if (depth + 1u <= rb) {
+        i0 = min(u32(rng_nextf(rng) * 4.0), 3u);
+        (*ch)[5] = i0;
+    } else {
+        i0 = (*ch)[5];
+    }
     bpos = f32(i0) * 0.25;
     bden = 4.0;
     {
@@ -290,11 +301,14 @@ fn mnd_point(xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc:
         }
     }
 
-    // Descend: at each level pick a uniform target F among the rule's
-    // F's and compose the prefix before it; the state lands at the
-    // start of that F's expansion. Level 1's target is the segment.
     for (var k = depth; k >= 1u; k = k - 1u) {
-        let tf = min(u32(rng_nextf(rng) * f32(ftot)), ftot - 1u);
+        var tf: u32;
+        if (k <= rb) {
+            tf = min(u32(rng_nextf(rng) * f32(ftot)), ftot - 1u);
+            (*ch)[k - 1u] = tf;
+        } else {
+            tf = (*ch)[k - 1u];
+        }
         bpos = bpos + f32(tf) / (bden * f32(ftot));
         bden = bden * f32(ftot);
         let bl = bo + 36u + (k - 1u) * 4u;
@@ -321,49 +335,122 @@ fn mnd_point(xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc:
         }
     }
 
-    // Draw the level-0 segment: from pp, direction ang, length drift^d —
-    // or fill the len-by-len cell beside it (per-segment hashed side).
-    let len = exp(clamp(d * lnds, -12.0, 12.0));
-    var q: vec2<f32>;
+    return array<f32, 6>(pp.x, pp.y, exp(clamp(d * lnds, -12.0, 12.0)), f32(ang), bpos, d);
+}
+
+fn mnd_point(xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec2<f32> {
+    let bo = 12u;
+    let depth = clamp(u32(get_param(xform_id, variation_id, 1u)), 1u, 5u);
+    let ds = clamp(get_param(xform_id, variation_id, 2u), 0.5, 2.0);
+    let size = get_param(xform_id, variation_id, 3u);
+    let thickness = get_param(xform_id, variation_id, 4u);
+    let dc_mode = u32(get_param(xform_id, variation_id, 5u));
+    let color_speed = get_param(xform_id, variation_id, 6u);
+    let dc_scale = get_param(xform_id, variation_id, 7u);
+    let centered = get_param(xform_id, variation_id, 8u) > 0.5;
+    let fillp = get_param(xform_id, variation_id, 9u);
+    let inset = clamp(get_param(xform_id, variation_id, 10u), 0.0, 0.45);
+    let span = max(get_param(xform_id, variation_id, 11u), 1.0);
+    let rl = u32(get_param(xform_id, variation_id, bo));
+    let ftot = max(u32(get_param(xform_id, variation_id, bo + 35u)), 1u);
+    let lnds = log(ds);
+
+    var cha: array<u32, 6>;
+    let sa = mnd_segment(xform_id, variation_id, rng, depth, lnds, rl, ftot, &cha, 6u);
+    let a_p0 = vec2<f32>(sa[0], sa[1]);
+    let a_len = sa[2];
+    let a_ang = u32(sa[3]);
+
+    var q = vec2<f32>(0.0, 0.0);
     var filling = false;
+    var rvc = 0.0;
     if (fillp > 0.0 && rng_nextf(rng) < fillp) {
-        filling = true;
-        let side = select(1.0, -1.0, fract(bpos * 977.0) < 0.5);
-        let t = mix(inset, 1.0 - inset, rng_nextf(rng));
-        let sfrac = mix(inset, 1.0 - inset, rng_nextf(rng));
-        q = pp + mnd_rot(vec2<f32>(len * t, len * sfrac * side), ang);
-    } else {
-        q = pp + mnd_rot(vec2<f32>(len * rng_nextf(rng), 0.0), ang);
+        // Rectangle fill, the chaos-game version of the R relational
+        // pass: a second independent segment; if parallel, overlapping
+        // in span, and within reach, fill the rectangle BETWEEN the
+        // two drawn lines. Width = their actual overlap, height =
+        // their actual separation -> true squares and longer
+        // rectangles, bounded by real lines on two sides (only
+        // sometimes on all four), lines drawing over the fills.
+        // B = sibling of A: replay A's descent, re-randomizing only the
+        // bottom level (sometimes two or three, for wider-reaching
+        // rectangles). Uniform independent pairs almost never lie
+        // adjacent in a drawing of thousands of segments.
+        var chb = cha;
+        let lr = rng_nextf(rng);
+        var rb = 1u;
+        if (lr < 0.35) { rb = 2u; }
+        if (lr < 0.08) { rb = 3u; }
+        let sb = mnd_segment(xform_id, variation_id, rng, depth, lnds, rl, ftot, &chb, rb);
+        let b_p0 = vec2<f32>(sb[0], sb[1]);
+        let b_len = sb[2];
+        let b_ang = u32(sb[3]);
+        if ((a_ang & 1u) == (b_ang & 1u)) {
+            let horiz = (a_ang & 1u) == 0u;
+            let a1 = a_p0 + mnd_rot(vec2<f32>(a_len, 0.0), a_ang);
+            let b1 = b_p0 + mnd_rot(vec2<f32>(b_len, 0.0), b_ang);
+            var aa0: f32; var aa1: f32; var ca: f32;
+            var ba0: f32; var ba1: f32; var cb: f32;
+            if (horiz) {
+                aa0 = min(a_p0.x, a1.x); aa1 = max(a_p0.x, a1.x); ca = a_p0.y;
+                ba0 = min(b_p0.x, b1.x); ba1 = max(b_p0.x, b1.x); cb = b_p0.y;
+            } else {
+                aa0 = min(a_p0.y, a1.y); aa1 = max(a_p0.y, a1.y); ca = a_p0.x;
+                ba0 = min(b_p0.y, b1.y); ba1 = max(b_p0.y, b1.y); cb = b_p0.x;
+            }
+            let lo = max(aa0, ba0);
+            let hi = min(aa1, ba1);
+            let sep = abs(cb - ca);
+            if (hi - lo > 0.05 && sep > 0.05 && sep <= span * max(a_len, b_len)) {
+                filling = true;
+                let c0 = min(ca, cb);
+                let c1 = max(ca, cb);
+                let ia = inset * (hi - lo);
+                let ic = inset * sep;
+                let av = mix(lo + ia, hi - ia, rng_nextf(rng));
+                let cv = mix(c0 + ic, c1 - ic, rng_nextf(rng));
+                if (horiz) { q = vec2<f32>(av, cv); } else { q = vec2<f32>(cv, av); }
+                // Stable per-rectangle color: hash the quantized bounds
+                // so every sample of this rectangle agrees, whichever
+                // segment pair spanned it.
+                let qs = 4.0;
+                rvc = mnd_hash01(
+                    i32(round(lo * qs)) ^ (i32(round(hi * qs)) * 7919),
+                    i32(round(c0 * qs)) ^ (i32(round(c1 * qs)) * 104729));
+            }
+        }
+    }
+    if (!filling) {
+        q = a_p0 + mnd_rot(vec2<f32>(a_len * rng_nextf(rng), 0.0), a_ang);
     }
 
     if (dc_mode == 1u) {
-        *vc = fract(bpos * max(dc_scale, 1e-6));
+        *vc = fract(sa[4] * max(dc_scale, 1e-6));
     } else if (dc_mode == 2u) {
         // Cyclic in the segment counter (the length-drift driver).
-        *vc = fract(d * color_speed * 0.1 * max(dc_scale, 1e-6));
+        *vc = fract(sa[5] * color_speed * 0.1 * max(dc_scale, 1e-6));
     } else if (dc_mode == 3u) {
-        *vc = fract((f32(ang) + 0.5) * 0.25 * max(dc_scale, 1e-6));
+        *vc = fract((f32(a_ang) + 0.5) * 0.25 * max(dc_scale, 1e-6));
     } else if (dc_mode == 4u) {
-        // Cell: flat color per unit-lattice cell (drawing frame, before
-        // centering); lines to palette position 0 (put black there).
+        // Cell: one flat color per rectangle; lines to palette
+        // position 0 (put black there).
         if (filling) {
-            let h = mnd_hash01(i32(floor(q.x)), i32(floor(q.y)));
             if (dc_scale >= 2.0) {
                 // Quantize to n flat palette colors (5 = the classic
                 // Mondrian five; the R script colors by id %% 5).
                 // floor(h*n)/(n-1) lands EXACTLY on evenly spaced
                 // palette stops instead of interpolating between them.
                 let n = round(dc_scale);
-                *vc = floor(h * n) / (n - 1.0);
+                *vc = floor(rvc * n) / (n - 1.0);
             } else {
-                *vc = h;
+                *vc = rvc;
             }
         } else {
             *vc = 0.0;
         }
     }
 
-    if (thickness > 0.0) {
+    if (!filling && thickness > 0.0) {
         q = q + thickness * vec2<f32>(rng_nextf(rng) - 0.5, rng_nextf(rng) - 0.5) * 2.0;
     }
     if (centered) {
