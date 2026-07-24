@@ -34,9 +34,10 @@
 //! resulting near-orbits regardless, exactly as Bagula's loose groups
 //! do.)
 //!
-//! `space` = Hyperbolic H3: the Poincaré extension — chimney columns
-//! over the octagon tiling, and bent groups act genuinely
-//! 3-dimensionally.
+//! `space` = Hyperbolic H3: the Poincaré extension — seeds are planted
+//! on the hemisphere dome over the unit circle (where H2 embeds in
+//! upper half-space), so the octagon tiling drapes over a curved dome;
+//! bent groups act genuinely 3-dimensionally.
 //!
 //! Uses `Feature::NeedsMobiusLib` (`shaders/core/su_mobius.wgsl`).
 
@@ -58,7 +59,7 @@ pub static SURFACE_GROUP: VariationDef = VariationDef {
     display_name: "Surface Group",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    features: &[Feature::NeedsRng, Feature::WritesColor, Feature::NeedsMobiusLib],
+    features: &[Feature::NeedsRng, Feature::WritesColor, Feature::NeedsMobiusLib, Feature::AlwaysZ],
     // Slot 0: previous generator index. Slot 1: color register.
     // Slot 2: walk depth.
     state_count: 3,
@@ -73,7 +74,7 @@ pub static SURFACE_GROUP: VariationDef = VariationDef {
         param!("dc_mode", "Color Mode", enum, 0, &["Off", "Generator", "Steps"], "Direct-color source (needs the transform's Direct Color > 0). Generator: each of the 8 side-pairings has its own palette position, blended through a persistent register at Color Speed. Steps: palette sweeps across the walk depth since the last reseed."),
         param!("dc_scale", "Color Scale", float, 1.0, 0.1, 8.0, "Palette-index multiplier for the color modes."),
         param!("color_speed", "Color Speed", float, 0.5, 0.0, 1.0, "Generator mode: pull strength toward each pairing's palette position. Steps mode: how much of the palette the mean walk traverses."),
-        param!("space", "Space", enum, 0, &["Planar", "Hyperbolic H3"], "3D render mode only. Planar: the disk tiling in the xy plane (z passes through). Hyperbolic H3: the Poincaré extension — chimney columns over the octagon tiling; bent (complex) groups act genuinely 3-dimensionally."),
+        param!("space", "Space", enum, 0, &["Planar", "Hyperbolic H3"], "3D render mode only. Planar: the disk tiling in the xy plane (z passes through). Hyperbolic H3: the Poincaré extension — seeds plant on the hemisphere dome over the unit circle, draping the octagon tiling over a curved dome; bent (complex) groups act genuinely 3-dimensionally."),
     ],
     init_param_count: 0,
     wgsl_init: None,
@@ -278,7 +279,13 @@ fn variation_surface_group(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: 
             let u = cos(ph) * e1 + sin(ph) * e2;
             m = cosh(tt) * m + sinh(tt) * u;
         }
-        a3 = vec3<f32>(sg_proj(m), a3.z);
+        if (space == 1u) {
+            // H3: seed on the hemisphere dome (hyperboloid / time
+            // component) — restores height every reseed; see von_dyck.
+            a3 = vec3<f32>(m.xy / m.z, 1.0 / m.z);
+        } else {
+            a3 = vec3<f32>(sg_proj(m), a3.z);
+        }
         depth = 0.0;
     } else {
         let r2 = dot(a3.xy, a3.xy);

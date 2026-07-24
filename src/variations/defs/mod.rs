@@ -161,10 +161,12 @@ mod apollonian_gasket;
 mod cubic_julia;
 mod fuchsian_triangle;
 mod hecke_group;
+mod hyperbolic_camera;
 mod jacobian_counterexample;
 mod littlewood;
 mod lorentz_mobius;
 mod schottky_group;
+mod sphere_packing;
 mod su_custom;
 mod surface_group;
 mod von_dyck;
@@ -358,10 +360,12 @@ pub use apollonian_gasket::*;
 pub use cubic_julia::*;
 pub use fuchsian_triangle::*;
 pub use hecke_group::*;
+pub use hyperbolic_camera::*;
 pub use jacobian_counterexample::*;
 pub use littlewood::*;
 pub use lorentz_mobius::*;
 pub use schottky_group::*;
+pub use sphere_packing::*;
 pub use su_custom::*;
 pub use surface_group::*;
 pub use von_dyck::*;
@@ -1236,4 +1240,6 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &MOBIQ4D,
     &JUBIQ4D,
     &LITTLEWOOD,
+    &SPHERE_PACKING,
+    &HYPERBOLIC_CAMERA,
 ];
