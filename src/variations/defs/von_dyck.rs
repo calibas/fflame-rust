@@ -44,6 +44,12 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Hyperbolic (p,q,r) rotation groups as a Möbius chaos game with
+/// tessellation seeding.
+///
+/// # Authors
+/// - Fractals for All
+/// - Claude Fable 5
 pub static VON_DYCK: VariationDef = VariationDef {
     name: "von_dyck",
     aliases: &[],

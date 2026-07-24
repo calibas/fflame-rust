@@ -25,6 +25,10 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Vasarely op-art bulge-grid stencil mask.
+///
+/// # Authors
+/// - Jesus Sosa
 pub static CUT_VASARELY: VariationDef = VariationDef {
     name: "cut_vasarely",
     aliases: &[],

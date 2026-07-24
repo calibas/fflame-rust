@@ -41,6 +41,12 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Chladni-plate nodal-line attractor (sand-on-a-vibrating-plate
+/// cymatics).
+///
+/// # Authors
+/// - Fractals for All
+/// - Claude Fable 5
 pub static CHLADNI: VariationDef = VariationDef {
     name: "chladni",
     aliases: &[],

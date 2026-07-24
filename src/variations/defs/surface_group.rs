@@ -46,6 +46,12 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Genus-2 surface group: the octagon tiling with a quasi-Fuchsian bend
+/// into SL(2,ℂ).
+///
+/// # Authors
+/// - Fractals for All
+/// - Claude Fable 5
 pub static SURFACE_GROUP: VariationDef = VariationDef {
     name: "surface_group",
     aliases: &[],

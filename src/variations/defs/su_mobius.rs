@@ -52,6 +52,13 @@ use crate::variations::{
 };
 use crate::param;
 
+/// SU(n)-reduced SL(2,ℂ) Möbius group limit sets from baked generator
+/// tables (triquasiconformal conjugation).
+///
+/// # Authors
+/// - Roger Bagula
+/// - Fractals for All
+/// - Claude Fable 5
 pub static SU_MOBIUS: VariationDef = VariationDef {
     name: "su_mobius",
     // Kept so flames/presets referring to the pre-generalization name

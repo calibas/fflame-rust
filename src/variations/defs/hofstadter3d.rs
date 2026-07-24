@@ -46,6 +46,11 @@ use crate::variations::{
 };
 use crate::param;
 
+/// The Hofstadter butterfly's full 3D spectral body.
+///
+/// # Authors
+/// - Fractals for All
+/// - Claude Fable 5
 pub static HOFSTADTER3D: VariationDef = VariationDef {
     name: "hofstadter3d",
     aliases: &[],

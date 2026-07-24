@@ -37,6 +37,12 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Chaos-game gaskets on the regular 4-polytopes (Menger-style IFS on
+/// tesseract/16-cell/24-cell/…).
+///
+/// # Authors
+/// - Fractals for All
+/// - Claude Fable 5
 pub static POLYCHORON: VariationDef = VariationDef {
     name: "polychoron",
     aliases: &[],

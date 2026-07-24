@@ -49,6 +49,12 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Hyperbolic honeycomb reflection walk (Schläfli {p,q,r}; 2D mode is
+/// the general (p,q,r) triangle group).
+///
+/// # Authors
+/// - Fractals for All
+/// - Claude Fable 5
 pub static HONEYCOMB: VariationDef = VariationDef {
     name: "honeycomb",
     aliases: &[],

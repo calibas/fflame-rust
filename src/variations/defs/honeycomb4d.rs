@@ -34,6 +34,11 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Hyperbolic H⁴ honeycomb reflection walk (Schläfli {p,q,r,s}).
+///
+/// # Authors
+/// - Fractals for All
+/// - Claude Fable 5
 pub static HONEYCOMB4D: VariationDef = VariationDef {
     name: "honeycomb4d",
     aliases: &[],

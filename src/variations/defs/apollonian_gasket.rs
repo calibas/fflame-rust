@@ -36,6 +36,12 @@ use crate::variations::{
 };
 use crate::param;
 
+/// The Apollonian gasket Kleinian group (Indra's Pearls Ch. 7) with QC
+/// deformation.
+///
+/// # Authors
+/// - Fractals for All
+/// - Claude Fable 5
 pub static APOLLONIAN_GASKET: VariationDef = VariationDef {
     name: "apollonian_gasket",
     aliases: &[],

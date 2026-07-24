@@ -38,6 +38,12 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Julia sets of cubic polynomials via 3-branch (Cardano) inverse
+/// iteration.
+///
+/// # Authors
+/// - Fractals for All
+/// - Claude Fable 5
 pub static CUBIC_JULIA: VariationDef = VariationDef {
     name: "cubic_julia",
     aliases: &[],

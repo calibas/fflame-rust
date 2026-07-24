@@ -44,6 +44,13 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Five SL(2,ℂ) Lorentz generators as a Möbius chaos game (the "Dirac
+/// five" set).
+///
+/// # Authors
+/// - Roger Bagula
+/// - Fractals for All
+/// - Claude Fable 5
 pub static LORENTZ_MOBIUS: VariationDef = VariationDef {
     name: "lorentz_mobius",
     aliases: &[],

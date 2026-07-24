@@ -43,6 +43,13 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Bagula's ⟨2,3,12⟩ Kleinian triangle-group limit set
+/// (McMullen/Nylander).
+///
+/// # Authors
+/// - Roger Bagula
+/// - Fractals for All
+/// - Claude Fable 5
 pub static FUCHSIAN_TRIANGLE: VariationDef = VariationDef {
     name: "fuchsian_triangle",
     aliases: &[],

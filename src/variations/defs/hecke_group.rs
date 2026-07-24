@@ -34,6 +34,12 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Hecke group H(q) orbit chaos game; q = 3 is the modular group
+/// PSL(2,ℤ).
+///
+/// # Authors
+/// - Fractals for All
+/// - Claude Fable 5
 pub static HECKE_GROUP: VariationDef = VariationDef {
     name: "hecke_group",
     aliases: &[],

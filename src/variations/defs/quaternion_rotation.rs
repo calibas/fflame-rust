@@ -22,6 +22,11 @@ use crate::variations::{
 };
 use crate::param;
 
+/// General 4D rotation of the point by q' = â·q·b̂.
+///
+/// # Authors
+/// - Fractals for All
+/// - Claude Fable 5
 pub static QUATERNION_ROTATION: VariationDef = VariationDef {
     name: "quaternion_rotation",
     aliases: &["qrotate"],

@@ -18,6 +18,11 @@ use crate::variations::{
 };
 use crate::param;
 
+/// A full 4D affine q' = M·q + t on the point q = (x,y,z,w).
+///
+/// # Authors
+/// - Fractals for All
+/// - Claude Fable 5
 pub static QUATERNION_LINEAR: VariationDef = VariationDef {
     name: "quaternion_linear",
     aliases: &["qlinear"],
