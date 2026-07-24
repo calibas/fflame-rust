@@ -48,7 +48,7 @@ pub static APOLLONIAN_GASKET: VariationDef = VariationDef {
     display_name: "Apollonian Gasket",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    features: &[Feature::NeedsRng, Feature::WritesColor, Feature::NeedsMobiusLib],
+    features: &[Feature::NeedsRng, Feature::WritesColor, Feature::NeedsMobiusLib, Feature::AlwaysZ],
     // Slot 0: previous generator index (avoid_reversal). Slot 1: color
     // register for the Generator color mode.
     state_count: 2,

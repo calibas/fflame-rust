@@ -50,7 +50,7 @@ pub static SCHOTTKY_GROUP: VariationDef = VariationDef {
     display_name: "Schottky Group",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    features: &[Feature::NeedsRng, Feature::WritesColor, Feature::NeedsMobiusLib],
+    features: &[Feature::NeedsRng, Feature::WritesColor, Feature::NeedsMobiusLib, Feature::AlwaysZ],
     // Slot 0: previous generator index (avoid_reversal). Slot 1: color
     // register for the Generator color mode.
     state_count: 2,

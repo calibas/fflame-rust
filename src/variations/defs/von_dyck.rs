@@ -32,9 +32,11 @@
 //!   Möbius change of coordinates; triangle groups are RIGID, so this
 //!   is the only deformation they admit).
 //! - **Hyperbolic H3**: the Poincaré extension — the 2D Fuchsian group
-//!   acting on upper half-space stamps the tiling into 3D "chimney"
-//!   columns (not `honeycomb4d`'s genuine {p,q,r} honeycombs — a
-//!   different object).
+//!   acts on upper half-space preserving the hemisphere DOME over the
+//!   unit circle (the geodesic surface where H2 embeds in H3), and the
+//!   seeds are planted on it: the tiling drapes over a curved dome
+//!   rather than a flat disk (not `honeycomb`'s solid-H3 tessellation —
+//!   a tiled surface inside H3).
 //!
 //! Uses `Feature::NeedsMobiusLib` (`shaders/core/su_mobius.wgsl`).
 
@@ -56,7 +58,7 @@ pub static VON_DYCK: VariationDef = VariationDef {
     display_name: "Von Dyck",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    features: &[Feature::NeedsRng, Feature::WritesColor, Feature::NeedsMobiusLib],
+    features: &[Feature::NeedsRng, Feature::WritesColor, Feature::NeedsMobiusLib, Feature::AlwaysZ],
     // Slot 0: previous generator index (avoid_reversal analogue built
     // into the walk). Slot 1: color register. Slot 2: walk depth.
     state_count: 3,
@@ -73,7 +75,7 @@ pub static VON_DYCK: VariationDef = VariationDef {
         param!("dc_mode", "Color Mode", enum, 0, &["Off", "Generator", "Steps"], "Direct-color source (needs the transform's Direct Color > 0). Generator: each group generator has its own palette position, blended through a persistent register at Color Speed. Steps: palette sweeps across the walk depth since the last reseed."),
         param!("dc_scale", "Color Scale", float, 1.0, 0.1, 8.0, "Palette-index multiplier for the color modes."),
         param!("color_speed", "Color Speed", float, 0.5, 0.0, 1.0, "Generator mode: pull strength toward each generator's palette position. Steps mode: how much of the palette the mean walk traverses."),
-        param!("space", "Space", enum, 0, &["Planar", "Hyperbolic H3"], "3D render mode only. Planar: the disk tiling in the xy plane (z passes through). Hyperbolic H3: the Poincaré extension — the 2D group acts on upper half-space (height = z), stamping the tiling into 3D chimney columns over the disk."),
+        param!("space", "Space", enum, 0, &["Planar", "Hyperbolic H3"], "3D render mode only. Planar: the disk tiling in the xy plane (z passes through). Hyperbolic H3: the Poincaré extension — the 2D group acts on upper half-space (height = z) preserving the hemisphere dome over the unit circle, and seeds are planted ON the dome: the tiling drapes over the curved dome surface."),
         param!("qc_deform", "QC Deform", bool, false, "Conjugate every generator by Bagula's triquasiconformal C = dk(δ)·s0·qf(θ+iη) — the even→uneven warp applied to a tiling. Triangle groups are rigid (their deformation space is a point), so this global Möbius warp is the only deformation they admit."),
         param!("conj_angle", "Angle", angle, 45.0, "Elliptic rotation θ in the conjugator (QC Deform on)."),
         param!("conj_hyper", "Hyper Angle", angle, 0.0, "Hyperbolic rotation η in the conjugator (QC Deform on)."),
@@ -371,7 +373,18 @@ fn variation_von_dyck(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
             let u = cos(ph) * e1 + sin(ph) * e2;
             m = cosh(tt) * m + sinh(tt) * u;
         }
-        a3 = vec3<f32>(vd_proj(m), a3.z);
+        if (space == 1u) {
+            // H3: plant the seed on the hemisphere DOME over the unit
+            // circle — the invariant geodesic surface where H2 embeds in
+            // upper half-space (dome point = hyperboloid vector / its
+            // time component; |X|²+t² = 1 preserved by the extension).
+            // This restores the height at every reseed: the random walk
+            // drifts a.s. toward the boundary plane, and without the
+            // restore the picture flattens onto it.
+            a3 = vec3<f32>(m.xy / m.z, 1.0 / m.z);
+        } else {
+            a3 = vec3<f32>(vd_proj(m), a3.z);
+        }
         depth = 0.0;
     } else {
         let r2 = dot(a3.xy, a3.xy);
