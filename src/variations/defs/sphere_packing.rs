@@ -63,16 +63,18 @@ pub static SPHERE_PACKING: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     features: &[Feature::NeedsRng, Feature::WritesColor, Feature::AlwaysZ],
     // Slot 0: previous mirror index (inversions are involutions — block
-    // immediate repeats). Slot 1: color register.
-    state_count: 2,
+    // immediate repeats). Slot 1: color register. Slot 2: generation
+    // counter. Slots 3..6: the carried sphere (radius, center) that the
+    // Curvature mode transports exactly through every inversion.
+    state_count: 7,
     wgsl_state_init: None,
     parameters: &[
         param!("mode", "Mode", enum, 0, &["Apollonian (Dual)", "Tangent Spheres", "Ring", "Ring + Caps"], "The mirror configuration. Apollonian: inversions in the five dual spheres of the symmetric Soddy configuration — the limit set is the exact Apollonian sphere packing (gasket in 2D). Tangent Spheres: the five Soddy spheres themselves as mirrors — denser sibling fractal. Ring: N spheres around the equator kissing the outer sphere (and each other at Ring Scale 1) — a freely tunable packing family. Ring + Caps: adds two polar cap spheres kissing outer + ring (3D; renders as Ring in 2D)."),
         param!("size", "Size", float, 1.0, 0.1, 4.0, "Radius of the outer sphere/circle in world units."),
         param!("avoid_repeat", "Avoid Repeat", bool, true, "Block choosing the same mirror twice in a row (an inversion is an involution, so a repeat cancels to the identity). Off = all mirrors equally likely every call."),
-        param!("dc_mode", "Color Mode", enum, 0, &["Off", "Mirror", "Mirror Blend"], "Direct-color source (needs the transform's Direct Color > 0). Mirror: which inversion was applied this call. Mirror Blend: persistent register pulled toward each mirror's palette slot at Color Speed — colors the packing by reflection itinerary."),
+        param!("dc_mode", "Color Mode", enum, 0, &["Off", "Mirror", "Mirror Blend", "Curvature", "Generation", "Angle"], "Direct-color source (needs the transform's Direct Color > 0). Mirror: the last inversion applied — coarse flat regions (each mirror maps everything into its own ball; Color Speed unused). Mirror Blend: register pulled toward each mirror's slot after EVERY inversion — Color Speed is the region size (1 = coarse basins, lower = each step refines one hierarchy level). Curvature: the canonical Apollonian coloring — the carried sphere is transported through every inversion in closed form, so each sphere of the packing gets its own palette position by SIZE (needs Reseed > 0). Generation: palette sweeps with the number of inversions since the last reseed — colors by hierarchy depth. Angle: azimuth of the output point."),
         param!("dc_scale", "Color Scale", float, 1.0, 0.1, 8.0, "Palette-index multiplier for the color modes."),
-        param!("color_speed", "Color Speed", float, 0.5, 0.0, 1.0, "Blend rate of the Mirror Blend register: low = deep itinerary history, high = recent mirrors only."),
+        param!("color_speed", "Color Speed", float, 0.5, 0.0, 1.0, "Mirror Blend: blend rate = color region size (1 = coarse per-mirror basins, low = fine cells from deep itinerary). Generation: palette sweep rate per hierarchy level."),
         param!("steps", "Steps", int, 3.0, 1.0, 8.0, "Inversions applied per call (only the last point is plotted). Higher values let respawned points converge onto the packing before plotting — suppresses pre-convergence haze — at proportional GPU cost."),
         param!("reseed", "Reseed", float, 0.25, 0.0, 0.5, "Probability per call of planting the point on the seed geometry (see Seed) before the walk. The packing spheres are exact limit-set subsets for the tangent configurations, so seeded points render crisply from the first plot. 0 = pure feed-through chaos game."),
         param!("ring_n", "Ring N", int, 6.0, 2.0, 16.0, "Ring modes: number of spheres around the equator. At Ring Scale 1 neighbours kiss exactly (r = sin(π/N)/(1+sin(π/N)))."),
@@ -154,24 +156,34 @@ fn variation_sphere_packing(p: vec2<f32>, xform_id: u32, variation_id: u32, rng:
     let mcnt = scnt;   // 2D: dual count (4) == tangent count (4)
 
     var x = p / size;
+    // Carried circle (radius, center) transported through every
+    // inversion for the Curvature coloring.
+    var crad = get_state(xform_id, variation_id, 3u);
+    var ccen = vec2<f32>(get_state(xform_id, variation_id, 4u), get_state(xform_id, variation_id, 5u));
+    var depth = get_state(xform_id, variation_id, 2u);
     if (rng_nextf(rng) < reseed) {
         if (seed_mode == 0u) {
             // Surface of a random configuration circle.
             let cs = sp_conf2(mode, min(u32(rng_nextf(rng) * f32(scnt)), scnt - 1u), ring_n, ring_scale, jit);
             let a = rng_nextf(rng) * 6.28318530718;
             x = cs.xy + cs.z * vec2<f32>(cos(a), sin(a));
+            crad = cs.z; ccen = cs.xy;
         } else if (seed_mode == 1u) {
             // Center vertex (skip the outer circle's center).
             let k = 1u + min(u32(rng_nextf(rng) * f32(scnt - 1u)), scnt - 2u);
-            x = sp_conf2(mode, k, ring_n, ring_scale, jit).xy;
+            let cs = sp_conf2(mode, k, ring_n, ring_scale, jit);
+            x = cs.xy;
+            crad = cs.z; ccen = cs.xy;
         } else {
             // Tangency-graph edge: cycle of the inner circles.
             let inner = scnt - 1u;
             let e = min(u32(rng_nextf(rng) * f32(inner)), inner - 1u);
-            let c0 = sp_conf2(mode, 1u + e, ring_n, ring_scale, jit).xy;
+            let s0 = sp_conf2(mode, 1u + e, ring_n, ring_scale, jit);
             let c1 = sp_conf2(mode, 1u + (e + 1u) % inner, ring_n, ring_scale, jit).xy;
-            x = mix(c0, c1, rng_nextf(rng));
+            x = mix(s0.xy, c1, rng_nextf(rng));
+            crad = s0.z; ccen = s0.xy;
         }
+        depth = 0.0;
         if (thickness > 0.0) {
             let a = rng_nextf(rng) * 6.28318530718;
             x = x + thickness * sqrt(rng_nextf(rng)) * vec2<f32>(cos(a), sin(a));
@@ -179,6 +191,7 @@ fn variation_sphere_packing(p: vec2<f32>, xform_id: u32, variation_id: u32, rng:
     }
 
     var prev = u32(get_state(xform_id, variation_id, 0u));
+    var creg = get_state(xform_id, variation_id, 1u);
     var k = 0u;
     for (var i = 0; i < steps; i = i + 1) {
         k = min(u32(rng_nextf(rng) * f32(mcnt)), mcnt - 1u);
@@ -187,17 +200,36 @@ fn variation_sphere_packing(p: vec2<f32>, xform_id: u32, variation_id: u32, rng:
         let v = x - cr.xy;
         let nn = max(dot(v, v), 1e-12);
         x = cr.xy + (cr.z * cr.z / nn) * v;
+        // Transport the carried circle: image center c_m + r²u/D,
+        // radius r²ρ/|D|, u = c − c_m, D = |u|² − ρ².
+        let u2 = ccen - cr.xy;
+        let dd = dot(u2, u2) - crad * crad;
+        let add = max(abs(dd), 1e-12);
+        ccen = cr.xy + (cr.z * cr.z * sign(dd) / add) * u2;
+        crad = cr.z * cr.z * crad / add;
+        // Per-step itinerary blend: Color Speed = region size.
+        creg = mix(creg, (f32(k) + 0.5) / f32(mcnt), color_speed);
         prev = k;
     }
     set_state(xform_id, variation_id, 0u, f32(prev));
+    depth = depth + f32(steps);
+    set_state(xform_id, variation_id, 2u, depth);
+    set_state(xform_id, variation_id, 3u, crad);
+    set_state(xform_id, variation_id, 4u, ccen.x);
+    set_state(xform_id, variation_id, 5u, ccen.y);
 
     if (dc_mode == 1u) {
         *vc = fract((f32(k) + 0.5) / f32(mcnt) * dc_scale);
     } else if (dc_mode == 2u) {
-        var creg = get_state(xform_id, variation_id, 1u);
-        creg = mix(creg, (f32(k) + 0.5) / f32(mcnt), color_speed);
         set_state(xform_id, variation_id, 1u, creg);
         *vc = fract(creg * dc_scale);
+    } else if (dc_mode == 3u) {
+        *vc = fract(0.5 + 0.15 * dc_scale * log(1.0 / max(crad, 1e-9)));
+    } else if (dc_mode == 4u) {
+        let t = clamp(depth * color_speed * 0.05, 0.0, 1.0);
+        *vc = fract(min(t * dc_scale, 0.999));
+    } else if (dc_mode == 5u) {
+        *vc = fract((atan2(x.y, x.x) * 0.15915494 + 0.5) * dc_scale);
     }
     return x * size;
 }
@@ -300,6 +332,11 @@ fn variation_sphere_packing(p: vec3<f32>, xform_id: u32, variation_id: u32, rng:
     else if (mode == 3u) { ecnt = 3u * ring_n; }
 
     var x = p / size;
+    // Carried sphere (radius, center) transported through every
+    // inversion for the Curvature coloring.
+    var crad = get_state(xform_id, variation_id, 3u);
+    var ccen = vec3<f32>(get_state(xform_id, variation_id, 4u), get_state(xform_id, variation_id, 5u), get_state(xform_id, variation_id, 6u));
+    var depth = get_state(xform_id, variation_id, 2u);
     if (rng_nextf(rng) < reseed) {
         if (seed_mode == 0u) {
             let sp = sp_conf3(mode, min(u32(rng_nextf(rng) * f32(scnt)), scnt - 1u), ring_n, ring_scale, cap_scale, jit);
@@ -307,16 +344,21 @@ fn variation_sphere_packing(p: vec3<f32>, xform_id: u32, variation_id: u32, rng:
             let ph = rng_nextf(rng) * 6.28318530718;
             let sa = sqrt(max(1.0 - za * za, 0.0));
             x = sp.xyz + sp.w * vec3<f32>(sa * cos(ph), sa * sin(ph), za);
+            crad = sp.w; ccen = sp.xyz;
         } else if (seed_mode == 1u) {
             let k = 1u + min(u32(rng_nextf(rng) * f32(scnt - 1u)), scnt - 2u);
-            x = sp_conf3(mode, k, ring_n, ring_scale, cap_scale, jit).xyz;
+            let sp = sp_conf3(mode, k, ring_n, ring_scale, cap_scale, jit);
+            x = sp.xyz;
+            crad = sp.w; ccen = sp.xyz;
         } else {
             let e = min(u32(rng_nextf(rng) * f32(ecnt)), ecnt - 1u);
             let ij = sp_edge3(mode, e, ring_n);
-            let c0 = sp_conf3(mode, ij.x, ring_n, ring_scale, cap_scale, jit).xyz;
+            let s0 = sp_conf3(mode, ij.x, ring_n, ring_scale, cap_scale, jit);
             let c1 = sp_conf3(mode, ij.y, ring_n, ring_scale, cap_scale, jit).xyz;
-            x = mix(c0, c1, rng_nextf(rng));
+            x = mix(s0.xyz, c1, rng_nextf(rng));
+            crad = s0.w; ccen = s0.xyz;
         }
+        depth = 0.0;
         if (thickness > 0.0) {
             let za = rng_nextf(rng) * 2.0 - 1.0;
             let ph = rng_nextf(rng) * 6.28318530718;
@@ -326,6 +368,7 @@ fn variation_sphere_packing(p: vec3<f32>, xform_id: u32, variation_id: u32, rng:
     }
 
     var prev = u32(get_state(xform_id, variation_id, 0u));
+    var creg = get_state(xform_id, variation_id, 1u);
     var k = 0u;
     for (var i = 0; i < steps; i = i + 1) {
         k = min(u32(rng_nextf(rng) * f32(mcnt)), mcnt - 1u);
@@ -334,17 +377,34 @@ fn variation_sphere_packing(p: vec3<f32>, xform_id: u32, variation_id: u32, rng:
         let v = x - sp.xyz;
         let nn = max(dot(v, v), 1e-12);
         x = sp.xyz + (sp.w * sp.w / nn) * v;
+        let u3 = ccen - sp.xyz;
+        let dd = dot(u3, u3) - crad * crad;
+        let add = max(abs(dd), 1e-12);
+        ccen = sp.xyz + (sp.w * sp.w * sign(dd) / add) * u3;
+        crad = sp.w * sp.w * crad / add;
+        creg = mix(creg, (f32(k) + 0.5) / f32(mcnt), color_speed);
         prev = k;
     }
     set_state(xform_id, variation_id, 0u, f32(prev));
+    depth = depth + f32(steps);
+    set_state(xform_id, variation_id, 2u, depth);
+    set_state(xform_id, variation_id, 3u, crad);
+    set_state(xform_id, variation_id, 4u, ccen.x);
+    set_state(xform_id, variation_id, 5u, ccen.y);
+    set_state(xform_id, variation_id, 6u, ccen.z);
 
     if (dc_mode == 1u) {
         *vc = fract((f32(k) + 0.5) / f32(mcnt) * dc_scale);
     } else if (dc_mode == 2u) {
-        var creg = get_state(xform_id, variation_id, 1u);
-        creg = mix(creg, (f32(k) + 0.5) / f32(mcnt), color_speed);
         set_state(xform_id, variation_id, 1u, creg);
         *vc = fract(creg * dc_scale);
+    } else if (dc_mode == 3u) {
+        *vc = fract(0.5 + 0.15 * dc_scale * log(1.0 / max(crad, 1e-9)));
+    } else if (dc_mode == 4u) {
+        let t = clamp(depth * color_speed * 0.05, 0.0, 1.0);
+        *vc = fract(min(t * dc_scale, 0.999));
+    } else if (dc_mode == 5u) {
+        *vc = fract((atan2(x.y, x.x) * 0.15915494 + 0.5) * dc_scale);
     }
     return x * size;
 }
