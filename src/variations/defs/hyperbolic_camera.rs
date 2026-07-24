@@ -75,6 +75,7 @@ pub static HYPERBOLIC_CAMERA: VariationDef = VariationDef {
         param!("rot_y", "Rotate Y", angle, 0.0, "Rotation about the y axis through the model center (3D only)."),
         param!("rot_z", "Rotate Z", angle, 0.0, "Rotation about the z axis (the in-plane rotation in 2D)."),
         param!("size", "Size", float, 1.0, 0.1, 4.0, "Model scale in world units: input is divided by it, output multiplied — ball models occupy radius `size`."),
+        param!("curvature", "Curvature K", unlimited_float, -1.0, -100.0, -0.01, "Sectional curvature the camera experiences (K < 0; content is interpreted at K = -1). The content's intrinsic scale is locked to the curvature radius 1/sqrt(-K) while the camera's ruler stays fixed — the exact radial rescale d' = d/sqrt(-K) of hyperbolic distance about the OBSERVER (applied after the isometry, so the camera position is the fixed point). K = -100: the horizon crowds inward, objects shrink faster, area growth explodes. K = -0.01: the world flattens toward Euclidean — content huddles at the model center, parallels barely diverge, the horizon recedes. Only possible because hyperbolic geometry has an intrinsic scale — flat space has no such dial."),
     ],
     wgsl_2d: WGSL_2D,
     wgsl_3d: WGSL_3D,
@@ -158,6 +159,7 @@ fn variation_hyperbolic_camera(p: vec2<f32>, xform_id: u32, variation_id: u32) -
     let ty = get_param(xform_id, variation_id, 3u);
     let rot_z = get_param(xform_id, variation_id, 7u) * 0.01745329252;
     let size = max(get_param(xform_id, variation_id, 8u), 1e-6);
+    let curv = sqrt(clamp(-get_param(xform_id, variation_id, 9u), 1e-4, 1e4));
 
     var h = hycam_to_hyp2(p / size, in_model);
     if (rot_z != 0.0) {
@@ -171,6 +173,15 @@ fn variation_hyperbolic_camera(p: vec2<f32>, xform_id: u32, variation_id: u32) -
         let perp = h.xy - par * n;
         let ch = cosh(d); let sh = sinh(d);
         h = vec3<f32>(perp + (ch * par + sh * h.z) * n, sh * par + ch * h.z);
+    }
+    // Curvature morph: radial rescale of hyperbolic distance about the
+    // observer (origin), d' = d*sqrt(-K). Not an isometry — the point.
+    if (abs(curv - 1.0) > 1e-6) {
+        let sn = length(h.xy);
+        if (sn > 1e-9) {
+            let dd = min(acosh(max(h.z, 1.0)) / curv, 40.0);
+            h = vec3<f32>((sinh(dd) / sn) * h.xy, cosh(dd));
+        }
     }
     return hycam_from_hyp2(h, out_model) * size;
 }
@@ -294,6 +305,7 @@ fn variation_hyperbolic_camera(p: vec3<f32>, xform_id: u32, variation_id: u32) -
     let rot_y = get_param(xform_id, variation_id, 6u) * 0.01745329252;
     let rot_z = get_param(xform_id, variation_id, 7u) * 0.01745329252;
     let size = max(get_param(xform_id, variation_id, 8u), 1e-6);
+    let curv = sqrt(clamp(-get_param(xform_id, variation_id, 9u), 1e-4, 1e4));
 
     let u = p / size;
     var h: vec4<f32>;
@@ -328,6 +340,14 @@ fn variation_hyperbolic_camera(p: vec3<f32>, xform_id: u32, variation_id: u32) -
         let perp = h.xyz - par * n;
         let ch = cosh(d); let sh = sinh(d);
         h = vec4<f32>(perp + (ch * par + sh * h.w) * n, sh * par + ch * h.w);
+    }
+    // Curvature morph: radial rescale about the observer, d' = d*sqrt(-K).
+    if (abs(curv - 1.0) > 1e-6) {
+        let sn = length(h.xyz);
+        if (sn > 1e-9) {
+            let dd = min(acosh(max(h.w, 1.0)) / curv, 40.0);
+            h = vec4<f32>((sinh(dd) / sn) * h.xyz, cosh(dd));
+        }
     }
 
     if (out_model < 6u) {
