@@ -162,6 +162,7 @@ mod cubic_julia;
 mod fuchsian_triangle;
 mod hecke_group;
 mod jacobian_counterexample;
+mod littlewood;
 mod lorentz_mobius;
 mod schottky_group;
 mod su_custom;
@@ -358,6 +359,7 @@ pub use cubic_julia::*;
 pub use fuchsian_triangle::*;
 pub use hecke_group::*;
 pub use jacobian_counterexample::*;
+pub use littlewood::*;
 pub use lorentz_mobius::*;
 pub use schottky_group::*;
 pub use su_custom::*;
@@ -1233,4 +1235,5 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &SURFACE_GROUP,
     &MOBIQ4D,
     &JUBIQ4D,
+    &LITTLEWOOD,
 ];
