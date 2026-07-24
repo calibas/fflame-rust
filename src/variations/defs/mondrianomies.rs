@@ -25,10 +25,14 @@
 //!   one of the `4·f^depth` segments uniformly by choosing a random
 //!   branch at each level and composing prefix transforms — ~depth ·
 //!   |rule| steps, no expansion stored.
-//! - The rectangle-fill pass is omitted (it is relational
-//!   post-processing over the whole segment set); the variation
-//!   renders the line skeleton and the flame palette supplies the
-//!   Mondrian colors.
+//! - The R rectangle-fill pass is relational post-processing over the
+//!   whole segment set (per-thread infeasible); the Fill param is the
+//!   chaos-game approximation: a fraction of samples fill the
+//!   len-by-len cell on a per-segment hashed side of their segment,
+//!   and the Cell color mode assigns each unit-lattice cell one flat
+//!   palette color (lines drop to palette position 0 — put black
+//!   there), recovering the colored-rectangles-with-black-lines look.
+//!   Fill Inset leaves the white gutters.
 //! - The rule is generated deterministically from the Seed param (the
 //!   R script uses session randomness). Bracket insertion is clean;
 //!   the R insertion loop `c(v1[1:k], b, v1[k:n])` duplicates one
@@ -61,12 +65,14 @@ pub static MONDRIANOMIES: VariationDef = VariationDef {
         param!("drift", "Length Drift", float, 1.0, 0.9, 1.1, "Segment length = drift^d, where d counts segments drawn before this one (saved/restored with the bracket stack) — the source's ds = jitter(1). Exactly 1 gives the pure unit grid; small deviations make the grid drift and shear apart exponentially with drawing order."),
         param!("size", "Size", float, 0.1, 0.001, 2.0, "Output scale. Drawings span tens of units at unit segment length; 0.1 fits typical seeds near the frame."),
         param!("thickness", "Thickness", float, 0.0, 0.0, 0.5, "Jitter radius fattening the line skeleton into strokes (in un-scaled drawing units)."),
-        param!("dc_mode", "Color Mode", enum, 0, &["Off", "Sequence", "Depth", "Angle"], "Direct-color source. Sequence: palette position follows drawing order (the R script cycles its five Mondrian colors by rectangle id — use DC Scale for the cycle count). Depth: colors by the segment counter d (the length-drift driver). Angle: four flat colors by segment direction."),
+        param!("dc_mode", "Color Mode", enum, 0, &["Off", "Sequence", "Depth", "Angle", "Cell"], "Direct-color source. Sequence: palette position follows drawing order (the R script cycles its five Mondrian colors by rectangle id — use DC Scale for the cycle count). Depth: colors by the segment counter d (the length-drift driver). Angle: four flat colors by segment direction. Cell: fills colored by a hash of the unit-lattice cell they land in — every sample in a cell gets the same flat color regardless of which segment painted it (the Mondrian mode; needs Fill > 0, best at Length Drift 1). DC Scale >= 2 quantizes to that many flat palette colors (5 = the classic Mondrian five, matching the R id %% 5); below 2 the hash is continuous. Line samples go to palette position 0 — put black at the palette start for the authentic black-lines-over-colored-rects look."),
         param!("color_speed", "Color Speed", float, 0.5, 0.0, 1.0, "Depth mode: palette advance per drawn segment (cyclic — wraps instead of saturating)."),
-        param!("dc_scale", "DC Scale", float, 1.0, 0.0, 20.0, "Sequence mode: how many palette cycles across the whole drawing. Depth/Angle: extra multiplier on the palette position."),
+        param!("dc_scale", "DC Scale", float, 1.0, 0.0, 20.0, "Sequence mode: how many palette cycles across the whole drawing. Depth/Angle: extra multiplier on the palette position. Cell mode: >= 2 quantizes fills to that many flat palette colors (5 = the Mondrian five)."),
         param!("center", "Center", bool, true, "Recenter using the mean of the four axiom waypoints (the drawing starts at the turtle origin and wanders)."),
+        param!("fill", "Fill", float, 0.0, 0.0, 1.0, "Fraction of samples that fill the cell beside their segment instead of drawing its line (0 = pure skeleton, 1 = pure fill). Each segment fills the len-by-len cell on one side, chosen by a per-segment hash so the fill is stable. The R original detects and fills enclosed rectangles relationally; this is the per-thread approximation — with the Cell color mode it recovers the flat-colored-cells Mondrian look."),
+        param!("inset", "Fill Inset", float, 0.04, 0.0, 0.2, "Shrinks each filled cell inward by this fraction, leaving unpainted gutters between cells — the white borders of a Mondrian canvas."),
     ],
-    // Derived layout (base = 9 user params):
+    // Derived layout (base = 11 user params):
     //   +0        rule length (≤ 32)
     //   +1..+34   rule symbols: 0=F 1=+ 2=- 3=[ 4=]
     //   +35       F-count in the rule
@@ -95,7 +101,7 @@ fn mnd_rot_i(v: vec2<f32>, ang: u32) -> vec2<f32> {
     return v;
 }
 
-fn init_mondrianomies(user: array<f32, 9>) -> array<f32, 62> {
+fn init_mondrianomies(user: array<f32, 11>) -> array<f32, 62> {
     var out: array<f32, 62>;
     let depth = clamp(u32(user[1]), 1u, 5u);
     let ds = clamp(user[2], 0.5, 2.0);
@@ -227,6 +233,14 @@ fn init_mondrianomies(user: array<f32, 9>) -> array<f32, 62> {
 macro_rules! mnd_body {
     () => {
         r#"
+fn mnd_hash01(a: i32, b: i32) -> f32 {
+    var h = u32(a) * 0x8da6b343u ^ u32(b) * 0xd8163841u;
+    h = h ^ (h >> 16u);
+    h = h * 0x7feb352du;
+    h = h ^ (h >> 13u);
+    return f32(h & 0xFFFFFFu) / 16777216.0;
+}
+
 fn mnd_rot(v: vec2<f32>, ang: u32) -> vec2<f32> {
     if (ang == 1u) { return vec2<f32>(-v.y, v.x); }
     if (ang == 2u) { return -v; }
@@ -235,7 +249,7 @@ fn mnd_rot(v: vec2<f32>, ang: u32) -> vec2<f32> {
 }
 
 fn mnd_point(xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec2<f32> {
-    let bo = 9u;
+    let bo = 11u;
     let depth = clamp(u32(get_param(xform_id, variation_id, 1u)), 1u, 5u);
     let ds = clamp(get_param(xform_id, variation_id, 2u), 0.5, 2.0);
     let size = get_param(xform_id, variation_id, 3u);
@@ -244,6 +258,8 @@ fn mnd_point(xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc:
     let color_speed = get_param(xform_id, variation_id, 6u);
     let dc_scale = get_param(xform_id, variation_id, 7u);
     let centered = get_param(xform_id, variation_id, 8u) > 0.5;
+    let fillp = get_param(xform_id, variation_id, 9u);
+    let inset = clamp(get_param(xform_id, variation_id, 10u), 0.0, 0.45);
     let rl = u32(get_param(xform_id, variation_id, bo));
     let ftot = max(u32(get_param(xform_id, variation_id, bo + 35u)), 1u);
     let lnds = log(ds);
@@ -305,10 +321,20 @@ fn mnd_point(xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc:
         }
     }
 
-    // Draw the level-0 segment: from pp, direction ang, length drift^d.
+    // Draw the level-0 segment: from pp, direction ang, length drift^d —
+    // or fill the len-by-len cell beside it (per-segment hashed side).
     let len = exp(clamp(d * lnds, -12.0, 12.0));
-    let t = rng_nextf(rng);
-    var q = pp + mnd_rot(vec2<f32>(len * t, 0.0), ang);
+    var q: vec2<f32>;
+    var filling = false;
+    if (fillp > 0.0 && rng_nextf(rng) < fillp) {
+        filling = true;
+        let side = select(1.0, -1.0, fract(bpos * 977.0) < 0.5);
+        let t = mix(inset, 1.0 - inset, rng_nextf(rng));
+        let sfrac = mix(inset, 1.0 - inset, rng_nextf(rng));
+        q = pp + mnd_rot(vec2<f32>(len * t, len * sfrac * side), ang);
+    } else {
+        q = pp + mnd_rot(vec2<f32>(len * rng_nextf(rng), 0.0), ang);
+    }
 
     if (dc_mode == 1u) {
         *vc = fract(bpos * max(dc_scale, 1e-6));
@@ -317,6 +343,24 @@ fn mnd_point(xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc:
         *vc = fract(d * color_speed * 0.1 * max(dc_scale, 1e-6));
     } else if (dc_mode == 3u) {
         *vc = fract((f32(ang) + 0.5) * 0.25 * max(dc_scale, 1e-6));
+    } else if (dc_mode == 4u) {
+        // Cell: flat color per unit-lattice cell (drawing frame, before
+        // centering); lines to palette position 0 (put black there).
+        if (filling) {
+            let h = mnd_hash01(i32(floor(q.x)), i32(floor(q.y)));
+            if (dc_scale >= 2.0) {
+                // Quantize to n flat palette colors (5 = the classic
+                // Mondrian five; the R script colors by id %% 5).
+                // floor(h*n)/(n-1) lands EXACTLY on evenly spaced
+                // palette stops instead of interpolating between them.
+                let n = round(dc_scale);
+                *vc = floor(h * n) / (n - 1.0);
+            } else {
+                *vc = h;
+            }
+        } else {
+            *vc = 0.0;
+        }
     }
 
     if (thickness > 0.0) {
