@@ -43,7 +43,7 @@ use crate::param;
 ///
 /// # Authors
 /// - Jesus Sosa
-/// - FractalDesire (polygon sampler)
+/// - FractalDesire
 pub static SUNFLOWER: VariationDef = VariationDef {
     name: "sunflower",
     aliases: &[],

@@ -34,6 +34,10 @@ use crate::param;
 /// shifting the colour register by a per-branch amount. `*mirror`
 /// parameters act as probabilities in `[0, 2]` (the branch fires with
 /// probability `mirror/2`).
+/// 
+/// # Authors
+/// - Thomas Michels
+/// - Brad Stefanov
 pub static COMBIMIRROR: VariationDef = VariationDef {
     name: "combimirror",
     aliases: &[],

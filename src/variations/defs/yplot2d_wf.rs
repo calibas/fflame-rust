@@ -36,7 +36,7 @@ use crate::param;
 ///
 /// # Authors
 /// - Andreas Maschke
-/// - Rick Sidwell (preset formulas 3-13)
+/// - Rick Sidwell
 pub static YPLOT2D_WF: VariationDef = VariationDef {
     name: "yplot2d_wf",
     aliases: &[],

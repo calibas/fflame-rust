@@ -121,7 +121,6 @@ fn variation_cut_x(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<func
 ///
 /// # Authors
 /// - Jesus Sosa
-/// - Fractals for All
 pub static CUT_METABALLS: VariationDef = VariationDef {
     name: "cut_metaballs",
     aliases: &[],
@@ -234,7 +233,6 @@ fn variation_cut_metaballs(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: 
 ///
 /// # Authors
 /// - Jesus Sosa
-/// - Fractals for All
 pub static CUT_KALEIDO: VariationDef = VariationDef {
     name: "cut_kaleido",
     aliases: &[],
@@ -337,7 +335,6 @@ fn variation_cut_kaleido(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: pt
 ///
 /// # Authors
 /// - Jesus Sosa
-/// - Fractals for All
 pub static CUT_SPIRAL: VariationDef = VariationDef {
     name: "cut_spiral",
     aliases: &[],
@@ -427,7 +424,6 @@ fn variation_cut_spiral(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
 ///
 /// # Authors
 /// - Jesus Sosa
-/// - Fractals for All
 pub static CUT_SWARP: VariationDef = VariationDef {
     name: "cut_swarp",
     aliases: &[],

@@ -290,6 +290,9 @@ fn variation_cpow3(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<func
 /// Variant of Disc with extra twist and rotation. The `rot` slider scales
 /// the wave frequency; `twist` adds rotational drift that amplifies beyond
 /// ±2π.
+/// 
+/// # Authors
+/// - Z+
 pub static DISC2: VariationDef = VariationDef {
     name: "disc2",
     aliases: &[],

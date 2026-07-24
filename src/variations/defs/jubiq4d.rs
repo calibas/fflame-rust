@@ -30,6 +30,8 @@ use crate::param;
 ///
 /// # Authors
 /// - Brad Stefanov
+/// - Xyrus02
+/// - zephyrtronium
 /// - Fractals for All
 /// - Claude Fable 5
 pub static JUBIQ4D: VariationDef = VariationDef {

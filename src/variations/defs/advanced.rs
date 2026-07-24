@@ -940,8 +940,8 @@ fn variation_scry(p: vec3<f32>) -> vec3<f32> {
 /// `w × (accumZ + Z·u)` — both branches are handled exactly.
 ///
 /// # Authors
-/// - Apophysis Plugin Pack (original `scry`)
-/// - Larry Berlin (3D extension)
+/// - Apophysis Plugin Pack
+/// - Larry Berlin
 pub static SCRY_3D: VariationDef = VariationDef {
     name: "scry_3D",
     aliases: &[],

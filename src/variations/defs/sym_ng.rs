@@ -16,6 +16,10 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Network Symmetry Group variations sym_ng1..sym_ng17
+///
+/// # Authors
+/// - Jesus Sosa
 pub static SYM_NG1: VariationDef = VariationDef {
     name: "sym_ng1",
     aliases: &[],
@@ -67,6 +71,10 @@ fn variation_sym_ng1(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fu
 "#,
 };
 
+/// Network Symmetry Group variations sym_ng1..sym_ng17
+///
+/// # Authors
+/// - Jesus Sosa
 pub static SYM_NG2: VariationDef = VariationDef {
     name: "sym_ng2",
     aliases: &[],
@@ -118,6 +126,10 @@ fn variation_sym_ng2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fu
 "#,
 };
 
+/// Network Symmetry Group variations sym_ng1..sym_ng17
+///
+/// # Authors
+/// - Jesus Sosa
 pub static SYM_NG3: VariationDef = VariationDef {
     name: "sym_ng3",
     aliases: &[],
@@ -172,6 +184,10 @@ fn variation_sym_ng3(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fu
 "#,
 };
 
+/// Network Symmetry Group variations sym_ng1..sym_ng17
+///
+/// # Authors
+/// - Jesus Sosa
 pub static SYM_NG4: VariationDef = VariationDef {
     name: "sym_ng4",
     aliases: &[],
@@ -241,6 +257,10 @@ fn variation_sym_ng4(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fu
 "#,
 };
 
+/// Network Symmetry Group variations sym_ng1..sym_ng17
+///
+/// # Authors
+/// - Jesus Sosa
 pub static SYM_NG5: VariationDef = VariationDef {
     name: "sym_ng5",
     aliases: &[],
@@ -299,6 +319,10 @@ fn variation_sym_ng5(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fu
 "#,
 };
 
+/// Network Symmetry Group variations sym_ng1..sym_ng17
+///
+/// # Authors
+/// - Jesus Sosa
 pub static SYM_NG6: VariationDef = VariationDef {
     name: "sym_ng6",
     aliases: &[],
@@ -357,6 +381,10 @@ fn variation_sym_ng6(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fu
 "#,
 };
 
+/// Network Symmetry Group variations sym_ng1..sym_ng17
+///
+/// # Authors
+/// - Jesus Sosa
 pub static SYM_NG7: VariationDef = VariationDef {
     name: "sym_ng7",
     aliases: &[],
@@ -408,6 +436,10 @@ fn variation_sym_ng7(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fu
 "#,
 };
 
+/// Network Symmetry Group variations sym_ng1..sym_ng17
+///
+/// # Authors
+/// - Jesus Sosa
 pub static SYM_NG8: VariationDef = VariationDef {
     name: "sym_ng8",
     aliases: &[],
@@ -477,6 +509,10 @@ fn variation_sym_ng8(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fu
 "#,
 };
 
+/// Network Symmetry Group variations sym_ng1..sym_ng17
+///
+/// # Authors
+/// - Jesus Sosa
 pub static SYM_NG9: VariationDef = VariationDef {
     name: "sym_ng9",
     aliases: &[],
@@ -532,6 +568,10 @@ fn variation_sym_ng9(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fu
 "#,
 };
 
+/// Network Symmetry Group variations sym_ng1..sym_ng17
+///
+/// # Authors
+/// - Jesus Sosa
 pub static SYM_NG10: VariationDef = VariationDef {
     name: "sym_ng10",
     aliases: &[],
@@ -590,6 +630,10 @@ fn variation_sym_ng10(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
 "#,
 };
 
+/// Network Symmetry Group variations sym_ng1..sym_ng17
+///
+/// # Authors
+/// - Jesus Sosa
 pub static SYM_NG11: VariationDef = VariationDef {
     name: "sym_ng11",
     aliases: &[],
@@ -662,6 +706,10 @@ fn variation_sym_ng11(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
 "#,
 };
 
+/// Network Symmetry Group variations sym_ng1..sym_ng17
+///
+/// # Authors
+/// - Jesus Sosa
 pub static SYM_NG12: VariationDef = VariationDef {
     name: "sym_ng12",
     aliases: &[],
@@ -728,6 +776,10 @@ fn variation_sym_ng12(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
 "#,
 };
 
+/// Network Symmetry Group variations sym_ng1..sym_ng17
+///
+/// # Authors
+/// - Jesus Sosa
 pub static SYM_NG13: VariationDef = VariationDef {
     name: "sym_ng13",
     aliases: &[],
@@ -798,6 +850,10 @@ fn variation_sym_ng13(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
 "#,
 };
 
+/// Network Symmetry Group variations sym_ng1..sym_ng17
+///
+/// # Authors
+/// - Jesus Sosa
 pub static SYM_NG14: VariationDef = VariationDef {
     name: "sym_ng14",
     aliases: &[],
@@ -880,6 +936,10 @@ fn variation_sym_ng14(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
 "#,
 };
 
+/// Network Symmetry Group variations sym_ng1..sym_ng17
+///
+/// # Authors
+/// - Jesus Sosa
 pub static SYM_NG15: VariationDef = VariationDef {
     name: "sym_ng15",
     aliases: &[],
@@ -962,6 +1022,10 @@ fn variation_sym_ng15(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
 "#,
 };
 
+/// Network Symmetry Group variations sym_ng1..sym_ng17
+///
+/// # Authors
+/// - Jesus Sosa
 pub static SYM_NG16: VariationDef = VariationDef {
     name: "sym_ng16",
     aliases: &[],
@@ -1042,6 +1106,10 @@ fn variation_sym_ng16(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
 "#,
 };
 
+/// Network Symmetry Group variations sym_ng1..sym_ng17
+///
+/// # Authors
+/// - Jesus Sosa
 pub static SYM_NG17: VariationDef = VariationDef {
     name: "sym_ng17",
     aliases: &[],
