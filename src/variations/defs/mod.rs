@@ -164,6 +164,7 @@ mod hecke_group;
 mod hyperbolic_camera;
 mod jacobian_counterexample;
 mod littlewood;
+mod mondrianomies;
 mod lorentz_mobius;
 mod schottky_group;
 mod sphere_packing;
@@ -363,6 +364,7 @@ pub use hecke_group::*;
 pub use hyperbolic_camera::*;
 pub use jacobian_counterexample::*;
 pub use littlewood::*;
+pub use mondrianomies::*;
 pub use lorentz_mobius::*;
 pub use schottky_group::*;
 pub use sphere_packing::*;
@@ -1242,4 +1244,5 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &LITTLEWOOD,
     &SPHERE_PACKING,
     &HYPERBOLIC_CAMERA,
+    &MONDRIANOMIES,
 ];
