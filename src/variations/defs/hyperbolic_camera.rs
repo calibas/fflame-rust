@@ -66,8 +66,8 @@ pub static HYPERBOLIC_CAMERA: VariationDef = VariationDef {
     state_count: 0,
     wgsl_state_init: None,
     parameters: &[
-        param!("in_model", "In Model", enum, 0, &["Poincaré Disk (2D)", "Klein Disk (2D)", "Half-Plane (2D)", "Hyperboloid (2D)", "Equidistant (2D)", "Band (2D)", "Poincaré Ball (3D)", "Klein Ball (3D)", "Half-Space (3D)", "Hyperboloid (3D)", "Equidistant (3D)"], "How the incoming point is interpreted. 2D charts read xy (input z passes in as the third hyperboloid coordinate — planar content becomes a positionable H3 object). 3D charts read the full point. In 2D render mode, 3D selections demote to their 2D counterparts. Half-Plane height = y; Half-Space height = z (the Kleinian H3 space-mode convention); Hyperboloid is the raw Minkowski spatial part (Gans model); Equidistant has Euclidean radius = true hyperbolic distance; Band is the conformal strip (log half-plane)."),
-        param!("out_model", "Out Model", enum, 0, &["Poincaré Disk (2D)", "Klein Disk (2D)", "Half-Plane (2D)", "Hyperboloid (2D)", "Equidistant (2D)", "Band (2D)", "Poincaré Ball (3D)", "Klein Ball (3D)", "Half-Space (3D)", "Hyperboloid (3D)", "Equidistant (3D)"], "The model the point is re-projected into. Selecting a 2D chart in 3D render mode projects the H3 point geodesically onto the equatorial plane for the chart and emits the dropped spatial component as z — a 2D projection of 3D hyperbolic content that keeps depth. Poincaré → Klein straightens tiling edges into chords; → Half-Plane/Space unrolls against a boundary; → Hyperboloid gives the unbounded Gans funnel; → Equidistant keeps distances radially true; → Band unrolls into an infinite conformal frieze ribbon."),
+        param!("in_model", "In Model", enum, 0, &["Poincaré Disk (2D)", "Klein Disk (2D)", "Half-Plane (2D)", "Hyperboloid (2D)", "Equidistant (2D)", "Band (2D)", "Poincaré Ball (3D)", "Klein Ball (3D)", "Half-Space (3D)", "Hyperboloid (3D)", "Equidistant (3D)"], "How the incoming point is interpreted. 2D charts read xy (input z passes in as the third hyperboloid coordinate — planar content becomes a positionable H3 object). 3D charts read the full point. In 2D render mode, 3D selections demote to their 2D counterparts. Half-Plane height = y; Half-Space height = z (the Kleinian H3 space-mode convention); Hyperboloid is the raw Minkowski spatial part (Gans model); Equidistant has Euclidean radius = true hyperbolic distance (the azimuthal equidistant projection, as on the UN-emblem world map); as an In Model it is also the natural way to import flat non-hyperbolic content — radial distances and angles at the center carry over exactly (the exponential map); Band is the conformal strip (log half-plane)."),
+        param!("out_model", "Out Model", enum, 0, &["Poincaré Disk (2D)", "Klein Disk (2D)", "Half-Plane (2D)", "Hyperboloid (2D)", "Equidistant (2D)", "Band (2D)", "Poincaré Ball (3D)", "Klein Ball (3D)", "Half-Space (3D)", "Hyperboloid (3D)", "Equidistant (3D)"], "The model the point is re-projected into. Selecting a 2D chart in 3D render mode projects the H3 point geodesically onto the equatorial plane for the chart and emits the dropped spatial component as z — a 2D projection of 3D hyperbolic content that keeps depth. Poincaré → Klein straightens tiling edges into chords; → Half-Plane/Space unrolls against a boundary; → Hyperboloid gives the unbounded Gans funnel; → Equidistant keeps distances radially true (azimuthal equidistant — no boundary crush); → Band unrolls into an infinite conformal frieze ribbon."),
         param!("tx", "Translate X", unlimited_float, 0.0, -4.0, 4.0, "Hyperbolic translation along x, in units of hyperbolic distance (rapidity of the Lorentz boost). Moving the observer: the scene slides toward the opposite boundary, crowding conformally."),
         param!("ty", "Translate Y", unlimited_float, 0.0, -4.0, 4.0, "Hyperbolic translation along y."),
         param!("tz", "Translate Z", unlimited_float, 0.0, -4.0, 4.0, "Hyperbolic translation along z (3D render mode only). With a 2D in-chart this lifts the planar content off the equatorial plane."),
@@ -77,6 +77,7 @@ pub static HYPERBOLIC_CAMERA: VariationDef = VariationDef {
         param!("size", "Size", float, 1.0, 0.1, 4.0, "Model scale in world units: input is divided by it, output multiplied — ball models occupy radius `size`."),
         param!("curvature", "Curvature K", unlimited_float, -1.0, -100.0, -0.01, "Sectional curvature the camera experiences (K < 0; content is interpreted at K = -1). The content's intrinsic scale is locked to the curvature radius 1/sqrt(-K) while the camera's ruler stays fixed — the exact radial rescale d' = d/sqrt(-K) of hyperbolic distance about the OBSERVER (applied after the isometry, so the camera position is the fixed point). K = -100: the horizon crowds inward, objects shrink faster, area growth explodes. K = -0.01: the world flattens toward Euclidean — content huddles at the model center, parallels barely diverge, the horizon recedes. Only possible because hyperbolic geometry has an intrinsic scale — flat space has no such dial."),
         param!("h_zoom", "Hyperbolic Zoom", unlimited_float, 0.0, -2.0, 2.0, "Moves the IDEAL BOUNDARY instead of the field of view — Euclidean zoom rescales everything, hyperbolic zoom changes how much of hyperbolic infinity is compressed into the image while the scale at the observer stays fixed. The azimuthal out-charts (Poincaré, Klein, Hyperboloid/Gans) are one projective family R = k*2*rho/(1 + a*rho^2); this slides `a` from the chart's native value (Klein 1, Poincaré 0, Gans -1). Positive: the boundary circle recedes off-frame — past Gans (e.g. Poincaré at +1.5) visual infinity sits at FINITE hyperbolic distance and only that ball of the plane is shown, at true scale. Negative: all of infinity compresses into an ever smaller circle. No effect on Equidistant/Half-Plane/Band out-charts or on in-charts."),
+        param!("zoom_wrap", "Zoom Wrap", bool, false, "When Hyperbolic Zoom puts visual infinity at finite distance (past Gans), content beyond it is physically invisible — off by default it flies off-frame along its own ray (clipped). On: the raw projective behavior — beyond-horizon content wraps antipodally back into frame as an inverted exterior corona around the horizon ring. Incorrect as a projection, striking as an effect."),
     ],
     wgsl_2d: WGSL_2D,
     wgsl_3d: WGSL_3D,
@@ -129,7 +130,7 @@ fn hycam_to_hyp2(u_in: vec2<f32>, model: u32) -> vec3<f32> {
     return vec3<f32>(u, sqrt(1.0 + dot(u, u)));
 }
 
-fn hycam_from_hyp2(h: vec3<f32>, model: u32, hz: f32) -> vec2<f32> {
+fn hycam_from_hyp2(h: vec3<f32>, model: u32, hz: f32, wrap: bool) -> vec2<f32> {
     let t = max(h.z, 1.0);
     // Hyperbolic zoom: the azimuthal charts are one projective family
     // (projection of the hyperboloid from (0, -c)). In Poincaré radius
@@ -145,7 +146,15 @@ fn hycam_from_hyp2(h: vec3<f32>, model: u32, hz: f32) -> vec2<f32> {
         if (model == 1u) { a = 1.0 - hz; k = 1.0; }
         if (model == 3u) { a = -1.0 - hz; k = 1.0; }
         var dn = 1.0 + a * dot(pv, pv);
-        if (abs(dn) < 1e-4) { dn = select(1e-4, -1e-4, dn < 0.0); }
+        if (wrap) {
+            // Raw projective map: beyond-pole (behind visual infinity)
+            // content flips antipodally into an exterior corona.
+            if (abs(dn) < 1e-4) { dn = select(1e-4, -1e-4, dn < 0.0); }
+        } else {
+            // Physical: content behind visual infinity is not visible —
+            // keep the ray direction and send it off-frame.
+            dn = max(dn, 1e-4);
+        }
         return pv * (2.0 * k / dn);
     }
     if (model == 0u) { return h.xy / (1.0 + t); }
@@ -179,6 +188,7 @@ fn variation_hyperbolic_camera(p: vec2<f32>, xform_id: u32, variation_id: u32) -
     let size = max(get_param(xform_id, variation_id, 8u), 1e-6);
     let curv = sqrt(clamp(-get_param(xform_id, variation_id, 9u), 1e-4, 1e4));
     let h_zoom = get_param(xform_id, variation_id, 10u);
+    let zoom_wrap = get_param(xform_id, variation_id, 11u) > 0.5;
 
     var h = hycam_to_hyp2(p / size, in_model);
     if (rot_z != 0.0) {
@@ -202,7 +212,7 @@ fn variation_hyperbolic_camera(p: vec2<f32>, xform_id: u32, variation_id: u32) -
             h = vec3<f32>((sinh(dd) / sn) * h.xy, cosh(dd));
         }
     }
-    return hycam_from_hyp2(h, out_model, h_zoom) * size;
+    return hycam_from_hyp2(h, out_model, h_zoom, zoom_wrap) * size;
 }
 "#;
 
@@ -247,7 +257,7 @@ fn hycam_to_hyp2(u_in: vec2<f32>, model: u32) -> vec3<f32> {
     return vec3<f32>(u, sqrt(1.0 + dot(u, u)));
 }
 
-fn hycam_from_hyp2(h: vec3<f32>, model: u32, hz: f32) -> vec2<f32> {
+fn hycam_from_hyp2(h: vec3<f32>, model: u32, hz: f32, wrap: bool) -> vec2<f32> {
     let t = max(h.z, 1.0);
     // Hyperbolic zoom: the azimuthal charts are one projective family
     // (projection of the hyperboloid from (0, -c)). In Poincaré radius
@@ -263,7 +273,15 @@ fn hycam_from_hyp2(h: vec3<f32>, model: u32, hz: f32) -> vec2<f32> {
         if (model == 1u) { a = 1.0 - hz; k = 1.0; }
         if (model == 3u) { a = -1.0 - hz; k = 1.0; }
         var dn = 1.0 + a * dot(pv, pv);
-        if (abs(dn) < 1e-4) { dn = select(1e-4, -1e-4, dn < 0.0); }
+        if (wrap) {
+            // Raw projective map: beyond-pole (behind visual infinity)
+            // content flips antipodally into an exterior corona.
+            if (abs(dn) < 1e-4) { dn = select(1e-4, -1e-4, dn < 0.0); }
+        } else {
+            // Physical: content behind visual infinity is not visible —
+            // keep the ray direction and send it off-frame.
+            dn = max(dn, 1e-4);
+        }
         return pv * (2.0 * k / dn);
     }
     if (model == 0u) { return h.xy / (1.0 + t); }
@@ -315,7 +333,7 @@ fn hycam_to_hyp3(u_in: vec3<f32>, c: u32) -> vec4<f32> {
     return vec4<f32>(u, sqrt(1.0 + dot(u, u)));
 }
 
-fn hycam_from_hyp3(h: vec4<f32>, c: u32, hz: f32) -> vec3<f32> {
+fn hycam_from_hyp3(h: vec4<f32>, c: u32, hz: f32, wrap: bool) -> vec3<f32> {
     let t = max(h.w, 1.0);
     // Hyperbolic zoom — same projective family as hycam_from_hyp2.
     if (abs(hz) > 1e-9 && (c == 0u || c == 1u || c == 3u)) {
@@ -325,7 +343,11 @@ fn hycam_from_hyp3(h: vec4<f32>, c: u32, hz: f32) -> vec3<f32> {
         if (c == 1u) { a = 1.0 - hz; k = 1.0; }
         if (c == 3u) { a = -1.0 - hz; k = 1.0; }
         var dn = 1.0 + a * dot(pv, pv);
-        if (abs(dn) < 1e-4) { dn = select(1e-4, -1e-4, dn < 0.0); }
+        if (wrap) {
+            if (abs(dn) < 1e-4) { dn = select(1e-4, -1e-4, dn < 0.0); }
+        } else {
+            dn = max(dn, 1e-4);
+        }
         return pv * (2.0 * k / dn);
     }
     if (c == 0u) { return h.xyz / (1.0 + t); }
@@ -354,6 +376,7 @@ fn variation_hyperbolic_camera(p: vec3<f32>, xform_id: u32, variation_id: u32) -
     let size = max(get_param(xform_id, variation_id, 8u), 1e-6);
     let curv = sqrt(clamp(-get_param(xform_id, variation_id, 9u), 1e-4, 1e4));
     let h_zoom = get_param(xform_id, variation_id, 10u);
+    let zoom_wrap = get_param(xform_id, variation_id, 11u) > 0.5;
 
     let u = p / size;
     var h: vec4<f32>;
@@ -403,9 +426,9 @@ fn variation_hyperbolic_camera(p: vec3<f32>, xform_id: u32, variation_id: u32) -
         // plane for the chart; the dropped spatial component is emitted
         // as z — a 2D projection of 3D hyperbolic content with depth.
         let t2 = sqrt(1.0 + h.x * h.x + h.y * h.y);
-        let out2 = hycam_from_hyp2(vec3<f32>(h.x, h.y, t2), out_model, h_zoom);
+        let out2 = hycam_from_hyp2(vec3<f32>(h.x, h.y, t2), out_model, h_zoom, zoom_wrap);
         return vec3<f32>(out2, h.z) * size;
     }
-    return hycam_from_hyp3(h, out_model - 6u, h_zoom) * size;
+    return hycam_from_hyp3(h, out_model - 6u, h_zoom, zoom_wrap) * size;
 }
 "#;
