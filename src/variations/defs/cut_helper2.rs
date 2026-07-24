@@ -136,7 +136,6 @@ fn variation_cut_apollonian(p: vec3<f32>, xform_id: u32, variation_id: u32, rng:
 ///
 /// # Authors
 /// - Jesus Sosa
-/// - Fractals for All
 pub static CUT_ZIGZAG: VariationDef = VariationDef {
     name: "cut_zigzag",
     aliases: &[],
@@ -250,7 +249,6 @@ fn variation_cut_zigzag(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
 ///
 /// # Authors
 /// - Jesus Sosa
-/// - Fractals for All
 pub static CUT_BRICKS: VariationDef = VariationDef {
     name: "cut_bricks",
     aliases: &[],
@@ -354,7 +352,6 @@ fn variation_cut_bricks(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
 ///
 /// # Authors
 /// - Jesus Sosa
-/// - Fractals for All
 pub static CUT_WEB: VariationDef = VariationDef {
     name: "cut_web",
     aliases: &[],
@@ -464,7 +461,6 @@ fn variation_cut_web(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fu
 ///
 /// # Authors
 /// - Jesus Sosa
-/// - Fractals for All
 pub static CUT_FINGERPRINT: VariationDef = VariationDef {
     name: "cut_fingerprint",
     aliases: &[],
@@ -584,7 +580,6 @@ fn variation_cut_fingerprint(p: vec3<f32>, xform_id: u32, variation_id: u32, rng
 ///
 /// # Authors
 /// - Jesus Sosa
-/// - Fractals for All
 pub static CUT_TILEILLUSION: VariationDef = VariationDef {
     name: "cut_tileillusion",
     aliases: &[],
@@ -723,7 +718,6 @@ fn variation_cut_tileillusion(p: vec3<f32>, xform_id: u32, variation_id: u32, rn
 ///
 /// # Authors
 /// - Jesus Sosa
-/// - Fractals for All
 pub static CUT_PATTERN: VariationDef = VariationDef {
     name: "cut_pattern",
     aliases: &[],
@@ -850,7 +844,6 @@ fn variation_cut_pattern(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: pt
 ///
 /// # Authors
 /// - Jesus Sosa
-/// - Fractals for All
 pub static CUT_CELTIC: VariationDef = VariationDef {
     name: "cut_celtic",
     aliases: &[],

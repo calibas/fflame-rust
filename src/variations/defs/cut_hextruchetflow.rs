@@ -25,6 +25,10 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Hex-truchet flow stencil mask.
+///
+/// # Authors
+/// - Jesus Sosa
 pub static CUT_HEXTRUCHETFLOW: VariationDef = VariationDef {
     name: "cut_hextruchetflow",
     aliases: &[],

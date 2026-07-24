@@ -143,7 +143,6 @@ fn variation_cut_chains(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
 ///
 /// # Authors
 /// - Jesus Sosa
-/// - Fractals for All
 pub static CUT_HEXDOTS: VariationDef = VariationDef {
     name: "cut_hexdots",
     aliases: &[],
@@ -224,7 +223,6 @@ fn variation_cut_hexdots(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: pt
 ///
 /// # Authors
 /// - Jesus Sosa
-/// - Fractals for All
 pub static CUT_BOOLEANS: VariationDef = VariationDef {
     name: "cut_booleans",
     aliases: &[],
@@ -310,7 +308,6 @@ fn variation_cut_booleans(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: p
 ///
 /// # Authors
 /// - Jesus Sosa
-/// - Fractals for All
 pub static CUT_SQSPLITS: VariationDef = VariationDef {
     name: "cut_sqsplits",
     aliases: &[],
@@ -398,7 +395,6 @@ fn variation_cut_sqsplits(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: p
 ///
 /// # Authors
 /// - Jesus Sosa
-/// - Fractals for All
 pub static CUT_BTREE: VariationDef = VariationDef {
     name: "cut_btree",
     aliases: &[],
@@ -491,7 +487,6 @@ fn variation_cut_btree(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
 ///
 /// # Authors
 /// - Jesus Sosa
-/// - Fractals for All
 pub static CUT_FRACTAL: VariationDef = VariationDef {
     name: "cut_fractal",
     aliases: &[],
@@ -578,7 +573,6 @@ fn variation_cut_fractal(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: pt
 ///
 /// # Authors
 /// - Jesus Sosa
-/// - Fractals for All
 pub static CUT_GLYPHO: VariationDef = VariationDef {
     name: "cut_glypho",
     aliases: &[],
@@ -681,7 +675,6 @@ fn variation_cut_glypho(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
 ///
 /// # Authors
 /// - Jesus Sosa
-/// - Fractals for All
 pub static CUT_CIRCDES: VariationDef = VariationDef {
     name: "cut_circdes",
     aliases: &[],
@@ -793,7 +786,6 @@ fn variation_cut_circdes(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: pt
 ///
 /// # Authors
 /// - Jesus Sosa
-/// - Fractals for All
 pub static CUT_SNOWFLAKE: VariationDef = VariationDef {
     name: "cut_snowflake",
     aliases: &[],
@@ -886,7 +878,6 @@ fn variation_cut_snowflake(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: 
 ///
 /// # Authors
 /// - Jesus Sosa
-/// - Fractals for All
 pub static CUT_JIGSAW: VariationDef = VariationDef {
     name: "cut_jigsaw",
     aliases: &[],
@@ -980,7 +971,6 @@ fn variation_cut_jigsaw(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
 ///
 /// # Authors
 /// - Jesus Sosa
-/// - Fractals for All
 pub static CUT_RGRID: VariationDef = VariationDef {
     name: "cut_rgrid",
     aliases: &[],

@@ -43,8 +43,8 @@ use crate::param;
 /// "plot seeds that escape" and "plot seeds that don't" semantics.
 ///
 /// # Authors
-/// - Jed Kelsey (original Apophysis plugin, 2007)
-/// - Andreas Maschke (JWildfire port)
+/// - Jed Kelsey
+/// - Andreas Maschke
 pub static MANDELBROT: VariationDef = VariationDef {
     name: "mandelbrot",
     aliases: &[],

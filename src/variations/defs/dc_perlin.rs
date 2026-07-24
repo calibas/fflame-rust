@@ -39,8 +39,8 @@ use crate::param;
 ///   on another variation's XY shape)
 ///
 /// # Authors
-/// - slobo777 (original Apophysis plugin)
-/// - Andreas Maschke (JWildfire port)
+/// - slobo777
+/// - Andreas Maschke
 pub static DC_PERLIN: VariationDef = VariationDef {
     name: "dc_perlin",
     aliases: &[],

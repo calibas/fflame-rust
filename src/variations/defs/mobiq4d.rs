@@ -36,6 +36,7 @@ use crate::param;
 ///
 /// # Authors
 /// - zephyrtronium
+/// - Brad Stefanov
 /// - Fractals for All
 /// - Claude Fable 5
 pub static MOBIQ4D: VariationDef = VariationDef {
