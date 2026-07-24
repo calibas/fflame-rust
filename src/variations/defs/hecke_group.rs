@@ -57,7 +57,7 @@ pub static HECKE_GROUP: VariationDef = VariationDef {
         param!("dc_mode", "Color Mode", enum, 0, &["Off", "Generator"], "Direct-color source (needs the transform's Direct Color > 0). Generator: S / T / T⁻¹ each have their own palette position, blended through a persistent color register at Color Speed."),
         param!("dc_scale", "Color Scale", float, 1.0, 0.1, 8.0, "Palette-index multiplier for the Generator color (wrapped with fract)."),
         param!("color_speed", "Color Speed", float, 0.5, 0.0, 1.0, "How hard each generator pulls the color register toward its own palette position."),
-        param!("space", "Space", enum, 0, &["Planar", "Hyperbolic H3"], "3D render mode only. Planar: the Möbius orbit in the xy plane (z passes through). Hyperbolic H3: the Poincaré extension into upper half-space — the Ford-sphere fan. The t→0 slice is the 2D picture."),
+        param!("space", "Space", enum, 0, &["Euclidean", "Hyperbolic H3"], "3D render mode only. Euclidean: the Möbius orbit in the xy plane (z passes through). Hyperbolic H3: the Poincaré extension into upper half-space — the Ford-sphere fan. The t→0 slice is the 2D picture."),
         param!("symmetry", "Symmetry", enum, 0, &["None", "2-Fold Point", "2-Fold Mirror", "4-Fold"], "Random output symmetrization each call: 2-Fold Point = {z,−z}, 2-Fold Mirror = {z,conj z}, 4-Fold = both."),
     ],
     init_param_count: 0,

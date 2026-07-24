@@ -74,7 +74,7 @@ pub static SURFACE_GROUP: VariationDef = VariationDef {
         param!("dc_mode", "Color Mode", enum, 0, &["Off", "Generator", "Steps"], "Direct-color source (needs the transform's Direct Color > 0). Generator: each of the 8 side-pairings has its own palette position, blended through a persistent register at Color Speed. Steps: palette cycles with the walk depth since the last reseed (wraps, so deep levels stay distinct)."),
         param!("dc_scale", "Color Scale", float, 1.0, 0.1, 8.0, "Palette-index multiplier for the color modes."),
         param!("color_speed", "Color Speed", float, 0.5, 0.0, 1.0, "Generator mode: pull strength toward each pairing's palette position. Steps mode: palette advance per reflection (cyclic — wraps instead of saturating)."),
-        param!("space", "Space", enum, 0, &["Planar", "Hyperbolic H3"], "3D render mode only. Planar: the disk tiling in the xy plane (z passes through). Hyperbolic H3: the Poincaré extension — seeds plant on the hemisphere dome over the unit circle, draping the octagon tiling over a curved dome; bent (complex) groups act genuinely 3-dimensionally."),
+        param!("space", "Space", enum, 0, &["Euclidean", "Hyperbolic H3"], "3D render mode only. Euclidean: the disk tiling in the xy plane (z passes through). Hyperbolic H3: the Poincaré extension — seeds plant on the hemisphere dome over the unit circle, draping the octagon tiling over a curved dome; bent (complex) groups act genuinely 3-dimensionally."),
     ],
     init_param_count: 0,
     wgsl_init: None,
