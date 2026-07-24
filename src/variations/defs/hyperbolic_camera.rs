@@ -10,7 +10,7 @@
 //! `surface_group`, the hypertiles, or any Kleinian, this is
 //! fly-through-hyperbolic-space.
 //!
-//! Models are EXPLICIT about dimension — six 2D charts and five 3D
+//! Models are EXPLICIT about dimension — seven 2D charts and six 3D
 //! charts in one list, freely mixable in 3D render mode:
 //! - 2D: **Poincaré Disk**, **Klein Disk**, **Half-Plane** (height =
 //!   y), **Hyperboloid/Gans**, **Equidistant** (azimuthal — Euclidean
@@ -18,6 +18,9 @@
 //!   conformal strip, log of the half-plane — infinite frieze ribbons).
 //! - 3D: **Poincaré Ball**, **Klein Ball**, **Half-Space** (height =
 //!   z, the Kleinian convention), **Hyperboloid/Gans**, **Equidistant**.
+//! - **Equal-Area** (both dims, appended at indices 11/12): the
+//!   hyperbolic Lambert azimuthal, r = 2 sinh(d/2) — image area equals
+//!   intrinsic hyperbolic area.
 //!
 //! Cross-dimension rules (3D render mode):
 //! - 3D in → 2D out: the H3 point projects geodesically onto the
@@ -60,14 +63,14 @@ pub static HYPERBOLIC_CAMERA: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     // AlwaysZ: the 3D body writes z unconditionally (model coordinates
     // must survive preserve_z = false).
-    features: &[Feature::AlwaysZ],
+    features: &[Feature::AlwaysZ, Feature::CanHide],
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
     parameters: &[
-        param!("in_model", "In Model", enum, 0, &["Poincaré Disk (2D)", "Klein Disk (2D)", "Half-Plane (2D)", "Hyperboloid (2D)", "Equidistant (2D)", "Band (2D)", "Poincaré Ball (3D)", "Klein Ball (3D)", "Half-Space (3D)", "Hyperboloid (3D)", "Equidistant (3D)"], "How the incoming point is interpreted. 2D charts read xy (input z passes in as the third hyperboloid coordinate — planar content becomes a positionable H3 object). 3D charts read the full point. In 2D render mode, 3D selections demote to their 2D counterparts. Half-Plane height = y; Half-Space height = z (the Kleinian H3 space-mode convention); Hyperboloid is the raw Minkowski spatial part (Gans model); Equidistant has Euclidean radius = true hyperbolic distance (the azimuthal equidistant projection, as on the UN-emblem world map); as an In Model it is also the natural way to import flat non-hyperbolic content — radial distances and angles at the center carry over exactly (the exponential map); Band is the conformal strip (log half-plane)."),
-        param!("out_model", "Out Model", enum, 0, &["Poincaré Disk (2D)", "Klein Disk (2D)", "Half-Plane (2D)", "Hyperboloid (2D)", "Equidistant (2D)", "Band (2D)", "Poincaré Ball (3D)", "Klein Ball (3D)", "Half-Space (3D)", "Hyperboloid (3D)", "Equidistant (3D)"], "The model the point is re-projected into. Selecting a 2D chart in 3D render mode projects the H3 point geodesically onto the equatorial plane for the chart and emits the dropped spatial component as z — a 2D projection of 3D hyperbolic content that keeps depth. Poincaré → Klein straightens tiling edges into chords; → Half-Plane/Space unrolls against a boundary; → Hyperboloid gives the unbounded Gans funnel; → Equidistant keeps distances radially true (azimuthal equidistant — no boundary crush); → Band unrolls into an infinite conformal frieze ribbon."),
+        param!("in_model", "In Model", enum, 0, &["Poincaré Disk (2D)", "Klein Disk (2D)", "Half-Plane (2D)", "Hyperboloid (2D)", "Equidistant (2D)", "Band (2D)", "Poincaré Ball (3D)", "Klein Ball (3D)", "Half-Space (3D)", "Hyperboloid (3D)", "Equidistant (3D)", "Equal-Area (2D)", "Equal-Area (3D)"], "How the incoming point is interpreted. 2D charts read xy (input z passes in as the third hyperboloid coordinate — planar content becomes a positionable H3 object). 3D charts read the full point. In 2D render mode, 3D selections demote to their 2D counterparts. Half-Plane height = y; Half-Space height = z (the Kleinian H3 space-mode convention); Hyperboloid is the raw Minkowski spatial part (Gans model); Equidistant has Euclidean radius = true hyperbolic distance (the azimuthal equidistant projection, as on the UN-emblem world map); as an In Model it is also the natural way to import flat non-hyperbolic content — radial distances and angles at the center carry over exactly (the exponential map); Band is the conformal strip (log half-plane); Equal-Area is the hyperbolic Lambert azimuthal (radius = 2*sinh(d/2)) — image area is faithful to intrinsic hyperbolic area."),
+        param!("out_model", "Out Model", enum, 0, &["Poincaré Disk (2D)", "Klein Disk (2D)", "Half-Plane (2D)", "Hyperboloid (2D)", "Equidistant (2D)", "Band (2D)", "Poincaré Ball (3D)", "Klein Ball (3D)", "Half-Space (3D)", "Hyperboloid (3D)", "Equidistant (3D)", "Equal-Area (2D)", "Equal-Area (3D)"], "The model the point is re-projected into. Selecting a 2D chart in 3D render mode projects the H3 point geodesically onto the equatorial plane for the chart and emits the dropped spatial component as z — a 2D projection of 3D hyperbolic content that keeps depth. Poincaré → Klein straightens tiling edges into chords; → Half-Plane/Space unrolls against a boundary; → Hyperboloid gives the unbounded Gans funnel; → Equidistant keeps distances radially true (azimuthal equidistant — no boundary crush); → Band unrolls into an infinite conformal frieze ribbon; → Equal-Area keeps image area faithful to hyperbolic area (unbounded, grows as e^(d/2) — between Equidistant and Gans)."),
         param!("tx", "Translate X", unlimited_float, 0.0, -4.0, 4.0, "Hyperbolic translation along x, in units of hyperbolic distance (rapidity of the Lorentz boost). Moving the observer: the scene slides toward the opposite boundary, crowding conformally."),
         param!("ty", "Translate Y", unlimited_float, 0.0, -4.0, 4.0, "Hyperbolic translation along y."),
         param!("tz", "Translate Z", unlimited_float, 0.0, -4.0, 4.0, "Hyperbolic translation along z (3D render mode only). With a 2D in-chart this lifts the planar content off the equatorial plane."),
@@ -76,8 +79,10 @@ pub static HYPERBOLIC_CAMERA: VariationDef = VariationDef {
         param!("rot_z", "Rotate Z", angle, 0.0, "Rotation about the z axis (the in-plane rotation in 2D)."),
         param!("size", "Size", float, 1.0, 0.1, 4.0, "Model scale in world units: input is divided by it, output multiplied — ball models occupy radius `size`."),
         param!("curvature", "Curvature K", unlimited_float, -1.0, -100.0, -0.01, "Sectional curvature the camera experiences (K < 0; content is interpreted at K = -1). The content's intrinsic scale is locked to the curvature radius 1/sqrt(-K) while the camera's ruler stays fixed — the exact radial rescale d' = d/sqrt(-K) of hyperbolic distance about the OBSERVER (applied after the isometry, so the camera position is the fixed point). K = -100: the horizon crowds inward, objects shrink faster, area growth explodes. K = -0.01: the world flattens toward Euclidean — content huddles at the model center, parallels barely diverge, the horizon recedes. Only possible because hyperbolic geometry has an intrinsic scale — flat space has no such dial."),
-        param!("h_zoom", "Hyperbolic Zoom", unlimited_float, 0.0, -2.0, 2.0, "Moves the IDEAL BOUNDARY instead of the field of view — Euclidean zoom rescales everything, hyperbolic zoom changes how much of hyperbolic infinity is compressed into the image while the scale at the observer stays fixed. The azimuthal out-charts (Poincaré, Klein, Hyperboloid/Gans) are one projective family R = k*2*rho/(1 + a*rho^2); this slides `a` from the chart's native value (Klein 1, Poincaré 0, Gans -1). Positive: the boundary circle recedes off-frame — past Gans (e.g. Poincaré at +1.5) visual infinity sits at FINITE hyperbolic distance and only that ball of the plane is shown, at true scale. Negative: all of infinity compresses into an ever smaller circle. No effect on Equidistant/Half-Plane/Band out-charts or on in-charts."),
+        param!("h_zoom", "Hyperbolic Zoom", unlimited_float, 0.0, -2.0, 2.0, "Moves the IDEAL BOUNDARY instead of the field of view — Euclidean zoom rescales everything, hyperbolic zoom changes how much of hyperbolic infinity is compressed into the image while the scale at the observer stays fixed. The azimuthal out-charts (Poincaré, Klein, Hyperboloid/Gans) are one projective family R = k*2*rho/(1 + a*rho^2); this slides `a` from the chart's native value (Klein 1, Poincaré 0, Gans -1). Positive: the boundary circle recedes off-frame — past Gans (e.g. Poincaré at +1.5) visual infinity sits at FINITE hyperbolic distance and only that ball of the plane is shown, at true scale. Negative: all of infinity compresses into an ever smaller circle. No effect on Equidistant/Equal-Area/Half-Plane/Band out-charts or on in-charts."),
         param!("zoom_wrap", "Zoom Wrap", bool, false, "When Hyperbolic Zoom puts visual infinity at finite distance (past Gans), content beyond it is physically invisible — off by default it flies off-frame along its own ray (clipped). On: the raw projective behavior — beyond-horizon content wraps antipodally back into frame as an inverted exterior corona around the horizon ring. Incorrect as a projection, striking as an effect."),
+        param!("shell_min", "Shell Min", float, 0.0, 0.0, 20.0, "Hide points closer than this hyperbolic distance from the observer (measured after the isometry and curvature — the experienced distance). With Shell Max this isolates a constant-distance shell: a true hyperbolic annulus (2D) or ball shell (3D) around the camera. 0 = no near clip."),
+        param!("shell_max", "Shell Max", float, 0.0, 0.0, 20.0, "Hide points farther than this hyperbolic distance from the observer; 0 = no far clip. Hyperbolic area grows exponentially with radius, so successive shells hold dramatically more content — sweeping the shell outward is a tour through the tiling's generations."),
     ],
     wgsl_2d: WGSL_2D,
     wgsl_3d: WGSL_3D,
@@ -126,6 +131,12 @@ fn hycam_to_hyp2(u_in: vec2<f32>, model: u32) -> vec3<f32> {
         let t = (1.0 + s2) / (2.0 * w);
         return vec3<f32>(hp.x / w, t - 1.0 / w, t);
     }
+    if (model == 6u) {
+        // Equal-area (Lambert azimuthal): r_img = 2*sinh(d/2), so
+        // sinh(d) = r*sqrt(1 + r^2/4) and cosh(d) = 1 + r^2/2.
+        let r2 = dot(u, u);
+        return vec3<f32>(u * sqrt(1.0 + 0.25 * r2), 1.0 + 0.5 * r2);
+    }
     // Hyperboloid / Gans: spatial part given, time reconstructed.
     return vec3<f32>(u, sqrt(1.0 + dot(u, u)));
 }
@@ -173,15 +184,20 @@ fn hycam_from_hyp2(h: vec3<f32>, model: u32, hz: f32, wrap: bool) -> vec2<f32> {
         let hp = vec2<f32>(h.x / iw, 1.0 / iw);
         return vec2<f32>(0.5 * log(max(dot(hp, hp), 1e-20)), atan2(hp.y, hp.x) - 1.5707963);
     }
+    if (model == 6u) {
+        // Equal-area inverse: 2*sinh(d/2) = |x|*sqrt(2/(1+t)).
+        return h.xy * sqrt(2.0 / (1.0 + t));
+    }
     return h.xy;
 }
 
-fn variation_hyperbolic_camera(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
+fn variation_hyperbolic_camera(p: vec2<f32>, xform_id: u32, variation_id: u32, hide: ptr<function, bool>) -> vec2<f32> {
     var in_model = u32(get_param(xform_id, variation_id, 0u));
     var out_model = u32(get_param(xform_id, variation_id, 1u));
-    // 2D render mode: 3D chart selections demote to their 2D versions.
-    if (in_model >= 6u) { in_model = in_model - 6u; }
-    if (out_model >= 6u) { out_model = out_model - 6u; }
+    // 2D render mode: 3D chart selections demote to their 2D versions;
+    // Equal-Area (11 = 2D, 12 = 3D) is 2D chart id 6.
+    if (in_model >= 11u) { in_model = 6u; } else if (in_model >= 6u) { in_model = in_model - 6u; }
+    if (out_model >= 11u) { out_model = 6u; } else if (out_model >= 6u) { out_model = out_model - 6u; }
     let tx = get_param(xform_id, variation_id, 2u);
     let ty = get_param(xform_id, variation_id, 3u);
     let rot_z = get_param(xform_id, variation_id, 7u) * 0.01745329252;
@@ -211,6 +227,15 @@ fn variation_hyperbolic_camera(p: vec2<f32>, xform_id: u32, variation_id: u32) -
             let dd = min(acosh(max(h.z, 1.0)) / curv, 40.0);
             h = vec3<f32>((sinh(dd) / sn) * h.xy, cosh(dd));
         }
+    }
+    // Constant-distance shell: hide outside the hyperbolic annulus
+    // [shell_min, shell_max] about the observer (experienced distance).
+    let shell_min = get_param(xform_id, variation_id, 12u);
+    let shell_max = get_param(xform_id, variation_id, 13u);
+    if (shell_min > 0.0 || shell_max > 0.0) {
+        let dcam = acosh(max(h.z, 1.0));
+        let smax = select(shell_max, 1e9, shell_max <= 0.0);
+        if (dcam < shell_min || dcam > smax) { *hide = true; }
     }
     return hycam_from_hyp2(h, out_model, h_zoom, zoom_wrap) * size;
 }
@@ -253,6 +278,11 @@ fn hycam_to_hyp2(u_in: vec2<f32>, model: u32) -> vec3<f32> {
         let s2 = hp.x * hp.x + w * w;
         let t = (1.0 + s2) / (2.0 * w);
         return vec3<f32>(hp.x / w, t - 1.0 / w, t);
+    }
+    if (model == 6u) {
+        // Equal-area: sinh d = r*sqrt(1+r^2/4), cosh d = 1 + r^2/2.
+        let r2 = dot(u, u);
+        return vec3<f32>(u * sqrt(1.0 + 0.25 * r2), 1.0 + 0.5 * r2);
     }
     return vec3<f32>(u, sqrt(1.0 + dot(u, u)));
 }
@@ -300,6 +330,10 @@ fn hycam_from_hyp2(h: vec3<f32>, model: u32, hz: f32, wrap: bool) -> vec2<f32> {
         let hp = vec2<f32>(h.x / iw, 1.0 / iw);
         return vec2<f32>(0.5 * log(max(dot(hp, hp), 1e-20)), atan2(hp.y, hp.x) - 1.5707963);
     }
+    if (model == 6u) {
+        // Equal-area inverse: 2*sinh(d/2) = |x|*sqrt(2/(1+t)).
+        return h.xy * sqrt(2.0 / (1.0 + t));
+    }
     return h.xy;
 }
 
@@ -329,6 +363,11 @@ fn hycam_to_hyp3(u_in: vec3<f32>, c: u32) -> vec4<f32> {
         let d = length(u);
         if (d < 1e-9) { return vec4<f32>(0.0, 0.0, 0.0, 1.0); }
         return vec4<f32>((sinh(d) / d) * u, cosh(d));
+    }
+    if (c == 5u) {
+        // Equal-area: sinh d = r*sqrt(1+r^2/4), cosh d = 1 + r^2/2.
+        let r2 = dot(u, u);
+        return vec4<f32>(u * sqrt(1.0 + 0.25 * r2), 1.0 + 0.5 * r2);
     }
     return vec4<f32>(u, sqrt(1.0 + dot(u, u)));
 }
@@ -361,10 +400,13 @@ fn hycam_from_hyp3(h: vec4<f32>, c: u32, hz: f32, wrap: bool) -> vec3<f32> {
         if (sn < 1e-9) { return vec3<f32>(0.0, 0.0, 0.0); }
         return (acosh(t) / sn) * h.xyz;
     }
+    if (c == 5u) {
+        return h.xyz * sqrt(2.0 / (1.0 + t));
+    }
     return h.xyz;
 }
 
-fn variation_hyperbolic_camera(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
+fn variation_hyperbolic_camera(p: vec3<f32>, xform_id: u32, variation_id: u32, hide: ptr<function, bool>) -> vec3<f32> {
     let in_model = u32(get_param(xform_id, variation_id, 0u));
     let out_model = u32(get_param(xform_id, variation_id, 1u));
     let tx = get_param(xform_id, variation_id, 2u);
@@ -380,14 +422,14 @@ fn variation_hyperbolic_camera(p: vec3<f32>, xform_id: u32, variation_id: u32) -
 
     let u = p / size;
     var h: vec4<f32>;
-    if (in_model < 6u) {
+    if (in_model < 6u || in_model == 11u) {
         // 2D in-chart: read xy through the 2D chart, embed equatorially
         // with input z as the third hyperboloid coordinate — planar
         // content becomes a positionable H3 object.
-        let h2 = hycam_to_hyp2(u.xy, in_model);
+        let h2 = hycam_to_hyp2(u.xy, select(in_model, 6u, in_model == 11u));
         h = vec4<f32>(h2.x, h2.y, u.z, sqrt(1.0 + h2.x * h2.x + h2.y * h2.y + u.z * u.z));
     } else {
-        h = hycam_to_hyp3(u, in_model - 6u);
+        h = hycam_to_hyp3(u, select(in_model - 6u, 5u, in_model == 12u));
     }
 
     // Spatial rotations Rz · Ry · Rx about the model center.
@@ -421,14 +463,23 @@ fn variation_hyperbolic_camera(p: vec3<f32>, xform_id: u32, variation_id: u32) -
         }
     }
 
-    if (out_model < 6u) {
+    // Constant-distance shell (see the 2D body).
+    let shell_min = get_param(xform_id, variation_id, 12u);
+    let shell_max = get_param(xform_id, variation_id, 13u);
+    if (shell_min > 0.0 || shell_max > 0.0) {
+        let dcam = acosh(max(h.w, 1.0));
+        let smax = select(shell_max, 1e9, shell_max <= 0.0);
+        if (dcam < shell_min || dcam > smax) { *hide = true; }
+    }
+
+    if (out_model < 6u || out_model == 11u) {
         // 2D out-chart: geodesic projection onto the equatorial H2
         // plane for the chart; the dropped spatial component is emitted
         // as z — a 2D projection of 3D hyperbolic content with depth.
         let t2 = sqrt(1.0 + h.x * h.x + h.y * h.y);
-        let out2 = hycam_from_hyp2(vec3<f32>(h.x, h.y, t2), out_model, h_zoom, zoom_wrap);
+        let out2 = hycam_from_hyp2(vec3<f32>(h.x, h.y, t2), select(out_model, 6u, out_model == 11u), h_zoom, zoom_wrap);
         return vec3<f32>(out2, h.z) * size;
     }
-    return hycam_from_hyp3(h, out_model - 6u, h_zoom, zoom_wrap) * size;
+    return hycam_from_hyp3(h, select(out_model - 6u, 5u, out_model == 12u), h_zoom, zoom_wrap) * size;
 }
 "#;
