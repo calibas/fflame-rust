@@ -342,13 +342,10 @@ fn variation_honeycomb(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
     if (dc_mode == 2u) {
         *vc = 0.5 + 0.5 * tanh(2.0 * dc_scale * out.z / size);
     } else if (dc_mode == 3u) {
-        // Palette position sweeps 0 -> 1 across the MEAN walk length
-        // (10 calls at 10% reseed probability x steps reflections per
-        // call); deeper outliers clamp at the final color. Color Speed
-        // scales the sweep (1 = full palette over the mean walk),
-        // dc_scale adds wrap cycles.
-        let t = clamp(depth * color_speed / (10.0 * f32(steps)), 0.0, 1.0);
-        *vc = fract(min(t * dc_scale, 0.999));
+        // Cyclic: advances and WRAPS with walk depth, so adjacent
+        // depths stay distinct even in a narrow palette (the old
+        // saturating sweep pinned all deep detail to the palette end).
+        *vc = fract(depth * color_speed * 0.1 * dc_scale);
     }
     return out;
 }
@@ -526,13 +523,10 @@ fn variation_honeycomb(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<
     if (dc_mode == 2u) {
         *vc = fract(length(out) / size * dc_scale);
     } else if (dc_mode == 3u) {
-        // Palette position sweeps 0 -> 1 across the MEAN walk length
-        // (10 calls at 10% reseed probability x steps reflections per
-        // call); deeper outliers clamp at the final color. Color Speed
-        // scales the sweep (1 = full palette over the mean walk),
-        // dc_scale adds wrap cycles.
-        let t = clamp(depth * color_speed / (10.0 * f32(steps)), 0.0, 1.0);
-        *vc = fract(min(t * dc_scale, 0.999));
+        // Cyclic: advances and WRAPS with walk depth, so adjacent
+        // depths stay distinct even in a narrow palette (the old
+        // saturating sweep pinned all deep detail to the palette end).
+        *vc = fract(depth * color_speed * 0.1 * dc_scale);
     }
     return out;
 }

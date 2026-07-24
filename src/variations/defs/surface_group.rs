@@ -71,9 +71,9 @@ pub static SURFACE_GROUP: VariationDef = VariationDef {
         param!("steps", "Steps", int, 2.0, 1.0, 8.0, "Group elements applied per call (backtrack-avoiding random walk)."),
         param!("seed", "Seed", enum, 0, &["Input", "Vertices", "Edges", "Faces"], "What the walk stamps through the tiling: the incoming flame measure, the octagon's vertex orbit (8 corners, one orbit), its edge skeleton, or face-fan fragments."),
         param!("thickness", "Thickness", float, 0.0, 0.0, 2.0, "Seed modes: geodesic tangent-space offset by exact hyperbolic distance — balls, tubes, slabs of uniform hyperbolic radius."),
-        param!("dc_mode", "Color Mode", enum, 0, &["Off", "Generator", "Steps"], "Direct-color source (needs the transform's Direct Color > 0). Generator: each of the 8 side-pairings has its own palette position, blended through a persistent register at Color Speed. Steps: palette sweeps across the walk depth since the last reseed."),
+        param!("dc_mode", "Color Mode", enum, 0, &["Off", "Generator", "Steps"], "Direct-color source (needs the transform's Direct Color > 0). Generator: each of the 8 side-pairings has its own palette position, blended through a persistent register at Color Speed. Steps: palette cycles with the walk depth since the last reseed (wraps, so deep levels stay distinct)."),
         param!("dc_scale", "Color Scale", float, 1.0, 0.1, 8.0, "Palette-index multiplier for the color modes."),
-        param!("color_speed", "Color Speed", float, 0.5, 0.0, 1.0, "Generator mode: pull strength toward each pairing's palette position. Steps mode: how much of the palette the mean walk traverses."),
+        param!("color_speed", "Color Speed", float, 0.5, 0.0, 1.0, "Generator mode: pull strength toward each pairing's palette position. Steps mode: palette advance per reflection (cyclic — wraps instead of saturating)."),
         param!("space", "Space", enum, 0, &["Planar", "Hyperbolic H3"], "3D render mode only. Planar: the disk tiling in the xy plane (z passes through). Hyperbolic H3: the Poincaré extension — seeds plant on the hemisphere dome over the unit circle, draping the octagon tiling over a curved dome; bent (complex) groups act genuinely 3-dimensionally."),
     ],
     init_param_count: 0,
@@ -194,8 +194,10 @@ fn variation_surface_group(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: 
         set_state(xform_id, variation_id, 1u, creg);
         *vc = creg;
     } else if (dc_mode == 2u) {
-        let t = clamp(depth * color_speed / (10.0 * f32(steps)), 0.0, 1.0);
-        *vc = fract(min(t * dc_scale, 0.999));
+        // Cyclic: advances and WRAPS with walk depth, so adjacent
+        // depths stay distinct even in a narrow palette (the old
+        // saturating sweep pinned all deep detail to the palette end).
+        *vc = fract(depth * color_speed * 0.1 * dc_scale);
     }
     return a * size;
 }
@@ -313,8 +315,10 @@ fn variation_surface_group(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: 
         set_state(xform_id, variation_id, 1u, creg);
         *vc = creg;
     } else if (dc_mode == 2u) {
-        let t = clamp(depth * color_speed / (10.0 * f32(steps)), 0.0, 1.0);
-        *vc = fract(min(t * dc_scale, 0.999));
+        // Cyclic: advances and WRAPS with walk depth, so adjacent
+        // depths stay distinct even in a narrow palette (the old
+        // saturating sweep pinned all deep detail to the palette end).
+        *vc = fract(depth * color_speed * 0.1 * dc_scale);
     }
     return a3 * size;
 }
