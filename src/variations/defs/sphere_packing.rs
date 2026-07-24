@@ -83,6 +83,7 @@ pub static SPHERE_PACKING: VariationDef = VariationDef {
         param!("size_jitter", "Size Jitter", float, 0.0, 0.0, 1.0, "Ring modes: deterministic per-sphere radius variation (each ring sphere shrinks by up to this fraction, hashed by index) — de-uniformizes the packing while every sphere keeps kissing the outer sphere."),
         param!("seed", "Seed", enum, 0, &["Surfaces", "Centers", "Edges"], "What Reseed plants. Surfaces: random point on a random configuration sphere (exact limit-set subset). Centers: the sphere centers as a vertex constellation — their orbit is its own fractal cloud. Edges: the tangency graph — straight segments joining centers of kissing spheres (the inner tetrahedron for Soddy, the ring cycle + cap spokes for rings), honeycomb-style."),
         param!("thickness", "Thickness", float, 0.0, 0.0, 0.5, "Euclidean jitter radius fattening Centers into balls and Edges into tubes."),
+        param!("ring_tilt", "Ring Tilt", angle, 0.0, "Ring modes (3D): alternate spheres tilt up/down in latitude by this angle — an antiprism crown instead of a flat equatorial ring. Outer-sphere tangency is preserved exactly for any tilt; the sphere radius auto-shrinks to whichever is tighter of adjacent-pair tangency and SAME-parity-pair tangency (same-side spheres crowd toward the pole as tilt grows — without the cap the mirrors overlap and the group degenerates into blur). Even Ring N closes the crown perfectly; odd N leaves one seam pair."),
     ],
     init_param_count: 0,
     wgsl_init: None,
@@ -226,8 +227,11 @@ fn variation_sphere_packing(p: vec2<f32>, xform_id: u32, variation_id: u32, rng:
     } else if (dc_mode == 3u) {
         *vc = fract(0.5 + 0.15 * dc_scale * log(1.0 / max(crad, 1e-9)));
     } else if (dc_mode == 4u) {
-        let t = clamp(depth * color_speed * 0.05, 0.0, 1.0);
-        *vc = fract(min(t * dc_scale, 0.999));
+        // Cyclic: each inversion advances the palette and WRAPS, so
+        // adjacent hierarchy depths stay distinct even in a narrow
+        // palette (a saturating sweep pins all deep detail to the
+        // palette end).
+        *vc = fract(depth * color_speed * 0.1 * dc_scale);
     } else if (dc_mode == 5u) {
         *vc = fract((atan2(x.y, x.x) * 0.15915494 + 0.5) * dc_scale);
     }
@@ -242,15 +246,33 @@ fn sp_hash01(k: u32) -> f32 {
 
 // Configuration (tangent/seed) sphere k for the active mode.
 // Ring layout: 0 = outer, 1..N = ring, N+1 / N+2 = caps (mode 3).
-fn sp_conf3(mode: u32, k: u32, n: u32, rs: f32, cs: f32, jit: f32) -> vec4<f32> {
+fn sp_conf3(mode: u32, k: u32, n: u32, rs: f32, cs: f32, jit: f32, tilt: f32) -> vec4<f32> {
     if (mode >= 2u) {
         if (k == 0u) { return vec4<f32>(0.0, 0.0, 0.0, 1.0); }
-        let rt = sin(3.14159265359 / f32(n)) / (1.0 + sin(3.14159265359 / f32(n)));
+        // Tangent radius from the TRUE angle between adjacent centers:
+        // alternating +-tilt latitudes give cos(theta) =
+        // cos^2(tilt)*cos(2pi/N) - sin^2(tilt); r = sin(theta/2)/(1+sin(theta/2)).
+        let ct = cos(tilt);
+        let st = sin(tilt);
+        // Adjacent (opposite-latitude) pair angle.
+        let cth = ct * ct * cos(6.28318530718 / f32(n)) - st * st;
+        let sh2 = sqrt(max(0.5 * (1.0 - cth), 1e-6));
+        var rt = sh2 / (1.0 + sh2);
+        if (n >= 3u) {
+            // Same-parity pair (i, i+2) — both tilted the SAME way, so
+            // they crowd toward the pole as tilt grows. Cap the radius
+            // at their tangency too: overlapping mirrors make the
+            // reflection group non-discrete (dense blur).
+            let cth2 = ct * ct * cos(12.5663706144 / f32(n)) + st * st;
+            let shp = sqrt(max(0.5 * (1.0 - cth2), 1e-6));
+            rt = min(rt, shp / (1.0 + shp));
+        }
         if (mode == 3u && k > n) {
-            // Polar caps: kiss the outer sphere and the nominal ring.
+            // Polar caps: kiss the outer sphere and the up-tilted ring
+            // spheres exactly (reduces to the flat formula at tilt 0).
             let rn = rt * rs;
             let dn = 1.0 - rn;
-            let rho = (dn * dn + 1.0 - rn * rn) / (2.0 * (1.0 + rn));
+            let rho = (dn * dn + 1.0 - rn * rn - 2.0 * dn * st) / (2.0 * max(1.0 + rn - dn * st, 1e-4));
             let cr = max(rho * cs, 1e-4);
             let h = 1.0 - cr;
             let sgn = select(1.0, -1.0, k == n + 2u);
@@ -260,7 +282,8 @@ fn sp_conf3(mode: u32, k: u32, n: u32, rs: f32, cs: f32, jit: f32) -> vec4<f32> 
         let r = rt * rs * (1.0 - jit * sp_hash01(i));
         let d = 1.0 - r;
         let a = 6.28318530718 * f32(i) / f32(n);
-        return vec4<f32>(d * cos(a), d * sin(a), 0.0, r);
+        let ph = select(tilt, -tilt, (i & 1u) == 1u);
+        return vec4<f32>(d * cos(a) * cos(ph), d * sin(a) * cos(ph), d * sin(ph), r);
     }
     // Soddy tangent spheres: outer + tetrahedral inner.
     switch k {
@@ -273,8 +296,8 @@ fn sp_conf3(mode: u32, k: u32, n: u32, rs: f32, cs: f32, jit: f32) -> vec4<f32> 
 }
 
 // Mirror sphere k: Soddy duals for mode 0, else the configuration.
-fn sp_mirror3(mode: u32, k: u32, n: u32, rs: f32, cs: f32, jit: f32) -> vec4<f32> {
-    if (mode != 0u) { return sp_conf3(mode, k, n, rs, cs, jit); }
+fn sp_mirror3(mode: u32, k: u32, n: u32, rs: f32, cs: f32, jit: f32, tilt: f32) -> vec4<f32> {
+    if (mode != 0u) { return sp_conf3(mode, k, n, rs, cs, jit, tilt); }
     switch k {
         case 0u: { return vec4<f32>(0.0, 0.0, 0.0, 0.3178372); }
         case 1u: { return vec4<f32>(-1.7320508, -1.7320508, -1.7320508, 2.8284271); }
@@ -321,6 +344,7 @@ fn variation_sphere_packing(p: vec3<f32>, xform_id: u32, variation_id: u32, rng:
     let jit = get_param(xform_id, variation_id, 11u);
     let seed_mode = u32(get_param(xform_id, variation_id, 12u));
     let thickness = get_param(xform_id, variation_id, 13u);
+    let tilt = get_param(xform_id, variation_id, 14u) * 0.01745329252;
 
     // Configuration and mirror counts, edge count.
     var scnt = 5u;
@@ -339,7 +363,7 @@ fn variation_sphere_packing(p: vec3<f32>, xform_id: u32, variation_id: u32, rng:
     var depth = get_state(xform_id, variation_id, 2u);
     if (rng_nextf(rng) < reseed) {
         if (seed_mode == 0u) {
-            let sp = sp_conf3(mode, min(u32(rng_nextf(rng) * f32(scnt)), scnt - 1u), ring_n, ring_scale, cap_scale, jit);
+            let sp = sp_conf3(mode, min(u32(rng_nextf(rng) * f32(scnt)), scnt - 1u), ring_n, ring_scale, cap_scale, jit, tilt);
             let za = rng_nextf(rng) * 2.0 - 1.0;
             let ph = rng_nextf(rng) * 6.28318530718;
             let sa = sqrt(max(1.0 - za * za, 0.0));
@@ -347,14 +371,14 @@ fn variation_sphere_packing(p: vec3<f32>, xform_id: u32, variation_id: u32, rng:
             crad = sp.w; ccen = sp.xyz;
         } else if (seed_mode == 1u) {
             let k = 1u + min(u32(rng_nextf(rng) * f32(scnt - 1u)), scnt - 2u);
-            let sp = sp_conf3(mode, k, ring_n, ring_scale, cap_scale, jit);
+            let sp = sp_conf3(mode, k, ring_n, ring_scale, cap_scale, jit, tilt);
             x = sp.xyz;
             crad = sp.w; ccen = sp.xyz;
         } else {
             let e = min(u32(rng_nextf(rng) * f32(ecnt)), ecnt - 1u);
             let ij = sp_edge3(mode, e, ring_n);
-            let s0 = sp_conf3(mode, ij.x, ring_n, ring_scale, cap_scale, jit);
-            let c1 = sp_conf3(mode, ij.y, ring_n, ring_scale, cap_scale, jit).xyz;
+            let s0 = sp_conf3(mode, ij.x, ring_n, ring_scale, cap_scale, jit, tilt);
+            let c1 = sp_conf3(mode, ij.y, ring_n, ring_scale, cap_scale, jit, tilt).xyz;
             x = mix(s0.xyz, c1, rng_nextf(rng));
             crad = s0.w; ccen = s0.xyz;
         }
@@ -373,7 +397,7 @@ fn variation_sphere_packing(p: vec3<f32>, xform_id: u32, variation_id: u32, rng:
     for (var i = 0; i < steps; i = i + 1) {
         k = min(u32(rng_nextf(rng) * f32(mcnt)), mcnt - 1u);
         if (avoid && prev < mcnt && k == prev) { k = (k + 1u) % mcnt; }
-        let sp = sp_mirror3(mode, k, ring_n, ring_scale, cap_scale, jit);
+        let sp = sp_mirror3(mode, k, ring_n, ring_scale, cap_scale, jit, tilt);
         let v = x - sp.xyz;
         let nn = max(dot(v, v), 1e-12);
         x = sp.xyz + (sp.w * sp.w / nn) * v;
@@ -401,8 +425,11 @@ fn variation_sphere_packing(p: vec3<f32>, xform_id: u32, variation_id: u32, rng:
     } else if (dc_mode == 3u) {
         *vc = fract(0.5 + 0.15 * dc_scale * log(1.0 / max(crad, 1e-9)));
     } else if (dc_mode == 4u) {
-        let t = clamp(depth * color_speed * 0.05, 0.0, 1.0);
-        *vc = fract(min(t * dc_scale, 0.999));
+        // Cyclic: each inversion advances the palette and WRAPS, so
+        // adjacent hierarchy depths stay distinct even in a narrow
+        // palette (a saturating sweep pins all deep detail to the
+        // palette end).
+        *vc = fract(depth * color_speed * 0.1 * dc_scale);
     } else if (dc_mode == 5u) {
         *vc = fract((atan2(x.y, x.x) * 0.15915494 + 0.5) * dc_scale);
     }

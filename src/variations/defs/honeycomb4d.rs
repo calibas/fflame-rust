@@ -59,9 +59,9 @@ pub static HONEYCOMB4D: VariationDef = VariationDef {
         param!("size", "Size", float, 1.0, 0.1, 4.0, "Radius of the 4-ball model in world units."),
         param!("steps", "Steps", int, 2.0, 1.0, 8.0, "Random mirror reflections per call (5 mirrors)."),
         param!("projection", "Projection", enum, 0, &["Poincaré", "Beltrami–Klein", "Half-Space"], "Model of H⁴ for the plotted (and fed-forward) 4-ball point; the xyz shadow is plotted and the 4th ball coordinate rides the per-thread w register. Half-Space uses the 4th coordinate as the height above the floor hyperplane."),
-        param!("dc_mode", "Color Mode", enum, 0, &["Off", "Mirror", "Depth", "Steps"], "Direct-color source. Mirror: each of the 5 orthoscheme mirrors has its own palette position, blended through the persistent color register at Color Speed. Depth: output z. Steps: palette sweeps start-to-end across the walk depth since the last reseed (see honeycomb)."),
+        param!("dc_mode", "Color Mode", enum, 0, &["Off", "Mirror", "Depth", "Steps"], "Direct-color source. Mirror: each of the 5 orthoscheme mirrors has its own palette position, blended through the persistent color register at Color Speed. Depth: output z. Steps: palette cycles with the walk depth since the last reseed (wraps, so deep levels stay distinct)."),
         param!("dc_scale", "Color Scale", float, 1.0, 0.1, 8.0, "Palette-index multiplier for the color modes."),
-        param!("color_speed", "Color Speed", float, 0.5, 0.0, 1.0, "Mirror mode: pull strength toward each mirror's palette position. Steps mode: how much of the palette the mean walk traverses."),
+        param!("color_speed", "Color Speed", float, 0.5, 0.0, 1.0, "Mirror mode: pull strength toward each mirror's palette position. Steps mode: palette advance per reflection (cyclic — wraps instead of saturating)."),
         param!("seed", "Seed", enum, 0, &["Input", "Vertices", "Edges", "Faces"], "What the walk stamps through the honeycomb: the incoming flame measure, the vertex orbit, the edge skeleton, or flag-fragment faces (see honeycomb — same semantics, one dimension up)."),
         param!("thickness", "Thickness", float, 0.0, 0.0, 2.0, "Seed modes: geodesic tangent-space offset by exact hyperbolic distance — balls / tubes / slabs with uniform hyperbolic radius (see honeycomb)."),
         param!("variant", "Variant", enum, 0, &["Normal", "Rectified", "Truncated", "Bitruncated", "Cantellated", "Cantitruncated", "Runcitruncated", "Runcicantellated", "Omnitruncated"], "Wythoff variant: ring mask over the first four Coxeter nodes (the fifth stays unringed). Same construction as honeycomb, one dimension up."),
@@ -334,8 +334,10 @@ fn variation_honeycomb4d(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: pt
     if (dc_mode == 2u) {
         *vc = 0.5 + 0.5 * tanh(2.0 * dc_scale * out4.z / size);
     } else if (dc_mode == 3u) {
-        let tt = clamp(depth * color_speed / (10.0 * f32(steps)), 0.0, 1.0);
-        *vc = fract(min(tt * dc_scale, 0.999));
+        // Cyclic: advances and WRAPS with walk depth, so adjacent
+        // depths stay distinct even in a narrow palette (the old
+        // saturating sweep pinned all deep detail to the palette end).
+        *vc = fract(depth * color_speed * 0.1 * dc_scale);
     }
     return out4.xyz;
 }
@@ -500,8 +502,10 @@ fn variation_honeycomb4d(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: pt
     if (dc_mode == 2u) {
         *vc = fract(length(out) / size * dc_scale);
     } else if (dc_mode == 3u) {
-        let tt = clamp(depth * color_speed / (10.0 * f32(steps)), 0.0, 1.0);
-        *vc = fract(min(tt * dc_scale, 0.999));
+        // Cyclic: advances and WRAPS with walk depth, so adjacent
+        // depths stay distinct even in a narrow palette (the old
+        // saturating sweep pinned all deep detail to the palette end).
+        *vc = fract(depth * color_speed * 0.1 * dc_scale);
     }
     return out;
 }
