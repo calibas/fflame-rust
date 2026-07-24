@@ -1283,6 +1283,11 @@ impl ShaderBuilder {
                 } else {
                     crate::variations::defs::synth::specialize_wgsl_2d(flame)
                 }),
+                "mondrianomies" => Some(if render_3d {
+                    crate::variations::defs::mondrianomies::specialize_wgsl_3d(flame)
+                } else {
+                    crate::variations::defs::mondrianomies::specialize_wgsl_2d(flame)
+                }),
                 _ => None,
             }
         }
@@ -3139,9 +3144,13 @@ fn helper(x: i32) -> i32 {
 /// blocks. Returns `(fn_name, full_block_with_preceding_blank_lines)`
 /// in the order they appear.
 ///
-/// "Top-level" = `fn ` at column 0 of a line. Variation bodies don't have
-/// module-level `const`/`struct`/`var` declarations, so this is sufficient
-/// — any later module-scope construct would need a parallel branch here.
+/// "Top-level" = `fn ` or `const ` at column 0 of a line. `const` blocks
+/// (used by per-flame specialized sources like mondrianomies' baked
+/// rectangle tables) run to the first `;` — safe because WGSL array/vec
+/// initializers contain no semicolons. Their dedup key is the const name,
+/// so a shared table is emitted once like a shared helper fn. Module-scope
+/// `struct`/`var` declarations are still unsupported — a variation needing
+/// one gets a parallel branch here.
 ///
 /// Brace counting skips `//` line comments to avoid miscounting braces
 /// that appear inside comments. WGSL block comments (`/* */`) are not
@@ -3152,14 +3161,36 @@ fn split_wgsl_top_level_fns(source: &str) -> Vec<(String, String)> {
     let mut i = 0;
 
     while i < bytes.len() {
-        // Find the next `fn ` at column 0 (start of source or after `\n`).
-        let fn_start = if (i == 0 && source.starts_with("fn ")) || source[i..].starts_with("fn ") {
-            i
+        // Find the next `fn ` or `const ` at column 0 (start of source or
+        // after `\n`), whichever comes first.
+        let next_fn = if source[i..].starts_with("fn ") {
+            Some(i)
         } else {
-            match source[i..].find("\nfn ") {
-                Some(off) => i + off + 1,
-                None => break,
+            source[i..].find("\nfn ").map(|off| i + off + 1)
+        };
+        let next_const = if source[i..].starts_with("const ") {
+            Some(i)
+        } else {
+            source[i..].find("\nconst ").map(|off| i + off + 1)
+        };
+
+        if let Some(c_start) = next_const {
+            if next_fn.map_or(true, |f| c_start < f) {
+                // `const NAME: ... = ...;` — block ends at the first `;`.
+                let name_start = c_start + 6;
+                let Some(colon_rel) = source[name_start..].find(':') else { break };
+                let name = source[name_start..name_start + colon_rel].trim().to_string();
+                let Some(semi_rel) = source[c_start..].find(';') else { break };
+                let block_end = c_start + semi_rel + 1;
+                blocks.push((name, source[c_start..block_end].to_string()));
+                i = block_end;
+                continue;
             }
+        }
+
+        let fn_start = match next_fn {
+            Some(f) => f,
+            None => break,
         };
 
         // Extract function name: from after `fn ` to the next `(` (trim

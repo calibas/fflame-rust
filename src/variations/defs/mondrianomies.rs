@@ -79,7 +79,8 @@ pub static MONDRIANOMIES: VariationDef = VariationDef {
         param!("center", "Center", bool, true, "Recenter using the mean of the four axiom waypoints (the drawing starts at the turtle origin and wanders)."),
         param!("fill", "Fill", float, 0.0, 0.0, 1.0, "Fraction of samples that attempt a rectangle fill instead of drawing a line (0 = pure skeleton). A fill picks a SECOND independent segment; if the two are parallel, overlap in span, and sit within Fill Span of each other, the rectangle between them is filled — width = the drawn lines' actual overlap, height = their actual separation, so cells come out as true squares and longer rectangles bounded by real lines (mirroring the R script's detected rectangles). Non-qualifying pairs fall back to drawing a line, so effective fill density also depends on Depth (more segments = more parallel pairs)."),
         param!("inset", "Fill Inset", float, 0.04, 0.0, 0.2, "Shrinks each filled rectangle inward by this fraction of its span, leaving unpainted gutters along the bounding lines — the white borders of a Mondrian canvas."),
-        param!("fill_span", "Fill Span", float, 2.0, 1.0, 6.0, "How far apart (in segment lengths) two parallel drawn lines may be and still span a fill. 1 keeps only the tightest cells; larger values admit longer rectangles between more distant lines."),
+        param!("fill_span", "Fill Span", float, 2.0, 1.0, 6.0, "Pairs fill mode: how far apart (in segment lengths) two parallel drawn lines may be and still span a fill. 1 keeps only the tightest cells; larger values admit longer rectangles between more distant lines. Ignored in Exact mode."),
+        param!("fill_mode", "Fill Mode", enum, 0, &["Pairs", "Exact (R)"], "How fills are found. Pairs: GPU sibling-pair sampling — a self-assembling square-cell mosaic, no rebuild cost (its own thing, not the R output). Exact (R): the drawing is expanded on the CPU and the R script's relational rectangle pass runs for real — segment endpoints rounded and deduped, rectangles of every aspect ratio found from aligned segment/point combinations, kept only when a drawn line connects them, painter-ordered with overlaps clipped, colored id %% 5 onto five evenly spaced palette stops. The rectangle table is baked into the shader, so changing Seed, Depth, or Length Drift triggers a shader rebuild (same pause as toggling a variation). Depth caps at 4 in Exact mode."),
     ],
     // Derived layout (base = 11 user params):
     //   +0        rule length (≤ 32)
@@ -110,7 +111,7 @@ fn mnd_rot_i(v: vec2<f32>, ang: u32) -> vec2<f32> {
     return v;
 }
 
-fn init_mondrianomies(user: array<f32, 12>) -> array<f32, 62> {
+fn init_mondrianomies(user: array<f32, 13>) -> array<f32, 62> {
     var out: array<f32, 62>;
     let depth = clamp(u32(user[1]), 1u, 5u);
     let ds = clamp(user[2], 0.5, 2.0);
@@ -257,6 +258,17 @@ fn mnd_rot(v: vec2<f32>, ang: u32) -> vec2<f32> {
     return v;
 }
 
+// MND_EXACT_STUB_BEGIN
+// Replaced by per-flame specialization (specialize_wgsl_2d/_3d below)
+// with baked rectangle tables from the CPU run of the R relational
+// pass. The stub keeps the static source valid; it reports "no table"
+// so Exact mode falls back to the Pairs fill until specialization
+// kicks in.
+fn mnd_exact_pick(seed: f32, dep: f32, drift: f32, inset: f32, r1: f32, r2: f32, r3: f32) -> vec4<f32> {
+    return vec4<f32>(0.0, 0.0, 0.0, -1.0);
+}
+// MND_EXACT_STUB_END
+
 // One uniform random segment of the expanded L-system, by descent
 // through the derivation tree (see the module docs): at each level
 // pick a uniform target F among the rule's F's and compose the prefix
@@ -268,7 +280,7 @@ fn mnd_rot(v: vec2<f32>, ang: u32) -> vec2<f32> {
 // above rb replay the stored choice. rb = 6 -> fully random; small rb
 // -> a SIBLING of the stored path (same parent expansion, so nearby).
 fn mnd_segment(xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, depth: u32, lnds: f32, rl: u32, ftot: u32, ch: ptr<function, array<u32, 6>>, rb: u32) -> array<f32, 6> {
-    let bo = 12u;
+    let bo = 13u;
     var pp = vec2<f32>(0.0, 0.0);
     var ang = 0u;
     var d = 0.0;
@@ -339,7 +351,7 @@ fn mnd_segment(xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, d
 }
 
 fn mnd_point(xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec2<f32> {
-    let bo = 12u;
+    let bo = 13u;
     let depth = clamp(u32(get_param(xform_id, variation_id, 1u)), 1u, 5u);
     let ds = clamp(get_param(xform_id, variation_id, 2u), 0.5, 2.0);
     let size = get_param(xform_id, variation_id, 3u);
@@ -351,6 +363,7 @@ fn mnd_point(xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc:
     let fillp = get_param(xform_id, variation_id, 9u);
     let inset = clamp(get_param(xform_id, variation_id, 10u), 0.0, 0.45);
     let span = max(get_param(xform_id, variation_id, 11u), 1.0);
+    let fill_mode = u32(get_param(xform_id, variation_id, 12u));
     let rl = u32(get_param(xform_id, variation_id, bo));
     let ftot = max(u32(get_param(xform_id, variation_id, bo + 35u)), 1u);
     let lnds = log(ds);
@@ -363,8 +376,23 @@ fn mnd_point(xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc:
 
     var q = vec2<f32>(0.0, 0.0);
     var filling = false;
+    var exact_fill = false;
     var rvc = 0.0;
     if (fillp > 0.0 && rng_nextf(rng) < fillp) {
+        if (fill_mode == 1u) {
+            // Exact (R) fills: sample the CPU-detected, painter-clipped
+            // rectangle table baked into this shader (area-weighted).
+            let seedp = floor(max(get_param(xform_id, variation_id, 0u), 0.0));
+            let pk = mnd_exact_pick(seedp, f32(min(depth, 4u)), ds, inset,
+                                    rng_nextf(rng), rng_nextf(rng), rng_nextf(rng));
+            if (pk.w > 0.0) {
+                filling = true;
+                exact_fill = true;
+                q = pk.xy;
+                rvc = pk.z;
+            }
+        }
+        if (!filling) {
         // Rectangle fill, the chaos-game version of the R relational
         // pass: a second independent segment; if parallel, overlapping
         // in span, and within reach, fill the rectangle BETWEEN the
@@ -419,6 +447,7 @@ fn mnd_point(xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc:
                     i32(round(c0 * qs)) ^ (i32(round(c1 * qs)) * 104729));
             }
         }
+        }
     }
     if (!filling) {
         q = a_p0 + mnd_rot(vec2<f32>(a_len * rng_nextf(rng), 0.0), a_ang);
@@ -434,7 +463,10 @@ fn mnd_point(xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc:
     } else if (dc_mode == 4u) {
         // Cell: one flat color per rectangle; lines to palette
         // position 0 (put black there).
-        if (filling) {
+        if (filling && exact_fill) {
+            // Baked R color (id %% 5 on five evenly spaced stops).
+            *vc = rvc;
+        } else if (filling) {
             if (dc_scale >= 2.0) {
                 // Quantize to n flat palette colors (5 = the classic
                 // Mondrian five; the R script colors by id %% 5).
@@ -479,3 +511,520 @@ fn variation_mondrianomies(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: 
 }
 "#
 );
+
+
+// =============================================================================
+// Exact-fill specialization: the R relational pass, on the CPU.
+//
+// A flame variation is a stateless per-sample function; the R script's fill
+// is a global analysis of the finished drawing (round + dedup endpoints,
+// find rectangles from aligned segment/point combinations, keep only those
+// with a drawn connecting side, paint in order). Those are whole-set
+// relational queries a per-thread chaos game cannot answer — so when a
+// transform selects Fill Mode = Exact, we expand the L-system here, run the
+// R algorithm, painter-clip the overlaps into disjoint pieces, and bake the
+// result into the shader as const tables via the per-flame specialization
+// hook (the `synth` mechanism). `specialization_key` makes the shader cache
+// rebuild whenever a (seed, depth, drift) combo changes.
+//
+// Known divergences from the R script, all order-of-enumeration flavored:
+// candidate order (and thus the id %% 5 color assignment and painter order)
+// follows our deterministic point-major/segment-sorted order, not R's exact
+// dplyr row order; R's area-percentile filter is reproduced as written
+// (`A >= quantile(..)[1]` compares against the 0% quantile — a no-op);
+// overlaps are clipped topmost-first into disjoint rectangles instead of
+// overdrawn, which is painter-equivalent for the visible result.
+// =============================================================================
+
+use crate::scene::transforms::Flame;
+use std::collections::{BTreeSet, HashMap, HashSet};
+
+/// CPU mirror of the WGSL init's LCG — must stay in lockstep so the rule
+/// (and therefore the line drawing the GPU samples) matches the rectangle
+/// table baked here.
+fn cpu_next(st: &mut u32) -> f32 {
+    *st = st.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+    ((*st >> 8) & 0xFF_FFFF) as f32 / 16_777_216.0
+}
+
+/// CPU mirror of the WGSL init's rule generation (see WGSL_INIT).
+fn cpu_rule(seed: u32) -> Vec<u8> {
+    let mut st = seed.wrapping_mul(0x9E37_79B9).wrapping_add(0x85EB_CA6B);
+    st ^= st >> 16;
+    let s = 15 + (cpu_next(&mut st) * 11.999) as usize;
+    let mut base = vec![0u8; s];
+    for slot in base.iter_mut() {
+        let r = cpu_next(&mut st) * 34.0;
+        *slot = if r < 10.0 {
+            0
+        } else if r < 22.0 {
+            1
+        } else {
+            2
+        };
+    }
+    let mut posn = [0usize; 6];
+    for i in 0..6 {
+        let mut pp;
+        let mut tries = 0;
+        loop {
+            pp = ((cpu_next(&mut st) * (s as f32 + 1.0)) as usize).min(s);
+            let dup = posn[..i].contains(&pp);
+            tries += 1;
+            if !dup || tries > 64 {
+                break;
+            }
+        }
+        posn[i] = pp;
+    }
+    posn.sort_unstable();
+    let mut rule: Vec<u8> = Vec::with_capacity(s + 6);
+    let mut b = 0usize;
+    for i in 0..=s {
+        while b < 6 && posn[b] == i {
+            rule.push(3 + (b as u8 & 1));
+            b += 1;
+        }
+        if i < s {
+            rule.push(base[i]);
+        }
+    }
+    if !rule.contains(&0) {
+        for c in rule.iter_mut() {
+            if *c < 3 {
+                *c = 0;
+                break;
+            }
+        }
+    }
+    rule
+}
+
+fn deci(v: f64) -> i64 {
+    (v * 10.0).round() as i64
+}
+
+/// Expand the L-system and run the turtle sequentially (R semantics: the
+/// segment counter d advances per drawn segment and is saved/restored by
+/// the bracket stack), then round endpoints to 0.1 and dedup in first-
+/// occurrence order — the R script's `round(...,1) + distinct()`.
+fn cpu_segments(rule: &[u8], depth: u32, ds: f64) -> Vec<[i64; 4]> {
+    let mut acts: Vec<u8> = vec![0, 2, 0, 2, 0, 2, 0]; // F-F-F-F
+    for _ in 0..depth {
+        let mut next = Vec::with_capacity(acts.len() * rule.len());
+        for &a in &acts {
+            if a == 0 {
+                next.extend_from_slice(rule);
+            } else {
+                next.push(a);
+            }
+        }
+        acts = next;
+        if acts.len() > 8_000_000 {
+            break; // safety valve; depth is capped at 4 by the callers
+        }
+    }
+    let (mut x, mut y) = (0f64, 0f64);
+    let mut a: i64 = 0;
+    let mut d: i64 = 0;
+    // R initializes the stack with the origin state, so an unmatched `]`
+    // restores the start of the drawing.
+    let mut stack: Vec<(f64, f64, i64, i64)> = vec![(0.0, 0.0, 0, 0)];
+    let mut seen: HashSet<[i64; 4]> = HashSet::new();
+    let mut lines: Vec<[i64; 4]> = Vec::new();
+    let ln = ds.ln();
+    for &c in &acts {
+        match c {
+            0 => {
+                let len = (d as f64 * ln).clamp(-27.6, 27.6).exp();
+                let (dx, dy) = match a.rem_euclid(4) {
+                    0 => (len, 0.0),
+                    1 => (0.0, len),
+                    2 => (-len, 0.0),
+                    _ => (0.0, -len),
+                };
+                let (nx, ny) = (x + dx, y + dy);
+                let k = [deci(x), deci(y), deci(nx), deci(ny)];
+                if (k[0] != k[2] || k[1] != k[3])
+                    && k.iter().all(|v| v.abs() < 100_000_000)
+                    && seen.insert(k)
+                {
+                    lines.push(k);
+                }
+                x = nx;
+                y = ny;
+                d += 1;
+            }
+            1 => a -= 1, // '+' turns right
+            2 => a += 1, // '-' turns left
+            3 => stack.push((x, y, a, d)),
+            4 => {
+                if let Some(s0) = stack.pop() {
+                    x = s0.0;
+                    y = s0.1;
+                    a = s0.2;
+                    d = s0.3;
+                }
+            }
+            _ => {}
+        }
+    }
+    lines
+}
+
+/// The R rectangle detection: candidates are (segment, third point) with an
+/// aligned coordinate; kept when a drawn line connects the point to one of
+/// the segment's endpoints (directed, as in the R inner_joins) and the
+/// three points are not collinear. Color = candidate id %% 5, with the id
+/// counting per 10-point chunk exactly as the R script's chunked
+/// row_number() does. Returned in painter order (join-group major, as the
+/// R bind_rows produces): earlier = painted first = bottom.
+fn cpu_rects(lines: &[[i64; 4]]) -> Vec<([i64; 4], u8)> {
+    let mut pts: Vec<(i64, i64)> = Vec::new();
+    let mut pseen: HashSet<(i64, i64)> = HashSet::new();
+    for l in lines {
+        if pseen.insert((l[0], l[1])) {
+            pts.push((l[0], l[1]));
+        }
+    }
+    for l in lines {
+        if pseen.insert((l[2], l[3])) {
+            pts.push((l[2], l[3]));
+        }
+    }
+    let lineset: HashSet<[i64; 4]> = lines.iter().cloned().collect();
+    let mut by_x: HashMap<i64, Vec<usize>> = HashMap::new();
+    let mut by_y: HashMap<i64, Vec<usize>> = HashMap::new();
+    for (i, l) in lines.iter().enumerate() {
+        by_x.entry(l[0]).or_default().push(i);
+        if l[2] != l[0] {
+            by_x.entry(l[2]).or_default().push(i);
+        }
+        by_y.entry(l[1]).or_default().push(i);
+        if l[3] != l[1] {
+            by_y.entry(l[3]).or_default().push(i);
+        }
+    }
+
+    struct Cand {
+        g: u8,
+        ord: usize,
+        bbox: [i64; 4],
+        color: u8,
+    }
+    let mut cands: Vec<Cand> = Vec::new();
+    let mut ord = 0usize;
+    for chunk in pts.chunks(10) {
+        let mut id = 0u32;
+        for &(px, py) in chunk {
+            let mut segids: Vec<usize> = Vec::new();
+            if let Some(v) = by_x.get(&px) {
+                segids.extend_from_slice(v);
+            }
+            if let Some(v) = by_y.get(&py) {
+                segids.extend_from_slice(v);
+            }
+            segids.sort_unstable();
+            segids.dedup();
+            for &si in &segids {
+                let l = lines[si];
+                // Point must not coincide with either endpoint.
+                if (l[0] == px && l[1] == py) || (l[2] == px && l[3] == py) {
+                    continue;
+                }
+                id += 1; // R: row_number() over the filtered squares1 rows
+                let color = (id % 5) as u8;
+                // A drawn line must connect the point to an endpoint
+                // (the four directed inner_joins, first match = group).
+                let g = if lineset.contains(&[l[0], l[1], px, py]) {
+                    1
+                } else if lineset.contains(&[l[2], l[3], px, py]) {
+                    2
+                } else if lineset.contains(&[px, py, l[0], l[1]]) {
+                    3
+                } else if lineset.contains(&[px, py, l[2], l[3]]) {
+                    4
+                } else {
+                    continue;
+                };
+                // Remove straight-line (collinear) triples.
+                if (l[0] == l[2] && l[2] == px) || (l[1] == l[3] && l[3] == py) {
+                    continue;
+                }
+                let bbox = [
+                    l[0].min(l[2]).min(px),
+                    l[1].min(l[3]).min(py),
+                    l[0].max(l[2]).max(px),
+                    l[1].max(l[3]).max(py),
+                ];
+                if bbox[2] - bbox[0] < 1 || bbox[3] - bbox[1] < 1 {
+                    continue;
+                }
+                cands.push(Cand { g, ord, bbox, color });
+                ord += 1;
+            }
+        }
+    }
+    cands.sort_by_key(|c| (c.g, c.ord));
+    cands.into_iter().map(|c| (c.bbox, c.color)).collect()
+}
+
+/// Subtract rect `c` from rect `f`, returning the up-to-4 remainder strips.
+fn rect_minus(f: [i64; 4], c: [i64; 4]) -> Vec<[i64; 4]> {
+    if c[0] >= f[2] || c[2] <= f[0] || c[1] >= f[3] || c[3] <= f[1] {
+        return vec![f];
+    }
+    let mut out = Vec::new();
+    if c[0] > f[0] {
+        out.push([f[0], f[1], c[0], f[3]]);
+    }
+    if c[2] < f[2] {
+        out.push([c[2], f[1], f[2], f[3]]);
+    }
+    let mx0 = f[0].max(c[0]);
+    let mx1 = f[2].min(c[2]);
+    if c[1] > f[1] {
+        out.push([mx0, f[1], mx1, c[1]]);
+    }
+    if c[3] < f[3] {
+        out.push([mx0, c[3], mx1, f[3]]);
+    }
+    out
+}
+
+/// Painter's-order resolution: process rects topmost-first, keeping only
+/// the parts not already covered — the visible result is exactly what the
+/// R overdraw shows, as disjoint rectangles the shader can sample flatly.
+/// Capped: once `cap` visible pieces exist we stop, dropping the deepest
+/// (most-covered) rects.
+fn cpu_clip(rects: &[([i64; 4], u8)], cap: usize) -> Vec<([i64; 4], u8)> {
+    let mut covered: Vec<[i64; 4]> = Vec::new();
+    let mut visible: Vec<([i64; 4], u8)> = Vec::new();
+    for &(r, col) in rects.iter().rev() {
+        let mut frags = vec![r];
+        for c in &covered {
+            if frags.is_empty() {
+                break;
+            }
+            let mut next = Vec::new();
+            for f in frags {
+                next.extend(rect_minus(f, *c));
+            }
+            frags = next;
+        }
+        for f in frags {
+            if f[2] - f[0] >= 1 && f[3] - f[1] >= 1 {
+                visible.push((f, col));
+                covered.push(f);
+            }
+        }
+        if visible.len() >= cap {
+            break;
+        }
+    }
+    visible
+}
+
+/// Distinct (seed, depth, drift) combos of transforms running
+/// mondrianomies with Fill Mode = Exact and Fill > 0, across normal,
+/// linked, and final transforms. Sorted; capped at 4 (each combo bakes
+/// its own rectangle table).
+pub fn exact_combos(flame: &Flame) -> Vec<(u32, u32, f32)> {
+    let mut set: BTreeSet<(u32, u32, u32)> = BTreeSet::new();
+    let xforms = flame
+        .transforms
+        .iter()
+        .chain(flame.linked_transforms.iter())
+        .chain(flame.final_transforms.iter());
+    for xform in xforms {
+        if !xform.variations.contains_key("mondrianomies") {
+            continue;
+        }
+        let gp = |k: &str, d: f32| {
+            xform
+                .variation_params
+                .get(&format!("mondrianomies.{k}"))
+                .copied()
+                .unwrap_or(d)
+        };
+        if gp("fill_mode", 0.0) as u32 != 1 || gp("fill", 0.0) <= 0.0 {
+            continue;
+        }
+        let seed = gp("seed", 1.0).max(0.0) as u32;
+        let depth = (gp("depth", 3.0) as u32).clamp(1, 4);
+        let drift = gp("drift", 1.0).clamp(0.5, 2.0);
+        set.insert((seed, depth, drift.to_bits()));
+    }
+    set.into_iter()
+        .take(4)
+        .map(|(s, d, dr)| (s, d, f32::from_bits(dr)))
+        .collect()
+}
+
+/// Cache key for the shader cache: changes whenever the baked tables would.
+pub fn specialization_key(flame: &Flame) -> String {
+    exact_combos(flame)
+        .iter()
+        .map(|(s, d, dr)| format!("{s}:{d}:{:08x}", dr.to_bits()))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// Build the WGSL const tables + real `mnd_exact_pick` for the combos.
+fn build_exact_wgsl(combos: &[(u32, u32, f32)]) -> String {
+    let per_combo_cap = (3200 / combos.len().max(1)).max(400);
+    let mut keys = String::new();
+    let mut ranges = String::new();
+    let mut rects_s = String::new();
+    let mut metas = String::new();
+    let mut total = 0usize;
+    for &(seed, depth, drift) in combos {
+        let rule = cpu_rule(seed);
+        let lines = cpu_segments(&rule, depth, drift as f64);
+        let rects = cpu_rects(&lines);
+        let vis = cpu_clip(&rects, per_combo_cap);
+        let offset = total;
+        // Area-weighted CDF so a uniform r1 picks rectangles with density
+        // proportional to area (flat perceived fill).
+        let areas: Vec<f64> = vis
+            .iter()
+            .map(|(r, _)| ((r[2] - r[0]) as f64) * ((r[3] - r[1]) as f64))
+            .collect();
+        let asum: f64 = areas.iter().sum::<f64>().max(1e-9);
+        let mut acc = 0f64;
+        for (i, (r, col)) in vis.iter().enumerate() {
+            acc += areas[i];
+            let cdf = (acc / asum) as f32;
+            rects_s.push_str(&format!(
+                "vec4<f32>({:.4}, {:.4}, {:.4}, {:.4}), ",
+                r[0] as f32 / 10.0,
+                r[1] as f32 / 10.0,
+                r[2] as f32 / 10.0,
+                r[3] as f32 / 10.0
+            ));
+            metas.push_str(&format!(
+                "vec2<f32>({:.7}, {:.2}), ",
+                cdf,
+                *col as f32 / 4.0
+            ));
+        }
+        total += vis.len();
+        keys.push_str(&format!(
+            "vec4<f32>({:.1}, {:.1}, {:.7}, 0.0), ",
+            seed as f32, depth as f32, drift
+        ));
+        ranges.push_str(&format!("vec2<u32>({offset}u, {}u), ", vis.len()));
+    }
+    if total == 0 {
+        // All combos produced empty tables — keep the stub semantics.
+        rects_s.push_str("vec4<f32>(0.0, 0.0, 0.0, 0.0), ");
+        metas.push_str("vec2<f32>(1.0, 0.0), ");
+        total = 1;
+    }
+    let c = combos.len();
+    format!(
+        r#"const MND_XKEY: array<vec4<f32>, {c}> = array<vec4<f32>, {c}>({keys});
+const MND_XRANGE: array<vec2<u32>, {c}> = array<vec2<u32>, {c}>({ranges});
+const MND_XRECT: array<vec4<f32>, {total}> = array<vec4<f32>, {total}>({rects_s});
+const MND_XMETA: array<vec2<f32>, {total}> = array<vec2<f32>, {total}>({metas});
+fn mnd_exact_pick(seed: f32, dep: f32, drift: f32, inset: f32, r1: f32, r2: f32, r3: f32) -> vec4<f32> {{
+    var off = 0u;
+    var cnt = 0u;
+    for (var i = 0u; i < {c}u; i = i + 1u) {{
+        let k = MND_XKEY[i];
+        if (abs(k.x - seed) < 0.5 && abs(k.y - dep) < 0.5 && abs(k.z - drift) < 1e-6) {{
+            off = MND_XRANGE[i].x;
+            cnt = MND_XRANGE[i].y;
+            break;
+        }}
+    }}
+    if (cnt == 0u) {{ return vec4<f32>(0.0, 0.0, 0.0, -1.0); }}
+    var lo = off;
+    var hi = off + cnt - 1u;
+    while (lo < hi) {{
+        let mid = (lo + hi) >> 1u;
+        if (MND_XMETA[mid].x < r1) {{ lo = mid + 1u; }} else {{ hi = mid; }}
+    }}
+    let rc = MND_XRECT[lo];
+    let w = rc.z - rc.x;
+    let h = rc.w - rc.y;
+    let px = mix(rc.x + inset * w, rc.z - inset * w, r2);
+    let py = mix(rc.y + inset * h, rc.w - inset * h, r3);
+    return vec4<f32>(px, py, MND_XMETA[lo].y, 1.0);
+}}
+"#
+    )
+}
+
+fn specialize(source: &str, flame: &Flame) -> String {
+    let combos = exact_combos(flame);
+    if combos.is_empty() {
+        return source.to_string();
+    }
+    let (Some(b), Some(e)) = (
+        source.find("// MND_EXACT_STUB_BEGIN"),
+        source.find("// MND_EXACT_STUB_END"),
+    ) else {
+        return source.to_string();
+    };
+    let end = e + "// MND_EXACT_STUB_END".len();
+    format!("{}{}{}", &source[..b], build_exact_wgsl(&combos), &source[end..])
+}
+
+/// 2D specialization entry point (see `variation_specialized_source` in
+/// the shader builder). Returns the static source untouched when no
+/// transform uses Exact fills — no rebuild churn.
+pub fn specialize_wgsl_2d(flame: &Flame) -> String {
+    specialize(MONDRIANOMIES.wgsl_2d, flame)
+}
+
+/// 3D specialization — same tables on the 3D body.
+pub fn specialize_wgsl_3d(flame: &Flame) -> String {
+    specialize(MONDRIANOMIES.wgsl_3d, flame)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exact_pass_produces_rects_for_default_seed() {
+        let rule = cpu_rule(12);
+        assert!(rule.contains(&0), "rule has an F");
+        let lines = cpu_segments(&rule, 3, 1.0);
+        assert!(lines.len() > 50, "expanded drawing has segments: {}", lines.len());
+        let rects = cpu_rects(&lines);
+        assert!(!rects.is_empty(), "R pass finds rectangles");
+        let vis = cpu_clip(&rects, 3200);
+        assert!(!vis.is_empty());
+        // Disjointness of the clipped pieces.
+        for (i, (a, _)) in vis.iter().enumerate() {
+            for (b, _) in vis.iter().skip(i + 1) {
+                let overlap = a[0].max(b[0]) < a[2].min(b[2]) && a[1].max(b[1]) < a[3].min(b[3]);
+                assert!(!overlap, "clipped rects overlap: {a:?} {b:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn specialized_wgsl_replaces_stub() {
+        use crate::scene::transforms::Transform;
+        let mut flame = Flame::default();
+        let xf = flame.transforms.get_mut(0);
+        let xf = match xf {
+            Some(x) => x,
+            None => {
+                flame.transforms.push(Transform::default());
+                flame.transforms.get_mut(0).unwrap()
+            }
+        };
+        xf.variations.insert("mondrianomies".into(), 1.0);
+        xf.variation_params
+            .insert("mondrianomies.fill_mode".into(), 1.0);
+        xf.variation_params.insert("mondrianomies.fill".into(), 0.9);
+        xf.variation_params.insert("mondrianomies.seed".into(), 12.0);
+        let src = specialize_wgsl_2d(&flame);
+        assert!(src.contains("MND_XRECT"), "tables baked");
+        assert!(!src.contains("MND_EXACT_STUB_BEGIN"), "stub replaced");
+    }
+}

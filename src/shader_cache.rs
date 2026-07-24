@@ -272,6 +272,12 @@ impl ShaderCache {
                 .join(",");
             key.push(("synth".to_string(), joined));
         }
+        if active_variations.contains_key("mondrianomies") {
+            let k = crate::variations::defs::mondrianomies::specialization_key(flame);
+            if !k.is_empty() {
+                key.push(("mondrianomies".to_string(), k));
+            }
+        }
         key
     }
 

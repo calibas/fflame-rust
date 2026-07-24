@@ -164,7 +164,7 @@ mod hecke_group;
 mod hyperbolic_camera;
 mod jacobian_counterexample;
 mod littlewood;
-mod mondrianomies;
+pub mod mondrianomies;
 mod lorentz_mobius;
 mod schottky_group;
 mod sphere_packing;
