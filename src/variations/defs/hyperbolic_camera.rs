@@ -76,6 +76,7 @@ pub static HYPERBOLIC_CAMERA: VariationDef = VariationDef {
         param!("rot_z", "Rotate Z", angle, 0.0, "Rotation about the z axis (the in-plane rotation in 2D)."),
         param!("size", "Size", float, 1.0, 0.1, 4.0, "Model scale in world units: input is divided by it, output multiplied — ball models occupy radius `size`."),
         param!("curvature", "Curvature K", unlimited_float, -1.0, -100.0, -0.01, "Sectional curvature the camera experiences (K < 0; content is interpreted at K = -1). The content's intrinsic scale is locked to the curvature radius 1/sqrt(-K) while the camera's ruler stays fixed — the exact radial rescale d' = d/sqrt(-K) of hyperbolic distance about the OBSERVER (applied after the isometry, so the camera position is the fixed point). K = -100: the horizon crowds inward, objects shrink faster, area growth explodes. K = -0.01: the world flattens toward Euclidean — content huddles at the model center, parallels barely diverge, the horizon recedes. Only possible because hyperbolic geometry has an intrinsic scale — flat space has no such dial."),
+        param!("h_zoom", "Hyperbolic Zoom", unlimited_float, 0.0, -2.0, 2.0, "Moves the IDEAL BOUNDARY instead of the field of view — Euclidean zoom rescales everything, hyperbolic zoom changes how much of hyperbolic infinity is compressed into the image while the scale at the observer stays fixed. The azimuthal out-charts (Poincaré, Klein, Hyperboloid/Gans) are one projective family R = k*2*rho/(1 + a*rho^2); this slides `a` from the chart's native value (Klein 1, Poincaré 0, Gans -1). Positive: the boundary circle recedes off-frame — past Gans (e.g. Poincaré at +1.5) visual infinity sits at FINITE hyperbolic distance and only that ball of the plane is shown, at true scale. Negative: all of infinity compresses into an ever smaller circle. No effect on Equidistant/Half-Plane/Band out-charts or on in-charts."),
     ],
     wgsl_2d: WGSL_2D,
     wgsl_3d: WGSL_3D,
@@ -128,8 +129,25 @@ fn hycam_to_hyp2(u_in: vec2<f32>, model: u32) -> vec3<f32> {
     return vec3<f32>(u, sqrt(1.0 + dot(u, u)));
 }
 
-fn hycam_from_hyp2(h: vec3<f32>, model: u32) -> vec2<f32> {
+fn hycam_from_hyp2(h: vec3<f32>, model: u32, hz: f32) -> vec2<f32> {
     let t = max(h.z, 1.0);
+    // Hyperbolic zoom: the azimuthal charts are one projective family
+    // (projection of the hyperboloid from (0, -c)). In Poincaré radius
+    // rho: R = k*2*rho/(1 + a*rho^2), a = 1 Klein, 0 Poincaré, -1
+    // Gans; hz slides a from the chart's native value. The ideal
+    // boundary (at R = k*2/(1+a)) moves while the scale at the
+    // observer (dR/dd at 0) stays fixed; a < -1 puts visual infinity
+    // at finite hyperbolic distance (beyond-pole content flips out).
+    if (abs(hz) > 1e-9 && (model == 0u || model == 1u || model == 3u)) {
+        let pv = h.xy / (1.0 + t);
+        var a = -hz;
+        var k = 0.5;
+        if (model == 1u) { a = 1.0 - hz; k = 1.0; }
+        if (model == 3u) { a = -1.0 - hz; k = 1.0; }
+        var dn = 1.0 + a * dot(pv, pv);
+        if (abs(dn) < 1e-4) { dn = select(1e-4, -1e-4, dn < 0.0); }
+        return pv * (2.0 * k / dn);
+    }
     if (model == 0u) { return h.xy / (1.0 + t); }
     if (model == 1u) { return h.xy / t; }
     if (model == 2u) {
@@ -160,6 +178,7 @@ fn variation_hyperbolic_camera(p: vec2<f32>, xform_id: u32, variation_id: u32) -
     let rot_z = get_param(xform_id, variation_id, 7u) * 0.01745329252;
     let size = max(get_param(xform_id, variation_id, 8u), 1e-6);
     let curv = sqrt(clamp(-get_param(xform_id, variation_id, 9u), 1e-4, 1e4));
+    let h_zoom = get_param(xform_id, variation_id, 10u);
 
     var h = hycam_to_hyp2(p / size, in_model);
     if (rot_z != 0.0) {
@@ -175,7 +194,7 @@ fn variation_hyperbolic_camera(p: vec2<f32>, xform_id: u32, variation_id: u32) -
         h = vec3<f32>(perp + (ch * par + sh * h.z) * n, sh * par + ch * h.z);
     }
     // Curvature morph: radial rescale of hyperbolic distance about the
-    // observer (origin), d' = d*sqrt(-K). Not an isometry — the point.
+    // observer (origin), d' = d/sqrt(-K). Not an isometry — the point.
     if (abs(curv - 1.0) > 1e-6) {
         let sn = length(h.xy);
         if (sn > 1e-9) {
@@ -183,7 +202,7 @@ fn variation_hyperbolic_camera(p: vec2<f32>, xform_id: u32, variation_id: u32) -
             h = vec3<f32>((sinh(dd) / sn) * h.xy, cosh(dd));
         }
     }
-    return hycam_from_hyp2(h, out_model) * size;
+    return hycam_from_hyp2(h, out_model, h_zoom) * size;
 }
 "#;
 
@@ -228,8 +247,25 @@ fn hycam_to_hyp2(u_in: vec2<f32>, model: u32) -> vec3<f32> {
     return vec3<f32>(u, sqrt(1.0 + dot(u, u)));
 }
 
-fn hycam_from_hyp2(h: vec3<f32>, model: u32) -> vec2<f32> {
+fn hycam_from_hyp2(h: vec3<f32>, model: u32, hz: f32) -> vec2<f32> {
     let t = max(h.z, 1.0);
+    // Hyperbolic zoom: the azimuthal charts are one projective family
+    // (projection of the hyperboloid from (0, -c)). In Poincaré radius
+    // rho: R = k*2*rho/(1 + a*rho^2), a = 1 Klein, 0 Poincaré, -1
+    // Gans; hz slides a from the chart's native value. The ideal
+    // boundary (at R = k*2/(1+a)) moves while the scale at the
+    // observer (dR/dd at 0) stays fixed; a < -1 puts visual infinity
+    // at finite hyperbolic distance (beyond-pole content flips out).
+    if (abs(hz) > 1e-9 && (model == 0u || model == 1u || model == 3u)) {
+        let pv = h.xy / (1.0 + t);
+        var a = -hz;
+        var k = 0.5;
+        if (model == 1u) { a = 1.0 - hz; k = 1.0; }
+        if (model == 3u) { a = -1.0 - hz; k = 1.0; }
+        var dn = 1.0 + a * dot(pv, pv);
+        if (abs(dn) < 1e-4) { dn = select(1e-4, -1e-4, dn < 0.0); }
+        return pv * (2.0 * k / dn);
+    }
     if (model == 0u) { return h.xy / (1.0 + t); }
     if (model == 1u) { return h.xy / t; }
     if (model == 2u) {
@@ -279,8 +315,19 @@ fn hycam_to_hyp3(u_in: vec3<f32>, c: u32) -> vec4<f32> {
     return vec4<f32>(u, sqrt(1.0 + dot(u, u)));
 }
 
-fn hycam_from_hyp3(h: vec4<f32>, c: u32) -> vec3<f32> {
+fn hycam_from_hyp3(h: vec4<f32>, c: u32, hz: f32) -> vec3<f32> {
     let t = max(h.w, 1.0);
+    // Hyperbolic zoom — same projective family as hycam_from_hyp2.
+    if (abs(hz) > 1e-9 && (c == 0u || c == 1u || c == 3u)) {
+        let pv = h.xyz / (1.0 + t);
+        var a = -hz;
+        var k = 0.5;
+        if (c == 1u) { a = 1.0 - hz; k = 1.0; }
+        if (c == 3u) { a = -1.0 - hz; k = 1.0; }
+        var dn = 1.0 + a * dot(pv, pv);
+        if (abs(dn) < 1e-4) { dn = select(1e-4, -1e-4, dn < 0.0); }
+        return pv * (2.0 * k / dn);
+    }
     if (c == 0u) { return h.xyz / (1.0 + t); }
     if (c == 1u) { return h.xyz / t; }
     if (c == 2u) {
@@ -306,6 +353,7 @@ fn variation_hyperbolic_camera(p: vec3<f32>, xform_id: u32, variation_id: u32) -
     let rot_z = get_param(xform_id, variation_id, 7u) * 0.01745329252;
     let size = max(get_param(xform_id, variation_id, 8u), 1e-6);
     let curv = sqrt(clamp(-get_param(xform_id, variation_id, 9u), 1e-4, 1e4));
+    let h_zoom = get_param(xform_id, variation_id, 10u);
 
     let u = p / size;
     var h: vec4<f32>;
@@ -341,7 +389,7 @@ fn variation_hyperbolic_camera(p: vec3<f32>, xform_id: u32, variation_id: u32) -
         let ch = cosh(d); let sh = sinh(d);
         h = vec4<f32>(perp + (ch * par + sh * h.w) * n, sh * par + ch * h.w);
     }
-    // Curvature morph: radial rescale about the observer, d' = d*sqrt(-K).
+    // Curvature morph: radial rescale about the observer, d' = d/sqrt(-K).
     if (abs(curv - 1.0) > 1e-6) {
         let sn = length(h.xyz);
         if (sn > 1e-9) {
@@ -355,9 +403,9 @@ fn variation_hyperbolic_camera(p: vec3<f32>, xform_id: u32, variation_id: u32) -
         // plane for the chart; the dropped spatial component is emitted
         // as z — a 2D projection of 3D hyperbolic content with depth.
         let t2 = sqrt(1.0 + h.x * h.x + h.y * h.y);
-        let out2 = hycam_from_hyp2(vec3<f32>(h.x, h.y, t2), out_model);
+        let out2 = hycam_from_hyp2(vec3<f32>(h.x, h.y, t2), out_model, h_zoom);
         return vec3<f32>(out2, h.z) * size;
     }
-    return hycam_from_hyp3(h, out_model - 6u) * size;
+    return hycam_from_hyp3(h, out_model - 6u, h_zoom) * size;
 }
 "#;
