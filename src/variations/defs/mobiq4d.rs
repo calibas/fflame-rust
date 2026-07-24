@@ -31,6 +31,13 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Honest 4D quaternionic Möbius (GL(2,ℍ) on S⁴) — carries the
+/// k-component classic mobiq drops.
+///
+/// # Authors
+/// - zephyrtronium
+/// - Fractals for All
+/// - Claude Fable 5
 pub static MOBIQ4D: VariationDef = VariationDef {
     name: "mobiq4d",
     aliases: &[],

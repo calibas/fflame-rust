@@ -53,6 +53,12 @@ const SHAPES: &[&str] = &[
     "Truncated Octahedron",
 ];
 
+/// Polyhedron surface projection (the bubble sphere map generalized to
+/// regular polyhedra).
+///
+/// # Authors
+/// - Fractals for All
+/// - Claude Fable 5
 pub static POLYHEDRON: VariationDef = VariationDef {
     name: "polyhedron",
     aliases: &[],
@@ -130,6 +136,12 @@ fn variation_polyhedron(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<
 "#,
 };
 
+/// Polyhedron solid-occluder: a depth-only side-emit companion to
+/// polyhedron.
+///
+/// # Authors
+/// - Fractals for All
+/// - Claude Fable 5
 pub static POLYHEDRON_VOLUME: VariationDef = VariationDef {
     name: "polyhedron_volume",
     aliases: &[],

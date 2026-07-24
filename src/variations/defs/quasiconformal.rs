@@ -52,6 +52,12 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Quasiconformal warp: an exact log-affine map or a spatially-varying
+/// Beltrami field.
+///
+/// # Authors
+/// - Fractals for All
+/// - Claude Fable 5
 pub static QUASICONFORMAL: VariationDef = VariationDef {
     name: "quasiconformal",
     aliases: &["qconformal"],

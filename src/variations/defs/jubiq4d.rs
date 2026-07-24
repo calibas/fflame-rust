@@ -25,6 +25,13 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Honest 4D jubiq — the julian2/Möbius chimera with the k-component
+/// classic jubiQ drops carried through.
+///
+/// # Authors
+/// - Brad Stefanov
+/// - Fractals for All
+/// - Claude Fable 5
 pub static JUBIQ4D: VariationDef = VariationDef {
     name: "jubiq4d",
     aliases: &[],

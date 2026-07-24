@@ -63,6 +63,12 @@ use crate::variations::{
 };
 use crate::param;
 
+/// 3D standing-wave cymatics attractor (the chladni idea in three
+/// dimensions).
+///
+/// # Authors
+/// - Fractals for All
+/// - Claude Fable 5
 pub static CYMATICS3D: VariationDef = VariationDef {
     name: "cymatics3d",
     aliases: &[],

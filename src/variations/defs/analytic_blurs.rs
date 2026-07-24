@@ -22,6 +22,10 @@ use crate::param;
 
 /// Analytic counterpart of `blur` (uniform-radius disc). Same fuzz, but
 /// eligible for the analytic blur buffer.
+///
+/// # Authors
+/// - Fractals for All
+/// - Claude Opus 4.8
 pub static ANALYTIC_BLUR: VariationDef = VariationDef {
     name: "analytic_blur",
     aliases: &[],
@@ -54,6 +58,10 @@ fn variation_analytic_blur(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: 
 };
 
 /// Analytic counterpart of `gaussian_blur` (Irwin-Hall(4) bell radius).
+///
+/// # Authors
+/// - Fractals for All
+/// - Claude Opus 4.8
 pub static ANALYTIC_GAUSSIAN_BLUR: VariationDef = VariationDef {
     name: "analytic_gaussian_blur",
     aliases: &[],

@@ -32,6 +32,11 @@ use crate::variations::{
 };
 use crate::param;
 
+/// 4D quaternion Julia-N map q' = qⁿ + c.
+///
+/// # Authors
+/// - Fractals for All
+/// - Claude Fable 5
 pub static QUATERNION_JULIA: VariationDef = VariationDef {
     name: "quaternion_julia",
     aliases: &["qjulia", "qjulian"],

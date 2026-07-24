@@ -29,6 +29,12 @@ use crate::variations::{
 };
 use crate::param;
 
+/// A 4D camera for the quaternion variations (rotates the full q =
+/// (x,y,z,w) before projection).
+///
+/// # Authors
+/// - Fractals for All
+/// - Claude Fable 5
 pub static QUATERNION_CAMERA: VariationDef = VariationDef {
     name: "quaternion_camera",
     aliases: &["qcamera"],

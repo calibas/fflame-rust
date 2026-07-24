@@ -50,6 +50,11 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Hydrogen electron-orbital isosurface attractor.
+///
+/// # Authors
+/// - Fractals for All
+/// - Claude Fable 5
 pub static ORBITAL: VariationDef = VariationDef {
     name: "electron_orbital",
     aliases: &[],

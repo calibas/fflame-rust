@@ -39,6 +39,11 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Classical Schottky circle-pairing chaos game (Indra's Pearls Ch. 4).
+///
+/// # Authors
+/// - Fractals for All
+/// - Claude Fable 5
 pub static SCHOTTKY_GROUP: VariationDef = VariationDef {
     name: "schottky_group",
     aliases: &[],

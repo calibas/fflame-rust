@@ -27,6 +27,10 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Square-to-circle morph tiling stencil mask.
+///
+/// # Authors
+/// - Jesus Sosa
 pub static CUT_SQCIR: VariationDef = VariationDef {
     name: "cut_sqcir",
     aliases: &[],

@@ -27,6 +27,10 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Sine/cosine interference stencil mask.
+///
+/// # Authors
+/// - Jesus Sosa
 pub static CUT_SINCOS: VariationDef = VariationDef {
     name: "cut_sincos",
     aliases: &[],

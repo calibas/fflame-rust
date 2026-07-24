@@ -83,6 +83,12 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Inverse-branch IFS of the 2026 Jacobian-conjecture counterexample
+/// map (closed-form 3-sheet inverse).
+///
+/// # Authors
+/// - Fractals for All
+/// - Claude Fable 5
 pub static JACOBIAN_COUNTEREXAMPLE: VariationDef = VariationDef {
     name: "jacobian_counterexample",
     // Shipped briefly as `jacobian_cubic`; the map is degree 4/6 (the

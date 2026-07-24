@@ -44,6 +44,12 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Hofstadter-butterfly spectrum attractor (electron on a 2D lattice in
+/// a magnetic field).
+///
+/// # Authors
+/// - Fractals for All
+/// - Claude Fable 5
 pub static HOFSTADTER: VariationDef = VariationDef {
     name: "hofstadter",
     aliases: &[],

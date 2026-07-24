@@ -44,6 +44,12 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Littlewood-polynomial IFS attractor A(λ) of the pair z ↦ (z±1)/λ
+/// (Barnsley–Harrington).
+///
+/// # Authors
+/// - Fractals for All
+/// - Claude Fable 5
 pub static LITTLEWOOD: VariationDef = VariationDef {
     name: "littlewood",
     aliases: &[],

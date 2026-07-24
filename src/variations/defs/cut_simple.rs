@@ -44,6 +44,10 @@ use crate::param;
 // =============================================================================
 // cut_chains
 // =============================================================================
+/// Interlocking-chain sine-field stencil mask.
+///
+/// # Authors
+/// - Jesus Sosa
 pub static CUT_CHAINS: VariationDef = VariationDef {
     name: "cut_chains",
     aliases: &[],
@@ -135,6 +139,11 @@ fn variation_cut_chains(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
 // =============================================================================
 // cut_hexdots
 // =============================================================================
+/// Hexagonal nearest-cell dot stencil mask.
+///
+/// # Authors
+/// - Jesus Sosa
+/// - Fractals for All
 pub static CUT_HEXDOTS: VariationDef = VariationDef {
     name: "cut_hexdots",
     aliases: &[],
@@ -211,6 +220,11 @@ fn variation_cut_hexdots(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: pt
 // =============================================================================
 // cut_booleans
 // =============================================================================
+/// XOR/AND/OR bit-pattern stencil of the integer grid.
+///
+/// # Authors
+/// - Jesus Sosa
+/// - Fractals for All
 pub static CUT_BOOLEANS: VariationDef = VariationDef {
     name: "cut_booleans",
     aliases: &[],
@@ -292,6 +306,11 @@ fn variation_cut_booleans(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: p
 // =============================================================================
 // cut_sqsplits
 // =============================================================================
+/// Radially-split square-tile stencil mask.
+///
+/// # Authors
+/// - Jesus Sosa
+/// - Fractals for All
 pub static CUT_SQSPLITS: VariationDef = VariationDef {
     name: "cut_sqsplits",
     aliases: &[],
@@ -375,6 +394,11 @@ fn variation_cut_sqsplits(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: p
 // =============================================================================
 // cut_btree
 // =============================================================================
+/// Recursive binary-tree band stencil mask.
+///
+/// # Authors
+/// - Jesus Sosa
+/// - Fractals for All
 pub static CUT_BTREE: VariationDef = VariationDef {
     name: "cut_btree",
     aliases: &[],
@@ -463,6 +487,11 @@ fn variation_cut_btree(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
 // =============================================================================
 // cut_fractal
 // =============================================================================
+/// Abs/inversion Julia-style escape stencil mask.
+///
+/// # Authors
+/// - Jesus Sosa
+/// - Fractals for All
 pub static CUT_FRACTAL: VariationDef = VariationDef {
     name: "cut_fractal",
     aliases: &[],
@@ -545,6 +574,11 @@ fn variation_cut_fractal(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: pt
 // =============================================================================
 // cut_glypho
 // =============================================================================
+/// Layered glyph-blob stencil mask (nested ring sampling).
+///
+/// # Authors
+/// - Jesus Sosa
+/// - Fractals for All
 pub static CUT_GLYPHO: VariationDef = VariationDef {
     name: "cut_glypho",
     aliases: &[],
@@ -643,6 +677,11 @@ fn variation_cut_glypho(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
 // =============================================================================
 // cut_circdes
 // =============================================================================
+/// Recursive circle-subtraction design stencil mask.
+///
+/// # Authors
+/// - Jesus Sosa
+/// - Fractals for All
 pub static CUT_CIRCDES: VariationDef = VariationDef {
     name: "cut_circdes",
     aliases: &[],
@@ -750,6 +789,11 @@ fn variation_cut_circdes(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: pt
 // =============================================================================
 // cut_snowflake
 // =============================================================================
+/// 3D kaleidoscopic-fold (Kaliset) stencil mask.
+///
+/// # Authors
+/// - Jesus Sosa
+/// - Fractals for All
 pub static CUT_SNOWFLAKE: VariationDef = VariationDef {
     name: "cut_snowflake",
     aliases: &[],
@@ -838,6 +882,11 @@ fn variation_cut_snowflake(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: 
 // =============================================================================
 // cut_jigsaw
 // =============================================================================
+/// Interlocking jigsaw-piece tile stencil mask.
+///
+/// # Authors
+/// - Jesus Sosa
+/// - Fractals for All
 pub static CUT_JIGSAW: VariationDef = VariationDef {
     name: "cut_jigsaw",
     aliases: &[],
@@ -927,6 +976,11 @@ fn variation_cut_jigsaw(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
 // =============================================================================
 // cut_rgrid
 // =============================================================================
+/// Rotated-square offset-grid stencil mask.
+///
+/// # Authors
+/// - Jesus Sosa
+/// - Fractals for All
 pub static CUT_RGRID: VariationDef = VariationDef {
     name: "cut_rgrid",
     aliases: &[],

@@ -47,6 +47,11 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Circular-plate Chladni figure attractor (Bessel nodal lines).
+///
+/// # Authors
+/// - Fractals for All
+/// - Claude Fable 5
 pub static CHLADNI_DISC: VariationDef = VariationDef {
     name: "chladni_disc",
     aliases: &[],

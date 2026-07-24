@@ -30,6 +30,13 @@ use crate::variations::{
 };
 use crate::param;
 
+/// SU(n) Möbius groups with live reduction tensors dialed from the
+/// Reduce sliders.
+///
+/// # Authors
+/// - Roger Bagula
+/// - Fractals for All
+/// - Claude Fable 5
 pub static SU_CUSTOM: VariationDef = VariationDef {
     name: "su_custom",
     aliases: &[],
