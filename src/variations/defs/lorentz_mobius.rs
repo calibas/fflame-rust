@@ -63,8 +63,8 @@ pub static LORENTZ_MOBIUS: VariationDef = VariationDef {
     state_count: 2,
     wgsl_state_init: None,
     parameters: &[
-        param!("theta", "Theta", unlimited_float, 1.0, -4.0, 4.0, "Magnitude of the θ-slot generators (the notebook's 'rotation z/y/x' trio g3–g5). These exponentiate σ/2, so as Möbius maps they are HYPERBOLIC — boost-like squeezes toward antipodal fixed points (the notebook's labels are the reverse of the physics convention). Notebook value: 1."),
-        param!("eta", "Eta", unlimited_float, 1.0, -4.0, 4.0, "Magnitude of the η-slot generators (the notebook's 'boost ±z' pair g1–g2). These exponentiate iσ/2, so as Möbius maps they are ELLIPTIC — rotations about the ±z celestial poles by η radians. Notebook value: 1."),
+        param!("theta", "Theta", unlimited_float, 1.5, -4.0, 4.0, "Magnitude of the θ-slot generators (the notebook's 'rotation z/y/x' trio g3–g5). These exponentiate σ/2, so as Möbius maps they are HYPERBOLIC — boost-like squeezes toward antipodal fixed points (the notebook's labels are the reverse of the physics convention). Notebook value: 1."),
+        param!("eta", "Eta", unlimited_float, 0.0, -4.0, 4.0, "Magnitude of the η-slot generators (the notebook's 'boost ±z' pair g1–g2). These exponentiate iσ/2, so as Möbius maps they are ELLIPTIC — rotations about the ±z celestial poles by η radians. Notebook value: 1."),
         param!("avoid_reversal", "Avoid Reversal", bool, true, "Skip a generator's inverse immediately after applying it (no g·g⁻¹ cancellation; the inverse of generator k is k+5). Off = all ten elements equally likely every call."),
         param!("dc_mode", "Color Mode", enum, 0, &["Off", "Generator"], "Direct-color source (needs the transform's Direct Color > 0). Generator: each of the ten group elements has its own palette position, blended through a persistent color register at Color Speed."),
         param!("dc_scale", "Color Scale", float, 1.0, 0.1, 8.0, "Palette-index multiplier for the Generator color (wrapped with fract)."),
