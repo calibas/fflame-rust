@@ -276,70 +276,53 @@ fn mnd_exact_pick(seed: f32, dep: f32, drift: f32, inset: f32, r1: f32, r2: f32,
 // transforms before it; level 1's target is the drawn segment.
 // Returns [p0.x, p0.y, len, angle (0..3), bpos, d] — the shader
 // builder's fn-splitter drops top-level structs, so a plain array.
-// `ch` records the descent choices (slot 5 = axiom arm, slot k-1 =
-// level-k target); levels <= rb re-randomize and write back, levels
-// above rb replay the stored choice. rb = 6 -> fully random; small rb
-// -> a SIBLING of the stored path (same parent expansion, so nearby).
-fn mnd_segment(xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, depth: u32, lnds: f32, rl: u32, ftot: u32, ch: ptr<function, array<u32, 6>>, rb: u32) -> array<f32, 6> {
-    let bo = 14u;
+// The rule and level tables come from thread-local caches (read from
+// the param buffer once per mnd_point call), and the turtle state at
+// the entry of every level is checkpointed into `ckpt` so sibling
+// segments can resume mid-descent (mnd_seg_from) instead of paying a
+// full descent per retry.
+fn mnd_seg_full(rulec: ptr<function, array<u32, 34>>, lvt: ptr<function, array<vec4<f32>, 6>>, ckpt: ptr<function, array<vec4<f32>, 6>>, rng: ptr<function, RngState>, depth: u32, lnds: f32, rl: u32, ftot: u32) -> array<f32, 6> {
     var pp = vec2<f32>(0.0, 0.0);
     var ang = 0u;
     var d = 0.0;
-    // Tree position in drawing order (Sequence color / side hashes):
-    // string order within the rule IS drawing order, so the mixed-radix
-    // digits (i0, t_k...) index segments in the order the pen visits them.
+    // Tree position in drawing order (Sequence color mode): string
+    // order within the rule IS drawing order, so the mixed-radix
+    // digits index segments in the order the pen visits them.
     var bpos = 0.0;
     var bden = 1.0;
 
     // Axiom F-F-F-F: pick which of the four arms, compose the prefix.
-    var i0: u32;
-    if (depth + 1u <= rb) {
-        i0 = min(u32(rng_nextf(rng) * 4.0), 3u);
-        (*ch)[5] = i0;
-    } else {
-        i0 = (*ch)[5];
-    }
+    let i0 = min(u32(rng_nextf(rng) * 4.0), 3u);
     bpos = f32(i0) * 0.25;
     bden = 4.0;
     {
-        let bl = bo + 36u + depth * 4u;
-        let vk = vec2<f32>(get_param(xform_id, variation_id, bl), get_param(xform_id, variation_id, bl + 1u));
-        let ak = u32(get_param(xform_id, variation_id, bl + 2u));
-        let mk = get_param(xform_id, variation_id, bl + 3u);
+        let lv = (*lvt)[depth];
         for (var j = 0u; j < i0; j = j + 1u) {
             let sc = exp(clamp(d * lnds, -12.0, 12.0));
-            pp = pp + sc * mnd_rot(vk, ang);
-            ang = (ang + ak + 1u) & 3u;                 // F then '-' (left)
-            d = d + mk;
+            pp = pp + sc * mnd_rot(lv.xy, ang);
+            ang = (ang + u32(lv.z) + 1u) & 3u;      // F then '-' (left)
+            d = d + lv.w;
         }
     }
 
     for (var k = depth; k >= 1u; k = k - 1u) {
-        var tf: u32;
-        if (k <= rb) {
-            tf = min(u32(rng_nextf(rng) * f32(ftot)), ftot - 1u);
-            (*ch)[k - 1u] = tf;
-        } else {
-            tf = (*ch)[k - 1u];
-        }
+        (*ckpt)[k] = vec4<f32>(pp.x, pp.y, f32(ang), d);
+        let tf = min(u32(rng_nextf(rng) * f32(ftot)), ftot - 1u);
         bpos = bpos + f32(tf) / (bden * f32(ftot));
         bden = bden * f32(ftot);
-        let bl = bo + 36u + (k - 1u) * 4u;
-        let vk = vec2<f32>(get_param(xform_id, variation_id, bl), get_param(xform_id, variation_id, bl + 1u));
-        let ak = u32(get_param(xform_id, variation_id, bl + 2u));
-        let mk = get_param(xform_id, variation_id, bl + 3u);
+        let lv = (*lvt)[k - 1u];
         var sp = pp;
         var sang = ang;
         var sd = d;
         var cnt = 0u;
         for (var i = 0u; i < rl; i = i + 1u) {
-            let sym = u32(get_param(xform_id, variation_id, bo + 1u + i));
+            let sym = (*rulec)[i];
             if (sym == 0u) {
                 if (cnt == tf) { break; }
                 let sc = exp(clamp(d * lnds, -12.0, 12.0));
-                pp = pp + sc * mnd_rot(vk, ang);
-                ang = (ang + ak) & 3u;
-                d = d + mk;
+                pp = pp + sc * mnd_rot(lv.xy, ang);
+                ang = (ang + u32(lv.z)) & 3u;
+                d = d + lv.w;
                 cnt = cnt + 1u;
             } else if (sym == 1u) { ang = (ang + 3u) & 3u; }
             else if (sym == 2u) { ang = (ang + 1u) & 3u; }
@@ -349,6 +332,41 @@ fn mnd_segment(xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, d
     }
 
     return array<f32, 6>(pp.x, pp.y, exp(clamp(d * lnds, -12.0, 12.0)), f32(ang), bpos, d);
+}
+
+// Sibling segment: resume the last full descent from its level-ll
+// checkpoint with fresh choices below — the same distribution as
+// replaying the recorded prefix, at a fraction of the cost (ll is
+// usually 1, so most retries re-run a single level scan).
+// Returns [p0.x, p0.y, len, angle].
+fn mnd_seg_from(rulec: ptr<function, array<u32, 34>>, lvt: ptr<function, array<vec4<f32>, 6>>, ckpt: ptr<function, array<vec4<f32>, 6>>, rng: ptr<function, RngState>, ll: u32, lnds: f32, rl: u32, ftot: u32) -> array<f32, 4> {
+    let c0 = (*ckpt)[ll];
+    var pp = vec2<f32>(c0.x, c0.y);
+    var ang = u32(c0.z);
+    var d = c0.w;
+    for (var k = ll; k >= 1u; k = k - 1u) {
+        let tf = min(u32(rng_nextf(rng) * f32(ftot)), ftot - 1u);
+        let lv = (*lvt)[k - 1u];
+        var sp = pp;
+        var sang = ang;
+        var sd = d;
+        var cnt = 0u;
+        for (var i = 0u; i < rl; i = i + 1u) {
+            let sym = (*rulec)[i];
+            if (sym == 0u) {
+                if (cnt == tf) { break; }
+                let sc = exp(clamp(d * lnds, -12.0, 12.0));
+                pp = pp + sc * mnd_rot(lv.xy, ang);
+                ang = (ang + u32(lv.z)) & 3u;
+                d = d + lv.w;
+                cnt = cnt + 1u;
+            } else if (sym == 1u) { ang = (ang + 3u) & 3u; }
+            else if (sym == 2u) { ang = (ang + 1u) & 3u; }
+            else if (sym == 3u) { sp = pp; sang = ang; sd = d; }
+            else { pp = sp; ang = sang; d = sd; }
+        }
+    }
+    return array<f32, 4>(pp.x, pp.y, exp(clamp(d * lnds, -12.0, 12.0)), f32(ang));
 }
 
 fn mnd_point(xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec2<f32> {
@@ -370,8 +388,25 @@ fn mnd_point(xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc:
     let ftot = max(u32(get_param(xform_id, variation_id, bo + 35u)), 1u);
     let lnds = log(ds);
 
-    var cha: array<u32, 6>;
-    let sa = mnd_segment(xform_id, variation_id, rng, depth, lnds, rl, ftot, &cha, 6u);
+    // Thread-local caches: the descent and its sibling retries hammer
+    // the rule symbols and level tables — reading them once per call
+    // turns ~10^3 storage-buffer reads per sample into ~40.
+    var rulec: array<u32, 34>;
+    for (var i = 0u; i < rl; i = i + 1u) {
+        rulec[i] = u32(get_param(xform_id, variation_id, bo + 1u + i));
+    }
+    var lvt: array<vec4<f32>, 6>;
+    for (var k = 0u; k <= depth; k = k + 1u) {
+        let bl = bo + 36u + k * 4u;
+        lvt[k] = vec4<f32>(
+            get_param(xform_id, variation_id, bl),
+            get_param(xform_id, variation_id, bl + 1u),
+            get_param(xform_id, variation_id, bl + 2u),
+            get_param(xform_id, variation_id, bl + 3u));
+    }
+    var ckpt: array<vec4<f32>, 6>;
+
+    let sa = mnd_seg_full(&rulec, &lvt, &ckpt, rng, depth, lnds, rl, ftot);
     let a_p0 = vec2<f32>(sa[0], sa[1]);
     let a_len = sa[2];
     let a_ang = u32(sa[3]);
@@ -397,7 +432,6 @@ fn mnd_point(xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc:
                 rvc = pk.z;
             }
         }
-        if (!filling) {
         // Rectangle fill, the chaos-game version of the R relational
         // pass: a second independent segment; if parallel, overlapping
         // in span, and within reach, fill the rectangle BETWEEN the
@@ -409,12 +443,19 @@ fn mnd_point(xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc:
         // bottom level (sometimes two or three, for wider-reaching
         // rectangles). Uniform independent pairs almost never lie
         // adjacent in a drawing of thousands of segments.
-        var chb = cha;
+        // Up to 8 sibling tries per sample: a single try succeeds only
+        // at the pair-geometry acceptance rate (~15-30%), silently
+        // handing most of the fill budget back to the lines. Retrying
+        // makes the Fill slider mean what it says; if A truly has no
+        // parallel neighbor, all tries fail and the sample draws a
+        // line (correct - there is nothing to fill there).
+        for (var att = 0u; att < 8u && !filling; att = att + 1u) {
         let lr = rng_nextf(rng);
         var rb = 1u;
         if (lr < 0.35) { rb = 2u; }
         if (lr < 0.08) { rb = 3u; }
-        let sb = mnd_segment(xform_id, variation_id, rng, depth, lnds, rl, ftot, &chb, rb);
+        rb = min(rb, depth);
+        let sb = mnd_seg_from(&rulec, &lvt, &ckpt, rng, rb, lnds, rl, ftot);
         let b_p0 = vec2<f32>(sb[0], sb[1]);
         let b_len = sb[2];
         let b_ang = u32(sb[3]);
