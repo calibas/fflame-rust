@@ -2,6 +2,8 @@
 //! Sánchez Chinchón's "the-mondrianomies" R project
 //! (<https://github.com/aschinchon/the-mondrianomies>, `mondrianomies.R`).
 //!
+//! See also: https://fronkonstin.com/2022/03/25/the-mondrianomies/
+//! 
 //! An L-system (Lindenmayer 1968) turtle drawing with the source's
 //! exact grammar: axiom `F-F-F-F`, turning angle 90°, and ONE random
 //! rule of 15–26 symbols drawn from {F, +, −} with weights 10/12/12,
@@ -58,7 +60,8 @@ use crate::param;
 /// Mondrian-painting scaffolding from a seed.
 ///
 /// # Authors
-/// - Antonio Sánchez Chinchón (the-mondrianomies R project)
+/// - Antonio Sánchez Chinchón
+/// - Fractals for All
 /// - Claude Fable 5
 pub static MONDRIANOMIES: VariationDef = VariationDef {
     name: "mondrianomies",
