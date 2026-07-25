@@ -342,10 +342,26 @@ fn variation_honeycomb(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
     if (dc_mode == 2u) {
         *vc = 0.5 + 0.5 * tanh(2.0 * dc_scale * out.z / size);
     } else if (dc_mode == 3u) {
-        // Cyclic: advances and WRAPS with walk depth, so adjacent
-        // depths stay distinct even in a narrow palette (the old
-        // saturating sweep pinned all deep detail to the palette end).
-        *vc = fract(depth * color_speed * 0.1 * dc_scale);
+        if (seed_mode != 0u) {
+            // Population-proportional (same reasoning as
+            // sphere_packing): reseeding makes the generation index
+            // g = depth/steps geometrically distributed, so a linear
+            // ramp bunches most samples into a short stretch of
+            // palette. Mapping g to the MIDPOINT of its
+            // cumulative-probability interval [F(g-1), F(g)] gives
+            // each generation a slot spaced by how many samples it
+            // holds, filling the palette. q = 1 - 0.1 mirrors the
+            // reseed probability used above; keep the two in sync.
+            let g = max(depth / max(f32(steps), 1.0), 1.0);
+            let q = 0.9;
+            let t = 1.0 - pow(q, g - 1.0) * (1.0 + q) * 0.5;
+            *vc = fract(t * dc_scale);
+        } else {
+            // This seed mode never reseeds, so depth grows without
+            // bound: cycle instead (a saturating map would pin every
+            // deep level to the palette end).
+            *vc = fract(depth * color_speed * 0.1 * dc_scale);
+        }
     }
     return out;
 }
@@ -523,10 +539,26 @@ fn variation_honeycomb(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<
     if (dc_mode == 2u) {
         *vc = fract(length(out) / size * dc_scale);
     } else if (dc_mode == 3u) {
-        // Cyclic: advances and WRAPS with walk depth, so adjacent
-        // depths stay distinct even in a narrow palette (the old
-        // saturating sweep pinned all deep detail to the palette end).
-        *vc = fract(depth * color_speed * 0.1 * dc_scale);
+        if (seed_mode != 0u) {
+            // Population-proportional (same reasoning as
+            // sphere_packing): reseeding makes the generation index
+            // g = depth/steps geometrically distributed, so a linear
+            // ramp bunches most samples into a short stretch of
+            // palette. Mapping g to the MIDPOINT of its
+            // cumulative-probability interval [F(g-1), F(g)] gives
+            // each generation a slot spaced by how many samples it
+            // holds, filling the palette. q = 1 - 0.1 mirrors the
+            // reseed probability used above; keep the two in sync.
+            let g = max(depth / max(f32(steps), 1.0), 1.0);
+            let q = 0.9;
+            let t = 1.0 - pow(q, g - 1.0) * (1.0 + q) * 0.5;
+            *vc = fract(t * dc_scale);
+        } else {
+            // This seed mode never reseeds, so depth grows without
+            // bound: cycle instead (a saturating map would pin every
+            // deep level to the palette end).
+            *vc = fract(depth * color_speed * 0.1 * dc_scale);
+        }
     }
     return out;
 }
