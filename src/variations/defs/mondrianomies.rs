@@ -81,6 +81,7 @@ pub static MONDRIANOMIES: VariationDef = VariationDef {
         param!("inset", "Fill Inset", float, 0.04, 0.0, 0.2, "Shrinks each filled rectangle inward by this fraction of its span, leaving unpainted gutters along the bounding lines — the white borders of a Mondrian canvas."),
         param!("fill_span", "Fill Span", float, 2.0, 1.0, 6.0, "Pairs fill mode: how far apart (in segment lengths) two parallel drawn lines may be and still span a fill. 1 keeps only the tightest cells; larger values admit longer rectangles between more distant lines. Ignored in Exact mode."),
         param!("fill_mode", "Fill Mode", enum, 0, &["Pairs", "Exact (R)"], "How fills are found. Pairs: GPU sibling-pair sampling — a self-assembling square-cell mosaic, no rebuild cost (its own thing, not the R output). Exact (R): the drawing is expanded on the CPU and the R script's relational rectangle pass runs for real — segment endpoints rounded and deduped, rectangles of every aspect ratio found from aligned segment/point combinations, kept only when a drawn line connects them, painter-ordered with overlaps clipped, colored id %% 5 onto five evenly spaced palette stops. The rectangle table is baked into the shader, so changing Seed, Depth, or Length Drift triggers a shader rebuild (same pause as toggling a variation). Depth caps at 4 in Exact mode."),
+        param!("line_ink", "Line Ink", float, 0.15, 0.0, 1.0, "Fraction of samples reserved for the line skeleton BEFORE fills are attempted — the line/fill brightness balance. In Exact mode every fill attempt succeeds, so Fill = 1 alone starves the lines to invisibility; in Pairs mode rejected fill attempts already fall back to lines, so this matters less there. The remaining share attempts fills at the Fill probability."),
     ],
     // Derived layout (base = 11 user params):
     //   +0        rule length (≤ 32)
@@ -111,7 +112,7 @@ fn mnd_rot_i(v: vec2<f32>, ang: u32) -> vec2<f32> {
     return v;
 }
 
-fn init_mondrianomies(user: array<f32, 13>) -> array<f32, 62> {
+fn init_mondrianomies(user: array<f32, 14>) -> array<f32, 62> {
     var out: array<f32, 62>;
     let depth = clamp(u32(user[1]), 1u, 5u);
     let ds = clamp(user[2], 0.5, 2.0);
@@ -280,7 +281,7 @@ fn mnd_exact_pick(seed: f32, dep: f32, drift: f32, inset: f32, r1: f32, r2: f32,
 // above rb replay the stored choice. rb = 6 -> fully random; small rb
 // -> a SIBLING of the stored path (same parent expansion, so nearby).
 fn mnd_segment(xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, depth: u32, lnds: f32, rl: u32, ftot: u32, ch: ptr<function, array<u32, 6>>, rb: u32) -> array<f32, 6> {
-    let bo = 13u;
+    let bo = 14u;
     var pp = vec2<f32>(0.0, 0.0);
     var ang = 0u;
     var d = 0.0;
@@ -351,7 +352,7 @@ fn mnd_segment(xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, d
 }
 
 fn mnd_point(xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec2<f32> {
-    let bo = 13u;
+    let bo = 14u;
     let depth = clamp(u32(get_param(xform_id, variation_id, 1u)), 1u, 5u);
     let ds = clamp(get_param(xform_id, variation_id, 2u), 0.5, 2.0);
     let size = get_param(xform_id, variation_id, 3u);
@@ -364,6 +365,7 @@ fn mnd_point(xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc:
     let inset = clamp(get_param(xform_id, variation_id, 10u), 0.0, 0.45);
     let span = max(get_param(xform_id, variation_id, 11u), 1.0);
     let fill_mode = u32(get_param(xform_id, variation_id, 12u));
+    let line_ink = clamp(get_param(xform_id, variation_id, 13u), 0.0, 1.0);
     let rl = u32(get_param(xform_id, variation_id, bo));
     let ftot = max(u32(get_param(xform_id, variation_id, bo + 35u)), 1u);
     let lnds = log(ds);
@@ -378,7 +380,10 @@ fn mnd_point(xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc:
     var filling = false;
     var exact_fill = false;
     var rvc = 0.0;
-    if (fillp > 0.0 && rng_nextf(rng) < fillp) {
+    // Line Ink reserves the low [0, line_ink) band of the draw for the
+    // skeleton; the rest attempts a fill with probability fillp.
+    let udraw = rng_nextf(rng);
+    if (fillp > 0.0 && udraw >= line_ink && udraw < line_ink + (1.0 - line_ink) * fillp) {
         if (fill_mode == 1u) {
             // Exact (R) fills: sample the CPU-detected, painter-clipped
             // rectangle table baked into this shader (area-weighted).
