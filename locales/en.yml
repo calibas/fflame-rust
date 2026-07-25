@@ -159,6 +159,7 @@ variations_panel:
   category_depth_3d: "3D Depth"
   category_rotation_3d: "3D Rotation"
   category_full_3d: "3D Full"
+  category_only_3d: "3D Only"
   category_plugin: "Plugin / API"
   source_built_in: "built-in"
   source_api: "API"
