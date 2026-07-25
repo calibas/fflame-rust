@@ -66,7 +66,7 @@ pub static CHLADNI: VariationDef = VariationDef {
         param!("size", "Size", float, 1.0, 0.1, 4.0, "Spatial scale of the plate: one period of the pattern spans 2·size units. Purely a coordinate scale — same figure, bigger or smaller."),
         param!("steps", "Steps", int, 3.0, 1.0, 6.0, "Newton iterations toward the nodal line per call. 1 is soft and halo-like; 3+ lands points crisply on the line."),
         param!("strength", "Strength", float, 0.9, 0.0, 1.0, "Blend between the untouched input point (0) and the fully projected point (1). Below 1 the pattern reads as attraction rather than hard snapping, which composes better with other variations."),
-        param!("jitter", "Jitter", float, 0.0, 0.0, 0.2, "Isotropic random offset added after projection — a sand-grain look. 0 keeps the nodal lines razor thin."),
+        param!("jitter", "Jitter", float, 0.01, 0.0, 0.2, "Isotropic random offset added after projection — a sand-grain look. 0 keeps the nodal lines razor thin."),
         param!("dc_mode", "Color Mode", enum, 0, &["Off", "Distance", "Amplitude", "Mode Mix"], "Direct-color source, applied through the transform's Direct Color slider. Distance: palette position 1 on the nodal lines fading to 0 away from them (great at low Strength). Amplitude: colors the cells between lines by signed vibration phase — the physical checkerboard of a real plate. Mode Mix: colors along the figure by the two modes' signed push-pull balance (varies along the nodal curves, unlike a ratio which is constant on them)."),
         param!("dc_scale", "Color Scale", float, 1.0, 0.1, 4.0, "Contrast for the direct-color modes: Distance falloff sharpness, Amplitude saturation. No effect when Color Mode is Off."),
     ],
