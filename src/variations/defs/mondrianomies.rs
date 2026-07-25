@@ -73,18 +73,18 @@ pub static MONDRIANOMIES: VariationDef = VariationDef {
     parameters: &[
         param!("seed", "Seed", int, 1.0, 0.0, 99999.0, "Seed for the random rule. Each seed is a different Mondrianomy: rule length 15-26, symbols from {F, +, -} with the source's 10/12/12 weights, three balanced bracket pairs at random positions."),
         param!("depth", "Depth", int, 3.0, 1.0, 5.0, "How many times the rule substitutes F, starting from the axiom F-F-F-F (the R source picks 3 or 4). Segment count multiplies by the rule's F-count per level."),
-        param!("drift", "Length Drift", float, 1.0, 0.9, 1.1, "Segment length = drift^d, where d counts segments drawn before this one (saved/restored with the bracket stack) — the source's ds = jitter(1). Exactly 1 gives the pure unit grid; small deviations make the grid drift and shear apart exponentially with drawing order."),
-        param!("size", "Size", float, 0.1, 0.001, 2.0, "Output scale. Drawings span tens of units at unit segment length; 0.1 fits typical seeds near the frame."),
+        param!("drift", "Length Drift", float, 0.98, 0.9, 1.1, "Segment length = drift^d, where d counts segments drawn before this one (saved/restored with the bracket stack) — the source's ds = jitter(1). Exactly 1 gives the pure unit grid; small deviations make the grid drift and shear apart exponentially with drawing order."),
+        param!("size", "Size", float, 0.3, 0.001, 2.0, "Output scale. Drawings span tens of units at unit segment length; 0.1 fits typical seeds near the frame."),
         param!("thickness", "Thickness", float, 0.0, 0.0, 0.5, "Jitter radius fattening the line skeleton into strokes (in un-scaled drawing units)."),
-        param!("dc_mode", "Color Mode", enum, 0, &["Off", "Sequence", "Depth", "Angle", "Cell"], "Direct-color source. Sequence: palette position follows drawing order (the R script cycles its five Mondrian colors by rectangle id — use DC Scale for the cycle count). Depth: colors by the segment counter d (the length-drift driver). Angle: four flat colors by segment direction. Cell: each filled rectangle takes one flat color from a hash of its bounds — every sample agrees no matter which segment pair spanned it (the Mondrian mode; needs Fill > 0). DC Scale >= 2 quantizes to that many flat palette colors (5 = the classic Mondrian five, matching the R id %% 5); below 2 the hash is continuous. Line samples go to palette position 0 — put black at the palette start for the authentic black-lines-over-colored-rects look."),
+        param!("dc_mode", "Color Mode", enum, 4, &["Off", "Sequence", "Depth", "Angle", "Cell"], "Direct-color source. Sequence: palette position follows drawing order (the R script cycles its five Mondrian colors by rectangle id — use DC Scale for the cycle count). Depth: colors by the segment counter d (the length-drift driver). Angle: four flat colors by segment direction. Cell: each filled rectangle takes one flat color from a hash of its bounds — every sample agrees no matter which segment pair spanned it (the Mondrian mode; needs Fill > 0). DC Scale >= 2 quantizes to that many flat palette colors (5 = the classic Mondrian five, matching the R id %% 5); below 2 the hash is continuous. Line samples go to palette position 0 — put black at the palette start for the authentic black-lines-over-colored-rects look."),
         param!("color_speed", "Color Speed", float, 0.5, 0.0, 1.0, "Depth mode: palette advance per drawn segment (cyclic — wraps instead of saturating)."),
         param!("dc_scale", "DC Scale", float, 1.0, 0.0, 20.0, "Sequence mode: how many palette cycles across the whole drawing. Depth/Angle: extra multiplier on the palette position. Cell mode: >= 2 quantizes fills to that many flat palette colors (5 = the Mondrian five)."),
         param!("center", "Center", bool, true, "Recenter using the mean of the four axiom waypoints (the drawing starts at the turtle origin and wanders)."),
-        param!("fill", "Fill", float, 0.0, 0.0, 1.0, "Fraction of samples that attempt a rectangle fill instead of drawing a line (0 = pure skeleton). A fill picks a SECOND independent segment; if the two are parallel, overlap in span, and sit within Fill Span of each other, the rectangle between them is filled — width = the drawn lines' actual overlap, height = their actual separation, so cells come out as true squares and longer rectangles bounded by real lines (mirroring the R script's detected rectangles). Non-qualifying pairs fall back to drawing a line, so effective fill density also depends on Depth (more segments = more parallel pairs)."),
+        param!("fill", "Fill", float, 1.0, 0.0, 1.0, "Fraction of samples that attempt a rectangle fill instead of drawing a line (0 = pure skeleton). A fill picks a SECOND independent segment; if the two are parallel, overlap in span, and sit within Fill Span of each other, the rectangle between them is filled — width = the drawn lines' actual overlap, height = their actual separation, so cells come out as true squares and longer rectangles bounded by real lines (mirroring the R script's detected rectangles). Non-qualifying pairs fall back to drawing a line, so effective fill density also depends on Depth (more segments = more parallel pairs)."),
         param!("inset", "Fill Inset", float, 0.04, 0.0, 0.2, "Shrinks each filled rectangle inward by this fraction of its span, leaving unpainted gutters along the bounding lines — the white borders of a Mondrian canvas."),
         param!("fill_span", "Fill Span", float, 2.0, 1.0, 6.0, "Pairs fill mode: how far apart (in segment lengths) two parallel drawn lines may be and still span a fill. 1 keeps only the tightest cells; larger values admit longer rectangles between more distant lines. Ignored in Exact mode."),
-        param!("fill_mode", "Fill Mode", enum, 0, &["Pairs", "Exact (R)"], "How fills are found. Pairs: GPU sibling-pair sampling — a self-assembling square-cell mosaic, no rebuild cost (its own thing, not the R output). Exact (R): the drawing is expanded on the CPU and the R script's relational rectangle pass runs for real — segment endpoints rounded and deduped, rectangles of every aspect ratio found from aligned segment/point combinations, kept only when a drawn line connects them, painter-ordered with overlaps clipped, colored id %% 5 onto five evenly spaced palette stops. The rectangle table is baked into the shader, so changing Seed, Depth, or Length Drift triggers a shader rebuild (same pause as toggling a variation). Depth caps at 4 in Exact mode."),
-        param!("line_ink", "Line Ink", float, 0.15, 0.0, 1.0, "Fraction of samples reserved for the line skeleton BEFORE fills are attempted — the line/fill brightness balance. In Exact mode every fill attempt succeeds, so Fill = 1 alone starves the lines to invisibility; in Pairs mode rejected fill attempts already fall back to lines, so this matters less there. The remaining share attempts fills at the Fill probability."),
+        param!("fill_mode", "Fill Mode", enum, 1, &["Pairs", "Exact (R)"], "How fills are found. Pairs: GPU sibling-pair sampling — a self-assembling square-cell mosaic, no rebuild cost (its own thing, not the R output). Exact (R): the drawing is expanded on the CPU and the R script's relational rectangle pass runs for real — segment endpoints rounded and deduped, rectangles of every aspect ratio found from aligned segment/point combinations, kept only when a drawn line connects them, painter-ordered with overlaps clipped, colored id %% 5 onto five evenly spaced palette stops. The rectangle table is baked into the shader, so changing Seed, Depth, or Length Drift triggers a shader rebuild (same pause as toggling a variation). Depth caps at 4 in Exact mode."),
+        param!("line_ink", "Line Ink", float, 0.35, 0.0, 1.0, "Fraction of samples reserved for the line skeleton BEFORE fills are attempted — the line/fill brightness balance. In Exact mode every fill attempt succeeds, so Fill = 1 alone starves the lines to invisibility; in Pairs mode rejected fill attempts already fall back to lines, so this matters less there. The remaining share attempts fills at the Fill probability."),
     ],
     // Derived layout (base = 11 user params):
     //   +0        rule length (≤ 32)
@@ -889,19 +889,18 @@ pub fn exact_combos(flame: &Flame) -> Vec<(u32, u32, f32)> {
         if !xform.variations.contains_key("mondrianomies") {
             continue;
         }
-        let gp = |k: &str, d: f32| {
-            xform
-                .variation_params
-                .get(&format!("mondrianomies.{k}"))
-                .copied()
-                .unwrap_or(d)
-        };
-        if gp("fill_mode", 0.0) as u32 != 1 || gp("fill", 0.0) <= 0.0 {
+        // Defaults come from the definition, never from literals here:
+        // a config that leaves these unset still renders with them, so a
+        // stale literal would bake the wrong table (or none at all, which
+        // silently drops every fill sample into the 8-retry Pairs
+        // fallback -- the Pairs picture at Exact's intended cost).
+        let gp = |k: &str| xform.variation_param_or_default("mondrianomies", k);
+        if gp("fill_mode") as u32 != 1 || gp("fill") <= 0.0 {
             continue;
         }
-        let seed = gp("seed", 1.0).max(0.0) as u32;
-        let depth = (gp("depth", 3.0) as u32).clamp(1, 4);
-        let drift = gp("drift", 1.0).clamp(0.5, 2.0);
+        let seed = gp("seed").max(0.0) as u32;
+        let depth = (gp("depth") as u32).clamp(1, 4);
+        let drift = gp("drift").clamp(0.5, 2.0);
         set.insert((seed, depth, drift.to_bits()));
     }
     set.into_iter()
@@ -1052,6 +1051,50 @@ mod tests {
                 let overlap = a[0].max(b[0]) < a[2].min(b[2]) && a[1].max(b[1]) < a[3].min(b[3]);
                 assert!(!overlap, "clipped rects overlap: {a:?} {b:?}");
             }
+        }
+    }
+
+    /// The specializer must see a bare transform exactly as the GPU
+    /// will: through the DEFINITION's defaults. Asserted against the
+    /// definition rather than literals, so editing a default can never
+    /// silently re-open the gap that made default-valued Exact flames
+    /// bake no table and fall back to the slow Pairs path.
+    #[test]
+    fn exact_specialization_reads_definition_defaults() {
+        use crate::scene::transforms::Transform;
+        let def = |k: &str| {
+            MONDRIANOMIES
+                .parameters
+                .iter()
+                .find(|p| p.name == k)
+                .unwrap_or_else(|| panic!("no param {k}"))
+                .default_value
+        };
+        let mut flame = Flame::default();
+        if flame.transforms.is_empty() {
+            flame.transforms.push(Transform::default());
+        }
+        let xf = flame.transforms.get_mut(0).unwrap();
+        xf.variations.insert("mondrianomies".into(), 1.0);
+        xf.variation_params.clear(); // rely entirely on defaults
+
+        let combos = exact_combos(&flame);
+        if def("fill_mode") as u32 == 1 && def("fill") > 0.0 {
+            assert_eq!(
+                combos.len(),
+                1,
+                "defaults select Exact fills, so a bare transform must specialize"
+            );
+            let (seed, depth, drift) = combos[0];
+            assert_eq!(seed, def("seed").max(0.0) as u32, "seed default");
+            assert_eq!(depth, (def("depth") as u32).clamp(1, 4), "depth default");
+            assert!(
+                (drift - def("drift").clamp(0.5, 2.0)).abs() < 1e-6,
+                "drift default: {drift} vs {}",
+                def("drift")
+            );
+        } else {
+            assert!(combos.is_empty(), "defaults do not select Exact fills");
         }
     }
 

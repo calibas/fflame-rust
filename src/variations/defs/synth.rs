@@ -950,11 +950,11 @@ pub fn synth_modes_in_flame(flame: &Flame) -> Vec<i32> {
         if !xform.variations.contains_key("synth") {
             continue;
         }
-        let mode = xform
-            .variation_params
-            .get("synth.mode")
-            .copied()
-            .unwrap_or(0.0) as i32;
+        // Definition default, not a literal — synth's `mode` defaults to
+        // 3, so the old `unwrap_or(0.0)` made the specializer emit only
+        // case 0 for a flame relying on the default. The GPU then read
+        // mode 3, fell through to `default:` and contributed nothing.
+        let mode = xform.variation_param_or_default("synth", "mode") as i32;
         modes.insert(mode);
     }
     modes.into_iter().collect()
@@ -1048,6 +1048,35 @@ fn extract_case_body(source: &str, mode: i32) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+
+    /// synth's mode specializer must resolve an unset `synth.mode` to the
+    /// DEFINITION's default. It used to assume 0 while the default is 3,
+    /// so a flame relying on the default had only case 0 compiled — the
+    /// GPU read mode 3, hit `default:` and the variation contributed
+    /// nothing.
+    #[test]
+    fn specializer_resolves_default_mode() {
+        use crate::scene::transforms::{Flame, Transform};
+        let default_mode = SYNTH
+            .parameters
+            .iter()
+            .find(|p| p.name == "mode")
+            .expect("synth has a mode param")
+            .default_value as i32;
+        let mut flame = Flame::default();
+        if flame.transforms.is_empty() {
+            flame.transforms.push(Transform::default());
+        }
+        let xf = flame.transforms.get_mut(0).unwrap();
+        xf.variations.insert("synth".into(), 1.0);
+        xf.variation_params.clear();
+        assert_eq!(
+            synth_modes_in_flame(&flame),
+            vec![default_mode],
+            "specializer must emit the case the GPU will actually run"
+        );
+    }
 
     /// Sanity check: extracting case 1007 from the 2D body should yield the
     /// MODE_CYLINDER block and nothing else.
