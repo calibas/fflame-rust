@@ -166,6 +166,7 @@ mod jacobian_counterexample;
 mod littlewood;
 pub mod mondrianomies;
 mod minkowski;
+mod minkowski_camera;
 mod lorentz_mobius;
 mod schottky_group;
 mod sphere_packing;
@@ -367,6 +368,7 @@ pub use jacobian_counterexample::*;
 pub use littlewood::*;
 pub use mondrianomies::*;
 pub use minkowski::*;
+pub use minkowski_camera::*;
 pub use lorentz_mobius::*;
 pub use schottky_group::*;
 pub use sphere_packing::*;
@@ -1248,4 +1250,5 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &HYPERBOLIC_CAMERA,
     &MONDRIANOMIES,
     &MINKOWSKI,
+    &MINKOWSKI_CAMERA,
 ];
