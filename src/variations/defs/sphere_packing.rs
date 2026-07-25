@@ -72,7 +72,7 @@ pub static SPHERE_PACKING: VariationDef = VariationDef {
         param!("mode", "Mode", enum, 0, &["Apollonian (Dual)", "Tangent Spheres", "Ring", "Ring + Caps"], "The mirror configuration. Apollonian: inversions in the five dual spheres of the symmetric Soddy configuration — the limit set is the exact Apollonian sphere packing (gasket in 2D). Tangent Spheres: the five Soddy spheres themselves as mirrors — denser sibling fractal. Ring: N spheres around the equator kissing the outer sphere (and each other at Ring Scale 1) — a freely tunable packing family. Ring + Caps: adds two polar cap spheres kissing outer + ring (3D; renders as Ring in 2D)."),
         param!("size", "Size", float, 1.0, 0.1, 4.0, "Radius of the outer sphere/circle in world units."),
         param!("avoid_repeat", "Avoid Repeat", bool, true, "Block choosing the same mirror twice in a row (an inversion is an involution, so a repeat cancels to the identity). Off = all mirrors equally likely every call."),
-        param!("dc_mode", "Color Mode", enum, 0, &["Off", "Mirror", "Mirror Blend", "Curvature", "Generation", "Angle"], "Direct-color source (needs the transform's Direct Color > 0). Mirror: the last inversion applied — coarse flat regions (each mirror maps everything into its own ball; Color Speed unused). Mirror Blend: register pulled toward each mirror's slot after EVERY inversion — Color Speed is the region size (1 = coarse basins, lower = each step refines one hierarchy level). Curvature: the canonical Apollonian coloring — the carried sphere is transported through every inversion in closed form, so each sphere of the packing gets its own palette position by SIZE (needs Reseed > 0). Generation: palette sweeps with the number of inversions since the last reseed — colors by hierarchy depth. Angle: azimuth of the output point."),
+        param!("dc_mode", "Color Mode", enum, 0, &["Off", "Mirror", "Mirror Blend", "Curvature", "Generation", "Angle"], "Direct-color source (needs the transform's Direct Color > 0). Mirror: the last inversion applied — coarse flat regions (each mirror maps everything into its own ball; Color Speed unused). Mirror Blend: register pulled toward each mirror's slot after EVERY inversion — Color Speed is the region size (1 = coarse basins, lower = each step refines one hierarchy level). Curvature: the canonical Apollonian coloring — the carried sphere is transported through every inversion in closed form, so each sphere of the packing gets its own palette position by SIZE (needs Reseed > 0). Generation (uses Color Scale as palette cycles; ignores Color Speed, since spacing is derived from Reseed): palette sweeps with the number of inversions since the last reseed — colors by hierarchy depth. Angle: azimuth of the output point."),
         param!("dc_scale", "Color Scale", float, 1.0, 0.1, 8.0, "Palette-index multiplier for the color modes."),
         param!("color_speed", "Color Speed", float, 0.5, 0.0, 1.0, "Mirror Blend: blend rate = color region size (1 = coarse per-mirror basins, low = fine cells from deep itinerary). Generation: palette sweep rate per hierarchy level."),
         param!("steps", "Steps", int, 3.0, 1.0, 8.0, "Inversions applied per call (only the last point is plotted). Higher values let respawned points converge onto the packing before plotting — suppresses pre-convergence haze — at proportional GPU cost."),
@@ -227,11 +227,28 @@ fn variation_sphere_packing(p: vec2<f32>, xform_id: u32, variation_id: u32, rng:
     } else if (dc_mode == 3u) {
         *vc = fract(0.5 + 0.15 * dc_scale * log(1.0 / max(crad, 1e-9)));
     } else if (dc_mode == 4u) {
-        // Cyclic: each inversion advances the palette and WRAPS, so
-        // adjacent hierarchy depths stay distinct even in a narrow
-        // palette (a saturating sweep pins all deep detail to the
-        // palette end).
-        *vc = fract(depth * color_speed * 0.1 * dc_scale);
+        // Generation: palette position by POPULATION, not by a linear
+        // ramp in generation count.
+        //
+        // A point reseeds with probability `reseed` per call, so the
+        // generation index g = depth/steps is geometrically
+        // distributed: at Reseed 0.5 half of ALL samples are g = 1, a
+        // quarter g = 2, and so on. A linear ramp therefore crushed
+        // ~95% of the image into a sliver of palette near the start
+        // (the reported "extremely limited range") no matter how the
+        // sliders were set — cranking Color Scale only aliased the
+        // first few generations on top of each other.
+        //
+        // Mapping g to the MIDPOINT of its cumulative-probability
+        // interval [F(g-1), F(g)] = 1 - q^(g-1)(1+q)/2, q = 1-reseed,
+        // gives each generation its own palette slot spaced by how
+        // many samples it actually holds. The full palette is used at
+        // any Reseed setting, and the dominant generations land on
+        // well-separated colors instead of neighbouring shades.
+        let g = max(depth / max(f32(steps), 1.0), 1.0);
+        let q = 1.0 - clamp(reseed, 0.02, 1.0);
+        let t = 1.0 - pow(q, g - 1.0) * (1.0 + q) * 0.5;
+        *vc = fract(t * dc_scale);
     } else if (dc_mode == 5u) {
         *vc = fract((atan2(x.y, x.x) * 0.15915494 + 0.5) * dc_scale);
     }
@@ -425,11 +442,28 @@ fn variation_sphere_packing(p: vec3<f32>, xform_id: u32, variation_id: u32, rng:
     } else if (dc_mode == 3u) {
         *vc = fract(0.5 + 0.15 * dc_scale * log(1.0 / max(crad, 1e-9)));
     } else if (dc_mode == 4u) {
-        // Cyclic: each inversion advances the palette and WRAPS, so
-        // adjacent hierarchy depths stay distinct even in a narrow
-        // palette (a saturating sweep pins all deep detail to the
-        // palette end).
-        *vc = fract(depth * color_speed * 0.1 * dc_scale);
+        // Generation: palette position by POPULATION, not by a linear
+        // ramp in generation count.
+        //
+        // A point reseeds with probability `reseed` per call, so the
+        // generation index g = depth/steps is geometrically
+        // distributed: at Reseed 0.5 half of ALL samples are g = 1, a
+        // quarter g = 2, and so on. A linear ramp therefore crushed
+        // ~95% of the image into a sliver of palette near the start
+        // (the reported "extremely limited range") no matter how the
+        // sliders were set — cranking Color Scale only aliased the
+        // first few generations on top of each other.
+        //
+        // Mapping g to the MIDPOINT of its cumulative-probability
+        // interval [F(g-1), F(g)] = 1 - q^(g-1)(1+q)/2, q = 1-reseed,
+        // gives each generation its own palette slot spaced by how
+        // many samples it actually holds. The full palette is used at
+        // any Reseed setting, and the dominant generations land on
+        // well-separated colors instead of neighbouring shades.
+        let g = max(depth / max(f32(steps), 1.0), 1.0);
+        let q = 1.0 - clamp(reseed, 0.02, 1.0);
+        let t = 1.0 - pow(q, g - 1.0) * (1.0 + q) * 0.5;
+        *vc = fract(t * dc_scale);
     } else if (dc_mode == 5u) {
         *vc = fract((atan2(x.y, x.x) * 0.15915494 + 0.5) * dc_scale);
     }
