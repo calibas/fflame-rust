@@ -75,8 +75,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 {{/if}}
 
 {{#if XAOS_ENABLED}}
-    // Track previous transform for xaos-weighted selection
-    var prev_xform_idx = 0u;
+    // Track previous transform for xaos-weighted selection. Seeded
+    // with an UNCONDITIONED weighted pick (flam3 does the same) rather
+    // than a fixed 0: a constant seed makes every thread start in
+    // transform 0's xaos row, so branches unreachable from transform 0
+    // (e.g. the isolated groups of a block-diagonal xaos) would never
+    // fire at all.
+    var prev_xform_idx = select_transform_const(rng_nextf(&rng));
 {{/if}}
 
 {{#if HAS_ANALYTIC_BLUR}}

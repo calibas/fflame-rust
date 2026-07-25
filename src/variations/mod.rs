@@ -286,8 +286,24 @@ pub enum VariationCategory {
     /// 3D rotation variations (PreRotateX, etc.)
     Rotation3D,
 
-    /// Full 3D variations (Hemisphere, etc.)
+    /// Full 3D variations (Hemisphere, etc.) — 3D in character, but
+    /// their `wgsl_2d` bodies are real 2D implementations, so they are
+    /// compiled into 2D shaders like any other variation.
     Full3D,
+
+    /// Variations with NO meaningful 2D reading at all — the ONLY
+    /// category dropped from 2D shaders (see
+    /// `ShaderBuilder::active_with_local_indices`).
+    ///
+    /// Currently empty, and that is the expected steady state: an
+    /// audit of all 639 variations found none that needs excluding.
+    /// A z-only variation returning `vec2(0.0)` and a pre/post 3D
+    /// rotation returning `p` are both CORRECT 2D contributions, not
+    /// broken ones. Reach for this only when a variation genuinely
+    /// cannot be written in 2D — and prefer writing an honest 2D body
+    /// instead, since dropping a variation silently changes the
+    /// weighted sum of every transform that uses it.
+    Only3D,
 
     /// Plugin variations
     Plugin,

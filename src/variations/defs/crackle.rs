@@ -36,8 +36,8 @@ use crate::param;
 /// z-slice — animate this for a flowing effect).
 ///
 /// # Authors
-/// - slobo777 (original Apophysis plugin)
-/// - Andreas Maschke (JWildfire port)
+/// - slobo777
+/// - Andreas Maschke
 pub static CRACKLE: VariationDef = VariationDef {
     name: "crackle",
     aliases: &[],
@@ -65,8 +65,8 @@ pub static CRACKLE: VariationDef = VariationDef {
 /// color_offset` (mod 1).
 ///
 /// # Authors
-/// - slobo777 (original)
-/// - Andreas Maschke (DC port)
+/// - slobo777
+/// - Andreas Maschke
 pub static DC_CRACKLE_WF: VariationDef = VariationDef {
     name: "dc_crackle_wf",
     aliases: &[],

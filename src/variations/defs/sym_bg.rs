@@ -16,6 +16,10 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Band Symmetry Group variations sym_bg1..sym_bg7
+///
+/// # Authors
+/// - Jesus Sosa
 pub static SYM_BG1: VariationDef = VariationDef {
     name: "sym_bg1",
     aliases: &[],
@@ -67,6 +71,10 @@ fn variation_sym_bg1(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fu
 "#,
 };
 
+/// Band Symmetry Group variations sym_bg1..sym_bg7
+///
+/// # Authors
+/// - Jesus Sosa
 pub static SYM_BG2: VariationDef = VariationDef {
     name: "sym_bg2",
     aliases: &[],
@@ -118,6 +126,10 @@ fn variation_sym_bg2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fu
 "#,
 };
 
+/// Band Symmetry Group variations sym_bg1..sym_bg7
+///
+/// # Authors
+/// - Jesus Sosa
 pub static SYM_BG3: VariationDef = VariationDef {
     name: "sym_bg3",
     aliases: &[],
@@ -169,6 +181,10 @@ fn variation_sym_bg3(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fu
 "#,
 };
 
+/// Band Symmetry Group variations sym_bg1..sym_bg7
+///
+/// # Authors
+/// - Jesus Sosa
 pub static SYM_BG4: VariationDef = VariationDef {
     name: "sym_bg4",
     aliases: &[],
@@ -220,6 +236,10 @@ fn variation_sym_bg4(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fu
 "#,
 };
 
+/// Band Symmetry Group variations sym_bg1..sym_bg7
+///
+/// # Authors
+/// - Jesus Sosa
 pub static SYM_BG5: VariationDef = VariationDef {
     name: "sym_bg5",
     aliases: &[],
@@ -271,6 +291,10 @@ fn variation_sym_bg5(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fu
 "#,
 };
 
+/// Band Symmetry Group variations sym_bg1..sym_bg7
+///
+/// # Authors
+/// - Jesus Sosa
 pub static SYM_BG6: VariationDef = VariationDef {
     name: "sym_bg6",
     aliases: &[],
@@ -326,6 +350,10 @@ fn variation_sym_bg6(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fu
 "#,
 };
 
+/// Band Symmetry Group variations sym_bg1..sym_bg7
+///
+/// # Authors
+/// - Jesus Sosa
 pub static SYM_BG7: VariationDef = VariationDef {
     name: "sym_bg7",
     aliases: &[],

@@ -32,6 +32,10 @@ use crate::param;
 // =============================================================================
 // cut_x
 // =============================================================================
+/// Rotated absolute-value cross (45° fold) stencil mask.
+///
+/// # Authors
+/// - Jesus Sosa
 pub static CUT_X: VariationDef = VariationDef {
     name: "cut_x",
     aliases: &[],
@@ -113,6 +117,10 @@ fn variation_cut_x(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<func
 // =============================================================================
 // cut_metaballs
 // =============================================================================
+/// Voronoi metaball-field stencil mask (hash-jittered cells).
+///
+/// # Authors
+/// - Jesus Sosa
 pub static CUT_METABALLS: VariationDef = VariationDef {
     name: "cut_metaballs",
     aliases: &[],
@@ -221,6 +229,10 @@ fn variation_cut_metaballs(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: 
 // =============================================================================
 // cut_kaleido
 // =============================================================================
+/// Summed-distance kaleidoscope stencil mask (N orbiting centers).
+///
+/// # Authors
+/// - Jesus Sosa
 pub static CUT_KALEIDO: VariationDef = VariationDef {
     name: "cut_kaleido",
     aliases: &[],
@@ -319,6 +331,10 @@ fn variation_cut_kaleido(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: pt
 // =============================================================================
 // cut_spiral
 // =============================================================================
+/// 64-step rotation-parity spiral stencil mask.
+///
+/// # Authors
+/// - Jesus Sosa
 pub static CUT_SPIRAL: VariationDef = VariationDef {
     name: "cut_spiral",
     aliases: &[],
@@ -404,6 +420,10 @@ fn variation_cut_spiral(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
 // =============================================================================
 // cut_swarp
 // =============================================================================
+/// Sine-warped tiled distance-band stencil mask.
+///
+/// # Authors
+/// - Jesus Sosa
 pub static CUT_SWARP: VariationDef = VariationDef {
     name: "cut_swarp",
     aliases: &[],

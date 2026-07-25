@@ -33,6 +33,10 @@ use crate::param;
 // =============================================================================
 // cut_apollonian
 // =============================================================================
+/// Apollonian gasket fold (inversion iteration) stencil mask.
+///
+/// # Authors
+/// - Jesus Sosa
 pub static CUT_APOLLONIAN: VariationDef = VariationDef {
     name: "cut_apollonian",
     aliases: &[],
@@ -128,6 +132,10 @@ fn variation_cut_apollonian(p: vec3<f32>, xform_id: u32, variation_id: u32, rng:
 // =============================================================================
 // cut_zigzag
 // =============================================================================
+/// Mirrored zig-zag stripe-tile stencil mask.
+///
+/// # Authors
+/// - Jesus Sosa
 pub static CUT_ZIGZAG: VariationDef = VariationDef {
     name: "cut_zigzag",
     aliases: &[],
@@ -237,6 +245,10 @@ fn variation_cut_zigzag(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
 // =============================================================================
 // cut_bricks
 // =============================================================================
+/// Running-bond brick-grid stencil mask.
+///
+/// # Authors
+/// - Jesus Sosa
 pub static CUT_BRICKS: VariationDef = VariationDef {
     name: "cut_bricks",
     aliases: &[],
@@ -336,6 +348,10 @@ fn variation_cut_bricks(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
 // =============================================================================
 // cut_web
 // =============================================================================
+/// Log-polar spider-web grid stencil mask.
+///
+/// # Authors
+/// - Jesus Sosa
 pub static CUT_WEB: VariationDef = VariationDef {
     name: "cut_web",
     aliases: &[],
@@ -441,6 +457,10 @@ fn variation_cut_web(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fu
 // =============================================================================
 // cut_fingerprint
 // =============================================================================
+/// Whorled fingerprint-ridge stencil mask (atan accumulation).
+///
+/// # Authors
+/// - Jesus Sosa
 pub static CUT_FINGERPRINT: VariationDef = VariationDef {
     name: "cut_fingerprint",
     aliases: &[],
@@ -556,6 +576,10 @@ fn variation_cut_fingerprint(p: vec3<f32>, xform_id: u32, variation_id: u32, rng
 // =============================================================================
 // cut_tileillusion
 // =============================================================================
+/// Sheared wavy-tile checkerboard-illusion stencil mask.
+///
+/// # Authors
+/// - Jesus Sosa
 pub static CUT_TILEILLUSION: VariationDef = VariationDef {
     name: "cut_tileillusion",
     aliases: &[],
@@ -690,6 +714,10 @@ fn variation_cut_tileillusion(p: vec3<f32>, xform_id: u32, variation_id: u32, rn
 // =============================================================================
 // cut_pattern
 // =============================================================================
+/// Rotated-tile radial-wave pattern stencil mask.
+///
+/// # Authors
+/// - Jesus Sosa
 pub static CUT_PATTERN: VariationDef = VariationDef {
     name: "cut_pattern",
     aliases: &[],
@@ -812,6 +840,10 @@ fn variation_cut_pattern(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: pt
 // =============================================================================
 // cut_celtic
 // =============================================================================
+/// Triple hex-offset Celtic-knot circle stencil mask.
+///
+/// # Authors
+/// - Jesus Sosa
 pub static CUT_CELTIC: VariationDef = VariationDef {
     name: "cut_celtic",
     aliases: &[],

@@ -775,18 +775,28 @@ impl ShaderBuilder {
             .filter_map(|name| {
                 let local_idx = *local_map.get(name)?;
                 if !render_3d {
-                    // 2D shaders: drop variations whose body is only
-                    // meaningful in 3D (Z-only depth manipulation, 3D
-                    // rotation matrices, full-3D projections). Plugin
-                    // variations are allowed — their wgsl_2d body is
-                    // expected to be a sensible 2D implementation.
+                    // 2D shaders: drop only variations that have no
+                    // meaningful 2D reading whatsoever (VariationCategory
+                    // ::Only3D — currently none).
+                    //
+                    // This used to drop all of Depth3D | Rotation3D |
+                    // Full3D, which was wrong: those categories describe
+                    // a variation's CHARACTER, not whether its wgsl_2d
+                    // body is real. 112 Full3D variations (quaternion,
+                    // hypertile3D, superShape3d, …) ship genuine 2D
+                    // implementations and were being silently discarded
+                    // — a 2D flame using them rendered with the
+                    // variation contributing nothing to the weighted
+                    // sum, which is neither what the config asks for nor
+                    // what JWildfire does (JWF has no 2D mode; every
+                    // variation always contributes its x/y).
+                    //
+                    // The z-only bodies this used to exclude are correct
+                    // as written: `vec2(0.0)` from a z-only variation
+                    // and `p` from a pre/post 3D rotation are the right
+                    // 2D contributions, so including them is a no-op.
                     let info = self.registry.get(name)?;
-                    if matches!(
-                        info.category,
-                        VariationCategory::Depth3D
-                            | VariationCategory::Rotation3D
-                            | VariationCategory::Full3D,
-                    ) {
+                    if matches!(info.category, VariationCategory::Only3D) {
                         return None;
                     }
                 }
@@ -947,13 +957,30 @@ impl ShaderBuilder {
             &local_map,
             &self.registry,
         );
-        if layout.is_empty() {
+        // `compute_state_layout` allocates slots only for variations with a
+        // NON-ZERO weight, but the shader compiles in the BODY of every
+        // active variation regardless of weight (a weight-0 variation is
+        // merely never dispatched). So slot allocation and accessor
+        // emission need different tests: if any active variation's body
+        // could reference get_state/set_state, the functions must exist or
+        // the module fails to parse — which is what happened when the only
+        // state-using variation in a flame was dialled to weight 0.
+        let needs_accessors = active_variations.iter().any(|(name, _)| {
+            self.registry
+                .get(name)
+                .is_some_and(|info| info.state_count > 0)
+        });
+        if layout.is_empty() && !needs_accessors {
             return String::new();
         }
+        // WGSL has no zero-length array, so keep one dummy slot alive for
+        // the all-weights-zero case; the accessors are compiled but never
+        // called (the dispatcher gates every call on a non-zero weight).
         let total = layout
             .last()
             .map(|e| e.offset + e.state_count)
-            .unwrap_or(0);
+            .unwrap_or(0)
+            .max(1);
 
         let mut out = String::new();
         out.push_str(&format!(
@@ -1283,6 +1310,11 @@ impl ShaderBuilder {
                 } else {
                     crate::variations::defs::synth::specialize_wgsl_2d(flame)
                 }),
+                "mondrianomies" => Some(if render_3d {
+                    crate::variations::defs::mondrianomies::specialize_wgsl_3d(flame)
+                } else {
+                    crate::variations::defs::mondrianomies::specialize_wgsl_2d(flame)
+                }),
                 _ => None,
             }
         }
@@ -1537,6 +1569,44 @@ impl ShaderBuilder {
         }
         if needs_voronoi {
             shader.push_str(include_str!("../shaders/core/voronoi.wgsl"));
+            shader.push('\n');
+        }
+
+        // 7d. Polyhedron radial-support helpers — shared by the
+        //     `polyhedron` surface projection and `polyhedron_volume`
+        //     occluder so the pair can coexist in one flame without
+        //     duplicate symbols.
+        let needs_polyhedra = active.iter().any(|(name, _)| {
+            matches!(name.as_str(), "polyhedron" | "polyhedron_volume")
+        });
+        if needs_polyhedra {
+            shader.push_str(include_str!("../shaders/core/polyhedra.wgsl"));
+            shader.push('\n');
+        }
+
+        // 7e. Regular 4-polytope vertex tables for the `polychoron`
+        //     chaos-game variation, plus the Menger Tesseract 4-gap
+        //     point set used by `menger`'s third dimension mode.
+        let needs_polychora = active.iter().any(|(name, _)| {
+            matches!(name.as_str(), "polychoron" | "menger")
+        });
+        if needs_polychora {
+            shader.push_str(include_str!("../shaders/core/polychora.wgsl"));
+            shader.push('\n');
+        }
+
+        // 7f. SL(2,C) Mobius-group machinery (Bagula) — the SuMat helpers,
+        //     conjugator, quaternion Poincaré extension, and baked SU(n)
+        //     tables. Feature-driven: injected once when any active
+        //     variation declares `Feature::NeedsMobiusLib` (the Kleinian
+        //     family — su_mobius, fuchsian_triangle, …).
+        let needs_mobius_lib = active.iter().any(|(name, _)| {
+            self.registry
+                .get(name)
+                .is_some_and(|info| info.has_feature(Feature::NeedsMobiusLib))
+        });
+        if needs_mobius_lib {
+            shader.push_str(include_str!("../shaders/core/su_mobius.wgsl"));
             shader.push('\n');
         }
 
@@ -2774,6 +2844,90 @@ mod tests {
         );
     }
 
+    /// A state-using variation dialled to weight 0 must still compile.
+    ///
+    /// Slot allocation skips zero-weight variations, but their bodies are
+    /// still emitted into the module, so `get_state` / `set_state` have to
+    /// exist regardless. Before this was fixed, dragging the weight of the
+    /// only state-using variation to 0 produced
+    /// "no definition in scope for identifier: `get_state`" and killed the
+    /// app mid-edit.
+    #[test]
+    fn state_accessors_survive_zero_weight() {
+        use crate::scene::transforms::{Flame, Transform};
+        let registry = crate::variations::global_registry().clone();
+        let builder = ShaderBuilder::new(registry);
+        let constants = ShaderConstants::default();
+
+        // fuchsian_triangle has state_count = 2; park it at weight 0
+        // alongside a normal variation, as a slider drag would.
+        let mut flame = Flame::new();
+        let mut xform = Transform::new();
+        xform.variations.insert("linear".to_string(), 1.0);
+        xform.variations.insert("fuchsian_triangle".to_string(), 0.0);
+        flame.transforms.push(xform);
+        let mut active = HashMap::new();
+        active.insert("linear".to_string(), 1.0);
+        active.insert("fuchsian_triangle".to_string(), 0.0);
+
+        for render_3d in [false, true] {
+            let shader = builder
+                .build_from_template(&flame, &active, render_3d, false, false, true, &constants);
+            if shader.contains("get_state(") {
+                assert!(
+                    shader.contains("fn get_state("),
+                    "get_state referenced but not defined (render_3d = {render_3d})"
+                );
+            }
+            if shader.contains("set_state(") {
+                assert!(
+                    shader.contains("fn set_state("),
+                    "set_state referenced but not defined (render_3d = {render_3d})"
+                );
+            }
+            assert!(
+                !shader.contains("array<f32, 0u>"),
+                "zero-length WGSL array is invalid (render_3d = {render_3d})"
+            );
+        }
+    }
+
+    /// `Feature::NeedsMobiusLib` injects the shared SL(2,C) Möbius library
+    /// exactly when an active variation declares it — variation defs, not a
+    /// name list in the builder, control access.
+    #[test]
+    fn mobius_lib_injected_only_for_feature() {
+        use crate::scene::transforms::{Flame, Transform};
+        let registry = crate::variations::global_registry().clone();
+        let builder = ShaderBuilder::new(registry);
+        let constants = ShaderConstants::default();
+
+        // fuchsian_triangle declares NeedsMobiusLib → SuMat machinery present.
+        let mut flame = Flame::new();
+        let mut xform = Transform::new();
+        xform.variations.insert("fuchsian_triangle".to_string(), 1.0);
+        flame.transforms.push(xform);
+        let mut active = HashMap::new();
+        active.insert("fuchsian_triangle".to_string(), 1.0);
+        let shader = builder.build_from_template(&flame, &active, false, false, false, true, &constants);
+        assert!(shader.contains("struct SuMat"), "Möbius lib must be injected");
+        assert!(shader.contains("fn su_apply_plain("), "Möbius lib helpers present");
+
+        // A flame without any NeedsMobiusLib variation must NOT get the lib.
+        let mut plain = Flame::new();
+        let mut t = Transform::new();
+        t.variations.insert("linear".to_string(), 1.0);
+        plain.transforms.push(t);
+        let mut plain_active = HashMap::new();
+        plain_active.insert("linear".to_string(), 1.0);
+        let plain_shader =
+            builder.build_from_template(&plain, &plain_active, false, false, false, true, &constants);
+        assert!(
+            !plain_shader.contains("struct SuMat"),
+            "Möbius lib must NOT be injected without the feature"
+        );
+    }
+
     /// w-summing: two NeedsW variations on one transform must weight-accumulate
     /// their w into `point_w_acc` (like x/y/z) and commit it under `point_w_hit`.
     #[test]
@@ -3065,9 +3219,13 @@ fn helper(x: i32) -> i32 {
 /// blocks. Returns `(fn_name, full_block_with_preceding_blank_lines)`
 /// in the order they appear.
 ///
-/// "Top-level" = `fn ` at column 0 of a line. Variation bodies don't have
-/// module-level `const`/`struct`/`var` declarations, so this is sufficient
-/// — any later module-scope construct would need a parallel branch here.
+/// "Top-level" = `fn ` or `const ` at column 0 of a line. `const` blocks
+/// (used by per-flame specialized sources like mondrianomies' baked
+/// rectangle tables) run to the first `;` — safe because WGSL array/vec
+/// initializers contain no semicolons. Their dedup key is the const name,
+/// so a shared table is emitted once like a shared helper fn. Module-scope
+/// `struct`/`var` declarations are still unsupported — a variation needing
+/// one gets a parallel branch here.
 ///
 /// Brace counting skips `//` line comments to avoid miscounting braces
 /// that appear inside comments. WGSL block comments (`/* */`) are not
@@ -3078,14 +3236,36 @@ fn split_wgsl_top_level_fns(source: &str) -> Vec<(String, String)> {
     let mut i = 0;
 
     while i < bytes.len() {
-        // Find the next `fn ` at column 0 (start of source or after `\n`).
-        let fn_start = if (i == 0 && source.starts_with("fn ")) || source[i..].starts_with("fn ") {
-            i
+        // Find the next `fn ` or `const ` at column 0 (start of source or
+        // after `\n`), whichever comes first.
+        let next_fn = if source[i..].starts_with("fn ") {
+            Some(i)
         } else {
-            match source[i..].find("\nfn ") {
-                Some(off) => i + off + 1,
-                None => break,
+            source[i..].find("\nfn ").map(|off| i + off + 1)
+        };
+        let next_const = if source[i..].starts_with("const ") {
+            Some(i)
+        } else {
+            source[i..].find("\nconst ").map(|off| i + off + 1)
+        };
+
+        if let Some(c_start) = next_const {
+            if next_fn.map_or(true, |f| c_start < f) {
+                // `const NAME: ... = ...;` — block ends at the first `;`.
+                let name_start = c_start + 6;
+                let Some(colon_rel) = source[name_start..].find(':') else { break };
+                let name = source[name_start..name_start + colon_rel].trim().to_string();
+                let Some(semi_rel) = source[c_start..].find(';') else { break };
+                let block_end = c_start + semi_rel + 1;
+                blocks.push((name, source[c_start..block_end].to_string()));
+                i = block_end;
+                continue;
             }
+        }
+
+        let fn_start = match next_fn {
+            Some(f) => f,
+            None => break,
         };
 
         // Extract function name: from after `fn ` to the next `(` (trim

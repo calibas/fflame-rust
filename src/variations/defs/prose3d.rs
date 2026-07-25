@@ -13,9 +13,6 @@
 //! **`srvsc`** (JWildfire's own spelling); two RNG draws per call in the
 //! order ghostPrep → posNeg; `pVarTP.z` is written unconditionally
 //! (`Feature::AlwaysZ`). `_cycle = 2π/k` (JWF's `init()`) is folded inline.
-//!
-//! # Authors
-//! - Larry Berlin
 
 use crate::variations::{
     definition::{Feature, VariationDef, VariationParamDef},
@@ -23,6 +20,11 @@ use crate::variations::{
 };
 use crate::param;
 
+/// 3D polar-rose base shape with a per-point Z "waggle/wig" profile 
+/// and an optional transparent mirror reflection.
+///
+/// # Authors
+/// - Larry Berlin
 pub static PROSE3D: VariationDef = VariationDef {
     name: "pRose3D",
     aliases: &[],

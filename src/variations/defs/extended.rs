@@ -592,8 +592,8 @@ fn variation_juliascope(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
 /// power|, 1)` for the random pick and an `|power| < EPS` early-out.
 ///
 /// # Authors
-/// - Brad Stefanov (3D extension)
-/// - Scott Draves (original juliascope kaleidoscope)
+/// - Brad Stefanov
+/// - Scott Draves
 pub static JULIASCOPE_3DB: VariationDef = VariationDef {
     name: "juliascope3Db",
     aliases: &[],

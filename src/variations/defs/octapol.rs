@@ -25,9 +25,7 @@
 ///
 /// Source:
 /// [`output/variation-jwf-source/OctapolFunc.java`](../../../output/variation-jwf-source/OctapolFunc.java).
-///
-/// # Authors
-/// - Xyrus02
+
 
 use crate::variations::{
     definition::{Feature, VariationDef, VariationParamDef},
@@ -35,6 +33,10 @@ use crate::variations::{
 };
 use crate::param;
 
+/// `octapol` — octagon-with-polar-core shape warp.
+///
+/// # Authors
+/// - Xyrus02
 pub static OCTAPOL: VariationDef = VariationDef {
     name: "octapol",
     aliases: &[],

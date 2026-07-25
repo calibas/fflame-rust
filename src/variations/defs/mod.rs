@@ -27,6 +27,7 @@ mod affine_ports;
 mod dc;
 mod hypertile;
 mod classic_2d;
+mod mobiq4d;
 mod mobius_extended;
 mod circle_blur;
 mod numbered_extras;
@@ -120,6 +121,7 @@ mod dc_carpet3d_misc;
 mod dc_tc_read;
 mod vibration2_misc;
 mod gridout3d_misc;
+mod jubiq4d;
 mod jubiq_misc;
 mod supershape3d_misc;
 mod wz_lost_variations;
@@ -143,6 +145,35 @@ mod mandelbrot;
 mod crackle;
 mod dc_perlin;
 mod szubieta;
+mod chladni;
+mod chladni_disc;
+mod cymatics3d;
+mod orbital;
+mod hofstadter;
+mod hofstadter3d;
+mod polyhedra_project;
+mod menger;
+mod polychoron;
+mod honeycomb;
+mod honeycomb4d;
+mod quasiconformal;
+mod apollonian_gasket;
+mod cubic_julia;
+mod fuchsian_triangle;
+mod hecke_group;
+mod hyperbolic_camera;
+mod jacobian_counterexample;
+mod littlewood;
+pub mod mondrianomies;
+mod minkowski;
+mod minkowski_camera;
+mod lorentz_mobius;
+mod schottky_group;
+mod sphere_packing;
+mod su_custom;
+mod surface_group;
+mod von_dyck;
+mod su_mobius;
 mod glsl_fractals;
 mod glsl_tilings;
 mod glsl_fields;
@@ -200,6 +231,7 @@ pub use affine_ports::*;
 pub use dc::*;
 pub use hypertile::*;
 pub use classic_2d::*;
+pub use mobiq4d::*;
 pub use mobius_extended::*;
 pub use circle_blur::*;
 pub use numbered_extras::*;
@@ -293,6 +325,7 @@ pub use dc_carpet3d_misc::*;
 pub use dc_tc_read::*;
 pub use vibration2_misc::*;
 pub use gridout3d_misc::*;
+pub use jubiq4d::*;
 pub use jubiq_misc::*;
 pub use supershape3d_misc::*;
 pub use wz_lost_variations::*;
@@ -314,6 +347,35 @@ pub use mandelbrot::*;
 pub use crackle::*;
 pub use dc_perlin::*;
 pub use szubieta::*;
+pub use chladni::*;
+pub use chladni_disc::*;
+pub use cymatics3d::*;
+pub use orbital::*;
+pub use hofstadter::*;
+pub use hofstadter3d::*;
+pub use polyhedra_project::*;
+pub use menger::*;
+pub use polychoron::*;
+pub use honeycomb::*;
+pub use honeycomb4d::*;
+pub use quasiconformal::*;
+pub use apollonian_gasket::*;
+pub use cubic_julia::*;
+pub use fuchsian_triangle::*;
+pub use hecke_group::*;
+pub use hyperbolic_camera::*;
+pub use jacobian_counterexample::*;
+pub use littlewood::*;
+pub use mondrianomies::*;
+pub use minkowski::*;
+pub use minkowski_camera::*;
+pub use lorentz_mobius::*;
+pub use schottky_group::*;
+pub use sphere_packing::*;
+pub use su_custom::*;
+pub use surface_group::*;
+pub use von_dyck::*;
+pub use su_mobius::*;
 pub use glsl_fractals::*;
 pub use glsl_tilings::*;
 pub use glsl_fields::*;
@@ -1157,4 +1219,36 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     // consumed image samples — replaced by the side-emitting
     // sphere_volume). Tail position, so no stable IDs shifted.
     &SPHERE_VOLUME,
+    &CHLADNI,
+    &CHLADNI_DISC,
+    &CYMATICS3D,
+    &ORBITAL,
+    &HOFSTADTER,
+    &HOFSTADTER3D,
+    &POLYHEDRON,
+    &POLYHEDRON_VOLUME,
+    &MENGER,
+    &POLYCHORON,
+    &HONEYCOMB,
+    &HONEYCOMB4D,
+    &QUASICONFORMAL,
+    &SU_MOBIUS,
+    &FUCHSIAN_TRIANGLE,
+    &JACOBIAN_COUNTEREXAMPLE,
+    &LORENTZ_MOBIUS,
+    &APOLLONIAN_GASKET,
+    &HECKE_GROUP,
+    &SCHOTTKY_GROUP,
+    &CUBIC_JULIA,
+    &SU_CUSTOM,
+    &VON_DYCK,
+    &SURFACE_GROUP,
+    &MOBIQ4D,
+    &JUBIQ4D,
+    &LITTLEWOOD,
+    &SPHERE_PACKING,
+    &HYPERBOLIC_CAMERA,
+    &MONDRIANOMIES,
+    &MINKOWSKI,
+    &MINKOWSKI_CAMERA,
 ];

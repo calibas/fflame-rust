@@ -16,13 +16,14 @@
 //! a random point on a unit 20-gon's edge, then scale + translate.
 //! No primitive list, no per-instance state. This file computes the
 //! same thing directly.
+//! 
+//! "inspired from a program in R language from this site"
+//! https://fronkonstin.com/2017/05/22/sunflowers-for-colourlovers/
 //!
 //! Sources:
 //! [`output/variation-jwf-source/SZubietaFunc.java`](../../../output/variation-jwf-source/SZubietaFunc.java),
 //! [`output/jwildfire-vars/output/szubieta.cpp`](../../../output/jwildfire-vars/output/szubieta.cpp).
-//!
-//! # Authors
-//! - Jesus Sosa
+
 
 use crate::variations::{
     definition::{Feature, VariationDef, VariationParamDef},
@@ -30,6 +31,10 @@ use crate::variations::{
 };
 use crate::param;
 
+/// SZubieta - Grid-of-polygons base shape.
+///
+/// # Authors
+/// - Jesus Sosa
 pub static SZUBIETA: VariationDef = VariationDef {
     name: "szubieta",
     aliases: &[],
