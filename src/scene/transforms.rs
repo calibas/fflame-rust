@@ -602,6 +602,25 @@ impl Transform {
     /// tail is the stable fallback for flames/edits that didn't record an
     /// order, so old `.fflame` files render exactly as before. See
     /// [`Self::variation_order`].
+    /// Value of `variation.param` on this transform, falling back to the
+    /// variation DEFINITION's declared default when the key is absent.
+    ///
+    /// Use this anywhere the CPU has to predict what the GPU will see —
+    /// above all in the per-flame shader specializers, which bake data
+    /// derived from these values into the WGSL. The GPU fills absent
+    /// params from the definition, so a hardcoded literal here silently
+    /// diverges the moment a default is edited: the specializer then
+    /// bakes tables for a flame that is not the one being drawn.
+    pub fn variation_param_or_default(&self, variation: &str, param: &str) -> f32 {
+        if let Some(v) = self.variation_params.get(&format!("{variation}.{param}")) {
+            return *v;
+        }
+        crate::variations::global_registry()
+            .get(variation)
+            .and_then(|info| info.get_param_default(param))
+            .unwrap_or(0.0)
+    }
+
     pub fn ordered_variation_names(&self, registry: &VariationRegistry) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
         let mut seen = std::collections::HashSet::new();
@@ -1866,7 +1885,7 @@ impl Point {
 
 /// Serde skip helper — omit zero-valued optional f32 fields so
 /// existing .fflame files stay byte-stable.
-fn f32_is_zero(v: &f32) -> bool {
+fn _f32_is_zero(v: &f32) -> bool {
     *v == 0.0
 }
 
