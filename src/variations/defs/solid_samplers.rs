@@ -29,6 +29,10 @@ use crate::param;
 /// it its own low-weight transform) to guarantee baseline density over
 /// an entire sphere — the textured variations still dominate wherever
 /// they have density; this fills what they leave empty.
+///
+/// # Authors
+/// - Fractals for All
+/// - Claude Fable 5
 pub static SOLID_SPHERE: VariationDef = VariationDef {
     name: "solid_sphere",
     aliases: &[],
@@ -99,6 +103,10 @@ fn variation_solid_sphere(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: p
 /// The transform's post-affine applies to emitted points; final
 /// transforms and post-symmetry do not. Requires Solid Rendering
 /// (or lighting) to be active.
+///
+/// # Authors
+/// - Fractals for All
+/// - Claude Fable 5
 pub static SPHERE_VOLUME: VariationDef = VariationDef {
     name: "sphere_volume",
     aliases: &[],

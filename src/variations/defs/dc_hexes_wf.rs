@@ -29,7 +29,7 @@
 //!
 //! # Authors
 //! - slobo777 (Hexes algorithm)
-//! - thargor6 (direct-color specialization)
+//! - Andreas Maschke (direct-color specialization)
 
 use crate::variations::{
     definition::{Feature, VariationDef, VariationParamDef},
@@ -43,8 +43,8 @@ use crate::param;
 /// color_offset`, clamped). Produces coloured hexagonal-lattice textures.
 ///
 /// # Authors
-/// - slobo777 (Hexes)
-/// - thargor6 (dc_ specialization)
+/// - slobo777
+/// - Andreas Maschke
 pub static DC_HEXES_WF: VariationDef = VariationDef {
     name: "dc_hexes_wf",
     aliases: &[],

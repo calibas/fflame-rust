@@ -24,6 +24,9 @@ use crate::variations::{
 /// Like ACoth but applied to sqrt(z) instead of z. The square-root pre-step
 /// roughly halves the angle, producing a denser, more intricate version of
 /// ACoth's two-singularity pattern. Random ±sign each iteration.
+/// 
+/// # Authors
+/// - Whittaker Courtney
 pub static SQRT_ACOTH: VariationDef = VariationDef {
     name: "sqrt_acoth",
     aliases: &[],
@@ -78,6 +81,9 @@ fn variation_sqrt_acoth(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32>
 //   AcosH(w) = ln(w + sqrt(w² - 1))
 // =============================================================================
 /// Like ACosh but on sqrt(z). Random ±sign each iteration.
+///  
+/// # Authors
+/// - Whittaker Courtney
 pub static SQRT_ACOSH: VariationDef = VariationDef {
     name: "sqrt_acosh",
     aliases: &[],
@@ -144,6 +150,9 @@ fn variation_sqrt_acosh(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32>
 // =============================================================================
 /// Like ACosecH but on sqrt(z) — denser version of the symmetric two-branch
 /// pattern. Random ±sign each iteration.
+///  
+/// # Authors
+/// - Whittaker Courtney
 pub static SQRT_ACOSECH: VariationDef = VariationDef {
     name: "sqrt_acosech",
     aliases: &[],
@@ -218,6 +227,9 @@ fn variation_sqrt_acosech(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f3
 /// Variant of ArcSecH applied to sqrt(z). Note: upstream ports a copy-paste
 /// bug that makes this equivalent to sqrt_acosh — preserved so JWildfire
 /// flames render the same.
+///  
+/// # Authors
+/// - Whittaker Courtney
 pub static SQRT_ASECH: VariationDef = VariationDef {
     name: "sqrt_asech",
     aliases: &[],
@@ -279,6 +291,9 @@ fn variation_sqrt_asech(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32>
 //   AsinH(w) = ln(w + sqrt(w² + 1))
 // =============================================================================
 /// Like ArcSinh but on sqrt(z). Random ±sign each iteration.
+///  
+/// # Authors
+/// - Whittaker Courtney
 pub static SQRT_ASINH: VariationDef = VariationDef {
     name: "sqrt_asinh",
     aliases: &[],
@@ -341,6 +356,9 @@ fn variation_sqrt_asinh(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32>
 // =============================================================================
 /// Like ArcTanh but on sqrt(z) — a denser, more compressed variant of the
 /// unit-disc-to-plane mapping. Random ±sign each iteration.
+///  
+/// # Authors
+/// - Whittaker Courtney
 pub static SQRT_ATANH: VariationDef = VariationDef {
     name: "sqrt_atanh",
     aliases: &[],

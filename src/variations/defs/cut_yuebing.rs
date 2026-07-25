@@ -20,6 +20,10 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Yuebing (mooncake) radial-pattern stencil mask.
+///
+/// # Authors
+/// - Jesus Sosa
 pub static CUT_YUEBING: VariationDef = VariationDef {
     name: "cut_yuebing",
     aliases: &[],

@@ -36,6 +36,12 @@ use crate::variations::{
 };
 use crate::param;
 
+/// The filled quaternion Julia set by escape-time membership (Paul
+/// Bourke's method).
+///
+/// # Authors
+/// - Fractals for All
+/// - Claude Fable 5
 pub static QUATERNION_JULIA_SET: VariationDef = VariationDef {
     name: "quaternion_julia_set",
     aliases: &["qjuliaset", "qjulia_solid"],

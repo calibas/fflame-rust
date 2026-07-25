@@ -82,23 +82,12 @@ macro_rules! fractwf_params {
     };
 }
 
-// Indexing helpers — every variation body uses these constants so the
-// slot offsets stay in sync with the `fractwf_params!` macro layout
-// above. Custom params start at slot 6; the post-section starts at
-// `6 + N_custom`.
-const SLOT_MAX_ITER:        u32 = 0;
-const SLOT_XMIN:            u32 = 1;
-const SLOT_XMAX:            u32 = 2;
-const SLOT_YMIN:            u32 = 3;
-const SLOT_YMAX:            u32 = 4;
-// _SLOT_BUDDHABROT_MODE = 5 — unused in v1 body but reserved.
-
 /// Dragon-curve escape-time fractal (slobo777-style iterator,
 /// JWildfire's [`FractDragonWFFunc`](../../../output/variation-jwf-source/FractDragonWFFunc.java)).
 /// `xseed` / `yseed` parameterize the complex multiplier
 /// `z → z·(z-1)·(xseed + i·yseed)` at each step.
 ///
-/// 18 common params + 2 custom (xseed, yseed) = 20 total.
+/// 19 common params + 2 custom (xseed, yseed) = 21 total.
 ///
 /// # Authors
 /// - Andreas Maschke

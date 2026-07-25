@@ -47,7 +47,7 @@ use crate::param;
 /// sign branch. Optional magnitude-based colour tint.
 ///
 /// # Authors
-/// - Whittaker Courtney (Zy0rg's Log_tile)
+/// - Whittaker Courtney
 pub static MOBIUS_DRAGON_3D: VariationDef = VariationDef {
     name: "mobius_dragon_3D",
     aliases: &[],

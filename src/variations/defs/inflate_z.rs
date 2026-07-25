@@ -168,7 +168,9 @@ pub static INFLATEZ_4: VariationDef = VariationDef {
     wgsl_state_init: None,
     wgsl_2d: r#"
 fn variation_inflateZ_4(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
-    let _ = rng_nextf(rng);
+    // Phony assignment (WGSL rejects `let _`): still consumes the
+    // RNG draw its 3D sibling would, keeping the stream aligned.
+    _ = rng_nextf(rng);
     return vec2<f32>(0.0, 0.0);
 }
 "#,

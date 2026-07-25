@@ -849,12 +849,17 @@ fn render_variations_section(
             let registry = global_registry();
             let search_lower = search_text.to_lowercase();
 
-            // Collect categories to show based on render mode. Plugin
-            // variations are surfaced in both 2D and 3D — their wgsl_2d
-            // body is expected to be a sensible 2D implementation
-            // (subflame_wf is the current sole plugin and has one). The
-            // strictly-3D categories (Depth3D, Rotation3D, Full3D)
-            // remain 3D-only since their 2D bodies are stubs.
+            // Categories offered, by render mode. The picker mirrors the
+            // shader's rule exactly: everything is available, except that
+            // 2D drops Only3D (the sole category with no meaningful 2D
+            // reading — currently empty).
+            //
+            // Depth3D and Rotation3D belong in the 2D list even though
+            // most of their members act only on z: `tangent3D` is a real
+            // xy tangent map, and `pre_spin_z` / `post_spin_z` are planar
+            // rotations. Category names describe a variation's character,
+            // not whether it does something in 2D — the ones that truly
+            // are z-only simply contribute nothing, which is correct.
             let categories: Vec<VariationCategory> = if matches!(render_mode, RenderMode::ThreeD) {
                 vec![
                     VariationCategory::Basic2D,
@@ -862,12 +867,16 @@ fn render_variations_section(
                     VariationCategory::Depth3D,
                     VariationCategory::Rotation3D,
                     VariationCategory::Full3D,
+                    VariationCategory::Only3D,
                     VariationCategory::Plugin,
                 ]
             } else {
                 vec![
                     VariationCategory::Basic2D,
                     VariationCategory::Advanced2D,
+                    VariationCategory::Depth3D,
+                    VariationCategory::Rotation3D,
+                    VariationCategory::Full3D,
                     VariationCategory::Plugin,
                 ]
             };

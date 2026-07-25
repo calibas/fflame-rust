@@ -133,6 +133,9 @@ fn variation_acosh(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
 /// Inverse hyperbolic cosecant on the complex input (arcsinh of 1/z), then
 /// swaps the real and imaginary parts. Random branch selection per
 /// iteration produces symmetric two-branch patterns.
+/// 
+/// # Authors
+/// - Whittaker Courtney
 pub static ACOSECH: VariationDef = VariationDef {
     name: "acosech",
     aliases: &[],
@@ -277,6 +280,10 @@ fn variation_arcsech(p: vec3<f32>) -> vec3<f32> {
 // =============================================================================
 /// Variant of ArcSecH with translation by ±i depending on the imaginary
 /// sign — produces two parallel arcs instead of one.
+/// 
+/// # Authors
+/// - Tatyana Zabanova
+/// - DarkBeam
 pub static ARCSECH2: VariationDef = VariationDef {
     name: "arcsech2",
     aliases: &[],
@@ -360,6 +367,10 @@ fn variation_arcsech2(p: vec3<f32>) -> vec3<f32> {
 // =============================================================================
 /// Inverse hyperbolic sine on the complex input. Maps the entire plane onto
 /// a horizontal strip — acts as a `spreading` transform.
+/// 
+/// # Authors
+/// - Tatyana Zabanova
+/// - DarkBeam
 pub static ARCSINH: VariationDef = VariationDef {
     name: "arcsinh",
     aliases: &[],
@@ -416,6 +427,10 @@ fn variation_arcsinh(p: vec3<f32>) -> vec3<f32> {
 /// Inverse hyperbolic tangent on the complex input. Maps the unit disc onto
 /// the entire plane; everything inside |z|=1 expands outward, everything
 /// outside compresses inward.
+/// 
+/// # Authors
+/// - Tatyana Zabanova
+/// - DarkBeam
 pub static ARCTANH: VariationDef = VariationDef {
     name: "arctanh",
     aliases: &[],

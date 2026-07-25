@@ -471,8 +471,8 @@ fn variation_roundspher(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<
 /// when this is the only Z-writer in the xform.
 ///
 /// # Authors
-/// - Raykoid666 (original `roundspher`)
-/// - Larry Berlin (3D extension)
+/// - Raykoid666
+/// - Larry Berlin
 pub static ROUNDSPHER3D: VariationDef = VariationDef {
     name: "roundspher3D",
     aliases: &[],
