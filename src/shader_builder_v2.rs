@@ -957,13 +957,30 @@ impl ShaderBuilder {
             &local_map,
             &self.registry,
         );
-        if layout.is_empty() {
+        // `compute_state_layout` allocates slots only for variations with a
+        // NON-ZERO weight, but the shader compiles in the BODY of every
+        // active variation regardless of weight (a weight-0 variation is
+        // merely never dispatched). So slot allocation and accessor
+        // emission need different tests: if any active variation's body
+        // could reference get_state/set_state, the functions must exist or
+        // the module fails to parse — which is what happened when the only
+        // state-using variation in a flame was dialled to weight 0.
+        let needs_accessors = active_variations.iter().any(|(name, _)| {
+            self.registry
+                .get(name)
+                .is_some_and(|info| info.state_count > 0)
+        });
+        if layout.is_empty() && !needs_accessors {
             return String::new();
         }
+        // WGSL has no zero-length array, so keep one dummy slot alive for
+        // the all-weights-zero case; the accessors are compiled but never
+        // called (the dispatcher gates every call on a non-zero weight).
         let total = layout
             .last()
             .map(|e| e.offset + e.state_count)
-            .unwrap_or(0);
+            .unwrap_or(0)
+            .max(1);
 
         let mut out = String::new();
         out.push_str(&format!(
@@ -2825,6 +2842,54 @@ mod tests {
             !shader_2d.contains("var<private> point_w"),
             "point_w must NOT be emitted in the 2D pipeline"
         );
+    }
+
+    /// A state-using variation dialled to weight 0 must still compile.
+    ///
+    /// Slot allocation skips zero-weight variations, but their bodies are
+    /// still emitted into the module, so `get_state` / `set_state` have to
+    /// exist regardless. Before this was fixed, dragging the weight of the
+    /// only state-using variation to 0 produced
+    /// "no definition in scope for identifier: `get_state`" and killed the
+    /// app mid-edit.
+    #[test]
+    fn state_accessors_survive_zero_weight() {
+        use crate::scene::transforms::{Flame, Transform};
+        let registry = crate::variations::global_registry().clone();
+        let builder = ShaderBuilder::new(registry);
+        let constants = ShaderConstants::default();
+
+        // fuchsian_triangle has state_count = 2; park it at weight 0
+        // alongside a normal variation, as a slider drag would.
+        let mut flame = Flame::new();
+        let mut xform = Transform::new();
+        xform.variations.insert("linear".to_string(), 1.0);
+        xform.variations.insert("fuchsian_triangle".to_string(), 0.0);
+        flame.transforms.push(xform);
+        let mut active = HashMap::new();
+        active.insert("linear".to_string(), 1.0);
+        active.insert("fuchsian_triangle".to_string(), 0.0);
+
+        for render_3d in [false, true] {
+            let shader = builder
+                .build_from_template(&flame, &active, render_3d, false, false, true, &constants);
+            if shader.contains("get_state(") {
+                assert!(
+                    shader.contains("fn get_state("),
+                    "get_state referenced but not defined (render_3d = {render_3d})"
+                );
+            }
+            if shader.contains("set_state(") {
+                assert!(
+                    shader.contains("fn set_state("),
+                    "set_state referenced but not defined (render_3d = {render_3d})"
+                );
+            }
+            assert!(
+                !shader.contains("array<f32, 0u>"),
+                "zero-length WGSL array is invalid (render_3d = {render_3d})"
+            );
+        }
     }
 
     /// `Feature::NeedsMobiusLib` injects the shared SL(2,C) Möbius library
