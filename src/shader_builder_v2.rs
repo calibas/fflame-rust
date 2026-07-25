@@ -775,18 +775,28 @@ impl ShaderBuilder {
             .filter_map(|name| {
                 let local_idx = *local_map.get(name)?;
                 if !render_3d {
-                    // 2D shaders: drop variations whose body is only
-                    // meaningful in 3D (Z-only depth manipulation, 3D
-                    // rotation matrices, full-3D projections). Plugin
-                    // variations are allowed — their wgsl_2d body is
-                    // expected to be a sensible 2D implementation.
+                    // 2D shaders: drop only variations that have no
+                    // meaningful 2D reading whatsoever (VariationCategory
+                    // ::Only3D — currently none).
+                    //
+                    // This used to drop all of Depth3D | Rotation3D |
+                    // Full3D, which was wrong: those categories describe
+                    // a variation's CHARACTER, not whether its wgsl_2d
+                    // body is real. 112 Full3D variations (quaternion,
+                    // hypertile3D, superShape3d, …) ship genuine 2D
+                    // implementations and were being silently discarded
+                    // — a 2D flame using them rendered with the
+                    // variation contributing nothing to the weighted
+                    // sum, which is neither what the config asks for nor
+                    // what JWildfire does (JWF has no 2D mode; every
+                    // variation always contributes its x/y).
+                    //
+                    // The z-only bodies this used to exclude are correct
+                    // as written: `vec2(0.0)` from a z-only variation
+                    // and `p` from a pre/post 3D rotation are the right
+                    // 2D contributions, so including them is a no-op.
                     let info = self.registry.get(name)?;
-                    if matches!(
-                        info.category,
-                        VariationCategory::Depth3D
-                            | VariationCategory::Rotation3D
-                            | VariationCategory::Full3D,
-                    ) {
+                    if matches!(info.category, VariationCategory::Only3D) {
                         return None;
                     }
                 }

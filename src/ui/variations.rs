@@ -28,6 +28,7 @@ pub fn render_variations_panel(ui: &mut egui::Ui) -> VariationsPanelResponse {
             (VariationCategory::Depth3D, "variations_panel.category_depth_3d"),
             (VariationCategory::Rotation3D, "variations_panel.category_rotation_3d"),
             (VariationCategory::Full3D, "variations_panel.category_full_3d"),
+            (VariationCategory::Only3D, "variations_panel.category_only_3d"),
             (VariationCategory::Plugin, "variations_panel.category_plugin"),
         ];
 
