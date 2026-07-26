@@ -245,6 +245,21 @@ renderer UI section, and the world-space round-trip trick removes the
 one real argument for the stage (camera access). Revisit only if panel
 clipping in-variation proves awkward in practice.
 
+## Field notes (post-implementation)
+
+- **Triptych spacing vs convergence**: the L-R-L eye pattern turns the
+  per-eye convergence displacement `e·b/2·(1/zr_conv − 1/zr_content)`
+  into content offsets (−off, +off, −off), so pair 1-2 spacing grows by
+  2·off while 2-3 shrinks by it. Verified: z_conv far from the content
+  gave 223/176 px spacings; z_conv at content depth gave 202/196. Not a
+  bug — both pairs still fuse at their own spacing — but ergonomically
+  the rule is "Convergence near the content depth" (tooltipped).
+- **Panel gap color**: the gap is simply unsampled raster, so it shows
+  the background color — "background" mode is free. Painted white/black
+  gap bars would have to fight the log tonemap as stochastic fills
+  (poor solidity) or be a tonemap/composite-stage rectangle fill across
+  all three output paths — deferred as not worth the effort yet.
+
 ## Phases
 
 1. **Plumbing**: `plot_emits` field, `HAS_PLOT_EMIT` gate + cap, emit
