@@ -114,6 +114,23 @@ pub fn snap_to_step(value: f64, origin: f64, step: f64) -> f32 {
     ((snapped * factor).round() / factor) as f32
 }
 
+/// Snap to `digits` significant figures.
+///
+/// The right quantum for a LOGARITHMIC control, where a single linear step
+/// is wrong at one end or the other: a weight slider spanning 0..1024 would
+/// get a step of 5 from [`nice_step`], erasing the fine control at the low
+/// end that is the whole point of a log scale. Significant figures give
+/// 0.0123 / 1.23 / 123 — tidy at every magnitude.
+pub fn snap_to_significant(value: f64, digits: u32) -> f32 {
+    if value == 0.0 || !value.is_finite() {
+        return value as f32;
+    }
+    let digits = digits.clamp(1, 9) as i32;
+    let exp = value.abs().log10().floor() as i32;
+    let factor = 10f64.powi(digits - 1 - exp);
+    ((value * factor).round() / factor) as f32
+}
+
 /// How many decimal places a step of this size implies (0.05 -> 2).
 pub fn decimals_for_step(step: f64) -> usize {
     if step <= 0.0 || !step.is_finite() {
@@ -179,6 +196,17 @@ mod tests {
         assert_eq!(fmt_f32(snapped), "0.98");
         // Step 0 means "don't snap" rather than divide by zero.
         assert_eq!(snap_to_step(0.123456, 0.0, 0.0), 0.123456f32);
+    }
+
+    #[test]
+    fn significant_snapping_suits_log_scales() {
+        // A weight slider (0..1024, logarithmic) must stay fine-grained
+        // low down, where nice_step() would have quantized to 5.
+        assert_eq!(snap_to_significant(0.12345678, 4), 0.1235f32);
+        assert_eq!(snap_to_significant(123.456, 4), 123.5f32);
+        assert_eq!(snap_to_significant(0.0, 4), 0.0f32);
+        // and the result still prints short
+        assert_eq!(fmt_f32(snap_to_significant(0.9799999, 4)), "0.98");
     }
 
     #[test]
