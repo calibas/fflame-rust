@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "450999ab",
+  "git_hash": "b565a8ef",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 34406,
@@ -422,6 +422,10 @@
       "bytes": 7235,
       "sha256": "a825d8ba6846353a0bd9a439fb7aee0b226e4d69162944630b6fe9b6add5e6a6"
     },
+    "variations-multi_kaleidoscope-smoke.png": {
+      "bytes": 1826,
+      "sha256": "98446acead7e23bee8f6125e94fe4ccd380787b667508f52497accf9cfef36eb"
+    },
     "variations-numbered-extras-smoke.png": {
       "bytes": 7273,
       "sha256": "3c649860267e9de4c8a833f1971ed2ca3755fbc0a0cf5123d7c8e47d198f6b6c"
@@ -517,6 +521,10 @@
     "variations-spin-phase-smoke.png": {
       "bytes": 19035,
       "sha256": "c42faffd527e7faf3fd0aec0c7dc64815591e88e5f603abaf710e1e9992971d1"
+    },
+    "variations-spray_blur-smoke.png": {
+      "bytes": 5552,
+      "sha256": "4048693a98a9bdfb31f11998a7b8744ca52b862fc37ebea817d5c5b38b9c7233"
     },
     "variations-standalone-exotics-smoke.png": {
       "bytes": 27494,
