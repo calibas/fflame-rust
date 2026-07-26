@@ -1,6 +1,6 @@
 # Multi-Emit Plotting + Stereograms
 
-Status: **spec** — no implementation yet. Branch: `multi-emit`.
+Status: **Phases 1–2 implemented** (plumbing + `stereogram`). Branch: `multi-emit`.
 
 ## Motivation
 
@@ -35,13 +35,13 @@ The stereo analysis this is built on (from design discussion):
 
 ### Authoring contract
 
-Not a `Feature` flag. A new **data field on `VariationDef`**:
+Carried as **data on the features slice**: `Feature::PlotEmits(u8)`.
 
-```rust
-/// Maximum extra plot points this variation may emit per call.
-/// 0 (default) = none; the shader compiles byte-identically.
-pub plot_emits: usize,
-```
+(The spec originally called for a new `VariationDef` field, but defs
+initialize every struct field explicitly — a new mandatory field means
+editing all ~640 definitions. A data-carrying Feature variant is the
+same information with zero churn, and `VariationInfo::plot_emit_cap()`
+reads it out.)
 
 The builder derives a `HAS_PLOT_EMIT` template gate from "any active
 variation has `plot_emits > 0`" — the same pattern as `HAS_W` /
