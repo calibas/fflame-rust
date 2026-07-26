@@ -627,7 +627,14 @@ fn render_enabled_variation(
                         egui::Label::new(
                             egui::RichText::new(display_name).color(Color32::LIGHT_GRAY),
                         )
-                        .truncate(),
+                        .truncate()
+                        // egui shows its own tooltip when a label elides,
+                        // built from the label's styled text — so it came out
+                        // grey, and stacked under ours as a second copy of the
+                        // name. It also only appeared when the name actually
+                        // elided, which is why it seemed to come and go. Ours
+                        // is the single, always-present, default-coloured one.
+                        .show_tooltip_when_elided(false),
                     )
                     .on_hover_text(display_name);
                     response
