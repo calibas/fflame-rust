@@ -484,9 +484,19 @@ fn render_tracks_visual(
                 all_track_rects.push(bg_rect);
             }
 
-            // Buttons on the right (rendered in UI layer for interaction)
+            // Buttons on the right (rendered in UI layer for interaction).
+            //
+            // id_salt is REQUIRED here. This whole row body sits inside
+            // `if ui.is_rect_visible(rect)`, so scrolled-off rows create no
+            // widgets at all — and without a salt these buttons take their
+            // ids from egui's positional auto-counter, which then shifts as
+            // rows enter and leave view. A press and its release could land
+            // on different rows' ids, deleting or editing a track the user
+            // never clicked. Salting by track index pins each row's ids to
+            // the row itself, the same reason the label above uses an
+            // explicit `track_label_{index}` id.
             ui.scope_builder(
-                egui::UiBuilder::new().max_rect(Rect::from_min_max(
+                egui::UiBuilder::new().id_salt(("track_row", track_index)).max_rect(Rect::from_min_max(
                     Pos2::new(rect.right() - BUTTON_WIDTH, rect.top()),
                     rect.right_bottom(),
                 )),
@@ -529,6 +539,11 @@ fn render_tracks_visual(
     // Delete track if requested
     if let Some(index) = track_to_delete {
         animation.remove_track(index);
+        // The editor panel addresses its track by INDEX, so removing an
+        // earlier track would silently re-point it at a different one (and
+        // any edit would then be applied to the wrong target). Follow the
+        // track, and close the panel outright if it was the deleted one.
+        state.editing_track_index = adjust_index_after_removal(state.editing_track_index, index);
     }
 
     response
@@ -1529,3 +1544,37 @@ pub fn initialize_preview_keyframes(
     state.preview_interpolation = Interpolation::Linear;
 }
 
+/// Where an index-based selection points after the item at `removed` is
+/// deleted: `None` if the selection WAS that item, shifted down by one if it
+/// sat after it, unchanged otherwise.
+///
+/// Tracks are addressed by position, so every index held elsewhere has to be
+/// re-based on deletion or it silently starts referring to a different track.
+fn adjust_index_after_removal(selected: Option<usize>, removed: usize) -> Option<usize> {
+    match selected {
+        Some(sel) if sel == removed => None,
+        Some(sel) if sel > removed => Some(sel - 1),
+        other => other,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::adjust_index_after_removal;
+
+    #[test]
+    fn selection_follows_its_track_across_a_deletion() {
+        // Deleting an EARLIER track shifts the selection down so it still
+        // refers to the same track.
+        assert_eq!(adjust_index_after_removal(Some(3), 1), Some(2));
+        // Deleting a LATER track leaves it alone.
+        assert_eq!(adjust_index_after_removal(Some(1), 3), Some(1));
+        // Deleting the selected track closes the editor rather than
+        // silently retargeting it at whatever slid into that slot.
+        assert_eq!(adjust_index_after_removal(Some(2), 2), None);
+        // Nothing selected stays nothing.
+        assert_eq!(adjust_index_after_removal(None, 0), None);
+        // Deleting the first track while editing it.
+        assert_eq!(adjust_index_after_removal(Some(0), 0), None);
+    }
+}
