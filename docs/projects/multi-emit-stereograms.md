@@ -1,6 +1,6 @@
 # Multi-Emit Plotting + Stereograms
 
-Status: **Phases 1–2 implemented** (plumbing + `stereogram`). Branch: `multi-emit`.
+Status: **Phases 1–3 implemented** (plumbing, `stereogram`, `multi_kaleidoscope` + `spray_blur`). Branch: `multi-emit`.
 
 ## Motivation
 
@@ -209,15 +209,24 @@ Defined but degenerate: side-by-side duplicate with zero disparity (no
 depth to encode). The 2D body does exactly that and the tooltip says
 so.
 
-## Part 3 — kaleidoscope / spray notes (same plumbing, later)
+## Part 3 — `multi_kaleidoscope` + `spray_blur` (implemented)
 
-- **Kaleidoscope**: a final variation with `plot_emits: N` emitting N
-  rotated/mirrored copies at `w = 1/N`. Differs from post-symmetry by
-  being arbitrary per-variation math (curved mirrors, per-copy
-  transforms) and animatable via ordinary variation-param tracks.
-- **Spray blurs**: emit K jittered copies at `w = 1/K` — a K× faster
-  approximation of K iterations through a stochastic blur, with
-  correlated placement.
+Both hide the center plot (`CanHide`) and emit ALL copies at
+`brightness/N`, so brightness 1 is exactly mono-equivalent at any
+count — and both converge N× faster than the one-copy-per-iteration
+equivalent.
+
+- **`multi_kaleidoscope`** (`PlotEmits(16)`, order 2–16): what
+  post-symmetry cannot express — per-copy log-spiral scaling
+  (`spiral^k` about a movable center), a per-copy `twist` increment
+  that shears the fan out of exact symmetry, dihedral `mirror` mode,
+  and every param animatable through ordinary variation tracks.
+- **`spray_blur`** (`PlotEmits(16)` + rng): Gaussian (the classic
+  Irwin–Hall distribution) / Disc / Ring / Streak kernels with
+  elliptical `aspect` and `angle` orientation — soft blur, flat and
+  ring bokeh, and motion streaks from one variation. Deliberately not
+  `AnalyticBlur` (single-sample contract; the flame-wide analytic gate
+  already excludes emitters).
 
 ## Known broken / accepted tradeoffs (stereo)
 

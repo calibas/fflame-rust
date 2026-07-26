@@ -1,0 +1,128 @@
+{
+ "background_color": [
+  1.0,
+  1.0,
+  1.0
+ ],
+ "flame": {
+  "name": "Default",
+  "transforms": [
+   {
+    "a": 1.0,
+    "b": 0.0,
+    "c": 0.0,
+    "color": 0.5,
+    "color_speed": 0.0,
+    "d": 1.0,
+    "direct_color": 1.0,
+    "e": 0.0,
+    "f": 0.0,
+    "g": 0.0,
+    "opacity": 1.0,
+    "variation_order": [
+     "mondrianomies"
+    ],
+    "variation_params": {
+     "mondrianomies.color_speed": 0.4300000071525574,
+     "mondrianomies.dc_mode": 4.0,
+     "mondrianomies.dc_scale": 20.0,
+     "mondrianomies.drift": 0.9799999594688416,
+     "mondrianomies.fill": 1.0,
+     "mondrianomies.fill_mode": 1.0,
+     "mondrianomies.line_ink": 0.3499999940395355,
+     "mondrianomies.seed": 1.0,
+     "mondrianomies.size": 0.3009999990463257
+    },
+    "variations": {
+     "mondrianomies": 1.0
+    },
+    "weight": 1.0,
+    "final_attachments": [
+     0
+    ]
+   }
+  ],
+  "final_transforms": [
+   {
+    "a": 1.0,
+    "b": 0.0,
+    "c": 0.0,
+    "color": 0.5,
+    "color_speed": 0.0,
+    "d": 1.0,
+    "direct_color": 1.0,
+    "e": 0.0,
+    "f": 0.0,
+    "g": 0.0,
+    "opacity": 1.0,
+    "variation_order": [
+     "hyperbolic_camera"
+    ],
+    "variation_params": {
+     "spray_blur.count": 12.0,
+     "spray_blur.radius": 0.25,
+     "spray_blur.shape": 3.0,
+     "spray_blur.angle": 30.0,
+     "spray_blur.brightness": 1.0
+    },
+    "variations": {
+     "spray_blur": 1.0
+    },
+    "weight": 1.0
+   }
+  ]
+ },
+ "levels_gamma": 0.5,
+ "palette": {
+  "locked": false,
+  "name": "Fire",
+  "stops": [
+   {
+    "color": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "position": 0.0
+   },
+   {
+    "color": [
+     0.5,
+     0.0,
+     0.0
+    ],
+    "position": 0.25
+   },
+   {
+    "color": [
+     1.0,
+     0.30000001192092896,
+     0.0
+    ],
+    "position": 0.5
+   },
+   {
+    "color": [
+     1.0,
+     0.800000011920929,
+     0.0
+    ],
+    "position": 0.75
+   },
+   {
+    "color": [
+     1.0,
+     1.0,
+     0.800000011920929
+    ],
+    "position": 1.0
+   }
+  ]
+ },
+ "pan_x": 0.12015503644943237,
+ "pan_y": 0.04263565316796303,
+ "preserve_z": false,
+ "render_mode": "2d",
+ "version": 3,
+ "deterministic_rng": true
+}
