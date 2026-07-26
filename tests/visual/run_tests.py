@@ -8,6 +8,21 @@ Tests all build configurations and compares:
 - Cross-platform consistency
 
 IMPORTANT: All test configs MUST have "deterministic_rng": true for reproducible results.
+
+Baselines are stored as small, metadata-free thumbnails (see BASELINE_SIZE)
+and compared with a tolerance rather than an exact hash. Both parts matter:
+
+* Small + metadata-free keeps them git-trackable. Every exported PNG embeds
+  GitHash / BuildDate / RenderTime, so keeping metadata would make every
+  regeneration rewrite every file and add a fresh blob to history. Stripped,
+  an unchanged baseline re-renders byte-identical, git dedupes it, and a
+  regeneration only costs the images that actually changed.
+* Tolerance compare survives GPU/driver rounding differences across machines,
+  and is REQUIRED for the solid-* tests, which are not bit-reproducible by
+  design (in-batch depth race). Downscaling also averages out per-pixel
+  noise, so real regressions stand out from sampling jitter.
+
+Regenerate with:  python tests/visual/run_tests.py --update-baseline
 """
 
 import subprocess
@@ -29,6 +44,17 @@ except ImportError:
     HAS_PILLOW = False
     print("Warning: PIL/Pillow not installed. Install with: pip install Pillow numpy")
     print("Falling back to PNG file hash comparison (less reliable)")
+
+
+# Baselines are stored at this size (4:3, matching the 800x600 render) —
+# ~12 KB each, so the whole suite is a couple of MB rather than 40.
+BASELINE_SIZE = (160, 120)
+
+# Tolerance for the downscaled comparison, on a 0-255 scale. MEAN catches
+# broad drift (a palette shift, a collapsed attractor); MAX catches a small
+# but severe local change. Both must pass.
+TOLERANCE_MEAN = 2.0
+TOLERANCE_MAX = 40.0
 
 
 @dataclass
@@ -227,10 +253,10 @@ class VisualTestRunner:
 
         # If baseline exists, compare
         if baseline_path.exists():
-            baseline_sha256 = self.hash_image(baseline_path)
-            if actual_sha256 != baseline_sha256:
+            ok, msg = self.compare_to_baseline(output_path, baseline_path)
+            if not ok:
                 passed = False
-                error = f"Image mismatch: baseline {baseline_sha256[:8]}..., got {actual_sha256[:8]}..."
+                error = msg
         elif config.reference_sha256:
             # Compare against expected hash
             if actual_sha256 != config.reference_sha256:
@@ -249,11 +275,44 @@ class VisualTestRunner:
             name=config.name,
             passed=passed,
             actual_sha256=actual_sha256,
-            expected_sha256=config.reference_sha256 or (baseline_sha256 if baseline_path.exists() else None),
+            expected_sha256=config.reference_sha256 or (self.hash_image(baseline_path) if baseline_path.exists() else None),
             render_time_ms=render_time_ms,
             iterations_per_second=iterations_per_second,
             error=error
         )
+
+    def thumbnail(self, path: Path):
+        """Downscaled RGB array of a render, or None without PIL."""
+        if not HAS_PILLOW:
+            return None
+        img = Image.open(path).convert("RGB").resize(BASELINE_SIZE, Image.LANCZOS)
+        return np.asarray(img, dtype=np.float32)
+
+    def write_baseline(self, src: Path, dst: Path):
+        """Save `src` as a small baseline thumbnail with NO metadata.
+
+        PIL writes only the pixel data here (no pnginfo=), which is what
+        keeps regenerated-but-unchanged baselines byte-identical.
+        """
+        if not HAS_PILLOW:
+            shutil.copy(src, dst)
+            return
+        Image.open(src).convert("RGB").resize(BASELINE_SIZE, Image.LANCZOS).save(dst, "PNG", optimize=True)
+
+    def compare_to_baseline(self, current: Path, baseline: Path):
+        """(passed, message). Tolerance compare on the downscaled images."""
+        if not HAS_PILLOW:
+            same = self.hash_image(current) == self.hash_image(baseline)
+            return same, None if same else "Image mismatch (file hash; install Pillow for tolerance compare)"
+        cur = self.thumbnail(current)
+        base = self.thumbnail(baseline)
+        if cur is None or base is None or cur.shape != base.shape:
+            return False, f"Baseline shape mismatch: {None if base is None else base.shape} vs {None if cur is None else cur.shape}"
+        diff = np.abs(cur - base)
+        mean_d, max_d = float(diff.mean()), float(diff.max())
+        if mean_d <= TOLERANCE_MEAN and max_d <= TOLERANCE_MAX:
+            return True, None
+        return False, f"Image differs: mean {mean_d:.2f} (limit {TOLERANCE_MEAN}), max {max_d:.0f} (limit {TOLERANCE_MAX:.0f})"
 
     def hash_image(self, path: Path) -> str:
         """
@@ -305,8 +364,13 @@ class VisualTestRunner:
                 max_iterations = 10_000_000
 
             # Create test config with generous time limits
+            # Qualify the test name with its category. Two configs shared
+            # the stem `affine3d-smoke` (3d/ and variations/), so they wrote
+            # the same output/baseline file and silently clobbered each
+            # other — the suite then compared one config's render against
+            # the other's baseline.
             configs.append(TestConfig(
-                name=fflame_path.stem,
+                name=f"{category}-{fflame_path.stem}" if category else fflame_path.stem,
                 config_file=fflame_path,
                 category=category,
                 expected_iterations=max_iterations,
@@ -316,15 +380,55 @@ class VisualTestRunner:
         return sorted(configs, key=lambda c: (c.category, c.name))
 
     def update_baselines(self):
-        """Copy current outputs to baseline directory."""
-        print("\nUpdating baseline images...")
-        count = 0
-        for png in self.current_dir.glob("*.png"):
+        """Write current outputs to the baseline dir as small, metadata-free
+        thumbnails, and record provenance in baseline_manifest.json."""
+        print(f"\nUpdating baselines ({BASELINE_SIZE[0]}x{BASELINE_SIZE[1]}, metadata stripped)...")
+        self.baseline_dir.mkdir(parents=True, exist_ok=True)
+        manifest, count, total = {}, 0, 0
+        kept = 0
+        for png in sorted(self.current_dir.glob("*.png")):
             baseline = self.baseline_dir / png.name
-            shutil.copy(png, baseline)
-            print(f"  {png.name} -> baseline")
+            # Only rewrite a baseline that actually moved beyond tolerance.
+            # The solid-* renders are not bit-reproducible (in-batch depth
+            # race), so re-encoding them every time would add a new blob to
+            # git history on every regeneration for no visible change.
+            # Skipping them keeps --update-baseline byte-idempotent.
+            if baseline.exists():
+                ok, _ = self.compare_to_baseline(png, baseline)
+                if ok:
+                    kept += 1
+                    manifest[png.name] = {
+                        "sha256": self.hash_image(baseline),
+                        "bytes": baseline.stat().st_size,
+                    }
+                    total += baseline.stat().st_size
+                    count += 1
+                    continue
+            self.write_baseline(png, baseline)
+            size = baseline.stat().st_size
+            manifest[png.name] = {
+                "sha256": self.hash_image(baseline),
+                "bytes": size,
+            }
+            total += size
             count += 1
-        print(f"Updated {count} baseline images")
+        meta = {
+            "generated_by": "tests/visual/run_tests.py --update-baseline",
+            "baseline_size": list(BASELINE_SIZE),
+            "tolerance_mean": TOLERANCE_MEAN,
+            "tolerance_max": TOLERANCE_MAX,
+            "images": manifest,
+        }
+        try:
+            meta["git_hash"] = subprocess.run(
+                ["git", "rev-parse", "--short", "HEAD"],
+                capture_output=True, text=True, timeout=10
+            ).stdout.strip()
+        except Exception:
+            pass
+        with open(self.baseline_dir / "baseline_manifest.json", "w") as f:
+            json.dump(meta, f, indent=2, sort_keys=True)
+        print(f"Baselines: {count} total, {count - kept} rewritten, {kept} unchanged (left byte-identical), {total/1024/1024:.2f} MB")
 
     def print_result(self, result: TestResult):
         """Print test result."""
