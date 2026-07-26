@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "67ef42b1",
+  "git_hash": "450999ab",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 34406,
@@ -65,6 +65,10 @@
     "3d-simple-zcone.png": {
       "bytes": 274,
       "sha256": "d183141b2eb52497bc718a63651b89b49fc37765460bdaff465b67b58c893073"
+    },
+    "3d-stereogram-smoke.png": {
+      "bytes": 13227,
+      "sha256": "8de04eb9e42d06769d9b9f676378f86ae7ee103e4e6c3bfb775bdf2ed9ba0e8c"
     },
     "3d-subflame-smoke.png": {
       "bytes": 543,
