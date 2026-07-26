@@ -837,6 +837,51 @@ impl ShaderBuilder {
         })
     }
 
+    /// Per-shader multi-emit cap (`Feature::PlotEmits`): max across the
+    /// active set, clamped to 16. 0 disables the machinery entirely and
+    /// the WGSL is byte-identical to a build without the feature.
+    fn plot_emit_cap(&self, active_variations: &[(String, u32)]) -> u32 {
+        active_variations
+            .iter()
+            .filter_map(|(name, _)| self.registry.get(name).map(|i| i.plot_emit_cap()))
+            .max()
+            .unwrap_or(0)
+            .min(16)
+    }
+
+    /// Multi-emit globals + helpers (`Feature::PlotEmits`). Points are
+    /// collected into a private array during variation application and
+    /// plotted by the source loop in main_template (HAS_PLOT_EMIT).
+    /// Storage is vec4 (xyz + weight); the 2D module's helper takes vec2
+    /// and stores z = 0.
+    fn build_plot_emit(&self, cap: u32, render_3d: bool) -> String {
+        let (dim, store) = if render_3d {
+            ("vec3<f32>", "vec4<f32>(p, w)")
+        } else {
+            ("vec2<f32>", "vec4<f32>(p, 0.0, w)")
+        };
+        format!(
+            "// Multi-emit collector (Feature::PlotEmits): up to {cap} extra
+             // plot points per iteration, reset by the main loop. See
+             // docs/projects/multi-emit-stereograms.md.
+             var<private> plot_emit_points: array<vec4<f32>, {cap}u>;
+             var<private> plot_emit_count: u32;
+
+             fn emit_plot_weighted(p: {dim}, w: f32) {{
+                 if (plot_emit_count < {cap}u) {{
+                     plot_emit_points[plot_emit_count] = {store};
+                     plot_emit_count = plot_emit_count + 1u;
+                 }}
+             }}
+
+             fn emit_plot(p: {dim}) {{
+                 emit_plot_weighted(p, 1.0);
+             }}
+
+"
+        )
+    }
+
     /// True if any active variation side-emits volume-only points
     /// (`Feature::VolumeSideEmit`). Drives `HAS_VOLUME_SIDE`.
     fn has_volume_side_variation(&self, active_variations: &[(String, u32)]) -> bool {
@@ -1412,6 +1457,10 @@ impl ShaderBuilder {
         // Only meaningful in the 3D pipeline (2D bodies carry no w).
         let has_w = self.has_w_variation(&active) && render_3d;
         let has_volume_side = self.has_volume_side_variation(&active);
+        // Multi-emit (Feature::PlotEmits). Unlike point_w this is NOT
+        // 3D-gated: 2D emitters (kaleidoscopes, sprays) are legitimate.
+        let plot_emit_cap = self.plot_emit_cap(&active);
+        let has_plot_emit = plot_emit_cap > 0;
 
         // Build the template processor up front — both the header and the
         // main_template body have `{{#if ...}}` blocks (header gates which
@@ -1426,6 +1475,7 @@ impl ShaderBuilder {
         processor.set("HAS_RGB", has_rgb);
         processor.set("HAS_W", has_w);
         processor.set("HAS_VOLUME_SIDE", has_volume_side);
+        processor.set("HAS_PLOT_EMIT", has_plot_emit);
         // HAS_ATTACHMENTS gates the per-iteration `attachments[xform_idx]`
         // load and the Linked/Final chain loops. False when the flame has
         // no Linked or Final transforms, restoring pre-attachment-feature
@@ -1639,6 +1689,9 @@ impl ShaderBuilder {
                  var<private> volume_side_flag: bool;\n\n",
             );
             shader.push('\n');
+        }
+        if has_plot_emit {
+            shader.push_str(&self.build_plot_emit(plot_emit_cap, render_3d));
         }
 
         // 8b. Complex arithmetic + 2x2 complex matrix helpers. Always
@@ -2842,6 +2895,56 @@ mod tests {
             !shader_2d.contains("var<private> point_w"),
             "point_w must NOT be emitted in the 2D pipeline"
         );
+    }
+
+    /// Multi-emit machinery appears only when an emitting variation is
+    /// active — flames without one must compile byte-identically to a
+    /// build predating the feature (the same guarantee point_w gives).
+    #[test]
+    fn plot_emit_gated_by_active_set() {
+        use crate::scene::transforms::{Flame, Transform};
+        let registry = crate::variations::global_registry().clone();
+        let builder = ShaderBuilder::new(registry);
+        let constants = ShaderConstants::default();
+
+        // Plain flame: no emit machinery at all.
+        let mut plain = Flame::new();
+        let mut t = Transform::new();
+        t.variations.insert("linear".to_string(), 1.0);
+        plain.transforms.push(t);
+        let mut plain_active = HashMap::new();
+        plain_active.insert("linear".to_string(), 1.0);
+        for render_3d in [false, true] {
+            let shader = builder
+                .build_from_template(&plain, &plain_active, render_3d, false, false, true, &constants);
+            assert!(
+                !shader.contains("plot_emit"),
+                "no emit machinery without an emitter (render_3d = {render_3d})"
+            );
+        }
+
+        // Stereogram flame: helpers + source loop present, and the
+        // 2D/3D helper takes the module's own point type.
+        let mut flame = Flame::new();
+        let mut xf = Transform::new();
+        xf.variations.insert("linear".to_string(), 1.0);
+        xf.variations.insert("stereogram".to_string(), 1.0);
+        flame.transforms.push(xf);
+        let mut active = HashMap::new();
+        active.insert("linear".to_string(), 1.0);
+        active.insert("stereogram".to_string(), 1.0);
+        for render_3d in [false, true] {
+            let shader = builder
+                .build_from_template(&flame, &active, render_3d, false, false, true, &constants);
+            assert!(shader.contains("fn emit_plot_weighted("), "helper present ({render_3d})");
+            assert!(shader.contains("plot_emit_count = 0u;"), "per-iteration reset ({render_3d})");
+            assert!(
+                shader.contains("multi-emit source loop"),
+                "plot source loop present ({render_3d})"
+            );
+            let want = if render_3d { "fn emit_plot_weighted(p: vec3<f32>" } else { "fn emit_plot_weighted(p: vec2<f32>" };
+            assert!(shader.contains(want), "module-typed helper ({render_3d})");
+        }
     }
 
     /// A state-using variation dialled to weight 0 must still compile.
