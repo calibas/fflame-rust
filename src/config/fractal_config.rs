@@ -816,8 +816,14 @@ impl FractalConfig {
                     ordered_obj.insert(k.clone(), v.clone());
                 }
             }
-            Ok(serde_json::Value::Object(ordered_obj))
+            let mut out = serde_json::Value::Object(ordered_obj);
+            // Every number here started life as an f32; `to_value` widened
+            // them to f64, which prints the full binary expansion
+            // (0.98 -> 0.9799999594688416). Re-state them at f32 precision.
+            crate::config::precision::normalize_f32_numbers(&mut out);
+            Ok(out)
         } else {
+            crate::config::precision::normalize_f32_numbers(&mut value);
             Ok(value)
         }
     }

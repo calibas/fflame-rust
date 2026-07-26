@@ -9,6 +9,7 @@
 /// - Human-readable change descriptions
 /// - Centralized lazy undo throttling
 
+pub mod precision;
 pub mod defaults;
 pub mod delta;
 pub mod fractal_config;
