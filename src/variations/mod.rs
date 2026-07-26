@@ -270,6 +270,18 @@ impl VariationInfo {
     pub fn has_feature(&self, f: crate::variations::definition::Feature) -> bool {
         self.features.contains(&f)
     }
+
+    /// Max extra plot points this variation may emit per call
+    /// (`Feature::PlotEmits`). 0 = plots normally only.
+    pub fn plot_emit_cap(&self) -> u32 {
+        self.features
+            .iter()
+            .find_map(|f| match f {
+                crate::variations::definition::Feature::PlotEmits(n) => Some(*n as u32),
+                _ => None,
+            })
+            .unwrap_or(0)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]

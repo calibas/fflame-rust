@@ -135,6 +135,35 @@ pub enum Feature {
     /// No solid depth region → no-op.
     VolumeSideEmit,
 
+    /// The variation may plot up to N EXTRA points per call via the
+    /// `emit_plot(p)` / `emit_plot_weighted(p, w)` helpers (module-scope,
+    /// generated only when an active variation carries this feature — the
+    /// `HAS_PLOT_EMIT` gate, byte-identical WGSL otherwise).
+    ///
+    /// Carried as data in the features slice rather than a separate
+    /// `VariationDef` field so the other ~640 defs need no edit.
+    ///
+    /// Contract:
+    /// * The RETURN VALUE keeps its exact usual meaning — it is the
+    ///   propagated trajectory state on a normal transform and the main
+    ///   plotted point on a Final. Emissions are plot-only extras; they
+    ///   never re-enter the chaos game.
+    /// * Emissions respect the opacity draw but NOT `CanHide` — a hiding
+    ///   emitter (stereogram) suppresses only its own center plot.
+    /// * Emissions pass through post-symmetry and every plot-time effect
+    ///   (DoF, fog, density weights) but NOT through Final chains — put
+    ///   emitters ON the final. (A fourth `apply_variations` call site
+    ///   would multiply driver compile cost for every flame.)
+    /// * `w` rides the per-sample density weight: all four histogram
+    ///   channels scale together, so color recovery is unaffected and
+    ///   w = 1/N restores mono-equivalent brightness for an N-emitter.
+    ///   Weights below ~0.01 floor to zero in the u32 deposit.
+    /// * The per-call cap is the max across active variations, clamped to
+    ///   16; excess `emit_plot` calls are silently dropped.
+    /// * 2D bodies call the vec2 form, 3D bodies the vec3 form (the
+    ///   helper is generated per-module with the right signature).
+    PlotEmits(u8),
+
     /// The variation is an **input-independent** blur: its output is the
     /// input point plus a random offset whose distribution does NOT depend
     /// on the input position (e.g. `blur`, `gaussian_blur` — a random disc /
