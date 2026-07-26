@@ -91,45 +91,122 @@ pub fn vkb_sync_full(
 
 /// Builder for a DragValue with automatic VKB sync.
 /// Usage: `ui.add(VkbDragValue::new(&mut val).speed(0.01).range(0..=100))`
+/// Entry point only — `new()` returns the generic builder below.
 pub struct VkbDragValue<'a> {
-    value_str: String,
-    is_integer: bool,
-    min: Option<f64>,
-    max: Option<f64>,
-    inner: egui_dock::egui::DragValue<'a>,
+    _marker: std::marker::PhantomData<&'a ()>,
+}
+
+/// Adapter that lets the Vkb widgets own the edit round-trip.
+///
+/// egui works in `f64` and writes the value itself, which left the wrapper
+/// no chance to apply a precision policy. Callers now hand us their number,
+/// we edit a local `f64`, and we decide what lands back in it — see
+/// [`crate::config::precision`].
+pub struct VkbNum<'a, Num: egui_dock::egui::emath::Numeric> {
+    target: &'a mut Num,
+    scratch: f64,
+}
+
+impl<'a, Num: egui_dock::egui::emath::Numeric> VkbNum<'a, Num> {
+    pub fn new(target: &'a mut Num) -> Self {
+        let scratch = target.to_f64();
+        Self { target, scratch }
+    }
+    /// Write `v` back to the caller's number.
+    fn commit(&mut self, v: f64) {
+        self.scratch = v;
+        *self.target = Num::from_f64(v);
+    }
 }
 
 impl<'a> VkbDragValue<'a> {
-    pub fn new<Num: egui_dock::egui::emath::Numeric>(value: &'a mut Num) -> Self {
-        let value_str = format!("{}", value.to_f64());
-        let is_integer = Num::INTEGRAL;
-        Self {
-            value_str,
-            is_integer,
+    pub fn new<Num: egui_dock::egui::emath::Numeric>(value: &'a mut Num) -> VkbDragValueOwned<'a, Num> {
+        VkbDragValueOwned {
+            num: VkbNum::new(value),
             min: None,
             max: None,
-            inner: egui_dock::egui::DragValue::new(value),
+            speed: None,
+            prefix: None,
+            suffix: None,
+            min_decimals: None,
+            fixed_decimals: None,
         }
     }
-
-    pub fn speed(mut self, speed: impl Into<f64>) -> Self { self.inner = self.inner.speed(speed); self }
-    pub fn range<Num: egui_dock::egui::emath::Numeric>(mut self, range: std::ops::RangeInclusive<Num>) -> Self {
-        self.min = Some(range.start().to_f64());
-        self.max = Some(range.end().to_f64());
-        self.inner = self.inner.range(range);
-        self
-    }
-    pub fn prefix(mut self, prefix: impl ToString) -> Self { self.inner = self.inner.prefix(prefix.to_string()); self }
-    pub fn suffix(mut self, suffix: impl ToString) -> Self { self.inner = self.inner.suffix(suffix.to_string()); self }
-    pub fn min_decimals(mut self, min_decimals: usize) -> Self { self.inner = self.inner.min_decimals(min_decimals); self }
-    pub fn fixed_decimals(mut self, fixed_decimals: usize) -> Self { self.inner = self.inner.fixed_decimals(fixed_decimals); self }
 }
 
-impl egui_dock::egui::Widget for VkbDragValue<'_> {
-    fn ui(self, ui: &mut egui_dock::egui::Ui) -> egui_dock::egui::Response {
-        let response = self.inner.ui(ui);
-        let field_type = if self.is_integer { "integer" } else { "decimal" };
-        vkb_sync_full(ui, &response, &self.value_str, field_type, self.min, self.max);
+/// The actual builder (generic over the caller's numeric type).
+pub struct VkbDragValueOwned<'a, Num: egui_dock::egui::emath::Numeric> {
+    num: VkbNum<'a, Num>,
+    min: Option<f64>,
+    max: Option<f64>,
+    speed: Option<f64>,
+    prefix: Option<String>,
+    suffix: Option<String>,
+    min_decimals: Option<usize>,
+    fixed_decimals: Option<usize>,
+}
+
+impl<'a, Num: egui_dock::egui::emath::Numeric> VkbDragValueOwned<'a, Num> {
+    pub fn speed(mut self, speed: impl Into<f64>) -> Self { self.speed = Some(speed.into()); self }
+    pub fn range<R: egui_dock::egui::emath::Numeric>(mut self, range: std::ops::RangeInclusive<R>) -> Self {
+        self.min = Some(range.start().to_f64());
+        self.max = Some(range.end().to_f64());
+        self
+    }
+    pub fn prefix(mut self, prefix: impl ToString) -> Self { self.prefix = Some(prefix.to_string()); self }
+    pub fn suffix(mut self, suffix: impl ToString) -> Self { self.suffix = Some(suffix.to_string()); self }
+    pub fn min_decimals(mut self, min_decimals: usize) -> Self { self.min_decimals = Some(min_decimals); self }
+    pub fn fixed_decimals(mut self, fixed_decimals: usize) -> Self { self.fixed_decimals = Some(fixed_decimals); self }
+}
+
+impl<Num: egui_dock::egui::emath::Numeric> egui_dock::egui::Widget for VkbDragValueOwned<'_, Num> {
+    fn ui(mut self, ui: &mut egui_dock::egui::Ui) -> egui_dock::egui::Response {
+        use crate::config::precision;
+        let is_integer = Num::INTEGRAL;
+        let before = self.num.scratch;
+        let value_str = if is_integer {
+            format!("{}", before as i64)
+        } else {
+            precision::fmt_f32(before as f32)
+        };
+
+        let mut edited = before;
+        let mut dv = egui_dock::egui::DragValue::new(&mut edited);
+        if let Some(sp) = self.speed { dv = dv.speed(sp); }
+        if let (Some(lo), Some(hi)) = (self.min, self.max) { dv = dv.range(lo..=hi); }
+        if let Some(p) = &self.prefix { dv = dv.prefix(p.clone()); }
+        if let Some(sx) = &self.suffix { dv = dv.suffix(sx.clone()); }
+        if let Some(d) = self.min_decimals { dv = dv.min_decimals(d); }
+        if let Some(d) = self.fixed_decimals { dv = dv.fixed_decimals(d); }
+        if !is_integer && self.fixed_decimals.is_none() {
+            // Show the value's own shortest f32 form rather than a
+            // decimal count egui guesses from the range.
+            dv = dv
+                .custom_formatter(|v, _| precision::fmt_f32(v as f32))
+                .custom_parser(|s| s.trim().parse::<f64>().ok());
+        }
+        let response = dv.ui(ui);
+
+        if edited != before {
+            // A DRAG may land anywhere, so quantize it; typed text is taken
+            // exactly as entered (that is how you reach a value like
+            // 0.93248 that no drag would hit).
+            let snapped = if !is_integer && response.dragged() {
+                match self.speed.filter(|s| *s > 0.0) {
+                    // Derive the quantum from the drag speed the caller chose.
+                    Some(sp) => precision::snap_to_step(edited, 0.0, precision::nice_step(sp * 200.0)) as f64,
+                    // No speed given and no range to scale from: keep it tidy
+                    // by significant figures instead of leaving raw drag noise.
+                    None => precision::snap_to_significant(edited, 4) as f64,
+                }
+            } else {
+                edited
+            };
+            self.num.commit(snapped);
+        }
+
+        let field_type = if is_integer { "integer" } else { "decimal" };
+        vkb_sync_full(ui, &response, &value_str, field_type, self.min, self.max);
         response
     }
 }
@@ -137,42 +214,106 @@ impl egui_dock::egui::Widget for VkbDragValue<'_> {
 /// Builder for a Slider with automatic VKB sync.
 /// Usage: `ui.add(VkbSlider::new(&mut val, 0.0..=1.0).text("label").logarithmic(true))`
 pub struct VkbSlider<'a> {
-    value_str: String,
-    is_integer: bool,
-    min: f64,
-    max: f64,
-    inner: egui_dock::egui::Slider<'a>,
+    _marker: std::marker::PhantomData<&'a ()>,
 }
 
 impl<'a> VkbSlider<'a> {
-    pub fn new<Num: egui_dock::egui::emath::Numeric>(value: &'a mut Num, range: std::ops::RangeInclusive<Num>) -> Self {
-        let value_str = format!("{}", value.to_f64());
-        let is_integer = Num::INTEGRAL;
+    pub fn new<Num: egui_dock::egui::emath::Numeric>(
+        value: &'a mut Num,
+        range: std::ops::RangeInclusive<Num>,
+    ) -> VkbSliderOwned<'a, Num> {
         let min = range.start().to_f64();
         let max = range.end().to_f64();
-        Self {
-            value_str,
-            is_integer,
+        VkbSliderOwned {
+            num: VkbNum::new(value),
             min,
             max,
-            inner: egui_dock::egui::Slider::new(value, range),
+            text: None,
+            logarithmic: false,
+            suffix: None,
+            show_value: true,
+            step: None,
+            clamping: None,
+            drag_value_speed: None,
         }
     }
-
-    pub fn text(mut self, text: impl Into<egui_dock::egui::WidgetText>) -> Self { self.inner = self.inner.text(text); self }
-    pub fn logarithmic(mut self, logarithmic: bool) -> Self { self.inner = self.inner.logarithmic(logarithmic); self }
-    pub fn suffix(mut self, suffix: impl ToString) -> Self { self.inner = self.inner.suffix(suffix); self }
-    pub fn show_value(mut self, show_value: bool) -> Self { self.inner = self.inner.show_value(show_value); self }
-    pub fn step_by(mut self, step: f64) -> Self { self.inner = self.inner.step_by(step); self }
-    pub fn clamping(mut self, clamping: egui_dock::egui::SliderClamping) -> Self { self.inner = self.inner.clamping(clamping); self }
-    pub fn drag_value_speed(mut self, speed: impl Into<f64>) -> Self { self.inner = self.inner.drag_value_speed(speed.into()); self }
 }
 
-impl egui_dock::egui::Widget for VkbSlider<'_> {
-    fn ui(self, ui: &mut egui_dock::egui::Ui) -> egui_dock::egui::Response {
-        let response = self.inner.ui(ui);
-        let field_type = if self.is_integer { "integer" } else { "decimal" };
-        vkb_sync_full(ui, &response, &self.value_str, field_type, Some(self.min), Some(self.max));
+/// The actual slider builder (generic over the caller's numeric type).
+pub struct VkbSliderOwned<'a, Num: egui_dock::egui::emath::Numeric> {
+    num: VkbNum<'a, Num>,
+    min: f64,
+    max: f64,
+    text: Option<egui_dock::egui::WidgetText>,
+    logarithmic: bool,
+    suffix: Option<String>,
+    show_value: bool,
+    step: Option<f64>,
+    clamping: Option<egui_dock::egui::SliderClamping>,
+    drag_value_speed: Option<f64>,
+}
+
+impl<'a, Num: egui_dock::egui::emath::Numeric> VkbSliderOwned<'a, Num> {
+    pub fn text(mut self, text: impl Into<egui_dock::egui::WidgetText>) -> Self { self.text = Some(text.into()); self }
+    pub fn logarithmic(mut self, logarithmic: bool) -> Self { self.logarithmic = logarithmic; self }
+    pub fn suffix(mut self, suffix: impl ToString) -> Self { self.suffix = Some(suffix.to_string()); self }
+    pub fn show_value(mut self, show_value: bool) -> Self { self.show_value = show_value; self }
+    pub fn step_by(mut self, step: f64) -> Self { self.step = Some(step); self }
+    pub fn clamping(mut self, clamping: egui_dock::egui::SliderClamping) -> Self { self.clamping = Some(clamping); self }
+    pub fn drag_value_speed(mut self, speed: impl Into<f64>) -> Self { self.drag_value_speed = Some(speed.into()); self }
+}
+
+impl<Num: egui_dock::egui::emath::Numeric> egui_dock::egui::Widget for VkbSliderOwned<'_, Num> {
+    fn ui(mut self, ui: &mut egui_dock::egui::Ui) -> egui_dock::egui::Response {
+        use crate::config::precision;
+        let is_integer = Num::INTEGRAL;
+        let before = self.num.scratch;
+        let value_str = if is_integer {
+            format!("{}", before as i64)
+        } else {
+            precision::fmt_f32(before as f32)
+        };
+
+        let mut edited = before;
+        let mut sl = egui_dock::egui::Slider::new(&mut edited, self.min..=self.max)
+            .logarithmic(self.logarithmic)
+            .show_value(self.show_value);
+        if let Some(t) = self.text.clone() { sl = sl.text(t); }
+        if let Some(sx) = &self.suffix { sl = sl.suffix(sx.clone()); }
+        if let Some(st) = self.step { sl = sl.step_by(st); }
+        if let Some(c) = self.clamping { sl = sl.clamping(c); }
+        if let Some(sp) = self.drag_value_speed { sl = sl.drag_value_speed(sp); }
+        if !is_integer {
+            // egui otherwise derives the displayed decimals from the range
+            // (2..5 depending on span) and rounds the stored value to them,
+            // which is what put a floor of ~0.01 on fine-grained params.
+            sl = sl
+                .custom_formatter(|v, _| precision::fmt_f32(v as f32))
+                .custom_parser(|s| s.trim().parse::<f64>().ok());
+        }
+        let response = sl.ui(ui);
+
+        if edited != before {
+            // Dragging the handle snaps to a round decimal — a slider is a
+            // couple of hundred pixels wide, so arbitrary values are neither
+            // reachable on purpose nor worth storing. Typing is exact.
+            let snapped = if !is_integer && response.dragged() && self.step.is_none() {
+                if self.logarithmic {
+                    // A linear step is wrong on a log scale — see
+                    // precision::snap_to_significant.
+                    precision::snap_to_significant(edited, 4) as f64
+                } else {
+                    let step = precision::nice_step(self.max - self.min);
+                    precision::snap_to_step(edited, self.min, step) as f64
+                }
+            } else {
+                edited
+            };
+            self.num.commit(snapped);
+        }
+
+        let field_type = if is_integer { "integer" } else { "decimal" };
+        vkb_sync_full(ui, &response, &value_str, field_type, Some(self.min), Some(self.max));
         response
     }
 }
