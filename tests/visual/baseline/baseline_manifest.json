@@ -1,0 +1,588 @@
+{
+  "baseline_size": [
+    160,
+    120
+  ],
+  "generated_by": "tests/visual/run_tests.py --update-baseline",
+  "git_hash": "67ef42b1",
+  "images": {
+    "2d-plastic-sierpinski.png": {
+      "bytes": 34406,
+      "sha256": "624a3681054ad6532833dcf7b6d4b108c6d25b674f68e3e8121b770fe5d0c4e4"
+    },
+    "2d-simple-linear.png": {
+      "bytes": 3183,
+      "sha256": "c1550a22c7ea03d609224edd8a25990acb5400eab7a88428a279c2482af8bce8"
+    },
+    "2d-subflame-blob.png": {
+      "bytes": 1107,
+      "sha256": "9b59ad8093d6befb7622a08d485a64aeb4646eb7ce9f8d66b2c945242f80fa89"
+    },
+    "2d-subflame-julian.png": {
+      "bytes": 485,
+      "sha256": "75de3e4a8d75b0818ce0a8f499024be91c9aa75dfba2b6bcb6f05b3279961af8"
+    },
+    "2d-subflame-klein.png": {
+      "bytes": 977,
+      "sha256": "0bbd104a863006b79ab171ba13430bf2e2247465f7b0b3ef96b4e022cbb17e46"
+    },
+    "2d-subflame-smoke-2d.png": {
+      "bytes": 543,
+      "sha256": "6cc3458fcc1ac769ebaaaf21f73a81b41dc2ddbec886ddfa071a56edb48c455a"
+    },
+    "3d-affine3d-smoke.png": {
+      "bytes": 10166,
+      "sha256": "7ffdc6f7de360a1d31020c78d0f81bbda8af1153d22bb78e8f9e4754e1a1aeda"
+    },
+    "3d-bubble-3d.png": {
+      "bytes": 26935,
+      "sha256": "cec98cd8689fb115b6973dc551eb968e8bc4f7fd7a9a00a0c403674e00ec4c22"
+    },
+    "3d-cpow3_wf-smoke.png": {
+      "bytes": 31000,
+      "sha256": "3ad4d56b0551f8a5fbb7be9c48b4bd452df201bbcabffd045497ccf11c0036de"
+    },
+    "3d-flatten-smoke.png": {
+      "bytes": 4470,
+      "sha256": "09d00870fee93153ceb2c6578e93795c0689277065585ecc3792705990d80cd6"
+    },
+    "3d-flower_db-smoke.png": {
+      "bytes": 1265,
+      "sha256": "63544f9e154ed8b29d9e5d3e436098270b614669e3697c8b59505c8fff92285e"
+    },
+    "3d-hypercrop-smoke.png": {
+      "bytes": 10551,
+      "sha256": "a457a6523dbddb1b9698c338df66246df1a03e6b646b4452d7ce53f16f020c64"
+    },
+    "3d-maurer_rose-smoke.png": {
+      "bytes": 702,
+      "sha256": "d48b1541fe0ec8fc749721c2e0c64268f46e97edbc9e8581e4d4269758b2ee82"
+    },
+    "3d-murl-smoke.png": {
+      "bytes": 10985,
+      "sha256": "02c19ae7354338f7076f6326bde6dcd2a09640a316c44011be79ade5d9949f3d"
+    },
+    "3d-simple-zcone.png": {
+      "bytes": 274,
+      "sha256": "d183141b2eb52497bc718a63651b89b49fc37765460bdaff465b67b58c893073"
+    },
+    "3d-subflame-smoke.png": {
+      "bytes": 543,
+      "sha256": "62e2fb6433b60355ca0a7f21b9c21e0ff50567dc52d289a583d0ce029b6d5394"
+    },
+    "3d-swirl3-smoke.png": {
+      "bytes": 10151,
+      "sha256": "fe2411ed4404fb399211590e31c5449be6053c7e02a45ad3991d3e55a71a99d1"
+    },
+    "3d-swirl3D_wf-smoke.png": {
+      "bytes": 11159,
+      "sha256": "c5b32182d784db0aa48bad88e791881b4ad6c82c4d107ac17c6b74ca7eb09b0c"
+    },
+    "3d-zcone-smoke.png": {
+      "bytes": 1227,
+      "sha256": "4d2ee1681b618297a5c2bb68cf892db87215c8de7b3f5e78fb3e32d016312b94"
+    },
+    "3d-zscale-smoke.png": {
+      "bytes": 892,
+      "sha256": "e8bc31ce5af5761fda5263d7aca2f10fb3f3e16974f93e7560b912f5afb9c893"
+    },
+    "general-warmup.png": {
+      "bytes": 35605,
+      "sha256": "b7237c6474131dd9ef1651fb040bd10daf254fbc9578641c8fb906eeb11ac459"
+    },
+    "solid-solid-depth-effects.png": {
+      "bytes": 15892,
+      "sha256": "578d6a90808496f1b04c8f80cded505440d674dc419c8e56499d95b8c0876333"
+    },
+    "solid-solid-hard.png": {
+      "bytes": 21707,
+      "sha256": "91c08a0d60ef16389d170e7cdffb183d3c94ca5d2385eb76e87015fbb0010e6e"
+    },
+    "solid-solid-lit-transparent.png": {
+      "bytes": 21511,
+      "sha256": "f5f0a526e2670d5beca7db34c737aba632c2cab1d02c98438c6489866739b994"
+    },
+    "solid-solid-lit.png": {
+      "bytes": 23216,
+      "sha256": "ca7afee8dbedcd6899ff583289baeefa46a2be5f0e3ab1b33817519d17a1c1fa"
+    },
+    "solid-solid-shadows.png": {
+      "bytes": 23002,
+      "sha256": "69f936695f313e5908da4b74783685f2bfb7535cd38f9f64c6f8ad89a468fa8a"
+    },
+    "solid-solid-translucent.png": {
+      "bytes": 21236,
+      "sha256": "196ed501fe15d9959ee91e41af004bdbb456897bc414652d34dabc834a545086"
+    },
+    "tonemap-black-curve.png": {
+      "bytes": 136,
+      "sha256": "c72274a22cba2dcef62e0f62834446ee39b0cd95ad0faa27a89b3b49f48aa390"
+    },
+    "tonemap-white-curve.png": {
+      "bytes": 25969,
+      "sha256": "e7acd7fa082ca5ea681fb10f678869cb963544a941572eaf4d1400adb4c69445"
+    },
+    "variations-affine3d-smoke.png": {
+      "bytes": 838,
+      "sha256": "c43f4e0a7d10cc754015afc9c5505aaee68a97700baf9bb2e79fb8551f0c45bf"
+    },
+    "variations-apo-misc-smoke.png": {
+      "bytes": 25673,
+      "sha256": "596abfd06c41f7ed34500157d08c79625fcc7dcb6dcd9f678bd739c3bb64fc4c"
+    },
+    "variations-apo-misc10-smoke.png": {
+      "bytes": 34383,
+      "sha256": "a82141604e095f4feba3d15fd0e97c224bf8bdeb7f575592c5698dc107e5e9b7"
+    },
+    "variations-apo-misc11-smoke.png": {
+      "bytes": 36073,
+      "sha256": "f52f1e309d2dbf4c49c576c2c7ee5497990ced2ca65397eef48d349153cd1a5e"
+    },
+    "variations-apo-misc12-smoke.png": {
+      "bytes": 6311,
+      "sha256": "c11245358c120aba0364825bb552db307b02fa012b42fcdb16f80ed8a552a387"
+    },
+    "variations-apo-misc13-smoke.png": {
+      "bytes": 3335,
+      "sha256": "44e74d9831fe8f5ff59a17f8c9ca9fb35d4439755d9cf15bfb384f6f9292686c"
+    },
+    "variations-apo-misc14-smoke.png": {
+      "bytes": 2516,
+      "sha256": "af388ef1abaa6199ec9e298ce0cda35d7ec7e98ea92f0a643c49b029bc47c821"
+    },
+    "variations-apo-misc15-smoke.png": {
+      "bytes": 4570,
+      "sha256": "4e58cfb585d6cc4f2c7e198b7cc3f60291394923d4be6a9905839917d40aaa98"
+    },
+    "variations-apo-misc16-smoke.png": {
+      "bytes": 1985,
+      "sha256": "785bcfcc5a75a0c01d29824b9fc426fd6d34f66d92197ca0911ef5b24e40b00f"
+    },
+    "variations-apo-misc17-smoke.png": {
+      "bytes": 8153,
+      "sha256": "002d132f471750e9e2ba1606a6fde0313dc855facdf2d34bc367ad4d8c4a61da"
+    },
+    "variations-apo-misc7-smoke.png": {
+      "bytes": 18529,
+      "sha256": "f6723b494964ddd56d5ddd9de6d86a8699fee64b7cfcf7af2ffdf38d080705f0"
+    },
+    "variations-apo-misc8-smoke.png": {
+      "bytes": 6805,
+      "sha256": "7d0a0dcbfc2d1a850ae6125e81268c80a4c8791f87ab5a279110dc597d0cb01c"
+    },
+    "variations-apo-misc9-smoke.png": {
+      "bytes": 3142,
+      "sha256": "79bdc347f48141955f72e0cd469aeb272d91b0bca2db9ab79b026da35cee22f9"
+    },
+    "variations-apo_misc18-smoke.png": {
+      "bytes": 6430,
+      "sha256": "1ca21f16bcb92cc03e5e506f4397f0041a9ff8410ad2b3c550a0a0a89e166617"
+    },
+    "variations-apo_misc19-smoke.png": {
+      "bytes": 4776,
+      "sha256": "4416376e6185766d5abb79a82f339ecbad52fae0983808f9875940794be26751"
+    },
+    "variations-apo_misc20-smoke.png": {
+      "bytes": 30851,
+      "sha256": "4ebe80862eaf4a0c93ee34b471c5b20b328239925633ddab78d78b1f5722d229"
+    },
+    "variations-apo_misc21-smoke.png": {
+      "bytes": 9868,
+      "sha256": "6cc22bd4305e7af1226553b21e782e821a48d58e6fb46edf4fa72a73774f56cc"
+    },
+    "variations-apo_misc22-smoke.png": {
+      "bytes": 9832,
+      "sha256": "34bab10b8c90a9d6a3d810c31759a8dac45ded514f9774318649423a6165cf38"
+    },
+    "variations-bipolar-series-smoke.png": {
+      "bytes": 20139,
+      "sha256": "f938a611396375d1def7ce02e618c59ed86bceed062cdbbf91d1055a9d3654a0"
+    },
+    "variations-blur-extras-smoke.png": {
+      "bytes": 4630,
+      "sha256": "7cbc57bc40a2e884910f794a65216be167c46cdc9ddfff930b87c3712b8dcbc6"
+    },
+    "variations-boarders-smoke.png": {
+      "bytes": 25791,
+      "sha256": "3ccc2aebde8d3bbb8543a58ed8f23ddb3a9e4aaee61c3f08eea12ef2fc6aa269"
+    },
+    "variations-bubblet3d-smoke.png": {
+      "bytes": 1302,
+      "sha256": "38af695193ace0db0c1fe8327823341d0d25778f712d3ffed811989510ecdcbe"
+    },
+    "variations-butterfly-fay-smoke.png": {
+      "bytes": 7600,
+      "sha256": "3103d21e0631af4c9d6dac13cd1f15dc79c4161882a5c2a44ec8fd070718d7e1"
+    },
+    "variations-bwraps2-phase-smoke.png": {
+      "bytes": 561,
+      "sha256": "3b1aed8fdb5b7834f3f53074f54777a6984350908053b5d8ca1477eaf2e7cde2"
+    },
+    "variations-bwraps7-smoke.png": {
+      "bytes": 1296,
+      "sha256": "cdd5c4f82f71b4af513886021cd31a9885056ae9a6f8121feab70b0dbf65f216"
+    },
+    "variations-circle-blur-smoke.png": {
+      "bytes": 4464,
+      "sha256": "7120c40534fe0cbc80e126a60f2c9c7a5a039b9b6f555317b7b6de2213808fd4"
+    },
+    "variations-circle_rand_misc-smoke.png": {
+      "bytes": 34737,
+      "sha256": "7bf5e6003c509e42e9785e971def44c1741c09f1049b673bc692d4f475a02cca"
+    },
+    "variations-circlecrop-exblur-smoke.png": {
+      "bytes": 443,
+      "sha256": "0965554fcaa69b3e300fca715aaf97ffdef7eec99fb5a914fa40a57e1243e7fc"
+    },
+    "variations-circlecrop-phase-smoke.png": {
+      "bytes": 273,
+      "sha256": "1edaed9162750bb9142516c84ad2d6f5d8d49dec21cc08c2b7af7b02458f9cef"
+    },
+    "variations-classic-2d-smoke.png": {
+      "bytes": 4434,
+      "sha256": "28c2010e60c7f86aa519afa48607594f84e4daf8749e03c51a91f8b935b06060"
+    },
+    "variations-classic-blades-misc-smoke.png": {
+      "bytes": 26120,
+      "sha256": "efd313d180f1f2281102e887add8ece2d5e1d7737ec42d1aca09022defe7381c"
+    },
+    "variations-complex-smoke.png": {
+      "bytes": 583,
+      "sha256": "22468a0b19a789246a81de39ad0b4fc99cb6aa4648e33a02a5d7325c936c831a"
+    },
+    "variations-curl-sp-smoke.png": {
+      "bytes": 960,
+      "sha256": "78c8b313c82521d8f3babcb41a75f65209d6fabc8c92548e31acf87fd425ed53"
+    },
+    "variations-curliecue2-smoke.png": {
+      "bytes": 13424,
+      "sha256": "16a43f89701c631c5c3ebca7df496907dcab6c7f535cd7ef4edb7d5ed9eef472"
+    },
+    "variations-dc-smoke.png": {
+      "bytes": 588,
+      "sha256": "c3668dd807d40d8d0ad7d59be681548ff190b450eb536d32ecc7e6b902bcddbd"
+    },
+    "variations-dc_carpet3d-smoke.png": {
+      "bytes": 4822,
+      "sha256": "bef6c98097b08ba0ec2b45bac8a18bdbde611d2053f1e377363963ab76f9e5e3"
+    },
+    "variations-dc_misc-smoke.png": {
+      "bytes": 4635,
+      "sha256": "105c84de6bb5540beb667d603d4a0060339aabebe1431223c44def3f11abf28b"
+    },
+    "variations-dc_misc2-smoke.png": {
+      "bytes": 4394,
+      "sha256": "b3bb8db982245d45aebbc64a5c057f7dfc357aa74b1d9f9433bd7a1608774ead"
+    },
+    "variations-erf-misc-smoke.png": {
+      "bytes": 21392,
+      "sha256": "87cc955458bfdfeb119e750e5b8139cd0660c8d1f85ca649805f7310331307f4"
+    },
+    "variations-extrude-smoke.png": {
+      "bytes": 444,
+      "sha256": "9c8a262eb525e4538db1b41226f8f1d48412cddb83e6fe2b14633dedbc08c883"
+    },
+    "variations-farblur-smoke.png": {
+      "bytes": 1717,
+      "sha256": "1abe4e82715bce9110bd94753f321c48c457fecab2c2fb201bee6925698bfac7"
+    },
+    "variations-gamma-smoke.png": {
+      "bytes": 5948,
+      "sha256": "229e1ee1c9f2648932c5519fdab68564d6e091e8511c03cd3761ab373ba3b478"
+    },
+    "variations-glynn-smoke.png": {
+      "bytes": 23753,
+      "sha256": "bbf11eadddbdae438443937490d71cff3eb34ec99e4a0106b6f83f86c745450c"
+    },
+    "variations-glynnlissa-smoke.png": {
+      "bytes": 3479,
+      "sha256": "20117c076804c0f4fd9763fbaa94734b85d65b28b4029d1490fb925507f132a2"
+    },
+    "variations-glynnspiro-smoke.png": {
+      "bytes": 3144,
+      "sha256": "113f6228e94f7a86c122a99dab3e89c620ac1eacb5e382f9d62085665b2b99dc"
+    },
+    "variations-glynnsshape-smoke.png": {
+      "bytes": 3138,
+      "sha256": "b7b7d91eb75d1b5e4bcdc74476e0b0bd5e0898e0f2aa4031b6473fbf20d41869"
+    },
+    "variations-gridout3d-jubiq-smoke.png": {
+      "bytes": 1103,
+      "sha256": "ab30c35d39bdc809db128fff075c084f21992c3eed40999f19bc55d37dec2c77"
+    },
+    "variations-harmonograph-smoke.png": {
+      "bytes": 2437,
+      "sha256": "2306868f38675ea7dcf386d2f19d10ac08f50ed6e2e617353f221d0f7f9da6cb"
+    },
+    "variations-hexaplay3d-smoke.png": {
+      "bytes": 855,
+      "sha256": "da0eee6b165ba31c40c656279c4cc2759f3e68ca4fc043a5e0ea53f71c3005c8"
+    },
+    "variations-hexnix3d-smoke.png": {
+      "bytes": 4180,
+      "sha256": "a3581c6c17ee92746ece10052ecc49ef295c078b3a7ac42ec4142381484013b6"
+    },
+    "variations-hypertile-poincare.png": {
+      "bytes": 28825,
+      "sha256": "2ff16987ec71c714c136eabfbb1117642f8432df81db98182fe0f3e248178825"
+    },
+    "variations-hypertile-smoke.png": {
+      "bytes": 4079,
+      "sha256": "8c7a5feba333b3f741ef6bf8067f34c5ae899d9d23c7a4e063512e3afd02f661"
+    },
+    "variations-hypertile3d-smoke.png": {
+      "bytes": 1803,
+      "sha256": "c7b3c0e1209886eff7386b2e62c0b00c94133f9f3163aba7b4d916717a6122d0"
+    },
+    "variations-iconattractor_js-smoke.png": {
+      "bytes": 8171,
+      "sha256": "086396f6a6e5cf66694be3ba227dc0b098f9923656fa0f8df58f1545896e829c"
+    },
+    "variations-inflate-z-smoke.png": {
+      "bytes": 10304,
+      "sha256": "ceabb2176b2b6bb8893ddcfb8d04dc78ed7bb7dbcd737dff519de95e10cd5802"
+    },
+    "variations-init-migration-smoke.png": {
+      "bytes": 603,
+      "sha256": "7c5320174aa63b69545cd8ff3e1948f0f419f811d295f951da900c281594ebac"
+    },
+    "variations-internal-weight-smoke.png": {
+      "bytes": 8716,
+      "sha256": "078bb537958d81b45dd727a33dbdb1e31d3021566cc0b4386e8f32de78d1100d"
+    },
+    "variations-jac_asn-smoke.png": {
+      "bytes": 2887,
+      "sha256": "5e8711f8aa505107e38d6ec296f366c096f92fc67c8783443d3751123064b609"
+    },
+    "variations-jacobi-elliptic-smoke.png": {
+      "bytes": 353,
+      "sha256": "68d69dab2ac5089d96764e805df5c9929b4394f04676a748e5236790b9a5a29a"
+    },
+    "variations-klein-grandma-smoke.png": {
+      "bytes": 4767,
+      "sha256": "d5a3b75b2128e54cd1a1ff83122dca77b7498a2f7d79464437378a3b67256b6d"
+    },
+    "variations-klein-maskit-smoke.png": {
+      "bytes": 6992,
+      "sha256": "acb74a915fc93d7aef1f954d2f289737b7c4950d93a56a330b249e20dc3f5063"
+    },
+    "variations-klein-riley-smoke.png": {
+      "bytes": 1348,
+      "sha256": "ce7fca408a47bf147893e75a3c617c4817005a5f8da0e25b52df2186da6479fa"
+    },
+    "variations-lazy-family-smoke.png": {
+      "bytes": 353,
+      "sha256": "af53989cf912372fb8391771fbab24360ca6edbe9a130422ed7124b34847d9ab"
+    },
+    "variations-macmillan-smoke.png": {
+      "bytes": 786,
+      "sha256": "9ba1348f21b8ba783953745c177f2165ab57db3b0f4600e1b9d67a9cda3a3432"
+    },
+    "variations-maurer-hyper-smoke.png": {
+      "bytes": 6740,
+      "sha256": "79e6496876cbf96f0dbb10e21ca0bfc2878fbb5e231053a35d9cdfb3aa4a1b40"
+    },
+    "variations-minkowskope-smoke.png": {
+      "bytes": 348,
+      "sha256": "5277d543d01931430900e81232d90a132ebf8c51b363cb7d1a10afcbd599e9a1"
+    },
+    "variations-misc-2d-smoke.png": {
+      "bytes": 29810,
+      "sha256": "94b9d2fd224bc24ba09ddc4fa5abd81988941fdf554e025591fc760c55f65a3e"
+    },
+    "variations-misc-extras-smoke.png": {
+      "bytes": 29962,
+      "sha256": "e549e21c9d441ca1befda0944cb3314439d978d89bcdfa622eedeba24cff6f69"
+    },
+    "variations-misc-extras2-smoke.png": {
+      "bytes": 11338,
+      "sha256": "cc88e72387204fb23540069cebc18737fdb05c9638293d44280c84d54d777b04"
+    },
+    "variations-misc-extras3-smoke.png": {
+      "bytes": 10244,
+      "sha256": "68b05e4615efab84309633ec4ecd615cbe950284584d648054014d6d9156263f"
+    },
+    "variations-misc-extras4-smoke.png": {
+      "bytes": 11373,
+      "sha256": "755619e4feed24050680fd70e4a38ac89ffcc10208907d23c5d42476318a0e29"
+    },
+    "variations-misc-variations.png": {
+      "bytes": 29889,
+      "sha256": "b394dbc8cabee38417d79c1d7ed8a213a4180395e49cc22919023fadb2f086c1"
+    },
+    "variations-misc-variations2.png": {
+      "bytes": 28218,
+      "sha256": "f5d78c34ed34ba31f7997a6251184314bcf63ee321b27ddbb7612eeddbdeba79"
+    },
+    "variations-mobius-extended-smoke.png": {
+      "bytes": 7235,
+      "sha256": "a825d8ba6846353a0bd9a439fb7aee0b226e4d69162944630b6fe9b6add5e6a6"
+    },
+    "variations-numbered-extras-smoke.png": {
+      "bytes": 7273,
+      "sha256": "3c649860267e9de4c8a833f1971ed2ca3755fbc0a0cf5123d7c8e47d198f6b6c"
+    },
+    "variations-onion2-smoke.png": {
+      "bytes": 650,
+      "sha256": "2768a66f44872636278d3135f54003e97f0f0be16e6e3e7afdeb2829aa444552"
+    },
+    "variations-parametric-curves-smoke.png": {
+      "bytes": 31091,
+      "sha256": "51f8e1b7d26ac4e9253faecd8aae3f437985385ed446d98b6c88ce6e0096b8c4"
+    },
+    "variations-plusrecip-smoke.png": {
+      "bytes": 3036,
+      "sha256": "e33c512393d6f00e1d9881bbdc7a2adf0495a1e6a749ec5fe02fad2cdf7e2a3e"
+    },
+    "variations-pointgrid_misc-smoke.png": {
+      "bytes": 34622,
+      "sha256": "0479749cf370bbfe32a662ca5d3a2002eb0734cafb3eacc05956cf27d0474f4f"
+    },
+    "variations-popcorn2_3d-smoke.png": {
+      "bytes": 633,
+      "sha256": "898d1ea85970298cc656e246b5c7e7e2ed4a1b55b3c79e3061d20d79878ca644"
+    },
+    "variations-post-heat-smoke.png": {
+      "bytes": 20080,
+      "sha256": "868352d0ec328ef7447cf9d437e941d209f56261dba3434ba652742de8671267"
+    },
+    "variations-post-rblur-smoke.png": {
+      "bytes": 14841,
+      "sha256": "43975c6282a81bce4cbb7d0895ab212a8f197dcd38b5e591d1b869b2cbc7895d"
+    },
+    "variations-post_axis_symmetry-smoke.png": {
+      "bytes": 5511,
+      "sha256": "af869a067448ad1f65fa80e9f856ca10fe0a4bfb01183e38144a85a7e5b88d71"
+    },
+    "variations-pre-post-bridges-smoke.png": {
+      "bytes": 8218,
+      "sha256": "939572cee6ea3e3b5ebf71a645b7ca8ae03d90fc0a0e11c48b422f1e64db1861"
+    },
+    "variations-pre_wave3d-smoke.png": {
+      "bytes": 699,
+      "sha256": "fde1e34008dc23101a88f4b59262117e9b49767fd9b4d4c3439627830f6cb26a"
+    },
+    "variations-quaternion-smoke.png": {
+      "bytes": 1936,
+      "sha256": "90b563921a30c7bf3f77a65fc7e28b4c80421a6b85fcbded16cce1cd2761ae8a"
+    },
+    "variations-radial-extras-smoke.png": {
+      "bytes": 2858,
+      "sha256": "dc3a07bfee486bc1cb18e5725a3edbfaa26c7374167cf647544f7d9c7c101697"
+    },
+    "variations-rhodonea-smoke.png": {
+      "bytes": 1482,
+      "sha256": "613d2f7ab1c5503e9ef3d815acc2cafaaf7de8c8d09ac762694b6655c2faac2d"
+    },
+    "variations-rosoni-smoke.png": {
+      "bytes": 426,
+      "sha256": "432b2b3ce32324eaac00f9a4917282254d1e823dad829cbbb887cb7976a152db"
+    },
+    "variations-shapes3-smoke.png": {
+      "bytes": 36829,
+      "sha256": "7e3c9ba262c1df2525bcd3955779f201399294bbfa5cf5b1b78da35106b2fef5"
+    },
+    "variations-siercarpet_js-smoke.png": {
+      "bytes": 14470,
+      "sha256": "dda6b262d90f1ce6b27c44c30f989266c32b951af78cfb6b5f7bc8ec5d48056f"
+    },
+    "variations-simple-classics-smoke.png": {
+      "bytes": 32970,
+      "sha256": "55a4b0a613e5f1479bf079b76221179189731fa8eddac4345ae9d3b1012eb31c"
+    },
+    "variations-singleton-misc-smoke.png": {
+      "bytes": 24440,
+      "sha256": "f13b7f83f89912fb49068b488d8364897a24a3d7c044e07f1caf1b694d79fc5b"
+    },
+    "variations-sosa_attractors-smoke.png": {
+      "bytes": 27631,
+      "sha256": "279da554633bebd8f013446e394d3c35befb41dc3e801c6673ff02db286b0d44"
+    },
+    "variations-sosa_attractors2-smoke.png": {
+      "bytes": 3410,
+      "sha256": "dc27989ffc7b66254d3b72c9a051991e9af705a8e5af74b8abea279a59748a1b"
+    },
+    "variations-sosa_attractors3-smoke.png": {
+      "bytes": 15044,
+      "sha256": "a6e846728638095e250dcf5f46f364e6951947df97339c5c8209f2ba3697099c"
+    },
+    "variations-sosa_attractors4-smoke.png": {
+      "bytes": 31471,
+      "sha256": "2b9cb86d4e21dcf1683f5e864d305b3e627e0d0c60c5bc4199c41af4d5b408e5"
+    },
+    "variations-spin-phase-smoke.png": {
+      "bytes": 19035,
+      "sha256": "c42faffd527e7faf3fd0aec0c7dc64815591e88e5f603abaf710e1e9992971d1"
+    },
+    "variations-standalone-exotics-smoke.png": {
+      "bytes": 27494,
+      "sha256": "577ed63257ad35af535a32eb4ecd2835476eba1f08aeaa959397ca41748e8fa1"
+    },
+    "variations-stub-recoveries-smoke.png": {
+      "bytes": 22721,
+      "sha256": "c221af840c39a68cf48c158fb854f9955d579ae21aa40a77f89957d31e7a5d92"
+    },
+    "variations-stub-recoveries2-smoke.png": {
+      "bytes": 35047,
+      "sha256": "ce5edd4e2c0adb97abf555bad0522131331e539fa6ee8174eb0ed85b10e4c009"
+    },
+    "variations-supershape3d-smoke.png": {
+      "bytes": 4063,
+      "sha256": "b53d195d75cb7ced92e972d35b845da99b6d766bbf53008cc6c7d35b140a9797"
+    },
+    "variations-truchet-smoke.png": {
+      "bytes": 850,
+      "sha256": "3236903a89ffe5f6cc0e3c2667fb37858832852a23c0c69c16eea6a91f2b89e7"
+    },
+    "variations-truchet-tw-smoke.png": {
+      "bytes": 356,
+      "sha256": "026dbe82a56854b365b46bc0c80751e281007ea00bda8023325c4bcffa24910f"
+    },
+    "variations-truchet2-smoke.png": {
+      "bytes": 7046,
+      "sha256": "a93f83b23020271cae21bda12a1e37e3478b5ab9b594619d73553a21221ae5f1"
+    },
+    "variations-vibration2-smoke.png": {
+      "bytes": 1615,
+      "sha256": "94b9441af192e26a88e79faf32ece80fd4a6c6da55cf7044730c34607c35c3b1"
+    },
+    "variations-watchlist-misc-smoke.png": {
+      "bytes": 34836,
+      "sha256": "ea97c5ca1b9d1ed522227dc32f168ebd35ef025ff6c606d965cbf2b0d85f4c18"
+    },
+    "variations-waveblur_wf-smoke.png": {
+      "bytes": 5058,
+      "sha256": "2d0badc7259395e83721f2beb2ceb8b93b5862759628b69f13ab15be9dad7f33"
+    },
+    "variations-waves2b-smoke.png": {
+      "bytes": 577,
+      "sha256": "07e6e7c077b1f8b8bf2e3059a7e1b568bacff3b47cef6a7abefee6b91ca7cfda"
+    },
+    "variations-waves_wf_family-smoke.png": {
+      "bytes": 6279,
+      "sha256": "31692219ed95dbf3a53ced35bcfb26df7d851fa62bcdc89c908df421a54b613c"
+    },
+    "variations-wedge-extended-smoke.png": {
+      "bytes": 32522,
+      "sha256": "ac684e1c01cd6412a7b00cb30a2a200ca52df7116686845900baaf7aeec9cdad"
+    },
+    "variations-weight-hack-smoke.png": {
+      "bytes": 19388,
+      "sha256": "17503963baa403e7ddaeba543e4f24ddbb4ef7c7fa54b219e10c70cc994cd199"
+    },
+    "variations-wf_curves-smoke.png": {
+      "bytes": 9465,
+      "sha256": "46d5aad5b107f5fd684c29554d5086db099dd5432a5396ca8a2d2e77673d0a8d"
+    },
+    "variations-wz-lost-smoke.png": {
+      "bytes": 2255,
+      "sha256": "712e1433cc54a46c38de714ffc63729399f9c1822753d428d6c8ab40525c9e10"
+    },
+    "variations-xtrb-smoke.png": {
+      "bytes": 4934,
+      "sha256": "aedd1d356a46c2e1f66b8b8cb916c9ef3b54a3540433c5f03743823ddd18de24"
+    }
+  },
+  "tolerance_max": 40.0,
+  "tolerance_mean": 2.0
+}
