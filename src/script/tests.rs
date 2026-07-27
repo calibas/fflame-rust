@@ -799,3 +799,78 @@ fn contractiveness_does_not_depend_on_hash_order() {
     ]);
     assert_eq!(forward, reverse, "sum order changed the result");
 }
+
+#[test]
+fn decompose_schottky_reproduces_the_packed_group() {
+    // The packed schottky_group variation holds four Mobius generators and
+    // picks one per iteration. Decomposing emits them as four transforms;
+    // the group must survive the move intact.
+    let host = ScriptHost::new();
+    let packed = host
+        .run(
+            r#"
+                script("S", "generator");
+                let t = flame.add_transform();
+                t.add_variation("schottky_group", 1.0);
+                t.weight = 1.0;
+            "#,
+            &FractalConfig::default(),
+            1,
+            HashMap::new(),
+        )
+        .unwrap()
+        .config;
+
+    let source = include_str!("../../assets/scripts/modifiers/decompose_schottky.rhai");
+    let out = host.run(source, &packed, 1, HashMap::new()).unwrap();
+    let flame = &out.config.flame;
+
+    assert_eq!(flame.transforms.len(), 4, "one transform per generator");
+    for (i, t) in flame.transforms.iter().enumerate() {
+        assert!(t.variations.contains_key("mobius"), "generator {i} carries mobius");
+        for name in ["re_a", "im_a", "re_b", "im_b", "re_c", "im_c", "re_d", "im_d"] {
+            let key = format!("mobius.{name}");
+            assert!(
+                t.variation_params.contains_key(&key),
+                "generator {i} is missing {key}"
+            );
+            assert!(
+                t.variation_params[&key].is_finite(),
+                "generator {i}: {key} is not finite"
+            );
+        }
+    }
+
+    // The word rule survives as xaos: a generator can never be followed by
+    // its own inverse, which sits 2 slots away in [a, b, a', b'].
+    let xaos = flame.xaos.as_ref().expect("word rule became xaos");
+    for from in 0..4 {
+        assert_eq!(
+            xaos[from][(from + 2) % 4],
+            0.0,
+            "from {from}: the inverse must be unreachable"
+        );
+    }
+
+    // Generators and their inverses are genuinely different maps.
+    let coeff = |i: usize, n: &str| flame.transforms[i].variation_params[&format!("mobius.{n}")];
+    assert_ne!(coeff(0, "re_b"), coeff(2, "re_b"), "a and a-inverse differ");
+
+    // Run on a flame with no schottky_group: report, don't wreck it.
+    let plain = host
+        .run(
+            r#"script("P", "generator"); let t = flame.add_transform(); t.add_variation("linear", 1.0);"#,
+            &FractalConfig::default(),
+            1,
+            HashMap::new(),
+        )
+        .unwrap()
+        .config;
+    let out = host.run(source, &plain, 1, HashMap::new()).unwrap();
+    assert_eq!(out.config.flame.transforms.len(), 1, "left the flame alone");
+    assert!(
+        out.messages.iter().any(|m| m.contains("No schottky_group")),
+        "said why nothing happened: {:?}",
+        out.messages
+    );
+}

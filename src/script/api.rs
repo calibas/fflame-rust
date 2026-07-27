@@ -139,6 +139,7 @@ pub(crate) fn register(
     register_config(engine, Rc::clone(&state));
     register_palettes(engine, Rc::clone(&state));
     register_registry_queries(engine);
+    register_builtins(engine);
 
     // print()/debug() are a beginner's main debugging tool, and stdout is
     // invisible in-app and on the web — capture them for the caller.
@@ -386,6 +387,43 @@ fn register_flame(engine: &mut Engine) {
             Ok(TransformHandle { cfg: Rc::clone(&f.cfg), pool: Pool::Final, idx })
         },
     );
+
+    // Xaos: how likely each transform is to follow each other one.
+    // xaos[from][to]; 1.0 is neutral, 0.0 forbids the transition.
+    engine.register_fn(
+        "set_xaos",
+        |f: &mut FlameHandle, from: i64, to: i64, weight: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            let weight = num(&weight, "xaos weight")? as f32;
+            let mut cfg = f.cfg.borrow_mut();
+            let n = cfg.flame.transforms.len();
+            let (from, to) = (
+                usize::try_from(from).map_err(|_| err("xaos index must be >= 0"))?,
+                usize::try_from(to).map_err(|_| err("xaos index must be >= 0"))?,
+            );
+            if from >= n || to >= n {
+                return Err(err(format!(
+                    "xaos index out of range (flame has {n} transforms)"
+                )));
+            }
+            let table = cfg.flame.xaos.get_or_insert_with(|| vec![vec![1.0; n]; n]);
+            // Grow if transforms were added after the table was created.
+            if table.len() != n || table.iter().any(|r| r.len() != n) {
+                let mut grown = vec![vec![1.0f32; n]; n];
+                for (i, row) in table.iter().enumerate().take(n) {
+                    for (j, v) in row.iter().enumerate().take(n) {
+                        grown[i][j] = *v;
+                    }
+                }
+                *table = grown;
+            }
+            table[from][to] = weight;
+            Ok(())
+        },
+    );
+
+    engine.register_fn("clear_xaos", |f: &mut FlameHandle| {
+        f.cfg.borrow_mut().flame.xaos = None;
+    });
 
     engine.register_fn("clear_transforms", |f: &mut FlameHandle| {
         f.cfg.borrow_mut().flame.transforms.clear();
@@ -1053,6 +1091,89 @@ fn register_palettes(engine: &mut Engine, state: Rc<RefCell<ScriptState>>) {
             .map(|p| Dynamic::from(p.name.clone()))
             .collect()
     });
+}
+
+// ------------------------------------------------------------- built-ins
+
+/// Group recipes and the helpers that map them onto transforms.
+fn register_builtins(engine: &mut Engine) {
+    use crate::script::builtins::{avoid_xaos_row, schottky_generators, Circle};
+
+    // schottky_generators([[x,y,r] x 4], twist_a, twist_b) -> 4 x 8 numbers
+    engine.register_fn(
+        "schottky_generators",
+        |circles: Array, twist_a: Dynamic, twist_b: Dynamic| -> Result<Array, Box<EvalAltResult>> {
+            let (twist_a, twist_b) = (num(&twist_a, "twist A")?, num(&twist_b, "twist B")?);
+            if circles.len() != 4 {
+                return Err(err(format!(
+                    "schottky_generators needs 4 circles as [x, y, radius], got {}",
+                    circles.len()
+                )));
+            }
+            let mut parsed = [Circle { x: 0.0, y: 0.0, r: 1.0 }; 4];
+            for (i, c) in circles.iter().enumerate() {
+                let arr = c
+                    .clone()
+                    .into_array()
+                    .map_err(|_| err(format!("circle {i} must be [x, y, radius]")))?;
+                if arr.len() != 3 {
+                    return Err(err(format!("circle {i} must be [x, y, radius]")));
+                }
+                parsed[i] = Circle {
+                    x: num(&arr[0], "circle x")?,
+                    y: num(&arr[1], "circle y")?,
+                    r: num(&arr[2], "circle radius")?,
+                };
+            }
+            Ok(schottky_generators(parsed, twist_a, twist_b)
+                .iter()
+                .map(|m| {
+                    Dynamic::from(
+                        m.to_params()
+                            .iter()
+                            .map(|v| Dynamic::from(*v))
+                            .collect::<Array>(),
+                    )
+                })
+                .collect())
+        },
+    );
+
+    // The xaos row reproducing a Schottky group's "never undo the last
+    // generator" rule, for transform `from` of four.
+    engine.register_fn("avoid_xaos_row", |from: i64| -> Result<Array, Box<EvalAltResult>> {
+        let from = usize::try_from(from).map_err(|_| err("transform index must be >= 0"))?;
+        if from >= 4 {
+            return Err(err("avoid_xaos_row expects a 4-generator group (index 0-3)"));
+        }
+        Ok(avoid_xaos_row(from).iter().map(|v| Dynamic::from(*v as f64)).collect())
+    });
+
+    // Write a generator onto a transform: adds `mobius` and its 8 params.
+    engine.register_fn(
+        "set_mobius",
+        |t: &mut TransformHandle, coeffs: Array| -> Result<(), Box<EvalAltResult>> {
+            if coeffs.len() != 8 {
+                return Err(err(format!(
+                    "set_mobius expects 8 numbers [re_a, im_a, re_b, im_b, re_c, im_c, re_d, im_d], got {}",
+                    coeffs.len()
+                )));
+            }
+            let names = [
+                "re_a", "im_a", "re_b", "im_b", "re_c", "im_c", "re_d", "im_d",
+            ];
+            let mut values = [0.0f32; 8];
+            for (i, d) in coeffs.iter().enumerate() {
+                values[i] = num(d, "mobius coefficient")? as f32;
+            }
+            t.with(|x| {
+                x.set_variation("mobius", 1.0);
+                for (name, v) in names.iter().zip(values) {
+                    x.variation_params.insert(format!("mobius.{name}"), v);
+                }
+            })
+        },
+    );
 }
 
 // -------------------------------------------------------- registry queries
