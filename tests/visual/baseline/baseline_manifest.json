@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "f986cf5a",
+  "git_hash": "3712c1ea",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 34406,

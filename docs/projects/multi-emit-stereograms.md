@@ -256,6 +256,23 @@ clipping in-variation proves awkward in practice.
 
 ## Field notes (post-implementation)
 
+- **Relative emissions** (`emit_plot_offset`): a per-emission bit marks
+  the point as an offset that the plot stage adds to `final_pos` — the
+  true end-of-chain position, post-affine and Final chain included.
+  This is what lets blur-style emitters sit on ANY transform: their
+  copies center on whatever actually plots, instead of being frozen in
+  the coordinate frame where the variation happened to run.
+  `spray_blur` uses it; `stereogram` / `multi_kaleidoscope` remain
+  absolute (they construct positions, not perturbations).
+
+- **`spray_blur` is POST-phase**: its identity return originally entered
+  the normal-phase weighted sum as `weight × p` — a phantom `linear`
+  that visibly bent anything sharing the transform (reported with
+  von_dyck) before the blur even applied. Post dispatch is
+  `result = f(result)`, making the pass-through exact at any weight;
+  the cost is that a transform with ONLY spray has an empty
+  normal-phase result and needs a companion `linear` 1 (tooltipped).
+
 - **Triptych spacing vs convergence**: the L-R-L eye pattern turns the
   per-eye convergence displacement `e·b/2·(1/zr_conv − 1/zr_content)`
   into content offsets (−off, +off, −off), so pair 1-2 spacing grows by
