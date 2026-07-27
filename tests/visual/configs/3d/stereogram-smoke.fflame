@@ -1,0 +1,187 @@
+{
+ "flame": {
+  "final_transforms": [
+   {
+    "a": 1.0,
+    "b": 0.0,
+    "c": 0.0,
+    "color": 0.5,
+    "color_speed": 0.0,
+    "d": 1.0,
+    "direct_color": 1.0,
+    "e": 0.0,
+    "f": 0.0,
+    "g": 0.0,
+    "opacity": 1.0,
+    "variation_order": [
+     "hyperbolic_camera"
+    ],
+    "variation_params": {
+     "stereogram.baseline": 0.2,
+     "stereogram.z_conv": 1.0,
+     "stereogram.view": 0.0,
+     "stereogram.panel_width": 2.4,
+     "stereogram.gap": 0.08,
+     "stereogram.eye_weight": 1.0
+    },
+    "variations": {
+     "stereogram": 1.0
+    },
+    "weight": 1.0
+   }
+  ],
+  "name": "Default",
+  "transforms": [
+   {
+    "a": 1.0,
+    "b": 0.0,
+    "c": 0.0,
+    "color": 0.5,
+    "color_speed": 0.0,
+    "d": 1.0,
+    "direct_color": 1.0,
+    "e": 0.0,
+    "f": 0.0,
+    "final_attachments": [
+     0
+    ],
+    "g": 0.0,
+    "opacity": 1.0,
+    "variation_order": [
+     "von_dyck"
+    ],
+    "variation_params": {
+     "von_dyck.color_speed": 0.5,
+     "von_dyck.dc_mode": 1.0,
+     "von_dyck.dc_scale": 1.0,
+     "von_dyck.p": 2.0,
+     "von_dyck.q": 3.0,
+     "von_dyck.r": 7.0,
+     "von_dyck.seed": 2.0,
+     "von_dyck.size": 1.0,
+     "von_dyck.space": 1.0,
+     "von_dyck.steps": 3.0,
+     "von_dyck.thickness": 0.019999999552965164
+    },
+    "variations": {
+     "von_dyck": 1.0
+    },
+    "weight": 1.0
+   }
+  ]
+ },
+ "levels_gamma": 0.5,
+ "max_iterations": 3000000,
+ "palette": {
+  "locked": false,
+  "name": "Fire",
+  "stops": [
+   {
+    "color": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "position": 0.0
+   },
+   {
+    "color": [
+     0.5,
+     0.0,
+     0.0
+    ],
+    "position": 0.25
+   },
+   {
+    "color": [
+     1.0,
+     0.30000001192092896,
+     0.0
+    ],
+    "position": 0.5
+   },
+   {
+    "color": [
+     1.0,
+     0.800000011920929,
+     0.0
+    ],
+    "position": 0.75
+   },
+   {
+    "color": [
+     1.0,
+     1.0,
+     0.800000011920929
+    ],
+    "position": 1.0
+   }
+  ]
+ },
+ "preserve_z": false,
+ "render_mode": "3d",
+ "solid_shading": {
+  "ambient": 0.1599999964237213,
+  "diffuse": 1.25,
+  "gap_fill": 0,
+  "lights": [
+   {
+    "azimuth": 35.0,
+    "color": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "elevation": 40.0,
+    "enabled": true,
+    "intensity": 1.0
+   },
+   {
+    "azimuth": -60.0,
+    "color": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "elevation": 10.0,
+    "enabled": false,
+    "intensity": 0.5
+   },
+   {
+    "azimuth": 35.0,
+    "color": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "elevation": 40.0,
+    "enabled": false,
+    "intensity": 1.0
+   },
+   {
+    "azimuth": 35.0,
+    "color": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "elevation": 40.0,
+    "enabled": false,
+    "intensity": 1.0
+   }
+  ],
+  "normal_smoothing": 1,
+  "shading_strength": 0.0,
+  "shadow_strength": 1.0,
+  "shininess": 32.0,
+  "specular": 0.4000000059604645,
+  "ssao_radius": 0.15000000596046448,
+  "ssao_strength": 0.6000000238418579
+ },
+ "surface_thickness": 0.0010000000474974513,
+ "version": 3,
+ "zoom": 0.9,
+ "camera_rotation_x": 0.9,
+ "deterministic_rng": true,
+ "perspective_strength": 0.1
+}

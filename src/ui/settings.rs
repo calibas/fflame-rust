@@ -62,7 +62,7 @@ pub fn render_settings_content(
 
     // Render settings - Iterations per thread
     let mut temp_iterations = config_manager.system_settings().iterations_per_thread;
-    let response = ui.add(super::VkbSlider::new(&mut temp_iterations, 1..=4096)
+    let response = ui.add(super::VkbSlider::new(&mut temp_iterations, 1..=10000)
         .text(t!("settings.iterations_per_thread")))
         .on_hover_text(t!("settings.tooltip_iterations_per_thread"));
 

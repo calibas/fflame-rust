@@ -598,14 +598,49 @@ fn render_enabled_variation(
         .unwrap_or(variation_name);
 
     ui.horizontal(|ui| {
-        // Weight slider
+        // Reserve the gear button's width BEFORE laying out the name, so a
+        // long variation name can never push it off the panel.
+        //
+        // The name used to be the slider's own `.text()`, but egui draws
+        // slider text with `TextWrapMode::Extend` — it will neither wrap nor
+        // truncate, it just runs past the edge, taking the gear with it. As
+        // a separate `Label` it can use egui's built-in truncation, which
+        // adds the ellipsis itself; the full name stays available on hover.
+        let gear_width = ui.spacing().interact_size.y + ui.spacing().item_spacing.x;
+        let row_width = (ui.available_width() - gear_width).max(80.0);
+        let row_height = ui.spacing().interact_size.y;
+
         let mut value = current_weight;
-        let response = ui.add(
-            super::VkbSlider::new(&mut value, -5.0..=5.0)
-                .text(egui::RichText::new(display_name).color(Color32::LIGHT_GRAY))
-                .drag_value_speed(0.1)
-                .clamping(egui::SliderClamping::Never)
-        );
+        let response = ui
+            .allocate_ui_with_layout(
+                egui::vec2(row_width, row_height),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    // Slider first: it has a fixed natural width, so whatever
+                    // is left over is the label's budget to truncate into.
+                    let response = ui.add(
+                        super::VkbSlider::new(&mut value, -5.0..=5.0)
+                            .drag_value_speed(0.1)
+                            .clamping(egui::SliderClamping::Never),
+                    );
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(display_name).color(Color32::LIGHT_GRAY),
+                        )
+                        .truncate()
+                        // egui shows its own tooltip when a label elides,
+                        // built from the label's styled text — so it came out
+                        // grey, and stacked under ours as a second copy of the
+                        // name. It also only appeared when the name actually
+                        // elided, which is why it seemed to come and go. Ours
+                        // is the single, always-present, default-coloured one.
+                        .show_tooltip_when_elided(false),
+                    )
+                    .on_hover_text(display_name);
+                    response
+                },
+            )
+            .inner;
 
         if response.changed() {
             value = value.clamp(f32::MIN, f32::MAX);
