@@ -2056,8 +2056,7 @@ impl App {
                 // thread: trajectories do not persist across dispatches,
                 // so ipt IS the trajectory depth — a user-visible quality
                 // setting for long-memory fractals — while the workgroup
-                // count is pure throughput. Floor of 4 workgroups (256
-                // threads) keeps forward progress on pathological flames.
+                // count is pure throughput.
                 let now = web_time::Instant::now();
                 if let Some(prev) = self.last_iter_frame {
                     let target = 1.0 / self.config_manager.system_settings().target_fps.max(1.0) as f64;
@@ -2065,8 +2064,14 @@ impl App {
                     self.iter_scale = crate::app::adjust_iter_scale(self.iter_scale, ratio);
                 }
                 self.last_iter_frame = Some(now);
+                // Floor of ONE workgroup: at extreme depth x emit x solid
+                // stacks, even 4 workgroups (256 threads x 10k iterations
+                // x 17 plot sources) blow the frame budget, and the only
+                // remaining shed axis would be trajectory depth — which is
+                // exactly what the governor exists to protect. One
+                // workgroup still makes forward progress every frame.
                 let effective_workgroups =
-                    ((NUM_WORKGROUPS as f64 * self.iter_scale) as u32).max(4);
+                    ((NUM_WORKGROUPS as f64 * self.iter_scale) as u32).max(1);
 
                 self.frames_since_accumulation += 1;
 
@@ -2466,7 +2471,9 @@ pub(crate) fn adjust_iter_scale(scale: f64, ratio: f64) -> f64 {
     } else if ratio < 0.9 {
         s *= 1.15;
     }
-    s.clamp(1.0 / 64.0, 1.0)
+    // 1/256 lets the dispatch reach its 1-workgroup floor (128/256 -> 1
+    // after the ceiling at the call site); the old 1/64 bottomed out at 2.
+    s.clamp(1.0 / 256.0, 1.0)
 }
 
 #[cfg(test)]
@@ -2492,7 +2499,7 @@ mod governor_tests {
         for _ in 0..50 {
             worst = adjust_iter_scale(worst, 100.0);
         }
-        assert!(worst >= 1.0 / 64.0);
+        assert!(worst >= 1.0 / 256.0);
         // Dead zone: near-target frames leave the batch alone.
         assert_eq!(adjust_iter_scale(0.5, 1.0), 0.5);
         assert_eq!(adjust_iter_scale(0.5, 1.25), 0.5);
