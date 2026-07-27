@@ -1139,6 +1139,29 @@ fn register_builtins(engine: &mut Engine) {
         },
     );
 
+    // apollonian_generators(deform, angle, hyper_angle, strength)
+    engine.register_fn(
+        "apollonian_generators",
+        |deform: bool, theta: Dynamic, eta: Dynamic, delta: Dynamic| -> Result<Array, Box<EvalAltResult>> {
+            let theta = num(&theta, "conjugation angle")?;
+            let eta = num(&eta, "hyperbolic angle")?;
+            let delta = num(&delta, "deform strength")?;
+            Ok(
+                crate::script::builtins::apollonian_generators(deform, theta, eta, delta)
+                    .iter()
+                    .map(|m| {
+                        Dynamic::from(
+                            m.to_params()
+                                .iter()
+                                .map(|v| Dynamic::from(*v))
+                                .collect::<Array>(),
+                        )
+                    })
+                    .collect(),
+            )
+        },
+    );
+
     // The xaos row reproducing a Schottky group's "never undo the last
     // generator" rule, for transform `from` of four.
     engine.register_fn("avoid_xaos_row", |from: i64| -> Result<Array, Box<EvalAltResult>> {
