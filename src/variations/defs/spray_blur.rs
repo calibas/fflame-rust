@@ -22,12 +22,14 @@
 //! (`emit_plot_offset`), which the plot stage adds to the iteration's
 //! final plotted position — after the transform's post-affine and the
 //! whole Final chain — so the copies always center on what actually
-//! plots. On a normal transform the variation returns `p` (identity
-//! contribution at its weight): the trajectory continues un-blurred, a
-//! non-destructive display blur. Note when SHARING a transform with
-//! other variations, that identity return blends `weight × p` into the
-//! output like an extra `linear` — keep spray solo on its transform (or
-//! on a final) for a pure blur. Deliberately NOT flagged
+//! plots. The variation runs in the POST phase and returns its input —
+//! an exact identity for the trajectory, so it mixes with any other
+//! variations on the transform with zero distortion and the walk
+//! continues un-blurred (a non-destructive display blur). Weight is an
+//! on/off switch (post dispatch carries no weight). One consequence: a
+//! transform with ONLY spray on it has an empty normal-phase result —
+//! pair it with `linear` 1 to pass the point through. Deliberately NOT
+//! flagged
 //! `AnalyticBlur`: the analytic mean-splat models a single-sample
 //! contract, and the flame-wide analytic gate already excludes
 //! multi-emitters.
@@ -51,14 +53,22 @@ pub static SPRAY_BLUR: VariationDef = VariationDef {
     aliases: &[],
     display_name: "Spray Blur",
     category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
+    // POST phase, deliberately: post dispatch is `result = f(result)`, and
+    // this body returns its input — an exact identity for the trajectory.
+    // In the normal phase the identity return entered the weighted sum as
+    // `weight × p`, a phantom `linear` that visibly distorted whatever
+    // shared the transform (reported with von_dyck: the tiling bent toward
+    // the previous trajectory point before blurring). Post placement also
+    // means spray sees the transform's finished output, which is the right
+    // thing to center a blur on. Weight is now purely an on/off switch.
+    phase: VariationPhase::Post,
     features: &[Feature::PlotEmits(16), Feature::NeedsRng],
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
     parameters: &[
-        param!("count", "Count", int, 8.0, 1.0, 16.0, "Jittered copies plotted per iteration. The blur fills in Count× faster than a one-sample stochastic blur at the same total density (each copy carries weight Brightness/Count). Works on normal transforms too: copies center on the final plotted position (post-affine and Final chains included), and the trajectory itself continues un-blurred."),
+        param!("count", "Count", int, 8.0, 1.0, 16.0, "Jittered copies plotted per iteration. The blur fills in Count× faster than a one-sample stochastic blur at the same total density (each copy carries weight Brightness/Count). Mixes distortion-free with other variations (post phase, identity pass-through); copies center on the final plotted position (post-affine and Final chains included) and the trajectory continues un-blurred. A transform with ONLY spray needs a companion linear 1 (the post phase acts on the normal-phase result)."),
         param!("radius", "Radius", float, 0.15, 0.0, 2.0, "Kernel size in world units: Gaussian scale, Disc/Ring radius, Streak half-length."),
         param!("shape", "Shape", enum, 0, &["Gaussian", "Disc", "Ring", "Streak"], "Jitter kernel. Gaussian: soft falloff (the classic gaussian_blur distribution). Disc: uniform fill — flat bokeh. Ring: exact circle — bokeh rings / neon doubling. Streak: uniform line segment along Angle — motion blur."),
         param!("angle", "Angle", angle, 0.0, "Kernel orientation: the Streak direction, and the major-axis direction of an elliptical (Aspect ≠ 1) Gaussian/Disc/Ring."),

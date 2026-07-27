@@ -66,7 +66,8 @@
      "spray_blur.brightness": 1.0
     },
     "variations": {
-     "spray_blur": 1.0
+     "spray_blur": 1.0,
+     "linear": 1.0
     },
     "weight": 1.0
    }
