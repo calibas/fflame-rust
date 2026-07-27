@@ -943,3 +943,66 @@ fn decompose_sphere_packing_emits_inversions() {
         out.messages
     );
 }
+
+#[test]
+fn decompose_klein_group_uses_its_own_word_rule() {
+    // Three packed groups, three different "don't backtrack" rules. This
+    // one excludes the previous generator's INVERSE and then draws
+    // uniformly from the remaining three — no doubling, and the inverse
+    // sits at index ^ 1 because the order is [a, a', b, b'].
+    let host = ScriptHost::new();
+    let packed = host
+        .run(
+            r#"
+                script("K", "generator");
+                let t = flame.add_transform();
+                t.add_variation("klein_group", 1.0);
+                t.weight = 1.0;
+            "#,
+            &FractalConfig::default(),
+            1,
+            HashMap::new(),
+        )
+        .unwrap()
+        .config;
+
+    let source = include_str!("../../assets/scripts/modifiers/decompose_group.rhai");
+    let out = host.run(source, &packed, 1, HashMap::new()).unwrap();
+    let flame = &out.config.flame;
+
+    assert_eq!(flame.transforms.len(), 4, "two generators and their inverses");
+    for (i, t) in flame.transforms.iter().enumerate() {
+        assert!(t.variations.contains_key("mobius"), "generator {i} carries mobius");
+    }
+
+    let xaos = flame.xaos.as_ref().expect("word rule became xaos");
+    for from in 0..4usize {
+        let forbidden = from ^ 1;
+        assert_eq!(xaos[from][forbidden], 0.0, "from {from}: inverse blocked");
+        // Everything else stays equally likely — the distinguishing detail.
+        for to in 0..4usize {
+            if to != forbidden {
+                assert_eq!(
+                    xaos[from][to], 1.0,
+                    "from {from} -> {to}: klein_group does not double any share"
+                );
+            }
+        }
+    }
+
+    // Cross-check against the packed variation's own construction: at the
+    // default traces the generators must be unimodular and correctly paired.
+    let gens = crate::script::builtins::klein_generators(0, 2.0, 0.0, 2.0, 0.0, 1.0);
+    let coeff = |i: usize, n: &str| {
+        flame.transforms[i].variation_params[&format!("mobius.{n}")] as f64
+    };
+    for (i, g) in gens.iter().enumerate() {
+        let p = g.to_params();
+        assert!(
+            (coeff(i, "re_a") - p[0]).abs() < 1e-5,
+            "generator {i} re_a: script {} vs builtin {}",
+            coeff(i, "re_a"),
+            p[0]
+        );
+    }
+}
