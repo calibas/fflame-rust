@@ -21,6 +21,10 @@ const EMBEDDED: &[(&str, &str)] = &[
         "jitter.rhai",
         include_str!("../../assets/scripts/modifiers/jitter.rhai"),
     ),
+    (
+        "mutate.rhai",
+        include_str!("../../assets/scripts/modifiers/mutate.rhai"),
+    ),
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]

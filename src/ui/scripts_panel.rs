@@ -343,9 +343,22 @@ impl ScriptsPanel {
                     .speed(1.0)
                     .range(2..=64),
             );
+            // A modifier run across many seeds IS mutation: same starting
+            // flame, a different random walk each time. Name the button
+            // after what it does rather than how it's implemented.
+            let (batch_label, batch_hint) = match self.declared_kind() {
+                ScriptKind::Generator => (
+                    "Batch",
+                    "Generate this many flames from consecutive seeds, and open them in the Fractal Browser",
+                ),
+                ScriptKind::Modifier => (
+                    "Mutate",
+                    "Make this many variations of the current flame and open them in the Fractal Browser, with the original first for comparison",
+                ),
+            };
             if ui
-                .add_enabled(self.error.is_none(), egui::Button::new("Batch"))
-                .on_hover_text("Run consecutive seeds and open the results in the Fractal Browser")
+                .add_enabled(self.error.is_none(), egui::Button::new(batch_label))
+                .on_hover_text(batch_hint)
                 .clicked()
             {
                 self.execute_batch(current, response);
@@ -375,6 +388,14 @@ impl ScriptsPanel {
 
     fn execute_batch(&mut self, current: &FractalConfig, response: &mut ScriptsResponse) {
         let mut configs = Vec::new();
+        // Mutating: lead with the untouched flame so the batch can be
+        // compared against it, and so picking "none of these" is a click
+        // rather than an undo.
+        if self.declared_kind() == ScriptKind::Modifier {
+            let mut original = current.clone();
+            original.flame.name = "Original".to_string();
+            configs.push(original);
+        }
         let start = self.seed;
         for i in 0..self.batch_count as u64 {
             let seed = start.wrapping_add(i);
@@ -392,11 +413,14 @@ impl ScriptsPanel {
                 }
             }
         }
+        let mutated = self.declared_kind() == ScriptKind::Modifier;
         self.status = Some(format!(
-            "{} flames from seeds {}–{}",
-            configs.len(),
+            "{} {} from seeds {}–{}{}",
+            self.batch_count,
+            if mutated { "mutations" } else { "flames" },
             start,
-            start.wrapping_add(self.batch_count as u64 - 1)
+            start.wrapping_add(self.batch_count as u64 - 1),
+            if mutated { " (original first)" } else { "" }
         ));
         response.batch = Some(configs);
     }

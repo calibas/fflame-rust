@@ -440,6 +440,39 @@ need to account for:
   `t.area_scale()`. Verified: at a fixed seed, target −0.25 renders a
   clean flame while +0.3 scatters the same flame into near-blackness.
 
+- **Mutation is a modifier run in batch.** Apophysis-style "mutate" needs
+  no new mechanism: a *modifier* script re-run across consecutive seeds
+  from the same starting flame IS a batch of mutations. The panel names
+  the button after the intent (`Mutate` for modifiers, `Batch` for
+  generators) and leads the batch with the untouched original, so picking
+  "none of these" is a click rather than an undo. Shipped as
+  `modifiers/mutate.rhai` with strength, a mode (Everything / Shape /
+  Variations / Weights / Colours) and a balance-preserving option.
+
+- **Variation weights scale the transform's output, and the balance
+  metric has to count them.** The dispatcher computes
+  `result = Σ_v w_v · f_v(A·p)`, so a lone `linear` at weight 1.18 is an
+  18% expansion regardless of the affine. The first version of
+  `contractiveness()` read only `det A`, so `set_contractiveness`
+  rebalanced the affines while the true scale drifted — a mutated flame
+  rendered to haze even though the metric said balance was preserved, and
+  the unit test passed because it compared the same wrong metric against
+  itself. **Only the render caught it.** The term is now
+  `0.5·ln|det A| + ln(Σ w_v)`, over variations that actually join the
+  weighted sum: `Normal` always, `Any` unless this transform's
+  `fx_priority` moved it (<0 pre, >0 post), `Pre`/`Post` never — matching
+  the shader builder's own rule. Two traps found along the way: `linear`
+  is phase `Any`, not `Normal`, so a naive `== Normal` filter summed to
+  zero; and a transform with nothing in the weighted sum drags the mean
+  to ~-27, which asked for a 1e12 rescale before the per-transform clamp.
+
+- **Rhai does not coerce `1` to `1.0`.** Every numeric entry point takes
+  `Dynamic` and goes through `num()`, because `t.weight = 1` otherwise
+  fails with "function not found" — a wall for exactly the audience this
+  is built for. Property setters use `register_get`/`register_set`
+  separately, since `register_get_set` ties the setter's type to the
+  getter's.
+
 - **Measuring nonlinear variations is unsolved and needs the GPU.** The
   metric above covers the affine part only, which is exact for
   affine-only flames and meaningless once a bounding variation like
