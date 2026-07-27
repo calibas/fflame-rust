@@ -439,6 +439,148 @@ pub fn repeat_xaos_row(from: usize, count: usize) -> Vec<f32> {
 }
 
 // ============================================================================
+// L-systems
+// ============================================================================
+
+/// One drawn segment of a turtle path.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Segment {
+    pub x1: f64,
+    pub y1: f64,
+    pub x2: f64,
+    pub y2: f64,
+    /// Bracket nesting at the time it was drawn — 0 on the trunk, higher
+    /// out along the branches. Useful for colouring by branch depth.
+    pub depth: u32,
+}
+
+/// Cap on the expanded string. L-systems grow exponentially: a rule that
+/// triples per generation is 3^12 ~ half a million symbols by depth 12,
+/// so this fails loudly rather than eating memory.
+pub const LSYSTEM_MAX_LEN: usize = 1 << 20;
+
+/// Rewrite `axiom` with `rules` for `depth` generations.
+///
+/// Every symbol is replaced simultaneously each generation (an L-system
+/// is parallel rewriting, unlike a formal grammar); symbols with no rule
+/// stand for themselves.
+pub fn lsystem_expand(
+    axiom: &str,
+    rules: &[(char, String)],
+    depth: u32,
+) -> Result<String, String> {
+    let mut current: String = axiom.to_string();
+    for generation in 0..depth {
+        let mut next = String::with_capacity(current.len() * 2);
+        for ch in current.chars() {
+            match rules.iter().find(|(k, _)| *k == ch) {
+                Some((_, replacement)) => next.push_str(replacement),
+                None => next.push(ch),
+            }
+            if next.len() > LSYSTEM_MAX_LEN {
+                return Err(format!(
+                    "L-system grew past {LSYSTEM_MAX_LEN} symbols at generation {} — \
+                     reduce the depth or shorten the rules",
+                    generation + 1
+                ));
+            }
+        }
+        current = next;
+    }
+    Ok(current)
+}
+
+/// Walk an expanded L-system string as a turtle, returning drawn segments.
+///
+/// Commands follow the usual convention (Prusinkiewicz & Lindenmayer,
+/// *The Algorithmic Beauty of Plants*):
+///
+/// * `F`, `G`, `A`, `B` — step forward, drawing
+/// * `f`, `g` — step forward without drawing
+/// * `+` / `-` — turn left / right by `angle_deg`
+/// * `|` — turn 180 degrees
+/// * `[` / `]` — push / pop position and heading (branching)
+///
+/// Any other symbol is ignored, so rules may use extra letters purely as
+/// rewriting state.
+pub fn turtle(expanded: &str, angle_deg: f64) -> Vec<Segment> {
+    let angle = angle_deg * std::f64::consts::PI / 180.0;
+    let mut out = Vec::new();
+    let (mut x, mut y, mut heading) = (0.0f64, 0.0f64, 0.0f64);
+    let mut depth: u32 = 0;
+    let mut stack: Vec<(f64, f64, f64, u32)> = Vec::new();
+
+    for ch in expanded.chars() {
+        match ch {
+            'F' | 'G' | 'A' | 'B' => {
+                let (nx, ny) = (x + heading.cos(), y + heading.sin());
+                out.push(Segment { x1: x, y1: y, x2: nx, y2: ny, depth });
+                x = nx;
+                y = ny;
+            }
+            'f' | 'g' => {
+                x += heading.cos();
+                y += heading.sin();
+            }
+            '+' => heading += angle,
+            '-' => heading -= angle,
+            '|' => heading += std::f64::consts::PI,
+            '[' => {
+                stack.push((x, y, heading, depth));
+                depth += 1;
+            }
+            ']' => {
+                if let Some((sx, sy, sh, sd)) = stack.pop() {
+                    x = sx;
+                    y = sy;
+                    heading = sh;
+                    depth = sd;
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Rescale and rotate a path so its overall displacement is the unit
+/// segment from (0, 0) to (1, 0).
+///
+/// This is what turns a turtle path into an IFS. A depth-1 expansion
+/// draws the pieces that one generation replaces a single edge with; once
+/// the whole path spans the unit segment, each piece is a CONTRACTION of
+/// it, and the attractor of those contractions is the L-system's limit
+/// curve. That equivalence is why a Koch rule can become four transforms.
+///
+/// Returns `None` when the path starts and ends in the same place (a
+/// closed figure such as a Sierpinski triangle's outline), where no such
+/// normalisation exists.
+pub fn normalize_segments(segs: &[Segment]) -> Option<Vec<Segment>> {
+    let first = segs.first()?;
+    let last = segs.last()?;
+    let (dx, dy) = (last.x2 - first.x1, last.y2 - first.y1);
+    let len2 = dx * dx + dy * dy;
+    if len2 < 1e-12 {
+        return None;
+    }
+    // Inverse of "rotate+scale by (dx, dy), then translate by start":
+    // divide by the complex number dx + i*dy.
+    let map = |px: f64, py: f64| -> (f64, f64) {
+        let (ux, uy) = (px - first.x1, py - first.y1);
+        ((ux * dx + uy * dy) / len2, (uy * dx - ux * dy) / len2)
+    };
+    Some(
+        segs.iter()
+            .map(|s| {
+                let (x1, y1) = map(s.x1, s.y1);
+                let (x2, y2) = map(s.x2, s.y2);
+                Segment { x1, y1, x2, y2, depth: s.depth }
+            })
+            .collect(),
+    )
+}
+
+// ============================================================================
 // Kleinian groups (Indra's Pearls)
 // ============================================================================
 
@@ -938,6 +1080,82 @@ mod tests {
             assert_eq!(allowed.len(), 3, "three generators remain");
             assert!(allowed.iter().all(|v| *v == 1.0), "and they are equally likely");
         }
+    }
+
+
+    #[test]
+    fn lsystem_rewrites_in_parallel() {
+        // Every symbol is replaced at once; symbols without a rule stand
+        // for themselves.
+        let rules = vec![('F', "F+F".to_string())];
+        assert_eq!(lsystem_expand("F", &rules, 0).unwrap(), "F");
+        assert_eq!(lsystem_expand("F", &rules, 1).unwrap(), "F+F");
+        assert_eq!(lsystem_expand("F", &rules, 2).unwrap(), "F+F+F+F");
+        // The + has no rule, so it survives untouched.
+        assert_eq!(lsystem_expand("+F+", &rules, 1).unwrap(), "+F+F+");
+
+        // Runaway growth fails loudly rather than exhausting memory.
+        let boom = vec![('F', "FFFF".to_string())];
+        let err = lsystem_expand("F", &boom, 40).unwrap_err();
+        assert!(err.contains("grew past"), "{err}");
+    }
+
+    #[test]
+    fn turtle_draws_and_branches() {
+        // A straight run of three unit steps.
+        let segs = turtle("FFF", 90.0);
+        assert_eq!(segs.len(), 3);
+        approx(segs[2].x2, 3.0, 1e-9, "three steps east");
+        approx(segs[2].y2, 0.0, 1e-9, "no drift");
+
+        // A right angle.
+        let segs = turtle("F+F", 90.0);
+        approx(segs[1].x2, 1.0, 1e-9, "turned north (x)");
+        approx(segs[1].y2, 1.0, 1e-9, "turned north (y)");
+
+        // Lower-case f moves without drawing.
+        assert_eq!(turtle("FfF", 90.0).len(), 2, "f draws nothing");
+
+        // Brackets save and restore position, heading AND depth.
+        let segs = turtle("F[+F]F", 90.0);
+        assert_eq!(segs.len(), 3);
+        assert_eq!(segs[0].depth, 0, "trunk");
+        assert_eq!(segs[1].depth, 1, "inside the bracket");
+        assert_eq!(segs[2].depth, 0, "back on the trunk");
+        // The third segment continues from where the first ended, not
+        // from the end of the branch.
+        approx(segs[2].x1, 1.0, 1e-9, "resumed at the branch point (x)");
+        approx(segs[2].y1, 0.0, 1e-9, "resumed at the branch point (y)");
+    }
+
+    #[test]
+    fn normalized_segments_are_contractions() {
+        // The Koch rule: one edge becomes four, and after normalising the
+        // whole path onto the unit segment each piece must be a genuine
+        // contraction — that is what makes the IFS converge to the curve.
+        let rules = vec![('F', "F+F--F+F".to_string())];
+        let expanded = lsystem_expand("F", &rules, 1).unwrap();
+        let segs = normalize_segments(&turtle(&expanded, 60.0)).expect("open path");
+        assert_eq!(segs.len(), 4, "Koch replaces one edge with four");
+
+        for (i, s) in segs.iter().enumerate() {
+            let len = ((s.x2 - s.x1).powi(2) + (s.y2 - s.y1).powi(2)).sqrt();
+            approx(len, 1.0 / 3.0, 1e-9, &format!("Koch piece {i} is one third"));
+            assert!(len < 1.0, "piece {i} must contract");
+        }
+        // The path spans exactly the unit segment.
+        approx(segs[0].x1, 0.0, 1e-9, "starts at the origin");
+        approx(segs[0].y1, 0.0, 1e-9, "starts at the origin");
+        approx(segs[3].x2, 1.0, 1e-9, "ends at (1, 0)");
+        approx(segs[3].y2, 0.0, 1e-9, "ends at (1, 0)");
+    }
+
+    #[test]
+    fn closed_figures_cannot_be_normalized() {
+        // A path returning to its start has no overall displacement to
+        // normalise by; say so rather than dividing by zero.
+        let segs = turtle("F+F+F+F", 90.0);
+        assert!(normalize_segments(&segs).is_none(), "a closed square has no IFS form");
     }
 
     #[test]

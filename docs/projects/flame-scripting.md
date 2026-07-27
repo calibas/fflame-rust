@@ -354,10 +354,60 @@ stays).
 starter scripts (mirroring the preset embedding); verify budgets on the
 browser main thread (chunked/async run if a long script janks).
 
-**Phase 4 — Built-ins.** `kleinian_generators`, Apollonian/sphere
-packing, `lsystem`/`turtle`; the decomposition Modifier scripts and 2–3
-L-system Generator scripts shipped as content. Math validated against
-the packed variations they decompose (render comparison).
+**Phase 4 — Built-ins.** Done. All four packed groups decompose through
+one `decompose_group.rhai`, and `lsystem.rhai` builds curves from
+rewriting rules.
+
+Validated by render comparison against the packed original (mean
+absolute difference over the frame):
+
+| | 2D | 3D |
+| --- | --- | --- |
+| `schottky_group` | 0.001 | 0.032 |
+| `apollonian_gasket` | 0.009 | 0.180 |
+| `klein_group` | 0.009 | 0.008 |
+| `sphere_packing` | 1.07 | 2.39 |
+
+The packing residual is not error: its decomposition lights a strict
+SUBSET (zero pixels lit only in the decomposition). The packed variation
+also *seeds* points onto the configuration spheres so their outlines
+render crisply, which a pure IFS has no equivalent for. Restoring it
+needs a circle-boundary sampler; `blur_circle` fills a disc.
+
+Three findings worth keeping:
+
+- **Every group has its own "don't backtrack" rule, and they differ in
+  distribution, not just in which index is blocked.** Schottky and
+  Apollonian redraw into the NEXT generator, so it gets double share
+  (`avoid_xaos_row`). A packing blocks repeating the same mirror, since
+  an inversion is its own inverse (`repeat_xaos_row`). `klein_group`
+  excludes the inverse and draws uniformly from the remaining three
+  (`exclude_xaos_row`). Index order differs too: `[a, b, a', b']` for the
+  Schottky family, `[a, a', b, b']` for Klein.
+- **Z has to be carried deliberately.** With `preserve_z` off the
+  renderer flattens z each iteration and only `AlwaysZ` variations
+  survive; `apollonian_gasket`/`schottky_group` are `AlwaysZ` but
+  decompose into `mobius`, which is not, so a 3D flame collapsed to the
+  flat 2D group *while still looking correct*. The script now sets
+  `preserve_z` exactly when the source is `AlwaysZ` and the target is
+  not, read from the registry via `variation_always_z()`. Blanket-setting
+  it breaks `klein_group` just as badly the other way.
+- **An inversion needs no special variation.**
+  `x -> c + r²(x-c)/|x-c|²` is translate → `spherical3D_wf` (weight r²) →
+  translate back, so packing mirrors land as ordinary transforms the
+  triangle editor can grab.
+
+L-systems take the classical IFS equivalence: one generation of an
+edge-rewriting rule, normalised onto the edge it replaced, is a set of
+contractions whose attractor is the curve. `flame.contractiveness()`
+independently confirms the ratios — Koch reports ln(1/3), the dragon
+ln(1/√2), Sierpinski ln(1/2).
+
+**Maintenance risk:** `builtins.rs` hand-mirrors four shader sources
+(`complex.wgsl`, `init_schottky_group`, `apollonian_gen`/`su_conjugator`,
+`sp_conf2/3`+`sp_mirror2/3`) and `init_klein_group`. If any changes, the
+decompositions silently drift from their originals. Each site says so,
+but a shared definition would be better.
 
 **Phase 5 — `pyfflame`.** `gui` feature-gating/factoring, PyO3
 bindings, maturin CI, format IO, `run_script`, CLI render wrapper,
