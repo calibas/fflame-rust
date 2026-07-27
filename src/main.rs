@@ -18,6 +18,33 @@ enum Commands {
     /// List available FFmpeg encoders and hardware acceleration options
     ListEncoders,
 
+    /// Run a flame script to produce a .fflame (headless)
+    Generate {
+        /// Script file (.rhai)
+        #[arg(short, long)]
+        script: String,
+
+        /// Output .fflame (defaults to the script name)
+        #[arg(short, long)]
+        output: Option<String>,
+
+        /// Seed — the same script and seed always produce the same flame
+        #[arg(long, default_value_t = 0)]
+        seed: u64,
+
+        /// Starting config for modifier scripts
+        #[arg(short, long)]
+        base: Option<String>,
+
+        /// Set a declared script parameter, e.g. --set copies=5
+        #[arg(long = "set", value_name = "KEY=VALUE")]
+        sets: Vec<String>,
+
+        /// List the script's declared parameters and exit
+        #[arg(long)]
+        list_params: bool,
+    },
+
     /// Export flame configs to PNG (headless batch mode)
     Export {
         /// Input .fflame config file or directory
@@ -138,6 +165,16 @@ fn main() {
             Some(Commands::ListEncoders) => {
                 // List available FFmpeg encoders
                 fractal_flame_wgpu::animation::export::print_available_encoders();
+            }
+            Some(Commands::Generate { script, output, seed, base, sets, list_params }) => {
+                fractal_flame_wgpu::generate_mode(
+                    &script,
+                    output.as_deref(),
+                    seed,
+                    base.as_deref(),
+                    &sets,
+                    list_params,
+                );
             }
             Some(Commands::Export { input, output, width, height, category, iterations_per_thread, dump_shader, transparent, premultiplied, supersample, engine }) => {
                 // Run in headless export mode

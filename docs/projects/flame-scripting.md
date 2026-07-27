@@ -354,6 +354,46 @@ extension, not a rework.
 
 ---
 
+## 7b. Phase 1 field notes (implemented)
+
+Things learned building the engine that the later phases and the docs
+need to account for:
+
+- **Rhai can't assign through a call result.** `flame.transform(i).color
+  = 0.25` is a syntax error ("expression cannot be assigned to"); you
+  must bind first: `let t = flame.transform(i); t.color = 0.25;`. Users
+  will hit this — the shipped examples model the correct form, and it
+  belongs in the user docs.
+- **Globals are variables, not constants.** Rhai refuses property and
+  indexer assignment on a constant, so `config["gamma"] = 2.2` and
+  `flame.name = "x"` fail if `flame`/`config` are pushed with
+  `push_constant`.
+- **Seeds must be scrambled, not OR'd.** PCG64-MCG needs an odd state;
+  forcing the low bit maps seeds 8842 and 8843 onto the *same* stream,
+  silently breaking "reroll = seed + 1". `expand_seed` runs SplitMix64
+  over both 64-bit halves. Implemented in-repo rather than via
+  `SeedableRng::seed_from_u64` so the mapping can never shift under a
+  dependency bump — script + seed is a shareable artifact.
+- **`.fflame` text is not byte-stable** (pre-existing, not caused by
+  scripting). `variations`, `variation_params` and effect `params` are
+  `HashMap`s, which serialize in per-instance hash order, so two saves of
+  an identical flame differ textually. Determinism tests must compare
+  `serde_json::Value` (BTreeMap-backed, sorted), not strings. Worth
+  considering separately: sorted serialization would also stop committed
+  presets and test configs producing spurious diffs on re-save.
+- **rhai pulls in smartstring**, which adds a second `Add` impl for
+  `String`. That made an existing line in `shader_builder_v2.rs` stop
+  compiling — with two candidate impls, `&String` no longer deref-coerces
+  to `&str` in operator position. Fixed with an explicit `.as_str()`.
+- **`config.set` ambiguity is resolved by key presence.** ~30 of 82
+  config fields are skip-if-default, so absence from the JSON doesn't
+  prove a typo. The rule: a key already present is known (no warning even
+  if the write is a no-op); only absent-and-no-change warns.
+- **Contractive scaling is the one rule examples must teach.** Random
+  affines with scale > 1 diverge and render as a formless haze rather
+  than a fractal; the starter generator keeps `scale` below 1 and says
+  why.
+
 ## 8. Open questions (non-blocking, settle during Phase 1/2)
 
 1. Exact API naming pass (`t.translate` vs `t.move_by`, `config.*`

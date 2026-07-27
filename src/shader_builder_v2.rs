@@ -122,7 +122,7 @@ impl TemplateProcessor {
 
                     // The remaining content after {{/if}} is already consumed
                     result.push_str(&remaining);
-                    return result + &chars.collect::<String>();
+                    return result + chars.collect::<String>().as_str();
                 } else {
                     // Unknown tag, output as-is
                     result.push_str("{{");

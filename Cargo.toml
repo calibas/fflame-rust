@@ -40,6 +40,8 @@ cpal = "0.15"
 symphonia = { version = "0.5", default-features = false, features = ["mp3", "wav", "flac", "ogg", "pcm"] }
 rustfft = "6.2"
 ringbuf = "0.4"
+rhai = "1.25.1"
+rand_pcg = "0.3"
 
 # WASM-specific dependencies
 [target.'cfg(target_arch = "wasm32")'.dependencies]
