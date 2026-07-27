@@ -821,7 +821,7 @@ fn decompose_schottky_reproduces_the_packed_group() {
         .unwrap()
         .config;
 
-    let source = include_str!("../../assets/scripts/modifiers/decompose_schottky.rhai");
+    let source = include_str!("../../assets/scripts/modifiers/decompose_group.rhai");
     let out = host.run(source, &packed, 1, HashMap::new()).unwrap();
     let flame = &out.config.flame;
 
@@ -869,7 +869,7 @@ fn decompose_schottky_reproduces_the_packed_group() {
     let out = host.run(source, &plain, 1, HashMap::new()).unwrap();
     assert_eq!(out.config.flame.transforms.len(), 1, "left the flame alone");
     assert!(
-        out.messages.iter().any(|m| m.contains("No schottky_group")),
+        out.messages.iter().any(|m| m.contains("No packed group")),
         "said why nothing happened: {:?}",
         out.messages
     );

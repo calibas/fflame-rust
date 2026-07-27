@@ -166,6 +166,76 @@ pub fn schottky_generators(circles: [Circle; 4], twist_a: f64, twist_b: f64) -> 
     [a, b, a.inverse(), b.inverse()]
 }
 
+/// General inverse, not assuming determinant 1 (`su_matinv`).
+fn inv_general(m: Mobius) -> Mobius {
+    let det = m.det();
+    Mobius {
+        a: cdiv(m.d, det),
+        b: cdiv([-m.b[0], -m.b[1]], det),
+        c: cdiv([-m.c[0], -m.c[1]], det),
+        d: cdiv(m.a, det),
+    }
+}
+
+/// The four generators of the classical Apollonian gasket group, in the
+/// packed variation's `[a, b, a⁻¹, b⁻¹]` order.
+///
+/// The base pair is the standard one from *Indra's Pearls*:
+/// `a = [[1, 0], [-2i, 1]]`, `b = [[1-i, 1], [1, 1+i]]`. Both have
+/// determinant 1, and the stored inverses are exactly their inverses.
+///
+/// `deform` applies Bagula's triquasiconformal conjugation `g -> C g C⁻¹`
+/// with `C = dk(δ)·s0·qf(θ + iη)`, matching `su_conjugator` — conjugation
+/// preserves the group, so the inverse pairing survives it.
+///
+/// Ported from `variation_apollonian_gasket`; keep the two in step.
+pub fn apollonian_generators(
+    deform: bool,
+    theta_deg: f64,
+    eta_deg: f64,
+    delta: f64,
+) -> [Mobius; 4] {
+    let base = [
+        Mobius { a: [1.0, 0.0], b: [0.0, 0.0], c: [0.0, -2.0], d: [1.0, 0.0] },
+        Mobius { a: [1.0, -1.0], b: [1.0, 0.0], c: [1.0, 0.0], d: [1.0, 1.0] },
+        Mobius { a: [1.0, 0.0], b: [0.0, 0.0], c: [0.0, 2.0], d: [1.0, 0.0] },
+        Mobius { a: [1.0, 1.0], b: [-1.0, 0.0], c: [-1.0, 0.0], d: [1.0, -1.0] },
+    ];
+    if !deform {
+        return base;
+    }
+    let cj = qc_conjugator(theta_deg, eta_deg, delta);
+    let cji = inv_general(cj);
+    [
+        cj.compose(base[0]).compose(cji),
+        cj.compose(base[1]).compose(cji),
+        cj.compose(base[2]).compose(cji),
+        cj.compose(base[3]).compose(cji),
+    ]
+}
+
+/// `C = dk(δ)·s0·qf(θ + iη)` — the quasiconformal conjugator, mirroring
+/// `su_conjugator` in su_mobius.wgsl (which takes radians; this takes the
+/// degrees the parameters are stored in).
+pub fn qc_conjugator(theta_deg: f64, eta_deg: f64, delta: f64) -> Mobius {
+    const S0: f64 = 0.7071068;
+    let theta = theta_deg * std::f64::consts::PI / 180.0;
+    let eta = eta_deg * std::f64::consts::PI / 180.0;
+    let (ch, sh) = (eta.cosh(), eta.sinh());
+    let (ct, st) = (theta.cos(), theta.sin());
+    let ca: C = [ct * ch, -st * sh];
+    let sa: C = [st * ch, ct * sh];
+    let qf = Mobius { a: ca, b: [-sa[0], -sa[1]], c: sa, d: ca };
+    let dk = Mobius {
+        a: [1.0, delta],
+        b: [1.0, 0.0],
+        c: [1.0, 0.0],
+        d: [1.0, -delta],
+    };
+    let s0 = Mobius { a: [S0, 0.0], b: [0.0, -S0], c: [0.0, -S0], d: [S0, 0.0] };
+    dk.compose(s0).compose(qf)
+}
+
 /// One row of the xaos matrix reproducing the packed "avoid" rule.
 ///
 /// The packed variation does not merely *forbid* the inverse — it draws
@@ -267,6 +337,49 @@ mod tests {
         assert!(
             (p[0] - t[0]).abs() + (p[1] - t[1]).abs() > 1e-3,
             "twist should change where points go"
+        );
+    }
+
+    #[test]
+    fn apollonian_generators_form_a_group() {
+        let g = apollonian_generators(false, 0.0, 0.0, 1.0);
+        for (i, m) in g.iter().enumerate() {
+            let det = m.det();
+            approx(det[0], 1.0, 1e-12, &format!("gen {i} det real"));
+            approx(det[1], 0.0, 1e-12, &format!("gen {i} det imag"));
+        }
+        // Slots 2 and 3 really are the inverses of 0 and 1.
+        for (m, inv) in [(g[0], g[2]), (g[1], g[3])] {
+            let z = [0.37, -0.21];
+            let w = inv.apply(m.apply(z));
+            approx(w[0], z[0], 1e-9, "inverse undoes the generator (x)");
+            approx(w[1], z[1], 1e-9, "inverse undoes the generator (y)");
+        }
+    }
+
+    #[test]
+    fn quasiconformal_deform_preserves_the_group() {
+        // Conjugation g -> C g C⁻¹ is a group isomorphism: determinants
+        // and the inverse pairing must survive it.
+        let g = apollonian_generators(true, 45.0, 12.0, 1.3);
+        for (i, m) in g.iter().enumerate() {
+            let det = m.det();
+            approx(det[0], 1.0, 1e-6, &format!("deformed gen {i} det real"));
+            approx(det[1], 0.0, 1e-6, &format!("deformed gen {i} det imag"));
+        }
+        for (m, inv) in [(g[0], g[2]), (g[1], g[3])] {
+            let z = [0.19, 0.43];
+            let w = inv.apply(m.apply(z));
+            approx(w[0], z[0], 1e-6, "deformed inverse still undoes it (x)");
+            approx(w[1], z[1], 1e-6, "deformed inverse still undoes it (y)");
+        }
+        // And it is a genuinely different group from the undeformed one.
+        let plain = apollonian_generators(false, 45.0, 12.0, 1.3);
+        let z = [0.2, 0.1];
+        let (a, b) = (plain[0].apply(z), g[0].apply(z));
+        assert!(
+            (a[0] - b[0]).abs() + (a[1] - b[1]).abs() > 1e-3,
+            "deform should move points"
         );
     }
 
