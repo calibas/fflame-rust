@@ -742,7 +742,7 @@ fn render_export_settings(
     // Iterations per thread (GPU batching)
     ui.horizontal(|ui| {
         ui.label(t!("animation_panel.iterations_thread"));
-        ui.add(super::VkbDragValue::new(&mut settings.iterations_per_thread).range(32..=4096));
+        ui.add(super::VkbDragValue::new(&mut settings.iterations_per_thread).range(32..=10000));
     });
 
     // Max iterations (quality)

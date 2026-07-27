@@ -2051,6 +2051,13 @@ impl App {
                 // responsive. (The compute-time metric can't drive this:
                 // it measures command ENCODING, not GPU execution — the
                 // frame delta is the only honest GPU-load signal here.)
+                //
+                // The governor scales WORKGROUPS, never iterations_per_
+                // thread: trajectories do not persist across dispatches,
+                // so ipt IS the trajectory depth — a user-visible quality
+                // setting for long-memory fractals — while the workgroup
+                // count is pure throughput. Floor of 4 workgroups (256
+                // threads) keeps forward progress on pathological flames.
                 let now = web_time::Instant::now();
                 if let Some(prev) = self.last_iter_frame {
                     let target = 1.0 / self.config_manager.system_settings().target_fps.max(1.0) as f64;
@@ -2058,9 +2065,8 @@ impl App {
                     self.iter_scale = crate::app::adjust_iter_scale(self.iter_scale, ratio);
                 }
                 self.last_iter_frame = Some(now);
-                let effective_ipt = ((self.config_manager.system_settings().iterations_per_thread as f64
-                    * self.iter_scale) as u32)
-                    .max(16);
+                let effective_workgroups =
+                    ((NUM_WORKGROUPS as f64 * self.iter_scale) as u32).max(4);
 
                 self.frames_since_accumulation += 1;
 
@@ -2080,8 +2086,8 @@ impl App {
                     self.clear_paths_next_frame = false;  // Reset flag after use
                 }
 
-                let samples_this_frame = renderer.compute_pass(&mut render_encoder, &self.gpu.queue, &self.gpu.device, NUM_WORKGROUPS,
-                    effective_ipt, self.config_manager.system_settings().burn_in,
+                let samples_this_frame = renderer.compute_pass(&mut render_encoder, &self.gpu.queue, &self.gpu.device, effective_workgroups,
+                    self.config_manager.system_settings().iterations_per_thread, self.config_manager.system_settings().burn_in,
                     final_config.zoom, final_config.pan_x, final_config.pan_y, final_config.rotation,
                     final_config.camera_rotation_x, final_config.camera_rotation_y, final_config.camera_bank, final_config.camera_x, final_config.camera_y, final_config.camera_z, final_config.speed_factor, clear_histogram, clear_paths);
 
@@ -2445,7 +2451,8 @@ impl App {
     }
 }
 
-/// Adaptive iteration-batch governor (pure math; see the dispatch site).
+/// Adaptive batch governor (pure math; see the dispatch site — the scale
+/// is applied to the WORKGROUP count so trajectory depth is untouched).
 ///
 /// `ratio` is last frame's duration over the target budget. Over budget
 /// by more than 30% -> shrink the batch proportionally (bounded, so one
