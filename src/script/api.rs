@@ -1172,6 +1172,116 @@ fn register_builtins(engine: &mut Engine) {
         Ok(avoid_xaos_row(from).iter().map(|v| Dynamic::from(*v as f64)).collect())
     });
 
+    // lsystem(axiom, #{"F": "F+F--F+F"}, depth) -> expanded string
+    engine.register_fn(
+        "lsystem",
+        |axiom: &str, rules: rhai::Map, depth: i64| -> Result<String, Box<EvalAltResult>> {
+            let mut parsed: Vec<(char, String)> = Vec::new();
+            for (key, value) in rules.iter() {
+                let mut chars = key.chars();
+                let symbol = chars
+                    .next()
+                    .ok_or_else(|| err("an L-system rule key must be a single symbol"))?;
+                if chars.next().is_some() {
+                    return Err(err(format!(
+                        "rule key `{key}` must be ONE symbol — rules rewrite single characters"
+                    )));
+                }
+                parsed.push((symbol, value.clone().into_string().unwrap_or_default()));
+            }
+            // Deterministic order, so a script's output never depends on
+            // map iteration order.
+            parsed.sort_by_key(|(k, _)| *k);
+            let depth = depth.clamp(0, 32) as u32;
+            crate::script::builtins::lsystem_expand(axiom, &parsed, depth).map_err(err)
+        },
+    );
+
+    // turtle(expanded, angle) -> [[x1, y1, x2, y2, depth], ...]
+    engine.register_fn(
+        "turtle",
+        |expanded: &str, angle: Dynamic| -> Result<Array, Box<EvalAltResult>> {
+            let angle = num(&angle, "turtle angle")?;
+            Ok(crate::script::builtins::turtle(expanded, angle)
+                .iter()
+                .map(|s| {
+                    Dynamic::from(
+                        [s.x1, s.y1, s.x2, s.y2, s.depth as f64]
+                            .iter()
+                            .map(|v| Dynamic::from(*v))
+                            .collect::<Array>(),
+                    )
+                })
+                .collect())
+        },
+    );
+
+    // Rescale a turtle path so its overall run is the unit segment, which
+    // turns the pieces into the contractions of an IFS.
+    engine.register_fn(
+        "normalize_segments",
+        |segs: Array| -> Result<Array, Box<EvalAltResult>> {
+            let mut parsed = Vec::with_capacity(segs.len());
+            for (i, d) in segs.iter().enumerate() {
+                let a = d
+                    .clone()
+                    .into_array()
+                    .map_err(|_| err(format!("segment {i} must be [x1, y1, x2, y2, depth]")))?;
+                if a.len() < 4 {
+                    return Err(err(format!("segment {i} must have at least 4 numbers")));
+                }
+                parsed.push(crate::script::builtins::Segment {
+                    x1: num(&a[0], "x1")?,
+                    y1: num(&a[1], "y1")?,
+                    x2: num(&a[2], "x2")?,
+                    y2: num(&a[3], "y2")?,
+                    depth: if a.len() > 4 { num(&a[4], "depth")? as u32 } else { 0 },
+                });
+            }
+            let normalized = crate::script::builtins::normalize_segments(&parsed).ok_or_else(|| {
+                err("this path returns to where it started, so it has no unit-segment form — \
+                     use an open curve, or place the segments yourself")
+            })?;
+            Ok(normalized
+                .iter()
+                .map(|s| {
+                    Dynamic::from(
+                        [s.x1, s.y1, s.x2, s.y2, s.depth as f64]
+                            .iter()
+                            .map(|v| Dynamic::from(*v))
+                            .collect::<Array>(),
+                    )
+                })
+                .collect())
+        },
+    );
+
+    // Turn a transform into the similarity carrying the unit segment
+    // (0,0)-(1,0) onto the given one: rotate+scale by the segment's
+    // vector, then translate to its start.
+    engine.register_fn(
+        "set_segment",
+        |t: &mut TransformHandle, seg: Array| -> Result<(), Box<EvalAltResult>> {
+            if seg.len() < 4 {
+                return Err(err("set_segment expects [x1, y1, x2, y2]"));
+            }
+            let x1 = num(&seg[0], "x1")?;
+            let y1 = num(&seg[1], "y1")?;
+            let x2 = num(&seg[2], "x2")?;
+            let y2 = num(&seg[3], "y2")?;
+            let (dx, dy) = (x2 - x1, y2 - y1);
+            t.with(|x| {
+                x.a = dx as f32;
+                x.b = -dy as f32;
+                x.c = dy as f32;
+                x.d = dx as f32;
+                x.e = x1 as f32;
+                x.f = y1 as f32;
+                x.set_variation("linear", 1.0);
+            })
+        },
+    );
+
     // klein_generators(recipe, a_re, a_im, b_re, b_im, weight)
     //   -> [a, a-inverse, b, b-inverse], each 8 numbers
     engine.register_fn(

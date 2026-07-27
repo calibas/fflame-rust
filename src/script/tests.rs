@@ -1066,3 +1066,70 @@ fn decomposition_sets_preserve_z_only_where_needed() {
     assert!(always_z("sphere_packing") && always_z("spherical3D_wf"));
     assert!(!always_z("mobius"), "the mobius target is not AlwaysZ");
 }
+
+#[test]
+fn lsystem_script_builds_a_contractive_ifs() {
+    // The L-system script rests on the classical equivalence: ONE
+    // generation of an edge-rewriting rule, shrunk onto the edge it
+    // replaced, is an IFS whose attractor is the curve. Each preset must
+    // therefore come out as the right number of pieces, all contracting.
+    let host = ScriptHost::new();
+    let source = include_str!("../../assets/scripts/generators/lsystem.rhai");
+
+    // (preset index, pieces, per-piece scale)
+    let cases = [(0usize, 4usize, 1.0 / 3.0), (2, 2, 0.5f64.sqrt()), (3, 3, 0.5)];
+    for (choice, pieces, scale) in cases {
+        let out = host
+            .run(
+                source,
+                &FractalConfig::default(),
+                1,
+                [("curve".to_string(), ParamValue::Choice(choice))]
+                    .into_iter()
+                    .collect(),
+            )
+            .unwrap_or_else(|e| panic!("preset {choice} failed: {e}"));
+        let flame = &out.config.flame;
+        assert_eq!(flame.transforms.len(), pieces, "preset {choice}: piece count");
+
+        for (i, t) in flame.transforms.iter().enumerate() {
+            // set_segment builds a similarity: [a b; c d] = [dx -dy; dy dx],
+            // so its scale is hypot(dx, dy).
+            let got = ((t.a as f64).powi(2) + (t.c as f64).powi(2)).sqrt();
+            assert!(
+                (got - scale).abs() < 1e-5,
+                "preset {choice} piece {i}: scale {got} should be {scale}"
+            );
+            assert!(got < 1.0, "preset {choice} piece {i} must contract");
+            assert!(t.variations.contains_key("linear"), "pieces are pure affines");
+        }
+
+        // The reported contractiveness must agree with the geometry:
+        // equal-weight pieces of the same scale give exactly ln(scale).
+        let reported: f64 = out.messages
+            .iter()
+            .find(|m| m.starts_with("contractiveness: "))
+            .and_then(|m| m.trim_start_matches("contractiveness: ").parse().ok())
+            .expect("script reports contractiveness");
+        assert!(
+            (reported - scale.ln()).abs() < 1e-6,
+            "preset {choice}: contractiveness {reported} should be ln({scale}) = {}",
+            scale.ln()
+        );
+    }
+}
+
+#[test]
+fn lsystem_rejects_a_closed_path() {
+    // A path returning to its start has no unit-segment form, so there is
+    // no IFS to build. Say so instead of dividing by zero.
+    let err = run(
+        r#"
+            script("L", "generator");
+            normalize_segments(turtle(lsystem("F", #{ "F": "F+F+F+F" }, 1), 90.0));
+        "#,
+        1,
+    )
+    .unwrap_err();
+    assert!(err.message.contains("returns to where it started"), "{err}");
+}
