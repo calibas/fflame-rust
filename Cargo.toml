@@ -40,7 +40,12 @@ cpal = "0.15"
 symphonia = { version = "0.5", default-features = false, features = ["mp3", "wav", "flac", "ogg", "pcm"] }
 rustfft = "6.2"
 ringbuf = "0.4"
-rhai = "1.25.1"
+# default-features would enable `ahash/runtime-rng`, which makes ahash
+# pull getrandom 0.3 — and via feature unification that applies to egui's
+# ahash too, breaking the wasm32 build (getrandom 0.3 refuses
+# wasm32-unknown-unknown without a cfg flag). We only need `std`; rhai
+# still gets ahash's compile-time-rng, which it depends on directly.
+rhai = { version = "1.25.1", default-features = false, features = ["std"] }
 rand_pcg = "0.3"
 
 # WASM-specific dependencies
