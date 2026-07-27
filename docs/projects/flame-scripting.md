@@ -389,10 +389,35 @@ need to account for:
   config fields are skip-if-default, so absence from the JSON doesn't
   prove a typo. The rule: a key already present is known (no warning even
   if the write is a no-op); only absent-and-no-change warns.
-- **Contractive scaling is the one rule examples must teach.** Random
-  affines with scale > 1 diverge and render as a formless haze rather
-  than a fractal; the starter generator keeps `scale` below 1 and says
-  why.
+- **Convergence is a whole-flame property, not a per-transform one.** An
+  individual transform scaling above 1 is legitimate and often where the
+  structure comes from; what decides whether the chaos game settles is
+  the probability-weighted mean log scale, `Σ pᵢ·0.5·ln|det Aᵢ|`, where
+  `pᵢ` is the transform's selection probability. Exposed to scripts as
+  `flame.contractiveness()` / `flame.set_contractiveness(target)` (one
+  shared factor, so each transform keeps its character) and
+  `t.area_scale()`. Verified: at a fixed seed, target −0.25 renders a
+  clean flame while +0.3 scatters the same flame into near-blackness.
+
+- **Measuring nonlinear variations is unsolved and needs the GPU.** The
+  metric above covers the affine part only, which is exact for
+  affine-only flames and meaningless once a bounding variation like
+  `spherical` is in play. Analytic extension would need each variation's
+  Jacobian; we have 500+ variations as WGSL source with no derivatives
+  and **no CPU evaluator at all**, so that route is closed. The workable
+  answer is empirical, and needs only forward evaluation:
+    1. *Numerical Lyapunov estimate* — iterate two nearby points through
+       the same transform sequence, accumulate `log(δₙ/δ₀)` with
+       renormalisation. Standard, handles arbitrary nonlinearity.
+    2. *Divergence rate* — count how often the shader's existing
+       bad-value respawn fires. Cheaper (one atomic), and a more direct
+       answer to the practical question "will this render as mud?".
+    3. *Bounding box* of the attractor, which the random generator could
+       also use for auto-framing.
+  All three want a short **GPU probe dispatch** (small workgroup count,
+  a few thousand iterations) returning statistics. Worth building for the
+  existing random generator regardless of scripting; scoped for a later
+  phase, not Phase 1.
 
 ## 8. Open questions (non-blocking, settle during Phase 1/2)
 

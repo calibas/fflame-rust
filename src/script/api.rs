@@ -373,6 +373,39 @@ fn register_flame(engine: &mut Engine) {
         },
     );
 
+    // Whether the system converges is a property of the WHOLE flame, not
+    // of any one transform — see mean_log_scale.
+    engine.register_fn("contractiveness", |f: &mut FlameHandle| -> f64 {
+        mean_log_scale(&f.cfg.borrow().flame).unwrap_or(f64::NEG_INFINITY)
+    });
+
+    engine.register_fn(
+        "set_contractiveness",
+        |f: &mut FlameHandle, target: f64| -> Result<f64, Box<EvalAltResult>> {
+            let mut cfg = f.cfg.borrow_mut();
+            let current = mean_log_scale(&cfg.flame).ok_or_else(|| {
+                err("set_contractiveness needs at least one transform with weight")
+            })?;
+            if !current.is_finite() {
+                return Err(err(
+                    "cannot rescale: a transform's affine is degenerate (zero area)",
+                ));
+            }
+            // Scaling every linear part by k shifts each transform's
+            // log-scale by ln k, so it shifts the weighted mean by ln k
+            // too — one uniform factor lands exactly on the target while
+            // leaving the relative character of each transform intact.
+            let k = (target - current).exp() as f32;
+            for t in &mut cfg.flame.transforms {
+                t.a *= k;
+                t.b *= k;
+                t.c *= k;
+                t.d *= k;
+            }
+            Ok(k as f64)
+        },
+    );
+
     engine.register_get_set(
         "name",
         |f: &mut FlameHandle| -> String { f.cfg.borrow().flame.name.clone() },
@@ -577,6 +610,58 @@ fn register_transform(engine: &mut Engine) {
     );
 
     engine.register_fn("index", |t: &mut TransformHandle| -> i64 { t.idx as i64 });
+
+    // |det| of the linear part: how much this transform scales AREA.
+    // Above 1 expands, below 1 contracts — legitimate either way.
+    engine.register_fn("area_scale", |t: &mut TransformHandle| -> Result<f64, Box<EvalAltResult>> {
+        t.with(|x| ((x.a * x.d - x.b * x.c) as f64).abs())
+    });
+}
+
+/// Probability-weighted mean log linear-scale of the normal transforms —
+/// negative means the flame contracts on average, and the chaos game
+/// settles onto a bounded attractor.
+///
+/// This is the quantity that decides whether a flame converges. It is NOT
+/// a per-transform property: a transform scaling by 1.5 is fine, and
+/// often desirable, as long as the others pull the weighted mean below
+/// zero. Weights are the selection probabilities, so a rarely-chosen
+/// expansive transform costs little.
+///
+/// Each transform contributes `0.5·ln|det A|` — the log of its average
+/// linear scale, since `|det|` is the area factor — including its
+/// post-affine when enabled.
+///
+/// Deliberately an estimate, not a guarantee:
+///
+/// * Only the affine part is measured. Nonlinear variations dominate when
+///   present (`spherical` bounds any input, however expansive the affine).
+/// * `det` averages the two axes, so a map that stretches along one axis
+///   while squashing the other can read as neutral.
+/// * Final transforms are excluded: they affect what is plotted, not the
+///   trajectory that continues.
+///
+/// Returns `None` when nothing carries weight.
+fn mean_log_scale(flame: &crate::scene::transforms::Flame) -> Option<f64> {
+    // Guards against ln(0) on a degenerate (zero-area) affine.
+    const FLOOR: f64 = 1e-12;
+    let total: f64 = flame.transforms.iter().map(|t| t.weight.max(0.0) as f64).sum();
+    if total <= 0.0 {
+        return None;
+    }
+    let mut acc = 0.0;
+    for t in &flame.transforms {
+        let w = t.weight.max(0.0) as f64;
+        if w <= 0.0 {
+            continue;
+        }
+        let mut det = ((t.a * t.d - t.b * t.c) as f64).abs();
+        if t.post_affine_enabled {
+            det *= ((t.post_a * t.post_d - t.post_b * t.post_c) as f64).abs();
+        }
+        acc += (w / total) * 0.5 * det.max(FLOOR).ln();
+    }
+    Some(acc)
 }
 
 fn validate_variation_param(var: &str, param: &str) -> Result<(), Box<EvalAltResult>> {
