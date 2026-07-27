@@ -23,6 +23,22 @@ use crate::scene::transforms::Transform;
 use super::host::ScriptState;
 use super::{humanize, ParamDecl, ParamValue, ScriptKind};
 
+/// Accept a whole number wherever a decimal is expected.
+///
+/// Rhai does not coerce `1` to `1.0` for registered functions, so
+/// without this `t.weight = 1` fails with "function not found" — a wall
+/// for exactly the audience this feature is for. Every numeric entry
+/// point below takes `Dynamic` and comes through here.
+fn num(d: &Dynamic, what: &str) -> Result<f64, Box<EvalAltResult>> {
+    if let Ok(f) = d.as_float() {
+        return Ok(f);
+    }
+    if let Ok(i) = d.as_int() {
+        return Ok(i as f64);
+    }
+    Err(err(format!("{what} expects a number, got a {}", d.type_name())))
+}
+
 /// Build a script-visible runtime error.
 fn err(msg: impl Into<String>) -> Box<EvalAltResult> {
     Box::new(EvalAltResult::ErrorRuntime(
@@ -159,7 +175,9 @@ fn register_meta(engine: &mut Engine, state: Rc<RefCell<ScriptState>>) {
     let s = Rc::clone(&state);
     engine.register_fn(
         "param",
-        move |key: &str, default: f64, min: f64, max: f64| -> Result<f64, Box<EvalAltResult>> {
+        move |key: &str, default: Dynamic, min: Dynamic, max: Dynamic| -> Result<f64, Box<EvalAltResult>> {
+            let default = num(&default, "param default")?;
+            let (min, max) = (num(&min, "param minimum")?, num(&max, "param maximum")?);
             if min > max {
                 return Err(err(format!("param `{key}`: min ({min}) is above max ({max})")));
             }
@@ -251,12 +269,16 @@ fn register_rng(engine: &mut Engine, state: Rc<RefCell<ScriptState>>) {
     engine.register_fn("rand", move || -> f64 { s.borrow_mut().rng.gen::<f64>() });
 
     let s = Rc::clone(&state);
-    engine.register_fn("rand", move |min: f64, max: f64| -> f64 {
-        if min >= max {
-            return min;
-        }
-        s.borrow_mut().rng.gen_range(min..max)
-    });
+    engine.register_fn(
+        "rand",
+        move |min: Dynamic, max: Dynamic| -> Result<f64, Box<EvalAltResult>> {
+            let (min, max) = (num(&min, "rand minimum")?, num(&max, "rand maximum")?);
+            if min >= max {
+                return Ok(min);
+            }
+            Ok(s.borrow_mut().rng.gen_range(min..max))
+        },
+    );
 
     let s = Rc::clone(&state);
     engine.register_fn("rand_int", move |min: i64, max: i64| -> i64 {
@@ -267,7 +289,10 @@ fn register_rng(engine: &mut Engine, state: Rc<RefCell<ScriptState>>) {
     });
 
     let s = Rc::clone(&state);
-    engine.register_fn("chance", move |p: f64| -> bool { s.borrow_mut().rng.gen::<f64>() < p });
+    engine.register_fn("chance", move |p: Dynamic| -> Result<bool, Box<EvalAltResult>> {
+        let p = num(&p, "chance")?;
+        Ok(s.borrow_mut().rng.gen::<f64>() < p)
+    });
 
     let s = Rc::clone(&state);
     engine.register_fn("pick", move |items: Array| -> Result<Dynamic, Box<EvalAltResult>> {
@@ -382,7 +407,8 @@ fn register_flame(engine: &mut Engine) {
 
     engine.register_fn(
         "set_contractiveness",
-        |f: &mut FlameHandle, target: f64| -> Result<f64, Box<EvalAltResult>> {
+        |f: &mut FlameHandle, target: Dynamic| -> Result<f64, Box<EvalAltResult>> {
+            let target = num(&target, "contractiveness target")?;
             let mut cfg = f.cfg.borrow_mut();
             let current = mean_log_scale(&cfg.flame).ok_or_else(|| {
                 err("set_contractiveness needs at least one transform with weight")
@@ -396,6 +422,9 @@ fn register_flame(engine: &mut Engine) {
             // log-scale by ln k, so it shifts the weighted mean by ln k
             // too — one uniform factor lands exactly on the target while
             // leaving the relative character of each transform intact.
+            // Scaling the affines by k shifts each transform's log-scale by
+            // ln k (the variation-weight term is untouched), so the
+            // weighted mean lands exactly on the target.
             let k = (target - current).exp() as f32;
             for t in &mut cfg.flame.transforms {
                 t.a *= k;
@@ -435,7 +464,8 @@ fn register_flame(engine: &mut Engine) {
 
     engine.register_fn(
         "set_effect_param",
-        |f: &mut FlameHandle, name: &str, param: &str, value: f64| -> Result<(), Box<EvalAltResult>> {
+        |f: &mut FlameHandle, name: &str, param: &str, value: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            let value = num(&value, "effect parameter")?;
             let mut cfg = f.cfg.borrow_mut();
             // Most-recently added instance of that effect, color chain
             // first (the borrow checker wants these sequential, not chained).
@@ -466,12 +496,16 @@ fn register_flame(engine: &mut Engine) {
 fn register_transform(engine: &mut Engine) {
     macro_rules! prop_f32 {
         ($name:literal, $field:ident) => {
-            engine.register_get_set(
+            // Registered separately, not via register_get_set: that ties
+            // the setter's type to the getter's, and the setter has to
+            // take Dynamic so `t.weight = 1` works alongside `= 1.0`.
+            engine.register_get($name, |t: &mut TransformHandle| -> Result<f64, Box<EvalAltResult>> {
+                t.with(|x| x.$field as f64)
+            });
+            engine.register_set(
                 $name,
-                |t: &mut TransformHandle| -> Result<f64, Box<EvalAltResult>> {
-                    t.with(|x| x.$field as f64)
-                },
-                |t: &mut TransformHandle, v: f64| -> Result<(), Box<EvalAltResult>> {
+                |t: &mut TransformHandle, v: Dynamic| -> Result<(), Box<EvalAltResult>> {
+                    let v = num(&v, $name)?;
                     t.with(|x| x.$field = v as f32)
                 },
             );
@@ -494,7 +528,8 @@ fn register_transform(engine: &mut Engine) {
 
     engine.register_fn(
         "add_variation",
-        |t: &mut TransformHandle, name: &str, weight: f64| -> Result<(), Box<EvalAltResult>> {
+        |t: &mut TransformHandle, name: &str, weight: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            let weight = num(&weight, "variation weight")?;
             if crate::variations::global_registry().get(name).is_none() {
                 return Err(err(format!("unknown variation `{name}`")));
             }
@@ -515,7 +550,8 @@ fn register_transform(engine: &mut Engine) {
     // script writes matches what the .fflame file shows.
     engine.register_fn(
         "set_variation_param",
-        |t: &mut TransformHandle, key: &str, value: f64| -> Result<(), Box<EvalAltResult>> {
+        |t: &mut TransformHandle, key: &str, value: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            let value = num(&value, "parameter value")?;
             let (var, param) = key
                 .split_once('.')
                 .ok_or_else(|| err(format!("param key `{key}` must look like \"variation.param\"")))?;
@@ -528,7 +564,8 @@ fn register_transform(engine: &mut Engine) {
 
     engine.register_fn(
         "set_variation_param",
-        |t: &mut TransformHandle, var: &str, param: &str, value: f64| -> Result<(), Box<EvalAltResult>> {
+        |t: &mut TransformHandle, var: &str, param: &str, value: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            let value = num(&value, "parameter value")?;
             validate_variation_param(var, param)?;
             t.with(|x| {
                 x.variation_params
@@ -539,7 +576,8 @@ fn register_transform(engine: &mut Engine) {
 
     engine.register_fn(
         "translate",
-        |t: &mut TransformHandle, dx: f64, dy: f64| -> Result<(), Box<EvalAltResult>> {
+        |t: &mut TransformHandle, dx: Dynamic, dy: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            let (dx, dy) = (num(&dx, "translate x")?, num(&dy, "translate y")?);
             t.with(|x| {
                 x.e += dx as f32;
                 x.f += dy as f32;
@@ -551,8 +589,8 @@ fn register_transform(engine: &mut Engine) {
     // left alone, which is what "scale the triangle" means in Apophysis.
     engine.register_fn(
         "scale",
-        |t: &mut TransformHandle, s: f64| -> Result<(), Box<EvalAltResult>> {
-            let s = s as f32;
+        |t: &mut TransformHandle, s: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            let s = num(&s, "scale")? as f32;
             t.with(|x| {
                 x.a *= s;
                 x.b *= s;
@@ -564,8 +602,8 @@ fn register_transform(engine: &mut Engine) {
 
     engine.register_fn(
         "scale_xy",
-        |t: &mut TransformHandle, sx: f64, sy: f64| -> Result<(), Box<EvalAltResult>> {
-            let (sx, sy) = (sx as f32, sy as f32);
+        |t: &mut TransformHandle, sx: Dynamic, sy: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            let (sx, sy) = (num(&sx, "scale x")? as f32, num(&sy, "scale y")? as f32);
             t.with(|x| {
                 x.a *= sx;
                 x.b *= sx;
@@ -577,8 +615,8 @@ fn register_transform(engine: &mut Engine) {
 
     engine.register_fn(
         "rotate",
-        |t: &mut TransformHandle, degrees: f64| -> Result<(), Box<EvalAltResult>> {
-            let (s, c) = (degrees as f32).to_radians().sin_cos();
+        |t: &mut TransformHandle, degrees: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            let (s, c) = (num(&degrees, "rotate")? as f32).to_radians().sin_cos();
             t.with(|x| {
                 let (a, b, cc, d) = (x.a, x.b, x.c, x.d);
                 x.a = c * a - s * cc;
@@ -592,13 +630,16 @@ fn register_transform(engine: &mut Engine) {
     engine.register_fn(
         "set_affine",
         |t: &mut TransformHandle,
-         a: f64,
-         b: f64,
-         c: f64,
-         d: f64,
-         e: f64,
-         f: f64|
+         a: Dynamic,
+         b: Dynamic,
+         c: Dynamic,
+         d: Dynamic,
+         e: Dynamic,
+         f: Dynamic|
          -> Result<(), Box<EvalAltResult>> {
+            let (a, b) = (num(&a, "affine a")?, num(&b, "affine b")?);
+            let (c, d) = (num(&c, "affine c")?, num(&d, "affine d")?);
+            let (e, f) = (num(&e, "affine e")?, num(&f, "affine f")?);
             t.with(|x| {
                 x.a = a as f32;
                 x.b = b as f32;
@@ -611,6 +652,48 @@ fn register_transform(engine: &mut Engine) {
     );
 
     engine.register_fn("index", |t: &mut TransformHandle| -> i64 { t.idx as i64 });
+
+    // Reading what's already on a transform is what separates a MODIFIER
+    // from an overwriter: a mutation has to nudge what it finds.
+    engine.register_fn(
+        "variation_names",
+        |t: &mut TransformHandle| -> Result<Array, Box<EvalAltResult>> {
+            let registry = crate::variations::global_registry();
+            t.with(|x| {
+                x.ordered_variation_names(&registry)
+                    .into_iter()
+                    .map(Dynamic::from)
+                    .collect()
+            })
+        },
+    );
+
+    engine.register_fn(
+        "variation_weight",
+        |t: &mut TransformHandle, name: &str| -> Result<f64, Box<EvalAltResult>> {
+            t.with(|x| x.variations.get(name).copied().unwrap_or(0.0) as f64)
+        },
+    );
+
+    engine.register_fn(
+        "has_variation",
+        |t: &mut TransformHandle, name: &str| -> Result<bool, Box<EvalAltResult>> {
+            t.with(|x| x.variations.contains_key(name))
+        },
+    );
+
+    engine.register_fn(
+        "variation_param",
+        |t: &mut TransformHandle, key: &str| -> Result<f64, Box<EvalAltResult>> {
+            let (var, param) = key
+                .split_once('.')
+                .ok_or_else(|| err(format!("param key `{key}` must look like \"variation.param\"")))?;
+            validate_variation_param(var, param)?;
+            // Falls back to the variation's declared default, so a script
+            // reading an untouched parameter sees what the renderer uses.
+            t.with(|x| x.variation_param_or_default(var, param) as f64)
+        },
+    );
 
     // |det| of the linear part: how much this transform scales AREA.
     // Above 1 expands, below 1 contracts — legitimate either way.
@@ -629,16 +712,29 @@ fn register_transform(engine: &mut Engine) {
 /// zero. Weights are the selection probabilities, so a rarely-chosen
 /// expansive transform costs little.
 ///
-/// Each transform contributes `0.5·ln|det A|` — the log of its average
-/// linear scale, since `|det|` is the area factor — including its
-/// post-affine when enabled.
+/// Each transform contributes `0.5·ln|det A| + ln(Σ w_v)` — the log of
+/// its average linear scale (|det| being the area factor, and the
+/// post-affine folded in when enabled) plus the total weight of its
+/// normal-phase variations.
+///
+/// That second term matters more than it looks. The dispatcher computes
+/// `result = Σ_v w_v · f_v(A·p)`, so the variation weights scale the
+/// transform's OUTPUT: a lone `linear` at weight 1.18 is an 18% expansion
+/// no matter what the affine says. Ignoring it made
+/// `set_contractiveness` silently wrong for any flame whose variation
+/// weights weren't exactly 1 — it rebalanced the affines while the real
+/// scale drifted, which showed up as a mutation rendering to haze.
 ///
 /// Deliberately an estimate, not a guarantee:
 ///
-/// * Only the affine part is measured. Nonlinear variations dominate when
-///   present (`spherical` bounds any input, however expansive the affine).
+/// * Only the affine and the weights are measured. A variation's own
+///   scaling is invisible — `spherical` bounds any input however
+///   expansive the affine feeding it, so the number is a guide, not a
+///   verdict, once curved variations carry real weight.
 /// * `det` averages the two axes, so a map that stretches along one axis
 ///   while squashing the other can read as neutral.
+/// * Pre/post-phase variations are function composition rather than terms
+///   in the weighted sum, so their weights are excluded here.
 /// * Final transforms are excluded: they affect what is plotted, not the
 ///   trajectory that continues.
 ///
@@ -660,7 +756,32 @@ fn mean_log_scale(flame: &crate::scene::transforms::Flame) -> Option<f64> {
         if t.post_affine_enabled {
             det *= ((t.post_a * t.post_d - t.post_b * t.post_c) as f64).abs();
         }
-        acc += (w / total) * 0.5 * det.max(FLOOR).ln();
+        // Only variations in the weighted sum scale the output. Mirrors
+        // the shader builder's own rule: a Normal variation always sums,
+        // an `Any` variation sums unless this transform's fx_priority
+        // moved it (<0 pre, >0 post), and Pre/Post compose instead.
+        let registry = crate::variations::global_registry();
+        let var_scale: f64 = t
+            .variations
+            .iter()
+            .filter(|(name, _)| match registry.get(name).map(|i| i.phase.clone()) {
+                Some(crate::variations::VariationPhase::Normal) => true,
+                Some(crate::variations::VariationPhase::Any) => {
+                    t.variation_priorities.get(*name).copied().unwrap_or(0) == 0
+                }
+                Some(_) => false,
+                None => true,
+            })
+            .map(|(_, w)| *w as f64)
+            .sum::<f64>()
+            .abs();
+        // Bounded per transform: one degenerate transform (no summing
+        // variation at all, so its normal result is the origin) would
+        // otherwise drag the mean to ~-27 and make set_contractiveness
+        // ask for an astronomical rescale.
+        let contribution =
+            (0.5 * det.max(FLOOR).ln() + var_scale.max(FLOOR).ln()).clamp(-10.0, 10.0);
+        acc += (w / total) * contribution;
     }
     Some(acc)
 }

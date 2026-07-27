@@ -487,3 +487,242 @@ fn palette_errors_are_actionable() {
         .unwrap_err();
     assert!(err.message.contains("no palette library"), "{err}");
 }
+
+/// A flame with real structure, to mutate.
+fn seeded_flame() -> FractalConfig {
+    let host = ScriptHost::new();
+    let script = r#"
+        script("Base", "generator");
+        for i in 0..3 {
+            let t = flame.add_transform();
+            t.add_variation("linear", 1.0);
+            t.add_variation("spherical", 0.5);
+            t.set_affine(0.6, 0.1, -0.1, 0.6, 0.2, -0.3);
+            t.weight = 1.0;
+            t.color = 0.4;
+        }
+    "#;
+    host.run(script, &FractalConfig::default(), 1, HashMap::new())
+        .unwrap()
+        .config
+}
+
+#[test]
+fn mutate_varies_the_flame_without_wrecking_it() {
+    let base = seeded_flame();
+    let source = include_str!("../../assets/scripts/modifiers/mutate.rhai");
+    let host = ScriptHost::new();
+
+    let before_balance = {
+        // Same measure the script preserves.
+        let out = host
+            .run(
+                "script(\"M\", \"modifier\"); print(\"\" + flame.contractiveness());",
+                &base,
+                1,
+                HashMap::new(),
+            )
+            .unwrap();
+        out.messages[0].parse::<f64>().unwrap()
+    };
+
+    let mut seen = std::collections::HashSet::new();
+    for seed in 1u64..=6 {
+        let out = host.run(source, &base, seed, HashMap::new()).unwrap();
+        let cfg = out.config;
+
+        // Structure survives: same transforms, still weighted, still curved.
+        assert_eq!(cfg.flame.transforms.len(), base.flame.transforms.len());
+        for t in &cfg.flame.transforms {
+            assert!(t.weight >= 0.05, "seed {seed}: transform faded out");
+            assert!(t.a.is_finite() && t.d.is_finite(), "seed {seed}: bad affine");
+            assert!((0.0..=1.0).contains(&t.color), "seed {seed}: colour off-palette");
+            assert!(!t.variations.is_empty(), "seed {seed}: lost its variations");
+        }
+
+        // Balance is held, so mutations explore shape rather than drifting
+        // into an over-expanded haze.
+        let after = host
+            .run(
+                "script(\"M\", \"modifier\"); print(\"\" + flame.contractiveness());",
+                &cfg,
+                1,
+                HashMap::new(),
+            )
+            .unwrap()
+            .messages[0]
+            .parse::<f64>()
+            .unwrap();
+        assert!(
+            (after - before_balance).abs() < 1e-4,
+            "seed {seed}: balance drifted {before_balance} -> {after}"
+        );
+
+        // Each seed is a DIFFERENT mutation, and none is the original.
+        let json = serde_json::to_string(&serde_json::to_value(&cfg).unwrap()).unwrap();
+        assert!(seen.insert(json), "seed {seed} repeated an earlier mutation");
+        assert_ne!(
+            serde_json::to_value(&cfg).unwrap(),
+            serde_json::to_value(&base).unwrap(),
+            "seed {seed} changed nothing"
+        );
+    }
+}
+
+#[test]
+fn mutate_modes_limit_what_changes() {
+    let base = seeded_flame();
+    let source = include_str!("../../assets/scripts/modifiers/mutate.rhai");
+    let host = ScriptHost::new();
+
+    // Colours-only leaves the geometry alone.
+    let out = host
+        .run(
+            source,
+            &base,
+            5,
+            [("mode".to_string(), ParamValue::Choice(4))].into_iter().collect(),
+        )
+        .unwrap();
+    let (a, b) = (&out.config.flame.transforms[0], &base.flame.transforms[0]);
+    assert_eq!((a.a, a.b, a.c, a.d, a.e, a.f), (b.a, b.b, b.c, b.d, b.e, b.f));
+    assert_eq!(a.weight, b.weight, "weights untouched in Colours mode");
+
+    // Shape-only leaves colour alone.
+    let out = host
+        .run(
+            source,
+            &base,
+            5,
+            [("mode".to_string(), ParamValue::Choice(1))].into_iter().collect(),
+        )
+        .unwrap();
+    let a = &out.config.flame.transforms[0];
+    assert_eq!(a.color, base.flame.transforms[0].color);
+}
+
+#[test]
+fn contractiveness_counts_variation_weights() {
+    // Regression: a variation's weight MULTIPLIES the transform's output
+    // (`result = Sum w_v * f_v(A*p)`), so `linear` at 2.0 is a doubling.
+    // A metric that reads only the affine called this balanced, so
+    // set_contractiveness "restored" a balance that had really drifted —
+    // which showed up as a mutated flame rendering to haze.
+    let probe = |weight: f64| {
+        let script = format!(
+            r#"
+                script("W", "generator");
+                let t = flame.add_transform();
+                t.set_affine(0.5, 0.0, 0.0, 0.5, 0.0, 0.0);
+                t.add_variation("linear", {weight});
+                t.weight = 1.0;
+                print("" + flame.contractiveness());
+            "#
+        );
+        run(&script, 1).unwrap().messages[0].parse::<f64>().unwrap()
+    };
+
+    // 0.5x affine alone: ln(0.5).
+    let base = probe(1.0);
+    assert!((base - 0.5f64.ln()).abs() < 1e-6, "got {base}");
+    // Doubling the variation weight cancels it exactly.
+    let doubled = probe(2.0);
+    assert!(doubled.abs() < 1e-6, "0.5x affine x2 weight is neutral, got {doubled}");
+    // And halving compounds it.
+    let halved = probe(0.5);
+    assert!((halved - 0.25f64.ln()).abs() < 1e-6, "got {halved}");
+}
+
+#[test]
+fn contractiveness_ignores_non_summing_variations() {
+    // Pre/post variations compose rather than joining the weighted sum,
+    // so their weights must not be read as output scaling. `pre_blur` is
+    // a Pre-phase variation; `linear` carries the sum.
+    let script = r#"
+        script("P", "generator");
+        let t = flame.add_transform();
+        t.set_affine(0.5, 0.0, 0.0, 0.5, 0.0, 0.0);
+        t.add_variation("linear", 1.0);
+        t.weight = 1.0;
+        print("" + flame.contractiveness());
+        t.add_variation("pre_blur", 3.0);
+        print("" + flame.contractiveness());
+    "#;
+    let out = run(script, 1).unwrap();
+    let (before, after) = (
+        out.messages[0].parse::<f64>().unwrap(),
+        out.messages[1].parse::<f64>().unwrap(),
+    );
+    assert!(
+        (before - after).abs() < 1e-9,
+        "a pre-phase weight changed the reading: {before} -> {after}"
+    );
+}
+
+#[test]
+fn set_contractiveness_stays_sane_on_a_degenerate_transform() {
+    // A transform with nothing in the weighted sum collapses to the
+    // origin. It must not drag the mean to -27 and trigger an
+    // astronomical rescale (an earlier version asked for k = 1e12).
+    let script = r#"
+        script("D", "generator");
+        let a = flame.add_transform();
+        a.set_affine(0.5, 0.0, 0.0, 0.5, 0.0, 0.0);
+        a.add_variation("linear", 1.0);
+        a.weight = 1.0;
+        let b = flame.add_transform();
+        b.set_affine(0.5, 0.0, 0.0, 0.5, 0.0, 0.0);
+        b.weight = 1.0;
+        let k = flame.set_contractiveness(-0.25);
+        print("" + k);
+    "#;
+    let out = run(script, 1).unwrap();
+    let k: f64 = out.messages[0].parse().unwrap();
+    assert!(k > 1e-3 && k < 1e3, "rescale factor out of sane range: {k}");
+    for t in &out.config.flame.transforms {
+        assert!(t.a.is_finite() && t.a.abs() < 1e6, "affine blew up: {}", t.a);
+    }
+}
+
+#[test]
+fn whole_numbers_work_wherever_decimals_do() {
+    // Rhai does not coerce 1 to 1.0 for registered functions, so without
+    // explicit handling every one of these fails with "function not
+    // found" — a wall for the non-programmers this feature targets.
+    let script = r#"
+        script("N", "generator");
+        let s = param("spread", 1, 0, 3);
+        let t = flame.add_transform();
+        t.add_variation("linear", 1);
+        t.weight = 2;
+        t.color = 1;
+        t.translate(1, -1);
+        t.scale(2);
+        t.scale_xy(1, 1);
+        t.rotate(90);
+        t.set_affine(1, 0, 0, 1, 0, 0);
+        t.set_variation_param("julian.power", 3);
+        let r = rand(0, 2);
+        if chance(1) { t.color = 0; }
+        flame.set_contractiveness(0);
+    "#;
+    let out = run(script, 1).expect("whole numbers accepted throughout");
+    let t = &out.config.flame.transforms[0];
+    assert_eq!(t.weight, 2.0);
+    assert_eq!(t.color, 0.0, "chance(1) is always true");
+
+    // Mixed int/float in one call is fine too.
+    assert!(run(
+        "script(\"N\", \"generator\"); let t = flame.add_transform(); t.set_affine(1, 0.0, 0, 1.0, 0, 0.5);",
+        1
+    )
+    .is_ok());
+
+    // A genuine non-number still gets a clear message, not "not found".
+    let err = run(
+        "script(\"N\", \"generator\"); let t = flame.add_transform(); t.weight = \"heavy\";",
+        1,
+    )
+    .unwrap_err();
+    assert!(err.message.contains("expects a number"), "{err}");
+}
