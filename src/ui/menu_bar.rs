@@ -286,6 +286,12 @@ pub fn render_menu_bar(
                     workspace.open_floating_panel(super::workspace::PanelType::Variations, ctx);
                 }
 
+                // Scripts panel
+                let scripts_open = workspace.panel_exists(super::workspace::PanelType::Scripts);
+                if ui.selectable_label(scripts_open, t!("menu.window_scripts").as_ref()).clicked() {
+                    workspace.open_floating_panel(super::workspace::PanelType::Scripts, ctx);
+                }
+
                 // Subflames panel
                 let subflames_open = workspace.panel_exists(super::workspace::PanelType::Subflames);
                 if ui.selectable_label(subflames_open, t!("menu.window_subflames").as_ref()).clicked() {
