@@ -866,6 +866,24 @@ impl ShaderBuilder {
              // docs/projects/multi-emit-stereograms.md.
              var<private> plot_emit_points: array<vec4<f32>, {cap}u>;
              var<private> plot_emit_count: u32;
+             // Bit k set = emission k is an OFFSET from the iteration's
+             // final plotted position (applied after post-affine and the
+             // Final chain), not an absolute point. This is what lets
+             // blur-style emitters sit on ANY transform: the copies
+             // center on whatever actually plots.
+             var<private> plot_emit_relative: u32;
+             // Set by emit_suppress_main(): suppress the MAIN plot (source
+             // 0) while still plotting the emissions. Deliberately NOT
+             // Feature::CanHide — on a normal transform CanHide aborts the
+             // whole iteration (trajectory revert + continue, the cut_*
+             // contract), which discards the emissions too. This flag only
+             // gates source 0 in the plot loop; the walk and the emissions
+             // are untouched.
+             var<private> plot_emit_suppress: bool;
+
+             fn emit_suppress_main() {{
+                 plot_emit_suppress = true;
+             }}
 
              fn emit_plot_weighted(p: {dim}, w: f32) {{
                  if (plot_emit_count < {cap}u) {{
@@ -876,6 +894,11 @@ impl ShaderBuilder {
 
              fn emit_plot(p: {dim}) {{
                  emit_plot_weighted(p, 1.0);
+             }}
+
+             fn emit_plot_offset(p: {dim}, w: f32) {{
+                 plot_emit_relative = plot_emit_relative | (1u << plot_emit_count);
+                 emit_plot_weighted(p, w);
              }}
 
 "
@@ -2944,6 +2967,49 @@ mod tests {
             );
             let want = if render_3d { "fn emit_plot_weighted(p: vec3<f32>" } else { "fn emit_plot_weighted(p: vec2<f32>" };
             assert!(shader.contains(want), "module-typed helper ({render_3d})");
+            assert!(shader.contains("fn emit_plot_offset("), "offset helper present ({render_3d})");
+            assert!(shader.contains("plot_emit_relative = 0u;"), "bitmask reset present ({render_3d})");
+        }
+    }
+
+    /// The generated WGSL for a spray-on-NORMAL-transform flame must
+    /// parse — in the app a shader that fails validation is silently
+    /// dropped (no error scope), leaving the previous pipeline running,
+    /// which presents as "the variation does nothing".
+    #[test]
+    fn plot_emit_wgsl_parses_in_plain_mode() {
+        use crate::scene::transforms::{Flame, Transform};
+        let registry = crate::variations::global_registry().clone();
+        let builder = ShaderBuilder::new(registry);
+        let constants = ShaderConstants::default();
+
+        let mut flame = Flame::new();
+        let mut t0 = Transform::new();
+        t0.variations.insert("linear".to_string(), 1.0);
+        flame.transforms.push(t0);
+        let mut t1 = Transform::new();
+        t1.variations.insert("spray_blur".to_string(), 1.0);
+        flame.transforms.push(t1);
+        let mut active = HashMap::new();
+        active.insert("linear".to_string(), 1.0);
+        active.insert("spray_blur".to_string(), 1.0);
+
+        for render_3d in [false, true] {
+            for (path_tracking, xaos) in [(false, false), (true, false), (false, true)] {
+                let shader = builder.build_from_template(
+                    &flame, &active, render_3d, path_tracking, xaos, true, &constants,
+                );
+                if !render_3d && !path_tracking && !xaos {
+                    let _ = std::fs::write("debug_shader_plain_2d.wgsl", &shader);
+                }
+                if let Err(e) = wgpu::naga::front::wgsl::parse_str(&shader) {
+                    let msg = e.emit_to_string(&shader);
+                    panic!(
+                        "plain-mode WGSL fails to parse (render_3d={render_3d}, path={path_tracking}, xaos={xaos}):
+{msg}"
+                    );
+                }
+            }
         }
     }
 

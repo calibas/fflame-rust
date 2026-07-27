@@ -135,6 +135,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 {{#if HAS_PLOT_EMIT}}
         // Reset the multi-emit collector (Feature::PlotEmits).
         plot_emit_count = 0u;
+        plot_emit_relative = 0u;
+        plot_emit_suppress = false;
 {{/if}}
 
         // Analytic-blur mean-splat accumulator: the selected transform's
@@ -458,7 +460,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 should_plot = false;
             }
 {{#if HAS_PLOT_EMIT}}
-            let main_visible = should_plot;
+            // An emitter's own main plot can be suppressed without touching
+            // the iteration (emit_suppress_main) — unlike CanHide, which
+            // aborts the whole iteration on normal transforms.
+            let main_visible = should_plot && !plot_emit_suppress;
 {{/if}}
 
             // Post-symmetry — gated entirely by HAS_POST_SYMMETRY.
@@ -565,10 +570,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             var src_weight = 1.0;
             if (src_i > 0u) {
                 let em = plot_emit_points[src_i - 1u];
+                // Relative emissions are offsets from the final plotted
+                // position — post-affine and the Final chain already
+                // applied — so a blur emitter on a NORMAL transform still
+                // centers its copies on what actually plots.
+                let rel = ((plot_emit_relative >> (src_i - 1u)) & 1u) == 1u;
 {{#if RENDER_3D}}
-                plot_src = em.xyz;
+                plot_src = select(em.xyz, final_pos + em.xyz, rel);
 {{else}}
-                plot_src = em.xy;
+                plot_src = select(em.xy, final_pos + em.xy, rel);
 {{/if}}
                 src_weight = em.w;
             }

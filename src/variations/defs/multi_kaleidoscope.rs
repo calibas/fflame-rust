@@ -11,7 +11,7 @@
 //! group can express.
 //!
 //! All `order` copies are emitted (the center plot is suppressed via
-//! `CanHide`), each at weight `brightness/order`, so the default is
+//! `emit_suppress_main`), each at weight `brightness/order`, so the default is
 //! exactly mono-equivalent total density — an order-12 kaleidoscope is
 //! no brighter than the unadorned flame, and converges 12× faster than
 //! rendering one sector per iteration.
@@ -38,7 +38,7 @@ pub static MULTI_KALEIDOSCOPE: VariationDef = VariationDef {
     display_name: "Multi Kaleidoscope",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    features: &[Feature::CanHide, Feature::PlotEmits(16)],
+    features: &[Feature::PlotEmits(16)],
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
@@ -58,7 +58,7 @@ pub static MULTI_KALEIDOSCOPE: VariationDef = VariationDef {
 };
 
 const WGSL_2D: &str = r#"
-fn variation_multi_kaleidoscope(p: vec2<f32>, xform_id: u32, variation_id: u32, hide: ptr<function, bool>) -> vec2<f32> {
+fn variation_multi_kaleidoscope(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let order = clamp(u32(get_param(xform_id, variation_id, 0u)), 2u, 16u);
     let angle = get_param(xform_id, variation_id, 1u) * 0.01745329252;
     let twist = get_param(xform_id, variation_id, 2u) * 0.01745329252;
@@ -71,7 +71,7 @@ fn variation_multi_kaleidoscope(p: vec2<f32>, xform_id: u32, variation_id: u32, 
 
     // All copies are emissions; the center plot is suppressed so the
     // brightness accounting is exact (Brightness/Order each).
-    *hide = true;
+    emit_suppress_main();
     let v0 = p - c;
     let w = brightness / f32(order);
     let step = 6.28318530718 / f32(order);
@@ -93,7 +93,7 @@ fn variation_multi_kaleidoscope(p: vec2<f32>, xform_id: u32, variation_id: u32, 
 "#;
 
 const WGSL_3D: &str = r#"
-fn variation_multi_kaleidoscope(p: vec3<f32>, xform_id: u32, variation_id: u32, hide: ptr<function, bool>) -> vec3<f32> {
+fn variation_multi_kaleidoscope(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let order = clamp(u32(get_param(xform_id, variation_id, 0u)), 2u, 16u);
     let angle = get_param(xform_id, variation_id, 1u) * 0.01745329252;
     let twist = get_param(xform_id, variation_id, 2u) * 0.01745329252;
@@ -106,7 +106,7 @@ fn variation_multi_kaleidoscope(p: vec3<f32>, xform_id: u32, variation_id: u32, 
 
     // The fan lives in the xy plane; z rides along unchanged per copy
     // (a z-spiral would fight the camera pipeline's depth semantics).
-    *hide = true;
+    emit_suppress_main();
     let v0 = p.xy - c;
     let w = brightness / f32(order);
     let step = 6.28318530718 / f32(order);

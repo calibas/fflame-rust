@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "b565a8ef",
+  "git_hash": "f986cf5a",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 34406,
@@ -521,6 +521,10 @@
     "variations-spin-phase-smoke.png": {
       "bytes": 19035,
       "sha256": "c42faffd527e7faf3fd0aec0c7dc64815591e88e5f603abaf710e1e9992971d1"
+    },
+    "variations-spray_blur-normal-xform-smoke.png": {
+      "bytes": 2459,
+      "sha256": "ede2e1a7642db0a072b2d362237b991533a3c830c6f1530733357e805de77dac"
     },
     "variations-spray_blur-smoke.png": {
       "bytes": 5552,

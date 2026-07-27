@@ -148,8 +148,11 @@ pub enum Feature {
     ///   propagated trajectory state on a normal transform and the main
     ///   plotted point on a Final. Emissions are plot-only extras; they
     ///   never re-enter the chaos game.
-    /// * Emissions respect the opacity draw but NOT `CanHide` — a hiding
-    ///   emitter (stereogram) suppresses only its own center plot.
+    /// * Emissions respect the opacity draw. To suppress the variation's
+    ///   own main plot, call `emit_suppress_main()` — do NOT pair with
+    ///   `CanHide`: on a normal transform CanHide aborts the whole
+    ///   iteration (the cut_* contract: trajectory revert + continue),
+    ///   which silently discards the emissions too.
     /// * Emissions pass through post-symmetry and every plot-time effect
     ///   (DoF, fog, density weights) but NOT through Final chains — put
     ///   emitters ON the final. (A fourth `apply_variations` call site
