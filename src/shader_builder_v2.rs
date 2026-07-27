@@ -2999,9 +2999,6 @@ mod tests {
                 let shader = builder.build_from_template(
                     &flame, &active, render_3d, path_tracking, xaos, true, &constants,
                 );
-                if !render_3d && !path_tracking && !xaos {
-                    let _ = std::fs::write("debug_shader_plain_2d.wgsl", &shader);
-                }
                 if let Err(e) = wgpu::naga::front::wgsl::parse_str(&shader) {
                     let msg = e.emit_to_string(&shader);
                     panic!(

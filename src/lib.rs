@@ -29,6 +29,9 @@ pub mod api;
 // mod shader_builder; // Legacy - replaced by shader_builder_v2
 mod shader_builder_v2;
 mod shader_cache;
+/// Golden-file dumps of the generated WGSL (see `tests/shader_dumps/`).
+#[cfg(test)]
+mod shader_dumps;
 
 #[cfg(target_arch = "wasm32")]
 pub mod wasm_api;
