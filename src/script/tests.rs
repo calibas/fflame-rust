@@ -350,3 +350,61 @@ fn shuffle_and_pick_are_seeded() {
     let b = &run(s, 99).unwrap().config.flame.transforms[0];
     assert_eq!((a.weight, a.color), (b.weight, b.color));
 }
+
+#[test]
+fn contractiveness_is_a_whole_flame_property() {
+    // The point of the metric: an EXPANSIVE transform is legitimate. One
+    // map at 2x and one at 0.5x, equally weighted, average out to neutral.
+    let script = r#"
+        script("C", "generator");
+        let a = flame.add_transform();
+        a.add_variation("linear", 1.0);
+        a.set_affine(0.5, 0.0, 0.0, 0.5, 0.0, 0.0);
+        a.weight = 1.0;
+        let b = flame.add_transform();
+        b.add_variation("linear", 1.0);
+        b.set_affine(2.0, 0.0, 0.0, 2.0, 0.0, 0.0);
+        b.weight = 1.0;
+        print("" + flame.contractiveness());
+        print("" + b.area_scale());
+    "#;
+    let out = run(script, 1).unwrap();
+    let lambda: f64 = out.messages[0].parse().unwrap();
+    assert!(lambda.abs() < 1e-6, "0.5x and 2x should cancel, got {lambda}");
+    let area: f64 = out.messages[1].parse().unwrap();
+    assert!((area - 4.0).abs() < 1e-6, "2x scales area 4x, got {area}");
+
+    // Weight is a probability: make the expansive map rare and the system
+    // contracts overall, without touching either transform's scale.
+    let weighted = script.replace("b.weight = 1.0;", "b.weight = 0.2;");
+    let out = run(&weighted, 1).unwrap();
+    let lambda: f64 = out.messages[0].parse().unwrap();
+    assert!(lambda < 0.0, "rarely-chosen expansion should contract, got {lambda}");
+}
+
+#[test]
+fn set_contractiveness_hits_the_target() {
+    let script = r#"
+        script("C", "generator");
+        for i in 0..3 {
+            let t = flame.add_transform();
+            t.add_variation("linear", 1.0);
+            t.set_affine(1.4, 0.2, -0.1, 1.3, 0.0, 0.0);
+            t.weight = 1.0 + i;
+        }
+        print("" + flame.contractiveness());
+        flame.set_contractiveness(-0.25);
+        print("" + flame.contractiveness());
+    "#;
+    let out = run(script, 1).unwrap();
+    let before: f64 = out.messages[0].parse().unwrap();
+    let after: f64 = out.messages[1].parse().unwrap();
+    assert!(before > 0.0, "expansive to start with, got {before}");
+    assert!((after + 0.25).abs() < 1e-5, "should land on -0.25, got {after}");
+
+    // Nothing to scale is an error, not a silent no-op.
+    assert!(run("script(\"C\", \"generator\"); flame.set_contractiveness(-0.2);", 1)
+        .unwrap_err()
+        .message
+        .contains("at least one transform"));
+}

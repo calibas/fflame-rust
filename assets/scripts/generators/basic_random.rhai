@@ -18,6 +18,7 @@ let min_transforms = param_int("min_transforms", 2, 1, 10);
 let max_transforms = param_int("max_transforms", 4, 1, 10);
 let spread = param("spread", 1.0, 0.0, 3.0);
 let curviness = param("curviness", 0.6, 0.0, 1.0);
+let target_contraction = param("target_contraction", -0.25, -1.5, 0.5);
 let add_plasma = param_bool("add_plasma", false);
 
 // How many transforms this flame gets. rand_int picks a whole number.
@@ -40,12 +41,10 @@ for i in 0..count {
     // How often this transform is chosen. Higher = more visible.
     t.weight = rand(0.5, 2.0);
 
-    // Where it sits, and how big it is.
+    // Where it sits, and how big it is. Scaling ABOVE 1.0 is fine and
+    // often interesting — a transform that expands is not a mistake.
     t.translate(rand(-spread, spread), rand(-spread, spread));
-    // Keep this BELOW 1.0. Each transform has to shrink the picture, or
-    // the points race off to infinity and you get a formless haze instead
-    // of a fractal. (This is the one rule worth not breaking.)
-    t.scale(rand(0.3, 0.8));
+    t.scale(rand(0.4, 1.3));
     t.rotate(rand(0.0, 360.0));
 
     // Which part of the palette it draws from (0.0 to 1.0).
@@ -56,6 +55,21 @@ for i in 0..count {
 if add_plasma && chance(0.5) {
     flame.add_effect("plasma");
 }
+
+// What decides whether a flame resolves into structure instead of haze
+// is not any single transform, but the WEIGHTED AVERAGE across all of
+// them: expansions have to be paid for by contractions elsewhere (or by
+// being chosen rarely — weight is a probability). Below zero converges.
+//
+// Read it with flame.contractiveness(); this sets it, scaling every
+// transform by one shared factor so each keeps its own character.
+// Try 0.0 or a positive value to see the difference.
+flame.set_contractiveness(target_contraction);
+
+// Caveat worth knowing: this measures the affine part only. Curved
+// variations change the picture completely — `spherical` keeps its
+// output bounded no matter how expansive the affine feeding it is — so
+// treat the number as a guide, not a verdict.
 
 // Any setting from a saved .fflame file can be set by name — open one
 // in a text editor to see what else there is.
