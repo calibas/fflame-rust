@@ -473,6 +473,30 @@ need to account for:
   separately, since `register_get_set` ties the setter's type to the
   getter's.
 
+- **Determinism needs fixed-width arithmetic, and the platforms disagree
+  about `usize`.** Seeded scripts produced different flames in the browser
+  than on desktop. `pick()`, `shuffle()` and `random_palette()` drew via
+  `gen_range` over `usize` — 64-bit on desktop, **32-bit on wasm32** — and
+  rand dispatches to a different integer implementation per width,
+  consuming the stream differently. All draws are over `u64` now. Second
+  cause: `mean_log_scale` summed variation weights in `HashMap` order, and
+  float addition isn't associative, so the last bits tracked the hasher
+  seed (which varies per build and platform) and fed
+  `set_contractiveness`. It sums in canonical variation order now.
+  `random_stream_is_pinned` locks the stream with golden values —
+  **changing it invalidates every script anyone has shared**, so treat a
+  failure there as a breaking change rather than a number to update.
+  Relevant to Phase 5 too: a Python wheel is 64-bit and would have matched
+  desktop, hiding this.
+
+- **The web build had a pre-existing startup crash** (fixed in
+  `2e5748c4`, unrelated to scripting): egui rasterizes its font atlas per
+  `pixels_per_point`, browsers change the scale factor during startup, and
+  egui-wgpu panics if a partial texture update arrives for an image it
+  never received in full. Worth knowing for Phase 3 that the WASM target
+  had gone untested long enough for this to sit undiscovered since the
+  egui 0.34 bump.
+
 - **Measuring nonlinear variations is unsolved and needs the GPU.** The
   metric above covers the affine part only, which is exact for
   affine-only flames and meaningless once a bounding variation like
