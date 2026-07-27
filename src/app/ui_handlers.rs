@@ -434,6 +434,18 @@ impl App {
             }
         }
 
+        // A script produced a whole config (it may set any field), so it
+        // loads wholesale rather than being folded into a default.
+        if let Some(ref config) = ui_response.script_generated {
+            if let Err(e) = self.load_config_with_undo(
+                config.clone(),
+                "history.action.run_script".to_string(),
+                None,
+            ) {
+                eprintln!("Failed to load scripted flame: {}", e);
+            }
+        }
+
         // Handle generated batch from Random Generator panel
         // Configs are already self-contained with palettes embedded
         if let Some(ref configs) = ui_response.generated_batch {

@@ -18,6 +18,7 @@ pub mod api;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod cli;
 pub mod host;
+pub mod library;
 
 #[cfg(test)]
 mod tests;

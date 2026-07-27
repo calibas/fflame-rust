@@ -21,6 +21,7 @@ mod panel_viewer;
 mod path_editor;
 mod performance;
 mod random_generator;
+mod scripts_panel;
 pub mod response;
 mod settings;
 mod solid_panel;
@@ -427,8 +428,11 @@ pub struct EguiLayer {
 
     // Random generator panel state
     random_generator_panel: Option<random_generator::RandomGeneratorPanel>,
+    scripts_panel: Option<scripts_panel::ScriptsPanel>,
     generated_flame: Option<crate::scene::randomize::RandomFlame>,
     generated_batch: Option<Vec<crate::config::FractalConfig>>,
+    /// Config produced by the Scripts panel, applied as one undo step.
+    script_generated: Option<crate::config::FractalConfig>,
 
     // Fractal browser panel state
     fractal_browser_panel: Option<fractal_browser::FractalBrowserPanel>,
@@ -575,8 +579,10 @@ impl EguiLayer {
             close_path_overlay: false,
             path_editor_state: path_editor::PathEditorState::new(),
             random_generator_panel: None,
+            scripts_panel: None,
             generated_flame: None,
             generated_batch: None,
+            script_generated: None,
             fractal_browser_panel: None,
             loaded_api_flame_id: None,
             loaded_api_flame_is_public: None,
@@ -1274,6 +1280,8 @@ impl EguiLayer {
 
                         // Random generator panel state
                         random_generator_panel: &mut self.random_generator_panel,
+                        scripts_panel: &mut self.scripts_panel,
+                        script_generated: &mut self.script_generated,
                         generated_flame: &mut self.generated_flame,
                         generated_batch: &mut self.generated_batch,
 
@@ -1784,6 +1792,7 @@ impl EguiLayer {
 
         // Take generated flame from random generator panel
         let generated_flame = self.generated_flame.take();
+        let script_generated = self.script_generated.take();
         let generated_batch = self.generated_batch.take();
 
         UiResponse {
@@ -1833,6 +1842,7 @@ impl EguiLayer {
             animation_seek_drag_stopped,
             path_filters_changed,
             generated_flame,
+            script_generated,
             generated_batch,
             load_audio_file,
             load_signal_file,

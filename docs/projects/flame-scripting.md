@@ -326,12 +326,29 @@ collection, generator-vs-modifier semantics.
 *Exit criterion: the user's example script from this plan runs and
 produces a valid .fflame.*
 
-**Phase 2 — In-app panel.** Random Generator panel section: script
-list (shipped + user dir), editor, param sliders from declarations,
-seed + Reroll, Run/Apply as one undo point; Modifier entry point on the
-current flame. Ship starter scripts in `assets/scripts/`. Stretch:
-port/mirror `randomize.rs` presets as example generator scripts
-(dogfooding — proves API coverage; the Rust randomizer stays).
+**Phase 2 — In-app panel.** ✅ Implemented as a **dedicated `Scripts`
+panel** rather than a section of the Random Generator, which the plan
+originally suggested. Two reasons: modifiers are not "random generation"
+and would sit oddly under that heading, and the editor plus parameter
+sliders need more room than a section affords. One panel holds both
+kinds, switching its verb (Generate / Apply) on the script's declared
+kind. Contains: script picker (embedded starters + `assets/scripts/` +
+user folder, later sources shadowing earlier by file name), parameter
+widgets built from the collect pass, seed + Reroll (seed + 1), Batch
+across consecutive seeds into the existing Fractal Browser, a code
+editor with Save (always to the user folder — shipped starters are never
+overwritten) and Revert, and an error line that leads with the line
+number. Apply goes through `load_config_with_undo`, so a run is one undo
+step, same as a preset load.
+
+Generators start from a default config carrying the **current palette**
+over, since the script API cannot pick palettes yet — without that every
+generated flame would arrive in the default Fire palette. A
+`set_palette`/`random_palette` API would supersede this.
+
+Stretch (not done): port/mirror `randomize.rs` presets as example
+generator scripts (dogfooding — proves API coverage; the Rust randomizer
+stays).
 
 **Phase 3 — WASM enablement.** Panel on in the web build; embedded
 starter scripts (mirroring the preset embedding); verify budgets on the
