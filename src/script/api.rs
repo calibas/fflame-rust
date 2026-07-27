@@ -1172,6 +1172,99 @@ fn register_builtins(engine: &mut Engine) {
         Ok(avoid_xaos_row(from).iter().map(|v| Dynamic::from(*v as f64)).collect())
     });
 
+    // sphere_packing_mirrors(mode, size, ring_n, ring_scale, cap_scale,
+    //                        jitter, tilt, three_d) -> [[x, y, z, r], ...]
+    engine.register_fn(
+        "sphere_packing_mirrors",
+        |mode: i64,
+         size: Dynamic,
+         ring_n: i64,
+         ring_scale: Dynamic,
+         cap_scale: Dynamic,
+         jitter: Dynamic,
+         tilt: Dynamic,
+         three_d: bool|
+         -> Result<Array, Box<EvalAltResult>> {
+            let mirrors = crate::script::builtins::sphere_packing_mirrors(
+                mode.clamp(0, 3) as u32,
+                num(&size, "packing size")?,
+                ring_n.clamp(2, 16) as u32,
+                num(&ring_scale, "ring scale")?,
+                num(&cap_scale, "cap scale")?,
+                num(&jitter, "size jitter")?,
+                num(&tilt, "ring tilt")?,
+                three_d,
+            );
+            Ok(mirrors
+                .iter()
+                .map(|s| {
+                    Dynamic::from(
+                        [s.x, s.y, s.z, s.r]
+                            .iter()
+                            .map(|v| Dynamic::from(*v))
+                            .collect::<Array>(),
+                    )
+                })
+                .collect())
+        },
+    );
+
+    // Xaos row blocking a repeat of the same mirror (inversions are their
+    // own inverse), for `count` mirrors.
+    engine.register_fn(
+        "repeat_xaos_row",
+        |from: i64, count: i64| -> Result<Array, Box<EvalAltResult>> {
+            let count = usize::try_from(count).map_err(|_| err("count must be >= 0"))?;
+            let from = usize::try_from(from).map_err(|_| err("index must be >= 0"))?;
+            if count == 0 || from >= count {
+                return Err(err("repeat_xaos_row: index outside the mirror count"));
+            }
+            Ok(crate::script::builtins::repeat_xaos_row(from, count)
+                .iter()
+                .map(|v| Dynamic::from(*v as f64))
+                .collect())
+        },
+    );
+
+    // Turn a transform into an inversion in the given sphere.
+    //
+    // An inversion x -> c + r^2 (x - c)/|x - c|^2 is exactly "translate so
+    // the centre is at the origin, apply p/|p|^2 scaled by r^2, translate
+    // back" — so it needs no special variation, just the affine machinery
+    // the flame already has. Using spherical3D_wf (whose default exponent
+    // gives p/|p|^2, in the plane or in space) means the result is an
+    // ordinary transform the triangle editor can grab.
+    engine.register_fn(
+        "set_inversion",
+        |t: &mut TransformHandle, centre: Array, radius: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            if centre.len() != 2 && centre.len() != 3 {
+                return Err(err("set_inversion centre must be [x, y] or [x, y, z]"));
+            }
+            let cx = num(&centre[0], "centre x")?;
+            let cy = num(&centre[1], "centre y")?;
+            let cz = if centre.len() == 3 { num(&centre[2], "centre z")? } else { 0.0 };
+            let r = num(&radius, "radius")?;
+            if r <= 0.0 {
+                return Err(err("set_inversion radius must be positive"));
+            }
+            t.with(|x| {
+                // Pre-affine: move the sphere's centre to the origin.
+                x.a = 1.0; x.b = 0.0; x.c = 0.0; x.d = 1.0;
+                x.e = -cx as f32;
+                x.f = -cy as f32;
+                x.g = -cz as f32;
+                // The inversion kernel, weighted by r^2.
+                x.set_variation("spherical3D_wf", (r * r) as f32);
+                // Post-affine: move it back.
+                x.post_affine_enabled = true;
+                x.post_a = 1.0; x.post_b = 0.0; x.post_c = 0.0; x.post_d = 1.0;
+                x.post_e = cx as f32;
+                x.post_f = cy as f32;
+                x.post_g = cz as f32;
+            })
+        },
+    );
+
     // Write a generator onto a transform: adds `mobius` and its 8 params.
     engine.register_fn(
         "set_mobius",
