@@ -169,7 +169,7 @@ Host-side building blocks:
 | `flame.add_transform()` / `.final_transform()` / xaos setters | `scene::transforms` |
 | `t.add_variation(name, w)` | registry lookup — unknown names are a script error *with the line number*, not a silent no-op |
 | `t.set_variation_param("name.param", v)` | validated against the variation's param defs |
-| `random_palette()` / `palette(name)` | `PaletteLibrary` |
+| `flame.set_palette(name)` / `flame.random_palette()` / `palette_names()` | `PaletteLibrary`, seeded pick |
 | `flame.add_effect(name)` | effect chain |
 | `rand()` / `rand(a,b)` / `rand_int(a,b)` / `pick(array)` / `shuffle(array)` | seeded Pcg64Mcg |
 | `variation_names(category)` | registry — lets scripts do "pick a random Blur variation" |
@@ -363,11 +363,35 @@ the packed variations they decompose (render comparison).
 bindings, maturin CI, format IO, `run_script`, CLI render wrapper,
 PyPI-ready docs.
 
-**Phase 6 — Animation-track generation (deferred by design).** The
-object model grows an `anim` handle (tracks/keyframes targeting the
-same parameter names), scripts can emit `.anim`; Python gets it via the
-same bindings. Deliberately last: the API is designed so this is an
-extension, not a rework.
+**Phase 6 — Animation-track generation (wanted, unscheduled).** A
+script should be able to *optionally* define and add animation tracks —
+confirmed as a wanted feature, no urgency. The object model grows an
+`anim` handle (tracks/keyframes targeting the same parameter names a
+script already writes), scripts can emit `.anim`, and Python gets it
+through the same bindings. Deliberately late: the API is shaped so this
+is an extension, not a rework. The natural form is a script declaring
+what varies rather than baking values — e.g. a generator that also
+keyframes the `spiral` parameter it just set.
+
+**Phase 7 — Colour-theory palette generation (wanted, unscheduled).**
+Today a script picks an *existing* palette (`flame.set_palette(name)`,
+`flame.random_palette()`, both seeded) or leaves the current one alone.
+The third mode — *generating* a palette — is a system of its own:
+
+* Choose a **main** colour, optionally a **secondary** and **tertiary**.
+* Fill the rest by colour-theory relationship — **complementary**,
+  **analogous**, **monochromatic**.
+* Vary the rendering of that scheme, from a smooth gradient through to
+  deliberately mixed-up stops with noise.
+
+Important: this is **not** script-only. The same generator backs the
+**Palette UI**, so a palette can be dialled up by hand or by script from
+one implementation. That shared-ownership requirement is why it is its
+own project rather than a scripting add-on — it should probably live in
+`scene::palette` with the script API and the panel as two callers.
+
+When it lands, the script side is one more function alongside the
+existing two; nothing about the current API has to change.
 
 ---
 

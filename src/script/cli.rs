@@ -43,7 +43,11 @@ pub fn generate_mode(
         None => FractalConfig::default(),
     };
 
-    let host = ScriptHost::new();
+    // Same palette library the app loads, so `generate` and the Scripts
+    // panel resolve palette names identically.
+    let host = ScriptHost::with_palettes(
+        crate::scene::palette::PaletteLibrary::new().iter().cloned().collect(),
+    );
 
     // Collect first: it tells us the declared parameters (so --set can be
     // type-checked) and the script's kind.

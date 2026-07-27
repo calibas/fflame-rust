@@ -20,6 +20,7 @@ let spread = param("spread", 1.0, 0.0, 3.0);
 let curviness = param("curviness", 0.6, 0.0, 1.0);
 let target_contraction = param("target_contraction", -0.25, -1.5, 0.5);
 let add_plasma = param_bool("add_plasma", false);
+let palette_mode = param_choice("palette", ["Keep current", "Random"], 0);
 
 // How many transforms this flame gets. rand_int picks a whole number.
 let count = rand_int(min_transforms, max_transforms);
@@ -70,6 +71,15 @@ flame.set_contractiveness(target_contraction);
 // variations change the picture completely — `spherical` keeps its
 // output bounded no matter how expansive the affine feeding it is — so
 // treat the number as a guide, not a verdict.
+
+// Colours. Doing nothing keeps the palette you already have; you can
+// also name one, or take a random one from the library. Random still
+// reproduces from the seed, so a flame you like comes back exactly.
+//   flame.set_palette("Fire");            // by name
+//   flame.set_palette(pick(palette_names()));
+if palette_mode == "Random" {
+    flame.random_palette();
+}
 
 // Any setting from a saved .fflame file can be set by name — open one
 // in a text editor to see what else there is.

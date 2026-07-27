@@ -45,11 +45,20 @@ pub(crate) struct ScriptState {
     /// Anything the script sent to print()/debug(). Stdout is invisible
     /// in-app and on the web, so the caller surfaces these instead.
     pub messages: Vec<String>,
+    /// Palettes a script may choose from. Empty unless the caller
+    /// supplied a library — scripts then get a clear error rather than a
+    /// silently different result.
+    pub palettes: Vec<crate::scene::palette::Palette>,
     pub rng: Pcg64Mcg,
 }
 
 impl ScriptState {
-    fn new(mode: Mode, seed: u64, provided: HashMap<String, ParamValue>) -> Self {
+    fn new(
+        mode: Mode,
+        seed: u64,
+        provided: HashMap<String, ParamValue>,
+        palettes: Vec<crate::scene::palette::Palette>,
+    ) -> Self {
         Self {
             mode,
             meta: ScriptMeta::default(),
@@ -57,6 +66,7 @@ impl ScriptState {
             declared: HashSet::new(),
             warnings: Vec::new(),
             messages: Vec::new(),
+            palettes,
             // Pinned algorithm (PCG64-MCG), not StdRng: script + seed must
             // reproduce the same flame across platforms and across rand
             // crate versions.
@@ -96,15 +106,26 @@ pub struct ScriptOutcome {
 }
 
 /// Runs sandboxed flame scripts.
-///
-/// Stateless today; kept as a type so parse caching can land later
-/// without churning call sites.
 #[derive(Default)]
-pub struct ScriptHost;
+pub struct ScriptHost {
+    /// Palettes `flame.set_palette` / `flame.random_palette` draw from.
+    palettes: Vec<crate::scene::palette::Palette>,
+}
 
 impl ScriptHost {
+    /// A host with no palette library: scripts keep whatever palette the
+    /// base config already has.
     pub fn new() -> Self {
-        Self
+        Self::default()
+    }
+
+    /// A host that lets scripts choose from `palettes`.
+    ///
+    /// Selection uses the script's seeded RNG, so "pick a random palette"
+    /// still reproduces from script + seed — unlike the Rust random
+    /// generator, which draws from the thread RNG.
+    pub fn with_palettes(palettes: Vec<crate::scene::palette::Palette>) -> Self {
+        Self { palettes }
     }
 
     /// Collect metadata and parameter declarations without keeping the
@@ -140,7 +161,12 @@ impl ScriptHost {
         mode: Mode,
     ) -> Result<ScriptOutcome, ScriptError> {
         let cfg = Rc::new(RefCell::new(base.clone()));
-        let state = Rc::new(RefCell::new(ScriptState::new(mode, seed, params)));
+        let state = Rc::new(RefCell::new(ScriptState::new(
+            mode,
+            seed,
+            params,
+            self.palettes.clone(),
+        )));
 
         // Built per run: the registered closures capture this run's
         // config and state.
