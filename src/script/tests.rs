@@ -726,3 +726,76 @@ fn whole_numbers_work_wherever_decimals_do() {
     .unwrap_err();
     assert!(err.message.contains("expects a number"), "{err}");
 }
+
+/// Golden values pinning the random stream.
+///
+/// The sharing promise is that a script plus a seed names one exact
+/// flame, on desktop, in the browser, and from Python. That only holds
+/// if every draw uses FIXED-WIDTH arithmetic: `usize` is 64-bit on
+/// desktop and 32-bit on wasm32, and rand dispatches to a different
+/// integer implementation for each, so a `gen_range(0..len)` silently
+/// forked the stream between platforms (found by comparing a real WASM
+/// build against desktop).
+///
+/// If this test fails, the stream moved. That is a breaking change for
+/// every script anyone has already shared — treat it as such rather than
+/// updating the numbers.
+#[test]
+fn random_stream_is_pinned() {
+    let script = r#"
+        script("RNG", "generator");
+        print("" + rand());
+        print("" + rand(-2.0, 5.0));
+        print("" + rand_int(0, 1000000));
+        print("" + pick([10, 20, 30, 40, 50, 60, 70]));
+        print("" + shuffle([1,2,3,4,5,6,7,8]));
+        print("" + chance(0.5));
+    "#;
+    let out = run(script, 12345).unwrap();
+    assert_eq!(
+        out.messages,
+        vec![
+            "0.46722037666755534",
+            "1.6016749570971562",
+            "24093",
+            "40",
+            "[3, 5, 8, 1, 2, 4, 7, 6]",
+            "false",
+        ],
+        "the seeded stream changed — see this test's docs before touching it"
+    );
+}
+
+#[test]
+fn contractiveness_does_not_depend_on_hash_order() {
+    // mean_log_scale sums variation weights; float addition isn't
+    // associative, so summing in HashMap order would make the result
+    // depend on the hasher seed (which differs per build and platform).
+    // Many variations, added in varying orders, must agree exactly.
+    let build = |names: &[&str]| {
+        let adds: String = names
+            .iter()
+            .map(|n| format!("t.add_variation(\"{n}\", 0.37);
+"))
+            .collect();
+        let script = format!(
+            r#"
+                script("H", "generator");
+                let t = flame.add_transform();
+                t.set_affine(0.5, 0.0, 0.0, 0.5, 0.0, 0.0);
+                t.weight = 1.0;
+                {adds}
+                print("" + flame.contractiveness());
+            "#
+        );
+        run(&script, 1).unwrap().messages[0].clone()
+    };
+
+    let forward = build(&[
+        "linear", "spherical", "swirl", "horseshoe", "polar", "handkerchief", "heart", "disc",
+    ]);
+    let reverse = build(&[
+        "disc", "heart", "handkerchief", "polar", "horseshoe", "swirl", "spherical", "linear",
+    ]);
+    assert_eq!(forward, reverse, "sum order changed the result");
+}

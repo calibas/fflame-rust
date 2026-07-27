@@ -299,7 +299,12 @@ fn register_rng(engine: &mut Engine, state: Rc<RefCell<ScriptState>>) {
         if items.is_empty() {
             return Err(err("pick() needs a non-empty array"));
         }
-        let i = s.borrow_mut().rng.gen_range(0..items.len());
+        // u64, never usize: usize is 32-bit on wasm32 and 64-bit on
+        // desktop, and rand picks a different integer implementation for
+        // each — same seed, different draw. Fixed width keeps the stream
+        // identical everywhere, which the whole "script + seed" promise
+        // rests on.
+        let i = s.borrow_mut().rng.gen_range(0..items.len() as u64) as usize;
         Ok(items[i].clone())
     });
 
@@ -309,7 +314,8 @@ fn register_rng(engine: &mut Engine, state: Rc<RefCell<ScriptState>>) {
         let mut st = s.borrow_mut();
         // Fisher–Yates against the seeded stream, so shuffles reproduce.
         for i in (1..out.len()).rev() {
-            let j = st.rng.gen_range(0..=i);
+            // u64 for the same reason as pick().
+            let j = st.rng.gen_range(0..=i as u64) as usize;
             out.swap(i, j);
         }
         out
@@ -761,18 +767,23 @@ fn mean_log_scale(flame: &crate::scene::transforms::Flame) -> Option<f64> {
         // an `Any` variation sums unless this transform's fx_priority
         // moved it (<0 pre, >0 post), and Pre/Post compose instead.
         let registry = crate::variations::global_registry();
+        // Summed in the flame's canonical variation order, NOT HashMap
+        // order: float addition isn't associative, so iterating a HashMap
+        // makes the last bits depend on the hasher's seed — which differs
+        // between builds and platforms. That would leak into
+        // set_contractiveness and desynchronise otherwise-identical runs.
         let var_scale: f64 = t
-            .variations
-            .iter()
-            .filter(|(name, _)| match registry.get(name).map(|i| i.phase.clone()) {
+            .ordered_variation_names(&registry)
+            .into_iter()
+            .filter(|name| match registry.get(name).map(|i| i.phase.clone()) {
                 Some(crate::variations::VariationPhase::Normal) => true,
                 Some(crate::variations::VariationPhase::Any) => {
-                    t.variation_priorities.get(*name).copied().unwrap_or(0) == 0
+                    t.variation_priorities.get(name).copied().unwrap_or(0) == 0
                 }
                 Some(_) => false,
                 None => true,
             })
-            .map(|(_, w)| *w as f64)
+            .map(|name| t.variations.get(&name).copied().unwrap_or(0.0) as f64)
             .sum::<f64>()
             .abs();
         // Bounded per transform: one degenerate transform (no summing
@@ -1025,8 +1036,8 @@ fn register_palettes(engine: &mut Engine, state: Rc<RefCell<ScriptState>>) {
                     "no palette library is available here (try running from the app)",
                 ));
             }
-            let count = st.palettes.len();
-            let i = st.rng.gen_range(0..count);
+            let count = st.palettes.len() as u64;
+            let i = st.rng.gen_range(0..count) as usize;
             let chosen = st.palettes[i].clone();
             let name = chosen.name.clone();
             f.cfg.borrow_mut().palette = chosen;
