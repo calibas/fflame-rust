@@ -394,6 +394,16 @@ pub struct EguiLayer {
     config_json_buffer: String,
     palette_editor: PaletteEditor,
 
+    /// Texture IDs the egui renderer holds a FULL image for.
+    ///
+    /// egui-wgpu panics ("tried to update a texture that has not been
+    /// allocated yet") if a partial update arrives for a texture it never
+    /// received in full. That happens when the atlas is rebuilt out from
+    /// under the renderer — notably on the web, where the browser's
+    /// scale factor changes during startup and egui rasterizes its font
+    /// atlas per pixels_per_point.
+    allocated_textures: std::collections::HashSet<egui_dock::egui::TextureId>,
+
     // Fractal texture ID (registered from renderer's texture)
     fractal_texture_id: Option<egui_dock::egui::TextureId>,
     // Track registered texture dimensions to detect resize
@@ -511,6 +521,7 @@ impl EguiLayer {
             },
         );
         // Clear stale texture registrations from old surface
+        self.allocated_textures.clear();
         self.fractal_texture_id = None;
         self.fractal_texture_width = 0;
         self.fractal_texture_height = 0;
@@ -530,6 +541,7 @@ impl EguiLayer {
                 options: egui::TextureOptions::LINEAR,
             },
         );
+        self.allocated_textures.insert(egui::TextureId::Managed(0));
     }
 
     pub fn new(window: &Window, device: &Device, format: TextureFormat) -> Self {
@@ -579,6 +591,7 @@ impl EguiLayer {
             close_path_overlay: false,
             path_editor_state: path_editor::PathEditorState::new(),
             random_generator_panel: None,
+            allocated_textures: std::collections::HashSet::new(),
             scripts_panel: None,
             generated_flame: None,
             generated_batch: None,
@@ -1606,8 +1619,43 @@ impl EguiLayer {
         };
 
         for (id, image_delta) in &full_output.textures_delta.set {
+            // A partial update (pos: Some) is a patch into an image the
+            // renderer is assumed to already hold. If it doesn't, egui-wgpu
+            // panics — so repair the gap instead of crashing.
+            if image_delta.pos.is_some() && !self.allocated_textures.contains(id) {
+                if *id == egui::TextureId::Managed(0) {
+                    // The font atlas: we can rebuild it in full from the
+                    // context, so seed that and let the patch apply on top.
+                    let font_image = self.ctx.fonts(|f| f.image());
+                    self.renderer.update_texture(
+                        device,
+                        queue,
+                        *id,
+                        &egui::epaint::ImageDelta {
+                            image: egui::ImageData::Color(std::sync::Arc::new(font_image)),
+                            pos: None,
+                            options: image_delta.options,
+                        },
+                    );
+                    self.allocated_textures.insert(*id);
+                } else {
+                    // Any other managed texture (user images) — we have no
+                    // way to reconstruct the base, so skip the patch. It
+                    // will be re-sent in full when its owner next changes
+                    // it; a stale texture beats a panic.
+                    log::warn!(
+                        "skipping partial update for unallocated texture {:?}",
+                        id
+                    );
+                    continue;
+                }
+            }
+
             self.renderer
                 .update_texture(device, queue, *id, image_delta);
+            if image_delta.pos.is_none() {
+                self.allocated_textures.insert(*id);
+            }
         }
 
         self.renderer
@@ -1641,6 +1689,7 @@ impl EguiLayer {
 
         for id in &full_output.textures_delta.free {
             self.renderer.free_texture(id);
+            self.allocated_textures.remove(id);
         }
 
         // Handle View menu actions BEFORE syncing flame (so changes take effect this frame)
