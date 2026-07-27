@@ -1,0 +1,790 @@
+//! The scripting object model: what a script is allowed to touch.
+//!
+//! Everything a script can do is registered here. Nothing else exists
+//! inside the sandbox — no file, network, or process access.
+//!
+//! Two layers:
+//!
+//! * **Typed handles** (`flame`, transforms) for structure — the hot,
+//!   frequently-scripted operations, with real validation.
+//! * **`config.set(key, value)`** for the long tail of scalar settings,
+//!   backed by serde. The keys are exactly the `.fflame` JSON keys, so
+//!   a user can read a saved file to discover what's settable.
+
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use rand::Rng;
+use rhai::{Array, Dynamic, Engine, EvalAltResult, Position, Scope};
+
+use crate::config::fractal_config::FractalConfig;
+use crate::scene::transforms::Transform;
+
+use super::host::ScriptState;
+use super::{humanize, ParamDecl, ParamValue, ScriptKind};
+
+/// Build a script-visible runtime error.
+fn err(msg: impl Into<String>) -> Box<EvalAltResult> {
+    Box::new(EvalAltResult::ErrorRuntime(
+        Dynamic::from(msg.into()),
+        Position::NONE,
+    ))
+}
+
+// ============================================================================
+// Handles
+// ============================================================================
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Pool {
+    Normal,
+    Linked,
+    Final,
+}
+
+impl Pool {
+    fn name(self) -> &'static str {
+        match self {
+            Pool::Normal => "normal",
+            Pool::Linked => "linked",
+            Pool::Final => "final",
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct FlameHandle {
+    cfg: Rc<RefCell<FractalConfig>>,
+}
+
+#[derive(Clone)]
+pub struct ConfigHandle {
+    cfg: Rc<RefCell<FractalConfig>>,
+}
+
+/// Points at a transform by pool + index rather than borrowing it, so a
+/// handle stays valid across other script operations. Every access is
+/// bounds-checked: a handle to a removed transform errors with a
+/// message instead of panicking or silently writing elsewhere.
+#[derive(Clone)]
+pub struct TransformHandle {
+    cfg: Rc<RefCell<FractalConfig>>,
+    pool: Pool,
+    idx: usize,
+}
+
+impl TransformHandle {
+    fn with<R>(&self, f: impl FnOnce(&mut Transform) -> R) -> Result<R, Box<EvalAltResult>> {
+        let mut cfg = self.cfg.borrow_mut();
+        let list = match self.pool {
+            Pool::Normal => &mut cfg.flame.transforms,
+            Pool::Linked => &mut cfg.flame.linked_transforms,
+            Pool::Final => &mut cfg.flame.final_transforms,
+        };
+        match list.get_mut(self.idx) {
+            Some(t) => Ok(f(t)),
+            None => Err(err(format!(
+                "transform {} no longer exists in the {} pool",
+                self.idx,
+                self.pool.name()
+            ))),
+        }
+    }
+}
+
+// ============================================================================
+// Registration
+// ============================================================================
+
+/// Put the top-level objects in scope.
+///
+/// Pushed as ordinary variables, not constants: Rhai refuses property and
+/// indexer assignment on a constant, so `config["gamma"] = 2.2` and
+/// `flame.name = "x"` would fail. Rebinding them only breaks the script's
+/// own run.
+pub(crate) fn push_globals(scope: &mut Scope, cfg: Rc<RefCell<FractalConfig>>) {
+    scope.push("flame", FlameHandle { cfg: Rc::clone(&cfg) });
+    scope.push("config", ConfigHandle { cfg });
+}
+
+pub(crate) fn register(
+    engine: &mut Engine,
+    cfg: Rc<RefCell<FractalConfig>>,
+    state: Rc<RefCell<ScriptState>>,
+) {
+    engine.register_type_with_name::<FlameHandle>("Flame");
+    engine.register_type_with_name::<TransformHandle>("Transform");
+    engine.register_type_with_name::<ConfigHandle>("Config");
+
+    register_meta(engine, Rc::clone(&state));
+    register_rng(engine, Rc::clone(&state));
+    register_flame(engine);
+    register_transform(engine);
+    register_config(engine, Rc::clone(&state));
+    register_registry_queries(engine);
+
+    // print()/debug() are a beginner's main debugging tool, and stdout is
+    // invisible in-app and on the web — capture them for the caller.
+    let msg_state = Rc::clone(&state);
+    engine.on_print(move |s| msg_state.borrow_mut().messages.push(s.to_string()));
+    let dbg_state = Rc::clone(&state);
+    engine.on_debug(move |s, _, _| dbg_state.borrow_mut().messages.push(s.to_string()));
+
+    let _ = cfg;
+}
+
+// ---------------------------------------------------------------- metadata
+
+fn register_meta(engine: &mut Engine, state: Rc<RefCell<ScriptState>>) {
+    let s = Rc::clone(&state);
+    engine.register_fn("script", move |name: &str, kind: &str| -> Result<(), Box<EvalAltResult>> {
+        let mut st = s.borrow_mut();
+        if st.meta.kind.is_some() {
+            return Err(err("script(...) called more than once"));
+        }
+        if !st.declared.is_empty() {
+            return Err(err("script(...) must come before any param(...) declaration"));
+        }
+        let kind = ScriptKind::parse(kind).ok_or_else(|| {
+            err(format!(
+                "unknown script kind `{kind}` — expected \"generator\" or \"modifier\""
+            ))
+        })?;
+        st.meta.name = name.to_string();
+        st.meta.kind = Some(kind);
+        Ok(())
+    });
+
+    let s = Rc::clone(&state);
+    engine.register_fn(
+        "param",
+        move |key: &str, default: f64, min: f64, max: f64| -> Result<f64, Box<EvalAltResult>> {
+            if min > max {
+                return Err(err(format!("param `{key}`: min ({min}) is above max ({max})")));
+            }
+            let decl = ParamDecl::Float {
+                key: key.to_string(),
+                label: humanize(key),
+                default,
+                min,
+                max,
+            };
+            match s.borrow_mut().declare(decl).map_err(err)? {
+                ParamValue::Float(v) => Ok(v.clamp(min, max)),
+                other => Err(err(format!("param `{key}`: expected a number, got {other:?}"))),
+            }
+        },
+    );
+
+    let s = Rc::clone(&state);
+    engine.register_fn(
+        "param_int",
+        move |key: &str, default: i64, min: i64, max: i64| -> Result<i64, Box<EvalAltResult>> {
+            if min > max {
+                return Err(err(format!("param `{key}`: min ({min}) is above max ({max})")));
+            }
+            let decl = ParamDecl::Int {
+                key: key.to_string(),
+                label: humanize(key),
+                default,
+                min,
+                max,
+            };
+            match s.borrow_mut().declare(decl).map_err(err)? {
+                ParamValue::Int(v) => Ok(v.clamp(min, max)),
+                ParamValue::Float(v) => Ok((v as i64).clamp(min, max)),
+                other => Err(err(format!("param `{key}`: expected a number, got {other:?}"))),
+            }
+        },
+    );
+
+    let s = Rc::clone(&state);
+    engine.register_fn(
+        "param_bool",
+        move |key: &str, default: bool| -> Result<bool, Box<EvalAltResult>> {
+            let decl = ParamDecl::Bool {
+                key: key.to_string(),
+                label: humanize(key),
+                default,
+            };
+            match s.borrow_mut().declare(decl).map_err(err)? {
+                ParamValue::Bool(v) => Ok(v),
+                other => Err(err(format!("param `{key}`: expected true/false, got {other:?}"))),
+            }
+        },
+    );
+
+    // Returns the chosen option as a string, so scripts branch readably:
+    //     if param_choice("style", ["A", "B"], 0) == "A" { … }
+    let s = Rc::clone(&state);
+    engine.register_fn(
+        "param_choice",
+        move |key: &str, options: Array, default: i64| -> Result<String, Box<EvalAltResult>> {
+            let opts: Vec<String> = options.iter().map(|d| d.to_string()).collect();
+            if opts.is_empty() {
+                return Err(err(format!("param `{key}`: needs at least one option")));
+            }
+            let default = default.clamp(0, opts.len() as i64 - 1) as usize;
+            let decl = ParamDecl::Choice {
+                key: key.to_string(),
+                label: humanize(key),
+                options: opts.clone(),
+                default,
+            };
+            let idx = match s.borrow_mut().declare(decl).map_err(err)? {
+                ParamValue::Choice(i) => i,
+                ParamValue::Int(i) => i.clamp(0, opts.len() as i64 - 1) as usize,
+                other => {
+                    return Err(err(format!("param `{key}`: expected a choice, got {other:?}")))
+                }
+            };
+            Ok(opts.get(idx).cloned().unwrap_or_else(|| opts[0].clone()))
+        },
+    );
+}
+
+// --------------------------------------------------------------------- rng
+
+fn register_rng(engine: &mut Engine, state: Rc<RefCell<ScriptState>>) {
+    let s = Rc::clone(&state);
+    engine.register_fn("rand", move || -> f64 { s.borrow_mut().rng.gen::<f64>() });
+
+    let s = Rc::clone(&state);
+    engine.register_fn("rand", move |min: f64, max: f64| -> f64 {
+        if min >= max {
+            return min;
+        }
+        s.borrow_mut().rng.gen_range(min..max)
+    });
+
+    let s = Rc::clone(&state);
+    engine.register_fn("rand_int", move |min: i64, max: i64| -> i64 {
+        if min >= max {
+            return min;
+        }
+        s.borrow_mut().rng.gen_range(min..=max)
+    });
+
+    let s = Rc::clone(&state);
+    engine.register_fn("chance", move |p: f64| -> bool { s.borrow_mut().rng.gen::<f64>() < p });
+
+    let s = Rc::clone(&state);
+    engine.register_fn("pick", move |items: Array| -> Result<Dynamic, Box<EvalAltResult>> {
+        if items.is_empty() {
+            return Err(err("pick() needs a non-empty array"));
+        }
+        let i = s.borrow_mut().rng.gen_range(0..items.len());
+        Ok(items[i].clone())
+    });
+
+    let s = Rc::clone(&state);
+    engine.register_fn("shuffle", move |items: Array| -> Array {
+        let mut out = items;
+        let mut st = s.borrow_mut();
+        // Fisher–Yates against the seeded stream, so shuffles reproduce.
+        for i in (1..out.len()).rev() {
+            let j = st.rng.gen_range(0..=i);
+            out.swap(i, j);
+        }
+        out
+    });
+}
+
+// ------------------------------------------------------------------- flame
+
+fn register_flame(engine: &mut Engine) {
+    engine.register_fn("add_transform", |f: &mut FlameHandle| -> TransformHandle {
+        let mut cfg = f.cfg.borrow_mut();
+        cfg.flame.transforms.push(Transform::new());
+        TransformHandle {
+            cfg: Rc::clone(&f.cfg),
+            pool: Pool::Normal,
+            idx: cfg.flame.transforms.len() - 1,
+        }
+    });
+
+    engine.register_fn("add_final_transform", |f: &mut FlameHandle| -> TransformHandle {
+        let mut cfg = f.cfg.borrow_mut();
+        cfg.flame.final_transforms.push(Transform::new());
+        TransformHandle {
+            cfg: Rc::clone(&f.cfg),
+            pool: Pool::Final,
+            idx: cfg.flame.final_transforms.len() - 1,
+        }
+    });
+
+    engine.register_fn("add_linked_transform", |f: &mut FlameHandle| -> TransformHandle {
+        let mut cfg = f.cfg.borrow_mut();
+        cfg.flame.linked_transforms.push(Transform::new());
+        TransformHandle {
+            cfg: Rc::clone(&f.cfg),
+            pool: Pool::Linked,
+            idx: cfg.flame.linked_transforms.len() - 1,
+        }
+    });
+
+    engine.register_fn("transform_count", |f: &mut FlameHandle| -> i64 {
+        f.cfg.borrow().flame.transforms.len() as i64
+    });
+
+    engine.register_fn("final_count", |f: &mut FlameHandle| -> i64 {
+        f.cfg.borrow().flame.final_transforms.len() as i64
+    });
+
+    engine.register_fn(
+        "transform",
+        |f: &mut FlameHandle, i: i64| -> Result<TransformHandle, Box<EvalAltResult>> {
+            let len = f.cfg.borrow().flame.transforms.len();
+            let idx = usize::try_from(i).map_err(|_| err("transform index must be >= 0"))?;
+            if idx >= len {
+                return Err(err(format!("no transform {idx} (flame has {len})")));
+            }
+            Ok(TransformHandle { cfg: Rc::clone(&f.cfg), pool: Pool::Normal, idx })
+        },
+    );
+
+    engine.register_fn(
+        "final_transform",
+        |f: &mut FlameHandle, i: i64| -> Result<TransformHandle, Box<EvalAltResult>> {
+            let len = f.cfg.borrow().flame.final_transforms.len();
+            let idx = usize::try_from(i).map_err(|_| err("transform index must be >= 0"))?;
+            if idx >= len {
+                return Err(err(format!("no final transform {idx} (flame has {len})")));
+            }
+            Ok(TransformHandle { cfg: Rc::clone(&f.cfg), pool: Pool::Final, idx })
+        },
+    );
+
+    engine.register_fn("clear_transforms", |f: &mut FlameHandle| {
+        f.cfg.borrow_mut().flame.transforms.clear();
+    });
+
+    engine.register_fn(
+        "remove_transform",
+        |f: &mut FlameHandle, i: i64| -> Result<(), Box<EvalAltResult>> {
+            let mut cfg = f.cfg.borrow_mut();
+            let len = cfg.flame.transforms.len();
+            let idx = usize::try_from(i).map_err(|_| err("transform index must be >= 0"))?;
+            if idx >= len {
+                return Err(err(format!("no transform {idx} (flame has {len})")));
+            }
+            cfg.flame.transforms.remove(idx);
+            Ok(())
+        },
+    );
+
+    engine.register_get_set(
+        "name",
+        |f: &mut FlameHandle| -> String { f.cfg.borrow().flame.name.clone() },
+        |f: &mut FlameHandle, v: String| f.cfg.borrow_mut().flame.name = v,
+    );
+
+    // Effects route to the density or color chain by their registered
+    // category, so scripts don't have to know which pass an effect runs in.
+    engine.register_fn(
+        "add_effect",
+        |f: &mut FlameHandle, name: &str| -> Result<(), Box<EvalAltResult>> {
+            use crate::effects::{global_effect_registry, EffectCategory, EffectInstance};
+            let info = global_effect_registry()
+                .get(name)
+                .ok_or_else(|| err(format!("unknown effect `{name}`")))?;
+            let category = info.category;
+            let instance = EffectInstance::new(name);
+            let mut cfg = f.cfg.borrow_mut();
+            match category {
+                EffectCategory::Density => cfg.density_effects.push(instance),
+                EffectCategory::Color => cfg.color_effects.push(instance),
+            }
+            Ok(())
+        },
+    );
+
+    engine.register_fn(
+        "set_effect_param",
+        |f: &mut FlameHandle, name: &str, param: &str, value: f64| -> Result<(), Box<EvalAltResult>> {
+            let mut cfg = f.cfg.borrow_mut();
+            // Most-recently added instance of that effect, color chain
+            // first (the borrow checker wants these sequential, not chained).
+            let mut applied = false;
+            if let Some(e) = cfg.color_effects.iter_mut().rev().find(|e| e.effect_type == name) {
+                e.set_param(param, value as f32);
+                applied = true;
+            }
+            if !applied {
+                if let Some(e) =
+                    cfg.density_effects.iter_mut().rev().find(|e| e.effect_type == name)
+                {
+                    e.set_param(param, value as f32);
+                    applied = true;
+                }
+            }
+            if applied {
+                Ok(())
+            } else {
+                Err(err(format!("no `{name}` effect has been added yet")))
+            }
+        },
+    );
+}
+
+// --------------------------------------------------------------- transform
+
+fn register_transform(engine: &mut Engine) {
+    macro_rules! prop_f32 {
+        ($name:literal, $field:ident) => {
+            engine.register_get_set(
+                $name,
+                |t: &mut TransformHandle| -> Result<f64, Box<EvalAltResult>> {
+                    t.with(|x| x.$field as f64)
+                },
+                |t: &mut TransformHandle, v: f64| -> Result<(), Box<EvalAltResult>> {
+                    t.with(|x| x.$field = v as f32)
+                },
+            );
+        };
+    }
+
+    prop_f32!("weight", weight);
+    prop_f32!("color", color);
+    prop_f32!("color_speed", color_speed);
+    prop_f32!("opacity", opacity);
+    prop_f32!("direct_color", direct_color);
+    // Affine coefficients: x' = a·x + b·y + e, y' = c·x + d·y + f
+    prop_f32!("a", a);
+    prop_f32!("b", b);
+    prop_f32!("c", c);
+    prop_f32!("d", d);
+    prop_f32!("e", e);
+    prop_f32!("f", f);
+    prop_f32!("g", g);
+
+    engine.register_fn(
+        "add_variation",
+        |t: &mut TransformHandle, name: &str, weight: f64| -> Result<(), Box<EvalAltResult>> {
+            if crate::variations::global_registry().get(name).is_none() {
+                return Err(err(format!("unknown variation `{name}`")));
+            }
+            t.with(|x| x.set_variation(name, weight as f32))
+        },
+    );
+
+    engine.register_fn(
+        "remove_variation",
+        |t: &mut TransformHandle, name: &str| -> Result<(), Box<EvalAltResult>> {
+            t.with(|x| {
+                x.remove_variation(name);
+            })
+        },
+    );
+
+    // Params use the app's own "variation.param" key form, so what a
+    // script writes matches what the .fflame file shows.
+    engine.register_fn(
+        "set_variation_param",
+        |t: &mut TransformHandle, key: &str, value: f64| -> Result<(), Box<EvalAltResult>> {
+            let (var, param) = key
+                .split_once('.')
+                .ok_or_else(|| err(format!("param key `{key}` must look like \"variation.param\"")))?;
+            validate_variation_param(var, param)?;
+            t.with(|x| {
+                x.variation_params.insert(key.to_string(), value as f32);
+            })
+        },
+    );
+
+    engine.register_fn(
+        "set_variation_param",
+        |t: &mut TransformHandle, var: &str, param: &str, value: f64| -> Result<(), Box<EvalAltResult>> {
+            validate_variation_param(var, param)?;
+            t.with(|x| {
+                x.variation_params
+                    .insert(format!("{var}.{param}"), value as f32);
+            })
+        },
+    );
+
+    engine.register_fn(
+        "translate",
+        |t: &mut TransformHandle, dx: f64, dy: f64| -> Result<(), Box<EvalAltResult>> {
+            t.with(|x| {
+                x.e += dx as f32;
+                x.f += dy as f32;
+            })
+        },
+    );
+
+    // Scales the linear part only — the transform's placement (e, f) is
+    // left alone, which is what "scale the triangle" means in Apophysis.
+    engine.register_fn(
+        "scale",
+        |t: &mut TransformHandle, s: f64| -> Result<(), Box<EvalAltResult>> {
+            let s = s as f32;
+            t.with(|x| {
+                x.a *= s;
+                x.b *= s;
+                x.c *= s;
+                x.d *= s;
+            })
+        },
+    );
+
+    engine.register_fn(
+        "scale_xy",
+        |t: &mut TransformHandle, sx: f64, sy: f64| -> Result<(), Box<EvalAltResult>> {
+            let (sx, sy) = (sx as f32, sy as f32);
+            t.with(|x| {
+                x.a *= sx;
+                x.b *= sx;
+                x.c *= sy;
+                x.d *= sy;
+            })
+        },
+    );
+
+    engine.register_fn(
+        "rotate",
+        |t: &mut TransformHandle, degrees: f64| -> Result<(), Box<EvalAltResult>> {
+            let (s, c) = (degrees as f32).to_radians().sin_cos();
+            t.with(|x| {
+                let (a, b, cc, d) = (x.a, x.b, x.c, x.d);
+                x.a = c * a - s * cc;
+                x.b = c * b - s * d;
+                x.c = s * a + c * cc;
+                x.d = s * b + c * d;
+            })
+        },
+    );
+
+    engine.register_fn(
+        "set_affine",
+        |t: &mut TransformHandle,
+         a: f64,
+         b: f64,
+         c: f64,
+         d: f64,
+         e: f64,
+         f: f64|
+         -> Result<(), Box<EvalAltResult>> {
+            t.with(|x| {
+                x.a = a as f32;
+                x.b = b as f32;
+                x.c = c as f32;
+                x.d = d as f32;
+                x.e = e as f32;
+                x.f = f as f32;
+            })
+        },
+    );
+
+    engine.register_fn("index", |t: &mut TransformHandle| -> i64 { t.idx as i64 });
+}
+
+fn validate_variation_param(var: &str, param: &str) -> Result<(), Box<EvalAltResult>> {
+    let registry = crate::variations::global_registry();
+    let info = registry
+        .get(var)
+        .ok_or_else(|| err(format!("unknown variation `{var}`")))?;
+    if !info.parameters.iter().any(|p| p.name == param) {
+        let known: Vec<String> = info.parameters.iter().map(|p| p.name.to_string()).collect();
+        return Err(err(format!(
+            "variation `{var}` has no parameter `{param}` (has: {})",
+            if known.is_empty() { "none".to_string() } else { known.join(", ") }
+        )));
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------------ config
+
+fn register_config(engine: &mut Engine, state: Rc<RefCell<ScriptState>>) {
+    let s = Rc::clone(&state);
+    engine.register_fn(
+        "set",
+        move |c: &mut ConfigHandle, key: &str, value: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            let mut cfg = c.cfg.borrow_mut();
+            match set_config_field(&mut cfg, key, dynamic_to_json(&value)?) {
+                Ok(Applied::Changed) => Ok(()),
+                Ok(Applied::NoVisibleChange) => {
+                    // Either a no-op (already that value / equals the
+                    // default of a skip-if-default field) or a bad key.
+                    // Can't tell them apart from the JSON alone, so warn
+                    // rather than fail a legitimate no-op.
+                    s.borrow_mut().warnings.push(format!(
+                        "config.set(\"{key}\", …) changed nothing — check the setting name"
+                    ));
+                    Ok(())
+                }
+                Err(e) => Err(err(e)),
+            }
+        },
+    );
+
+    engine.register_fn(
+        "get",
+        |c: &mut ConfigHandle, key: &str| -> Result<Dynamic, Box<EvalAltResult>> {
+            let cfg = c.cfg.borrow();
+            let root = serde_json::to_value(&*cfg).map_err(|e| err(e.to_string()))?;
+            match json_at(&root, key) {
+                Some(v) => Ok(json_to_dynamic(v)),
+                None => Err(err(format!(
+                    "`{key}` is not set (it may be at its default and omitted, or misspelled)"
+                ))),
+            }
+        },
+    );
+
+    // config["gamma"] = 2.4 reads better than config.set(...) for simple
+    // assignments; same backing path.
+    let s = Rc::clone(&state);
+    engine.register_indexer_set(
+        move |c: &mut ConfigHandle, key: &str, value: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            let mut cfg = c.cfg.borrow_mut();
+            match set_config_field(&mut cfg, key, dynamic_to_json(&value)?) {
+                Ok(Applied::Changed) => Ok(()),
+                Ok(Applied::NoVisibleChange) => {
+                    s.borrow_mut().warnings.push(format!(
+                        "config[\"{key}\"] = … changed nothing — check the setting name"
+                    ));
+                    Ok(())
+                }
+                Err(e) => Err(err(e)),
+            }
+        },
+    );
+}
+
+enum Applied {
+    Changed,
+    NoVisibleChange,
+}
+
+/// Set any `FractalConfig` field by its `.fflame` JSON path.
+///
+/// Goes through serde rather than a hand-written table so the whole
+/// config is reachable and the key names are the ones users already see
+/// in saved files. The flame itself is excluded: it has richer structure
+/// (and session-local IDs that a JSON round trip would reset), so it is
+/// edited through the typed `flame` handle instead.
+fn set_config_field(
+    cfg: &mut FractalConfig,
+    key: &str,
+    value: serde_json::Value,
+) -> Result<Applied, String> {
+    if key == "flame" || key.starts_with("flame.") {
+        return Err("use the `flame` object to edit the flame, not config.set".to_string());
+    }
+
+    let before = serde_json::to_value(&*cfg).map_err(|e| e.to_string())?;
+    // A key already present in the JSON is a known setting, even if the
+    // assignment turns out to be a no-op (setting brightness to the value
+    // it already has). Only a key that is BOTH absent and produced no
+    // change is ambiguous enough to warn about.
+    let key_existed = json_at(&before, key).is_some();
+    let mut patched = before.clone();
+
+    // Walk to the parent, creating nothing: intermediate objects must
+    // already exist (a missing one means a bad path, not a default).
+    let parts: Vec<&str> = key.split('.').collect();
+    let (last, parents) = parts.split_last().ok_or("empty setting name")?;
+    let mut cur = &mut patched;
+    for p in parents {
+        cur = cur
+            .get_mut(*p)
+            .ok_or_else(|| format!("unknown setting group `{p}` in `{key}`"))?;
+    }
+    let obj = cur
+        .as_object_mut()
+        .ok_or_else(|| format!("`{key}` is not a settable field"))?;
+    // Insert rather than require presence: fields sitting at their
+    // default are omitted from the JSON entirely (skip-if-default).
+    obj.insert((*last).to_string(), value);
+
+    let flame = cfg.flame.clone();
+    let mut next: FractalConfig = serde_json::from_value(patched)
+        .map_err(|e| format!("invalid value for `{key}`: {e}"))?;
+    // Session-local IDs are #[serde(skip)]; restore the flame wholesale
+    // and re-issue IDs for anything the round trip blanked.
+    next.flame = flame;
+    next.fixup_ids();
+
+    let after = serde_json::to_value(&next).map_err(|e| e.to_string())?;
+    let changed = after != before;
+    *cfg = next;
+    Ok(if changed || key_existed {
+        Applied::Changed
+    } else {
+        Applied::NoVisibleChange
+    })
+}
+
+fn json_at<'a>(root: &'a serde_json::Value, key: &str) -> Option<&'a serde_json::Value> {
+    let mut cur = root;
+    for p in key.split('.') {
+        cur = cur.get(p)?;
+    }
+    Some(cur)
+}
+
+fn dynamic_to_json(d: &Dynamic) -> Result<serde_json::Value, Box<EvalAltResult>> {
+    use serde_json::Value;
+    if d.is::<bool>() {
+        return Ok(Value::Bool(d.as_bool().unwrap()));
+    }
+    if d.is::<i64>() {
+        return Ok(Value::from(d.as_int().unwrap()));
+    }
+    if d.is::<f64>() {
+        return Ok(Value::from(d.as_float().unwrap()));
+    }
+    if d.is::<String>() || d.is::<rhai::ImmutableString>() {
+        return Ok(Value::String(d.clone().into_string().unwrap_or_default()));
+    }
+    if d.is::<Array>() {
+        let arr = d.clone().into_array().unwrap_or_default();
+        let mut out = Vec::with_capacity(arr.len());
+        for item in &arr {
+            out.push(dynamic_to_json(item)?);
+        }
+        return Ok(Value::Array(out));
+    }
+    Err(err(format!(
+        "cannot use a {} as a config value",
+        d.type_name()
+    )))
+}
+
+fn json_to_dynamic(v: &serde_json::Value) -> Dynamic {
+    use serde_json::Value;
+    match v {
+        Value::Null => Dynamic::UNIT,
+        Value::Bool(b) => Dynamic::from(*b),
+        Value::Number(n) => n
+            .as_i64()
+            .map(Dynamic::from)
+            .or_else(|| n.as_f64().map(Dynamic::from))
+            .unwrap_or(Dynamic::UNIT),
+        Value::String(s) => Dynamic::from(s.clone()),
+        Value::Array(a) => Dynamic::from(a.iter().map(json_to_dynamic).collect::<Array>()),
+        Value::Object(_) => Dynamic::from(v.to_string()),
+    }
+}
+
+// -------------------------------------------------------- registry queries
+
+fn register_registry_queries(engine: &mut Engine) {
+    engine.register_fn("variation_names", || -> Array {
+        crate::variations::global_registry()
+            .names()
+            .iter()
+            .map(|n| Dynamic::from(n.clone()))
+            .collect()
+    });
+
+    engine.register_fn("variation_exists", |name: &str| -> bool {
+        crate::variations::global_registry().get(name).is_some()
+    });
+
+    engine.register_fn("effect_exists", |name: &str| -> bool {
+        crate::effects::global_effect_registry().get(name).is_some()
+    });
+}
