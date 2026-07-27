@@ -9,7 +9,8 @@
 // each generator gets its own colour, weight, animation tracks and
 // triangle-editor handle, and the group's word rule becomes xaos.
 //
-// Works on: schottky_group, apollonian_gasket, sphere_packing.
+// Works on: schottky_group, apollonian_gasket, sphere_packing,
+// klein_group.
 // Open a flame using one of those, then run this.
 
 script("Decompose Group", "modifier");
@@ -36,11 +37,14 @@ for i in 0..flame.transform_count() {
     } else if t.has_variation("sphere_packing") {
         source = i;
         kind = "sphere_packing";
+    } else if t.has_variation("klein_group") {
+        source = i;
+        kind = "klein_group";
     }
 }
 
 if source < 0 {
-    print("No packed group found. Open a flame using schottky_group, apollonian_gasket or sphere_packing.");
+    print("No packed group found. Open a flame using schottky_group, apollonian_gasket, sphere_packing or klein_group.");
 } else {
     let t = flame.transform(source);
     let gens = [];
@@ -61,6 +65,18 @@ if source < 0 {
         );
     } else if kind == "sphere_packing" {
         gens = [];   // filled below; packings emit inversions, not matrices
+    } else if kind == "klein_group" {
+        // Indra's Pearls: two generators and their inverses, built by one
+        // of seven recipes. Order here is [a, a-inverse, b, b-inverse] —
+        // NOT the Schottky order — because the word rule keys off it.
+        gens = klein_generators(
+            t.variation_param("klein_group.recipe").to_int(),
+            t.variation_param("klein_group.a_re"),
+            t.variation_param("klein_group.a_im"),
+            t.variation_param("klein_group.b_re"),
+            t.variation_param("klein_group.b_im"),
+            t.variation_weight("klein_group"),
+        );
     } else {
         gens = apollonian_generators(
             t.variation_param("apollonian_gasket.qc_deform") > 0.5,
@@ -129,7 +145,17 @@ if source < 0 {
 
         if keep_word_rule {
             for from in 0..4 {
-                let row = avoid_xaos_row(from);
+                // Three groups, three different "don't backtrack" rules.
+                // klein_group excludes the inverse and draws uniformly from
+                // the rest; the others redraw into the next generator, which
+                // doubles its share. avoid_xaos_row encodes the latter.
+                let row = [];
+                if kind == "klein_group" {
+                    // [a, a-inverse, b, b-inverse]: the inverse is from ^ 1.
+                    row = exclude_xaos_row(from ^ 1, 4);
+                } else {
+                    row = avoid_xaos_row(from);
+                }
                 for to in 0..4 {
                     flame.set_xaos(from, to, row[to]);
                 }

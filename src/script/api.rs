@@ -1172,6 +1172,55 @@ fn register_builtins(engine: &mut Engine) {
         Ok(avoid_xaos_row(from).iter().map(|v| Dynamic::from(*v as f64)).collect())
     });
 
+    // klein_generators(recipe, a_re, a_im, b_re, b_im, weight)
+    //   -> [a, a-inverse, b, b-inverse], each 8 numbers
+    engine.register_fn(
+        "klein_generators",
+        |recipe: i64,
+         a_re: Dynamic,
+         a_im: Dynamic,
+         b_re: Dynamic,
+         b_im: Dynamic,
+         weight: Dynamic|
+         -> Result<Array, Box<EvalAltResult>> {
+            let gens = crate::script::builtins::klein_generators(
+                recipe.clamp(0, 6) as u32,
+                num(&a_re, "A real")?,
+                num(&a_im, "A imaginary")?,
+                num(&b_re, "B real")?,
+                num(&b_im, "B imaginary")?,
+                num(&weight, "variation weight")?,
+            );
+            Ok(gens
+                .iter()
+                .map(|m| {
+                    Dynamic::from(
+                        m.to_params()
+                            .iter()
+                            .map(|v| Dynamic::from(*v))
+                            .collect::<Array>(),
+                    )
+                })
+                .collect())
+        },
+    );
+
+    // Xaos row that forbids one index outright, leaving the rest equal.
+    engine.register_fn(
+        "exclude_xaos_row",
+        |forbidden: i64, count: i64| -> Result<Array, Box<EvalAltResult>> {
+            let count = usize::try_from(count).map_err(|_| err("count must be >= 0"))?;
+            let forbidden = usize::try_from(forbidden).map_err(|_| err("index must be >= 0"))?;
+            if count == 0 {
+                return Err(err("exclude_xaos_row needs at least one transform"));
+            }
+            Ok(crate::script::builtins::exclude_xaos_row(forbidden, count)
+                .iter()
+                .map(|v| Dynamic::from(*v as f64))
+                .collect())
+        },
+    );
+
     // sphere_packing_mirrors(mode, size, ring_n, ring_scale, cap_scale,
     //                        jitter, tilt, three_d) -> [[x, y, z, r], ...]
     engine.register_fn(
