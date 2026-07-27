@@ -14,6 +14,7 @@
 //! reproduces a flame byte-for-byte on desktop, web, and Python.
 
 pub mod api;
+pub mod builtins;
 /// Headless `generate` command (desktop only — needs the filesystem).
 #[cfg(not(target_arch = "wasm32"))]
 pub mod cli;
