@@ -401,6 +401,11 @@ pub struct App {
 
     // Rendering internals (frame timing and batching)
     pub(super) last_frame_time: Option<web_time::Instant>,
+    // Adaptive iteration governor (see the dispatch site): scales the
+    // per-frame iterations_per_thread down when frames blow the target
+    // budget and back up when there is headroom. 1.0 = full batch.
+    pub(super) iter_scale: f64,
+    pub(super) last_iter_frame: Option<web_time::Instant>,
     pub(super) accumulation_batch_size: u32,  // Process every N frames (1 = normal, 4 = batched)
     pub(super) frames_since_accumulation: u32,
     // Overwrite mode timing (100ms window after parameter changes)
@@ -619,6 +624,8 @@ impl App {
             animation_controller: AnimationController::new(),
             metrics: PerformanceMetrics::new(),
             last_frame_time: None,
+            iter_scale: 1.0,
+            last_iter_frame: None,
             accumulation_batch_size: 4, // EXPERIMENT: Test batching
             frames_since_accumulation: 0,
             use_overwrite_next_frame: false,
@@ -2031,6 +2038,30 @@ impl App {
             if should_iterate {
                 const NUM_WORKGROUPS: u32 = 128;
 
+                // Adaptive iteration governor. The dispatch below is
+                // otherwise a FIXED batch (128 workgroups x
+                // iterations_per_thread) regardless of how heavy the flame
+                // is — the frame pacer only ever waits when frames are
+                // FAST, so a heavy flame (multi-emit spray/kaleidoscope,
+                // fat variation stacks) turns directly into dropped FPS.
+                // Measure the gap between successive iterating frames and
+                // scale the batch to fit the target budget; the same total
+                // GPU work happens across more, smaller batches, so
+                // convergence speed is unchanged while the UI stays
+                // responsive. (The compute-time metric can't drive this:
+                // it measures command ENCODING, not GPU execution — the
+                // frame delta is the only honest GPU-load signal here.)
+                let now = web_time::Instant::now();
+                if let Some(prev) = self.last_iter_frame {
+                    let target = 1.0 / self.config_manager.system_settings().target_fps.max(1.0) as f64;
+                    let ratio = prev.elapsed().as_secs_f64() / target;
+                    self.iter_scale = crate::app::adjust_iter_scale(self.iter_scale, ratio);
+                }
+                self.last_iter_frame = Some(now);
+                let effective_ipt = ((self.config_manager.system_settings().iterations_per_thread as f64
+                    * self.iter_scale) as u32)
+                    .max(16);
+
                 self.frames_since_accumulation += 1;
 
                 // Determine if we should accumulate this frame
@@ -2050,7 +2081,7 @@ impl App {
                 }
 
                 let samples_this_frame = renderer.compute_pass(&mut render_encoder, &self.gpu.queue, &self.gpu.device, NUM_WORKGROUPS,
-                    self.config_manager.system_settings().iterations_per_thread, self.config_manager.system_settings().burn_in,
+                    effective_ipt, self.config_manager.system_settings().burn_in,
                     final_config.zoom, final_config.pan_x, final_config.pan_y, final_config.rotation,
                     final_config.camera_rotation_x, final_config.camera_rotation_y, final_config.camera_bank, final_config.camera_x, final_config.camera_y, final_config.camera_z, final_config.speed_factor, clear_histogram, clear_paths);
 
@@ -2411,5 +2442,52 @@ impl App {
         let fractal_y = rotated_y / config.zoom + config.pan_y;
 
         (fractal_x, fractal_y)
+    }
+}
+
+/// Adaptive iteration-batch governor (pure math; see the dispatch site).
+///
+/// `ratio` is last frame's duration over the target budget. Over budget
+/// by more than 30% -> shrink the batch proportionally (bounded, so one
+/// catastrophic frame doesn't collapse the batch). Comfortably under
+/// budget -> recover gently toward full batches. The dead zone between
+/// avoids oscillation around the target.
+pub(crate) fn adjust_iter_scale(scale: f64, ratio: f64) -> f64 {
+    let mut s = scale;
+    if ratio > 1.3 {
+        s /= ratio.min(4.0);
+    } else if ratio < 0.9 {
+        s *= 1.15;
+    }
+    s.clamp(1.0 / 64.0, 1.0)
+}
+
+#[cfg(test)]
+mod governor_tests {
+    use super::adjust_iter_scale;
+
+    #[test]
+    fn governor_converges_and_recovers() {
+        // A flame 4x over budget settles near quarter batches...
+        let mut s = 1.0;
+        for _ in 0..10 {
+            let ratio = 4.0 * s; // frame cost proportional to batch size
+            s = adjust_iter_scale(s, ratio);
+        }
+        assert!(s < 0.34 && s > 0.15, "settled at {s}");
+        // ...and grows back to full batches on a light flame.
+        for _ in 0..30 {
+            s = adjust_iter_scale(s, 0.5 * s);
+        }
+        assert!((s - 1.0).abs() < 1e-9, "recovered to {s}");
+        // Bounded below even under absurd load.
+        let mut worst = 1.0;
+        for _ in 0..50 {
+            worst = adjust_iter_scale(worst, 100.0);
+        }
+        assert!(worst >= 1.0 / 64.0);
+        // Dead zone: near-target frames leave the batch alone.
+        assert_eq!(adjust_iter_scale(0.5, 1.0), 0.5);
+        assert_eq!(adjust_iter_scale(0.5, 1.25), 0.5);
     }
 }
