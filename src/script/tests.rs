@@ -1006,3 +1006,63 @@ fn decompose_klein_group_uses_its_own_word_rule() {
         );
     }
 }
+
+#[test]
+fn decomposition_sets_preserve_z_only_where_needed() {
+    // With preserve_z off (the default) the renderer flattens z every
+    // iteration, and only variations flagged AlwaysZ survive it. A
+    // decomposition that trades an AlwaysZ variation for one without it
+    // therefore has to turn preserve_z ON, or a 3D flame collapses to the
+    // flat 2D group — while still looking like a perfectly good fractal.
+    //
+    // It is NOT a blanket switch: klein_group is not AlwaysZ, so forcing
+    // preserve_z would make the decomposition keep a z its source
+    // discards, which breaks the match just as badly in the other
+    // direction. Verified by render comparison at 320x320: apollonian 3D
+    // went from mean 38.3/255 to 0.180/255 with the rule, and klein_group
+    // went from 0.008/255 to 39.4/255 without it.
+    let host = ScriptHost::new();
+    let source = include_str!("../../assets/scripts/modifiers/decompose_group.rhai");
+
+    let case = |variation: &str| -> bool {
+        let packed = host
+            .run(
+                &format!(
+                    r#"
+                        script("S", "generator");
+                        let t = flame.add_transform();
+                        t.add_variation("{variation}", 1.0);
+                        t.weight = 1.0;
+                        config.set("render_mode", "3d");
+                    "#
+                ),
+                &FractalConfig::default(),
+                1,
+                HashMap::new(),
+            )
+            .unwrap()
+            .config;
+        assert!(!packed.preserve_z, "the source starts with preserve_z off");
+        host.run(source, &packed, 1, HashMap::new()).unwrap().config.preserve_z
+    };
+
+    // AlwaysZ source -> non-AlwaysZ target (mobius): needs it.
+    assert!(case("apollonian_gasket"), "apollonian_gasket needs preserve_z");
+    assert!(case("schottky_group"), "schottky_group needs preserve_z");
+    // Not AlwaysZ at all: leave it alone.
+    assert!(!case("klein_group"), "klein_group must NOT get preserve_z");
+    // AlwaysZ source -> AlwaysZ target (spherical3D_wf): nothing to fix.
+    assert!(!case("sphere_packing"), "sphere_packing needs no preserve_z");
+
+    // The rule is driven by the feature flags, not a hardcoded list.
+    use crate::variations::definition::Feature;
+    let always_z = |n: &str| {
+        crate::variations::global_registry()
+            .get(n)
+            .is_some_and(|i| i.has_feature(Feature::AlwaysZ))
+    };
+    assert!(always_z("apollonian_gasket") && always_z("schottky_group"));
+    assert!(!always_z("klein_group"));
+    assert!(always_z("sphere_packing") && always_z("spherical3D_wf"));
+    assert!(!always_z("mobius"), "the mobius target is not AlwaysZ");
+}

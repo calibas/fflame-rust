@@ -49,6 +49,25 @@ if source < 0 {
     let t = flame.transform(source);
     let gens = [];
 
+    // Z bookkeeping. With preserve_z off (the default) the renderer
+    // flattens z every iteration, and only variations flagged AlwaysZ
+    // survive it. apollonian_gasket and schottky_group are AlwaysZ but
+    // decompose into `mobius`, which is not — so without this the
+    // decomposition of a 3D flame collapses to the flat 2D group, and
+    // still looks like a perfectly good gasket while doing it.
+    //
+    // Not a blanket switch: klein_group is NOT AlwaysZ, and forcing
+    // preserve_z on would make the decomposition preserve a z the packed
+    // original discards. sphere_packing decomposes into spherical3D_wf,
+    // which is AlwaysZ like its source, so it needs nothing either.
+    let target = "mobius";
+    if kind == "sphere_packing" {
+        target = "spherical3D_wf";
+    }
+    if variation_always_z(kind) && !variation_always_z(target) {
+        config.set("preserve_z", true);
+    }
+
     if kind == "schottky_group" {
         // Read the circles and marking straight off the variation, so the
         // decomposition matches whatever is on screen.

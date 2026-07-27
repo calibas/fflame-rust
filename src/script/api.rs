@@ -1356,6 +1356,20 @@ fn register_registry_queries(engine: &mut Engine) {
         crate::variations::global_registry().get(name).is_some()
     });
 
+    // Does this variation write z UNCONDITIONALLY (Feature::AlwaysZ)?
+    //
+    // Under preserve_z = false the renderer flattens z every iteration,
+    // and only AlwaysZ variations survive that. A decomposition therefore
+    // has to know whether it is trading an AlwaysZ variation for one that
+    // is not — see the preserve_z rule in decompose_group.rhai.
+    engine.register_fn("variation_always_z", |name: &str| -> bool {
+        crate::variations::global_registry()
+            .get(name)
+            .is_some_and(|info| {
+                info.has_feature(crate::variations::definition::Feature::AlwaysZ)
+            })
+    });
+
     engine.register_fn("effect_exists", |name: &str| -> bool {
         crate::effects::global_effect_registry().get(name).is_some()
     });
