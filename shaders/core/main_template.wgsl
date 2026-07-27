@@ -132,6 +132,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // Reset the side-emission flag (Feature::VolumeSideEmit).
         volume_side_flag = false;
 {{/if}}
+{{#if HAS_PLOT_EMIT}}
+        // Reset the multi-emit collector (Feature::PlotEmits).
+        plot_emit_count = 0u;
+        plot_emit_relative = 0u;
+        plot_emit_suppress = false;
+{{/if}}
 
         // Analytic-blur mean-splat accumulator: the selected transform's
         // analytic-blur variation (if any) writes its weighted offset
@@ -440,6 +446,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let final_pos = current;
 {{/if}}
 
+{{#if HAS_PLOT_EMIT}}
+            // Emissions ignore CanHide (a hiding emitter suppresses only
+            // its own center plot) but respect everything that has gated
+            // should_plot so far — the opacity draw above all.
+            let emit_visible = should_plot;
+{{/if}}
             // doHide gate: a CanHide (cut_*) variation anywhere in this
             // iteration's transform chain marks the point as cut — skip the
             // splat (all post-symmetry copies included) while the chaos game
@@ -447,6 +459,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             if (should_hide) {
                 should_plot = false;
             }
+{{#if HAS_PLOT_EMIT}}
+            // An emitter's own main plot can be suppressed without touching
+            // the iteration (emit_suppress_main) — unlike CanHide, which
+            // aborts the whole iteration on normal transforms.
+            let main_visible = should_plot && !plot_emit_suppress;
+{{/if}}
 
             // Post-symmetry — gated entirely by HAS_POST_SYMMETRY.
             // When false, sym_count is 1u and the loop runs exactly
@@ -539,24 +557,56 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             }
 {{/if}}
 {{/if}}
+{{#if HAS_PLOT_EMIT}}
+            // Multi-emit source loop (Feature::PlotEmits): source 0 is the
+            // main point, 1..=plot_emit_count are the variation's emitted
+            // extras — plot-only, never fed back into the walk. Each source
+            // runs the full plot body: post-symmetry copies, projection,
+            // DoF/fog/density weights, and both deposit paths, so preview
+            // and export stay in parity by construction.
+            for (var src_i: u32 = 0u; src_i <= plot_emit_count; src_i = src_i + 1u) {
+            should_plot = select(emit_visible, main_visible, src_i == 0u);
+            var plot_src = final_pos;
+            var src_weight = 1.0;
+            if (src_i > 0u) {
+                let em = plot_emit_points[src_i - 1u];
+                // Relative emissions are offsets from the final plotted
+                // position — post-affine and the Final chain already
+                // applied — so a blur emitter on a NORMAL transform still
+                // centers its copies on what actually plots.
+                let rel = ((plot_emit_relative >> (src_i - 1u)) & 1u) == 1u;
+{{#if RENDER_3D}}
+                plot_src = select(em.xyz, final_pos + em.xyz, rel);
+{{else}}
+                plot_src = select(em.xy, final_pos + em.xy, rel);
+{{/if}}
+                src_weight = em.w;
+            }
+{{else}}
+            let plot_src = final_pos;
+{{/if}}
             for (var sym_k: u32 = 0u; sym_k < sym_count; sym_k = sym_k + 1u) {
 {{#if HAS_POST_SYMMETRY}}
 {{#if RENDER_3D}}
-                let plot_pos = post_symmetry_copy(final_pos, sym_k);
+                let plot_pos = post_symmetry_copy(plot_src, sym_k);
 {{else}}
                 // 2D path: lift to vec3 with Z=0 so the symmetry helper
                 // (vec3 only) accepts it, then strip Z back off for
                 // world_to_pixel.
-                let plot_pos = post_symmetry_copy(vec3<f32>(final_pos, 0.0), sym_k).xy;
+                let plot_pos = post_symmetry_copy(vec3<f32>(plot_src, 0.0), sym_k).xy;
 {{/if}}
 {{else}}
-                let plot_pos = final_pos;
+                let plot_pos = plot_src;
 {{/if}}
 
-            // Per-sample histogram weight (1.0 = neutral). Only the
-            // 3D depth-density compensation below changes it; the 2D
-            // path always plots at weight 1.
+            // Per-sample histogram weight (1.0 = neutral). Multi-emit
+            // seeds it with the emission's weight; 3D depth-density
+            // compensation below multiplies on top.
+{{#if HAS_PLOT_EMIT}}
+            var density_weight = src_weight;
+{{else}}
             var density_weight = 1.0;
+{{/if}}
 
 
             // Convert to pixel coordinates
@@ -585,7 +635,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 // Behind-camera / near-singularity samples keep weight
                 // 1 — they're clipped by apply_perspective anyway.
                 if (zr > 1e-3) {
-                    density_weight = clamp(pow(zr, -2.0 * params.depth_density_compensation), 0.015625, 64.0);
+                    density_weight = density_weight * clamp(pow(zr, -2.0 * params.depth_density_compensation), 0.015625, 64.0);
                 }
             }
 
@@ -956,6 +1006,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 {{/if}}
             }
             }  // end for (sym_k = 0..sym_count) — post-symmetry loop
+{{#if HAS_PLOT_EMIT}}
+            }  // end for (src_i) — multi-emit source loop
+{{/if}}
         }
 
 {{#if FLATTEN_Z_PER_ITER}}

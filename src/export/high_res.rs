@@ -187,6 +187,9 @@ pub struct HighResExporter {
     // Configuration
     render_mode: RenderMode,
     samples_per_dispatch: u64,
+    /// 1 + the flame's multi-emit cap — samples-per-iteration multiplier
+    /// for buffer capacity and workgroup sizing.
+    emit_mult: u64,
     iterations_per_thread: u32,
     // Solid rendering (Phase 0): occlusion state mirrored from the config.
     // solid_enabled = strength > 0 && 3D; drives the SOLID iterate shader,
@@ -235,23 +238,37 @@ impl HighResExporter {
     /// Larger buffer = fewer round-trips = faster export
     const TARGET_BUFFER_SIZE: u64 = 128 * 1024 * 1024;
 
-    /// Calculate optimal workgroups based on target buffer size and iterations_per_thread
-    fn calculate_workgroups(iterations_per_thread: u32) -> u64 {
+    /// Calculate optimal workgroups based on target buffer size and
+    /// iterations_per_thread. `emit_mult` = 1 + the flame's multi-emit cap
+    /// (`Flame::plot_emit_cap`): an emitting flame produces up to that many
+    /// samples per iteration, so fewer workgroups fit the target buffer —
+    /// same total iterations, spread over more dispatches.
+    fn calculate_workgroups(iterations_per_thread: u32, emit_mult: u64) -> u64 {
         let sample_size = std::mem::size_of::<Sample>() as u64; // 32 bytes
-        let samples_per_workgroup = Self::THREADS_PER_WORKGROUP * iterations_per_thread as u64;
+        let samples_per_workgroup =
+            Self::THREADS_PER_WORKGROUP * iterations_per_thread as u64 * emit_mult.max(1);
         let bytes_per_workgroup = samples_per_workgroup * sample_size;
 
         // Calculate workgroups to fill target buffer
         let workgroups = Self::TARGET_BUFFER_SIZE / bytes_per_workgroup;
 
-        // Clamp to reasonable range (min 128, max 65535 for GPU compatibility)
-        workgroups.clamp(128, 65535)
+        // Budget wins over occupancy. The old floor of 128 workgroups
+        // silently overrode the 128 MB target once a single workgroup's
+        // samples got big: at iterations_per_thread = 4096 it produced a
+        // 1 GB sample buffer, and the new 10000 cap would have meant
+        // 2.4 GB (times the multi-emit multiplier on emitting flames).
+        // Deep-trajectory settings mean each thread already carries
+        // plenty of work, so low workgroup counts are the correct trade
+        // — exports run slower at extreme depth, they don't OOM. Floor
+        // of 1 keeps a degenerate config renderable.
+        workgroups.clamp(1, 65535)
     }
 
-    /// Calculate samples per dispatch for given iterations_per_thread
-    fn samples_per_dispatch(iterations_per_thread: u32) -> u64 {
-        let workgroups = Self::calculate_workgroups(iterations_per_thread);
-        workgroups * Self::THREADS_PER_WORKGROUP * iterations_per_thread as u64
+    /// Sample-buffer CAPACITY per dispatch (not the iteration count —
+    /// with multi-emit each iteration may deposit up to emit_mult samples).
+    fn samples_per_dispatch(iterations_per_thread: u32, emit_mult: u64) -> u64 {
+        let workgroups = Self::calculate_workgroups(iterations_per_thread, emit_mult);
+        workgroups * Self::THREADS_PER_WORKGROUP * iterations_per_thread as u64 * emit_mult.max(1)
     }
 
     /// Create a new high-resolution exporter
@@ -330,8 +347,9 @@ impl HighResExporter {
             .map_err(|e| format!("Failed to create device: {}", e))?;
 
         // Log export configuration
-        let workgroups = Self::calculate_workgroups(iterations_per_thread);
-        let samples_per_dispatch = Self::samples_per_dispatch(iterations_per_thread);
+        let emit_mult = 1 + config.flame.plot_emit_cap(&global_registry()) as u64;
+        let workgroups = Self::calculate_workgroups(iterations_per_thread, emit_mult);
+        let samples_per_dispatch = Self::samples_per_dispatch(iterations_per_thread, emit_mult);
         let buffer_size_mb = (samples_per_dispatch * std::mem::size_of::<Sample>() as u64) / (1024 * 1024);
         log::info!(
             "High-res export: {}x{}, {} workgroups, {} samples/dispatch (~{}MB buffer)",
@@ -372,8 +390,9 @@ impl HighResExporter {
             mapped_at_creation: false,
         });
 
-        // Create sample output buffer (sized for samples per dispatch based on iterations_per_thread)
-        let samples_per_dispatch = Self::samples_per_dispatch(iterations_per_thread);
+        // Create sample output buffer. Capacity accounts for multi-emit:
+        // up to emit_mult samples per iteration (see calculate_workgroups).
+        let samples_per_dispatch = Self::samples_per_dispatch(iterations_per_thread, emit_mult);
         let sample_buffer_size = samples_per_dispatch * std::mem::size_of::<Sample>() as u64;
         let sample_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Export Sample Buffer"),
@@ -1392,6 +1411,7 @@ impl HighResExporter {
             curve_lut_sampler,
             accumulation_sampler,
             render_mode: config.render_mode,
+            emit_mult,
             samples_per_dispatch,
             solid_enabled,
             solid_strength: config.solid_strength,
@@ -1660,7 +1680,7 @@ impl HighResExporter {
         // calculate_workgroups count) comfortably holds one 128-workgroup pass.
         const FR_PASS_WORKGROUPS: u32 = 128; // mirrors render.rs NUM_WORKGROUPS
         let workgroups_per_dispatch =
-            FR_PASS_WORKGROUPS.min(Self::calculate_workgroups(self.iterations_per_thread) as u32);
+            FR_PASS_WORKGROUPS.min(Self::calculate_workgroups(self.iterations_per_thread, self.emit_mult) as u32);
         let iterations_per_dispatch = workgroups_per_dispatch as u64
             * Self::THREADS_PER_WORKGROUP
             * self.iterations_per_thread as u64;

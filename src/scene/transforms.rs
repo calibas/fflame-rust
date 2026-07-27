@@ -2272,7 +2272,25 @@ impl Flame {
             && !self.has_attachments()
             && self.subflames.is_empty()
             && self.post_symmetry.ty == PostSymmetryType::None
+            // Multi-emit fans one sample into several plot points, which
+            // the single mean splat can't model (same reason post-symmetry
+            // is excluded above). Emitters on finals are already covered
+            // by the has_attachments() rule.
+            && self.plot_emit_cap(registry) == 0
             && !self.analytic_blur_transforms(registry).is_empty()
+    }
+
+    /// Per-flame multi-emit cap: the max `Feature::PlotEmits` count across
+    /// all active variations (normal + linked + final + subflames), clamped
+    /// to 16. 0 = no emitter active; the shader compiles without any
+    /// emit machinery and export buffers are sized 1 sample/iteration.
+    pub fn plot_emit_cap(&self, registry: &VariationRegistry) -> u32 {
+        self.active_variation_names_ordered(registry)
+            .iter()
+            .filter_map(|n| registry.get(n).map(|i| i.plot_emit_cap()))
+            .max()
+            .unwrap_or(0)
+            .min(16)
     }
 
     /// Per-flame cap on the AttachmentList struct's per-side array
