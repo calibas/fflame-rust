@@ -1569,8 +1569,10 @@ impl<'a> PanelViewer<'a> {
         // Scripts read the live config: modifiers start from it, and
         // generators inherit its palette.
         let current = self.context.config_manager.active_config().clone();
+        let palettes: Vec<crate::scene::palette::Palette> =
+            self.context.palette_library.iter().cloned().collect();
         if let Some(panel) = self.context.scripts_panel.as_mut() {
-            let response = panel.render(ui, &current);
+            let response = panel.render(ui, &current, palettes);
             if let Some(config) = response.generated {
                 *self.context.script_generated = Some(config);
             }

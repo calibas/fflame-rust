@@ -121,6 +121,7 @@ pub(crate) fn register(
     register_flame(engine);
     register_transform(engine);
     register_config(engine, Rc::clone(&state));
+    register_palettes(engine, Rc::clone(&state));
     register_registry_queries(engine);
 
     // print()/debug() are a beginner's main debugging tool, and stdout is
@@ -852,6 +853,74 @@ fn json_to_dynamic(v: &serde_json::Value) -> Dynamic {
         Value::Array(a) => Dynamic::from(a.iter().map(json_to_dynamic).collect::<Array>()),
         Value::Object(_) => Dynamic::from(v.to_string()),
     }
+}
+
+// ---------------------------------------------------------------- palettes
+
+/// Palette choice, in three modes:
+///
+/// * **Leave it alone** — a script that calls nothing here keeps whatever
+///   palette the flame already had. This is the default and needs no API.
+/// * **Pick an existing one** — `flame.set_palette(name)`, or
+///   `flame.random_palette()` for a seeded random choice from the loaded
+///   library.
+/// * **Generate one** — not yet: a colour-theory palette generator
+///   (main/secondary/tertiary colours combined by complementary,
+///   analogous or monochromatic rules) is planned as a system shared with
+///   the Palette UI. See the project doc.
+fn register_palettes(engine: &mut Engine, state: Rc<RefCell<ScriptState>>) {
+    let s = Rc::clone(&state);
+    engine.register_fn(
+        "set_palette",
+        move |f: &mut FlameHandle, name: &str| -> Result<(), Box<EvalAltResult>> {
+            let st = s.borrow();
+            let found = st
+                .palettes
+                .iter()
+                .find(|p| p.name.eq_ignore_ascii_case(name))
+                .cloned();
+            match found {
+                Some(p) => {
+                    f.cfg.borrow_mut().palette = p;
+                    Ok(())
+                }
+                None if st.palettes.is_empty() => Err(err(
+                    "no palette library is available here (try running from the app)",
+                )),
+                None => Err(err(format!(
+                    "no palette named `{name}` — see palette_names() for what's loaded"
+                ))),
+            }
+        },
+    );
+
+    let s = Rc::clone(&state);
+    engine.register_fn(
+        "random_palette",
+        move |f: &mut FlameHandle| -> Result<String, Box<EvalAltResult>> {
+            let mut st = s.borrow_mut();
+            if st.palettes.is_empty() {
+                return Err(err(
+                    "no palette library is available here (try running from the app)",
+                ));
+            }
+            let count = st.palettes.len();
+            let i = st.rng.gen_range(0..count);
+            let chosen = st.palettes[i].clone();
+            let name = chosen.name.clone();
+            f.cfg.borrow_mut().palette = chosen;
+            Ok(name)
+        },
+    );
+
+    let s = Rc::clone(&state);
+    engine.register_fn("palette_names", move || -> Array {
+        s.borrow()
+            .palettes
+            .iter()
+            .map(|p| Dynamic::from(p.name.clone()))
+            .collect()
+    });
 }
 
 // -------------------------------------------------------- registry queries

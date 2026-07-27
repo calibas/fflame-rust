@@ -43,6 +43,9 @@ pub struct ScriptsPanel {
     warnings: Vec<String>,
     status: Option<String>,
     initialized: bool,
+    /// Snapshot of the loaded palette library, refreshed each frame from
+    /// the app so newly loaded packs are selectable.
+    palettes: Vec<crate::scene::palette::Palette>,
 }
 
 impl Default for ScriptsPanel {
@@ -62,6 +65,7 @@ impl Default for ScriptsPanel {
             warnings: Vec::new(),
             status: None,
             initialized: false,
+            palettes: Vec::new(),
         }
     }
 }
@@ -134,10 +138,18 @@ impl ScriptsPanel {
             .unwrap_or(ScriptKind::Generator)
     }
 
-    /// Run once. Generators start from a fresh config (keeping the current
-    /// palette, which the script API can't set yet); modifiers start from
-    /// the flame on screen.
-    fn run_once(&self, current: &FractalConfig, seed: u64) -> Result<crate::script::ScriptOutcome, ScriptError> {
+    /// Run once. Generators start from a fresh config, modifiers from the
+    /// flame on screen; both inherit the current palette unless the script
+    /// chooses one.
+    fn run_once(
+        &self,
+        current: &FractalConfig,
+        seed: u64,
+    ) -> Result<crate::script::ScriptOutcome, ScriptError> {
+        // Both kinds start from the CURRENT palette, so a script that says
+        // nothing about palettes keeps yours. A script that calls
+        // set_palette / random_palette overrides it from the loaded
+        // library.
         let base = match self.declared_kind() {
             ScriptKind::Modifier => current.clone(),
             ScriptKind::Generator => {
@@ -146,11 +158,22 @@ impl ScriptsPanel {
                 fresh
             }
         };
-        ScriptHost::new().run(&self.text, &base, seed, self.values.clone())
+        ScriptHost::with_palettes(self.palettes.clone()).run(
+            &self.text,
+            &base,
+            seed,
+            self.values.clone(),
+        )
     }
 
-    pub fn render(&mut self, ui: &mut egui::Ui, current: &FractalConfig) -> ScriptsResponse {
+    pub fn render(
+        &mut self,
+        ui: &mut egui::Ui,
+        current: &FractalConfig,
+        palettes: Vec<crate::scene::palette::Palette>,
+    ) -> ScriptsResponse {
         let mut response = ScriptsResponse::default();
+        self.palettes = palettes;
 
         if !self.initialized {
             self.initialized = true;

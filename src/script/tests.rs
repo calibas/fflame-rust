@@ -408,3 +408,82 @@ fn set_contractiveness_hits_the_target() {
         .message
         .contains("at least one transform"));
 }
+
+fn test_palettes() -> Vec<crate::scene::palette::Palette> {
+    use crate::scene::palette::{ColorStop, Palette};
+    ["Ember", "Frost", "Moss"]
+        .iter()
+        .enumerate()
+        .map(|(i, name)| {
+            let v = i as f32 / 3.0;
+            Palette::new(
+                *name,
+                vec![
+                    ColorStop { position: 0.0, color: [0.0, 0.0, 0.0] },
+                    ColorStop { position: 1.0, color: [v, 1.0 - v, v * 0.5] },
+                ],
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn palette_choice_has_three_modes() {
+    let host = ScriptHost::with_palettes(test_palettes());
+    let mut base = FractalConfig::default();
+    base.palette = crate::scene::palette::Palette::new(
+        "MyCurrent",
+        vec![crate::scene::palette::ColorStop { position: 0.0, color: [1.0, 0.0, 0.0] }],
+    );
+
+    // 1. Say nothing -> the flame keeps the palette it came in with.
+    let out = host
+        .run("script(\"P\", \"generator\");", &base, 1, HashMap::new())
+        .unwrap();
+    assert_eq!(out.config.palette.name, "MyCurrent");
+
+    // 2. Name one from the library.
+    let out = host
+        .run(
+            "script(\"P\", \"generator\"); flame.set_palette(\"frost\");",
+            &base,
+            1,
+            HashMap::new(),
+        )
+        .unwrap();
+    assert_eq!(out.config.palette.name, "Frost", "name match is case-insensitive");
+
+    // 3. Random pick — and it rides the SEEDED rng, so it reproduces.
+    let script = "script(\"P\", \"generator\"); print(flame.random_palette());";
+    let a = host.run(script, &base, 77, HashMap::new()).unwrap();
+    let b = host.run(script, &base, 77, HashMap::new()).unwrap();
+    assert_eq!(a.config.palette.name, b.config.palette.name);
+    assert_eq!(a.messages[0], a.config.palette.name, "returns what it chose");
+    assert!(test_palettes().iter().any(|p| p.name == a.config.palette.name));
+}
+
+#[test]
+fn palette_errors_are_actionable() {
+    let host = ScriptHost::with_palettes(test_palettes());
+    let base = FractalConfig::default();
+    let err = host
+        .run(
+            "script(\"P\", \"generator\"); flame.set_palette(\"Nope\");",
+            &base,
+            1,
+            HashMap::new(),
+        )
+        .unwrap_err();
+    assert!(err.message.contains("palette_names()"), "points somewhere: {err}");
+
+    // Without a library at all, say so rather than failing obscurely.
+    let err = ScriptHost::new()
+        .run(
+            "script(\"P\", \"generator\"); flame.random_palette();",
+            &base,
+            1,
+            HashMap::new(),
+        )
+        .unwrap_err();
+    assert!(err.message.contains("no palette library"), "{err}");
+}
