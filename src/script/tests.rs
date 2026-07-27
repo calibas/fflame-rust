@@ -874,3 +874,72 @@ fn decompose_schottky_reproduces_the_packed_group() {
         out.messages
     );
 }
+
+#[test]
+fn decompose_sphere_packing_emits_inversions() {
+    // A packing is a REFLECTION group: each generator inverts in one
+    // sphere. Unlike the Mobius groups there is no matrix to carry, so the
+    // decomposition builds each inversion out of the flame's own affine
+    // machinery: translate the centre to the origin, apply p/|p|^2 scaled
+    // by r^2, translate back.
+    let host = ScriptHost::new();
+    let packed = host
+        .run(
+            r#"
+                script("P", "generator");
+                let t = flame.add_transform();
+                t.add_variation("sphere_packing", 1.0);
+                t.weight = 1.0;
+            "#,
+            &FractalConfig::default(),
+            1,
+            HashMap::new(),
+        )
+        .unwrap()
+        .config;
+
+    let source = include_str!("../../assets/scripts/modifiers/decompose_group.rhai");
+    let out = host.run(source, &packed, 1, HashMap::new()).unwrap();
+    let flame = &out.config.flame;
+
+    // Default mode is Apollonian (dual), 2D: four mirror circles.
+    let expected = crate::script::builtins::sphere_packing_mirrors(
+        0, 1.0, 6, 1.0, 1.0, 0.0, 0.0, false,
+    );
+    assert_eq!(flame.transforms.len(), expected.len(), "one transform per mirror");
+
+    for (i, (t, m)) in flame.transforms.iter().zip(expected.iter()).enumerate() {
+        assert!(
+            t.variations.contains_key("spherical3D_wf"),
+            "mirror {i} uses the inversion kernel"
+        );
+        // Weight carries r^2 - that is what turns p/|p|^2 into an
+        // inversion of the right radius.
+        let w = t.variations["spherical3D_wf"] as f64;
+        assert!(
+            (w - m.r * m.r).abs() < 1e-5,
+            "mirror {i}: weight should be r^2 ({} vs {})",
+            w,
+            m.r * m.r
+        );
+        // Pre-affine moves the centre to the origin, post-affine back.
+        assert!((-(t.e as f64) - m.x).abs() < 1e-5, "mirror {i}: pre-translate x");
+        assert!((-(t.f as f64) - m.y).abs() < 1e-5, "mirror {i}: pre-translate y");
+        assert!(t.post_affine_enabled, "mirror {i}: post-affine must be on");
+        assert!((t.post_e as f64 - m.x).abs() < 1e-5, "mirror {i}: post-translate x");
+        assert!((t.post_f as f64 - m.y).abs() < 1e-5, "mirror {i}: post-translate y");
+    }
+
+    // An inversion is its own inverse, so the word rule blocks REPEATS -
+    // the diagonal, not an offset like the Mobius groups use.
+    let xaos = flame.xaos.as_ref().expect("word rule became xaos");
+    for i in 0..flame.transforms.len() {
+        assert_eq!(xaos[i][i], 0.0, "mirror {i} must not follow itself");
+    }
+
+    assert!(
+        out.messages.iter().any(|m| m.contains("sphere inversions")),
+        "reported what it did: {:?}",
+        out.messages
+    );
+}

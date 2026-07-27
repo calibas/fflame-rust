@@ -236,6 +236,208 @@ pub fn qc_conjugator(theta_deg: f64, eta_deg: f64, delta: f64) -> Mobius {
     dk.compose(s0).compose(qf)
 }
 
+// ============================================================================
+// Sphere / circle packings
+// ============================================================================
+
+/// A mirror of a packing: a sphere (or circle, with `z` = 0) to invert in.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Sphere {
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+    pub r: f64,
+}
+
+impl Sphere {
+    /// Invert a point in this sphere: `x -> c + r^2 (x - c)/|x - c|^2`.
+    /// An inversion is its own inverse, which is why a packing forbids
+    /// REPEATING a mirror rather than forbidding some other index.
+    pub fn invert(self, p: [f64; 3]) -> [f64; 3] {
+        let v = [p[0] - self.x, p[1] - self.y, p[2] - self.z];
+        let n = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).max(1e-12);
+        let k = self.r * self.r / n;
+        [self.x + k * v[0], self.y + k * v[1], self.z + k * v[2]]
+    }
+}
+
+/// `sp_hash01` from the shader - the classic GLSL sine hash.
+///
+/// Computed in f32 deliberately: the shader's is f32, and `fract` after a
+/// multiply by 43758 amplifies any difference in `sin` into a completely
+/// different value. Even so, GPU and CPU `sin` need not agree to the last
+/// bit, so a packing with **Size Jitter above 0** may decompose to
+/// slightly different radii. At the default jitter of 0 the hash is
+/// unused and the decomposition is exact.
+fn sp_hash01(k: u32) -> f64 {
+    let v: f32 = ((k as f32) * 127.1 + 311.7).sin() * 43758.5453;
+    (v - v.floor()) as f64
+}
+
+const TAU: f64 = std::f64::consts::TAU;
+
+/// Configuration circle `k` (2D) - `sp_conf2`.
+fn sp_conf2(mode: u32, k: u32, n: u32, rs: f64, jit: f64) -> Sphere {
+    if mode >= 2 {
+        if k == 0 {
+            return Sphere { x: 0.0, y: 0.0, z: 0.0, r: 1.0 };
+        }
+        let i = k - 1;
+        let s = (std::f64::consts::PI / n as f64).sin();
+        let rt = s / (1.0 + s);
+        let r = rt * rs * (1.0 - jit * sp_hash01(i));
+        let d = 1.0 - r;
+        let a = TAU * i as f64 / n as f64;
+        return Sphere { x: d * a.cos(), y: d * a.sin(), z: 0.0, r };
+    }
+    // Soddy tangent circles.
+    match k {
+        0 => Sphere { x: 0.0, y: 0.0, z: 0.0, r: 1.0 },
+        1 => Sphere { x: 0.0, y: 0.5358984, z: 0.0, r: 0.4641016 },
+        2 => Sphere { x: -0.4641016, y: -0.2679492, z: 0.0, r: 0.4641016 },
+        _ => Sphere { x: 0.4641016, y: -0.2679492, z: 0.0, r: 0.4641016 },
+    }
+}
+
+/// Mirror circle `k` (2D) - `sp_mirror2`: Soddy duals for mode 0.
+fn sp_mirror2(mode: u32, k: u32, n: u32, rs: f64, jit: f64) -> Sphere {
+    if mode != 0 {
+        return sp_conf2(mode, k, n, rs, jit);
+    }
+    match k {
+        0 => Sphere { x: 0.0, y: 0.0, z: 0.0, r: 0.2679492 },
+        1 => Sphere { x: 0.0, y: -2.0, z: 0.0, r: 1.7320508 },
+        2 => Sphere { x: 1.7320508, y: 1.0, z: 0.0, r: 1.7320508 },
+        _ => Sphere { x: -1.7320508, y: 1.0, z: 0.0, r: 1.7320508 },
+    }
+}
+
+/// Configuration sphere `k` (3D) - `sp_conf3`.
+#[allow(clippy::too_many_arguments)]
+fn sp_conf3(mode: u32, k: u32, n: u32, rs: f64, cs: f64, jit: f64, tilt: f64) -> Sphere {
+    if mode >= 2 {
+        if k == 0 {
+            return Sphere { x: 0.0, y: 0.0, z: 0.0, r: 1.0 };
+        }
+        let (ct, st) = (tilt.cos(), tilt.sin());
+        let cth = ct * ct * (TAU / n as f64).cos() - st * st;
+        let sh2 = (0.5 * (1.0 - cth)).max(1e-6).sqrt();
+        let mut rt = sh2 / (1.0 + sh2);
+        if n >= 3 {
+            // Same-parity neighbours crowd toward the pole as tilt grows;
+            // cap the radius at their tangency too, or the mirrors overlap
+            // and the reflection group stops being discrete.
+            let cth2 = ct * ct * (2.0 * TAU / n as f64).cos() + st * st;
+            let shp = (0.5 * (1.0 - cth2)).max(1e-6).sqrt();
+            rt = rt.min(shp / (1.0 + shp));
+        }
+        if mode == 3 && k > n {
+            // Polar caps, sized to kiss the outer sphere and the ring.
+            let rn = rt * rs;
+            let dn = 1.0 - rn;
+            let rho = (dn * dn + 1.0 - rn * rn - 2.0 * dn * st)
+                / (2.0 * (1.0 + rn - dn * st).max(1e-4));
+            let cr = (rho * cs).max(1e-4);
+            let h = 1.0 - cr;
+            let sgn = if k == n + 2 { -1.0 } else { 1.0 };
+            return Sphere { x: 0.0, y: 0.0, z: sgn * h, r: cr };
+        }
+        let i = k - 1;
+        let r = rt * rs * (1.0 - jit * sp_hash01(i));
+        let d = 1.0 - r;
+        let a = TAU * i as f64 / n as f64;
+        let ph = if i % 2 == 1 { -tilt } else { tilt };
+        return Sphere {
+            x: d * a.cos() * ph.cos(),
+            y: d * a.sin() * ph.cos(),
+            z: d * ph.sin(),
+            r,
+        };
+    }
+    // Soddy tangent spheres: outer + tetrahedral inner.
+    match k {
+        0 => Sphere { x: 0.0, y: 0.0, z: 0.0, r: 1.0 },
+        1 => Sphere { x: 0.3178372, y: 0.3178372, z: 0.3178372, r: 0.4494897 },
+        2 => Sphere { x: 0.3178372, y: -0.3178372, z: -0.3178372, r: 0.4494897 },
+        3 => Sphere { x: -0.3178372, y: 0.3178372, z: -0.3178372, r: 0.4494897 },
+        _ => Sphere { x: -0.3178372, y: -0.3178372, z: 0.3178372, r: 0.4494897 },
+    }
+}
+
+/// Mirror sphere `k` (3D) - `sp_mirror3`: Soddy duals for mode 0.
+#[allow(clippy::too_many_arguments)]
+fn sp_mirror3(mode: u32, k: u32, n: u32, rs: f64, cs: f64, jit: f64, tilt: f64) -> Sphere {
+    if mode != 0 {
+        return sp_conf3(mode, k, n, rs, cs, jit, tilt);
+    }
+    match k {
+        0 => Sphere { x: 0.0, y: 0.0, z: 0.0, r: 0.3178372 },
+        1 => Sphere { x: -1.7320508, y: -1.7320508, z: -1.7320508, r: 2.8284271 },
+        2 => Sphere { x: -1.7320508, y: 1.7320508, z: 1.7320508, r: 2.8284271 },
+        3 => Sphere { x: 1.7320508, y: -1.7320508, z: 1.7320508, r: 2.8284271 },
+        _ => Sphere { x: 1.7320508, y: 1.7320508, z: -1.7320508, r: 2.8284271 },
+    }
+}
+
+/// Every mirror of a `sphere_packing`, in WORLD coordinates.
+///
+/// The variation works in `p / size` and scales back on the way out, so a
+/// mirror `(c, r)` there is `(size*c, size*r)` here - the form a
+/// decomposed transform needs.
+///
+/// Modes: 0 Apollonian (dual spheres), 1 Tangent Spheres, 2 Ring,
+/// 3 Ring + Caps (3D only; renders as Ring in 2D).
+#[allow(clippy::too_many_arguments)]
+pub fn sphere_packing_mirrors(
+    mode: u32,
+    size: f64,
+    ring_n: u32,
+    ring_scale: f64,
+    cap_scale: f64,
+    jitter: f64,
+    tilt_deg: f64,
+    three_d: bool,
+) -> Vec<Sphere> {
+    let n = ring_n.clamp(2, 16);
+    let tilt = tilt_deg * std::f64::consts::PI / 180.0;
+    let count = if three_d {
+        match mode {
+            2 => 1 + n,
+            3 => 3 + n,
+            _ => 5,
+        }
+    } else if mode >= 2 {
+        1 + n
+    } else {
+        4
+    };
+
+    (0..count)
+        .map(|k| {
+            let m = if three_d {
+                sp_mirror3(mode, k, n, ring_scale, cap_scale, jitter, tilt)
+            } else {
+                sp_mirror2(mode, k, n, ring_scale, jitter)
+            };
+            Sphere { x: m.x * size, y: m.y * size, z: m.z * size, r: m.r * size }
+        })
+        .collect()
+}
+
+/// Xaos row for "don't pick the same one twice in a row".
+///
+/// Like [`avoid_xaos_row`] but for a self-inverse generator: an inversion
+/// undoes itself, so the blocked index is the transform's own. The packed
+/// variation redraws into the NEXT mirror, so that one is twice as likely.
+pub fn repeat_xaos_row(from: usize, count: usize) -> Vec<f32> {
+    let mut row = vec![1.0f32; count];
+    if count > 1 {
+        row[from] = 0.0;
+        row[(from + 1) % count] += 1.0;
+    }
+    row
+}
+
 /// One row of the xaos matrix reproducing the packed "avoid" rule.
 ///
 /// The packed variation does not merely *forbid* the inverse — it draws
@@ -381,6 +583,93 @@ mod tests {
             (a[0] - b[0]).abs() + (a[1] - b[1]).abs() > 1e-3,
             "deform should move points"
         );
+    }
+
+
+    #[test]
+    fn inversion_fixes_its_own_sphere() {
+        // Defining property: points ON the mirror stay put, and inverting
+        // twice returns you where you started.
+        let s = Sphere { x: 0.3, y: -0.2, z: 0.5, r: 0.8 };
+        let third = 1.0 / 3.0f64.sqrt();
+        for (dx, dy, dz) in [(1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0), (third, third, third)] {
+            // The direction must be exactly unit length, or the point is
+            // not actually on the sphere and inversion legitimately moves it.
+            let p = [s.x + s.r * dx, s.y + s.r * dy, s.z + s.r * dz];
+            let q = s.invert(p);
+            for i in 0..3 {
+                approx(q[i], p[i], 1e-9, "a point on the mirror is fixed");
+            }
+        }
+        let p = [1.7, -0.4, 2.2];
+        let back = s.invert(s.invert(p));
+        for i in 0..3 {
+            approx(back[i], p[i], 1e-9, "inversion is an involution");
+        }
+        // Inside maps outside.
+        let inside = s.invert([s.x + 0.1, s.y, s.z]);
+        let d = ((inside[0] - s.x).powi(2) + (inside[1] - s.y).powi(2) + (inside[2] - s.z).powi(2)).sqrt();
+        assert!(d > s.r, "a point inside must land outside, got {d}");
+    }
+
+    #[test]
+    fn packing_mirrors_match_the_configuration() {
+        // Soddy 2D: outer circle plus three inner, and size scales all.
+        let m = sphere_packing_mirrors(1, 1.0, 6, 1.0, 1.0, 0.0, 0.0, false);
+        assert_eq!(m.len(), 4, "2D Soddy has 4 mirrors");
+        approx(m[0].r, 1.0, 1e-9, "outer circle is the unit circle");
+        for inner in &m[1..] {
+            approx(inner.r, 0.4641016, 1e-6, "inner Soddy radius");
+            // Inner circles kiss the outer one: |c| + r == 1.
+            let d = (inner.x * inner.x + inner.y * inner.y).sqrt();
+            approx(d + inner.r, 1.0, 1e-6, "inner circle kisses the outer");
+        }
+
+        // Size is a straight scale factor.
+        let big = sphere_packing_mirrors(1, 2.5, 6, 1.0, 1.0, 0.0, 0.0, false);
+        for (a, b) in m.iter().zip(big.iter()) {
+            approx(b.r, a.r * 2.5, 1e-9, "size scales radii");
+            approx(b.x, a.x * 2.5, 1e-9, "size scales centres");
+        }
+
+        // Ring mode: outer plus N, and neighbours are tangent at scale 1.
+        for n in [3u32, 5, 8] {
+            let ring = sphere_packing_mirrors(2, 1.0, n, 1.0, 1.0, 0.0, 0.0, false);
+            assert_eq!(ring.len() as u32, 1 + n, "ring has 1 + N mirrors");
+            let a = ring[1];
+            let b = ring[2];
+            let d = ((a.x - b.x).powi(2) + (a.y - b.y).powi(2)).sqrt();
+            approx(d, a.r + b.r, 1e-6, "adjacent ring circles are tangent");
+        }
+
+        // 3D Soddy: outer plus a tetrahedron of four.
+        let s3 = sphere_packing_mirrors(1, 1.0, 6, 1.0, 1.0, 0.0, 0.0, true);
+        assert_eq!(s3.len(), 5, "3D Soddy has 5 mirrors");
+        for inner in &s3[1..] {
+            let d = (inner.x * inner.x + inner.y * inner.y + inner.z * inner.z).sqrt();
+            approx(d + inner.r, 1.0, 1e-6, "inner sphere kisses the outer");
+        }
+
+        // Ring + Caps adds two polar spheres.
+        let caps = sphere_packing_mirrors(3, 1.0, 6, 1.0, 1.0, 0.0, 0.0, true);
+        assert_eq!(caps.len(), 9, "ring + caps = 1 + 6 + 2");
+        assert!(caps[7].z > 0.0 && caps[8].z < 0.0, "caps sit at opposite poles");
+    }
+
+    #[test]
+    fn repeat_rows_block_the_mirror_itself() {
+        // An inversion undoes itself, so the packing blocks REPEATS - a
+        // different rule from the Mobius groups, where the blocked index
+        // is the inverse two slots away.
+        for count in [4usize, 5, 9] {
+            for from in 0..count {
+                let row = repeat_xaos_row(from, count);
+                assert_eq!(row[from], 0.0, "count {count}, from {from}: no repeat");
+                assert_eq!(row[(from + 1) % count], 2.0, "successor doubled");
+                let total: f32 = row.iter().sum();
+                assert_eq!(total, count as f32, "weights still sum to the count");
+            }
+        }
     }
 
     #[test]
