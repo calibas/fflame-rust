@@ -252,8 +252,16 @@ impl HighResExporter {
         // Calculate workgroups to fill target buffer
         let workgroups = Self::TARGET_BUFFER_SIZE / bytes_per_workgroup;
 
-        // Clamp to reasonable range (min 128, max 65535 for GPU compatibility)
-        workgroups.clamp(128, 65535)
+        // Budget wins over occupancy. The old floor of 128 workgroups
+        // silently overrode the 128 MB target once a single workgroup's
+        // samples got big: at iterations_per_thread = 4096 it produced a
+        // 1 GB sample buffer, and the new 10000 cap would have meant
+        // 2.4 GB (times the multi-emit multiplier on emitting flames).
+        // Deep-trajectory settings mean each thread already carries
+        // plenty of work, so low workgroup counts are the correct trade
+        // — exports run slower at extreme depth, they don't OOM. Floor
+        // of 1 keeps a degenerate config renderable.
+        workgroups.clamp(1, 65535)
     }
 
     /// Sample-buffer CAPACITY per dispatch (not the iteration count —
