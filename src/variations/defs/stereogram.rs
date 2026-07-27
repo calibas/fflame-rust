@@ -31,8 +31,9 @@
 //! Panel discipline: each eye's content is band-clipped to its own panel
 //! (with a `gap` gutter) by projecting the candidate and simply not
 //! emitting out-of-band points — left-eye content can never bleed into
-//! the right panel. The main (center) plot is suppressed via `CanHide`;
-//! only the emitted panels appear.
+//! the right panel. The main (center) plot is suppressed via
+//! `emit_suppress_main` (NOT CanHide, which aborts the whole iteration
+//! on normal transforms); only the emitted panels appear.
 //!
 //! Requirements & limits (see docs/projects/multi-emit-stereograms.md):
 //! 3D render mode with `perspective_strength > 0` (orthographic has no
@@ -63,9 +64,9 @@ pub static STEREOGRAM: VariationDef = VariationDef {
     // degenerate) side-by-side duplicate, not a broken stub.
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    // CanHide: the center plot is suppressed; only the per-eye emissions
-    // appear. PlotEmits(3): two eyes, or three panels in Triptych mode.
-    features: &[Feature::CanHide, Feature::PlotEmits(3)],
+    // PlotEmits(3): two eyes, or three panels in Triptych mode. The
+    // center plot is suppressed via emit_suppress_main in the body.
+    features: &[Feature::PlotEmits(3)],
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
@@ -83,7 +84,7 @@ pub static STEREOGRAM: VariationDef = VariationDef {
 };
 
 const WGSL_2D: &str = r#"
-fn variation_stereogram(p: vec2<f32>, xform_id: u32, variation_id: u32, hide: ptr<function, bool>) -> vec2<f32> {
+fn variation_stereogram(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let view = u32(get_param(xform_id, variation_id, 2u));
     let panel_w = max(get_param(xform_id, variation_id, 3u), 1e-3);
     let gap = clamp(get_param(xform_id, variation_id, 4u), 0.0, 0.9);
@@ -91,7 +92,7 @@ fn variation_stereogram(p: vec2<f32>, xform_id: u32, variation_id: u32, hide: pt
 
     // 2D render mode: no depth, no disparity — a defined degenerate
     // (side-by-side duplicate) so the variation never renders garbage.
-    *hide = true;
+    emit_suppress_main();
     let band_half = 0.5 * panel_w * (1.0 - gap);
     let n = select(2u, 3u, view == 2u);
     for (var i = 0u; i < n; i = i + 1u) {
@@ -105,7 +106,7 @@ fn variation_stereogram(p: vec2<f32>, xform_id: u32, variation_id: u32, hide: pt
 "#;
 
 const WGSL_3D: &str = r#"
-fn variation_stereogram(p: vec3<f32>, xform_id: u32, variation_id: u32, hide: ptr<function, bool>) -> vec3<f32> {
+fn variation_stereogram(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let baseline = get_param(xform_id, variation_id, 0u);
     let z_conv = max(get_param(xform_id, variation_id, 1u), 1e-3);
     let view = u32(get_param(xform_id, variation_id, 2u));
@@ -114,7 +115,7 @@ fn variation_stereogram(p: vec3<f32>, xform_id: u32, variation_id: u32, hide: pt
     let eye_w = get_param(xform_id, variation_id, 5u);
 
     // Only the emitted panels plot; the center image is suppressed.
-    *hide = true;
+    emit_suppress_main();
 
     // World -> camera, with the SAME roll-less matrix project_3d_full
     // builds (see utilities.wgsl — the slot mapping is deliberate, roll

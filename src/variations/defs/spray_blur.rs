@@ -15,12 +15,22 @@
 //! squashes the kernel into an ellipse and `angle` orients it, so
 //! directional bokeh and diagonal motion smears are one slider away.
 //!
-//! The un-blurred center plot is suppressed (`CanHide`), so Brightness
-//! 1 is exactly mono-equivalent total density. Intended for a final
-//! transform (emissions skip later Final chains by design); legal
-//! anywhere. Deliberately NOT flagged `AnalyticBlur`: the analytic
-//! mean-splat models a single-sample contract, and the flame-wide
-//! analytic gate already excludes multi-emitters.
+//! The un-blurred center plot is suppressed (`emit_suppress_main`), so
+//! Brightness 1 is exactly mono-equivalent total density.
+//!
+//! Works on ANY transform, not just finals: emissions are OFFSETS
+//! (`emit_plot_offset`), which the plot stage adds to the iteration's
+//! final plotted position — after the transform's post-affine and the
+//! whole Final chain — so the copies always center on what actually
+//! plots. On a normal transform the variation returns `p` (identity
+//! contribution at its weight): the trajectory continues un-blurred, a
+//! non-destructive display blur. Note when SHARING a transform with
+//! other variations, that identity return blends `weight × p` into the
+//! output like an extra `linear` — keep spray solo on its transform (or
+//! on a final) for a pure blur. Deliberately NOT flagged
+//! `AnalyticBlur`: the analytic mean-splat models a single-sample
+//! contract, and the flame-wide analytic gate already excludes
+//! multi-emitters.
 
 use crate::variations::{
     definition::{Feature, VariationDef, VariationParamDef},
@@ -42,13 +52,13 @@ pub static SPRAY_BLUR: VariationDef = VariationDef {
     display_name: "Spray Blur",
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
-    features: &[Feature::CanHide, Feature::PlotEmits(16), Feature::NeedsRng],
+    features: &[Feature::PlotEmits(16), Feature::NeedsRng],
     init_param_count: 0,
     wgsl_init: None,
     state_count: 0,
     wgsl_state_init: None,
     parameters: &[
-        param!("count", "Count", int, 8.0, 1.0, 16.0, "Jittered copies plotted per iteration. The blur fills in Count× faster than a one-sample stochastic blur at the same total density (each copy carries weight Brightness/Count)."),
+        param!("count", "Count", int, 8.0, 1.0, 16.0, "Jittered copies plotted per iteration. The blur fills in Count× faster than a one-sample stochastic blur at the same total density (each copy carries weight Brightness/Count). Works on normal transforms too: copies center on the final plotted position (post-affine and Final chains included), and the trajectory itself continues un-blurred."),
         param!("radius", "Radius", float, 0.15, 0.0, 2.0, "Kernel size in world units: Gaussian scale, Disc/Ring radius, Streak half-length."),
         param!("shape", "Shape", enum, 0, &["Gaussian", "Disc", "Ring", "Streak"], "Jitter kernel. Gaussian: soft falloff (the classic gaussian_blur distribution). Disc: uniform fill — flat bokeh. Ring: exact circle — bokeh rings / neon doubling. Streak: uniform line segment along Angle — motion blur."),
         param!("angle", "Angle", angle, 0.0, "Kernel orientation: the Streak direction, and the major-axis direction of an elliptical (Aspect ≠ 1) Gaussian/Disc/Ring."),
@@ -80,7 +90,7 @@ fn spray_blur_offset(shape: u32, radius: f32, rng: ptr<function, RngState>) -> v
     return vec2<f32>(radius * (rng_nextf(rng) * 2.0 - 1.0), 0.0);
 }
 
-fn variation_spray_blur(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, hide: ptr<function, bool>) -> vec2<f32> {
+fn variation_spray_blur(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let count = clamp(u32(get_param(xform_id, variation_id, 0u)), 1u, 16u);
     let radius = get_param(xform_id, variation_id, 1u);
     let shape = u32(get_param(xform_id, variation_id, 2u));
@@ -88,7 +98,7 @@ fn variation_spray_blur(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr
     let aspect = get_param(xform_id, variation_id, 4u);
     let brightness = get_param(xform_id, variation_id, 5u);
 
-    *hide = true;
+    emit_suppress_main();
     let w = brightness / f32(count);
     let ca = cos(angle);
     let sa = sin(angle);
@@ -96,7 +106,11 @@ fn variation_spray_blur(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr
         var o = spray_blur_offset(shape, radius, rng);
         o = vec2<f32>(o.x, o.y * aspect);
         o = vec2<f32>(ca * o.x - sa * o.y, sa * o.x + ca * o.y);
-        emit_plot_weighted(p + o, w);
+        // OFFSET emission: the plot stage adds this to the iteration's
+        // final plotted position, so the blur centers on the true
+        // end-of-chain point — post-affine and Final chain included —
+        // from ANY transform, normal or final.
+        emit_plot_offset(o, w);
     }
     return p;
 }
@@ -121,7 +135,7 @@ fn spray_blur_offset(shape: u32, radius: f32, rng: ptr<function, RngState>) -> v
     return vec2<f32>(radius * (rng_nextf(rng) * 2.0 - 1.0), 0.0);
 }
 
-fn variation_spray_blur(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, hide: ptr<function, bool>) -> vec3<f32> {
+fn variation_spray_blur(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let count = clamp(u32(get_param(xform_id, variation_id, 0u)), 1u, 16u);
     let radius = get_param(xform_id, variation_id, 1u);
     let shape = u32(get_param(xform_id, variation_id, 2u));
@@ -131,7 +145,7 @@ fn variation_spray_blur(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
 
     // Jitter in the xy plane; z rides along (a screen-plane blur —
     // depth effects then act on each copy's true z as usual).
-    *hide = true;
+    emit_suppress_main();
     let w = brightness / f32(count);
     let ca = cos(angle);
     let sa = sin(angle);
@@ -139,7 +153,9 @@ fn variation_spray_blur(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
         var o = spray_blur_offset(shape, radius, rng);
         o = vec2<f32>(o.x, o.y * aspect);
         o = vec2<f32>(ca * o.x - sa * o.y, sa * o.x + ca * o.y);
-        emit_plot_weighted(vec3<f32>(p.xy + o, p.z), w);
+        // OFFSET emission (see the 2D body); z-offset 0 keeps the blur
+        // in the screen plane at the point's own depth.
+        emit_plot_offset(vec3<f32>(o, 0.0), w);
     }
     return p;
 }
