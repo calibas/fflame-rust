@@ -77,6 +77,9 @@ pub fn generate_mode(
                 ParamDecl::Bool { key, default, .. } => {
                     println!("  {key}: true/false = {default}")
                 }
+                ParamDecl::Text { key, default, .. } => {
+                    println!("  {key}: text = \"{default}\"")
+                }
                 ParamDecl::Choice { key, options, default, .. } => println!(
                     "  {key}: one of [{}] = {}",
                     options.join(", "),
@@ -185,6 +188,7 @@ fn resolve_sets(
                     _ => return Err(format!("`{key}` expects true/false, got `{value}`")),
                 },
             ),
+            ParamDecl::Text { .. } => ParamValue::Text(value.to_string()),
             ParamDecl::Choice { options, .. } => {
                 // Accept the option's name or its index.
                 let idx = options

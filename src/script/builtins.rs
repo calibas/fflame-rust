@@ -551,6 +551,86 @@ pub fn turtle(expanded: &str, angle_deg: f64) -> Vec<Segment> {
     out
 }
 
+/// Find a symbol whose rule is the MIRROR IMAGE of another's.
+///
+/// Curves like the Sierpinski arrowhead are built from a pair that swap
+/// roles with every turn reversed (`F -> +G-F-G+`, `G -> -F+G+F-`). Both
+/// symbols draw segments with identical endpoints, so a transform built
+/// from endpoints alone loses the chirality and the attractor comes out
+/// as the wrong curve. Detecting the pair lets the caller reflect the
+/// mirrored pieces without the user having to know any of this.
+///
+/// Returns the partner of `primary` — the one whose pieces need
+/// reflecting — or `None` when no rule mirrors it.
+pub fn mirror_partner(rules: &[(char, String)], primary: char) -> Option<char> {
+    let primary_rule = rules.iter().find(|(k, _)| *k == primary)?;
+    for (other, other_rule) in rules {
+        if *other == primary {
+            continue;
+        }
+        // Mirror the primary's rule: reverse every turn and swap the two
+        // symbols. If that is exactly the other rule, they are a pair.
+        let mirrored: String = primary_rule
+            .1
+            .chars()
+            .map(|c| match c {
+                '+' => '-',
+                '-' => '+',
+                c if c == primary => *other,
+                c if c == *other => primary,
+                c => c,
+            })
+            .collect();
+        if mirrored == *other_rule {
+            return Some(*other);
+        }
+    }
+    None
+}
+
+/// Bounding box of an L-system curve, normalised onto the unit segment.
+///
+/// Framing needs the extent of the CURVE, not of the depth-1 pieces — the
+/// dragon folds well outside its two starting edges. But a deep expansion
+/// is large (Hilbert quadruples its non-terminals every generation), and
+/// handing that to a script as an array of arrays blows the interpreter's
+/// array limit. So walk it here and return four numbers.
+///
+/// `max_segments` bounds the work: the depth steps down until the walk
+/// fits, since a rough box from a shallower expansion beats an error.
+/// Returns `(min_x, min_y, max_x, max_y, depth_used)`.
+pub fn lsystem_bounds(
+    axiom: &str,
+    rules: &[(char, String)],
+    depth: u32,
+    angle_deg: f64,
+    max_segments: usize,
+) -> Option<(f64, f64, f64, f64, u32)> {
+    for d in (0..=depth).rev() {
+        let Ok(expanded) = lsystem_expand(axiom, rules, d) else {
+            continue;
+        };
+        let segs = turtle(&expanded, angle_deg);
+        if segs.len() > max_segments {
+            continue;
+        }
+        let Some(norm) = normalize_segments(&segs) else {
+            continue;
+        };
+        let mut b = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+        for s in &norm {
+            b.0 = b.0.min(s.x1).min(s.x2);
+            b.1 = b.1.min(s.y1).min(s.y2);
+            b.2 = b.2.max(s.x1).max(s.x2);
+            b.3 = b.3.max(s.y1).max(s.y2);
+        }
+        if b.0 <= b.2 {
+            return Some((b.0, b.1, b.2, b.3, d));
+        }
+    }
+    None
+}
+
 /// Rescale and rotate a path so its overall displacement is the unit
 /// segment from (0, 0) to (1, 0).
 ///
@@ -1169,6 +1249,44 @@ mod tests {
         let n = normalize_segments(&segs).unwrap();
         assert_eq!(n[0].symbol, 'F');
         assert_eq!(n[1].symbol, 'G');
+    }
+
+    #[test]
+    fn mirror_pairs_are_detected() {
+        // Sierpinski arrowhead: each rule is the other with every turn
+        // reversed and the symbols swapped.
+        let rules = vec![
+            ('F', "+G-F-G+".to_string()),
+            ('G', "-F+G+F-".to_string()),
+        ];
+        assert_eq!(mirror_partner(&rules, 'F'), Some('G'));
+        assert_eq!(mirror_partner(&rules, 'G'), Some('F'));
+
+        // Koch has one rule and no partner.
+        let koch = vec![('F', "F+F--F+F".to_string())];
+        assert_eq!(mirror_partner(&koch, 'F'), None);
+
+        // Two rules that are NOT mirrors of each other (the dragon).
+        let dragon = vec![('F', "F+G".to_string()), ('G', "F-G".to_string())];
+        assert_eq!(mirror_partner(&dragon, 'F'), None, "dragon is not a mirror pair");
+    }
+
+    #[test]
+    fn bounds_step_down_when_the_expansion_is_huge() {
+        // Hilbert quadruples its non-terminals each generation, so a deep
+        // expansion is enormous. Rather than failing, the bounds walk
+        // steps down to a depth that fits the budget.
+        let hilbert = vec![
+            ('G', "+DFFF-GFFFG-FFFD+".to_string()),
+            ('D', "-GFFF+DFFFD+FFFG-".to_string()),
+        ];
+        let (_, _, _, _, used) = lsystem_bounds("G", &hilbert, 8, 90.0, 2_000).expect("bounded");
+        assert!(used < 8, "should have stepped down from 8, used {used}");
+
+        // A small system uses the depth it was asked for.
+        let koch = vec![('F', "F+F--F+F".to_string())];
+        let (_, _, _, _, used) = lsystem_bounds("F", &koch, 4, 60.0, 400_000).unwrap();
+        assert_eq!(used, 4, "no need to step down");
     }
 
     #[test]

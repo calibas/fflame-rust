@@ -85,6 +85,7 @@ impl ScriptState {
             ParamDecl::Int { default, .. } => ParamValue::Int(*default),
             ParamDecl::Bool { default, .. } => ParamValue::Bool(*default),
             ParamDecl::Choice { default, .. } => ParamValue::Choice(*default),
+            ParamDecl::Text { default, .. } => ParamValue::Text(default.clone()),
         };
         self.meta.params.push(decl);
         if self.mode == Mode::Collect {

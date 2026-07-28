@@ -1068,55 +1068,70 @@ fn decomposition_sets_preserve_z_only_where_needed() {
 }
 
 #[test]
-fn lsystem_script_builds_a_contractive_ifs() {
-    // The L-system script rests on the classical equivalence: ONE
-    // generation of an edge-rewriting rule, shrunk onto the edge it
-    // replaced, is an IFS whose attractor is the curve. Each preset must
-    // therefore come out as the right number of pieces, all contracting.
+fn lsystem_script_reads_rules_from_parameters() {
+    // Rules are typed in as text now, so a user can paste one from any
+    // reference without touching the script.
     let host = ScriptHost::new();
     let source = include_str!("../../assets/scripts/generators/lsystem.rhai");
-
-    // (preset index, pieces, per-piece scale)
-    let cases = [(0usize, 4usize, 1.0 / 3.0), (2, 2, 0.5f64.sqrt()), (3, 3, 0.5)];
-    for (choice, pieces, scale) in cases {
-        let out = host
-            .run(
-                source,
-                &FractalConfig::default(),
-                1,
-                [("curve".to_string(), ParamValue::Choice(choice))]
-                    .into_iter()
-                    .collect(),
-            )
-            .unwrap_or_else(|e| panic!("preset {choice} failed: {e}"));
-        let flame = &out.config.flame;
-        assert_eq!(flame.transforms.len(), pieces, "preset {choice}: piece count");
-
-        for (i, t) in flame.transforms.iter().enumerate() {
-            // set_segment builds a similarity: [a b; c d] = [dx -dy; dy dx],
-            // so its scale is hypot(dx, dy).
-            let got = ((t.a as f64).powi(2) + (t.c as f64).powi(2)).sqrt();
-            assert!(
-                (got - scale).abs() < 1e-5,
-                "preset {choice} piece {i}: scale {got} should be {scale}"
-            );
-            assert!(got < 1.0, "preset {choice} piece {i} must contract");
-            assert!(t.variations.contains_key("linear"), "pieces are pure affines");
-        }
-
-        // The reported contractiveness must agree with the geometry:
-        // equal-weight pieces of the same scale give exactly ln(scale).
-        let reported: f64 = out.messages
+    let run_with = |sets: &[(&str, &str)]| {
+        let params: HashMap<String, ParamValue> = sets
             .iter()
-            .find(|m| m.starts_with("contractiveness: "))
-            .and_then(|m| m.trim_start_matches("contractiveness: ").parse().ok())
-            .expect("script reports contractiveness");
-        assert!(
-            (reported - scale.ln()).abs() < 1e-6,
-            "preset {choice}: contractiveness {reported} should be ln({scale}) = {}",
-            scale.ln()
-        );
-    }
+            .map(|(k, v)| (k.to_string(), ParamValue::Text(v.to_string())))
+            .collect();
+        host.run(source, &FractalConfig::default(), 1, params).unwrap()
+    };
+
+    // Default is Koch: four pieces at one third.
+    let out = run_with(&[]);
+    assert_eq!(out.config.flame.transforms.len(), 4);
+
+    // The dragon, typed in as two rules.
+    let out = run_with(&[("rule_1", "F=F+G"), ("rule_2", "G=F-G")]);
+    assert_eq!(out.config.flame.transforms.len(), 2, "dragon has two pieces");
+
+    // A malformed rule is reported, not guessed at.
+    let out = run_with(&[("rule_1", "nonsense")]);
+    assert!(
+        out.messages.iter().any(|m| m.contains("Could not read this rule")),
+        "{:?}",
+        out.messages
+    );
+    assert!(out.config.flame.transforms.is_empty(), "and nothing is built");
+
+    // A rule whose symbols never draw is reported too.
+    let out = run_with(&[("axiom", "X"), ("rule_1", "X=X+X")]);
+    assert!(
+        out.messages.iter().any(|m| m.contains("at least 2 are needed")),
+        "{:?}",
+        out.messages
+    );
+}
+
+#[test]
+fn lsystem_warns_when_the_pieces_do_not_shrink() {
+    // Space-filling rules (Hilbert, Peano) rewrite NODES: one generation
+    // replaces an edge with pieces the same length, so the IFS has
+    // nothing to converge to. Report that plainly instead of emitting a
+    // flame that quietly is not the curve asked for.
+    let host = ScriptHost::new();
+    let source = include_str!("../../assets/scripts/generators/lsystem.rhai");
+    let params: HashMap<String, ParamValue> = [
+        ("axiom", "X"),
+        ("rule_1", "X=-YF+XFX+FY-"),
+        ("rule_2", "Y=+XF-YFY-FX+"),
+    ]
+    .iter()
+    .map(|(k, v)| (k.to_string(), ParamValue::Text(v.to_string())))
+    .collect();
+    let mut params = params;
+    params.insert("angle".to_string(), ParamValue::Float(90.0));
+
+    let out = host.run(source, &FractalConfig::default(), 1, params).unwrap();
+    assert!(
+        out.messages.iter().any(|m| m.contains("do not shrink")),
+        "expected the non-contractive warning: {:?}",
+        out.messages
+    );
 }
 
 #[test]
@@ -1144,16 +1159,24 @@ fn mirrored_pieces_get_a_reflected_transform() {
     // must get a REFLECTED similarity, which flips the determinant sign.
     let host = ScriptHost::new();
     let source = include_str!("../../assets/scripts/generators/lsystem.rhai");
-    let out = host
-        .run(
-            source,
-            &FractalConfig::default(),
-            1,
-            [("curve".to_string(), ParamValue::Choice(3))].into_iter().collect(),
-        )
-        .unwrap();
+    let params: HashMap<String, ParamValue> = [
+        ("rule_1", "F=+G-F-G+"),
+        ("rule_2", "G=-F+G+F-"),
+    ]
+    .iter()
+    .map(|(k, v)| (k.to_string(), ParamValue::Text(v.to_string())))
+    .collect();
+    let out = host.run(source, &FractalConfig::default(), 1, params).unwrap();
     let ts = &out.config.flame.transforms;
     assert_eq!(ts.len(), 3, "arrowhead replaces one edge with three");
+
+    // The mirror pair is DETECTED, not configured — the user never has to
+    // know the pieces drawn by G need reflecting.
+    assert!(
+        out.messages.iter().any(|m| m.contains("Mirror pair found")),
+        "{:?}",
+        out.messages
+    );
 
     // Pieces 0 and 2 are drawn by G (the mirrored symbol), piece 1 by F.
     let det = |t: &crate::scene::transforms::Transform| {

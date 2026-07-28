@@ -234,6 +234,24 @@ fn register_meta(engine: &mut Engine, state: Rc<RefCell<ScriptState>>) {
         },
     );
 
+    let s = Rc::clone(&state);
+    engine.register_fn(
+        "param_string",
+        move |key: &str, default: &str| -> Result<String, Box<EvalAltResult>> {
+            const MAX_LEN: usize = 2048;
+            let decl = ParamDecl::Text {
+                key: key.to_string(),
+                label: humanize(key),
+                default: default.to_string(),
+                max_len: MAX_LEN,
+            };
+            match s.borrow_mut().declare(decl).map_err(err)? {
+                ParamValue::Text(v) => Ok(v.chars().take(MAX_LEN).collect()),
+                other => Err(err(format!("param `{key}`: expected text, got {other:?}"))),
+            }
+        },
+    );
+
     // Returns the chosen option as a string, so scripts branch readably:
     //     if param_choice("style", ["A", "B"], 0) == "A" { … }
     let s = Rc::clone(&state);
@@ -1248,6 +1266,60 @@ fn register_builtins(engine: &mut Engine) {
             Ok(crate::script::builtins::turtle(expanded, angle)
                 .iter()
                 .map(|s| Dynamic::from(segment_to_array(s)))
+                .collect())
+        },
+    );
+
+    // The symbol whose rule mirrors the given one, or "" if there is no
+    // such pair. Pieces it draws need a reflected transform.
+    engine.register_fn(
+        "lsystem_mirror_symbol",
+        |rules: rhai::Map, primary: &str| -> String {
+            let mut parsed: Vec<(char, String)> = Vec::new();
+            for (key, value) in rules.iter() {
+                if let Some(sym) = key.chars().next() {
+                    parsed.push((sym, value.clone().into_string().unwrap_or_default()));
+                }
+            }
+            parsed.sort_by_key(|(k, _)| *k);
+            primary
+                .chars()
+                .next()
+                .and_then(|p| crate::script::builtins::mirror_partner(&parsed, p))
+                .map(|c| c.to_string())
+                .unwrap_or_default()
+        },
+    );
+
+    // lsystem_bounds(axiom, rules, depth, angle)
+    //   -> [min_x, min_y, max_x, max_y, depth_actually_used]
+    engine.register_fn(
+        "lsystem_bounds",
+        |axiom: &str, rules: rhai::Map, depth: i64, angle: Dynamic| -> Result<Array, Box<EvalAltResult>> {
+            let angle = num(&angle, "turtle angle")?;
+            let mut parsed: Vec<(char, String)> = Vec::new();
+            for (key, value) in rules.iter() {
+                if let Some(sym) = key.chars().next() {
+                    parsed.push((sym, value.clone().into_string().unwrap_or_default()));
+                }
+            }
+            parsed.sort_by_key(|(k, _)| *k);
+            // Well inside the engine's array limit, since this walk stays
+            // in Rust and never becomes a script value.
+            const MAX_SEGMENTS: usize = 400_000;
+            let (x0, y0, x1, y1, used) = crate::script::builtins::lsystem_bounds(
+                axiom,
+                &parsed,
+                depth.clamp(0, 32) as u32,
+                angle,
+                MAX_SEGMENTS,
+            )
+            .ok_or_else(|| {
+                err("could not measure this curve — it may return to its start, so it has no unit-segment form")
+            })?;
+            Ok([x0, y0, x1, y1, used as f64]
+                .iter()
+                .map(|v| Dynamic::from(*v))
                 .collect())
         },
     );

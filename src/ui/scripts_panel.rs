@@ -282,6 +282,23 @@ impl ScriptsPanel {
                         self.values.insert(key, ParamValue::Bool(v));
                     }
                 }
+                ParamDecl::Text { label, default, max_len, .. } => {
+                    let mut v = match self.values.get(&key) {
+                        Some(ParamValue::Text(v)) => v.clone(),
+                        _ => default.clone(),
+                    };
+                    ui.horizontal(|ui| {
+                        ui.label(label.clone());
+                        let r = ui.add(
+                            egui::TextEdit::singleline(&mut v)
+                                .char_limit(*max_len)
+                                .desired_width(f32::INFINITY),
+                        );
+                        if r.changed() {
+                            self.values.insert(key.clone(), ParamValue::Text(v.clone()));
+                        }
+                    });
+                }
                 ParamDecl::Choice { label, options, default, .. } => {
                     let mut idx = match self.values.get(&key) {
                         Some(ParamValue::Choice(i)) => *i,
