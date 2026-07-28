@@ -588,6 +588,159 @@ pub fn mirror_partner(rules: &[(char, String)], primary: char) -> Option<char> {
     None
 }
 
+/// Turtle state for the node-rewriting walk.
+#[derive(Clone, Copy)]
+struct LTurtle {
+    x: f64,
+    y: f64,
+    h: f64,
+}
+
+fn lsys_step(ch: char, angle: f64, st: &mut LTurtle, stack: &mut Vec<LTurtle>) {
+    match ch {
+        // Position-wise, drawing and moving are the same walk.
+        'F' | 'G' | 'A' | 'B' | 'f' | 'g' => {
+            st.x += st.h.cos();
+            st.y += st.h.sin();
+        }
+        '+' => st.h += angle,
+        '-' => st.h -= angle,
+        '|' => st.h += std::f64::consts::PI,
+        '[' => stack.push(*st),
+        ']' => {
+            if let Some(s) = stack.pop() {
+                *st = s;
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The IFS of a NODE-rewriting L-system (Hilbert, Peano — space-fillers).
+///
+/// Edge-rewriting curves decompose by their drawn depth-1 segments. A
+/// node-rewriting curve cannot: its drawn pieces are unit steps, nothing
+/// shrinks, and the depth-1 construction has nothing to converge to. Its
+/// self-similarity lives at the VARIABLE occurrences instead — one
+/// generation places a copy of the whole curve at every occurrence of a
+/// variable in the rule, joined by edges that become measure-zero in the
+/// limit.
+///
+/// Each occurrence therefore yields one map: the similarity carrying the
+/// whole curve's span onto that occurrence's sub-curve span, mirrored
+/// when the occurrence is the primary symbol's mirror partner. The spans
+/// are measured by walking a DEEP expansion (their positions converge
+/// like scaleᵈᵉᵖᵗʰ, so depth 7 puts the error near 1e-2 of a piece),
+/// with the depth stepping down until the expansion fits the budget.
+///
+/// Returned segments are in the same unit-displacement frame
+/// `normalize_segments` uses, so `set_segment` consumes them directly;
+/// `symbol` is the occurrence's variable, letting the caller apply the
+/// mirror exactly as it does for edge systems.
+///
+/// Requirements, reported rather than guessed around:
+/// * the axiom is a single non-drawing variable with a rule;
+/// * every variable in that rule is the axiom symbol or its mirror
+///   partner — anything else is a graph-directed IFS with two genuinely
+///   different sub-curves, which a flat set of transforms cannot express.
+pub fn lsystem_node_segments(
+    axiom: &str,
+    rules: &[(char, String)],
+    angle_deg: f64,
+) -> Result<Vec<Segment>, String> {
+    let angle = angle_deg * std::f64::consts::PI / 180.0;
+
+    let trimmed = axiom.trim();
+    let mut it = trimmed.chars();
+    let primary = match (it.next(), it.next()) {
+        (Some(p), None) => p,
+        _ => return Err("the axiom must be a single symbol (like X) for this construction".into()),
+    };
+    if matches!(primary, 'F' | 'G' | 'A' | 'B' | 'f' | 'g' | '+' | '-' | '|' | '[' | ']') {
+        return Err(format!(
+            "the axiom `{primary}` draws or moves, so this is an edge-rewriting system"
+        ));
+    }
+    let rule = rules
+        .iter()
+        .find(|(k, _)| *k == primary)
+        .map(|(_, r)| r.clone())
+        .ok_or_else(|| format!("the axiom `{primary}` has no rule"))?;
+    let partner = mirror_partner(rules, primary);
+
+    let is_var = |c: char| {
+        rules.iter().any(|(k, _)| *k == c) && !matches!(c, 'F' | 'G' | 'A' | 'B' | 'f' | 'g')
+    };
+
+    let mut occurrences = 0usize;
+    for ch in rule.chars() {
+        if is_var(ch) {
+            occurrences += 1;
+            if ch != primary && Some(ch) != partner {
+                return Err(format!(
+                    "the rule uses `{ch}`, which is neither `{primary}` nor its mirror image — \
+                     two genuinely different sub-curves make a graph-directed IFS, which a flat \
+                     set of transforms cannot express"
+                ));
+            }
+        }
+    }
+    if occurrences < 2 {
+        return Err("fewer than two variable occurrences — nothing to make copies of".into());
+    }
+
+    // A deep expansion pins the sub-curve spans; step the depth down until
+    // both expansions fit the budget.
+    const CHAR_BUDGET: usize = 400_000;
+    let mut depth = 9u32;
+    let (exp_primary, exp_partner) = loop {
+        let ep = lsystem_expand(&primary.to_string(), rules, depth);
+        let pp = match partner {
+            Some(p) => lsystem_expand(&p.to_string(), rules, depth),
+            None => Ok(String::new()),
+        };
+        match (ep, pp) {
+            (Ok(a), Ok(b)) if a.len() + b.len() <= CHAR_BUDGET => break (a, b),
+            _ if depth == 0 => return Err("could not expand this system at any depth".into()),
+            _ => depth -= 1,
+        }
+    };
+
+    let mut st = LTurtle { x: 0.0, y: 0.0, h: 0.0 };
+    let mut stack: Vec<LTurtle> = Vec::new();
+    let mut chunks: Vec<(f64, f64, f64, f64, char)> = Vec::new();
+    for ch in rule.chars() {
+        if is_var(ch) {
+            let (sx, sy) = (st.x, st.y);
+            let body = if ch == primary { &exp_primary } else { &exp_partner };
+            for bc in body.chars() {
+                lsys_step(bc, angle, &mut st, &mut stack);
+            }
+            chunks.push((sx, sy, st.x, st.y, ch));
+        } else {
+            lsys_step(ch, angle, &mut st, &mut stack);
+        }
+    }
+
+    // Normalize into the unit-displacement frame (walk started at the origin).
+    let (dx, dy) = (st.x, st.y);
+    let len2 = dx * dx + dy * dy;
+    if len2 < 1e-9 {
+        return Err(
+            "this curve returns to where it started, so it has no unit-segment frame".into(),
+        );
+    }
+    let map = |px: f64, py: f64| ((px * dx + py * dy) / len2, (py * dx - px * dy) / len2);
+    Ok(chunks
+        .iter()
+        .map(|(x1, y1, x2, y2, sym)| {
+            let (ax, ay) = map(*x1, *y1);
+            let (bx, by) = map(*x2, *y2);
+            Segment { x1: ax, y1: ay, x2: bx, y2: by, depth: 0, symbol: *sym }
+        })
+        .collect())
+}
+
 /// Bounding box of an L-system curve, normalised onto the unit segment.
 ///
 /// Framing needs the extent of the CURVE, not of the depth-1 pieces — the
@@ -1287,6 +1440,71 @@ mod tests {
         let koch = vec![('F', "F+F--F+F".to_string())];
         let (_, _, _, _, used) = lsystem_bounds("F", &koch, 4, 60.0, 400_000).unwrap();
         assert_eq!(used, 4, "no need to step down");
+    }
+
+
+    #[test]
+    fn hilbert_yields_four_half_scale_maps() {
+        // The known IFS of the Hilbert curve: four maps at scale 1/2, the
+        // first and last mirrored (they are Y occurrences, and Y is X's
+        // mirror partner). The spans are measured on a finite expansion,
+        // so the tolerance is loose-ish — but 1/2 is unambiguous.
+        let rules = vec![
+            ('X', "-YF+XFX+FY-".to_string()),
+            ('Y', "+XF-YFY-FX+".to_string()),
+        ];
+        let segs = lsystem_node_segments("X", &rules, 90.0).expect("hilbert extracts");
+        assert_eq!(segs.len(), 4, "four variable occurrences");
+
+        let symbols: Vec<char> = segs.iter().map(|s| s.symbol).collect();
+        assert_eq!(symbols, vec!['Y', 'X', 'X', 'Y'], "occurrence order preserved");
+
+        for (i, s) in segs.iter().enumerate() {
+            let len = ((s.x2 - s.x1).powi(2) + (s.y2 - s.y1).powi(2)).sqrt();
+            assert!(
+                (len - 0.5).abs() < 0.02,
+                "map {i} scale {len} should be about one half"
+            );
+        }
+    }
+
+    #[test]
+    fn peano_yields_nine_third_scale_maps() {
+        let rules = vec![
+            ('X', "XFYFX+F+YFXFY-F-XFYFX".to_string()),
+            ('Y', "YFXFY-F-XFYFX+F+YFXFY".to_string()),
+        ];
+        let segs = lsystem_node_segments("X", &rules, 90.0).expect("peano extracts");
+        assert_eq!(segs.len(), 9, "nine variable occurrences");
+        for (i, s) in segs.iter().enumerate() {
+            let len = ((s.x2 - s.x1).powi(2) + (s.y2 - s.y1).powi(2)).sqrt();
+            assert!(
+                (len - 1.0 / 3.0).abs() < 0.02,
+                "map {i} scale {len} should be about one third"
+            );
+        }
+    }
+
+    #[test]
+    fn node_extraction_reports_what_it_cannot_do() {
+        // A drawing axiom is an edge system, not a node one.
+        let koch = vec![('F', "F+F--F+F".to_string())];
+        let err = lsystem_node_segments("F", &koch, 60.0).unwrap_err();
+        assert!(err.contains("edge-rewriting"), "{err}");
+
+        // A third, non-mirror variable is a graph-directed IFS.
+        let tri = vec![
+            ('X', "YFZF".to_string()),
+            ('Y', "XFX".to_string()),
+            ('Z', "XFY".to_string()),
+        ];
+        let err = lsystem_node_segments("X", &tri, 90.0).unwrap_err();
+        assert!(err.contains("graph-directed"), "{err}");
+
+        // No F anywhere: the walk never moves.
+        let still = vec![('X', "X+X".to_string())];
+        let err = lsystem_node_segments("X", &still, 90.0).unwrap_err();
+        assert!(err.contains("returns to where it started"), "{err}");
     }
 
     #[test]
