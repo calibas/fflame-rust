@@ -1109,21 +1109,18 @@ fn lsystem_script_reads_rules_from_parameters() {
 
 #[test]
 fn lsystem_warns_when_the_pieces_do_not_shrink() {
-    // Space-filling rules (Hilbert, Peano) rewrite NODES: one generation
-    // replaces an edge with pieces the same length, so the IFS has
-    // nothing to converge to. Report that plainly instead of emitting a
-    // flame that quietly is not the curve asked for.
+    // A rule whose drawn pieces are unit steps with net displacement one
+    // step long: F=F+F+F- at 90 degrees walks east, north, west — a net
+    // displacement of one, so nothing shrinks and neither construction
+    // applies (the axiom draws, so node mode declines). Report it plainly
+    // instead of emitting a flame that quietly is not a curve.
     let host = ScriptHost::new();
     let source = include_str!("../../assets/scripts/generators/lsystem.rhai");
-    let params: HashMap<String, ParamValue> = [
-        ("axiom", "X"),
-        ("rule_1", "X=-YF+XFX+FY-"),
-        ("rule_2", "Y=+XF-YFY-FX+"),
-    ]
-    .iter()
-    .map(|(k, v)| (k.to_string(), ParamValue::Text(v.to_string())))
-    .collect();
-    let mut params = params;
+    let mut params: HashMap<String, ParamValue> =
+        [("rule_1", "F=F+F+F-")]
+            .iter()
+            .map(|(k, v)| (k.to_string(), ParamValue::Text(v.to_string())))
+            .collect();
     params.insert("angle".to_string(), ParamValue::Float(90.0));
 
     let out = host.run(source, &FractalConfig::default(), 1, params).unwrap();
@@ -1132,6 +1129,53 @@ fn lsystem_warns_when_the_pieces_do_not_shrink() {
         "expected the non-contractive warning: {:?}",
         out.messages
     );
+}
+
+#[test]
+fn space_filling_rules_build_by_node_rewriting() {
+    // The classic Hilbert L-system rewrites NODES, so its drawn depth-1
+    // pieces are unit steps and the edge construction has nothing to
+    // converge to. The node construction takes over: one map per variable
+    // occurrence, each carrying the whole curve onto a sub-cell. Hilbert's
+    // known IFS is four maps at scale one half, the first and last
+    // mirrored (they are Y occurrences, X's mirror partner). The attractor
+    // is the FILLED square — that is what space-filling means.
+    let host = ScriptHost::new();
+    let source = include_str!("../../assets/scripts/generators/lsystem.rhai");
+    let mut params: HashMap<String, ParamValue> = [
+        ("axiom", "X"),
+        ("rule_1", "X=-YF+XFX+FY-"),
+        ("rule_2", "Y=+XF-YFY-FX+"),
+    ]
+    .iter()
+    .map(|(k, v)| (k.to_string(), ParamValue::Text(v.to_string())))
+    .collect();
+    params.insert("angle".to_string(), ParamValue::Float(90.0));
+
+    let out = host.run(source, &FractalConfig::default(), 1, params).unwrap();
+    assert!(
+        out.messages.iter().any(|m| m.contains("Space-filling")),
+        "should announce the node construction: {:?}",
+        out.messages
+    );
+
+    let ts = &out.config.flame.transforms;
+    assert_eq!(ts.len(), 4, "Hilbert is four maps");
+    let det = |t: &crate::scene::transforms::Transform| {
+        (t.a as f64) * (t.d as f64) - (t.b as f64) * (t.c as f64)
+    };
+    // Occurrence order Y, X, X, Y: the outer two are reflected.
+    assert!(det(&ts[0]) < 0.0, "first map (Y) is mirrored");
+    assert!(det(&ts[1]) > 0.0, "second map (X) is direct");
+    assert!(det(&ts[2]) > 0.0, "third map (X) is direct");
+    assert!(det(&ts[3]) < 0.0, "fourth map (Y) is mirrored");
+    for (i, t) in ts.iter().enumerate() {
+        let scale = ((t.a as f64).powi(2) + (t.c as f64).powi(2)).sqrt();
+        assert!(
+            (scale - 0.5).abs() < 0.02,
+            "map {i} scale {scale} should be about one half"
+        );
+    }
 }
 
 #[test]

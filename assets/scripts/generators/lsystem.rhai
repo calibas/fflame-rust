@@ -4,11 +4,23 @@
 // the panel — you should not need to touch the script.
 //
 // HOW IT WORKS
-// An L-system grows a curve by repeatedly replacing each edge with a
-// small path. Take just ONE generation of that replacement, shrink it
-// back onto the edge it replaced, and each piece becomes a transform.
-// The chaos game then draws the curve those transforms agree on, to
-// infinite depth, for free. The rule becomes the transforms.
+// An L-system grows a curve by repeatedly replacing parts with smaller
+// paths. This script finds the self-similar pieces of ONE generation and
+// makes each one a transform; the chaos game then draws the curve those
+// transforms agree on, to infinite depth, for free. Two constructions
+// are tried, automatically:
+//
+//   EDGE rewriting (Koch, dragon, Levy...): the rule replaces a drawn
+//   edge with a shorter path — the drawn depth-1 segments are the pieces.
+//
+//   NODE rewriting (Hilbert, Peano — the space-fillers): the rule
+//   rewrites variables, and the drawn steps are just connections. The
+//   pieces live at each VARIABLE occurrence instead: one copy of the
+//   whole curve per occurrence.
+//
+// Not supported: rules whose variables are two genuinely different
+// curves (not mirror images of each other) — that needs more than a flat
+// set of transforms, and the script will say so.
 //
 // SYMBOLS  (Prusinkiewicz & Lindenmayer, "The Algorithmic Beauty of
 // Plants" — the convention most sources follow)
@@ -17,7 +29,7 @@
 //   + -       turn left / right by Angle
 //   |         turn around
 //   [ ]       start / end a branch
-//   any other letter is ignored by the turtle and only drives rewriting
+//   any other letter (X, Y, ...) is a variable: it only drives rewriting
 //
 // Sources disagree about which letters draw. If you copy a rule that uses
 // lower-case f and g as DRAWING symbols, upper-case them — otherwise
@@ -27,13 +39,6 @@
 //   symbol=replacement        e.g.  F=F+F--F+F
 // Leave a rule blank if you do not need it.
 //
-// WHAT THIS CANNOT DO
-// The construction needs an EDGE-rewriting rule: one generation must
-// replace a single edge with a shorter path. Space-filling curves —
-// Hilbert, Peano — rewrite NODES instead, and their pieces come out the
-// same length as the edge they replace. Nothing shrinks, the chaos game
-// has nothing to converge to, and the script says so.
-//
 // SOME TO TRY
 //   Koch          axiom F   F=F+F--F+F                 angle 60
 //   Koch square   axiom F   F=F+F-F-F+F                angle 90
@@ -41,6 +46,8 @@
 //   Dragon        axiom F   F=F+G   G=F-G              angle 90
 //   Sierpinski    axiom F   F=+G-F-G+   G=-F+G+F-      angle 60
 //   Levy C        axiom F   F=+F--F+                   angle 45
+//   Hilbert       axiom X   X=-YF+XFX+FY-   Y=+XF-YFY-FX+   angle 90
+//   Peano         axiom X   X=XFYFX+F+YFXFY-F-XFYFX   Y=YFXFY-F-XFYFX+F+YFXFY   angle 90
 
 script("L-System Curve", "generator");
 
@@ -89,21 +96,74 @@ if bad != "" {
     let expanded = lsystem(axiom, rules, 1);
     let drawn = turtle(expanded, angle);
 
-    if drawn.len() < 2 {
-        // Usually the rule draws with symbols this turtle does not treat
-        // as drawing. Report it rather than guessing at what was meant.
+    let pieces = [];
+    let construction = "";
+    let node_note = "";
+
+    // A single-variable axiom announces a node-rewriting system, so try
+    // that construction FIRST. Order matters: Peano's connective F-steps
+    // happen to pass the edge shrink test (its rule walks further than
+    // one step), and edge mode would quietly build a curve out of the
+    // connectors instead of the Peano curve.
+    let axiom_is_variable = axiom.len() == 1 && (axiom in rules) && !"FGABfg".contains(axiom);
+    if axiom_is_variable {
+        let nres = lsystem_node_pieces(axiom, rules, angle);
+        node_note = nres.note;
+        if nres.pieces.len() >= 2 {
+            pieces = nres.pieces;
+            construction = "node";
+        }
+    }
+
+    // EDGE construction: usable when the depth-1 drawn segments all
+    // SHRINK relative to the whole. If they do not, this is not an
+    // edge-rewriting system and the pieces would never converge.
+    if construction == "" && drawn.len() >= 2 {
+        try {
+            let cand = normalize_segments(drawn);
+            let shrinks = true;
+            for k in 0..cand.len() {
+                let d = cand[k];
+                let vx = d[2] - d[0];
+                let vy = d[3] - d[1];
+                if vx * vx + vy * vy >= 0.998 { shrinks = false; }
+            }
+            pieces = cand;
+            if shrinks { construction = "edge"; }
+        } catch (e) {
+            // A closed depth-1 path has no unit-segment frame; the node
+            // construction below may still apply.
+        }
+    }
+
+    // NODE construction as a fallback for everything else (a drawing
+    // axiom whose pieces did not shrink, say).
+    if construction == "" && !axiom_is_variable {
+        let nres = lsystem_node_pieces(axiom, rules, angle);
+        node_note = nres.note;
+        if nres.pieces.len() >= 2 {
+            pieces = nres.pieces;
+            construction = "node";
+        }
+    }
+
+    // Last resort: build the non-shrinking edge pieces anyway (with a
+    // warning below) so there is something to look at and adjust.
+    if construction == "" && pieces.len() >= 2 {
+        construction = "edge";
+    }
+
+    if pieces.len() < 2 {
         print("One generation of this rule gives: " + expanded);
         print("That draws " + drawn.len() + " segment(s), and at least 2 are needed.");
         print("Check the drawing symbols: F G A B draw, lower-case f and g move without drawing,");
         print("and any other letter is ignored. The rule may also be written for a different program.");
+        if node_note != "" {
+            print("The node-rewriting construction was tried too: " + node_note);
+        }
     } else {
-        // Shrink the whole path onto the segment from (0,0) to (1,0), so
-        // every piece is smaller than the whole. That is what makes the
-        // chaos game converge instead of flying apart.
-        let pieces = normalize_segments(drawn);
-
-        // Some curves are built from two symbols whose rules are mirror
-        // images (Sierpinski: F=+G-F-G+, G=-F+G+F-). Both draw the same
+        // Some systems pair two symbols whose rules are mirror images
+        // (Sierpinski's F/G, Hilbert's X/Y). Both make identical
         // endpoints, so the reflection has to come from the symbol, or
         // the attractor comes out as the wrong curve. Detected, not asked.
         let mirror_symbol = lsystem_mirror_symbol(rules, axiom);
@@ -133,24 +193,27 @@ if bad != "" {
             config.set("zoom", 2.7 / extent);
         }
 
-        print("Built " + pieces.len() + " pieces from " + expanded);
+        if construction == "node" {
+            print("Space-filling (node-rewriting) rule: " + pieces.len() + " copies of the whole curve, one per variable occurrence.");
+        } else {
+            print("Built " + pieces.len() + " pieces from " + expanded);
+        }
         if mirrored_count > 0 {
             print("Mirror pair found: the " + mirrored_count + " piece(s) drawn by " + mirror_symbol + " are reflected.");
         }
 
         // A converging IFS needs pieces SMALLER than the whole. If they
-        // are not, say so plainly — this is what happens with
-        // space-filling rules, where one generation replaces an edge with
-        // pieces the same length as itself.
+        // are not, say so plainly rather than leaving a flame that
+        // quietly is not the curve that was asked for.
         let balance = flame.contractiveness();
         print("contractiveness: " + balance);
         if balance >= -0.0001 {
             print("");
             print("WARNING: these pieces do not shrink, so the chaos game has nothing to");
             print("converge to and the result will not be the curve you expect.");
-            print("That is the signature of a space-filling rule (Hilbert, Peano), which");
-            print("rewrites nodes rather than edges. This construction needs a rule whose");
-            print("one generation replaces an edge with a SHORTER path.");
+            if node_note != "" {
+                print("The node-rewriting construction was tried too: " + node_note);
+            }
         }
     }
 }

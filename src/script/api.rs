@@ -1291,6 +1291,37 @@ fn register_builtins(engine: &mut Engine) {
         },
     );
 
+    // lsystem_node_pieces(axiom, rules, angle)
+    //   -> #{ pieces: [[x1,y1,x2,y2,0,symbol], ...], note: "" }
+    // The node-rewriting (space-filling) construction; `note` explains an
+    // empty result instead of guessing.
+    engine.register_fn(
+        "lsystem_node_pieces",
+        |axiom: &str, rules: rhai::Map, angle: Dynamic| -> Result<rhai::Map, Box<EvalAltResult>> {
+            let angle = num(&angle, "turtle angle")?;
+            let mut parsed: Vec<(char, String)> = Vec::new();
+            for (key, value) in rules.iter() {
+                if let Some(sym) = key.chars().next() {
+                    parsed.push((sym, value.clone().into_string().unwrap_or_default()));
+                }
+            }
+            parsed.sort_by_key(|(k, _)| *k);
+            let mut out = rhai::Map::new();
+            match crate::script::builtins::lsystem_node_segments(axiom, &parsed, angle) {
+                Ok(segs) => {
+                    let arr: Array = segs.iter().map(|s| Dynamic::from(segment_to_array(s))).collect();
+                    out.insert("pieces".into(), Dynamic::from(arr));
+                    out.insert("note".into(), Dynamic::from(String::new()));
+                }
+                Err(e) => {
+                    out.insert("pieces".into(), Dynamic::from(Array::new()));
+                    out.insert("note".into(), Dynamic::from(e));
+                }
+            }
+            Ok(out)
+        },
+    );
+
     // lsystem_bounds(axiom, rules, depth, angle)
     //   -> [min_x, min_y, max_x, max_y, depth_actually_used]
     engine.register_fn(
