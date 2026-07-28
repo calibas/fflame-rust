@@ -26,6 +26,10 @@ const EMBEDDED: &[(&str, &str)] = &[
         include_str!("../../assets/scripts/generators/lsystem_plant.rhai"),
     ),
     (
+        "hilbert3d.rhai",
+        include_str!("../../assets/scripts/generators/hilbert3d.rhai"),
+    ),
+    (
         "jitter.rhai",
         include_str!("../../assets/scripts/modifiers/jitter.rhai"),
     ),

@@ -438,6 +438,25 @@ deferred**: no established notation exists to paste from, and the flame
 model has no 4D affines; the one viable door, noted for later, is a
 path-variation map bank (its maps are dimension-agnostic parameters).
 
+**Graph-directed systems are SUPPORTED after all** — the earlier
+"cannot express" claim was wrong, and the user's instinct (xaos) was the
+mechanism. A multi-variable system is a graph-directed IFS, and the
+chaos game for a GIFS is exactly a flame with xaos: one transform per
+occurrence, allowed to follow another only when it consumes the type the
+other produced (`occ(next) == owner(prev)`), with per-transform OPACITY
+hiding every type except the axiom's — the scaffold curves drive the
+dynamics invisibly. This removes the mirror-pair-only limitation in both
+2D and 3D. Routing note: a graph-directed verdict must gate EDGE mode
+off, or it builds a curve out of the connective F segments (the Peano
+trap again). And the visible 3D Hilbert exists by a second route:
+single-type self-similar 3D Hilbert curves exist (Haverkort), and
+`hilbert3d_maps()` CONSTRUCTS one — a deterministic search over the
+cube's 48 symmetries, octant by octant in Gray-code order, picking the
+first that keeps entry/exit corners chaining. Verified by invariants
+(tiling, 1e-12 chaining, determinism) and shipped as `hilbert3d.rhai`:
+path mode draws the genuine cube-filling maze through `lsystem_path_3D`
+with a live depth parameter.
+
 **Maintenance risk:** `builtins.rs` hand-mirrors four shader sources
 (`complex.wgsl`, `init_schottky_group`, `apollonian_gen`/`su_conjugator`,
 `sp_conf2/3`+`sp_mirror2/3`) and `init_klein_group`. If any changes, the

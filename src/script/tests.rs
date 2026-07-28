@@ -1340,3 +1340,83 @@ fn plant_script_grows_a_fern_from_pasted_rules() {
         .unwrap();
     assert_eq!(out.config.flame.transforms.len(), 4, "stem weight 0 skips stems");
 }
+
+#[test]
+fn graph_directed_systems_build_with_xaos_and_opacity() {
+    // The construction previously refused as "graph-directed": a flame
+    // CAN express it — one transform per occurrence, xaos allowing a map
+    // only when it consumes the type the previous one produced, opacity
+    // hiding every curve but the axiom's. The hidden types still drive
+    // the dynamics; they are invisible scaffolding.
+    let host = ScriptHost::new();
+    let source = include_str!("../../assets/scripts/generators/lsystem.rhai");
+    let mut params: HashMap<String, ParamValue> = [
+        ("axiom", "X"),
+        ("rule_1", "X=F+YFZF"),
+        ("rule_2", "Y=FX-F"),
+        ("rule_3", "Z=F-XF"),
+    ]
+    .iter()
+    .map(|(k, v)| (k.to_string(), ParamValue::Text(v.to_string())))
+    .collect();
+    params.insert("angle".to_string(), ParamValue::Float(60.0));
+
+    let out = host.run(source, &FractalConfig::default(), 1, params).unwrap();
+    assert!(
+        out.messages.iter().any(|m| m.contains("Graph-directed")),
+        "{:?}",
+        out.messages
+    );
+
+    let flame = &out.config.flame;
+    // Occurrences: Y and Z in X's rule, X in Y's, X in Z's.
+    assert_eq!(flame.transforms.len(), 4, "one transform per occurrence");
+    for t in &flame.transforms {
+        assert!(t.variations.contains_key("matrix3D"), "graph pieces are matrix3D");
+    }
+
+    // Only the axiom's curve is visible: the two maps producing X.
+    let vis: Vec<bool> = flame.transforms.iter().map(|t| t.opacity > 0.5).collect();
+    assert_eq!(vis, vec![true, true, false, false], "only X-producing maps plot");
+
+    // Xaos gates on type: occ(next) == owner(prev). Piece order is
+    // [(Y<-X), (Z<-X), (X<-Y), (X<-Z)] as (occ, owner).
+    let xaos = flame.xaos.as_ref().expect("word structure as xaos");
+    let expect = [
+        [0.0, 0.0, 1.0, 1.0], // after an X-producer: only X-consumers
+        [0.0, 0.0, 1.0, 1.0],
+        [1.0, 0.0, 0.0, 0.0], // after the Y-producer: only the Y-consumer
+        [0.0, 1.0, 0.0, 0.0], // after the Z-producer: only the Z-consumer
+    ];
+    for f in 0..4 {
+        for t in 0..4 {
+            assert_eq!(
+                xaos[f][t], expect[f][t],
+                "xaos[{f}][{t}] must gate by type"
+            );
+        }
+    }
+}
+
+#[test]
+fn hilbert3d_script_builds_the_path() {
+    let host = ScriptHost::new();
+    let source = include_str!("../../assets/scripts/generators/hilbert3d.rhai");
+    let out = host
+        .run(source, &FractalConfig::default(), 1, HashMap::new())
+        .unwrap();
+    let flame = &out.config.flame;
+    assert_eq!(flame.transforms.len(), 1, "one transform carries the path");
+    let t = &flame.transforms[0];
+    assert!(t.variations.contains_key("lsystem_path_3D"));
+    let p = |k: &str| t.variation_params[&format!("lsystem_path_3D.{k}")] as f64;
+    assert_eq!(p("map_count") as i64, 8, "eight octant maps");
+    // The maps in the flame are the constructed ones: scale 1/2 columns.
+    for k in 0..8 {
+        let (a, c, e) = (p(&format!("m{k}_xx")), p(&format!("m{k}_yx")), p(&format!("m{k}_zx")));
+        let n = (a * a + c * c + e * e).sqrt();
+        assert!((n - 0.5).abs() < 1e-6, "map {k} column scale {n}");
+    }
+    assert_eq!(out.config.render_mode, crate::scene::transforms::RenderMode::ThreeD);
+    assert!(out.config.preserve_z, "z must survive between iterations");
+}
