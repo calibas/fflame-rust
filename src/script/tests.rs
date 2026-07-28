@@ -1273,6 +1273,15 @@ fn path_mode_bakes_the_maps_into_one_variation() {
     assert_eq!(p("map_count") as i64, 4, "Hilbert is four maps");
     assert_eq!(p("iterations") as i64, 6, "depth passed through");
 
+    // Space-filling curves draw the vertex chain through cell CENTRES —
+    // their cell spans lie on the boundary lattice and overlap each other
+    // (doubled lines and little boxes, reported from an in-app render;
+    // exact maps changed nothing because the defect was structural). The
+    // anchor is the attractor's bounding-box centre.
+    assert_eq!(p("anchored"), 1.0, "node curves use the centre chain");
+    assert!((p("anchor_x") - 0.5).abs() < 1e-6, "anchor at bbox centre x");
+    assert!((p("anchor_y") + 0.5).abs() < 1e-2, "anchor at bbox centre y");
+
     // The maps are the same similarities the attractor transforms would
     // get: scale 1/2, with the mirrored Y maps carrying negative
     // determinant.
