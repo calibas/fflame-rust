@@ -27,9 +27,17 @@
 //   F G A B   draw forward
 //   f g       move forward WITHOUT drawing
 //   + -       turn left / right by Angle
+//   & ^       pitch down / up      \\ /   roll left / right   (3D!)
 //   |         turn around
 //   [ ]       start / end a branch
 //   any other letter (X, Y, ...) is a variable: it only drives rewriting
+//
+// A word of honesty about 3D CURVES: many 3D edge rules have no stable
+// self-similar limit — the rotations compound so the shape never
+// settles, and the faithful answer is a degenerate or drifting form.
+// That is the mathematics, not a bug; it is why 3D L-system art is
+// nearly always PLANTS (see the L-System Plant script), which brackets
+// hold stable.
 //
 // Sources disagree about which letters draw. If you copy a rule that uses
 // lower-case f and g as DRAWING symbols, upper-case them — otherwise
@@ -108,13 +116,25 @@ if bad != "" {
     let construction = "";
     let node_note = "";
 
+    // Any pitch or roll command switches to the 3D construction: pieces
+    // come back as full 3D matrices (a flat segment cannot carry roll).
+    let is_3d = lsystem_uses_3d(axiom, rules);
+    if is_3d {
+        let nres = lsystem_pieces3(axiom, rules, angle);
+        node_note = nres.note;
+        if nres.branches.len() >= 2 {
+            pieces = nres.branches;
+            construction = "3d";
+        }
+    }
+
     // A single-variable axiom announces a node-rewriting system, so try
     // that construction FIRST. Order matters: Peano's connective F-steps
     // happen to pass the edge shrink test (its rule walks further than
     // one step), and edge mode would quietly build a curve out of the
     // connectors instead of the Peano curve.
     let axiom_is_variable = axiom.len() == 1 && (axiom in rules) && !"FGABfg".contains(axiom);
-    if axiom_is_variable {
+    if !is_3d && axiom_is_variable {
         let nres = lsystem_node_pieces(axiom, rules, angle);
         node_note = nres.note;
         if nres.pieces.len() >= 2 {
@@ -126,7 +146,7 @@ if bad != "" {
     // EDGE construction: usable when the depth-1 drawn segments all
     // SHRINK relative to the whole. If they do not, this is not an
     // edge-rewriting system and the pieces would never converge.
-    if construction == "" && drawn.len() >= 2 {
+    if !is_3d && construction == "" && drawn.len() >= 2 {
         try {
             let cand = normalize_segments(drawn);
             let shrinks = true;
@@ -146,7 +166,7 @@ if bad != "" {
 
     // NODE construction as a fallback for everything else (a drawing
     // axiom whose pieces did not shrink, say).
-    if construction == "" && !axiom_is_variable {
+    if !is_3d && construction == "" && !axiom_is_variable {
         let nres = lsystem_node_pieces(axiom, rules, angle);
         node_note = nres.note;
         if nres.pieces.len() >= 2 {
@@ -178,7 +198,10 @@ if bad != "" {
 
         // The attractor's bounding box, used for framing and (in path
         // mode) for the anchor point at its centre.
-        let box = lsystem_bounds(axiom, rules, 6, angle);
+        let box = [0.0, 0.0, 1.0, 0.0];
+        if !is_3d {
+            box = lsystem_bounds(axiom, rules, 6, angle);
+        }
 
         let path_mode = output == "Path (finite depth)" && pieces.len() <= 12;
         if output == "Path (finite depth)" && pieces.len() > 12 {
@@ -186,7 +209,36 @@ if bad != "" {
         }
 
         let mirrored_count = 0;
-        if path_mode {
+        if is_3d && path_mode {
+            // One transform, the 3D path variation: twelve coefficients
+            // per map, composed by the digits of the curve parameter.
+            let t = flame.add_transform();
+            t.add_variation("lsystem_path_3D", 1.0);
+            t.set_variation_param("lsystem_path_3D.iterations", path_iterations);
+            t.set_variation_param("lsystem_path_3D.map_count", pieces.len());
+            t.set_variation_param("lsystem_path_3D.connect", 1.0);
+            t.set_variation_param("lsystem_path_3D.dc", if colour_pieces { 1.0 } else { 0.0 });
+            t.weight = 1.0;
+            let names = ["xx", "xy", "xz", "yx", "yy", "yz", "zx", "zy", "zz", "tx", "ty", "tz"];
+            for k in 0..pieces.len() {
+                let q = pieces[k];
+                for j in 0..12 {
+                    t.set_variation_param("lsystem_path_3D.m" + k + "_" + names[j], q[j]);
+                }
+            }
+        } else if is_3d {
+            // 3D attractor: one matrix3D transform per piece. Mirror
+            // partners are already folded into the matrices.
+            for k in 0..pieces.len() {
+                let q = pieces[k];
+                let t = flame.add_transform();
+                t.set_matrix3d(q, 1.0);
+                t.weight = 1.0;
+                if colour_pieces {
+                    t.color = k.to_float() / pieces.len().to_float();
+                }
+            }
+        } else if path_mode {
             // One transform carrying the whole finite-depth curve. No
             // geometry is baked: the variation composes the maps by the
             // digits of the curve parameter, so Iterations stays a live
@@ -245,15 +297,32 @@ if bad != "" {
         // dragon folds well outside its two starting edges. (Bounds were
         // measured above, in Rust, so a deep expansion never becomes a
         // script-side array.)
-        let extent = box[2] - box[0];
-        if (box[3] - box[1]) > extent { extent = box[3] - box[1]; }
-        if extent > 0.0 {
-            config.set("pan_x", (box[0] + box[2]) * 0.5);
-            config.set("pan_y", (box[1] + box[3]) * 0.5);
-            config.set("zoom", 2.7 / extent);
+        if is_3d {
+            let b3 = lsystem_bounds3(axiom, rules, 6, angle);
+            let extent = b3[3] - b3[0];
+            if (b3[4] - b3[1]) > extent { extent = b3[4] - b3[1]; }
+            if extent > 0.0 {
+                config.set("pan_x", (b3[0] + b3[3]) * 0.5);
+                config.set("pan_y", (b3[1] + b3[4]) * 0.5);
+                config.set("zoom", 2.2 / extent);
+            }
+            config.set("render_mode", "3d");
+            config.set("preserve_z", true);
+            config.set("perspective_strength", 0.12);
+            config.set("camera_rotation_x", 30.0);
+        } else {
+            let extent = box[2] - box[0];
+            if (box[3] - box[1]) > extent { extent = box[3] - box[1]; }
+            if extent > 0.0 {
+                config.set("pan_x", (box[0] + box[2]) * 0.5);
+                config.set("pan_y", (box[1] + box[3]) * 0.5);
+                config.set("zoom", 2.7 / extent);
+            }
         }
 
-        if construction == "node" {
+        if construction == "3d" {
+            print("3D rule: " + pieces.len() + " pieces with full 3D frames.");
+        } else if construction == "node" {
             print("Space-filling (node-rewriting) rule: " + pieces.len() + " copies of the whole curve, one per variable occurrence.");
         } else {
             print("Built " + pieces.len() + " pieces from " + expanded);
@@ -262,7 +331,18 @@ if bad != "" {
             print("Mirror pair found: the " + mirrored_count + " piece(s) drawn by " + mirror_symbol + " are reflected.");
         }
 
-        if path_mode {
+        if is_3d && !path_mode {
+            // flame.contractiveness() reads the transform affine, which
+            // matrix3D leaves at identity — compute from the pieces
+            // instead so the number still means something.
+            let acc = 0.0;
+            for k in 0..pieces.len() {
+                let q = pieces[k];
+                let sc = sqrt(q[0] * q[0] + q[3] * q[3] + q[6] * q[6]);
+                if sc > 0.000001 { acc += ln(sc); }
+            }
+            print("mean piece log-scale: " + acc / pieces.len());
+        } else if path_mode {
             print("Path mode: drawing the curve at depth " + path_iterations
                 + " (" + pieces.len() + "^" + path_iterations + " segments)."
                 + " Iterations is a live parameter on the lsystem_path variation.");

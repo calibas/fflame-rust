@@ -1291,6 +1291,114 @@ fn register_builtins(engine: &mut Engine) {
         },
     );
 
+    // lsystem_pieces3(axiom, rules, angle)
+    //   -> #{ branches: [...], stems: [...], note: "" }
+    // Pieces are [12 affine floats row-major, depth, symbol]. The 3D
+    // construction (plants, edge and node curves unify once pieces carry
+    // a full frame).
+    engine.register_fn(
+        "lsystem_pieces3",
+        |axiom: &str, rules: rhai::Map, angle: Dynamic| -> Result<rhai::Map, Box<EvalAltResult>> {
+            let angle = num(&angle, "turtle angle")?;
+            let mut parsed: Vec<(char, String)> = Vec::new();
+            for (key, value) in rules.iter() {
+                if let Some(sym) = key.chars().next() {
+                    parsed.push((sym, value.clone().into_string().unwrap_or_default()));
+                }
+            }
+            parsed.sort_by_key(|(k, _)| *k);
+            let piece_arr = |p: &crate::script::builtins::Piece3| -> Dynamic {
+                let mut a: Array = p.m.iter().map(|v| Dynamic::from(*v)).collect();
+                a.push(Dynamic::from(p.depth as f64));
+                a.push(Dynamic::from(p.symbol.to_string()));
+                Dynamic::from(a)
+            };
+            let mut out = rhai::Map::new();
+            match crate::script::builtins::lsystem_pieces3(axiom, &parsed, angle) {
+                Ok(p) => {
+                    out.insert("branches".into(), Dynamic::from(p.branches.iter().map(piece_arr).collect::<Array>()));
+                    out.insert("stems".into(), Dynamic::from(p.stems.iter().map(piece_arr).collect::<Array>()));
+                    out.insert("note".into(), Dynamic::from(String::new()));
+                }
+                Err(e) => {
+                    out.insert("branches".into(), Dynamic::from(Array::new()));
+                    out.insert("stems".into(), Dynamic::from(Array::new()));
+                    out.insert("note".into(), Dynamic::from(e));
+                }
+            }
+            Ok(out)
+        },
+    );
+
+    // Does this rule set use the 3D turtle commands (& ^ \\ /)?
+    engine.register_fn("lsystem_uses_3d", |axiom: &str, rules: rhai::Map| -> bool {
+        let mut parsed: Vec<(char, String)> = Vec::new();
+        for (key, value) in rules.iter() {
+            if let Some(sym) = key.chars().next() {
+                parsed.push((sym, value.clone().into_string().unwrap_or_default()));
+            }
+        }
+        crate::script::builtins::lsystem_uses_3d(axiom, &parsed)
+    });
+
+    // lsystem_bounds3(axiom, rules, depth, angle)
+    //   -> [min_x, min_y, min_z, max_x, max_y, max_z]
+    engine.register_fn(
+        "lsystem_bounds3",
+        |axiom: &str, rules: rhai::Map, depth: i64, angle: Dynamic| -> Result<Array, Box<EvalAltResult>> {
+            let angle = num(&angle, "turtle angle")?;
+            let mut parsed: Vec<(char, String)> = Vec::new();
+            for (key, value) in rules.iter() {
+                if let Some(sym) = key.chars().next() {
+                    parsed.push((sym, value.clone().into_string().unwrap_or_default()));
+                }
+            }
+            parsed.sort_by_key(|(k, _)| *k);
+            let b = crate::script::builtins::lsystem_bounds3(
+                axiom,
+                &parsed,
+                depth.clamp(0, 32) as u32,
+                angle,
+                1_000_000,
+            )
+            .ok_or_else(|| err("could not measure this system"))?;
+            Ok([b.0, b.1, b.2, b.3, b.4, b.5]
+                .iter()
+                .map(|v| Dynamic::from(*v))
+                .collect())
+        },
+    );
+
+    // Turn a transform into an exact 3D affine piece: the matrix3D
+    // variation with the twelve coefficients from a pieces3 entry,
+    // optionally squashing the two off-axis columns (the 3D Barnsley
+    // stem: 0 lays a flattened copy of the whole along the piece).
+    engine.register_fn(
+        "set_matrix3d",
+        |t: &mut TransformHandle, piece: Array, thickness: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            if piece.len() < 12 {
+                return Err(err("set_matrix3d expects at least 12 affine numbers"));
+            }
+            let th = num(&thickness, "thickness")?;
+            let mut m = [0.0f64; 12];
+            for (i, v) in piece.iter().take(12).enumerate() {
+                m[i] = num(v, "matrix coefficient")?;
+            }
+            // Columns 1 (left) and 2 (up) carry the off-axis spread.
+            for row in 0..3 {
+                m[row * 3 + 1] *= th;
+                m[row * 3 + 2] *= th;
+            }
+            let names = ["xx", "xy", "xz", "yx", "yy", "yz", "zx", "zy", "zz", "tx", "ty", "tz"];
+            t.with(|x| {
+                x.set_variation("matrix3D", 1.0);
+                for (name, v) in names.iter().zip(m) {
+                    x.variation_params.insert(format!("matrix3D.{name}"), v as f32);
+                }
+            })
+        },
+    );
+
     // lsystem_plant_pieces(axiom, rules, angle)
     //   -> #{ branches: [...], stems: [...], note: "" }
     // The Barnsley-fern construction for bracketed (plant) rules.

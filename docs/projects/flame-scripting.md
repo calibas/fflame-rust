@@ -419,6 +419,25 @@ L-systems cover the full gamut across two scripts:
   Linked transforms were considered for ordering and declined: a linked
   chain changes the walk's order, never the attractor set.
 
+Both scripts speak **3D** (ABOP's `&`/`^` pitch and `\`/`/` roll,
+auto-detected — no mode switch): pieces come back as full 3D matrices
+carried by the new `matrix3D` variation (a raw-matrix container; the
+existing `affine3D` is JWF's rotate/scale/shear parameterization, the
+wrong shape for exact measured maps), with `preserve_z`, 3D render mode
+and a tilted camera set automatically. Path mode uses `lsystem_path_3D`
+(12 coefficients per map). Findings: a 2D segment cannot carry roll, so
+3D pieces store the turtle's frame; the global frame must be rotated so
+the displacement runs along +x or path anchors point the wrong way
+(found as a shattered render); the shader builder only carries top-level
+`fn`/`const` items, so variation WGSL cannot declare structs. And an
+honest limitation, verified against an independent simulation: many 3D
+edge-rewriting CURVE rules have no stable self-similar limit — their
+rotations compound so the displacement direction never settles — which
+is why 3D L-system art is nearly always plants. **4D was considered and
+deferred**: no established notation exists to paste from, and the flame
+model has no 4D affines; the one viable door, noted for later, is a
+path-variation map bank (its maps are dimension-agnostic parameters).
+
 **Maintenance risk:** `builtins.rs` hand-mirrors four shader sources
 (`complex.wgsl`, `init_schottky_group`, `apollonian_gen`/`su_conjugator`,
 `sp_conf2/3`+`sp_mirror2/3`) and `init_klein_group`. If any changes, the

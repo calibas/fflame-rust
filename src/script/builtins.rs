@@ -1095,6 +1095,507 @@ pub fn lsystem_plant_segments(
     Ok(PlantPieces { branches, stems })
 }
 
+// ============================================================================
+// 3D L-systems
+// ============================================================================
+
+/// 3D turtle state: position plus a right-handed orientation frame.
+/// Columns of `r` are heading H, left L, up U; the turtle starts facing
+/// +x with up = +z, so 2D rules (no pitch/roll) reproduce the 2D turtle
+/// exactly in the z = 0 plane.
+#[derive(Clone, Copy)]
+struct LTurtle3 {
+    p: [f64; 3],
+    r: [[f64; 3]; 3],
+}
+
+impl LTurtle3 {
+    fn new() -> Self {
+        Self { p: [0.0; 3], r: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]] }
+    }
+}
+
+fn mat3_mul(a: &[[f64; 3]; 3], b: &[[f64; 3]; 3]) -> [[f64; 3]; 3] {
+    let mut out = [[0.0; 3]; 3];
+    for i in 0..3 {
+        for j in 0..3 {
+            out[i][j] = a[i][0] * b[0][j] + a[i][1] * b[1][j] + a[i][2] * b[2][j];
+        }
+    }
+    out
+}
+
+/// ABOP's 3D turtle commands. Local-axis rotations are RIGHT
+/// multiplications; `+`/`-` yaw about up, `&`/`^` pitch about left,
+/// `\`/`/` roll about heading. Sign conventions are one consistent
+/// chirality — mirrored conventions elsewhere mirror the plant, nothing
+/// worse.
+fn lsys_step3(ch: char, angle: f64, st: &mut LTurtle3, stack: &mut Vec<LTurtle3>) {
+    let (s, c) = angle.sin_cos();
+    match ch {
+        'F' | 'G' | 'A' | 'B' | 'f' | 'g' => {
+            st.p[0] += st.r[0][0];
+            st.p[1] += st.r[1][0];
+            st.p[2] += st.r[2][0];
+        }
+        '+' => st.r = mat3_mul(&st.r, &[[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]]),
+        '-' => st.r = mat3_mul(&st.r, &[[c, s, 0.0], [-s, c, 0.0], [0.0, 0.0, 1.0]]),
+        '&' => st.r = mat3_mul(&st.r, &[[c, 0.0, s], [0.0, 1.0, 0.0], [-s, 0.0, c]]),
+        '^' => st.r = mat3_mul(&st.r, &[[c, 0.0, -s], [0.0, 1.0, 0.0], [s, 0.0, c]]),
+        '\\' => st.r = mat3_mul(&st.r, &[[1.0, 0.0, 0.0], [0.0, c, -s], [0.0, s, c]]),
+        '/' => st.r = mat3_mul(&st.r, &[[1.0, 0.0, 0.0], [0.0, c, s], [0.0, -s, c]]),
+        '|' => st.r = mat3_mul(&st.r, &[[-1.0, 0.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, 1.0]]),
+        '[' => stack.push(*st),
+        ']' => {
+            if let Some(prev) = stack.pop() {
+                *st = prev;
+            }
+        }
+        _ => {}
+    }
+}
+
+/// One extracted 3D piece: a full affine (`x' = m·x + t`, row-major
+/// `m00 m01 m02 m10 .. m22` then `tx ty tz`), plus bracket depth and the
+/// symbol that produced it.
+#[derive(Debug, Clone, Copy)]
+pub struct Piece3 {
+    pub m: [f64; 12],
+    pub depth: u32,
+    pub symbol: char,
+}
+
+/// The 3D pieces of a bracketed or curve L-system.
+#[derive(Debug)]
+pub struct Pieces3 {
+    pub branches: Vec<Piece3>,
+    pub stems: Vec<Piece3>,
+}
+
+/// Does a rule set use the 3D commands (`&`, `^`, `\`, `/`)?
+pub fn lsystem_uses_3d(axiom: &str, rules: &[(char, String)]) -> bool {
+    let is3d = |s: &str| s.chars().any(|c| matches!(c, '&' | '^' | '\\' | '/'));
+    is3d(axiom) || rules.iter().any(|(_, r)| is3d(r))
+}
+
+/// Unified 3D extraction — plants, edge curves and node curves are all
+/// the same construction once pieces carry a full frame:
+///
+/// * recursion sites (variable, or the primary itself when it draws)
+///   become BRANCH maps `t + s·R·x`: translation and scale measured on a
+///   deep expansion with a Richardson step (self-similarity is only
+///   asymptotic), rotation taken from the turtle's exact frame at the
+///   site and then nudged so the frame's heading agrees with the
+///   measured sub-displacement;
+/// * other drawn symbols become STEM pieces (same form, scale = drawn
+///   length), which callers squash for the Barnsley rachis look or skip
+///   for curves, where connectors are measure-zero;
+/// * mirror-partner occurrences get the reflection folded in (local
+///   left axis flipped), the 3D analogue of the 2D mirror flag.
+///
+/// In 2D the map's rotation was recoverable from a segment's endpoints;
+/// in 3D it is not — there is a free roll about the segment — which is
+/// exactly why pieces here carry the frame instead of endpoints.
+pub fn lsystem_pieces3(
+    axiom: &str,
+    rules: &[(char, String)],
+    angle_deg: f64,
+) -> Result<Pieces3, String> {
+    let angle = angle_deg * std::f64::consts::PI / 180.0;
+
+    let trimmed = axiom.trim();
+    let mut it = trimmed.chars();
+    let primary = match (it.next(), it.next()) {
+        (Some(p), None) => p,
+        _ => return Err("the axiom must be a single symbol for this construction".into()),
+    };
+    let rule = rules
+        .iter()
+        .find(|(k, _)| *k == primary)
+        .map(|(_, r)| r.clone())
+        .ok_or_else(|| format!("the axiom `{primary}` has no rule"))?;
+    let partner = mirror_partner(rules, primary);
+
+    let is_drawing = |c: char| matches!(c, 'F' | 'G' | 'A' | 'B');
+    let has_rule = |c: char| rules.iter().any(|(k, _)| *k == c);
+    let primary_draws = is_drawing(primary);
+
+    for ch in rule.chars() {
+        if has_rule(ch) && !is_drawing(ch) && !matches!(ch, 'f' | 'g') {
+            if ch != primary && Some(ch) != partner {
+                return Err(format!(
+                    "the rule uses `{ch}`, which is neither `{primary}` nor its mirror image — \
+                     a graph-directed IFS, which a flat set of transforms cannot express"
+                ));
+            }
+        }
+    }
+
+    let mut needed: Vec<char> = vec![primary];
+    if let Some(p) = partner {
+        needed.push(p);
+    }
+    for ch in rule.chars() {
+        if has_rule(ch) && !needed.contains(&ch) {
+            needed.push(ch);
+        }
+    }
+
+    const CHAR_BUDGET: usize = 400_000;
+    let mut depth = 8u32;
+    let expansions_at = |d: u32| -> Result<Vec<(char, String)>, ()> {
+        let mut out = Vec::new();
+        let mut total = 0usize;
+        for &sym in &needed {
+            match lsystem_expand(&sym.to_string(), rules, d) {
+                Ok(e) => {
+                    total += e.len();
+                    out.push((sym, e));
+                }
+                Err(_) => return Err(()),
+            }
+        }
+        if total > CHAR_BUDGET {
+            return Err(());
+        }
+        Ok(out)
+    };
+    let exp_fine = loop {
+        match expansions_at(depth) {
+            Ok(e) => break e,
+            Err(()) if depth == 0 => {
+                return Err("could not expand this system at any depth".into())
+            }
+            Err(()) => depth -= 1,
+        }
+    };
+
+    // Raw walk output per site: entry position, exit position, entry
+    // frame, nesting, symbol, is_branch.
+    struct Site {
+        p1: [f64; 3],
+        p2: [f64; 3],
+        r: [[f64; 3]; 3],
+        depth: u32,
+        symbol: char,
+        branch: bool,
+    }
+
+    let walk = |exps: &Vec<(char, String)>| -> Result<(Vec<Site>, f64), String> {
+        let body_of = |c: char| exps.iter().find(|(k, _)| *k == c).map(|(_, e)| e.as_str());
+        let mut st = LTurtle3::new();
+        let mut stack: Vec<LTurtle3> = Vec::new();
+        let mut sites: Vec<Site> = Vec::new();
+        for ch in rule.chars() {
+            let nest = stack.len() as u32;
+            let ruled = has_rule(ch);
+            let variable = ruled && !is_drawing(ch) && !matches!(ch, 'f' | 'g');
+            if variable || is_drawing(ch) {
+                let entry = st;
+                if let Some(body) = if ruled { body_of(ch) } else { None } {
+                    for bc in body.chars() {
+                        lsys_step3(bc, angle, &mut st, &mut stack);
+                    }
+                } else {
+                    lsys_step3(ch, angle, &mut st, &mut stack);
+                }
+                let branch = variable || (primary_draws && (ch == primary || Some(ch) == partner));
+                sites.push(Site {
+                    p1: entry.p,
+                    p2: st.p,
+                    r: entry.r,
+                    depth: nest,
+                    symbol: ch,
+                    branch,
+                });
+            } else {
+                lsys_step3(ch, angle, &mut st, &mut stack);
+            }
+        }
+        let d2 = st.p[0] * st.p[0] + st.p[1] * st.p[1] + st.p[2] * st.p[2];
+        if d2 < 1e-9 {
+            return Err("this system returns to where it started, so it has no unit frame".into());
+        }
+        Ok((sites, d2.sqrt()))
+    };
+
+    let (mut fine, scale_fine) = walk(&exp_fine)?;
+    // Normalize positions by the whole displacement LENGTH only — the
+    // start frame is the global frame, so no rotation is applied (unlike
+    // 2D, where rotating displacement onto x̂ was a free convenience).
+    for s in fine.iter_mut() {
+        for k in 0..3 {
+            s.p1[k] /= scale_fine;
+            s.p2[k] /= scale_fine;
+        }
+    }
+
+    // Richardson step against the next-shallower depth (positions only;
+    // frames are exact turtle states).
+    if depth >= 2 {
+        if let Ok(coarse_exp) = expansions_at(depth - 1) {
+            if let Ok((mut coarse, scale_coarse)) = walk(&coarse_exp) {
+                if coarse.len() == fine.len() {
+                    for s in coarse.iter_mut() {
+                        for k in 0..3 {
+                            s.p1[k] /= scale_coarse;
+                            s.p2[k] /= scale_coarse;
+                        }
+                    }
+                    let mut sigma = 0.0;
+                    let mut nb = 0.0;
+                    for s in fine.iter().filter(|s| s.branch) {
+                        let d = [s.p2[0] - s.p1[0], s.p2[1] - s.p1[1], s.p2[2] - s.p1[2]];
+                        sigma += (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+                        nb += 1.0;
+                    }
+                    if nb > 0.0 {
+                        sigma /= nb;
+                        if sigma > 0.05 && sigma < 0.95 {
+                            let k = sigma / (1.0 - sigma);
+                            for (f, c) in fine.iter_mut().zip(coarse.iter()) {
+                                for a in 0..3 {
+                                    f.p1[a] += (f.p1[a] - c.p1[a]) * k;
+                                    f.p2[a] += (f.p2[a] - c.p2[a]) * k;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // The whole system's displacement direction in the global frame: the
+    // shape every sub-copy repeats. Used to align each site's frame with
+    // its measured sub-displacement.
+    let whole_dir = {
+        // After normalization the whole runs from the origin a unit
+        // distance; recompute from the fine walk's final state direction.
+        let last = fine
+            .iter()
+            .map(|s| s.p2)
+            .last()
+            .unwrap_or([1.0, 0.0, 0.0]);
+        // Not exactly the endpoint (trailing turns don't move), but the
+        // endpoint of the last site is within the Richardson residual of
+        // it; direction is what matters here.
+        let n = (last[0] * last[0] + last[1] * last[1] + last[2] * last[2]).sqrt();
+        if n > 1e-9 {
+            [last[0] / n, last[1] / n, last[2] / n]
+        } else {
+            [1.0, 0.0, 0.0]
+        }
+    };
+
+    let mut branches = Vec::new();
+    let mut stems = Vec::new();
+    for s in &fine {
+        let d = [s.p2[0] - s.p1[0], s.p2[1] - s.p1[1], s.p2[2] - s.p1[2]];
+        let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+        if len < 1e-9 {
+            continue;
+        }
+
+        let mut r = s.r;
+        if s.branch {
+            // Nudge the frame so R·whole_dir lands on the measured
+            // sub-displacement: the map must send the whole's run onto
+            // the sub-copy's run, and at finite depth the exact turtle
+            // frame misses that by the convergence residual.
+            let from = [
+                r[0][0] * whole_dir[0] + r[0][1] * whole_dir[1] + r[0][2] * whole_dir[2],
+                r[1][0] * whole_dir[0] + r[1][1] * whole_dir[1] + r[1][2] * whole_dir[2],
+                r[2][0] * whole_dir[0] + r[2][1] * whole_dir[1] + r[2][2] * whole_dir[2],
+            ];
+            let to = [d[0] / len, d[1] / len, d[2] / len];
+            r = mat3_mul(&rotation_between(&from, &to), &r);
+        } else {
+            // Stems: the map lays the unit x axis along the drawn
+            // segment, so align heading with it directly.
+            let h = [r[0][0], r[1][0], r[2][0]];
+            let to = [d[0] / len, d[1] / len, d[2] / len];
+            r = mat3_mul(&rotation_between(&h, &to), &r);
+        }
+
+        // Mirror partners get the reflection folded in: flip the local
+        // left axis (column 1), the 3D analogue of the 2D mirror flag.
+        let mirror = Some(s.symbol) == partner;
+        let flip = if mirror { -1.0 } else { 1.0 };
+
+        let m = [
+            len * r[0][0], flip * len * r[0][1], len * r[0][2],
+            len * r[1][0], flip * len * r[1][1], len * r[1][2],
+            len * r[2][0], flip * len * r[2][1], len * r[2][2],
+            s.p1[0], s.p1[1], s.p1[2],
+        ];
+        let piece = Piece3 { m, depth: s.depth, symbol: s.symbol };
+        if s.branch {
+            branches.push(piece);
+        } else {
+            stems.push(piece);
+        }
+    }
+
+    if branches.is_empty() {
+        return Err("no recursion sites found — nothing carries a copy of the system".into());
+    }
+
+    // Rotate the global frame so the whole system's displacement lies
+    // along +x — the same convention the 2D extractor uses, and the one
+    // the path variation's anchors assume: the curve must run from the
+    // origin to (1, 0, 0), or "exit of cell i" anchored at x̂ points the
+    // wrong way and the chain shatters (found as a nearly empty render).
+    // Maps conjugate: A' = G·A·Gᵀ, t' = G·t.
+    let g = rotation_between(&whole_dir, &[1.0, 0.0, 0.0]);
+    let reframe = |piece: &mut Piece3| {
+        let a = [
+            [piece.m[0], piece.m[1], piece.m[2]],
+            [piece.m[3], piece.m[4], piece.m[5]],
+            [piece.m[6], piece.m[7], piece.m[8]],
+        ];
+        let gt = [
+            [g[0][0], g[1][0], g[2][0]],
+            [g[0][1], g[1][1], g[2][1]],
+            [g[0][2], g[1][2], g[2][2]],
+        ];
+        let ga = mat3_mul(&g, &a);
+        let gagt = mat3_mul(&ga, &gt);
+        let t = [piece.m[9], piece.m[10], piece.m[11]];
+        for i in 0..3 {
+            for j in 0..3 {
+                piece.m[i * 3 + j] = gagt[i][j];
+            }
+            piece.m[9 + i] = g[i][0] * t[0] + g[i][1] * t[1] + g[i][2] * t[2];
+        }
+    };
+    for b in branches.iter_mut() {
+        reframe(b);
+    }
+    for st in stems.iter_mut() {
+        reframe(st);
+    }
+
+    Ok(Pieces3 { branches, stems })
+}
+
+/// The rotation carrying unit vector `from` onto unit vector `to`
+/// (identity when they already agree; a half-turn about any
+/// perpendicular when opposed).
+fn rotation_between(from: &[f64; 3], to: &[f64; 3]) -> [[f64; 3]; 3] {
+    let cross = [
+        from[1] * to[2] - from[2] * to[1],
+        from[2] * to[0] - from[0] * to[2],
+        from[0] * to[1] - from[1] * to[0],
+    ];
+    let dot = from[0] * to[0] + from[1] * to[1] + from[2] * to[2];
+    let s2 = cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2];
+    if s2 < 1e-18 {
+        if dot > 0.0 {
+            return [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+        }
+        // Opposed: rotate half a turn about any axis perpendicular to `from`.
+        let axis = if from[0].abs() < 0.9 {
+            let a = [0.0, -from[2], from[1]];
+            let n = (a[1] * a[1] + a[2] * a[2]).sqrt();
+            [0.0, a[1] / n, a[2] / n]
+        } else {
+            let a = [-from[2], 0.0, from[0]];
+            let n = (a[0] * a[0] + a[2] * a[2]).sqrt();
+            [a[0] / n, 0.0, a[2] / n]
+        };
+        let (x, y, z) = (axis[0], axis[1], axis[2]);
+        return [
+            [2.0 * x * x - 1.0, 2.0 * x * y, 2.0 * x * z],
+            [2.0 * x * y, 2.0 * y * y - 1.0, 2.0 * y * z],
+            [2.0 * x * z, 2.0 * y * z, 2.0 * z * z - 1.0],
+        ];
+    }
+    // Rodrigues via the cross-product matrix: R = I + K + K²·(1-c)/s².
+    let k = [
+        [0.0, -cross[2], cross[1]],
+        [cross[2], 0.0, -cross[0]],
+        [-cross[1], cross[0], 0.0],
+    ];
+    let k2 = mat3_mul(&k, &k);
+    let f = (1.0 - dot) / s2;
+    let mut out = [[0.0; 3]; 3];
+    for i in 0..3 {
+        for j in 0..3 {
+            out[i][j] = if i == j { 1.0 } else { 0.0 } + k[i][j] + k2[i][j] * f;
+        }
+    }
+    out
+}
+
+/// 3D bounding box of the drawn system: (min_x, min_y, min_z, max_x,
+/// max_y, max_z), normalized by the whole displacement length. Framing
+/// uses xy; the camera handles z.
+pub fn lsystem_bounds3(
+    axiom: &str,
+    rules: &[(char, String)],
+    depth: u32,
+    angle_deg: f64,
+    max_steps: usize,
+) -> Option<(f64, f64, f64, f64, f64, f64)> {
+    let angle = angle_deg * std::f64::consts::PI / 180.0;
+    for d in (0..=depth).rev() {
+        let Ok(expanded) = lsystem_expand(axiom, rules, d) else {
+            continue;
+        };
+        if expanded.len() > max_steps {
+            continue;
+        }
+        let mut st = LTurtle3::new();
+        let mut stack = Vec::new();
+        let mut b = (f64::MAX, f64::MAX, f64::MAX, f64::MIN, f64::MIN, f64::MIN);
+        let mut drew = false;
+        for ch in expanded.chars() {
+            lsys_step3(ch, angle, &mut st, &mut stack);
+            if matches!(ch, 'F' | 'G' | 'A' | 'B') {
+                drew = true;
+                b.0 = b.0.min(st.p[0]);
+                b.1 = b.1.min(st.p[1]);
+                b.2 = b.2.min(st.p[2]);
+                b.3 = b.3.max(st.p[0]);
+                b.4 = b.4.max(st.p[1]);
+                b.5 = b.5.max(st.p[2]);
+            }
+        }
+        let d2 = st.p[0] * st.p[0] + st.p[1] * st.p[1] + st.p[2] * st.p[2];
+        if !drew || d2 < 1e-9 {
+            continue;
+        }
+        // Same frame as lsystem_pieces3: displacement along +x. The box
+        // must be axis-aligned in THAT frame or panning frames the wrong
+        // spot, so re-walk the points through the rotation.
+        let n = d2.sqrt();
+        let dirv = [st.p[0] / n, st.p[1] / n, st.p[2] / n];
+        let g = rotation_between(&dirv, &[1.0, 0.0, 0.0]);
+        let mut st2 = LTurtle3::new();
+        let mut stack2 = Vec::new();
+        let mut bb = (f64::MAX, f64::MAX, f64::MAX, f64::MIN, f64::MIN, f64::MIN);
+        for ch in expanded.chars() {
+            lsys_step3(ch, angle, &mut st2, &mut stack2);
+            if matches!(ch, 'F' | 'G' | 'A' | 'B') {
+                let q = [
+                    (g[0][0] * st2.p[0] + g[0][1] * st2.p[1] + g[0][2] * st2.p[2]) / n,
+                    (g[1][0] * st2.p[0] + g[1][1] * st2.p[1] + g[1][2] * st2.p[2]) / n,
+                    (g[2][0] * st2.p[0] + g[2][1] * st2.p[1] + g[2][2] * st2.p[2]) / n,
+                ];
+                bb.0 = bb.0.min(q[0]);
+                bb.1 = bb.1.min(q[1]);
+                bb.2 = bb.2.min(q[2]);
+                bb.3 = bb.3.max(q[0]);
+                bb.4 = bb.4.max(q[1]);
+                bb.5 = bb.5.max(q[2]);
+            }
+        }
+        return Some(bb);
+    }
+    None
+}
+
 /// Rescale and rotate a path so its overall displacement is the unit
 /// segment from (0, 0) to (1, 0).
 ///
@@ -1895,6 +2396,129 @@ mod tests {
         let none = vec![('X', "FF+FF".to_string())];
         let err = lsystem_plant_segments("X", &none, 25.0).unwrap_err();
         assert!(err.contains("no recursion sites"), "{err}");
+    }
+
+
+    fn col(m: &[f64; 12], j: usize) -> [f64; 3] {
+        [m[j], m[3 + j], m[6 + j]]
+    }
+
+    fn norm3(v: &[f64; 3]) -> f64 {
+        (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
+    }
+
+    #[test]
+    fn turtle3_matches_the_2d_turtle_in_the_plane() {
+        // A 2D rule through the 3D extractor: same piece scales as the 2D
+        // plant extraction, everything in the z = 0 plane.
+        let rules = vec![
+            ('X', "F-[[X]+X]+F[+FX]-X".to_string()),
+            ('F', "FF".to_string()),
+        ];
+        let p2 = lsystem_plant_segments("X", &rules, 22.5).unwrap();
+        let p3 = lsystem_pieces3("X", &rules, 22.5).unwrap();
+        assert_eq!(p3.branches.len(), p2.branches.len());
+        assert_eq!(p3.stems.len(), p2.stems.len());
+
+        let mut s2: Vec<f64> = p2
+            .branches
+            .iter()
+            .map(|b| ((b.x2 - b.x1).powi(2) + (b.y2 - b.y1).powi(2)).sqrt())
+            .collect();
+        let mut s3: Vec<f64> = p3.branches.iter().map(|b| norm3(&col(&b.m, 0))).collect();
+        s2.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        s3.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        for (a, b) in s2.iter().zip(s3.iter()) {
+            // 1e-4, not 1e-6: the 2D turtle accumulates an angle while the
+            // 3D one accumulates matrix products, and over a ~200k-step
+            // deep walk the f64 rounding drifts by ~1e-5. Same maps.
+            assert!((a - b).abs() < 1e-4, "scales agree across extractors: {a} vs {b}");
+        }
+        for b in &p3.branches {
+            assert!(b.m[11].abs() < 1e-9, "2D rules stay in the z = 0 plane");
+            // Planar frame: the zz entry is the whole scale.
+            assert!((b.m[8] - norm3(&col(&b.m, 0))).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn rolled_branches_leave_the_plane() {
+        // Roll then yaw tips subsequent growth out of the xy plane — the
+        // whole point of the 3D commands.
+        let rules = vec![
+            ('X', "F[\\+X][/-X]FX".to_string()),
+            ('F', "FF".to_string()),
+        ];
+        let p = lsystem_pieces3("X", &rules, 25.0).unwrap();
+        assert_eq!(p.branches.len(), 3, "three recursion sites");
+        assert_eq!(p.stems.len(), 2, "two stems");
+
+        // The two bracketed branches were rolled before yawing, so their
+        // frames must have a genuine z component; the trailing branch
+        // stays in-plane.
+        let out_of_plane = |m: &[f64; 12]| col(m, 0)[2].abs() + col(m, 1)[2].abs() > 1e-3;
+        assert!(out_of_plane(&p.branches[0].m), "rolled branch 0 leaves the plane");
+        assert!(out_of_plane(&p.branches[1].m), "rolled branch 1 leaves the plane");
+        assert!(!out_of_plane(&p.branches[2].m), "unrolled branch stays planar");
+
+        // Every branch map is a genuine similarity: orthogonal columns of
+        // equal length, and that length is the contraction.
+        for (i, b) in p.branches.iter().enumerate() {
+            let c0 = col(&b.m, 0);
+            let c1 = col(&b.m, 1);
+            let c2 = col(&b.m, 2);
+            let (n0, n1, n2) = (norm3(&c0), norm3(&c1), norm3(&c2));
+            assert!((n0 - n1).abs() < 1e-6 && (n1 - n2).abs() < 1e-6, "branch {i} isotropic");
+            assert!(n0 > 1e-3 && n0 < 0.999, "branch {i} contracts: {n0}");
+            let d01 = c0[0] * c1[0] + c0[1] * c1[1] + c0[2] * c1[2];
+            assert!(d01.abs() < 1e-6, "branch {i} columns orthogonal");
+        }
+    }
+
+    #[test]
+    fn edge_pieces3_chain_in_the_unit_frame() {
+        // The frame convention the path variation relies on: the system
+        // runs from the origin to (1,0,0), and for an edge curve each
+        // piece's exit — its map applied to x̂ — is the next piece's
+        // entry. This was broken before the global reframe: exits
+        // anchored at x̂ pointed the wrong way and the path shattered.
+        let rules = vec![('F', r"F+F\--F+F".to_string())];
+        let p = lsystem_pieces3("F", &rules, 60.0).unwrap();
+        assert_eq!(p.branches.len(), 4);
+
+        let apply = |m: &[f64; 12], v: [f64; 3]| {
+            [
+                m[0] * v[0] + m[1] * v[1] + m[2] * v[2] + m[9],
+                m[3] * v[0] + m[4] * v[1] + m[5] * v[2] + m[10],
+                m[6] * v[0] + m[7] * v[1] + m[8] * v[2] + m[11],
+            ]
+        };
+        for w in p.branches.windows(2) {
+            let exit = apply(&w[0].m, [1.0, 0.0, 0.0]);
+            let entry = [w[1].m[9], w[1].m[10], w[1].m[11]];
+            for k in 0..3 {
+                assert!(
+                    (exit[k] - entry[k]).abs() < 1e-3,
+                    "pieces must chain: {exit:?} vs {entry:?}"
+                );
+            }
+        }
+        // And the whole chain runs from the origin to (1, 0, 0).
+        let first = &p.branches[0].m;
+        assert!(first[9].abs() < 1e-6 && first[10].abs() < 1e-6 && first[11].abs() < 1e-6);
+        let end = apply(&p.branches[3].m, [1.0, 0.0, 0.0]);
+        assert!((end[0] - 1.0).abs() < 1e-3 && end[1].abs() < 1e-3 && end[2].abs() < 1e-3,
+            "chain ends at (1,0,0): {end:?}");
+    }
+
+    #[test]
+    fn lsystem_3d_detection_looks_for_the_3d_commands() {
+        let flat = vec![('F', "F+F--F+F".to_string())];
+        assert!(!lsystem_uses_3d("F", &flat));
+        let rolled = vec![('X', "F[\\+X]FX".to_string())];
+        assert!(lsystem_uses_3d("X", &rolled));
+        let pitched = vec![('X', "F[&X]F".to_string())];
+        assert!(lsystem_uses_3d("X", &pitched));
     }
 
     #[test]
