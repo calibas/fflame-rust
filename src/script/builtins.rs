@@ -706,37 +706,94 @@ pub fn lsystem_node_segments(
         }
     };
 
-    let mut st = LTurtle { x: 0.0, y: 0.0, h: 0.0 };
-    let mut stack: Vec<LTurtle> = Vec::new();
-    let mut chunks: Vec<(f64, f64, f64, f64, char)> = Vec::new();
-    for ch in rule.chars() {
-        if is_var(ch) {
-            let (sx, sy) = (st.x, st.y);
-            let body = if ch == primary { &exp_primary } else { &exp_partner };
-            for bc in body.chars() {
-                lsys_step(bc, angle, &mut st, &mut stack);
+    // Walk the rule against a pair of expansions, returning chunk
+    // endpoints normalized into the unit-displacement frame.
+    let walk = |exp_p: &str, exp_q: &str| -> Result<Vec<(f64, f64, f64, f64, char)>, String> {
+        let mut st = LTurtle { x: 0.0, y: 0.0, h: 0.0 };
+        let mut stack: Vec<LTurtle> = Vec::new();
+        let mut chunks: Vec<(f64, f64, f64, f64, char)> = Vec::new();
+        for ch in rule.chars() {
+            if is_var(ch) {
+                let (sx, sy) = (st.x, st.y);
+                let body = if ch == primary { exp_p } else { exp_q };
+                for bc in body.chars() {
+                    lsys_step(bc, angle, &mut st, &mut stack);
+                }
+                chunks.push((sx, sy, st.x, st.y, ch));
+            } else {
+                lsys_step(ch, angle, &mut st, &mut stack);
             }
-            chunks.push((sx, sy, st.x, st.y, ch));
-        } else {
-            lsys_step(ch, angle, &mut st, &mut stack);
+        }
+        let (dx, dy) = (st.x, st.y);
+        let len2 = dx * dx + dy * dy;
+        if len2 < 1e-9 {
+            return Err(
+                "this curve returns to where it started, so it has no unit-segment frame".into(),
+            );
+        }
+        let map = |px: f64, py: f64| ((px * dx + py * dy) / len2, (py * dx - px * dy) / len2);
+        Ok(chunks
+            .iter()
+            .map(|(x1, y1, x2, y2, sym)| {
+                let (ax, ay) = map(*x1, *y1);
+                let (bx, by) = map(*x2, *y2);
+                (ax, ay, bx, by, *sym)
+            })
+            .collect())
+    };
+
+    let fine = walk(&exp_primary, &exp_partner)?;
+
+    // The measured spans converge geometrically — error ∝ scaleᵈᵉᵖᵗʰ —
+    // so one Richardson step against the next-shallower depth removes
+    // most of the residual: q∞ ≈ q_d + (q_d − q_{d−1})·σ/(1−σ). Without
+    // it the cells miss exact tiling by ~scaleᵈᵉᵖᵗʰ, which shows up as
+    // visible seams between the copies.
+    let mut refined = fine.clone();
+    if depth >= 2 {
+        let ep = lsystem_expand(&primary.to_string(), rules, depth - 1);
+        let pp = match partner {
+            Some(pc) => lsystem_expand(&pc.to_string(), rules, depth - 1),
+            None => Ok(String::new()),
+        };
+        if let (Ok(a), Ok(b)) = (ep, pp) {
+            if let Ok(coarse) = walk(&a, &b) {
+                if coarse.len() == fine.len() {
+                    let mut sigma = 0.0;
+                    for f in &fine {
+                        sigma += ((f.2 - f.0).powi(2) + (f.3 - f.1).powi(2)).sqrt();
+                    }
+                    sigma /= fine.len() as f64;
+                    if sigma > 0.05 && sigma < 0.95 {
+                        let k = sigma / (1.0 - sigma);
+                        refined = fine
+                            .iter()
+                            .zip(coarse.iter())
+                            .map(|(f, c)| {
+                                (
+                                    f.0 + (f.0 - c.0) * k,
+                                    f.1 + (f.1 - c.1) * k,
+                                    f.2 + (f.2 - c.2) * k,
+                                    f.3 + (f.3 - c.3) * k,
+                                    f.4,
+                                )
+                            })
+                            .collect();
+                    }
+                }
+            }
         }
     }
 
-    // Normalize into the unit-displacement frame (walk started at the origin).
-    let (dx, dy) = (st.x, st.y);
-    let len2 = dx * dx + dy * dy;
-    if len2 < 1e-9 {
-        return Err(
-            "this curve returns to where it started, so it has no unit-segment frame".into(),
-        );
-    }
-    let map = |px: f64, py: f64| ((px * dx + py * dy) / len2, (py * dx - px * dy) / len2);
-    Ok(chunks
+    Ok(refined
         .iter()
-        .map(|(x1, y1, x2, y2, sym)| {
-            let (ax, ay) = map(*x1, *y1);
-            let (bx, by) = map(*x2, *y2);
-            Segment { x1: ax, y1: ay, x2: bx, y2: by, depth: 0, symbol: *sym }
+        .map(|(ax, ay, bx, by, sym)| Segment {
+            x1: *ax,
+            y1: *ay,
+            x2: *bx,
+            y2: *by,
+            depth: 0,
+            symbol: *sym,
         })
         .collect())
 }
@@ -1461,9 +1518,11 @@ mod tests {
 
         for (i, s) in segs.iter().enumerate() {
             let len = ((s.x2 - s.x1).powi(2) + (s.y2 - s.y1).powi(2)).sqrt();
+            // Richardson-extrapolated spans should hit the exact 1/2 to
+            // well under a pixel; 1e-3 would fail without the step.
             assert!(
-                (len - 0.5).abs() < 0.02,
-                "map {i} scale {len} should be about one half"
+                (len - 0.5).abs() < 1e-3,
+                "map {i} scale {len} should be one half"
             );
         }
     }
@@ -1479,8 +1538,8 @@ mod tests {
         for (i, s) in segs.iter().enumerate() {
             let len = ((s.x2 - s.x1).powi(2) + (s.y2 - s.y1).powi(2)).sqrt();
             assert!(
-                (len - 1.0 / 3.0).abs() < 0.02,
-                "map {i} scale {len} should be about one third"
+                (len - 1.0 / 3.0).abs() < 1e-3,
+                "map {i} scale {len} should be one third"
             );
         }
     }

@@ -1236,3 +1236,53 @@ fn mirrored_pieces_get_a_reflected_transform() {
         assert!((scale - 0.5).abs() < 1e-6, "piece {i} scale {scale} should be 0.5");
     }
 }
+
+#[test]
+fn path_mode_bakes_the_maps_into_one_variation() {
+    // Path mode draws the FINITE-depth curve — the iconic Hilbert maze —
+    // which the attractor transforms cannot show (their limit is the
+    // filled square). One transform carries the lsystem_path variation
+    // with the maps as parameters; no geometry is stored, so Iterations
+    // stays a live parameter.
+    let host = ScriptHost::new();
+    let source = include_str!("../../assets/scripts/generators/lsystem.rhai");
+    let mut params: HashMap<String, ParamValue> = [
+        ("axiom", "X"),
+        ("rule_1", "X=-YF+XFX+FY-"),
+        ("rule_2", "Y=+XF-YFY-FX+"),
+    ]
+    .iter()
+    .map(|(k, v)| (k.to_string(), ParamValue::Text(v.to_string())))
+    .collect();
+    params.insert("angle".to_string(), ParamValue::Float(90.0));
+    params.insert("output".to_string(), ParamValue::Choice(1));
+    params.insert("path_iterations".to_string(), ParamValue::Int(6));
+
+    let out = host.run(source, &FractalConfig::default(), 1, params).unwrap();
+    assert!(
+        out.messages.iter().any(|m| m.contains("Path mode")),
+        "{:?}",
+        out.messages
+    );
+
+    let ts = &out.config.flame.transforms;
+    assert_eq!(ts.len(), 1, "one transform carries the whole path");
+    let t = &ts[0];
+    assert!(t.variations.contains_key("lsystem_path"));
+    let p = |k: &str| t.variation_params[&format!("lsystem_path.{k}")] as f64;
+    assert_eq!(p("map_count") as i64, 4, "Hilbert is four maps");
+    assert_eq!(p("iterations") as i64, 6, "depth passed through");
+
+    // The maps are the same similarities the attractor transforms would
+    // get: scale 1/2, with the mirrored Y maps carrying negative
+    // determinant.
+    for k in 0..4 {
+        let (a, b) = (p(&format!("m{k}_a")), p(&format!("m{k}_b")));
+        let (c, d) = (p(&format!("m{k}_c")), p(&format!("m{k}_d")));
+        let scale = (a * a + c * c).sqrt();
+        assert!((scale - 0.5).abs() < 1e-3, "map {k} scale {scale}");
+        let det = a * d - b * c;
+        let mirrored = k == 0 || k == 3; // occurrence order Y, X, X, Y
+        assert_eq!(det < 0.0, mirrored, "map {k} determinant sign");
+    }
+}
