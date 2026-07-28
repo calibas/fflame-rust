@@ -188,6 +188,8 @@ pub static LSYSTEM_PATH_3D: VariationDef = VariationDef {
         param!("anchor_x", "Anchor X", unlimited_float, 0.5, -2.0, 2.0, "Anchor point x (the attractor's centre, set by the script)."),
         param!("anchor_y", "Anchor Y", unlimited_float, 0.0, -2.0, 2.0, "Anchor point y."),
         param!("anchor_z", "Anchor Z", unlimited_float, 0.0, -2.0, 2.0, "Anchor point z."),
+        param!("thickness", "Thickness", float, 0.0, 0.0, 0.2, "Tube radius around the drawn line, in the curve's own units (the whole curve spans 1). Samples are offset in the DISC perpendicular to the local segment — offsetting along it would only slide a point along ground the sweep already covers. Note the density trade: the same samples spread through more volume, so a thick tube is dimmer; raise Brightness to match."),
+        param!("soft", "Soft Edges", bool, false, "Gaussian falloff across the tube instead of a solid one. Solid reads as a drawn tube; soft reads as a glow."),
     ],
     wgsl_2d: WGSL_2D,
     wgsl_3d: WGSL_3D,
@@ -241,7 +243,9 @@ fn variation_lsystem_path_3D(p: vec2<f32>, xform_id: u32, variation_id: u32, rng
     }
     let t = rng_nextf(rng);
 
-    var out: vec3<f32>;
+    var seg_a: vec3<f32>;
+    var seg_b: vec3<f32>;
+    var frac: f32 = 0.0;
     if (anchored) {
         // Vertex chain through the anchor's image in each cell — the
         // classic space-filling drawing (anchor = attractor centre gives
@@ -254,18 +258,52 @@ fn variation_lsystem_path_3D(p: vec2<f32>, xform_id: u32, variation_id: u32, rng
         let segs = max(total - 1u, 1u);
         let ts = t * f32(segs);
         let idx = min(u32(ts), segs - 1u);
-        out = lsp3_point(xform_id, variation_id, idx, iters, n, anchor);
-        if (connect) {
-            let nxt = lsp3_point(xform_id, variation_id, idx + 1u, iters, n, anchor);
-            out = mix(out, nxt, clamp(ts - f32(idx), 0.0, 1.0));
-        }
+        seg_a = lsp3_point(xform_id, variation_id, idx, iters, n, anchor);
+        seg_b = lsp3_point(xform_id, variation_id, idx + 1u, iters, n, anchor);
+        frac = clamp(ts - f32(idx), 0.0, 1.0);
     } else {
         let idx = min(u32(t * f32(total)), total - 1u);
-        out = lsp3_point(xform_id, variation_id, idx, iters, n, vec3<f32>(0.0, 0.0, 0.0));
-        if (connect) {
-            let exit_p = lsp3_point(xform_id, variation_id, idx, iters, n, vec3<f32>(1.0, 0.0, 0.0));
-            let frac = clamp(t * f32(total) - f32(idx), 0.0, 1.0);
-            out = mix(out, exit_p, frac);
+        seg_a = lsp3_point(xform_id, variation_id, idx, iters, n, vec3<f32>(0.0, 0.0, 0.0));
+        seg_b = lsp3_point(xform_id, variation_id, idx, iters, n, vec3<f32>(1.0, 0.0, 0.0));
+        frac = clamp(t * f32(total) - f32(idx), 0.0, 1.0);
+    }
+
+    var out = seg_a;
+    if (connect) {
+        out = mix(seg_a, seg_b, frac);
+    }
+
+    // Thicken into a TUBE: offset within the disc perpendicular to the
+    // segment. An along-segment offset would only slide the sample along
+    // ground the t-sweep already covers.
+    let thickness = get_param(xform_id, variation_id, 152u);
+    if (thickness > 0.0) {
+        let soft = get_param(xform_id, variation_id, 153u) > 0.5;
+        let dseg = seg_b - seg_a;
+        let dlen = length(dseg);
+        // Uniform in the disc needs sqrt(u); soft uses an Irwin-Hall
+        // gaussian radius instead.
+        var rad = sqrt(rng_nextf(rng));
+        if (soft) {
+            rad = abs(rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) - 2.0) * 0.5;
+        }
+        let ang = rng_nextf(rng) * 6.28318530718;
+        if (connect && dlen > 1e-9) {
+            let dir = dseg / dlen;
+            // Any axis not parallel to dir gives a stable basis.
+            var ref_axis = vec3<f32>(0.0, 0.0, 1.0);
+            if (abs(dir.z) > 0.9) {
+                ref_axis = vec3<f32>(1.0, 0.0, 0.0);
+            }
+            let ub = normalize(cross(dir, ref_axis));
+            let vb = cross(dir, ub);
+            out = out + (ub * cos(ang) + vb * sin(ang)) * (thickness * rad);
+        } else {
+            // Vertices only: no segment to be perpendicular to, so spread
+            // through the whole ball.
+            let zc = rng_nextf(rng) * 2.0 - 1.0;
+            let rc = sqrt(max(1.0 - zc * zc, 0.0));
+            out = out + vec3<f32>(rc * cos(ang), rc * sin(ang), zc) * (thickness * rad);
         }
     }
     if (dc) {
@@ -324,7 +362,9 @@ fn variation_lsystem_path_3D(p: vec3<f32>, xform_id: u32, variation_id: u32, rng
     }
     let t = rng_nextf(rng);
 
-    var out: vec3<f32>;
+    var seg_a: vec3<f32>;
+    var seg_b: vec3<f32>;
+    var frac: f32 = 0.0;
     if (anchored) {
         // Vertex chain through the anchor's image in each cell — the
         // classic space-filling drawing (anchor = attractor centre gives
@@ -337,18 +377,52 @@ fn variation_lsystem_path_3D(p: vec3<f32>, xform_id: u32, variation_id: u32, rng
         let segs = max(total - 1u, 1u);
         let ts = t * f32(segs);
         let idx = min(u32(ts), segs - 1u);
-        out = lsp3_point(xform_id, variation_id, idx, iters, n, anchor);
-        if (connect) {
-            let nxt = lsp3_point(xform_id, variation_id, idx + 1u, iters, n, anchor);
-            out = mix(out, nxt, clamp(ts - f32(idx), 0.0, 1.0));
-        }
+        seg_a = lsp3_point(xform_id, variation_id, idx, iters, n, anchor);
+        seg_b = lsp3_point(xform_id, variation_id, idx + 1u, iters, n, anchor);
+        frac = clamp(ts - f32(idx), 0.0, 1.0);
     } else {
         let idx = min(u32(t * f32(total)), total - 1u);
-        out = lsp3_point(xform_id, variation_id, idx, iters, n, vec3<f32>(0.0, 0.0, 0.0));
-        if (connect) {
-            let exit_p = lsp3_point(xform_id, variation_id, idx, iters, n, vec3<f32>(1.0, 0.0, 0.0));
-            let frac = clamp(t * f32(total) - f32(idx), 0.0, 1.0);
-            out = mix(out, exit_p, frac);
+        seg_a = lsp3_point(xform_id, variation_id, idx, iters, n, vec3<f32>(0.0, 0.0, 0.0));
+        seg_b = lsp3_point(xform_id, variation_id, idx, iters, n, vec3<f32>(1.0, 0.0, 0.0));
+        frac = clamp(t * f32(total) - f32(idx), 0.0, 1.0);
+    }
+
+    var out = seg_a;
+    if (connect) {
+        out = mix(seg_a, seg_b, frac);
+    }
+
+    // Thicken into a TUBE: offset within the disc perpendicular to the
+    // segment. An along-segment offset would only slide the sample along
+    // ground the t-sweep already covers.
+    let thickness = get_param(xform_id, variation_id, 152u);
+    if (thickness > 0.0) {
+        let soft = get_param(xform_id, variation_id, 153u) > 0.5;
+        let dseg = seg_b - seg_a;
+        let dlen = length(dseg);
+        // Uniform in the disc needs sqrt(u); soft uses an Irwin-Hall
+        // gaussian radius instead.
+        var rad = sqrt(rng_nextf(rng));
+        if (soft) {
+            rad = abs(rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) - 2.0) * 0.5;
+        }
+        let ang = rng_nextf(rng) * 6.28318530718;
+        if (connect && dlen > 1e-9) {
+            let dir = dseg / dlen;
+            // Any axis not parallel to dir gives a stable basis.
+            var ref_axis = vec3<f32>(0.0, 0.0, 1.0);
+            if (abs(dir.z) > 0.9) {
+                ref_axis = vec3<f32>(1.0, 0.0, 0.0);
+            }
+            let ub = normalize(cross(dir, ref_axis));
+            let vb = cross(dir, ub);
+            out = out + (ub * cos(ang) + vb * sin(ang)) * (thickness * rad);
+        } else {
+            // Vertices only: no segment to be perpendicular to, so spread
+            // through the whole ball.
+            let zc = rng_nextf(rng) * 2.0 - 1.0;
+            let rc = sqrt(max(1.0 - zc * zc, 0.0));
+            out = out + vec3<f32>(rc * cos(ang), rc * sin(ang), zc) * (thickness * rad);
         }
     }
     if (dc) {
