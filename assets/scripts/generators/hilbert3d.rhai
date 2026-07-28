@@ -31,6 +31,15 @@ if output == "Path (finite depth)" {
     t.set_variation_param("lsystem_path_3D.map_count", maps.len());
     t.set_variation_param("lsystem_path_3D.connect", 1.0);
     t.set_variation_param("lsystem_path_3D.dc", if colour { 1.0 } else { 0.0 });
+    // Centre chain, not cell spans: spans lie on the cell-edge lattice
+    // and overlap (three-way joins, phantom dead ends — the same disease
+    // the 2D Hilbert had). The cube's centre images to every cell's
+    // centre, and corner-chaining guarantees consecutive cells share a
+    // face, so every centre-chain segment is a clean axis-aligned step.
+    t.set_variation_param("lsystem_path_3D.anchored", 1.0);
+    t.set_variation_param("lsystem_path_3D.anchor_x", 0.5);
+    t.set_variation_param("lsystem_path_3D.anchor_y", 0.5);
+    t.set_variation_param("lsystem_path_3D.anchor_z", 0.5);
     t.weight = 1.0;
     let names = ["xx", "xy", "xz", "yx", "yy", "yz", "zx", "zy", "zz", "tx", "ty", "tz"];
     for k in 0..maps.len() {

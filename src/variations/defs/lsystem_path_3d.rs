@@ -184,6 +184,10 @@ pub static LSYSTEM_PATH_3D: VariationDef = VariationDef {
         param!("m11_tx", "M11 TX", unlimited_float, 0.0, -4.0, 4.0, "Map 11 affine coefficient tx. Normally written by the L-System script."),
         param!("m11_ty", "M11 TY", unlimited_float, 0.0, -4.0, 4.0, "Map 11 affine coefficient ty. Normally written by the L-System script."),
         param!("m11_tz", "M11 TZ", unlimited_float, 0.0, -4.0, 4.0, "Map 11 affine coefficient tz. Normally written by the L-System script."),
+        param!("anchored", "Anchored", bool, false, "Vertex-chain mode: connect the images of the anchor point in consecutive cells instead of each cell's entry-to-exit span. Space-filling curves need this — their spans lie on the cell-edge lattice and overlap each other (three-way joins, phantom dead ends); the centre chain is the classic self-avoiding drawing."),
+        param!("anchor_x", "Anchor X", unlimited_float, 0.5, -2.0, 2.0, "Anchor point x (the attractor's centre, set by the script)."),
+        param!("anchor_y", "Anchor Y", unlimited_float, 0.0, -2.0, 2.0, "Anchor point y."),
+        param!("anchor_z", "Anchor Z", unlimited_float, 0.0, -2.0, 2.0, "Anchor point z."),
     ],
     wgsl_2d: WGSL_2D,
     wgsl_3d: WGSL_3D,
@@ -229,18 +233,40 @@ fn variation_lsystem_path_3D(p: vec2<f32>, xform_id: u32, variation_id: u32, rng
     let connect = get_param(xform_id, variation_id, 2u) > 0.5;
     let dc = get_param(xform_id, variation_id, 3u) > 0.5;
 
+    let anchored = get_param(xform_id, variation_id, 148u) > 0.5;
+
     var total = 1u;
     for (var j = 0u; j < iters; j = j + 1u) {
         total = min(total * n, 16000000u);
     }
     let t = rng_nextf(rng);
-    let idx = min(u32(t * f32(total)), total - 1u);
 
-    var out = lsp3_point(xform_id, variation_id, idx, iters, n, vec3<f32>(0.0, 0.0, 0.0));
-    if (connect) {
-        let exit_p = lsp3_point(xform_id, variation_id, idx, iters, n, vec3<f32>(1.0, 0.0, 0.0));
-        let frac = clamp(t * f32(total) - f32(idx), 0.0, 1.0);
-        out = mix(out, exit_p, frac);
+    var out: vec3<f32>;
+    if (anchored) {
+        // Vertex chain through the anchor's image in each cell — the
+        // classic space-filling drawing (anchor = attractor centre gives
+        // cell centres). Cell spans lie on the cell-edge lattice and
+        // OVERLAP each other; centres are self-avoiding.
+        let anchor = vec3<f32>(
+            get_param(xform_id, variation_id, 149u),
+            get_param(xform_id, variation_id, 150u),
+            get_param(xform_id, variation_id, 151u));
+        let segs = max(total - 1u, 1u);
+        let ts = t * f32(segs);
+        let idx = min(u32(ts), segs - 1u);
+        out = lsp3_point(xform_id, variation_id, idx, iters, n, anchor);
+        if (connect) {
+            let nxt = lsp3_point(xform_id, variation_id, idx + 1u, iters, n, anchor);
+            out = mix(out, nxt, clamp(ts - f32(idx), 0.0, 1.0));
+        }
+    } else {
+        let idx = min(u32(t * f32(total)), total - 1u);
+        out = lsp3_point(xform_id, variation_id, idx, iters, n, vec3<f32>(0.0, 0.0, 0.0));
+        if (connect) {
+            let exit_p = lsp3_point(xform_id, variation_id, idx, iters, n, vec3<f32>(1.0, 0.0, 0.0));
+            let frac = clamp(t * f32(total) - f32(idx), 0.0, 1.0);
+            out = mix(out, exit_p, frac);
+        }
     }
     if (dc) {
         *vc = t;
@@ -290,18 +316,40 @@ fn variation_lsystem_path_3D(p: vec3<f32>, xform_id: u32, variation_id: u32, rng
     let connect = get_param(xform_id, variation_id, 2u) > 0.5;
     let dc = get_param(xform_id, variation_id, 3u) > 0.5;
 
+    let anchored = get_param(xform_id, variation_id, 148u) > 0.5;
+
     var total = 1u;
     for (var j = 0u; j < iters; j = j + 1u) {
         total = min(total * n, 16000000u);
     }
     let t = rng_nextf(rng);
-    let idx = min(u32(t * f32(total)), total - 1u);
 
-    var out = lsp3_point(xform_id, variation_id, idx, iters, n, vec3<f32>(0.0, 0.0, 0.0));
-    if (connect) {
-        let exit_p = lsp3_point(xform_id, variation_id, idx, iters, n, vec3<f32>(1.0, 0.0, 0.0));
-        let frac = clamp(t * f32(total) - f32(idx), 0.0, 1.0);
-        out = mix(out, exit_p, frac);
+    var out: vec3<f32>;
+    if (anchored) {
+        // Vertex chain through the anchor's image in each cell — the
+        // classic space-filling drawing (anchor = attractor centre gives
+        // cell centres). Cell spans lie on the cell-edge lattice and
+        // OVERLAP each other; centres are self-avoiding.
+        let anchor = vec3<f32>(
+            get_param(xform_id, variation_id, 149u),
+            get_param(xform_id, variation_id, 150u),
+            get_param(xform_id, variation_id, 151u));
+        let segs = max(total - 1u, 1u);
+        let ts = t * f32(segs);
+        let idx = min(u32(ts), segs - 1u);
+        out = lsp3_point(xform_id, variation_id, idx, iters, n, anchor);
+        if (connect) {
+            let nxt = lsp3_point(xform_id, variation_id, idx + 1u, iters, n, anchor);
+            out = mix(out, nxt, clamp(ts - f32(idx), 0.0, 1.0));
+        }
+    } else {
+        let idx = min(u32(t * f32(total)), total - 1u);
+        out = lsp3_point(xform_id, variation_id, idx, iters, n, vec3<f32>(0.0, 0.0, 0.0));
+        if (connect) {
+            let exit_p = lsp3_point(xform_id, variation_id, idx, iters, n, vec3<f32>(1.0, 0.0, 0.0));
+            let frac = clamp(t * f32(total) - f32(idx), 0.0, 1.0);
+            out = mix(out, exit_p, frac);
+        }
     }
     if (dc) {
         *vc = t;
