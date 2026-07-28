@@ -62,6 +62,9 @@ pub enum ParamDecl {
     Int { key: String, label: String, default: i64, min: i64, max: i64 },
     Bool { key: String, label: String, default: bool },
     Choice { key: String, label: String, options: Vec<String>, default: usize },
+    /// Free text — L-system rules, names, anything the other kinds can't
+    /// express. `max_len` keeps a pasted novel out of the flame.
+    Text { key: String, label: String, default: String, max_len: usize },
 }
 
 impl ParamDecl {
@@ -70,7 +73,8 @@ impl ParamDecl {
             Self::Float { key, .. }
             | Self::Int { key, .. }
             | Self::Bool { key, .. }
-            | Self::Choice { key, .. } => key,
+            | Self::Choice { key, .. }
+            | Self::Text { key, .. } => key,
         }
     }
 
@@ -79,7 +83,8 @@ impl ParamDecl {
             Self::Float { label, .. }
             | Self::Int { label, .. }
             | Self::Bool { label, .. }
-            | Self::Choice { label, .. } => label,
+            | Self::Choice { label, .. }
+            | Self::Text { label, .. } => label,
         }
     }
 }
@@ -91,6 +96,7 @@ pub enum ParamValue {
     Int(i64),
     Bool(bool),
     Choice(usize),
+    Text(String),
 }
 
 /// Turn `trace_a` into `Trace A` for UI labels.
