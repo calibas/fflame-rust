@@ -1429,3 +1429,25 @@ fn hilbert3d_script_builds_the_path() {
     assert!((p("anchor_y") - 0.5).abs() < 1e-6);
     assert!((p("anchor_z") - 0.5).abs() < 1e-6);
 }
+
+#[test]
+fn path_thickness_defaults_off_and_is_appended() {
+    // Thickness must default to 0 so existing flames render exactly as
+    // before, and its parameters must sit AFTER the map bank and the
+    // anchor block — the slot indices the shaders read are positional,
+    // so inserting rather than appending would silently reinterpret
+    // every saved map.
+    let reg = crate::variations::global_registry();
+    for (name, before) in [("lsystem_path", "anchor_y"), ("lsystem_path_3D", "anchor_z")] {
+        let info = reg.get(name).unwrap_or_else(|| panic!("{name} registered"));
+        let names: Vec<String> = info.parameters.iter().map(|p| p.name.to_string()).collect();
+        let anchor_at = names.iter().position(|n| n == before).unwrap();
+        let thick_at = names.iter().position(|n| n == "thickness").unwrap();
+        let soft_at = names.iter().position(|n| n == "soft").unwrap();
+        assert!(thick_at > anchor_at, "{name}: thickness appended after the anchor block");
+        assert_eq!(soft_at, thick_at + 1, "{name}: soft follows thickness");
+
+        let thick = &info.parameters[thick_at];
+        assert_eq!(thick.default_value, 0.0, "{name}: thickness defaults to off");
+    }
+}

@@ -124,6 +124,8 @@ pub static LSYSTEM_PATH: VariationDef = VariationDef {
         param!("anchored", "Anchored", bool, false, "Vertex-chain mode: connect the images of the anchor point in consecutive cells, instead of drawing each cell's entry-to-exit span. Node-rewriting (space-filling) curves need this — their spans lie on the cell-boundary lattice and overlap each other; the centre chain is the classic self-avoiding drawing."),
         param!("anchor_x", "Anchor X", unlimited_float, 0.5, -2.0, 2.0, "Anchor point x in the curve's unit-displacement frame (the attractor's bounding-box centre, set by the script)."),
         param!("anchor_y", "Anchor Y", unlimited_float, 0.0, -2.0, 2.0, "Anchor point y."),
+        param!("thickness", "Thickness", float, 0.0, 0.0, 0.2, "Half-width of the drawn line, in the curve's own units (the whole curve spans 1). Samples are offset PERPENDICULAR to the local segment: offsetting along it would only slide a point along a line the sweep already covers. Note the density trade — the same samples spread over more area, so a thick line is dimmer; raise Brightness to match."),
+        param!("soft", "Soft Edges", bool, false, "Gaussian falloff across the width instead of a flat ribbon. Flat reads as a drawn line; soft reads as a glow."),
     ],
     wgsl_2d: WGSL_2D,
     wgsl_3d: WGSL_3D,
@@ -195,7 +197,9 @@ fn variation_lsystem_path(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: p
     }
     let t = rng_nextf(rng);
 
-    var out: vec2<f32>;
+    var seg_a: vec2<f32>;
+    var seg_b: vec2<f32>;
+    var frac: f32 = 0.0;
     if (anchored) {
         // Vertex chain through the anchor's image in each cell — the
         // classic space-filling drawing (anchor = attractor centre gives
@@ -207,19 +211,42 @@ fn variation_lsystem_path(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: p
         let segs = max(total - 1u, 1u);
         let ts = t * f32(segs);
         let idx = min(u32(ts), segs - 1u);
-        let v1 = lsystem_path_point(xform_id, variation_id, idx, iters, n, anchor);
-        out = v1;
-        if (connect) {
-            let v2 = lsystem_path_point(xform_id, variation_id, idx + 1u, iters, n, anchor);
-            out = mix(v1, v2, clamp(ts - f32(idx), 0.0, 1.0));
-        }
+        seg_a = lsystem_path_point(xform_id, variation_id, idx, iters, n, anchor);
+        seg_b = lsystem_path_point(xform_id, variation_id, idx + 1u, iters, n, anchor);
+        frac = clamp(ts - f32(idx), 0.0, 1.0);
     } else {
         let idx = min(u32(t * f32(total)), total - 1u);
         let cell = lsystem_path_cell(xform_id, variation_id, idx, iters, n);
-        out = cell.xy;
-        if (connect) {
-            let frac = clamp(t * f32(total) - f32(idx), 0.0, 1.0);
-            out = mix(cell.xy, cell.zw, frac);
+        seg_a = cell.xy;
+        seg_b = cell.zw;
+        frac = clamp(t * f32(total) - f32(idx), 0.0, 1.0);
+    }
+
+    var out = seg_a;
+    if (connect) {
+        out = mix(seg_a, seg_b, frac);
+    }
+
+    // Thicken PERPENDICULAR to the segment: an offset along it would only
+    // slide the sample along ground the t-sweep already covers.
+    let thickness = get_param(xform_id, variation_id, 79u);
+    if (thickness > 0.0) {
+        let soft = get_param(xform_id, variation_id, 80u) > 0.5;
+        var jit = rng_nextf(rng) * 2.0 - 1.0;
+        if (soft) {
+            // Irwin-Hall gaussian approximation, as gaussian_blur uses.
+            jit = (rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) - 2.0) * 0.5;
+        }
+        let dseg = seg_b - seg_a;
+        let dlen = length(dseg);
+        if (connect && dlen > 1e-9) {
+            let perp = vec2<f32>(-dseg.y, dseg.x) / dlen;
+            out = out + perp * (thickness * jit);
+        } else {
+            // No segment to be perpendicular to (vertices only): spread
+            // isotropically, so Thickness still means something.
+            let ang = rng_nextf(rng) * 6.28318530718;
+            out = out + vec2<f32>(cos(ang), sin(ang)) * (thickness * abs(jit));
         }
     }
     if (dc) {
@@ -287,7 +314,9 @@ fn variation_lsystem_path(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: p
     }
     let t = rng_nextf(rng);
 
-    var out: vec2<f32>;
+    var seg_a: vec2<f32>;
+    var seg_b: vec2<f32>;
+    var frac: f32 = 0.0;
     if (anchored) {
         // Vertex chain through the anchor's image in each cell — the
         // classic space-filling drawing (anchor = attractor centre gives
@@ -299,19 +328,42 @@ fn variation_lsystem_path(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: p
         let segs = max(total - 1u, 1u);
         let ts = t * f32(segs);
         let idx = min(u32(ts), segs - 1u);
-        let v1 = lsystem_path_point(xform_id, variation_id, idx, iters, n, anchor);
-        out = v1;
-        if (connect) {
-            let v2 = lsystem_path_point(xform_id, variation_id, idx + 1u, iters, n, anchor);
-            out = mix(v1, v2, clamp(ts - f32(idx), 0.0, 1.0));
-        }
+        seg_a = lsystem_path_point(xform_id, variation_id, idx, iters, n, anchor);
+        seg_b = lsystem_path_point(xform_id, variation_id, idx + 1u, iters, n, anchor);
+        frac = clamp(ts - f32(idx), 0.0, 1.0);
     } else {
         let idx = min(u32(t * f32(total)), total - 1u);
         let cell = lsystem_path_cell(xform_id, variation_id, idx, iters, n);
-        out = cell.xy;
-        if (connect) {
-            let frac = clamp(t * f32(total) - f32(idx), 0.0, 1.0);
-            out = mix(cell.xy, cell.zw, frac);
+        seg_a = cell.xy;
+        seg_b = cell.zw;
+        frac = clamp(t * f32(total) - f32(idx), 0.0, 1.0);
+    }
+
+    var out = seg_a;
+    if (connect) {
+        out = mix(seg_a, seg_b, frac);
+    }
+
+    // Thicken PERPENDICULAR to the segment: an offset along it would only
+    // slide the sample along ground the t-sweep already covers.
+    let thickness = get_param(xform_id, variation_id, 79u);
+    if (thickness > 0.0) {
+        let soft = get_param(xform_id, variation_id, 80u) > 0.5;
+        var jit = rng_nextf(rng) * 2.0 - 1.0;
+        if (soft) {
+            // Irwin-Hall gaussian approximation, as gaussian_blur uses.
+            jit = (rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) - 2.0) * 0.5;
+        }
+        let dseg = seg_b - seg_a;
+        let dlen = length(dseg);
+        if (connect && dlen > 1e-9) {
+            let perp = vec2<f32>(-dseg.y, dseg.x) / dlen;
+            out = out + perp * (thickness * jit);
+        } else {
+            // No segment to be perpendicular to (vertices only): spread
+            // isotropically, so Thickness still means something.
+            let ang = rng_nextf(rng) * 6.28318530718;
+            out = out + vec2<f32>(cos(ang), sin(ang)) * (thickness * abs(jit));
         }
     }
     if (dc) {
