@@ -58,6 +58,14 @@ let rule_3 = param_string("rule_3", "");
 let rule_4 = param_string("rule_4", "");
 let rule_5 = param_string("rule_5", "");
 let angle = param("angle", 60.0, 0.0, 180.0);
+
+// Attractor: the pieces become ordinary transforms and the chaos game
+// draws the INFINITE-depth limit — for a space-filling rule that limit is
+// a filled square. Path: one lsystem_path variation draws the curve at a
+// chosen finite depth — the iconic Hilbert maze, a depth-6 snowflake —
+// with the palette running along the path.
+let output = param_choice("output", ["Attractor (infinite depth)", "Path (finite depth)"], 0);
+let path_iterations = param_int("path_iterations", 5, 1, 12);
 let colour_pieces = param_bool("colour_pieces", true);
 
 // Gather the non-blank rules. A rule is one symbol, "=", a replacement.
@@ -168,15 +176,54 @@ if bad != "" {
         // the attractor comes out as the wrong curve. Detected, not asked.
         let mirror_symbol = lsystem_mirror_symbol(rules, axiom);
 
+        let path_mode = output == "Path (finite depth)" && pieces.len() <= 12;
+        if output == "Path (finite depth)" && pieces.len() > 12 {
+            print("Path mode holds at most 12 maps and this rule needs " + pieces.len() + " — building the attractor instead.");
+        }
+
         let mirrored_count = 0;
-        for k in 0..pieces.len() {
+        if path_mode {
+            // One transform carrying the whole finite-depth curve. No
+            // geometry is baked: the variation composes the maps by the
+            // digits of the curve parameter, so Iterations stays a live
+            // slider in the variation's own parameters.
             let t = flame.add_transform();
-            let mirrored = mirror_symbol != "" && segment_symbol(pieces[k]) == mirror_symbol;
-            if mirrored { mirrored_count += 1; }
-            t.set_segment(pieces[k], mirrored);
+            t.add_variation("lsystem_path", 1.0);
+            t.set_variation_param("lsystem_path.iterations", path_iterations);
+            t.set_variation_param("lsystem_path.map_count", pieces.len());
+            t.set_variation_param("lsystem_path.connect", 1.0);
+            t.set_variation_param("lsystem_path.dc", if colour_pieces { 1.0 } else { 0.0 });
             t.weight = 1.0;
-            if colour_pieces {
-                t.color = k.to_float() / pieces.len().to_float();
+            for k in 0..pieces.len() {
+                let d = pieces[k];
+                let dx = d[2] - d[0];
+                let dy = d[3] - d[1];
+                let mirrored = mirror_symbol != "" && segment_symbol(pieces[k]) == mirror_symbol;
+                if mirrored { mirrored_count += 1; }
+                // The similarity carrying the unit edge onto this piece —
+                // the same matrix set_segment builds, mirror included.
+                t.set_variation_param("lsystem_path.m" + k + "_a", dx);
+                t.set_variation_param("lsystem_path.m" + k + "_c", dy);
+                if mirrored {
+                    t.set_variation_param("lsystem_path.m" + k + "_b", dy);
+                    t.set_variation_param("lsystem_path.m" + k + "_d", -dx);
+                } else {
+                    t.set_variation_param("lsystem_path.m" + k + "_b", -dy);
+                    t.set_variation_param("lsystem_path.m" + k + "_d", dx);
+                }
+                t.set_variation_param("lsystem_path.m" + k + "_e", d[0]);
+                t.set_variation_param("lsystem_path.m" + k + "_f", d[1]);
+            }
+        } else {
+            for k in 0..pieces.len() {
+                let t = flame.add_transform();
+                let mirrored = mirror_symbol != "" && segment_symbol(pieces[k]) == mirror_symbol;
+                if mirrored { mirrored_count += 1; }
+                t.set_segment(pieces[k], mirrored);
+                t.weight = 1.0;
+                if colour_pieces {
+                    t.color = k.to_float() / pieces.len().to_float();
+                }
             }
         }
 
@@ -202,17 +249,25 @@ if bad != "" {
             print("Mirror pair found: the " + mirrored_count + " piece(s) drawn by " + mirror_symbol + " are reflected.");
         }
 
-        // A converging IFS needs pieces SMALLER than the whole. If they
-        // are not, say so plainly rather than leaving a flame that
-        // quietly is not the curve that was asked for.
-        let balance = flame.contractiveness();
-        print("contractiveness: " + balance);
-        if balance >= -0.0001 {
-            print("");
-            print("WARNING: these pieces do not shrink, so the chaos game has nothing to");
-            print("converge to and the result will not be the curve you expect.");
-            if node_note != "" {
-                print("The node-rewriting construction was tried too: " + node_note);
+        if path_mode {
+            print("Path mode: drawing the curve at depth " + path_iterations
+                + " (" + pieces.len() + "^" + path_iterations + " segments)."
+                + " Iterations is a live parameter on the lsystem_path variation.");
+        } else {
+            // A converging IFS needs pieces SMALLER than the whole. If
+            // they are not, say so plainly rather than leaving a flame
+            // that quietly is not the curve that was asked for. (Path
+            // mode has no such requirement — a finite path needs no
+            // convergence, which is exactly why space-fillers want it.)
+            let balance = flame.contractiveness();
+            print("contractiveness: " + balance);
+            if balance >= -0.0001 {
+                print("");
+                print("WARNING: these pieces do not shrink, so the chaos game has nothing to");
+                print("converge to and the result will not be the curve you expect.");
+                if node_note != "" {
+                    print("The node-rewriting construction was tried too: " + node_note);
+                }
             }
         }
     }

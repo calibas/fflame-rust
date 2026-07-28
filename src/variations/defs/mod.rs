@@ -170,6 +170,7 @@ mod minkowski_camera;
 mod stereogram;
 mod multi_kaleidoscope;
 mod spray_blur;
+mod lsystem_path;
 mod lorentz_mobius;
 mod schottky_group;
 mod sphere_packing;
@@ -375,6 +376,7 @@ pub use minkowski_camera::*;
 pub use stereogram::*;
 pub use multi_kaleidoscope::*;
 pub use spray_blur::*;
+pub use lsystem_path::*;
 pub use lorentz_mobius::*;
 pub use schottky_group::*;
 pub use sphere_packing::*;
@@ -1260,4 +1262,5 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &STEREOGRAM,
     &MULTI_KALEIDOSCOPE,
     &SPRAY_BLUR,
+    &LSYSTEM_PATH,
 ];
