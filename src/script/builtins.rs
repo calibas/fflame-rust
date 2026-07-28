@@ -872,6 +872,229 @@ pub fn lsystem_bounds(
     None
 }
 
+/// The pieces of a bracketed (plant) L-system.
+#[derive(Debug)]
+pub struct PlantPieces {
+    /// Recursion sites: each carries a copy of the whole plant.
+    pub branches: Vec<Segment>,
+    /// Drawn stem segments: rendered by squashed (thin) maps, the
+    /// Barnsley fern's rachis trick.
+    pub stems: Vec<Segment>,
+}
+
+/// The Barnsley-fern construction for bracketed L-systems.
+///
+/// A plant rule is self-similar at its RECURSION SITES: the plant is its
+/// stem plus transformed copies of itself at every occurrence of the
+/// recursing symbol — which is exactly an IFS, the way Barnsley's fern
+/// is four maps. Each occurrence yields a branch map (the similarity
+/// carrying the whole plant's span onto the occurrence's sub-plant
+/// span); each drawn stem segment yields a squashed map that lays a
+/// flattened copy of the whole plant along the stem, which is how the
+/// fern draws its rachis.
+///
+/// Spans are measured on a deep expansion with one Richardson step,
+/// exactly like the node-rewriting construction — a plant is only
+/// ASYMPTOTICALLY self-similar (`F=FF` stems lengthen every
+/// generation), so finite-depth measurement plus extrapolation is the
+/// honest way to the limit maps. No rational snapping: plants are not
+/// grid curves.
+///
+/// `Segment.depth` carries the bracket nesting at the piece's site, so
+/// callers can colour by branch level. `Segment.symbol` is the
+/// occurrence's symbol, for mirror pairs.
+///
+/// Two recursion styles are handled:
+/// * variable recursion (`X=F-[[X]+X]+F[+FX]-X`, with `F=FF` or not):
+///   non-drawing ruled symbols are the recursion sites, drawn symbols
+///   are stems;
+/// * drawing recursion (`F=FF-[-F+F+F]+[+F-F-F]`): the primary itself
+///   draws, every occurrence is a branch map, and there are no separate
+///   stems — the copies cover everything.
+pub fn lsystem_plant_segments(
+    axiom: &str,
+    rules: &[(char, String)],
+    angle_deg: f64,
+) -> Result<PlantPieces, String> {
+    let angle = angle_deg * std::f64::consts::PI / 180.0;
+
+    let trimmed = axiom.trim();
+    let mut it = trimmed.chars();
+    let primary = match (it.next(), it.next()) {
+        (Some(p), None) => p,
+        _ => return Err("the axiom must be a single symbol for the plant construction".into()),
+    };
+    let rule = rules
+        .iter()
+        .find(|(k, _)| *k == primary)
+        .map(|(_, r)| r.clone())
+        .ok_or_else(|| format!("the axiom `{primary}` has no rule"))?;
+    let partner = mirror_partner(rules, primary);
+
+    let is_drawing = |c: char| matches!(c, 'F' | 'G' | 'A' | 'B');
+    let has_rule = |c: char| rules.iter().any(|(k, _)| *k == c);
+    let primary_draws = is_drawing(primary);
+
+    // Validate: every non-drawing ruled symbol in the rule must be the
+    // primary or its mirror partner.
+    for ch in rule.chars() {
+        if has_rule(ch) && !is_drawing(ch) && !matches!(ch, 'f' | 'g') {
+            if ch != primary && Some(ch) != partner {
+                return Err(format!(
+                    "the rule uses `{ch}`, which is neither `{primary}` nor its mirror image — \
+                     two genuinely different sub-plants make a graph-directed IFS, which a flat \
+                     set of transforms cannot express"
+                ));
+            }
+        }
+    }
+
+    // Expansions for every ruled symbol that appears (primary, partner,
+    // and ruled drawing symbols like `F=FF`), at a depth that fits.
+    let mut needed: Vec<char> = vec![primary];
+    if let Some(p) = partner {
+        needed.push(p);
+    }
+    for ch in rule.chars() {
+        if has_rule(ch) && !needed.contains(&ch) {
+            needed.push(ch);
+        }
+    }
+
+    const CHAR_BUDGET: usize = 400_000;
+    let mut depth = 8u32;
+    let expansions_at = |d: u32| -> Result<Vec<(char, String)>, ()> {
+        let mut out = Vec::new();
+        let mut total = 0usize;
+        for &sym in &needed {
+            match lsystem_expand(&sym.to_string(), rules, d) {
+                Ok(e) => {
+                    total += e.len();
+                    out.push((sym, e));
+                }
+                Err(_) => return Err(()),
+            }
+        }
+        if total > CHAR_BUDGET {
+            return Err(());
+        }
+        Ok(out)
+    };
+    let exp_fine = loop {
+        match expansions_at(depth) {
+            Ok(e) => break e,
+            Err(()) if depth == 0 => {
+                return Err("could not expand this system at any depth".into())
+            }
+            Err(()) => depth -= 1,
+        }
+    };
+
+    // One walk of the rule against a set of expansions: literal steps and
+    // brackets move the turtle; ruled symbols walk their expansion and
+    // record the span. Classification per occurrence:
+    //   non-drawing ruled (X)          -> branch
+    //   drawing, primary-recursive (F) -> branch when the primary draws
+    //   drawing otherwise              -> stem (expanded span if ruled,
+    //                                    a single step if not)
+    let walk = |exps: &Vec<(char, String)>| -> Result<(Vec<Segment>, Vec<Segment>), String> {
+        let body_of = |c: char| exps.iter().find(|(k, _)| *k == c).map(|(_, e)| e.as_str());
+        let mut st = LTurtle { x: 0.0, y: 0.0, h: 0.0 };
+        let mut stack: Vec<LTurtle> = Vec::new();
+        let mut branches: Vec<Segment> = Vec::new();
+        let mut stems: Vec<Segment> = Vec::new();
+        for ch in rule.chars() {
+            let nest = stack.len() as u32;
+            let ruled = has_rule(ch);
+            if ruled && !is_drawing(ch) && !matches!(ch, 'f' | 'g') {
+                // Variable recursion site.
+                let (sx, sy) = (st.x, st.y);
+                if let Some(body) = body_of(ch) {
+                    for bc in body.chars() {
+                        lsys_step(bc, angle, &mut st, &mut stack);
+                    }
+                }
+                branches.push(Segment { x1: sx, y1: sy, x2: st.x, y2: st.y, depth: nest, symbol: ch });
+            } else if is_drawing(ch) {
+                let (sx, sy) = (st.x, st.y);
+                if let Some(body) = body_of(ch) {
+                    for bc in body.chars() {
+                        lsys_step(bc, angle, &mut st, &mut stack);
+                    }
+                } else {
+                    lsys_step(ch, angle, &mut st, &mut stack);
+                }
+                let seg = Segment { x1: sx, y1: sy, x2: st.x, y2: st.y, depth: nest, symbol: ch };
+                if primary_draws && (ch == primary || Some(ch) == partner) {
+                    branches.push(seg);
+                } else {
+                    stems.push(seg);
+                }
+            } else {
+                lsys_step(ch, angle, &mut st, &mut stack);
+            }
+        }
+        let (dx, dy) = (st.x, st.y);
+        let len2 = dx * dx + dy * dy;
+        if len2 < 1e-9 {
+            return Err(
+                "this plant returns to where it started, so it has no unit-displacement frame"
+                    .into(),
+            );
+        }
+        let map = |px: f64, py: f64| ((px * dx + py * dy) / len2, (py * dx - px * dy) / len2);
+        let norm = |v: &mut Vec<Segment>| {
+            for s in v.iter_mut() {
+                let (ax, ay) = map(s.x1, s.y1);
+                let (bx, by) = map(s.x2, s.y2);
+                s.x1 = ax;
+                s.y1 = ay;
+                s.x2 = bx;
+                s.y2 = by;
+            }
+        };
+        norm(&mut branches);
+        norm(&mut stems);
+        Ok((branches, stems))
+    };
+
+    let (mut branches, mut stems) = walk(&exp_fine)?;
+    if branches.is_empty() {
+        return Err("no recursion sites found — nothing carries a copy of the plant".into());
+    }
+
+    // Richardson step against the next-shallower depth, as in the node
+    // construction: spans converge geometrically toward the limit maps.
+    if depth >= 2 {
+        if let Ok(exp_coarse) = expansions_at(depth - 1) {
+            if let Ok((cb, cs)) = walk(&exp_coarse) {
+                if cb.len() == branches.len() && cs.len() == stems.len() {
+                    let mut sigma = 0.0;
+                    for f in &branches {
+                        sigma += ((f.x2 - f.x1).powi(2) + (f.y2 - f.y1).powi(2)).sqrt();
+                    }
+                    sigma /= branches.len() as f64;
+                    if sigma > 0.05 && sigma < 0.95 {
+                        let k = sigma / (1.0 - sigma);
+                        let refine = |fine: &mut Vec<Segment>, coarse: &Vec<Segment>| {
+                            for (f, c) in fine.iter_mut().zip(coarse.iter()) {
+                                f.x1 += (f.x1 - c.x1) * k;
+                                f.y1 += (f.y1 - c.y1) * k;
+                                f.x2 += (f.x2 - c.x2) * k;
+                                f.y2 += (f.y2 - c.y2) * k;
+                            }
+                        };
+                        refine(&mut branches, &cb);
+                        refine(&mut stems, &cs);
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(PlantPieces { branches, stems })
+}
+
 /// Rescale and rotate a path so its overall displacement is the unit
 /// segment from (0, 0) to (1, 0).
 ///
@@ -1616,6 +1839,62 @@ mod tests {
         // normalise by; say so rather than dividing by zero.
         let segs = turtle("F+F+F+F", 90.0);
         assert!(normalize_segments(&segs).is_none(), "a closed square has no IFS form");
+    }
+
+
+    #[test]
+    fn wikipedia_plant_extracts_branches_and_stems() {
+        // X=F-[[X]+X]+F[+FX]-X with F=FF: four X recursion sites, three
+        // literal F stems, bracket depths recorded for colouring.
+        let rules = vec![
+            ('X', "F-[[X]+X]+F[+FX]-X".to_string()),
+            ('F', "FF".to_string()),
+        ];
+        let p = lsystem_plant_segments("X", &rules, 22.5).expect("plant extracts");
+        assert_eq!(p.branches.len(), 4, "four X occurrences");
+        assert_eq!(p.stems.len(), 3, "three literal F stems");
+
+        // Bracket depths: [[X]+X] puts the first X two deep, the second
+        // one deep; [+FX] one deep; the last X on the trunk.
+        let depths: Vec<u32> = p.branches.iter().map(|b| b.depth).collect();
+        assert_eq!(depths, vec![2, 1, 1, 0], "bracket nesting per site");
+
+        // Every branch map must contract, or the plant diverges.
+        for (i, b) in p.branches.iter().enumerate() {
+            let len = ((b.x2 - b.x1).powi(2) + (b.y2 - b.y1).powi(2)).sqrt();
+            assert!(len > 1e-3 && len < 0.999, "branch {i} scale {len}");
+        }
+    }
+
+    #[test]
+    fn drawing_recursive_bush_has_no_separate_stems() {
+        // ABOP's bush: F both draws and recurses, so every occurrence is
+        // a branch map and the copies cover the stems themselves.
+        let rules = vec![('F', "FF-[-F+F+F]+[+F-F-F]".to_string())];
+        let p = lsystem_plant_segments("F", &rules, 22.5).expect("bush extracts");
+        assert_eq!(p.branches.len(), 8, "eight F occurrences");
+        assert_eq!(p.stems.len(), 0, "no separate stems");
+        for (i, b) in p.branches.iter().enumerate() {
+            let len = ((b.x2 - b.x1).powi(2) + (b.y2 - b.y1).powi(2)).sqrt();
+            assert!(len < 0.999, "branch {i} must contract, got {len}");
+        }
+    }
+
+    #[test]
+    fn plant_extraction_reports_what_it_cannot_do() {
+        let tri = vec![
+            ('X', "F[+Y]FZ".to_string()),
+            ('Y', "F[+X]F".to_string()),
+            ('Z', "FF".to_string()),
+        ];
+        // Z is ruled and drawing? No — Z is not a drawing symbol, and is
+        // neither X nor its mirror: graph-directed.
+        let err = lsystem_plant_segments("X", &tri, 25.0).unwrap_err();
+        assert!(err.contains("graph-directed"), "{err}");
+
+        let none = vec![('X', "FF+FF".to_string())];
+        let err = lsystem_plant_segments("X", &none, 25.0).unwrap_err();
+        assert!(err.contains("no recursion sites"), "{err}");
     }
 
     #[test]

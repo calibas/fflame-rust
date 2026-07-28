@@ -397,11 +397,27 @@ Three findings worth keeping:
   translate back, so packing mirrors land as ordinary transforms the
   triangle editor can grab.
 
-L-systems take the classical IFS equivalence: one generation of an
-edge-rewriting rule, normalised onto the edge it replaced, is a set of
-contractions whose attractor is the curve. `flame.contractiveness()`
-independently confirms the ratios — Koch reports ln(1/3), the dragon
-ln(1/√2), Sierpinski ln(1/2).
+L-systems cover the full gamut across two scripts:
+
+* **L-System Curve** — edge rewriting (Koch, dragon: drawn depth-1
+  segments are the pieces; `contractiveness()` independently confirms
+  ln(1/3), ln(1/√2), ln(1/2)) and node rewriting (Hilbert, Peano: one
+  map per variable occurrence, spans measured on a deep expansion with a
+  Richardson step and snapped to the rational grid). Output as the
+  infinite-depth attractor, or as the finite-depth path via the
+  `lsystem_path` variation — no baked geometry, vertices are digit-wise
+  map compositions, `iterations` is a live parameter, and node curves
+  draw the CENTRE chain (cell spans lie on the boundary lattice and
+  overlap; centres are the classic self-avoiding drawing — found when an
+  in-app render survived exact maps unchanged).
+* **L-System Plant** — bracketed rules by the Barnsley-fern
+  construction: recursion sites become branch maps, drawn stems become
+  SQUASHED maps laying a flattened copy of the whole plant along the
+  stem (the rachis trick), bracket nesting becomes colour, size becomes
+  weight. Handles variable recursion (`X=F-[[X]+X]+F[+FX]-X`, `F=FF`)
+  and drawing recursion (`F=FF-[-F+F+F]+[+F-F-F]`, no separate stems).
+  Linked transforms were considered for ordering and declined: a linked
+  chain changes the walk's order, never the attractor set.
 
 **Maintenance risk:** `builtins.rs` hand-mirrors four shader sources
 (`complex.wgsl`, `init_schottky_group`, `apollonian_gen`/`su_conjugator`,

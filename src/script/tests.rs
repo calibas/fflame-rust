@@ -1295,3 +1295,48 @@ fn path_mode_bakes_the_maps_into_one_variation() {
         assert_eq!(det < 0.0, mirrored, "map {k} determinant sign");
     }
 }
+
+#[test]
+fn plant_script_grows_a_fern_from_pasted_rules() {
+    // The Barnsley construction end to end: branch maps at the recursion
+    // sites, squashed stem maps along the drawn segments, colour by
+    // bracket depth, weights by size.
+    let host = ScriptHost::new();
+    let source = include_str!("../../assets/scripts/generators/lsystem_plant.rhai");
+    let out = host
+        .run(source, &FractalConfig::default(), 1, HashMap::new())
+        .unwrap();
+    let ts = &out.config.flame.transforms;
+    assert_eq!(ts.len(), 7, "four branch sites plus three stems");
+
+    // The stem maps are the SQUASHED ones: near-degenerate determinant
+    // relative to their scale (thickness 0.06), while branch maps are
+    // honest similarities. That asymmetry is the fern trick.
+    let mut squashed = 0;
+    for t in ts {
+        let det = (t.a as f64) * (t.d as f64) - (t.b as f64) * (t.c as f64);
+        let scale2 = (t.a as f64).powi(2) + (t.c as f64).powi(2);
+        if det.abs() < 0.2 * scale2 {
+            squashed += 1;
+        }
+        assert!(t.weight > 0.0, "every piece carries weight");
+    }
+    assert_eq!(squashed, 3, "exactly the three stems are squashed");
+
+    // Colour by depth: the trunk-level pieces sit at the palette start,
+    // the deepest twigs at its end.
+    let colors: Vec<f32> = ts.iter().map(|t| t.color).collect();
+    assert!(colors.iter().any(|c| *c == 1.0), "deepest level reaches 1.0: {colors:?}");
+    assert!(colors.iter().any(|c| *c == 0.0), "trunk level at 0.0: {colors:?}");
+
+    // Stems off means branch maps only.
+    let out = host
+        .run(
+            source,
+            &FractalConfig::default(),
+            1,
+            [("stem_weight".to_string(), ParamValue::Float(0.0))].into_iter().collect(),
+        )
+        .unwrap();
+    assert_eq!(out.config.flame.transforms.len(), 4, "stem weight 0 skips stems");
+}
