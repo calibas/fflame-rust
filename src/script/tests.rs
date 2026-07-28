@@ -1419,4 +1419,13 @@ fn hilbert3d_script_builds_the_path() {
     }
     assert_eq!(out.config.render_mode, crate::scene::transforms::RenderMode::ThreeD);
     assert!(out.config.preserve_z, "z must survive between iterations");
+
+    // Centre chain, not cell spans — the 3D port of the 2D lesson. Spans
+    // lie on the cell-edge lattice and overlap, showing up in-app as
+    // three-way joins and phantom dead ends under zoom; the anchor is
+    // the cube's centre, whose image in every cell is that cell's centre.
+    assert_eq!(p("anchored"), 1.0, "space-filling path uses the centre chain");
+    assert!((p("anchor_x") - 0.5).abs() < 1e-6);
+    assert!((p("anchor_y") - 0.5).abs() < 1e-6);
+    assert!((p("anchor_z") - 0.5).abs() < 1e-6);
 }
