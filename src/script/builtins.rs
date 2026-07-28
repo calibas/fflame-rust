@@ -785,6 +785,37 @@ pub fn lsystem_node_segments(
         }
     }
 
+    // Grid FASS curves (Hilbert, Peano) have exactly RATIONAL maps: every
+    // endpoint is a multiple of 1/m, m the grid subdivision. After the
+    // Richardson step we are within ~1e-3 of those values, so snapping is
+    // unambiguous — and it is what makes cell exit and next-cell entry
+    // agree EXACTLY. Without it, residual error shows up as segments that
+    // do not quite meet at cell boundaries. Snap only when the whole
+    // configuration is consistent with one grid; otherwise leave it be.
+    let mut mean_len = 0.0;
+    for f in &refined {
+        mean_len += ((f.2 - f.0).powi(2) + (f.3 - f.1).powi(2)).sqrt();
+    }
+    mean_len /= refined.len() as f64;
+    if mean_len > 1e-6 {
+        let m = (1.0 / mean_len).round();
+        if m >= 2.0 && (1.0 / m - mean_len).abs() < 5e-3 {
+            let on_grid = refined.iter().all(|f| {
+                [f.0, f.1, f.2, f.3]
+                    .iter()
+                    .all(|v| (v * m - (v * m).round()).abs() < 0.05)
+            });
+            if on_grid {
+                for f in refined.iter_mut() {
+                    f.0 = (f.0 * m).round() / m;
+                    f.1 = (f.1 * m).round() / m;
+                    f.2 = (f.2 * m).round() / m;
+                    f.3 = (f.3 * m).round() / m;
+                }
+            }
+        }
+    }
+
     Ok(refined
         .iter()
         .map(|(ax, ay, bx, by, sym)| Segment {
@@ -1518,13 +1549,26 @@ mod tests {
 
         for (i, s) in segs.iter().enumerate() {
             let len = ((s.x2 - s.x1).powi(2) + (s.y2 - s.y1).powi(2)).sqrt();
-            // Richardson-extrapolated spans should hit the exact 1/2 to
-            // well under a pixel; 1e-3 would fail without the step.
+            // Snapped to the rational grid: EXACTLY one half.
             assert!(
-                (len - 0.5).abs() < 1e-3,
-                "map {i} scale {len} should be one half"
+                (len - 0.5).abs() < 1e-12,
+                "map {i} scale {len} should be exactly one half"
             );
         }
+
+        // Continuity is the visible property: each cell's exit must BE the
+        // next cell's entry (the connective F steps vanish in the limit).
+        // Without exact maps the finite-depth path shows segments that do
+        // not quite meet at cell boundaries.
+        for w in segs.windows(2) {
+            assert!(
+                (w[0].x2 - w[1].x1).abs() < 1e-12 && (w[0].y2 - w[1].y1).abs() < 1e-12,
+                "cell exit must equal next cell entry"
+            );
+        }
+        // And the whole chain runs from the curve's start to its end.
+        assert!((segs[0].x1).abs() < 1e-12 && (segs[0].y1).abs() < 1e-12);
+        assert!((segs[3].x2 - 1.0).abs() < 1e-12 && (segs[3].y2).abs() < 1e-12);
     }
 
     #[test]

@@ -176,6 +176,10 @@ if bad != "" {
         // the attractor comes out as the wrong curve. Detected, not asked.
         let mirror_symbol = lsystem_mirror_symbol(rules, axiom);
 
+        // The attractor's bounding box, used for framing and (in path
+        // mode) for the anchor point at its centre.
+        let box = lsystem_bounds(axiom, rules, 6, angle);
+
         let path_mode = output == "Path (finite depth)" && pieces.len() <= 12;
         if output == "Path (finite depth)" && pieces.len() > 12 {
             print("Path mode holds at most 12 maps and this rule needs " + pieces.len() + " — building the attractor instead.");
@@ -193,6 +197,16 @@ if bad != "" {
             t.set_variation_param("lsystem_path.map_count", pieces.len());
             t.set_variation_param("lsystem_path.connect", 1.0);
             t.set_variation_param("lsystem_path.dc", if colour_pieces { 1.0 } else { 0.0 });
+            if construction == "node" {
+                // Space-filling curves must draw the CENTRE chain: their
+                // cell spans lie on the boundary lattice and overlap
+                // (doubled lines, little boxes). The anchor is the
+                // attractor's centre, whose image in every cell is that
+                // cell's centre — the classic self-avoiding drawing.
+                t.set_variation_param("lsystem_path.anchored", 1.0);
+                t.set_variation_param("lsystem_path.anchor_x", (box[0] + box[2]) * 0.5);
+                t.set_variation_param("lsystem_path.anchor_y", (box[1] + box[3]) * 0.5);
+            }
             t.weight = 1.0;
             for k in 0..pieces.len() {
                 let d = pieces[k];
@@ -228,10 +242,9 @@ if bad != "" {
         }
 
         // Frame the view on the CURVE, not on the depth-1 pieces — the
-        // dragon folds well outside its two starting edges. Measured in
-        // Rust, which keeps a deep expansion (Hilbert quadruples every
-        // generation) from ever becoming a script-side array.
-        let box = lsystem_bounds(axiom, rules, 6, angle);
+        // dragon folds well outside its two starting edges. (Bounds were
+        // measured above, in Rust, so a deep expansion never becomes a
+        // script-side array.)
         let extent = box[2] - box[0];
         if (box[3] - box[1]) > extent { extent = box[3] - box[1]; }
         if extent > 0.0 {

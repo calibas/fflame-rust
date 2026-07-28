@@ -121,16 +121,50 @@ pub static LSYSTEM_PATH: VariationDef = VariationDef {
         param!("m11_d", "M11 D", unlimited_float, 0.0, -4.0, 4.0, "Map 11: affine coefficient d (x' = a·x + b·y + e, y' = c·x + d·y + f). Normally written by the L-System script, not by hand."),
         param!("m11_e", "M11 E", unlimited_float, 0.0, -4.0, 4.0, "Map 11: affine coefficient e (x' = a·x + b·y + e, y' = c·x + d·y + f). Normally written by the L-System script, not by hand."),
         param!("m11_f", "M11 F", unlimited_float, 0.0, -4.0, 4.0, "Map 11: affine coefficient f (x' = a·x + b·y + e, y' = c·x + d·y + f). Normally written by the L-System script, not by hand."),
+        param!("anchored", "Anchored", bool, false, "Vertex-chain mode: connect the images of the anchor point in consecutive cells, instead of drawing each cell's entry-to-exit span. Node-rewriting (space-filling) curves need this — their spans lie on the cell-boundary lattice and overlap each other; the centre chain is the classic self-avoiding drawing."),
+        param!("anchor_x", "Anchor X", unlimited_float, 0.5, -2.0, 2.0, "Anchor point x in the curve's unit-displacement frame (the attractor's bounding-box centre, set by the script)."),
+        param!("anchor_y", "Anchor Y", unlimited_float, 0.0, -2.0, 2.0, "Anchor point y."),
     ],
     wgsl_2d: WGSL_2D,
     wgsl_3d: WGSL_3D,
 };
 
 const WGSL_2D: &str = r#"
-fn lsystem_path_vertex(xform_id: u32, variation_id: u32, idx: u32, iters: u32, n: u32) -> vec2<f32> {
-    // Digits least-significant first: the LSD picks the innermost
-    // (deepest) map, the MSD the outermost top-level cell.
-    var v = vec2<f32>(0.0, 0.0);
+// The cell's whole affine, composed from the digits of idx
+// (least-significant digit innermost). ONE composition yields BOTH
+// endpoints of the cell's segment — entry A·(0,0)+t and exit A·(1,0)+t —
+// so numeric error can shrink or shift a segment but never TILT it, and
+// consecutive cells meet exactly when the maps are exact.
+fn lsystem_path_cell(xform_id: u32, variation_id: u32, idx: u32, iters: u32, n: u32) -> vec4<f32> {
+    var ax = 1.0; var aby = 0.0; var cx = 0.0; var dy = 1.0;
+    var tx = 0.0; var ty = 0.0;
+    var rem = idx;
+    for (var j = 0u; j < iters; j = j + 1u) {
+        let d = rem % n;
+        rem = rem / n;
+        let base = 4u + d * 6u;
+        let ma = get_param(xform_id, variation_id, base);
+        let mb = get_param(xform_id, variation_id, base + 1u);
+        let mc = get_param(xform_id, variation_id, base + 2u);
+        let md = get_param(xform_id, variation_id, base + 3u);
+        let me = get_param(xform_id, variation_id, base + 4u);
+        let mf = get_param(xform_id, variation_id, base + 5u);
+        // Compose M ∘ C (apply M after what is already there).
+        let nax = ma * ax + mb * cx;
+        let nab = ma * aby + mb * dy;
+        let ncx = mc * ax + md * cx;
+        let ndy = mc * aby + md * dy;
+        let ntx = ma * tx + mb * ty + me;
+        let nty = mc * tx + md * ty + mf;
+        ax = nax; aby = nab; cx = ncx; dy = ndy; tx = ntx; ty = nty;
+    }
+    // Entry (A·origin + t) and exit (A·(1,0) + t).
+    return vec4<f32>(tx, ty, ax + tx, cx + ty);
+}
+
+fn lsystem_path_point(xform_id: u32, variation_id: u32, idx: u32, iters: u32, n: u32, anchor: vec2<f32>) -> vec2<f32> {
+    // The digit composition applied straight to the anchor point.
+    var v = anchor;
     var rem = idx;
     for (var j = 0u; j < iters; j = j + 1u) {
         let d = rem % n;
@@ -152,6 +186,7 @@ fn variation_lsystem_path(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: p
     let n = clamp(u32(get_param(xform_id, variation_id, 1u)), 2u, 12u);
     let connect = get_param(xform_id, variation_id, 2u) > 0.5;
     let dc = get_param(xform_id, variation_id, 3u) > 0.5;
+    let anchored = get_param(xform_id, variation_id, 76u) > 0.5;
 
     // Total cells, capped so f32(t)·total keeps sub-cell precision.
     var total = 1u;
@@ -159,19 +194,33 @@ fn variation_lsystem_path(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: p
         total = min(total * n, 16000000u);
     }
     let t = rng_nextf(rng);
-    let idx = min(u32(t * f32(total)), total - 1u);
 
-    var out = lsystem_path_vertex(xform_id, variation_id, idx, iters, n);
-    if (connect) {
-        var nxt: vec2<f32>;
-        if (idx + 1u < total) {
-            nxt = lsystem_path_vertex(xform_id, variation_id, idx + 1u, iters, n);
-        } else {
-            // The curve's own endpoint in the unit-displacement frame.
-            nxt = vec2<f32>(1.0, 0.0);
+    var out: vec2<f32>;
+    if (anchored) {
+        // Vertex chain through the anchor's image in each cell — the
+        // classic space-filling drawing (anchor = attractor centre gives
+        // cell centres). Cell spans would lie on the boundary lattice
+        // and OVERLAP each other; centres are self-avoiding.
+        let anchor = vec2<f32>(
+            get_param(xform_id, variation_id, 77u),
+            get_param(xform_id, variation_id, 78u));
+        let segs = max(total - 1u, 1u);
+        let ts = t * f32(segs);
+        let idx = min(u32(ts), segs - 1u);
+        let v1 = lsystem_path_point(xform_id, variation_id, idx, iters, n, anchor);
+        out = v1;
+        if (connect) {
+            let v2 = lsystem_path_point(xform_id, variation_id, idx + 1u, iters, n, anchor);
+            out = mix(v1, v2, clamp(ts - f32(idx), 0.0, 1.0));
         }
-        let frac = clamp(t * f32(total) - f32(idx), 0.0, 1.0);
-        out = mix(out, nxt, frac);
+    } else {
+        let idx = min(u32(t * f32(total)), total - 1u);
+        let cell = lsystem_path_cell(xform_id, variation_id, idx, iters, n);
+        out = cell.xy;
+        if (connect) {
+            let frac = clamp(t * f32(total) - f32(idx), 0.0, 1.0);
+            out = mix(cell.xy, cell.zw, frac);
+        }
     }
     if (dc) {
         *vc = t;
@@ -181,8 +230,34 @@ fn variation_lsystem_path(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: p
 "#;
 
 const WGSL_3D: &str = r#"
-fn lsystem_path_vertex(xform_id: u32, variation_id: u32, idx: u32, iters: u32, n: u32) -> vec2<f32> {
-    var v = vec2<f32>(0.0, 0.0);
+fn lsystem_path_cell(xform_id: u32, variation_id: u32, idx: u32, iters: u32, n: u32) -> vec4<f32> {
+    var ax = 1.0; var aby = 0.0; var cx = 0.0; var dy = 1.0;
+    var tx = 0.0; var ty = 0.0;
+    var rem = idx;
+    for (var j = 0u; j < iters; j = j + 1u) {
+        let d = rem % n;
+        rem = rem / n;
+        let base = 4u + d * 6u;
+        let ma = get_param(xform_id, variation_id, base);
+        let mb = get_param(xform_id, variation_id, base + 1u);
+        let mc = get_param(xform_id, variation_id, base + 2u);
+        let md = get_param(xform_id, variation_id, base + 3u);
+        let me = get_param(xform_id, variation_id, base + 4u);
+        let mf = get_param(xform_id, variation_id, base + 5u);
+        let nax = ma * ax + mb * cx;
+        let nab = ma * aby + mb * dy;
+        let ncx = mc * ax + md * cx;
+        let ndy = mc * aby + md * dy;
+        let ntx = ma * tx + mb * ty + me;
+        let nty = mc * tx + md * ty + mf;
+        ax = nax; aby = nab; cx = ncx; dy = ndy; tx = ntx; ty = nty;
+    }
+    return vec4<f32>(tx, ty, ax + tx, cx + ty);
+}
+
+fn lsystem_path_point(xform_id: u32, variation_id: u32, idx: u32, iters: u32, n: u32, anchor: vec2<f32>) -> vec2<f32> {
+    // The digit composition applied straight to the anchor point.
+    var v = anchor;
     var rem = idx;
     for (var j = 0u; j < iters; j = j + 1u) {
         let d = rem % n;
@@ -204,24 +279,40 @@ fn variation_lsystem_path(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: p
     let n = clamp(u32(get_param(xform_id, variation_id, 1u)), 2u, 12u);
     let connect = get_param(xform_id, variation_id, 2u) > 0.5;
     let dc = get_param(xform_id, variation_id, 3u) > 0.5;
+    let anchored = get_param(xform_id, variation_id, 76u) > 0.5;
 
     var total = 1u;
     for (var j = 0u; j < iters; j = j + 1u) {
         total = min(total * n, 16000000u);
     }
     let t = rng_nextf(rng);
-    let idx = min(u32(t * f32(total)), total - 1u);
 
-    var out = lsystem_path_vertex(xform_id, variation_id, idx, iters, n);
-    if (connect) {
-        var nxt: vec2<f32>;
-        if (idx + 1u < total) {
-            nxt = lsystem_path_vertex(xform_id, variation_id, idx + 1u, iters, n);
-        } else {
-            nxt = vec2<f32>(1.0, 0.0);
+    var out: vec2<f32>;
+    if (anchored) {
+        // Vertex chain through the anchor's image in each cell — the
+        // classic space-filling drawing (anchor = attractor centre gives
+        // cell centres). Cell spans would lie on the boundary lattice
+        // and OVERLAP each other; centres are self-avoiding.
+        let anchor = vec2<f32>(
+            get_param(xform_id, variation_id, 77u),
+            get_param(xform_id, variation_id, 78u));
+        let segs = max(total - 1u, 1u);
+        let ts = t * f32(segs);
+        let idx = min(u32(ts), segs - 1u);
+        let v1 = lsystem_path_point(xform_id, variation_id, idx, iters, n, anchor);
+        out = v1;
+        if (connect) {
+            let v2 = lsystem_path_point(xform_id, variation_id, idx + 1u, iters, n, anchor);
+            out = mix(v1, v2, clamp(ts - f32(idx), 0.0, 1.0));
         }
-        let frac = clamp(t * f32(total) - f32(idx), 0.0, 1.0);
-        out = mix(out, nxt, frac);
+    } else {
+        let idx = min(u32(t * f32(total)), total - 1u);
+        let cell = lsystem_path_cell(xform_id, variation_id, idx, iters, n);
+        out = cell.xy;
+        if (connect) {
+            let frac = clamp(t * f32(total) - f32(idx), 0.0, 1.0);
+            out = mix(cell.xy, cell.zw, frac);
+        }
     }
     if (dc) {
         *vc = t;
