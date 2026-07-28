@@ -1093,6 +1093,49 @@ fn register_palettes(engine: &mut Engine, state: Rc<RefCell<ScriptState>>) {
     });
 }
 
+/// `[x1, y1, x2, y2, depth, symbol]`.
+fn segment_to_array(s: &crate::script::builtins::Segment) -> Array {
+    vec![
+        Dynamic::from(s.x1),
+        Dynamic::from(s.y1),
+        Dynamic::from(s.x2),
+        Dynamic::from(s.y2),
+        Dynamic::from(s.depth as f64),
+        Dynamic::from(s.symbol.to_string()),
+    ]
+}
+
+/// The similarity carrying the unit edge (0,0)-(1,0) onto a segment.
+///
+/// Without `mirror` it is a rotation and scale by the segment's vector.
+/// With it, the perpendicular is flipped too — a reflected similarity.
+/// Curves built from mirror-paired rules need that: the endpoints are
+/// identical either way, so the chirality has to come from the symbol.
+fn apply_segment(
+    t: &mut TransformHandle,
+    x1: f64,
+    y1: f64,
+    x2: f64,
+    y2: f64,
+    mirror: bool,
+) -> Result<(), Box<EvalAltResult>> {
+    let (dx, dy) = (x2 - x1, y2 - y1);
+    t.with(|x| {
+        x.a = dx as f32;
+        x.c = dy as f32;
+        if mirror {
+            x.b = dy as f32;
+            x.d = -dx as f32;
+        } else {
+            x.b = -dy as f32;
+            x.d = dx as f32;
+        }
+        x.e = x1 as f32;
+        x.f = y1 as f32;
+        x.set_variation("linear", 1.0);
+    })
+}
+
 // ------------------------------------------------------------- built-ins
 
 /// Group recipes and the helpers that map them onto transforms.
@@ -1204,14 +1247,7 @@ fn register_builtins(engine: &mut Engine) {
             let angle = num(&angle, "turtle angle")?;
             Ok(crate::script::builtins::turtle(expanded, angle)
                 .iter()
-                .map(|s| {
-                    Dynamic::from(
-                        [s.x1, s.y1, s.x2, s.y2, s.depth as f64]
-                            .iter()
-                            .map(|v| Dynamic::from(*v))
-                            .collect::<Array>(),
-                    )
-                })
+                .map(|s| Dynamic::from(segment_to_array(s)))
                 .collect())
         },
     );
@@ -1236,6 +1272,11 @@ fn register_builtins(engine: &mut Engine) {
                     x2: num(&a[2], "x2")?,
                     y2: num(&a[3], "y2")?,
                     depth: if a.len() > 4 { num(&a[4], "depth")? as u32 } else { 0 },
+                    symbol: a
+                        .get(5)
+                        .and_then(|d| d.clone().into_string().ok())
+                        .and_then(|s| s.chars().next())
+                        .unwrap_or('F'),
                 });
             }
             let normalized = crate::script::builtins::normalize_segments(&parsed).ok_or_else(|| {
@@ -1244,14 +1285,7 @@ fn register_builtins(engine: &mut Engine) {
             })?;
             Ok(normalized
                 .iter()
-                .map(|s| {
-                    Dynamic::from(
-                        [s.x1, s.y1, s.x2, s.y2, s.depth as f64]
-                            .iter()
-                            .map(|v| Dynamic::from(*v))
-                            .collect::<Array>(),
-                    )
-                })
+                .map(|s| Dynamic::from(segment_to_array(s)))
                 .collect())
         },
     );
@@ -1269,18 +1303,32 @@ fn register_builtins(engine: &mut Engine) {
             let y1 = num(&seg[1], "y1")?;
             let x2 = num(&seg[2], "x2")?;
             let y2 = num(&seg[3], "y2")?;
-            let (dx, dy) = (x2 - x1, y2 - y1);
-            t.with(|x| {
-                x.a = dx as f32;
-                x.b = -dy as f32;
-                x.c = dy as f32;
-                x.d = dx as f32;
-                x.e = x1 as f32;
-                x.f = y1 as f32;
-                x.set_variation("linear", 1.0);
-            })
+            apply_segment(t, x1, y1, x2, y2, false)
         },
     );
+
+    // Same, but mirrored across the segment: the piece is laid down
+    // back-to-front. Needed by curves whose rules come in mirror pairs.
+    engine.register_fn(
+        "set_segment",
+        |t: &mut TransformHandle, seg: Array, mirror: bool| -> Result<(), Box<EvalAltResult>> {
+            if seg.len() < 4 {
+                return Err(err("set_segment expects [x1, y1, x2, y2]"));
+            }
+            let x1 = num(&seg[0], "x1")?;
+            let y1 = num(&seg[1], "y1")?;
+            let x2 = num(&seg[2], "x2")?;
+            let y2 = num(&seg[3], "y2")?;
+            apply_segment(t, x1, y1, x2, y2, mirror)
+        },
+    );
+
+    // The symbol that drew a segment, as a one-character string.
+    engine.register_fn("segment_symbol", |seg: Array| -> String {
+        seg.get(5)
+            .and_then(|d| d.clone().into_string().ok())
+            .unwrap_or_else(|| "F".to_string())
+    });
 
     // klein_generators(recipe, a_re, a_im, b_re, b_im, weight)
     //   -> [a, a-inverse, b, b-inverse], each 8 numbers

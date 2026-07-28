@@ -41,9 +41,13 @@ if preset == "Koch" {
     rules = #{ "F": "F+G", "G": "F-G" };
     angle = 90.0;
 } else if preset == "Sierpinski" {
-    // Arrowhead construction: A and B both draw, and swap roles.
-    axiom = "A";
-    rules = #{ "A": "B-A-B", "B": "A+B+A" };
+    // Arrowhead. F and G are MIRROR IMAGES of each other — every turn in
+    // one rule is reversed in the other — and the pieces they draw have
+    // to be laid down mirrored to match, which is handled below. Written
+    // in upper case because this turtle draws on F/G/A/B and treats
+    // lower-case f/g as "move without drawing".
+    axiom = "F";
+    rules = #{ "F": "+G-F-G+", "G": "-F+G+F-" };
     angle = 60.0;
 } else {
     // Levy C curve.
@@ -59,10 +63,18 @@ let expanded = lsystem(axiom, rules, 1);
 // converge instead of flying apart.
 let pieces = normalize_segments(turtle(expanded, angle));
 
+// Which symbol, if any, draws the MIRRORED half of a mirror-pair rule.
+// A piece drawn by it needs a reflected transform: the two symbols make
+// the same endpoints, so chirality can only come from the symbol.
+let mirror_symbol = "";
+if preset == "Sierpinski" {
+    mirror_symbol = "G";
+}
+
 for k in 0..pieces.len() {
     let t = flame.add_transform();
     // The transform that carries the unit edge onto this piece.
-    t.set_segment(pieces[k]);
+    t.set_segment(pieces[k], segment_symbol(pieces[k]) == mirror_symbol);
     t.weight = 1.0;
     if colour_pieces {
         t.color = k.to_float() / pieces.len().to_float();

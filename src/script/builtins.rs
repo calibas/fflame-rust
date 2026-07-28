@@ -452,6 +452,14 @@ pub struct Segment {
     /// Bracket nesting at the time it was drawn — 0 on the trunk, higher
     /// out along the branches. Useful for colouring by branch depth.
     pub depth: u32,
+    /// The symbol that drew it.
+    ///
+    /// Curves like the Sierpinski arrowhead alternate between two symbols
+    /// whose rules are mirror images (`F -> +G-F-G+`, `G -> -F+G+F-`).
+    /// The endpoints alone cannot express that: a segment drawn by the
+    /// mirrored symbol needs a REFLECTED similarity, not just a rotated
+    /// one, or the attractor comes out as the wrong curve entirely.
+    pub symbol: char,
 }
 
 /// Cap on the expanded string. L-systems grow exponentially: a rule that
@@ -514,7 +522,7 @@ pub fn turtle(expanded: &str, angle_deg: f64) -> Vec<Segment> {
         match ch {
             'F' | 'G' | 'A' | 'B' => {
                 let (nx, ny) = (x + heading.cos(), y + heading.sin());
-                out.push(Segment { x1: x, y1: y, x2: nx, y2: ny, depth });
+                out.push(Segment { x1: x, y1: y, x2: nx, y2: ny, depth, symbol: ch });
                 x = nx;
                 y = ny;
             }
@@ -574,7 +582,7 @@ pub fn normalize_segments(segs: &[Segment]) -> Option<Vec<Segment>> {
             .map(|s| {
                 let (x1, y1) = map(s.x1, s.y1);
                 let (x2, y2) = map(s.x2, s.y2);
-                Segment { x1, y1, x2, y2, depth: s.depth }
+                Segment { x1, y1, x2, y2, depth: s.depth, symbol: s.symbol }
             })
             .collect(),
     )
@@ -1148,6 +1156,19 @@ mod tests {
         approx(segs[0].y1, 0.0, 1e-9, "starts at the origin");
         approx(segs[3].x2, 1.0, 1e-9, "ends at (1, 0)");
         approx(segs[3].y2, 0.0, 1e-9, "ends at (1, 0)");
+    }
+
+    #[test]
+    fn segments_remember_their_symbol() {
+        // Mirror-pair curves need this: the endpoints alone cannot say
+        // whether a piece is the reflected variant.
+        let segs = turtle("F+G", 60.0);
+        assert_eq!(segs[0].symbol, 'F');
+        assert_eq!(segs[1].symbol, 'G');
+        // And it survives normalisation.
+        let n = normalize_segments(&segs).unwrap();
+        assert_eq!(n[0].symbol, 'F');
+        assert_eq!(n[1].symbol, 'G');
     }
 
     #[test]
