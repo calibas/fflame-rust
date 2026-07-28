@@ -18,14 +18,19 @@
 // Plants")
 //   F G A B   draw forward          f g   move without drawing
 //   + -       turn left / right     |     turn around
+//   & ^       pitch down / up       \\ /   roll left / right   (3D!)
 //   [ ]       start / end a branch
 //   other letters (X, Y...) recurse without drawing
+//
+// Using any of & ^ \\ / switches to the 3D turtle automatically: the
+// flame goes to 3D render mode and the camera tilts so the depth shows.
 //
 // SOME TO TRY
 //   Fractal plant   axiom X   X=F-[[X]+X]+F[+FX]-X   F=FF   angle 22.5
 //   Bush            axiom F   F=FF-[-F+F+F]+[+F-F-F]        angle 22.5
 //   Sticks          axiom X   X=F[+X]F[-X]+X   F=FF         angle 20
 //   Seaweed         axiom F   F=F[+FF][-FF]F[-F][+F]F       angle 25
+//   3D tree         axiom X   X=F[\\+X][/-X][&X]FX   F=FF   angle 25
 
 script("L-System Plant", "generator");
 
@@ -73,7 +78,16 @@ if bad != "" {
 } else if rules.is_empty() {
     print("No rules entered, so there is nothing to grow.");
 } else {
-    let plant = lsystem_plant_pieces(axiom, rules, angle);
+    // Any pitch or roll command switches to the 3D turtle: pieces come
+    // back as full 3D matrices (a 2D segment cannot carry roll).
+    let is_3d = lsystem_uses_3d(axiom, rules);
+
+    let plant = #{};
+    if is_3d {
+        plant = lsystem_pieces3(axiom, rules, angle);
+    } else {
+        plant = lsystem_plant_pieces(axiom, rules, angle);
+    }
 
     if plant.branches.len() == 0 {
         print("Could not build a plant from this rule.");
@@ -81,27 +95,43 @@ if bad != "" {
     } else {
         let mirror_symbol = lsystem_mirror_symbol(rules, axiom);
 
-        // Deepest bracket level, for colouring.
+        // Deepest bracket level, for colouring. 2D pieces store depth at
+        // index 4, 3D pieces at index 12.
+        let depth_at = if is_3d { 12 } else { 4 };
         let max_depth = 1.0;
         for b in plant.branches {
-            if b[4] > max_depth { max_depth = b[4]; }
+            if b[depth_at] > max_depth { max_depth = b[depth_at]; }
         }
+
+        // Piece scale: 2D from the segment span, 3D from the matrix's
+        // first column (the heading image — isotropic for branches).
+        let piece_len = |q| {
+            if is_3d {
+                sqrt(q[0] * q[0] + q[3] * q[3] + q[6] * q[6])
+            } else {
+                let dx = q[2] - q[0];
+                let dy = q[3] - q[1];
+                sqrt(dx * dx + dy * dy)
+            }
+        };
 
         // Branch maps: each carries the whole plant onto one recursion
         // site. Weighted by size, so big limbs get their share of the
-        // density and twigs stay wispy.
+        // density and twigs stay wispy. (Mirror partners are folded into
+        // the 3D matrices by the extraction; 2D applies the flag here.)
         for k in 0..plant.branches.len() {
             let b = plant.branches[k];
             let t = flame.add_transform();
-            let mirrored = mirror_symbol != "" && segment_symbol(b) == mirror_symbol;
-            t.set_segment(b, mirrored);
-            let dx = b[2] - b[0];
-            let dy = b[3] - b[1];
-            let len = sqrt(dx * dx + dy * dy);
-            t.weight = len + 0.05;
+            if is_3d {
+                t.set_matrix3d(b, 1.0);
+            } else {
+                let mirrored = mirror_symbol != "" && segment_symbol(b) == mirror_symbol;
+                t.set_segment(b, mirrored);
+            }
+            t.weight = piece_len.call(b) + 0.05;
             if colour_by_depth {
                 // Trunk at the palette's start, deepest twigs at its end.
-                t.color = b[4] / max_depth;
+                t.color = b[depth_at] / max_depth;
             }
         }
 
@@ -112,31 +142,53 @@ if bad != "" {
             for k in 0..plant.stems.len() {
                 let sgm = plant.stems[k];
                 let t = flame.add_transform();
-                t.set_segment(sgm, false, stem_thickness);
-                let dx = sgm[2] - sgm[0];
-                let dy = sgm[3] - sgm[1];
-                t.weight = stem_weight * (sqrt(dx * dx + dy * dy) + 0.05);
+                if is_3d {
+                    t.set_matrix3d(sgm, stem_thickness);
+                } else {
+                    t.set_segment(sgm, false, stem_thickness);
+                }
+                t.weight = stem_weight * (piece_len.call(sgm) + 0.05);
                 if colour_by_depth {
-                    t.color = sgm[4] / max_depth;
+                    t.color = sgm[depth_at] / max_depth;
                 }
             }
         }
 
-        // Frame on the plant's own bounding box.
-        let box = lsystem_bounds(axiom, rules, 6, angle);
-        let extent = box[2] - box[0];
-        if (box[3] - box[1]) > extent { extent = box[3] - box[1]; }
-        if extent > 0.0 {
-            config.set("pan_x", (box[0] + box[2]) * 0.5);
-            config.set("pan_y", (box[1] + box[3]) * 0.5);
-            // Roomier margin than the curve script: the measured bounds
-            // are the depth-6 drawing, and a plant's limit attractor
-            // reaches somewhat beyond it (each copy sprouts copies).
-            config.set("zoom", 2.1 / extent);
+        // Frame on the plant's own bounding box; in 3D also switch the
+        // render mode, keep z across iterations (matrix3D is useless
+        // without it), and tilt the camera so the depth is visible.
+        if is_3d {
+            let box = lsystem_bounds3(axiom, rules, 6, angle);
+            let extent = box[3] - box[0];
+            if (box[4] - box[1]) > extent { extent = box[4] - box[1]; }
+            if extent > 0.0 {
+                config.set("pan_x", (box[0] + box[3]) * 0.5);
+                config.set("pan_y", (box[1] + box[4]) * 0.5);
+                config.set("zoom", 2.1 / extent);
+            }
+            config.set("render_mode", "3d");
+            config.set("preserve_z", true);
+            config.set("perspective_strength", 0.12);
+            config.set("camera_rotation_x", 30.0);
+        } else {
+            let box = lsystem_bounds(axiom, rules, 6, angle);
+            let extent = box[2] - box[0];
+            if (box[3] - box[1]) > extent { extent = box[3] - box[1]; }
+            if extent > 0.0 {
+                config.set("pan_x", (box[0] + box[2]) * 0.5);
+                config.set("pan_y", (box[1] + box[3]) * 0.5);
+                // Roomier margin than the curve script: the measured
+                // bounds are the depth-6 drawing, and a plant's limit
+                // attractor reaches somewhat beyond it.
+                config.set("zoom", 2.1 / extent);
+            }
         }
 
         print("Grew a plant: " + plant.branches.len() + " branch site(s), "
-            + plant.stems.len() + " stem segment(s).");
-        print("contractiveness: " + flame.contractiveness());
+            + plant.stems.len() + " stem segment(s)."
+            + if is_3d { " (3D)" } else { "" });
+        if !is_3d {
+            print("contractiveness: " + flame.contractiveness());
+        }
     }
 }
