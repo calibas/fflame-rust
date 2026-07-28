@@ -281,7 +281,10 @@ impl<Num: egui_dock::egui::emath::Numeric> egui_dock::egui::Widget for VkbSlider
             .show_value(self.show_value);
         if let Some(t) = self.text.clone() { sl = sl.text(t); }
         if let Some(sx) = &self.suffix { sl = sl.suffix(sx.clone()); }
-        if let Some(st) = self.step { sl = sl.step_by(st); }
+        // Deliberately NOT `sl.step_by(self.step)`: egui rounds the value it
+        // is HANDED, so a stored value off the step grid gets rewritten just
+        // by drawing the slider — no interaction needed. The step is a
+        // drag-feel preference, so it's applied below, on drag only.
         if let Some(c) = self.clamping { sl = sl.clamping(c); }
         if let Some(sp) = self.drag_value_speed { sl = sl.drag_value_speed(sp); }
         if !is_integer {
@@ -298,8 +301,11 @@ impl<Num: egui_dock::egui::emath::Numeric> egui_dock::egui::Widget for VkbSlider
             // Dragging the handle snaps to a round decimal — a slider is a
             // couple of hundred pixels wide, so arbitrary values are neither
             // reachable on purpose nor worth storing. Typing is exact.
-            let snapped = if !is_integer && response.dragged() && self.step.is_none() {
-                if self.logarithmic {
+            let snapped = if !is_integer && response.dragged() {
+                if let Some(step) = self.step {
+                    // Caller asked for a specific drag granularity.
+                    precision::snap_to_step(edited, self.min, step) as f64
+                } else if self.logarithmic {
                     // A linear step is wrong on a log scale — see
                     // precision::snap_to_significant.
                     precision::snap_to_significant(edited, 4) as f64
@@ -316,6 +322,34 @@ impl<Num: egui_dock::egui::emath::Numeric> egui_dock::egui::Widget for VkbSlider
         let field_type = if is_integer { "integer" } else { "decimal" };
         vkb_sync_full(ui, &response, &value_str, field_type, Some(self.min), Some(self.max));
         response
+    }
+}
+
+#[cfg(test)]
+mod slider_tests {
+    /// A step is a drag-feel preference, not a constraint on what a config
+    /// may hold — so merely DRAWING a slider must leave the stored value
+    /// alone. Regression: `egui::Slider::step_by` rounds the value it is
+    /// handed, so a `.flame` import carrying `perspective 0.0273` was
+    /// silently rewritten to 0.03 on any frame the View panel was open,
+    /// with no interaction at all.
+    #[test]
+    fn drawing_a_stepped_slider_leaves_off_grid_values_alone() {
+        let mut value = 0.0273_f32;
+        egui_dock::egui::__run_test_ui(|ui| {
+            ui.add(super::VkbSlider::new(&mut value, 0.0..=10.0).step_by(0.01));
+        });
+        assert_eq!(value, 0.0273);
+    }
+
+    /// The same guarantee without a caller-supplied step.
+    #[test]
+    fn drawing_an_unstepped_slider_leaves_values_alone() {
+        let mut value = 0.006_f32;
+        egui_dock::egui::__run_test_ui(|ui| {
+            ui.add(super::VkbSlider::new(&mut value, 0.0..=0.2));
+        });
+        assert_eq!(value, 0.006);
     }
 }
 
