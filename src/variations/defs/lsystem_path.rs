@@ -126,6 +126,8 @@ pub static LSYSTEM_PATH: VariationDef = VariationDef {
         param!("anchor_y", "Anchor Y", unlimited_float, 0.0, -2.0, 2.0, "Anchor point y."),
         param!("thickness", "Thickness", float, 0.0, 0.0, 0.2, "Half-width of the drawn line, in the curve's own units (the whole curve spans 1). Samples are offset PERPENDICULAR to the local segment: offsetting along it would only slide a point along a line the sweep already covers. Note the density trade — the same samples spread over more area, so a thick line is dimmer; raise Brightness to match."),
         param!("soft", "Soft Edges", bool, false, "Gaussian falloff across the width instead of a flat ribbon. Flat reads as a drawn line; soft reads as a glow."),
+        param!("offset_x", "Offset X", unlimited_float, 0.0, -2.0, 2.0, "Move the whole curve along x, in the curve's own units. The path is built in its own frame, so an offset of minus its centre puts the object on the origin — which is what rotation and zoom orbit around. The script sets this to centre the curve."),
+        param!("offset_y", "Offset Y", unlimited_float, 0.0, -2.0, 2.0, "Move the whole curve along y."),
     ],
     wgsl_2d: WGSL_2D,
     wgsl_3d: WGSL_3D,
@@ -239,16 +241,38 @@ fn variation_lsystem_path(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: p
         }
         let dseg = seg_b - seg_a;
         let dlen = length(dseg);
-        if (connect && dlen > 1e-9) {
+        // Round join at each vertex, the flat twin of the pipe's join
+        // sphere: perpendicular offsets alone leave the outside of every
+        // corner notched open, and a space-filling curve is nearly all
+        // corners. Disc and shaft are sampled in proportion to their areas
+        // (pi*r^2 against 2*r*len) so density stays even across the join:
+        // p = pi*r / (pi*r + 2*len).
+        let jw = 3.14159265359 * thickness;
+        let joint = rng_nextf(rng) * (jw + 2.0 * dlen) < jw;
+        if (connect && dlen > 1e-9 && !joint) {
             let perp = vec2<f32>(-dseg.y, dseg.x) / dlen;
             out = out + perp * (thickness * jit);
         } else {
-            // No segment to be perpendicular to (vertices only): spread
-            // isotropically, so Thickness still means something.
+            // The join disc, centred on the vertex — and the same code
+            // serves the vertices-only case, which is all joins. Uniform
+            // over a disc needs sqrt(u); soft keeps the gaussian radius.
             let ang = rng_nextf(rng) * 6.28318530718;
-            out = out + vec2<f32>(cos(ang), sin(ang)) * (thickness * abs(jit));
+            var rad = sqrt(rng_nextf(rng));
+            if (soft) {
+                rad = abs(jit);
+            }
+            let base = select(out, seg_a, joint && connect);
+            out = base + vec2<f32>(cos(ang), sin(ang)) * (thickness * rad);
         }
     }
+
+    // Move the whole curve. The path is built in its own frame, so an
+    // offset of minus its centre puts the object on the origin — which is
+    // what rotation and zoom orbit around.
+    out = out + vec2<f32>(
+        get_param(xform_id, variation_id, 81u),
+        get_param(xform_id, variation_id, 82u));
+
     if (dc) {
         *vc = t;
     }
@@ -356,16 +380,38 @@ fn variation_lsystem_path(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: p
         }
         let dseg = seg_b - seg_a;
         let dlen = length(dseg);
-        if (connect && dlen > 1e-9) {
+        // Round join at each vertex, the flat twin of the pipe's join
+        // sphere: perpendicular offsets alone leave the outside of every
+        // corner notched open, and a space-filling curve is nearly all
+        // corners. Disc and shaft are sampled in proportion to their areas
+        // (pi*r^2 against 2*r*len) so density stays even across the join:
+        // p = pi*r / (pi*r + 2*len).
+        let jw = 3.14159265359 * thickness;
+        let joint = rng_nextf(rng) * (jw + 2.0 * dlen) < jw;
+        if (connect && dlen > 1e-9 && !joint) {
             let perp = vec2<f32>(-dseg.y, dseg.x) / dlen;
             out = out + perp * (thickness * jit);
         } else {
-            // No segment to be perpendicular to (vertices only): spread
-            // isotropically, so Thickness still means something.
+            // The join disc, centred on the vertex — and the same code
+            // serves the vertices-only case, which is all joins. Uniform
+            // over a disc needs sqrt(u); soft keeps the gaussian radius.
             let ang = rng_nextf(rng) * 6.28318530718;
-            out = out + vec2<f32>(cos(ang), sin(ang)) * (thickness * abs(jit));
+            var rad = sqrt(rng_nextf(rng));
+            if (soft) {
+                rad = abs(jit);
+            }
+            let base = select(out, seg_a, joint && connect);
+            out = base + vec2<f32>(cos(ang), sin(ang)) * (thickness * rad);
         }
     }
+
+    // Move the whole curve. The path is built in its own frame, so an
+    // offset of minus its centre puts the object on the origin — which is
+    // what rotation and zoom orbit around.
+    out = out + vec2<f32>(
+        get_param(xform_id, variation_id, 81u),
+        get_param(xform_id, variation_id, 82u));
+
     if (dc) {
         *vc = t;
     }

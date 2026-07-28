@@ -189,7 +189,10 @@ pub static LSYSTEM_PATH_3D: VariationDef = VariationDef {
         param!("anchor_y", "Anchor Y", unlimited_float, 0.0, -2.0, 2.0, "Anchor point y."),
         param!("anchor_z", "Anchor Z", unlimited_float, 0.0, -2.0, 2.0, "Anchor point z."),
         param!("thickness", "Thickness", float, 0.0, 0.0, 0.2, "Tube radius around the drawn line, in the curve's own units (the whole curve spans 1). Samples are offset in the DISC perpendicular to the local segment — offsetting along it would only slide a point along ground the sweep already covers. Note the density trade: the same samples spread through more volume, so a thick tube is dimmer; raise Brightness to match."),
-        param!("soft", "Soft Edges", bool, false, "Gaussian falloff across the tube instead of a solid one. Solid reads as a drawn tube; soft reads as a glow."),
+        param!("soft", "Soft Edges", bool, false, "Gaussian shell instead of a hard surface: samples fade inward and outward from the pipe wall. Hard reads as drawn geometry; soft reads as a glow."),
+        param!("offset_x", "Offset X", unlimited_float, 0.0, -2.0, 2.0, "Move the whole curve along x, in the curve's own units. The path is built in its own frame — the unit cube for a space-filling curve — so an offset of minus its centre puts the object on the origin, which is what camera rotation and zoom orbit around. The script sets this to centre the curve."),
+        param!("offset_y", "Offset Y", unlimited_float, 0.0, -2.0, 2.0, "Move the whole curve along y."),
+        param!("offset_z", "Offset Z", unlimited_float, 0.0, -2.0, 2.0, "Move the whole curve along z."),
     ],
     wgsl_2d: WGSL_2D,
     wgsl_3d: WGSL_3D,
@@ -281,14 +284,25 @@ fn variation_lsystem_path_3D(p: vec2<f32>, xform_id: u32, variation_id: u32, rng
         let soft = get_param(xform_id, variation_id, 153u) > 0.5;
         let dseg = seg_b - seg_a;
         let dlen = length(dseg);
-        // Uniform in the disc needs sqrt(u); soft uses an Irwin-Hall
-        // gaussian radius instead.
-        var rad = sqrt(rng_nextf(rng));
+        // Samples land ON the pipe's outer surface, not through its volume.
+        // A filled tube spreads its samples through the interior, where
+        // they integrate to a soft-edged smear — a blur, not a pipe. A
+        // surface puts every sample on the silhouette the eye reads as the
+        // pipe's edge. Soft trades the hard shell for a gaussian one that
+        // fades inward and out, which reads as a glow.
+        var rad = 1.0;
         if (soft) {
-            rad = abs(rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) - 2.0) * 0.5;
+            rad = 1.0 + (rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) - 2.0) * 0.35;
         }
         let ang = rng_nextf(rng) * 6.28318530718;
-        if (connect && dlen > 1e-9) {
+        // Round join at each vertex. Consecutive discs are tilted apart by
+        // the turn, so without one the pipe is notched open on the outside
+        // of every corner — and a space-filling curve is nearly all
+        // corners. Sphere and shaft are sampled in proportion to their
+        // areas (4*pi*r^2 against 2*pi*r*len) so surface density stays
+        // even across the join: p = 2r / (2r + len).
+        let joint = rng_nextf(rng) * (2.0 * thickness + dlen) < 2.0 * thickness;
+        if (connect && dlen > 1e-9 && !joint) {
             let dir = dseg / dlen;
             // Any axis not parallel to dir gives a stable basis.
             var ref_axis = vec3<f32>(0.0, 0.0, 1.0);
@@ -299,13 +313,24 @@ fn variation_lsystem_path_3D(p: vec2<f32>, xform_id: u32, variation_id: u32, rng
             let vb = cross(dir, ub);
             out = out + (ub * cos(ang) + vb * sin(ang)) * (thickness * rad);
         } else {
-            // Vertices only: no segment to be perpendicular to, so spread
-            // through the whole ball.
+            // The join sphere, centred on the vertex — and the same code
+            // serves the vertices-only case, which is all joins.
             let zc = rng_nextf(rng) * 2.0 - 1.0;
             let rc = sqrt(max(1.0 - zc * zc, 0.0));
-            out = out + vec3<f32>(rc * cos(ang), rc * sin(ang), zc) * (thickness * rad);
+            let base = select(out, seg_a, joint && connect);
+            out = base + vec3<f32>(rc * cos(ang), rc * sin(ang), zc) * (thickness * rad);
         }
     }
+
+    // Move the whole curve. The path is built in its own frame (the unit
+    // cube, for a space-filling curve), so an offset of minus its centre
+    // puts the object on the origin — which is what camera rotation and
+    // zoom orbit around.
+    out = out + vec3<f32>(
+        get_param(xform_id, variation_id, 154u),
+        get_param(xform_id, variation_id, 155u),
+        get_param(xform_id, variation_id, 156u));
+
     if (dc) {
         *vc = t;
     }
@@ -400,14 +425,25 @@ fn variation_lsystem_path_3D(p: vec3<f32>, xform_id: u32, variation_id: u32, rng
         let soft = get_param(xform_id, variation_id, 153u) > 0.5;
         let dseg = seg_b - seg_a;
         let dlen = length(dseg);
-        // Uniform in the disc needs sqrt(u); soft uses an Irwin-Hall
-        // gaussian radius instead.
-        var rad = sqrt(rng_nextf(rng));
+        // Samples land ON the pipe's outer surface, not through its volume.
+        // A filled tube spreads its samples through the interior, where
+        // they integrate to a soft-edged smear — a blur, not a pipe. A
+        // surface puts every sample on the silhouette the eye reads as the
+        // pipe's edge. Soft trades the hard shell for a gaussian one that
+        // fades inward and out, which reads as a glow.
+        var rad = 1.0;
         if (soft) {
-            rad = abs(rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) - 2.0) * 0.5;
+            rad = 1.0 + (rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) - 2.0) * 0.35;
         }
         let ang = rng_nextf(rng) * 6.28318530718;
-        if (connect && dlen > 1e-9) {
+        // Round join at each vertex. Consecutive discs are tilted apart by
+        // the turn, so without one the pipe is notched open on the outside
+        // of every corner — and a space-filling curve is nearly all
+        // corners. Sphere and shaft are sampled in proportion to their
+        // areas (4*pi*r^2 against 2*pi*r*len) so surface density stays
+        // even across the join: p = 2r / (2r + len).
+        let joint = rng_nextf(rng) * (2.0 * thickness + dlen) < 2.0 * thickness;
+        if (connect && dlen > 1e-9 && !joint) {
             let dir = dseg / dlen;
             // Any axis not parallel to dir gives a stable basis.
             var ref_axis = vec3<f32>(0.0, 0.0, 1.0);
@@ -418,13 +454,24 @@ fn variation_lsystem_path_3D(p: vec3<f32>, xform_id: u32, variation_id: u32, rng
             let vb = cross(dir, ub);
             out = out + (ub * cos(ang) + vb * sin(ang)) * (thickness * rad);
         } else {
-            // Vertices only: no segment to be perpendicular to, so spread
-            // through the whole ball.
+            // The join sphere, centred on the vertex — and the same code
+            // serves the vertices-only case, which is all joins.
             let zc = rng_nextf(rng) * 2.0 - 1.0;
             let rc = sqrt(max(1.0 - zc * zc, 0.0));
-            out = out + vec3<f32>(rc * cos(ang), rc * sin(ang), zc) * (thickness * rad);
+            let base = select(out, seg_a, joint && connect);
+            out = base + vec3<f32>(rc * cos(ang), rc * sin(ang), zc) * (thickness * rad);
         }
     }
+
+    // Move the whole curve. The path is built in its own frame (the unit
+    // cube, for a space-filling curve), so an offset of minus its centre
+    // puts the object on the origin — which is what camera rotation and
+    // zoom orbit around.
+    out = out + vec3<f32>(
+        get_param(xform_id, variation_id, 154u),
+        get_param(xform_id, variation_id, 155u),
+        get_param(xform_id, variation_id, 156u));
+
     if (dc) {
         *vc = t;
     }

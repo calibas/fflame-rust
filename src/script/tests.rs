@@ -1428,6 +1428,16 @@ fn hilbert3d_script_builds_the_path() {
     assert!((p("anchor_x") - 0.5).abs() < 1e-6);
     assert!((p("anchor_y") - 0.5).abs() < 1e-6);
     assert!((p("anchor_z") - 0.5).abs() < 1e-6);
+
+    // The curve is built in the unit cube, so its centre is (.5,.5,.5);
+    // offsetting by minus that puts the object on the origin, which is
+    // what camera rotation and zoom orbit around. The view must then NOT
+    // pan as well, or the curve just moves back off centre.
+    for axis in ["offset_x", "offset_y", "offset_z"] {
+        assert!((p(axis) + 0.5).abs() < 1e-6, "{axis} centres the cube");
+    }
+    assert_eq!(out.config.pan_x, 0.0, "centred geometry needs no pan");
+    assert_eq!(out.config.pan_y, 0.0);
 }
 
 #[test]
@@ -1449,5 +1459,20 @@ fn path_thickness_defaults_off_and_is_appended() {
 
         let thick = &info.parameters[thick_at];
         assert_eq!(thick.default_value, 0.0, "{name}: thickness defaults to off");
+
+        // Offsets are appended after soft, for the same positional reason,
+        // and default to 0 so an untouched curve stays where it was.
+        let off_at = names.iter().position(|n| n == "offset_x").unwrap();
+        assert_eq!(off_at, soft_at + 1, "{name}: offset_x follows soft");
+        assert_eq!(names[off_at + 1], "offset_y", "{name}: offset_y follows offset_x");
+        for axis in ["offset_x", "offset_y"] {
+            let p = info.parameters.iter().find(|p| p.name == axis).unwrap();
+            assert_eq!(p.default_value, 0.0, "{name}: {axis} defaults to no move");
+        }
+        if name == "lsystem_path_3D" {
+            assert_eq!(names[off_at + 2], "offset_z", "3D also offsets in z");
+            let p = info.parameters.iter().find(|p| p.name == "offset_z").unwrap();
+            assert_eq!(p.default_value, 0.0);
+        }
     }
 }

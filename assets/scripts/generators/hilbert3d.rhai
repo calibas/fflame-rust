@@ -40,6 +40,12 @@ if output == "Path (finite depth)" {
     t.set_variation_param("lsystem_path_3D.anchor_x", 0.5);
     t.set_variation_param("lsystem_path_3D.anchor_y", 0.5);
     t.set_variation_param("lsystem_path_3D.anchor_z", 0.5);
+    // Put the cube's centre on the origin, so camera rotation orbits the
+    // curve instead of swinging it around a corner. Offset X/Y/Z stay
+    // live sliders if you want to move it afterwards.
+    t.set_variation_param("lsystem_path_3D.offset_x", -0.5);
+    t.set_variation_param("lsystem_path_3D.offset_y", -0.5);
+    t.set_variation_param("lsystem_path_3D.offset_z", -0.5);
     t.weight = 1.0;
     let names = ["xx", "xy", "xz", "yx", "yy", "yz", "zx", "zy", "zz", "tx", "ty", "tz"];
     for k in 0..maps.len() {
@@ -69,6 +75,14 @@ config.set("preserve_z", true);
 config.set("perspective_strength", 0.15);
 config.set("camera_rotation_x", 35.0);
 config.set("camera_rotation_y", -30.0);
-config.set("pan_x", 0.5);
-config.set("pan_y", 0.5);
+// Path mode moves the geometry onto the origin (above), so the view
+// needs no pan. The attractor build has no such offset — its eight maps
+// tile the unit cube where it stands — so that one pans instead.
+if output == "Path (finite depth)" {
+    config.set("pan_x", 0.0);
+    config.set("pan_y", 0.0);
+} else {
+    config.set("pan_x", 0.5);
+    config.set("pan_y", 0.5);
+}
 config.set("zoom", 2.2);
