@@ -1291,6 +1291,57 @@ fn register_builtins(engine: &mut Engine) {
         },
     );
 
+    // hilbert3d_maps() -> 8 x [12 affine floats]: a self-similar 3D
+    // Hilbert curve (octants in face-adjacent order, exits chaining into
+    // entries, ending at (1,0,0)). Feed to lsystem_path_3D or matrix3D.
+    engine.register_fn("hilbert3d_maps", || -> Array {
+        crate::script::builtins::hilbert3d_maps()
+            .iter()
+            .map(|m| Dynamic::from(m.iter().map(|v| Dynamic::from(*v)).collect::<Array>()))
+            .collect()
+    });
+
+    // lsystem_graph_pieces(axiom, rules, angle)
+    //   -> #{ pieces: [[12 floats, depth, occ, owner], ...], note: "" }
+    // Multi-variable (graph-directed) extraction; the word structure is
+    // meant for xaos: a piece may follow another only when it CONSUMES
+    // the type the other PRODUCED (occ(next) == owner(prev)).
+    engine.register_fn(
+        "lsystem_graph_pieces",
+        |axiom: &str, rules: rhai::Map, angle: Dynamic| -> Result<rhai::Map, Box<EvalAltResult>> {
+            let angle = num(&angle, "turtle angle")?;
+            let mut parsed: Vec<(char, String)> = Vec::new();
+            for (key, value) in rules.iter() {
+                if let Some(sym) = key.chars().next() {
+                    parsed.push((sym, value.clone().into_string().unwrap_or_default()));
+                }
+            }
+            parsed.sort_by_key(|(k, _)| *k);
+            let mut out = rhai::Map::new();
+            match crate::script::builtins::lsystem_graph_pieces(axiom, &parsed, angle) {
+                Ok(pieces) => {
+                    let arr: Array = pieces
+                        .iter()
+                        .map(|p| {
+                            let mut a: Array = p.m.iter().map(|v| Dynamic::from(*v)).collect();
+                            a.push(Dynamic::from(p.depth as f64));
+                            a.push(Dynamic::from(p.occ.to_string()));
+                            a.push(Dynamic::from(p.owner.to_string()));
+                            Dynamic::from(a)
+                        })
+                        .collect();
+                    out.insert("pieces".into(), Dynamic::from(arr));
+                    out.insert("note".into(), Dynamic::from(String::new()));
+                }
+                Err(e) => {
+                    out.insert("pieces".into(), Dynamic::from(Array::new()));
+                    out.insert("note".into(), Dynamic::from(e));
+                }
+            }
+            Ok(out)
+        },
+    );
+
     // lsystem_pieces3(axiom, rules, angle)
     //   -> #{ branches: [...], stems: [...], note: "" }
     // Pieces are [12 affine floats row-major, depth, symbol]. The 3D

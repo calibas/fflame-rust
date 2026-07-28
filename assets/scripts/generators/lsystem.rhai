@@ -146,7 +146,11 @@ if bad != "" {
     // EDGE construction: usable when the depth-1 drawn segments all
     // SHRINK relative to the whole. If they do not, this is not an
     // edge-rewriting system and the pieces would never converge.
-    if !is_3d && construction == "" && drawn.len() >= 2 {
+    // A graph-directed verdict from the node attempt means the drawn
+    // segments are connectors between variables — edge mode would build
+    // a curve out of the connective tissue (the Peano trap), so skip it
+    // and let the graph construction below take the system instead.
+    if !is_3d && construction == "" && drawn.len() >= 2 && !node_note.contains("graph-directed") {
         try {
             let cand = normalize_segments(drawn);
             let shrinks = true;
@@ -172,6 +176,25 @@ if bad != "" {
         if nres.pieces.len() >= 2 {
             pieces = nres.pieces;
             construction = "node";
+        }
+    }
+
+    // GRAPH construction: systems whose variables are genuinely
+    // different curves (not mirror pairs) are graph-directed IFSs. A
+    // flame expresses those through XAOS — one transform per occurrence,
+    // allowed to follow another only when it consumes the type the other
+    // produced — with opacity hiding every type except the axiom's, so
+    // only the wanted curve plots while the others drive the dynamics
+    // invisibly.
+    let graph_pieces = [];
+    if construction == "" && node_note.contains("graph-directed") {
+        let gres = lsystem_graph_pieces(axiom, rules, angle);
+        if gres.pieces.len() >= 2 {
+            graph_pieces = gres.pieces;
+            construction = "graph";
+            pieces = gres.pieces;
+        } else if gres.note != "" {
+            node_note = gres.note;
         }
     }
 
@@ -209,7 +232,30 @@ if bad != "" {
         }
 
         let mirrored_count = 0;
-        if is_3d && path_mode {
+        if construction == "graph" {
+            // One transform per occurrence; xaos carries the word
+            // structure; opacity shows only the axiom's curve.
+            let n = graph_pieces.len();
+            for k in 0..n {
+                let q = graph_pieces[k];
+                let t = flame.add_transform();
+                t.set_matrix3d(q, 1.0);
+                let sc = sqrt(q[0] * q[0] + q[3] * q[3] + q[6] * q[6]);
+                t.weight = sc + 0.05;
+                t.opacity = if q[14] == axiom { 1.0 } else { 0.0 };
+                if colour_pieces {
+                    t.color = k.to_float() / n.to_float();
+                }
+            }
+            for from in 0..n {
+                for to in 0..n {
+                    // occ(next) == owner(prev): the next map must consume
+                    // what the last one produced.
+                    let allowed = graph_pieces[to][13] == graph_pieces[from][14];
+                    flame.set_xaos(from, to, if allowed { 1.0 } else { 0.0 });
+                }
+            }
+        } else if is_3d && path_mode {
             // One transform, the 3D path variation: twelve coefficients
             // per map, composed by the digits of the curve parameter.
             let t = flame.add_transform();
@@ -320,7 +366,10 @@ if bad != "" {
             }
         }
 
-        if construction == "3d" {
+        if construction == "graph" {
+            print("Graph-directed system: " + graph_pieces.len() + " maps across its curve types.");
+            print("The word structure runs through xaos; only the axiom's curve is visible.");
+        } else if construction == "3d" {
             print("3D rule: " + pieces.len() + " pieces with full 3D frames.");
         } else if construction == "node" {
             print("Space-filling (node-rewriting) rule: " + pieces.len() + " copies of the whole curve, one per variable occurrence.");
@@ -331,7 +380,17 @@ if bad != "" {
             print("Mirror pair found: the " + mirrored_count + " piece(s) drawn by " + mirror_symbol + " are reflected.");
         }
 
-        if is_3d && !path_mode {
+        if construction == "graph" {
+            // matrix3D leaves the transform affine at identity, so the
+            // usual balance metric is blind here; report piece scales.
+            let acc = 0.0;
+            for k in 0..graph_pieces.len() {
+                let q = graph_pieces[k];
+                let sc = sqrt(q[0] * q[0] + q[3] * q[3] + q[6] * q[6]);
+                if sc > 0.000001 { acc += ln(sc); }
+            }
+            print("mean piece log-scale: " + acc / graph_pieces.len());
+        } else if is_3d && !path_mode {
             // flame.contractiveness() reads the transform affine, which
             // matrix3D leaves at identity — compute from the pieces
             // instead so the number still means something.

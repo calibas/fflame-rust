@@ -1596,6 +1596,421 @@ pub fn lsystem_bounds3(
     None
 }
 
+// ============================================================================
+// Graph-directed L-systems (multi-variable) and the 3D Hilbert curve
+// ============================================================================
+
+/// One piece of a graph-directed system: a full 3D affine plus WHICH
+/// curve type it consumes (`occ`) and which it produces (`owner`).
+#[derive(Debug, Clone, Copy)]
+pub struct GraphPiece {
+    pub m: [f64; 12],
+    pub depth: u32,
+    /// The occurrence's symbol — the curve type this map CONSUMES.
+    pub occ: char,
+    /// The rule the occurrence sits in — the curve type it PRODUCES.
+    pub owner: char,
+}
+
+/// Multi-variable (graph-directed) extraction.
+///
+/// A system like ABOP's 3D Hilbert has several variables whose curves
+/// are built from copies of EACH OTHER — a graph-directed IFS. A flat
+/// transform set cannot express that (every map would apply to one
+/// attractor), but the chaos game for a GIFS is exactly a flame with
+/// XAOS: one transform per occurrence, allowed to follow another only
+/// when it consumes the type the other produced
+/// (`occ(next) == owner(prev)`), with opacity hiding every type except
+/// the axiom's so only the wanted curve plots. The scaffold types still
+/// drive the dynamics; they are just invisible.
+///
+/// Each variable's curve is normalized into its own unit frame
+/// (displacement along +x); a map for an occurrence of `W` inside
+/// `rule(V)` carries W's frame onto the occurrence's span inside V's
+/// frame. Spans measured deep with a Richardson step; orientations from
+/// the exact turtle frame, nudged onto the measured span.
+pub fn lsystem_graph_pieces(
+    axiom: &str,
+    rules: &[(char, String)],
+    angle_deg: f64,
+) -> Result<Vec<GraphPiece>, String> {
+    let angle = angle_deg * std::f64::consts::PI / 180.0;
+
+    let trimmed = axiom.trim();
+    let mut it = trimmed.chars();
+    let primary = match (it.next(), it.next()) {
+        (Some(p), None) => p,
+        _ => return Err("the axiom must be a single symbol".into()),
+    };
+    let is_drawing = |c: char| matches!(c, 'F' | 'G' | 'A' | 'B');
+    let has_rule = |c: char| rules.iter().any(|(k, _)| *k == c);
+    let is_var = |c: char| has_rule(c) && !is_drawing(c) && !matches!(c, 'f' | 'g');
+    if !is_var(primary) {
+        return Err(format!("the axiom `{primary}` must be a variable with a rule"));
+    }
+    let rule_of = |c: char| {
+        rules
+            .iter()
+            .find(|(k, _)| *k == c)
+            .map(|(_, r)| r.clone())
+            .unwrap_or_default()
+    };
+
+    // Types reachable from the axiom, in discovery order.
+    let mut types: Vec<char> = vec![primary];
+    let mut i = 0;
+    while i < types.len() {
+        for ch in rule_of(types[i]).chars() {
+            if is_var(ch) && !types.contains(&ch) {
+                types.push(ch);
+            }
+        }
+        i += 1;
+    }
+
+    // Everything that needs a deep expansion: the types, plus ruled
+    // drawing symbols (F=FF stems elongate).
+    let mut needed = types.clone();
+    for t in &types {
+        for ch in rule_of(*t).chars() {
+            if has_rule(ch) && !needed.contains(&ch) {
+                needed.push(ch);
+            }
+        }
+    }
+
+    const CHAR_BUDGET: usize = 400_000;
+    let mut depth = 8u32;
+    let expansions_at = |d: u32| -> Result<Vec<(char, String)>, ()> {
+        let mut out = Vec::new();
+        let mut total = 0usize;
+        for &sym in &needed {
+            match lsystem_expand(&sym.to_string(), rules, d) {
+                Ok(e) => {
+                    total += e.len();
+                    out.push((sym, e));
+                }
+                Err(_) => return Err(()),
+            }
+        }
+        if total > CHAR_BUDGET {
+            return Err(());
+        }
+        Ok(out)
+    };
+    let exp_fine = loop {
+        match expansions_at(depth) {
+            Ok(e) => break e,
+            Err(()) if depth == 0 => {
+                return Err("could not expand this system at any depth".into())
+            }
+            Err(()) => depth -= 1,
+        }
+    };
+
+    struct Site {
+        p1: [f64; 3],
+        p2: [f64; 3],
+        r: [[f64; 3]; 3],
+        depth: u32,
+        occ: char,
+    }
+    struct TypeWalk {
+        sites: Vec<Site>,
+        disp: [f64; 3],
+    }
+
+    // Walk one type's rule against a set of expansions.
+    let walk_type = |v: char, exps: &Vec<(char, String)>| -> Result<TypeWalk, String> {
+        let body_of = |c: char| exps.iter().find(|(k, _)| *k == c).map(|(_, e)| e.as_str());
+        let mut st = LTurtle3::new();
+        let mut stack: Vec<LTurtle3> = Vec::new();
+        let mut sites: Vec<Site> = Vec::new();
+        for ch in rule_of(v).chars() {
+            let nest = stack.len() as u32;
+            if is_var(ch) {
+                let entry = st;
+                if let Some(body) = body_of(ch) {
+                    for bc in body.chars() {
+                        lsys_step3(bc, angle, &mut st, &mut stack);
+                    }
+                }
+                sites.push(Site { p1: entry.p, p2: st.p, r: entry.r, depth: nest, occ: ch });
+            } else if is_drawing(ch) && has_rule(ch) {
+                if let Some(body) = body_of(ch) {
+                    for bc in body.chars() {
+                        lsys_step3(bc, angle, &mut st, &mut stack);
+                    }
+                }
+            } else {
+                lsys_step3(ch, angle, &mut st, &mut stack);
+            }
+        }
+        let d2 = st.p[0] * st.p[0] + st.p[1] * st.p[1] + st.p[2] * st.p[2];
+        if d2 < 1e-9 {
+            return Err(format!(
+                "type `{v}` returns to where it started, so it has no unit frame"
+            ));
+        }
+        Ok(TypeWalk { sites, disp: st.p })
+    };
+
+    let mut fine: Vec<(char, TypeWalk)> = Vec::new();
+    for &v in &types {
+        fine.push((v, walk_type(v, &exp_fine)?));
+    }
+    let coarse: Option<Vec<(char, TypeWalk)>> = if depth >= 2 {
+        expansions_at(depth - 1).ok().and_then(|e| {
+            let mut out = Vec::new();
+            for &v in &types {
+                match walk_type(v, &e) {
+                    Ok(w) => out.push((v, w)),
+                    Err(_) => return None,
+                }
+            }
+            Some(out)
+        })
+    } else {
+        None
+    };
+
+    // Per-type frames: normalize by displacement length and rotate the
+    // displacement onto +x, so every type's curve runs origin -> (1,0,0).
+    let frame_of = |disp: &[f64; 3]| -> ([[f64; 3]; 3], f64) {
+        let n = (disp[0] * disp[0] + disp[1] * disp[1] + disp[2] * disp[2]).sqrt();
+        let dir = [disp[0] / n, disp[1] / n, disp[2] / n];
+        (rotation_between(&dir, &[1.0, 0.0, 0.0]), n)
+    };
+
+    let mut pieces: Vec<GraphPiece> = Vec::new();
+    for (ti, (v, w)) in fine.iter().enumerate() {
+        let (g_v, n_v) = frame_of(&w.disp);
+        for (si, s) in w.sites.iter().enumerate() {
+            // Occurrence positions in V's normalized frame, Richardson-
+            // refined against the coarser depth when available.
+            let nrm = |p: &[f64; 3]| {
+                [
+                    (g_v[0][0] * p[0] + g_v[0][1] * p[1] + g_v[0][2] * p[2]) / n_v,
+                    (g_v[1][0] * p[0] + g_v[1][1] * p[1] + g_v[1][2] * p[2]) / n_v,
+                    (g_v[2][0] * p[0] + g_v[2][1] * p[1] + g_v[2][2] * p[2]) / n_v,
+                ]
+            };
+            let mut p1 = nrm(&s.p1);
+            let mut p2 = nrm(&s.p2);
+            if let Some(cw) = &coarse {
+                let (cv, cwk) = &cw[ti];
+                if *cv == *v && cwk.sites.len() == w.sites.len() {
+                    let (g_c, n_c) = frame_of(&cwk.disp);
+                    let cs = &cwk.sites[si];
+                    let cn = |p: &[f64; 3]| {
+                        [
+                            (g_c[0][0] * p[0] + g_c[0][1] * p[1] + g_c[0][2] * p[2]) / n_c,
+                            (g_c[1][0] * p[0] + g_c[1][1] * p[1] + g_c[1][2] * p[2]) / n_c,
+                            (g_c[2][0] * p[0] + g_c[2][1] * p[1] + g_c[2][2] * p[2]) / n_c,
+                        ]
+                    };
+                    let c1 = cn(&cs.p1);
+                    let c2 = cn(&cs.p2);
+                    let d = [p2[0] - p1[0], p2[1] - p1[1], p2[2] - p1[2]];
+                    let sig = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+                    if sig > 0.05 && sig < 0.95 {
+                        let k = sig / (1.0 - sig);
+                        for a in 0..3 {
+                            p1[a] += (p1[a] - c1[a]) * k;
+                            p2[a] += (p2[a] - c2[a]) * k;
+                        }
+                    }
+                }
+            }
+
+            let d = [p2[0] - p1[0], p2[1] - p1[1], p2[2] - p1[2]];
+            let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+            if len < 1e-9 {
+                continue;
+            }
+
+            // Rotation: V's frame, times the turtle's entry orientation,
+            // times W's frame undone; then nudged so x̂ lands on the
+            // measured span (the finite-depth residual).
+            let occ_disp = fine
+                .iter()
+                .find(|(k, _)| *k == s.occ)
+                .map(|(_, tw)| tw.disp)
+                .unwrap_or([1.0, 0.0, 0.0]);
+            let (g_w, _) = frame_of(&occ_disp);
+            let gw_t = [
+                [g_w[0][0], g_w[1][0], g_w[2][0]],
+                [g_w[0][1], g_w[1][1], g_w[2][1]],
+                [g_w[0][2], g_w[1][2], g_w[2][2]],
+            ];
+            let mut r = mat3_mul(&mat3_mul(&g_v, &s.r), &gw_t);
+            let rx = [r[0][0], r[1][0], r[2][0]];
+            let to = [d[0] / len, d[1] / len, d[2] / len];
+            r = mat3_mul(&rotation_between(&rx, &to), &r);
+
+            pieces.push(GraphPiece {
+                m: [
+                    len * r[0][0], len * r[0][1], len * r[0][2],
+                    len * r[1][0], len * r[1][1], len * r[1][2],
+                    len * r[2][0], len * r[2][1], len * r[2][2],
+                    p1[0], p1[1], p1[2],
+                ],
+                depth: s.depth,
+                occ: s.occ,
+                owner: *v,
+            });
+        }
+    }
+
+    if pieces.len() < 2 {
+        return Err("fewer than two recursion sites across the whole graph".into());
+    }
+    Ok(pieces)
+}
+
+/// A self-similar 3D Hilbert curve: eight maps at scale 1/2, one per
+/// octant in face-adjacent (Gray code) visiting order.
+///
+/// Multi-variable 3D Hilbert L-systems are graph-directed, but
+/// SINGLE-type 3D Hilbert curves exist too: all eight octant sub-curves
+/// congruent to the whole via symmetries of the cube (Haverkort's
+/// inventory of 3D Hilbert curves). Rather than trusting memory for
+/// published matrices, the maps are found by a deterministic search:
+/// walk the octants in Gray-code order, and for each pick the first cube
+/// symmetry (of the 48) that carries the curve's global entry/exit
+/// corners onto octant corners that CHAIN — each octant's exit is the
+/// next octant's entry, ending at the global exit. Continuity of the
+/// limit curve is exactly that chaining, the same condition the 2D
+/// construction rests on.
+///
+/// Frame: the unit cube [0,1]³, entry (0,0,0), exit (1,0,0) — matching
+/// the path variation's anchors. Deterministic: same maps every call.
+pub fn hilbert3d_maps() -> Vec<[f64; 12]> {
+    // Octants in Gray-code order (consecutive octants share a face),
+    // starting at the entry corner's octant, ending at the exit's.
+    let gray = [0b000u8, 0b001, 0b011, 0b010, 0b110, 0b111, 0b101, 0b100];
+    let oct = |g: u8| -> [f64; 3] {
+        [
+            if g & 0b100 != 0 { 0.5 } else { 0.0 },
+            if g & 0b010 != 0 { 0.5 } else { 0.0 },
+            if g & 0b001 != 0 { 0.5 } else { 0.0 },
+        ]
+    };
+
+    // The 48 symmetries of the cube: signed permutation matrices.
+    let mut syms: Vec<[[f64; 3]; 3]> = Vec::new();
+    let perms = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]];
+    for p in perms {
+        for sx in [1.0, -1.0] {
+            for sy in [1.0, -1.0] {
+                for sz in [1.0, -1.0] {
+                    let signs = [sx, sy, sz];
+                    let mut m = [[0.0; 3]; 3];
+                    for row in 0..3 {
+                        m[row][p[row]] = signs[row];
+                    }
+                    syms.push(m);
+                }
+            }
+        }
+    }
+
+    // M(u) = octant + 0.5·(P·(u − c) + c), c the cube centre.
+    let apply = |p: &[[f64; 3]; 3], o: &[f64; 3], u: &[f64; 3]| -> [f64; 3] {
+        let c = [0.5, 0.5, 0.5];
+        let v = [u[0] - c[0], u[1] - c[1], u[2] - c[2]];
+        [
+            o[0] + 0.5 * (p[0][0] * v[0] + p[0][1] * v[1] + p[0][2] * v[2] + c[0]),
+            o[1] + 0.5 * (p[1][0] * v[0] + p[1][1] * v[1] + p[1][2] * v[2] + c[1]),
+            o[2] + 0.5 * (p[2][0] * v[0] + p[2][1] * v[1] + p[2][2] * v[2] + c[2]),
+        ]
+    };
+    let close = |a: &[f64; 3], b: &[f64; 3]| {
+        (a[0] - b[0]).abs() < 1e-9 && (a[1] - b[1]).abs() < 1e-9 && (a[2] - b[2]).abs() < 1e-9
+    };
+    let in_octant = |o: &[f64; 3], q: &[f64; 3]| {
+        (0..3).all(|k| q[k] >= o[k] - 1e-9 && q[k] <= o[k] + 0.5 + 1e-9)
+    };
+
+    let entry_g = [0.0, 0.0, 0.0];
+    let exit_g = [1.0, 0.0, 0.0];
+
+    // Depth-first search: octant by octant, first symmetry that chains.
+    fn dfs(
+        i: usize,
+        entry: [f64; 3],
+        gray: &[u8; 8],
+        oct: &dyn Fn(u8) -> [f64; 3],
+        syms: &Vec<[[f64; 3]; 3]>,
+        apply: &dyn Fn(&[[f64; 3]; 3], &[f64; 3], &[f64; 3]) -> [f64; 3],
+        close: &dyn Fn(&[f64; 3], &[f64; 3]) -> bool,
+        in_octant: &dyn Fn(&[f64; 3], &[f64; 3]) -> bool,
+        entry_g: &[f64; 3],
+        exit_g: &[f64; 3],
+        picked: &mut Vec<[[f64; 3]; 3]>,
+    ) -> bool {
+        if i == 8 {
+            return true;
+        }
+        let o = oct(gray[i]);
+        for p in syms {
+            let e = apply(p, &o, entry_g);
+            if !close(&e, &entry) {
+                continue;
+            }
+            let x = apply(p, &o, exit_g);
+            let ok = if i == 7 {
+                close(&x, exit_g)
+            } else {
+                // The exit must be a corner shared with the NEXT octant.
+                in_octant(&oct(gray[i + 1]), &x)
+            };
+            if !ok {
+                continue;
+            }
+            picked.push(*p);
+            if dfs(i + 1, x, gray, oct, syms, apply, close, in_octant, entry_g, exit_g, picked) {
+                return true;
+            }
+            picked.pop();
+        }
+        false
+    }
+
+    let mut picked: Vec<[[f64; 3]; 3]> = Vec::new();
+    let found = dfs(
+        0, entry_g, &gray, &oct, &syms, &apply, &close, &in_octant, &entry_g, &exit_g,
+        &mut picked,
+    );
+    debug_assert!(found, "a chaining symmetry assignment exists");
+    if !found {
+        return Vec::new();
+    }
+
+    picked
+        .iter()
+        .zip(gray.iter())
+        .map(|(p, g)| {
+            let o = oct(*g);
+            // Affine: x' = 0.5·P·x + (o + 0.5·(c − P·c)).
+            let c = [0.5, 0.5, 0.5];
+            let pc = [
+                p[0][0] * c[0] + p[0][1] * c[1] + p[0][2] * c[2],
+                p[1][0] * c[0] + p[1][1] * c[1] + p[1][2] * c[2],
+                p[2][0] * c[0] + p[2][1] * c[1] + p[2][2] * c[2],
+            ];
+            [
+                0.5 * p[0][0], 0.5 * p[0][1], 0.5 * p[0][2],
+                0.5 * p[1][0], 0.5 * p[1][1], 0.5 * p[1][2],
+                0.5 * p[2][0], 0.5 * p[2][1], 0.5 * p[2][2],
+                o[0] + 0.5 * (c[0] - pc[0]),
+                o[1] + 0.5 * (c[1] - pc[1]),
+                o[2] + 0.5 * (c[2] - pc[2]),
+            ]
+        })
+        .collect()
+}
+
 /// Rescale and rotate a path so its overall displacement is the unit
 /// segment from (0, 0) to (1, 0).
 ///
@@ -2519,6 +2934,103 @@ mod tests {
         assert!(lsystem_uses_3d("X", &rolled));
         let pitched = vec![('X', "F[&X]F".to_string())];
         assert!(lsystem_uses_3d("X", &pitched));
+    }
+
+
+    #[test]
+    fn hilbert3d_maps_tile_and_chain() {
+        let maps = hilbert3d_maps();
+        assert_eq!(maps.len(), 8, "eight octants");
+
+        let apply = |m: &[f64; 12], v: [f64; 3]| {
+            [
+                m[0] * v[0] + m[1] * v[1] + m[2] * v[2] + m[9],
+                m[3] * v[0] + m[4] * v[1] + m[5] * v[2] + m[10],
+                m[6] * v[0] + m[7] * v[1] + m[8] * v[2] + m[11],
+            ]
+        };
+
+        // Each map is half a cube symmetry: columns orthogonal, length 1/2.
+        for (i, m) in maps.iter().enumerate() {
+            for j in 0..3 {
+                let cl = [m[j], m[3 + j], m[6 + j]];
+                let n = (cl[0] * cl[0] + cl[1] * cl[1] + cl[2] * cl[2]).sqrt();
+                approx(n, 0.5, 1e-12, &format!("map {i} column {j} scale"));
+            }
+        }
+
+        // The eight images of the cube's centre are the eight octant
+        // centres — the maps tile the cube, nothing doubled.
+        let mut centres: Vec<[i32; 3]> = maps
+            .iter()
+            .map(|m| {
+                let c = apply(m, [0.5, 0.5, 0.5]);
+                [(c[0] * 4.0).round() as i32, (c[1] * 4.0).round() as i32, (c[2] * 4.0).round() as i32]
+            })
+            .collect();
+        centres.sort();
+        centres.dedup();
+        assert_eq!(centres.len(), 8, "eight distinct octants");
+
+        // Continuity: the curve enters at (0,0,0), each octant's exit is
+        // the next octant's entry, and the whole exits at (1,0,0). This
+        // chaining IS what makes the limit a connected curve.
+        let entry0 = apply(&maps[0], [0.0, 0.0, 0.0]);
+        assert!(entry0.iter().all(|v| v.abs() < 1e-12), "starts at the origin");
+        for i in 0..7 {
+            let exit_i = apply(&maps[i], [1.0, 0.0, 0.0]);
+            let entry_next = apply(&maps[i + 1], [0.0, 0.0, 0.0]);
+            for k in 0..3 {
+                approx(exit_i[k], entry_next[k], 1e-12, &format!("octant {i} chains"));
+            }
+        }
+        let end = apply(&maps[7], [1.0, 0.0, 0.0]);
+        approx(end[0], 1.0, 1e-12, "exits at (1,0,0)");
+        approx(end[1], 0.0, 1e-12, "exits at (1,0,0)");
+        approx(end[2], 0.0, 1e-12, "exits at (1,0,0)");
+
+        // Deterministic: the search must return the same maps every call,
+        // or saved flames would silently change.
+        assert_eq!(maps, hilbert3d_maps());
+    }
+
+    #[test]
+    fn graph_pieces_carry_types_and_gate_correctly() {
+        // The 2D Hilbert pair, treated as a two-type GRAPH instead of
+        // via mirror folding: X's rule holds occurrences [Y, X, X, Y] and
+        // Y's holds [X, Y, Y, X]. Every map must know what it consumes
+        // and what it produces — that is what xaos gates on.
+        let rules = vec![
+            ('X', "-YF+XFX+FY-".to_string()),
+            ('Y', "+XF-YFY-FX+".to_string()),
+        ];
+        let pieces = lsystem_graph_pieces("X", &rules, 90.0).expect("graph extracts");
+        assert_eq!(pieces.len(), 8, "four occurrences in each of two rules");
+
+        let owners: Vec<char> = pieces.iter().map(|p| p.owner).collect();
+        assert_eq!(owners, vec!['X', 'X', 'X', 'X', 'Y', 'Y', 'Y', 'Y']);
+        let occs_x: Vec<char> = pieces.iter().filter(|p| p.owner == 'X').map(|p| p.occ).collect();
+        assert_eq!(occs_x, vec!['Y', 'X', 'X', 'Y']);
+
+        // Every map contracts by about one half (it is Hilbert).
+        for (i, p) in pieces.iter().enumerate() {
+            let c0 = [p.m[0], p.m[3], p.m[6]];
+            let n = (c0[0] * c0[0] + c0[1] * c0[1] + c0[2] * c0[2]).sqrt();
+            assert!((n - 0.5).abs() < 0.01, "piece {i} scale {n}");
+            assert!(p.m[11].abs() < 1e-9, "2D system stays in the plane");
+        }
+
+        // A three-type system that mirror folding REFUSES must extract
+        // here — that is the point of graph support.
+        let tri = vec![
+            ('X', "F+YFZF".to_string()),
+            ('Y', "FX-F".to_string()),
+            ('Z', "F-XF".to_string()),
+        ];
+        let p = lsystem_graph_pieces("X", &tri, 60.0).expect("three types extract");
+        let mut kinds: Vec<char> = p.iter().map(|q| q.owner).collect();
+        kinds.dedup();
+        assert_eq!(kinds, vec!['X', 'Y', 'Z'], "all three types present");
     }
 
     #[test]
