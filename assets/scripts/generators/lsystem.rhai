@@ -222,9 +222,15 @@ if bad != "" {
         // The attractor's bounding box, used for framing and (in path
         // mode) for the anchor point at its centre.
         let box = [0.0, 0.0, 1.0, 0.0];
-        if !is_3d {
+        let b3 = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+        if is_3d {
+            b3 = lsystem_bounds3(axiom, rules, 6, angle);
+        } else {
             box = lsystem_bounds(axiom, rules, 6, angle);
         }
+        // Set when the geometry itself has been moved onto the origin, so
+        // the framing below knows not to pan the camera as well.
+        let curve_centred = false;
 
         let path_mode = output == "Path (finite depth)" && pieces.len() <= 12;
         if output == "Path (finite depth)" && pieces.len() > 12 {
@@ -264,6 +270,13 @@ if bad != "" {
             t.set_variation_param("lsystem_path_3D.map_count", pieces.len());
             t.set_variation_param("lsystem_path_3D.connect", 1.0);
             t.set_variation_param("lsystem_path_3D.dc", if colour_pieces { 1.0 } else { 0.0 });
+            // Put the curve's centre on the origin, so camera rotation
+            // orbits the object rather than swinging it around. Offset
+            // X/Y/Z remain live sliders for moving it afterwards.
+            t.set_variation_param("lsystem_path_3D.offset_x", -(b3[0] + b3[3]) * 0.5);
+            t.set_variation_param("lsystem_path_3D.offset_y", -(b3[1] + b3[4]) * 0.5);
+            t.set_variation_param("lsystem_path_3D.offset_z", -(b3[2] + b3[5]) * 0.5);
+            curve_centred = true;
             t.weight = 1.0;
             let names = ["xx", "xy", "xz", "yx", "yy", "yz", "zx", "zy", "zz", "tx", "ty", "tz"];
             for k in 0..pieces.len() {
@@ -305,6 +318,11 @@ if bad != "" {
                 t.set_variation_param("lsystem_path.anchor_x", (box[0] + box[2]) * 0.5);
                 t.set_variation_param("lsystem_path.anchor_y", (box[1] + box[3]) * 0.5);
             }
+            // Put the curve's centre on the origin, so rotation and zoom
+            // orbit the object. Offset X/Y remain live sliders.
+            t.set_variation_param("lsystem_path.offset_x", -(box[0] + box[2]) * 0.5);
+            t.set_variation_param("lsystem_path.offset_y", -(box[1] + box[3]) * 0.5);
+            curve_centred = true;
             t.weight = 1.0;
             for k in 0..pieces.len() {
                 let d = pieces[k];
@@ -344,12 +362,13 @@ if bad != "" {
         // measured above, in Rust, so a deep expansion never becomes a
         // script-side array.)
         if is_3d {
-            let b3 = lsystem_bounds3(axiom, rules, 6, angle);
             let extent = b3[3] - b3[0];
             if (b3[4] - b3[1]) > extent { extent = b3[4] - b3[1]; }
             if extent > 0.0 {
-                config.set("pan_x", (b3[0] + b3[3]) * 0.5);
-                config.set("pan_y", (b3[1] + b3[4]) * 0.5);
+                // A centred curve needs no pan — it already sits on the
+                // origin. Panning as well would move it back off.
+                config.set("pan_x", if curve_centred { 0.0 } else { (b3[0] + b3[3]) * 0.5 });
+                config.set("pan_y", if curve_centred { 0.0 } else { (b3[1] + b3[4]) * 0.5 });
                 config.set("zoom", 2.2 / extent);
             }
             config.set("render_mode", "3d");
@@ -360,8 +379,8 @@ if bad != "" {
             let extent = box[2] - box[0];
             if (box[3] - box[1]) > extent { extent = box[3] - box[1]; }
             if extent > 0.0 {
-                config.set("pan_x", (box[0] + box[2]) * 0.5);
-                config.set("pan_y", (box[1] + box[3]) * 0.5);
+                config.set("pan_x", if curve_centred { 0.0 } else { (box[0] + box[2]) * 0.5 });
+                config.set("pan_y", if curve_centred { 0.0 } else { (box[1] + box[3]) * 0.5 });
                 config.set("zoom", 2.7 / extent);
             }
         }
