@@ -1291,6 +1291,74 @@ fn register_builtins(engine: &mut Engine) {
         },
     );
 
+    // lsystem_plant_pieces(axiom, rules, angle)
+    //   -> #{ branches: [...], stems: [...], note: "" }
+    // The Barnsley-fern construction for bracketed (plant) rules.
+    engine.register_fn(
+        "lsystem_plant_pieces",
+        |axiom: &str, rules: rhai::Map, angle: Dynamic| -> Result<rhai::Map, Box<EvalAltResult>> {
+            let angle = num(&angle, "turtle angle")?;
+            let mut parsed: Vec<(char, String)> = Vec::new();
+            for (key, value) in rules.iter() {
+                if let Some(sym) = key.chars().next() {
+                    parsed.push((sym, value.clone().into_string().unwrap_or_default()));
+                }
+            }
+            parsed.sort_by_key(|(k, _)| *k);
+            let mut out = rhai::Map::new();
+            match crate::script::builtins::lsystem_plant_segments(axiom, &parsed, angle) {
+                Ok(p) => {
+                    let to_arr = |v: &Vec<crate::script::builtins::Segment>| -> Array {
+                        v.iter().map(|s| Dynamic::from(segment_to_array(s))).collect()
+                    };
+                    out.insert("branches".into(), Dynamic::from(to_arr(&p.branches)));
+                    out.insert("stems".into(), Dynamic::from(to_arr(&p.stems)));
+                    out.insert("note".into(), Dynamic::from(String::new()));
+                }
+                Err(e) => {
+                    out.insert("branches".into(), Dynamic::from(Array::new()));
+                    out.insert("stems".into(), Dynamic::from(Array::new()));
+                    out.insert("note".into(), Dynamic::from(e));
+                }
+            }
+            Ok(out)
+        },
+    );
+
+    // set_segment(seg, mirror, thickness): the squashed variant — the
+    // perpendicular axis is scaled by `thickness`, so at 0 the transform
+    // lays a flattened copy of the whole attractor along the segment.
+    // That is the Barnsley fern's stem map: the rachis is drawn by
+    // squashed images of the entire plant.
+    engine.register_fn(
+        "set_segment",
+        |t: &mut TransformHandle, seg: Array, mirror: bool, thickness: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            if seg.len() < 4 {
+                return Err(err("set_segment expects [x1, y1, x2, y2]"));
+            }
+            let x1 = num(&seg[0], "x1")?;
+            let y1 = num(&seg[1], "y1")?;
+            let x2 = num(&seg[2], "x2")?;
+            let y2 = num(&seg[3], "y2")?;
+            let th = num(&thickness, "thickness")?;
+            let (dx, dy) = (x2 - x1, y2 - y1);
+            t.with(|x| {
+                x.a = dx as f32;
+                x.c = dy as f32;
+                if mirror {
+                    x.b = (dy * th) as f32;
+                    x.d = (-dx * th) as f32;
+                } else {
+                    x.b = (-dy * th) as f32;
+                    x.d = (dx * th) as f32;
+                }
+                x.e = x1 as f32;
+                x.f = y1 as f32;
+                x.set_variation("linear", 1.0);
+            })
+        },
+    );
+
     // lsystem_node_pieces(axiom, rules, angle)
     //   -> #{ pieces: [[x1,y1,x2,y2,0,symbol], ...], note: "" }
     // The node-rewriting (space-filling) construction; `note` explains an
