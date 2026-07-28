@@ -38,6 +38,12 @@ pub struct ScriptsPanel {
     seed: u64,
     batch_count: u32,
     show_editor: bool,
+    /// Whether the editor body was laid out last frame, so opening it can be
+    /// detected as a transition (the body doesn't exist yet when the header
+    /// is clicked, so the focus request has to wait a frame).
+    editor_was_open: bool,
+    /// One-shot: focus the editor on the next frame that draws it.
+    focus_editor: bool,
     error: Option<ScriptError>,
     messages: Vec<String>,
     warnings: Vec<String>,
@@ -60,6 +66,8 @@ impl Default for ScriptsPanel {
             seed: 1,
             batch_count: 9,
             show_editor: false,
+            editor_was_open: false,
+            focus_editor: false,
             error: None,
             messages: Vec::new(),
             warnings: Vec::new(),
@@ -291,6 +299,12 @@ impl ScriptsPanel {
                         ui.label(label.clone());
                         let r = ui.add(
                             egui::TextEdit::singleline(&mut v)
+                                // Keyed by parameter, not by position: the
+                                // param list is rebuilt from the script every
+                                // frame, and positional ids let the caret and
+                                // selection bleed between params (and between
+                                // scripts that happen to lay out alike).
+                                .id_salt(&key)
                                 .char_limit(*max_len)
                                 .desired_width(f32::INFINITY),
                         );
@@ -452,16 +466,31 @@ impl ScriptsPanel {
 
     fn render_editor(&mut self, ui: &mut egui::Ui) {
         ui.separator();
-        egui::CollapsingHeader::new("Edit script")
+        let section = egui::CollapsingHeader::new("Edit script")
             .default_open(self.show_editor)
             .show(ui, |ui| {
                 self.show_editor = true;
-                ui.add(
+                let editor = ui.add(
                     egui::TextEdit::multiline(&mut self.text)
+                        // A stable id: without one the editor's id comes from
+                        // a positional counter, so the focus request below
+                        // can't name it and typing state is lost whenever the
+                        // widgets above it change (a status or error line
+                        // appearing is enough).
+                        .id_salt("script_editor")
                         .code_editor()
                         .desired_rows(16)
                         .desired_width(f32::INFINITY),
                 );
+                // Take keyboard focus when the section opens. Without it the
+                // editor holds no focus, egui reports it doesn't want
+                // keyboard input, and keystrokes fall through to the app's
+                // global shortcuts (arrows pan the fractal) instead of
+                // reaching the script. Same one-shot pattern as the Add
+                // Variations search box.
+                if std::mem::take(&mut self.focus_editor) {
+                    editor.request_focus();
+                }
 
                 ui.horizontal(|ui| {
                     #[cfg(not(target_arch = "wasm32"))]
@@ -494,6 +523,15 @@ impl ScriptsPanel {
                     }
                 });
             });
+
+        // The header is clicked one frame before its body first lays out, so
+        // the focus request is armed on the transition and consumed above on
+        // the next frame.
+        let open_now = section.body_response.is_some();
+        if open_now && !self.editor_was_open {
+            self.focus_editor = true;
+        }
+        self.editor_was_open = open_now;
     }
 
     fn render_output(&mut self, ui: &mut egui::Ui) {

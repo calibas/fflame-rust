@@ -115,6 +115,11 @@ impl<'a, Num: egui_dock::egui::emath::Numeric> VkbNum<'a, Num> {
     }
     /// Write `v` back to the caller's number.
     fn commit(&mut self, v: f64) {
+        // `Numeric::from_f64` is `num as Self` for integers — truncation, not
+        // rounding. Stepping 5 up by a hair lands on 5.05 and truncates back
+        // to 5 (the Up arrow appearing dead), while stepping down lands on
+        // 4.95 and truncates to 4, so Down "worked" by accident.
+        let v = if Num::INTEGRAL { v.round() } else { v };
         self.scratch = v;
         *self.target = Num::from_f64(v);
     }
@@ -294,6 +299,14 @@ impl<Num: egui_dock::egui::emath::Numeric> egui_dock::egui::Widget for VkbSlider
             sl = sl
                 .custom_formatter(|v, _| precision::fmt_f32(v as f32))
                 .custom_parser(|s| s.trim().parse::<f64>().ok());
+        } else {
+            // We hand egui an f64, so it can't see that the caller's number
+            // is integral — `Slider::new` applies this itself, but only when
+            // `Num::INTEGRAL`. Without it an integer param renders with two
+            // decimals (egui derives them from the drag speed) and keyboard
+            // arrows step by the slider's pixel gradient (~0.05 over a 1..12
+            // range) instead of by 1.
+            sl = sl.integer();
         }
         let response = sl.ui(ui);
 
@@ -340,6 +353,21 @@ mod slider_tests {
             ui.add(super::VkbSlider::new(&mut value, 0.0..=10.0).step_by(0.01));
         });
         assert_eq!(value, 0.0273);
+    }
+
+    /// Integer write-back must round, not truncate. `Numeric::from_f64` is
+    /// `num as Self` for integers, so a step that lands a hair short of the
+    /// next whole number fell back to the current one — which is why the Up
+    /// arrow on Iterations/Map Count appeared dead while Down worked.
+    #[test]
+    fn integer_write_back_rounds_rather_than_truncating() {
+        let mut value = 5i32;
+        super::VkbNum::new(&mut value).commit(5.999_999_9);
+        assert_eq!(value, 6);
+
+        let mut down = 5i32;
+        super::VkbNum::new(&mut down).commit(4.000_000_1);
+        assert_eq!(down, 4);
     }
 
     /// The same guarantee without a caller-supplied step.
