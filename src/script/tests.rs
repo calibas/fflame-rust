@@ -1133,3 +1133,39 @@ fn lsystem_rejects_a_closed_path() {
     .unwrap_err();
     assert!(err.message.contains("returns to where it started"), "{err}");
 }
+
+#[test]
+fn mirrored_pieces_get_a_reflected_transform() {
+    // The Sierpinski arrowhead is built from two symbols whose rules are
+    // mirror images (F -> +G-F-G+, G -> -F+G+F-). Both draw segments with
+    // the SAME endpoints, so a transform derived from endpoints alone
+    // loses the chirality — and the attractor comes out as a hexagonal
+    // curve instead of the gasket. Pieces drawn by the mirrored symbol
+    // must get a REFLECTED similarity, which flips the determinant sign.
+    let host = ScriptHost::new();
+    let source = include_str!("../../assets/scripts/generators/lsystem.rhai");
+    let out = host
+        .run(
+            source,
+            &FractalConfig::default(),
+            1,
+            [("curve".to_string(), ParamValue::Choice(3))].into_iter().collect(),
+        )
+        .unwrap();
+    let ts = &out.config.flame.transforms;
+    assert_eq!(ts.len(), 3, "arrowhead replaces one edge with three");
+
+    // Pieces 0 and 2 are drawn by G (the mirrored symbol), piece 1 by F.
+    let det = |t: &crate::scene::transforms::Transform| {
+        (t.a as f64) * (t.d as f64) - (t.b as f64) * (t.c as f64)
+    };
+    assert!(det(&ts[0]) < 0.0, "first piece is reflected");
+    assert!(det(&ts[1]) > 0.0, "middle piece keeps its orientation");
+    assert!(det(&ts[2]) < 0.0, "last piece is reflected");
+
+    // Reflection does not change the scale: all three stay at one half.
+    for (i, t) in ts.iter().enumerate() {
+        let scale = ((t.a as f64).powi(2) + (t.c as f64).powi(2)).sqrt();
+        assert!((scale - 0.5).abs() < 1e-6, "piece {i} scale {scale} should be 0.5");
+    }
+}
