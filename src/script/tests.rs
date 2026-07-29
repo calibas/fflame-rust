@@ -2229,7 +2229,23 @@ fn calling_a_missing_script_is_explained() {
     assert!(err.message.contains("no script with id"), "{}", err.message);
     assert!(err.message.contains("known"), "lists what there is: {}", err.message);
 
+    // A default host can always reach the EMBEDDED starters — a shipped
+    // script that calls another has to work from every entry point — so
+    // an empty library now takes asking for one.
+    assert!(
+        ScriptHost::new()
+            .run(
+                "script(\"Main\", \"generator\");\nrun_script(\"random_palette\");",
+                &FractalConfig::default(),
+                1,
+                HashMap::new(),
+            )
+            .is_ok(),
+        "the shipped scripts must be callable without a discovered library"
+    );
+
     let err = ScriptHost::new()
+        .with_scripts(Vec::new())
         .run(
             "script(\"Main\", \"generator\");\nrun_script(\"anything\");",
             &FractalConfig::default(),
@@ -2524,4 +2540,181 @@ fn presets_and_custom_differ_as_advertised() {
         custom_a.stops[100].color, custom_b.stops[100].color,
         "Custom must use the sliders"
     );
+}
+
+/// Basic Random hands Random Palette its own seed, so the two agree:
+/// the palette on a generated flame is the one Random Palette produces
+/// on its own at the same seed. That is what makes it a starting point
+/// you can go and adjust rather than a dead end.
+#[test]
+fn the_generator_and_the_palette_script_share_a_seed() {
+    let base = FractalConfig::default();
+    let entries = super::library::discover(&base);
+    let host = ScriptHost::new().with_scripts(
+        entries
+            .iter()
+            .map(|e| (e.id.clone(), e.source.clone()))
+            .collect(),
+    );
+    let generator = super::library::find(&entries, "basic_random").expect("shipped");
+    let palette_script = super::library::find(&entries, "random_palette").expect("shipped");
+
+    // The settings Basic Random passes through.
+    let mut direct: HashMap<String, ParamValue> = HashMap::new();
+    direct.insert("scheme".into(), ParamValue::Text("Monochromatic".into()));
+    direct.insert("base".into(), ParamValue::Text("#000000".into()));
+    direct.insert("stops".into(), ParamValue::Int(5));
+    direct.insert("spread".into(), ParamValue::Float(0.35));
+    direct.insert("dark_end".into(), ParamValue::Bool(true));
+    direct.insert("shuffle_slices".into(), ParamValue::Int(10));
+    direct.insert("shuffle_amount".into(), ParamValue::Float(1.0));
+    direct.insert("hue_noise".into(), ParamValue::Float(85.0));
+    direct.insert("sat_noise".into(), ParamValue::Float(0.0));
+    direct.insert("val_noise".into(), ParamValue::Float(0.2));
+
+    for seed in [3u64, 12, 8842] {
+        let flame = host
+            .run(&generator.source, &base, seed, HashMap::new())
+            .unwrap()
+            .config;
+        let alone = host
+            .run(&palette_script.source, &base, seed, direct.clone())
+            .unwrap()
+            .config;
+        // Compared at the precision the format actually stores. A
+        // locked palette is 8-bit hex on disk, and `config.set` — which
+        // Basic Random calls after building the palette — round-trips
+        // the whole config through JSON, so the generated one arrives
+        // already quantised while the standalone one has not been saved
+        // yet. Comparing raw floats would fail on that alone; a
+        // genuinely different palette differs by far more than 1/255.
+        let bytes = |p: &crate::scene::palette::Palette| -> Vec<[u8; 3]> {
+            p.stops
+                .iter()
+                .map(|s| {
+                    let c = s.color;
+                    [
+                        (c[0] * 255.0).round() as u8,
+                        (c[1] * 255.0).round() as u8,
+                        (c[2] * 255.0).round() as u8,
+                    ]
+                })
+                .collect()
+        };
+        assert_eq!(
+            bytes(&flame.palette),
+            bytes(&alone.palette),
+            "seed {seed}: the flame's palette must be reproducible on its own"
+        );
+    }
+}
+
+/// Generated is the default, and it really does replace the palette.
+#[test]
+fn basic_random_generates_a_palette_by_default() {
+    let base = FractalConfig::default();
+    let entries = super::library::discover(&base);
+    let host = ScriptHost::new().with_scripts(
+        entries
+            .iter()
+            .map(|e| (e.id.clone(), e.source.clone()))
+            .collect(),
+    );
+    let generator = super::library::find(&entries, "basic_random").expect("shipped");
+
+    let out = host.run(&generator.source, &base, 4, HashMap::new()).unwrap();
+    assert!(
+        out.config.palette.name.starts_with("Generated"),
+        "default should generate: {}",
+        out.config.palette.name
+    );
+    assert_eq!(out.config.palette.stops.len(), 256, "and in fixed mode");
+
+    // Keeping the current palette must still be possible.
+    let mut keep: HashMap<String, ParamValue> = HashMap::new();
+    keep.insert("palette".into(), ParamValue::Text("Keep current".into()));
+    let kept = host.run(&generator.source, &base, 4, keep).unwrap();
+    assert_eq!(
+        kept.config.palette.name, base.palette.name,
+        "Keep current must leave the palette alone"
+    );
+}
+
+/// An explicit seed must not disturb the caller: whether it hands one
+/// over or not, everything it draws afterwards is the same.
+#[test]
+fn an_explicit_seed_does_not_shift_the_callers_stream() {
+    let host = ScriptHost::new().with_scripts(vec![(
+        "sub".to_string(),
+        "script(\"Sub\", \"modifier\"); let x = rand(0.0, 1.0);".to_string(),
+    )]);
+    let after = |call: &str| {
+        let src = format!(
+            "script(\"Main\", \"generator\");\nflame.add_transform();\n{call}\nprint(\"\" + rand(0.0, 1.0));"
+        );
+        host.run(&src, &FractalConfig::default(), 21, HashMap::new())
+            .unwrap()
+            .messages[0]
+            .clone()
+    };
+    let none = after("");
+    let seeded = after("run_script(\"sub\", #{}, 99);");
+    let streamed = after("run_script(\"sub\");");
+
+    assert_eq!(none, seeded, "a seeded call must not consume caller randomness");
+    assert_ne!(none, streamed, "an unseeded call continues the stream, as before");
+}
+
+/// The Random preset rolls its own set, seeded like everything else, so
+/// Mutate (consecutive seeds) gives a batch to choose from and a roll
+/// worth keeping comes back.
+#[test]
+fn the_random_preset_varies_with_the_seed() {
+    let base = FractalConfig::default();
+    let entries = super::library::discover(&base);
+    let entry = super::library::find(&entries, "iq_palette").expect("shipped");
+    let host = ScriptHost::new();
+
+    let roll = |seed: u64| {
+        let mut p: HashMap<String, ParamValue> = HashMap::new();
+        p.insert("preset".into(), ParamValue::Text("Random".into()));
+        host.run(&entry.source, &base, seed, p).unwrap().config.palette
+    };
+
+    let a = roll(1);
+    let b = roll(2);
+    let again = roll(1);
+
+    assert_eq!(a.stops, again.stops, "a roll must come back from its seed");
+    assert_ne!(a.stops, b.stops, "consecutive seeds must differ, or Mutate is pointless");
+    assert_eq!(a.stops.len(), 256);
+
+    // Every roll has to be a usable palette: in range, and actually
+    // going somewhere rather than a flat wash.
+    for seed in 1..12u64 {
+        let pal = roll(seed);
+        for s in &pal.stops {
+            for ch in s.color {
+                assert!((0.0..=1.0).contains(&ch), "seed {seed}: {ch} out of range");
+            }
+        }
+        let hues: Vec<f32> = pal
+            .stops
+            .iter()
+            .map(|s| crate::script::color::ScriptColor::from_rgb(s.color).hue())
+            .collect();
+        let span = hues.iter().cloned().fold(0.0f32, f32::max)
+            - hues.iter().cloned().fold(360.0f32, f32::min);
+        let vals: Vec<f32> = pal
+            .stops
+            .iter()
+            .map(|s| crate::script::color::ScriptColor::from_rgb(s.color).value())
+            .collect();
+        let vspan = vals.iter().cloned().fold(0.0f32, f32::max)
+            - vals.iter().cloned().fold(1.0f32, f32::min);
+        assert!(
+            span > 30.0 || vspan > 0.25,
+            "seed {seed}: neither hue ({span}) nor brightness ({vspan}) moves — a flat wash"
+        );
+    }
 }

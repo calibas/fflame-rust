@@ -63,6 +63,9 @@ pub(crate) struct ScriptState {
     /// buying a fresh budget by calling another one.
     pub frame_ops: Vec<u64>,
     pub ops_finished: u64,
+    /// The seed this run started from, so a script can hand it to
+    /// another and get a result that reproduces from the same number.
+    pub seed: u64,
     /// What the script asked to animate. Stays untouched — and so
     /// produces no animation at all — unless the script uses `anim`.
     pub anim: super::anim::AnimBuilder,
@@ -92,6 +95,7 @@ impl ScriptState {
             call_stack: Vec::new(),
             frame_ops: Vec::new(),
             ops_finished: 0,
+            seed,
         }
     }
 
@@ -217,8 +221,24 @@ pub struct ScriptHost {
 impl ScriptHost {
     /// A host with no palette library: scripts keep whatever palette the
     /// base config already has.
+    ///
+    /// The EMBEDDED starters are always callable, though. They are
+    /// compiled in, so there is no situation where they are missing —
+    /// and a shipped script that calls another (Basic Random asks
+    /// Random Palette for its colours) must work from every entry
+    /// point, including the Python bindings and a bare embedder.
+    /// `with_scripts` replaces this with a discovered library, which
+    /// adds the user's own on top.
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            scripts: super::library::EMBEDDED
+                .iter()
+                .map(|(name, src)| {
+                    (name.trim_end_matches(".rhai").to_string(), (*src).to_string())
+                })
+                .collect(),
+            ..Default::default()
+        }
     }
 
     /// A host whose scripts may call each other by id.
@@ -237,7 +257,7 @@ impl ScriptHost {
     /// still reproduces from script + seed — unlike the Rust random
     /// generator, which draws from the thread RNG.
     pub fn with_palettes(palettes: Vec<crate::scene::palette::Palette>) -> Self {
-        Self { palettes, scripts: Vec::new() }
+        Self { palettes, ..Self::new() }
     }
 
     /// Collect metadata and parameter declarations without keeping the
@@ -353,6 +373,7 @@ pub(crate) fn run_sub_script(
     state: &Rc<RefCell<ScriptState>>,
     id: &str,
     params: HashMap<String, ParamValue>,
+    seed: Option<u64>,
 ) -> Result<(), String> {
     let (source, saved) = {
         let mut st = state.borrow_mut();
@@ -397,6 +418,16 @@ pub(crate) fn run_sub_script(
         (source, saved)
     };
 
+    // An explicit seed makes the callee reproduce on its own: running
+    // `random_palette` at seed 5 gives the palette that seed 5 put on a
+    // flame, so a palette worth keeping can be picked up and tweaked.
+    // The caller's own stream is saved and restored around it, so asking
+    // for that does not shift everything the caller draws afterwards.
+    let saved_rng = seed.map(|s| {
+        let mut st = state.borrow_mut();
+        std::mem::replace(&mut st.rng, Pcg64Mcg::new(expand_seed(s)))
+    });
+
     let engine = build_engine(Rc::clone(cfg), Rc::clone(state));
     let mut scope = Scope::new();
     super::api::push_globals(&mut scope, Rc::clone(cfg), Rc::clone(state));
@@ -407,6 +438,9 @@ pub(crate) fn run_sub_script(
         let spent = st.frame_ops.pop().unwrap_or(0);
         st.ops_finished += spent;
         st.call_stack.pop();
+        if let Some(rng) = saved_rng {
+            st.rng = rng;
+        }
         st.meta = saved.0;
         st.provided = saved.1;
         st.declared = saved.2;
