@@ -105,12 +105,16 @@ impl ScriptsPanel {
         Self::default()
     }
 
-    /// Re-scan the script folders, keeping the current selection by name.
+    /// Re-scan the script folders, keeping the current selection.
+    ///
+    /// Keyed on the ID rather than the declared name: nothing stops two
+    /// scripts declaring the same name, and matching on it made the
+    /// selection jump to whichever happened to be found first.
     fn reload(&mut self, base: &FractalConfig) {
-        let previous = self.entries.get(self.selected).map(|e| e.display_name.clone());
+        let previous = self.entries.get(self.selected).map(|e| e.id.clone());
         self.entries = library::discover(base);
         self.selected = previous
-            .and_then(|name| self.entries.iter().position(|e| e.display_name == name))
+            .and_then(|id| self.entries.iter().position(|e| e.id == id))
             .unwrap_or(0);
         self.load_selected();
     }
@@ -163,7 +167,14 @@ impl ScriptsPanel {
             .ok()
             .and_then(|m| m.kind)
             .unwrap_or(ScriptKind::Generator);
-        self.entries.push(ScriptEntry { display_name: display_name.clone(), kind, source: source.clone(), origin });
+        let id = display_name.to_lowercase().replace(' ', "_");
+        self.entries.push(ScriptEntry {
+            id,
+            display_name: display_name.clone(),
+            kind,
+            source: source.clone(),
+            origin,
+        });
         self.selected = self.entries.len() - 1;
         self.text = source;
         // A different script means different parameters; keeping the old
@@ -301,6 +312,18 @@ impl ScriptsPanel {
                     egui::RichText::new("Changes the flame you have open.").weak(),
                 );
             }
+        }
+
+        if let Some(entry) = self.entries.get(self.selected) {
+            // The name one script calls another by, and the file it lives
+            // in. Worth showing: the declared name is not unique and is
+            // not what `run_script` takes.
+            ui.label(
+                egui::RichText::new(format!("id: {}", entry.id))
+                    .weak()
+                    .monospace(),
+            )
+            .on_hover_text("The script's stable id — its file name without .rhai. This is what another script calls it by.");
         }
 
         self.render_doc(ui);

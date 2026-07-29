@@ -57,6 +57,20 @@ pub enum ScriptOrigin {
 
 #[derive(Debug, Clone)]
 pub struct ScriptEntry {
+    /// Stable identifier: the file stem, without `.rhai`.
+    ///
+    /// This is what one script names another by, and what the picker
+    /// restores its selection with. The DECLARED name cannot serve:
+    /// nothing stops two scripts declaring "Random Palette", and using
+    /// it as a key made the picker jump between them.
+    ///
+    /// The stem is already the de-facto unique key — `discover` builds
+    /// its map on the file name, with later sources shadowing earlier —
+    /// so a user copy of `basic_random.rhai` shadows the shipped one and
+    /// keeps its id, which is exactly the override behaviour wanted.
+    /// The cost, accepted deliberately: shipped script FILENAMES are a
+    /// public API, and renaming one breaks whatever calls it.
+    pub id: String,
     /// The script's declared name, falling back to the file stem.
     pub display_name: String,
     pub kind: ScriptKind,
@@ -74,6 +88,14 @@ impl ScriptEntry {
         let mark = if matches!(self.origin, ScriptOrigin::Builtin) { "" } else { " *" };
         format!("{tag} · {}{mark}", self.display_name)
     }
+}
+
+/// Find a script by its id (file stem), for one script to call another.
+///
+/// Returns the winner of the shadowing rules, so a user copy is picked
+/// over the shipped script of the same name.
+pub fn find(entries: &[ScriptEntry], id: &str) -> Option<ScriptEntry> {
+    entries.iter().find(|e| e.id == id).cloned()
 }
 
 /// Where the user's own scripts live (created on demand by [`save_user_script`]).
@@ -119,12 +141,14 @@ pub fn discover(base: &FractalConfig) -> Vec<ScriptEntry> {
     let mut entries: Vec<ScriptEntry> = by_name
         .into_iter()
         .map(|(name, (source, origin))| {
+            let id = name.trim_end_matches(".rhai").to_string();
             // Read the declared name/kind. A script that fails to parse is
             // still listed — under its file name — so the user can select
             // it and see the error rather than wondering where it went.
             let meta = host.collect(&source, base).ok();
             let stem = name.trim_end_matches(".rhai").to_string();
             ScriptEntry {
+                id,
                 display_name: meta
                     .as_ref()
                     .map(|m| m.name.clone())
