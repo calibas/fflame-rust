@@ -501,9 +501,9 @@ testing: passing a choice as a plain int reads as an index, so
 script looks broken when the argument was merely misread. Choices now
 take an option's name or its index, and a bad one lists what's allowed.
 
-Not done, and deliberately: maturin CI matrix, PyPI publication, and a
-pure-Python ergonomics layer (a `Transform` proxy so `t.weight = 0.5`
-replaces `c.set_weight(i, 0.5)`). All additive.
+Everything still outstanding on the Python side — ergonomics, the rest
+of the model surface, wheel CI, and the nice-to-haves — is specced in
+[pyfflame.md](pyfflame.md).
 
 **Phase 6 — Animation-track generation (wanted, unscheduled).** A
 script should be able to *optionally* define and add animation tracks —
