@@ -733,11 +733,25 @@ guards have to be structural rather than a rule about what to call:
     naming the cycle, not a hang.
   - A **nesting depth cap**, for long chains that never repeat an id.
 
-**Panels can run scripts.** The Palette panel lists scripts carrying a
-`palette` flag (the `script(name, kind, [...])` mechanism) and runs the
-one you pick. One implementation, two surfaces, no shared Rust
-generator — and the same hook serves any panel that later wants its own
-generators.
+**Panels can run scripts.** The Palette Editor has a *Generate from
+script* section listing everything that declares the `palette` flag,
+with the script's own parameters, a seed and Reroll. One implementation,
+two surfaces, no shared Rust generator — and the same hook serves any
+panel that later grows generators of its own.
+
+It applies through `ConfigPath::Palette`, the route every other edit in
+that panel takes, so undo and the GPU update come for free. It takes
+**only the palette** from the result: a script can touch anything in the
+config, and a button called Generate in the Palette Editor rewriting the
+flame is not what anyone would expect.
+
+The parameter controls are shared with the Scripts panel
+(`ui/script_params.rs`) rather than copied, since the Palette Editor is
+unlikely to be the last panel that wants them.
+
+**Status: done.** All five steps are in. What is not done, and is
+additive: `run_script` returning a value, forwarding a callee's
+parameters into the caller's panel, and OKLCH beside HSV.
 
 ---
 

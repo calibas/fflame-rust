@@ -2,6 +2,8 @@ use crate::scene::palette::{ColorStop, Palette};
 use rust_i18n::t;
 
 pub struct PaletteEditor {
+    /// Generate-from-script section state.
+    pub generator: super::palette_generate::PaletteGenerator,
     pub current_palette: Palette,
     pub json_buffer: String,
     pub show_fixed_mode_warning: bool,
@@ -22,6 +24,7 @@ pub struct PaletteEditor {
 impl PaletteEditor {
     pub fn new() -> Self {
         Self {
+            generator: super::palette_generate::PaletteGenerator::new(),
             current_palette: Palette::fire(),
             json_buffer: String::new(),
             show_fixed_mode_warning: false,
@@ -460,6 +463,7 @@ pub fn render_palette_editor_content(
     palette_import_json: &mut Option<String>,
     palette_load_file: &mut bool,
     open_palette_library: &mut bool,
+    palettes: &[Palette],
     has_custom_palette_named: impl Fn(&str) -> bool,
 ) {
     // Always read from config.palette (single source of truth)
@@ -480,6 +484,12 @@ pub fn render_palette_editor_content(
         open_palette_library,
         has_custom_palette_named,
     );
+
+    ui.separator();
+    // Palette generation is a script, not a Rust generator — but it is
+    // offered HERE, where people look for it, rather than only in the
+    // Scripts panel.
+    super::palette_generate::render(ui, &mut palette_editor.generator, config_manager, palettes);
 
     // Note: The dialogs are rendered separately via render_palette_dialogs()
 }

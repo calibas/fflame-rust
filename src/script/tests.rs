@@ -2262,3 +2262,70 @@ fn a_callees_parameters_stay_out_of_the_callers_metadata() {
         out.warnings
     );
 }
+
+/// The Palette Editor offers exactly the scripts that opt in, which is
+/// what buys back the generate button that moving generation into
+/// scripts would otherwise have cost.
+#[test]
+fn palette_scripts_opt_in_by_flag() {
+    let base = FractalConfig::default();
+    let host = ScriptHost::new();
+    let entries = super::library::discover(&base);
+
+    let flagged: Vec<&str> = entries
+        .iter()
+        .filter(|e| {
+            host.collect(&e.source, &base)
+                .map(|m| m.flags.palette)
+                .unwrap_or(false)
+        })
+        .map(|e| e.id.as_str())
+        .collect();
+
+    assert!(
+        flagged.contains(&"random_palette"),
+        "the shipped palette script must offer itself: {flagged:?}"
+    );
+    assert!(
+        !flagged.contains(&"turntable"),
+        "an unflagged script must not appear in the Palette panel: {flagged:?}"
+    );
+    assert!(
+        flagged.len() < entries.len(),
+        "the flag must actually filter, not pass everything"
+    );
+}
+
+/// A palette script has to produce a usable palette from the panel's
+/// route: run it, take the palette, and nothing else.
+#[test]
+fn the_shipped_palette_script_produces_a_palette() {
+    let base = FractalConfig::default();
+    let entries = super::library::discover(&base);
+    let entry = super::library::find(&entries, "random_palette").expect("shipped");
+
+    let host = ScriptHost::new();
+    let a = host.run(&entry.source, &base, 3, HashMap::new()).unwrap();
+    assert!(a.config.palette.stops.len() >= 2, "a gradient needs two stops");
+    assert!(
+        a.config.palette.name.starts_with("Generated"),
+        "named so it is obvious where it came from: {}",
+        a.config.palette.name
+    );
+
+    // Same seed reproduces, so a palette worth keeping can be got back.
+    let b = host.run(&entry.source, &base, 3, HashMap::new()).unwrap();
+    assert_eq!(a.config.palette.stops, b.config.palette.stops);
+
+    // Reroll is the next seed along, and must give something else.
+    let c = host.run(&entry.source, &base, 4, HashMap::new()).unwrap();
+    assert_ne!(a.config.palette.stops, c.config.palette.stops);
+
+    // The panel takes only the palette, but the script should not be
+    // wandering outside its remit anyway.
+    assert_eq!(
+        a.config.flame.transforms.len(),
+        base.flame.transforms.len(),
+        "a palette script should leave the flame alone"
+    );
+}

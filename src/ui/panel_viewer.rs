@@ -710,6 +710,9 @@ impl<'a> PanelViewer<'a> {
     fn render_palette_editor_panel(&mut self, ui: &mut egui::Ui) {
         // Capture palette_library reference for the closure
         let palette_library = &self.context.palette_library;
+        // A generating script may still call set_palette / random_palette.
+        let palettes: Vec<crate::scene::palette::Palette> =
+            palette_library.iter().cloned().collect();
         super::palette_editor::render_palette_editor_content(
             ui,
             self.context.palette_editor,
@@ -721,6 +724,7 @@ impl<'a> PanelViewer<'a> {
             self.context.palette_import_json,
             self.context.palette_load_file,
             self.context.open_palette_library,
+            &palettes,
             |name| palette_library.has_custom_palette_named(name),
         );
     }

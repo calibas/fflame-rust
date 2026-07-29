@@ -924,6 +924,12 @@ triangle_editor:
 
 # Palette Editor Panel
 palette_editor:
+  generate: "Generate from script"
+  generate_none: "No palette scripts found. A script offers itself here by declaring the palette flag."
+  generate_rescan: "Re-scan the script folders"
+  generate_run: "Generate"
+  generate_seed: "Seed:"
+  generate_reroll: "Reroll"
   title: "Palette Editor"
   palette_name: "Palette Name:"
   gradient_preview: "Gradient Preview:"
