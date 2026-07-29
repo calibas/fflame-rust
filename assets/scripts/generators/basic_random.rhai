@@ -20,7 +20,12 @@ let spread = param("spread", 1.0, 0.0, 3.0);
 let curviness = param("curviness", 0.6, 0.0, 1.0);
 let target_contraction = param("target_contraction", -0.25, -1.5, 0.5);
 let add_plasma = param_bool("add_plasma", false);
-let palette_mode = param_choice("palette", ["Keep current", "Random"], 0);
+let palette_mode = param_choice("palette", ["Keep current", "From library", "Generated"], 0);
+// Passed straight through to the random_palette script when the mode
+// above is "Generated".
+let palette_scheme = param_choice("palette_scheme", [
+    "Complementary", "Analogous", "Triadic", "Split complementary", "Monochromatic"
+], 0);
 
 // How many transforms this flame gets. rand_int picks a whole number.
 let count = rand_int(min_transforms, max_transforms);
@@ -73,12 +78,19 @@ flame.set_contractiveness(target_contraction);
 // treat the number as a guide, not a verdict.
 
 // Colours. Doing nothing keeps the palette you already have; you can
-// also name one, or take a random one from the library. Random still
-// reproduces from the seed, so a flame you like comes back exactly.
+// also name one, take a random one from the library, or hand the job to
+// another script. All three reproduce from the seed, so a flame you like
+// comes back exactly.
 //   flame.set_palette("Fire");            // by name
 //   flame.set_palette(pick(palette_names()));
-if palette_mode == "Random" {
+if palette_mode == "From library" {
     flame.random_palette();
+} else if palette_mode == "Generated" {
+    // Another script, called by its id, working on this same flame. It
+    // continues our random stream rather than starting its own, so the
+    // whole result still reproduces from one seed — and its parameters
+    // are ours to set.
+    run_script("random_palette", #{ scheme: palette_scheme, stops: 6 });
 }
 
 // Any setting from a saved .fflame file can be set by name — open one

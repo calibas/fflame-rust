@@ -2040,3 +2040,225 @@ fn ids_survive_a_duplicated_display_name() {
         "the id picks the right one where the name cannot"
     );
 }
+
+// ============================================================================
+// One script calling another (Phase 7, step 3)
+// ============================================================================
+
+fn host_with(scripts: &[(&str, &str)]) -> ScriptHost {
+    ScriptHost::new().with_scripts(
+        scripts
+            .iter()
+            .map(|(id, src)| (id.to_string(), src.to_string()))
+            .collect(),
+    )
+}
+
+/// The callee works on the SAME config, which is what makes this useful
+/// without a return value.
+#[test]
+fn a_script_can_run_another_on_the_same_flame() {
+    let host = host_with(&[(
+        "pal",
+        "script(\"Pal\", \"modifier\");\n\
+         flame.set_palette_colors(\"Sub\", [color(1.0, 0.0, 0.0), color(0.0, 0.0, 1.0)]);",
+    )]);
+    let out = host
+        .run(
+            "script(\"Main\", \"generator\");\nflame.add_transform();\nrun_script(\"pal\");",
+            &FractalConfig::default(),
+            1,
+            HashMap::new(),
+        )
+        .unwrap();
+    assert_eq!(out.config.palette.name, "Sub");
+    assert_eq!(out.config.flame.transforms.len(), 1, "the caller's work survives");
+}
+
+/// The callee continues the caller's RNG stream rather than re-using its
+/// seed, so two calls give two results while the whole run still
+/// reproduces from (script, seed).
+#[test]
+fn a_called_script_continues_the_random_stream() {
+    let host = host_with(&[(
+        "r",
+        "script(\"R\", \"modifier\"); print(\"\" + rand(0.0, 1.0));",
+    )]);
+    let main = "script(\"Main\", \"generator\");\n\
+                flame.add_transform();\n\
+                run_script(\"r\");\n\
+                run_script(\"r\");";
+    let base = FractalConfig::default();
+
+    let a = host.run(main, &base, 7, HashMap::new()).unwrap();
+    assert_eq!(a.messages.len(), 2);
+    assert_ne!(a.messages[0], a.messages[1], "two calls, two draws");
+
+    let b = host.run(main, &base, 7, HashMap::new()).unwrap();
+    assert_eq!(a.messages, b.messages, "same seed still reproduces");
+
+    let c = host.run(main, &base, 8, HashMap::new()).unwrap();
+    assert_ne!(a.messages, c.messages, "a different seed differs");
+}
+
+/// A caller cannot know what the script it calls declares, so the
+/// DECLARATION decides the type. Naming a choice is how anyone would
+/// write it; passing the index would be unreadable.
+#[test]
+fn callers_may_name_a_choice_rather_than_number_it() {
+    let host = host_with(&[(
+        "pick",
+        "script(\"Pick\", \"modifier\");\n\
+         let s = param_choice(\"scheme\", [\"Alpha\", \"Beta\", \"Gamma\"], 0);\n\
+         print(s);",
+    )]);
+    let run = |arg: &str| {
+        let src = format!(
+            "script(\"Main\", \"generator\");\nflame.add_transform();\nrun_script(\"pick\", #{{ scheme: {arg} }});"
+        );
+        host.run(&src, &FractalConfig::default(), 1, HashMap::new())
+    };
+    assert_eq!(run("\"Gamma\"").unwrap().messages[0], "Gamma");
+    assert_eq!(run("2").unwrap().messages[0], "Gamma", "index still works");
+    let err = run("\"Delta\"").unwrap_err();
+    assert!(err.message.contains("expects one of"), "{}", err.message);
+}
+
+/// Calling a generator from a generator is allowed, so the protection
+/// has to be structural. All three guards are checked, because any one
+/// alone leaves a hole.
+#[test]
+fn runaway_scripts_are_stopped_three_ways() {
+    // 1. A cycle, however long, names the loop rather than hanging.
+    let host = host_with(&[
+        ("a", "script(\"A\", \"generator\"); run_script(\"b\");"),
+        ("b", "script(\"B\", \"generator\"); run_script(\"a\");"),
+        ("me", "script(\"Me\", \"generator\"); run_script(\"me\");"),
+    ]);
+    for entry in ["run_script(\"a\");", "run_script(\"me\");"] {
+        let err = host
+            .run(
+                &format!("script(\"Main\", \"generator\");\n{entry}"),
+                &FractalConfig::default(),
+                1,
+                HashMap::new(),
+            )
+            .unwrap_err();
+        assert!(
+            err.message.contains("call each other in a loop"),
+            "{}",
+            err.message
+        );
+    }
+
+    // 2. A long chain that never repeats an id still stops.
+    let deep: Vec<(String, String)> = (0..20)
+        .map(|i| {
+            (
+                format!("s{i}"),
+                format!("script(\"S{i}\", \"generator\"); run_script(\"s{}\");", i + 1),
+            )
+        })
+        .collect();
+    let host = ScriptHost::new().with_scripts(deep);
+    let err = host
+        .run(
+            "script(\"Main\", \"generator\");\nrun_script(\"s0\");",
+            &FractalConfig::default(),
+            1,
+            HashMap::new(),
+        )
+        .unwrap_err();
+    assert!(err.message.contains("nested more than"), "{}", err.message);
+
+    // 3. The operation budget is SHARED. Rhai counts per evaluation, so
+    // without this a script would buy a fresh allowance for every call
+    // it made — the sandbox hole that matters, since scripts are shared.
+    let host = host_with(&[(
+        "burn",
+        "script(\"Burn\", \"modifier\"); let x = 0; for i in 0..400000 { x += i; }",
+    )]);
+    let err = host
+        .run(
+            "script(\"Main\", \"generator\");\nfor i in 0..200 { run_script(\"burn\"); }",
+            &FractalConfig::default(),
+            1,
+            HashMap::new(),
+        )
+        .unwrap_err();
+    let low = err.message.to_lowercase();
+    assert!(
+        low.contains("budget") || low.contains("operation"),
+        "{}",
+        err.message
+    );
+}
+
+/// An unattributed line number in a file the reader never opened is a
+/// dead end, so a failure inside a called script says which one.
+#[test]
+fn errors_name_the_script_they_came_from() {
+    let host = host_with(&[(
+        "bad",
+        "script(\"Bad\", \"modifier\");\nlet c = color_hex(\"nope\");",
+    )]);
+    let err = host
+        .run(
+            "script(\"Main\", \"generator\");\nrun_script(\"bad\");",
+            &FractalConfig::default(),
+            1,
+            HashMap::new(),
+        )
+        .unwrap_err();
+    assert!(err.message.contains("bad"), "names the script: {}", err.message);
+    assert!(err.message.contains("line 2"), "and the line in it: {}", err.message);
+}
+
+/// An unknown id lists what is available; no library at all says so.
+#[test]
+fn calling_a_missing_script_is_explained() {
+    let host = host_with(&[("known", "script(\"K\", \"modifier\");")]);
+    let err = host
+        .run(
+            "script(\"Main\", \"generator\");\nrun_script(\"typo\");",
+            &FractalConfig::default(),
+            1,
+            HashMap::new(),
+        )
+        .unwrap_err();
+    assert!(err.message.contains("no script with id"), "{}", err.message);
+    assert!(err.message.contains("known"), "lists what there is: {}", err.message);
+
+    let err = ScriptHost::new()
+        .run(
+            "script(\"Main\", \"generator\");\nrun_script(\"anything\");",
+            &FractalConfig::default(),
+            1,
+            HashMap::new(),
+        )
+        .unwrap_err();
+    assert!(err.message.contains("no script library"), "{}", err.message);
+}
+
+/// The callee's parameters belong to it, not to the caller's panel.
+#[test]
+fn a_callees_parameters_stay_out_of_the_callers_metadata() {
+    let host = host_with(&[(
+        "sub",
+        "script(\"Sub\", \"modifier\"); let x = param(\"sub_only\", 1.0, 0.0, 2.0);",
+    )]);
+    let main = "script(\"Main\", \"generator\");\n\
+                let mine = param(\"mine\", 1.0, 0.0, 2.0);\n\
+                flame.add_transform();\n\
+                run_script(\"sub\");";
+    let out = host
+        .run(main, &FractalConfig::default(), 1, HashMap::new())
+        .unwrap();
+    let keys: Vec<&str> = out.meta.params.iter().map(|p| p.key()).collect();
+    assert_eq!(keys, vec!["mine"], "the caller declares only its own");
+    assert!(
+        out.warnings.is_empty(),
+        "and no spurious warnings: {:?}",
+        out.warnings
+    );
+}
