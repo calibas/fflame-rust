@@ -1,0 +1,17 @@
+[package]
+name = "pyfflame"
+version = "0.1.0"
+edition = "2021"
+
+# Standalone: deliberately NOT a member of the main crate's build. The
+# app must be unaffected by anything here.
+[workspace]
+
+[lib]
+name = "pyfflame"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pyo3 = { version = "0.23", features = ["extension-module", "abi3-py38"] }
+fractal_flame_wgpu = { path = ".." }
+serde_json = "1.0"

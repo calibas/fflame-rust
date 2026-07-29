@@ -199,12 +199,13 @@ the crate already builds as rlib + cdylib):
   recipes, L-system expansion.
 - `mod.rs` — `ScriptKind`, `ScriptMeta`, `ScriptParamDecl`, results.
 
-**Feature gating** (needed for the Python wheel, harmless before then):
-`gui` feature (default) gates `app/`, `ui/`, winit/egui/wgpu-surface
-deps; `script` core (config + scene + variations registry + formats +
-script engine) must build with `--no-default-features`. The variations
-registry is required headlessly anyway (name/param validation). This
-factoring lands in Phase 5 with the wheel; Phases 1–4 don't need it.
+**Feature gating — planned, then found unnecessary.** The intent was a
+`gui` feature (default) gating `app/`, `ui/` and the winit/egui/wgpu
+deps, so the core would build with `--no-default-features` for the
+wheel. Phase 5 showed that isn't needed: the wheel depends on the crate
+as it stands, with default features, and the linker drops everything it
+never calls (2.6 MB, no GPU or window code in it). The refactor would
+have bought nothing but risk to the editor. See Phase 5 below.
 
 UI: script panel added to the existing **Random Generator panel**
 (`PanelType` addition), plus a Modifiers entry point on the current
@@ -463,9 +464,46 @@ with a live depth parameter.
 decompositions silently drift from their originals. Each site says so,
 but a shared definition would be better.
 
-**Phase 5 — `pyfflame`.** `gui` feature-gating/factoring, PyO3
-bindings, maturin CI, format IO, `run_script`, CLI render wrapper,
-PyPI-ready docs.
+**Phase 5 — `pyfflame`.** Done, and smaller than planned.
+
+`python/` is a **standalone crate with its own `[workspace]`**, depending
+on the main crate by path. The app is not touched at all: no features
+toggled, no modules gated, so its build and codegen are byte-for-byte
+what they were. That was the user's constraint (zero performance impact,
+no rewrites of the app) and it turned out to cost nothing — see below.
+
+Ships: `Config` (flame model, camera, colour, render settings),
+`.fflame` and `.flame` read/write as both files and strings,
+index-addressed transform/variation/parameter editing with registry
+validation, `run_script(source, seed, params, base)`, and registry
+queries. No rendering: PNGs come from the existing CLI exporter, called
+as a subprocess.
+
+**The feature-gating refactor was never needed.** The plan assumed the
+wheel required severing the GUI. Measurement first said the core was
+nearly free-standing anyway — 211 variation files with zero GUI/GPU
+references, and exactly ONE code edge from the core into GPU-land
+(`MAX_BLUR_BUFFERS`, a `const u32`; the other two hits are doc
+comments). Then the spike showed even that didn't matter: the crate
+builds as a path dependency unmodified, and the linker drops the unused
+GPU and window code. **The wheel is 2.6 MB.** A refactor touching the
+whole crate would have bought nothing and risked the editor.
+
+**Verified against the app, not against itself.** `run_script` output is
+byte-identical to `fractal_flame_wgpu generate` for the same script and
+seed, so the two entry points cannot silently diverge. Ten Python tests
+cover both formats round-tripping, seed determinism, and error quality.
+
+**Parameter coercion follows the script's DECLARATION**, mirroring
+`generate --set`, rather than guessing from the Python type. Caught in
+testing: passing a choice as a plain int reads as an index, so
+`output=0` selected "Attractor" while the caller meant "Path" — the
+script looks broken when the argument was merely misread. Choices now
+take an option's name or its index, and a bad one lists what's allowed.
+
+Not done, and deliberately: maturin CI matrix, PyPI publication, and a
+pure-Python ergonomics layer (a `Transform` proxy so `t.weight = 0.5`
+replaces `c.set_weight(i, 0.5)`). All additive.
 
 **Phase 6 — Animation-track generation (wanted, unscheduled).** A
 script should be able to *optionally* define and add animation tracks —
