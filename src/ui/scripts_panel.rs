@@ -19,7 +19,7 @@ use crate::script::library::{self, ScriptEntry, ScriptOrigin};
 /// egui temp-data key the browser file picker writes into (WASM).
 #[cfg(target_arch = "wasm32")]
 const PENDING_SCRIPT_LOAD: &str = "pending_script_load_raw";
-use crate::script::{ParamDecl, ParamValue, ScriptError, ScriptHost, ScriptKind, ScriptMeta};
+use crate::script::{ParamValue, ScriptError, ScriptHost, ScriptKind, ScriptMeta};
 
 #[derive(Default)]
 pub struct ScriptsResponse {
@@ -577,106 +577,7 @@ impl ScriptsPanel {
         let Some(meta) = self.meta.clone() else {
             return;
         };
-        if meta.params.is_empty() {
-            ui.label(egui::RichText::new("This script has no settings.").weak());
-            return;
-        }
-
-        for decl in &meta.params {
-            let key = decl.key().to_string();
-            match decl {
-                ParamDecl::Color { key: _, label, default } => {
-                    let mut v = match self.values.get(&key) {
-                        Some(ParamValue::Color(v)) => *v,
-                        _ => *default,
-                    };
-                    ui.horizontal(|ui| {
-                        // The same picker the Palette Editor, Solid panel
-                        // and background colour already use.
-                        if ui.color_edit_button_rgb(&mut v).changed() {
-                            self.values.insert(key.clone(), ParamValue::Color(v));
-                        }
-                        ui.label(label.clone());
-                    });
-                }
-                ParamDecl::Float { label, default, min, max, .. } => {
-                    let mut v = match self.values.get(&key) {
-                        Some(ParamValue::Float(v)) => *v,
-                        _ => *default,
-                    };
-                    if ui
-                        .add(super::VkbSlider::new(&mut v, *min..=*max).text(label.clone()))
-                        .changed()
-                    {
-                        self.values.insert(key, ParamValue::Float(v));
-                    }
-                }
-                ParamDecl::Int { label, default, min, max, .. } => {
-                    let mut v = match self.values.get(&key) {
-                        Some(ParamValue::Int(v)) => *v,
-                        _ => *default,
-                    };
-                    if ui
-                        .add(super::VkbSlider::new(&mut v, *min..=*max).text(label.clone()))
-                        .changed()
-                    {
-                        self.values.insert(key, ParamValue::Int(v));
-                    }
-                }
-                ParamDecl::Bool { label, default, .. } => {
-                    let mut v = match self.values.get(&key) {
-                        Some(ParamValue::Bool(v)) => *v,
-                        _ => *default,
-                    };
-                    if ui.checkbox(&mut v, label.clone()).changed() {
-                        self.values.insert(key, ParamValue::Bool(v));
-                    }
-                }
-                ParamDecl::Text { label, default, max_len, .. } => {
-                    let mut v = match self.values.get(&key) {
-                        Some(ParamValue::Text(v)) => v.clone(),
-                        _ => default.clone(),
-                    };
-                    ui.horizontal(|ui| {
-                        ui.label(label.clone());
-                        let r = ui.add(
-                            egui::TextEdit::singleline(&mut v)
-                                // Keyed by parameter, not by position: the
-                                // param list is rebuilt from the script every
-                                // frame, and positional ids let the caret and
-                                // selection bleed between params (and between
-                                // scripts that happen to lay out alike).
-                                .id_salt(&key)
-                                .char_limit(*max_len)
-                                .desired_width(f32::INFINITY),
-                        );
-                        if r.changed() {
-                            self.values.insert(key.clone(), ParamValue::Text(v.clone()));
-                        }
-                    });
-                }
-                ParamDecl::Choice { label, options, default, .. } => {
-                    let mut idx = match self.values.get(&key) {
-                        Some(ParamValue::Choice(i)) => *i,
-                        _ => *default,
-                    };
-                    let shown = options.get(idx).cloned().unwrap_or_default();
-                    ui.horizontal(|ui| {
-                        ui.label(label.clone());
-                        egui::ComboBox::from_id_salt(format!("script_choice_{key}"))
-                            .selected_text(shown)
-                            .show_ui(ui, |ui| {
-                                for (i, opt) in options.iter().enumerate() {
-                                    if ui.selectable_label(i == idx, opt).clicked() {
-                                        idx = i;
-                                        self.values.insert(key.clone(), ParamValue::Choice(i));
-                                    }
-                                }
-                            });
-                    });
-                }
-            }
-        }
+        super::script_params::render(ui, &meta, &mut self.values);
     }
 
     fn render_run_controls(

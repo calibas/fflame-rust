@@ -37,6 +37,8 @@ mod undo_history;
 mod variation_params;
 mod view;
 pub mod workspace;
+mod palette_generate;
+mod script_params;
 mod xaos_editor;
 
 pub use export_status::{ExportKind, ExportStatus, UiReporter};
