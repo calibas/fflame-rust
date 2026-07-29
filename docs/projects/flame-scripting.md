@@ -267,6 +267,17 @@ as it stands, with default features, and the linker drops everything it
 never calls (2.6 MB, no GPU or window code in it). The refactor would
 have bought nothing but risk to the editor. See Phase 5 below.
 
+A user script can be **deleted** from the picker row, behind a
+confirmation (there is no undo for a removed file), reusing the shape
+the Palette Editor already uses. The guard matters more than the button:
+`discover` hands `ScriptOrigin::File` to the shipped `assets/scripts/`
+files *and* to the user's own copies, so the origin alone does not say
+who owns a script — `is_user_script` checks the canonical path lies
+inside the user folder, and `delete_user_script` refuses anything else.
+Without that, Delete would remove the starters that ship with the app.
+Deleting a user copy re-reveals the shipped script it was shadowing,
+which is how you reset an edited starter.
+
 The panel's editor has **Open…** and **Save As…** alongside Save and
 Revert, taking the same file-dialog route the Animation panel uses for
 `.anim`: `rfd` on desktop, the browser picker and a download on the web.

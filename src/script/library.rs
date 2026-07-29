@@ -185,6 +185,45 @@ pub fn save_user_script(file_name: &str, source: &str) -> Result<PathBuf, String
     Ok(path)
 }
 
+/// Whether a script file lives in the user folder, and is therefore the
+/// user's to delete.
+///
+/// This matters because `discover` gives `ScriptOrigin::File` to BOTH
+/// the shipped `assets/scripts/` files and the user's own copies — the
+/// origin alone does not say who owns a script. Without this check a
+/// Delete button would happily remove the starters that ship with the
+/// app.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn is_user_script(path: &std::path::Path) -> bool {
+    let Some(dir) = user_script_dir() else {
+        return false;
+    };
+    // Compare canonical paths so `..` or a symlinked data folder cannot
+    // dress a shipped file up as a user one.
+    match (path.canonicalize(), dir.canonicalize()) {
+        (Ok(path), Ok(dir)) => path.starts_with(dir),
+        // An un-canonicalizable path (already deleted, say) is not one we
+        // are willing to delete.
+        _ => false,
+    }
+}
+
+/// Delete a script from the user folder.
+///
+/// Refuses anything outside it, so a shipped starter can never be
+/// removed — the worst case is that the user copy goes and the original
+/// reappears in the picker, which is the intended way to "reset" one.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn delete_user_script(path: &std::path::Path) -> Result<(), String> {
+    if !is_user_script(path) {
+        return Err(format!(
+            "{} is not in your scripts folder, so it will not be deleted",
+            path.display()
+        ));
+    }
+    std::fs::remove_file(path).map_err(|e| format!("cannot delete {}: {e}", path.display()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
