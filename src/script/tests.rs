@@ -1992,3 +1992,51 @@ fn a_bad_colour_literal_is_rejected() {
     assert!(err.message.contains("not a colour"), "{}", err.message);
     assert!(err.line.is_some(), "should carry a position");
 }
+
+// ============================================================================
+// Script identity (Phase 7, step 2)
+// ============================================================================
+
+/// Every discovered script carries the file stem as its id, and ids are
+/// unique — that is what lets one script name another, and what the
+/// picker restores its selection with.
+#[test]
+fn discovered_scripts_have_unique_stable_ids() {
+    let entries = super::library::discover(&FractalConfig::default());
+    assert!(!entries.is_empty());
+
+    let mut seen = std::collections::HashSet::new();
+    for e in &entries {
+        assert!(!e.id.is_empty(), "{} has no id", e.display_name);
+        assert!(!e.id.contains(".rhai"), "the id is the stem: {}", e.id);
+        assert!(seen.insert(e.id.clone()), "duplicate id {}", e.id);
+    }
+
+    // The shipped ids are what scripts will call each other by, so they
+    // are effectively public API — pin a couple.
+    assert!(super::library::find(&entries, "basic_random").is_some());
+    assert!(super::library::find(&entries, "turntable").is_some());
+    assert!(super::library::find(&entries, "no_such_script").is_none());
+}
+
+/// The declared NAME cannot serve as the key: nothing stops two scripts
+/// sharing one, which is exactly what made the picker jump between them.
+#[test]
+fn ids_survive_a_duplicated_display_name() {
+    let entries = super::library::discover(&FractalConfig::default());
+    let a = super::library::find(&entries, "basic_random").unwrap();
+    let b = super::library::find(&entries, "turntable").unwrap();
+
+    // Give them the same declared name, as two user scripts easily could.
+    let mut clash = vec![a.clone(), b.clone()];
+    clash[0].display_name = "Same Name".to_string();
+    clash[1].display_name = "Same Name".to_string();
+
+    // Names no longer distinguish them; ids still do.
+    assert_eq!(clash[0].display_name, clash[1].display_name);
+    assert_eq!(
+        clash.iter().position(|e| e.id == "turntable"),
+        Some(1),
+        "the id picks the right one where the name cannot"
+    );
+}
