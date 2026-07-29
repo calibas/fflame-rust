@@ -21,7 +21,9 @@ use crate::config::fractal_config::FractalConfig;
 use crate::scene::transforms::Transform;
 
 use super::host::ScriptState;
+use super::color::ScriptColor;
 use super::{humanize, ParamDecl, ParamValue, ScriptFlags, ScriptKind};
+use crate::scene::palette::ColorStop;
 
 /// Accept a whole number wherever a decimal is expected.
 ///
@@ -327,6 +329,7 @@ pub(crate) fn register(
     register_flame(engine);
     register_transform(engine);
     register_config(engine, Rc::clone(&state));
+    register_colors(engine, Rc::clone(&state));
     register_palettes(engine, Rc::clone(&state));
     register_registry_queries(engine);
     register_builtins(engine);
@@ -380,6 +383,26 @@ fn register_meta(engine: &mut Engine, state: Rc<RefCell<ScriptState>>) {
             match s.borrow_mut().declare(decl).map_err(err)? {
                 ParamValue::Float(v) => Ok(v.clamp(min, max)),
                 other => Err(err(format!("param `{key}`: expected a number, got {other:?}"))),
+            }
+        },
+    );
+
+    // A colour parameter, rendered with the same picker the rest of the
+    // app uses. Declared with a hex default so the script reads as the
+    // colour it means.
+    let s = Rc::clone(&state);
+    engine.register_fn(
+        "param_color",
+        move |key: &str, default: &str| -> Result<ScriptColor, Box<EvalAltResult>> {
+            let fallback = ScriptColor::from_hex(default).map_err(err)?;
+            let decl = ParamDecl::Color {
+                key: key.to_string(),
+                label: humanize(key),
+                default: fallback.to_rgb(),
+            };
+            match s.borrow_mut().declare(decl).map_err(err)? {
+                ParamValue::Color(rgb) => Ok(ScriptColor::from_rgb(rgb)),
+                other => Err(err(format!("param `{key}`: expected a colour, got {other:?}"))),
             }
         },
     );
@@ -1232,6 +1255,139 @@ fn json_to_dynamic(v: &serde_json::Value) -> Dynamic {
 }
 
 // ---------------------------------------------------------------- palettes
+
+/// `Color` — the value colour-generating scripts work in, plus the two
+/// palette builders that make generating one possible at all.
+///
+/// Scripts could previously only SELECT a palette from the loaded
+/// library; there was no way to construct one, which is what made
+/// palette generation a Rust feature rather than a script.
+fn register_colors(engine: &mut Engine, state: Rc<RefCell<ScriptState>>) {
+    engine.register_type_with_name::<ScriptColor>("Color");
+
+    engine.register_fn("color", |r: Dynamic, g: Dynamic, b: Dynamic| -> Result<ScriptColor, Box<EvalAltResult>> {
+        Ok(ScriptColor::new(
+            num(&r, "red")? as f32,
+            num(&g, "green")? as f32,
+            num(&b, "blue")? as f32,
+        ))
+    });
+    // Hue in DEGREES, so the numbers match what colour theory talks
+    // about (complementary = +180) and what the app's pickers show.
+    engine.register_fn("color_hsv", |h: Dynamic, s: Dynamic, v: Dynamic| -> Result<ScriptColor, Box<EvalAltResult>> {
+        Ok(ScriptColor::from_hsv(
+            num(&h, "hue")? as f32,
+            num(&s, "saturation")? as f32,
+            num(&v, "value")? as f32,
+        ))
+    });
+    engine.register_fn("color_hex", |text: &str| -> Result<ScriptColor, Box<EvalAltResult>> {
+        ScriptColor::from_hex(text).map_err(err)
+    });
+
+    engine.register_get("r", |c: &mut ScriptColor| c.r as f64);
+    engine.register_get("g", |c: &mut ScriptColor| c.g as f64);
+    engine.register_get("b", |c: &mut ScriptColor| c.b as f64);
+    engine.register_get("h", |c: &mut ScriptColor| c.hue() as f64);
+    engine.register_get("s", |c: &mut ScriptColor| c.saturation() as f64);
+    engine.register_get("v", |c: &mut ScriptColor| c.value() as f64);
+
+    engine.register_fn("rotate_hue", |c: &mut ScriptColor, d: Dynamic| -> Result<ScriptColor, Box<EvalAltResult>> {
+        Ok(c.rotate_hue(num(&d, "degrees")? as f32))
+    });
+    engine.register_fn("with_hue", |c: &mut ScriptColor, h: Dynamic| -> Result<ScriptColor, Box<EvalAltResult>> {
+        Ok(c.with_hue(num(&h, "hue")? as f32))
+    });
+    engine.register_fn("with_saturation", |c: &mut ScriptColor, s: Dynamic| -> Result<ScriptColor, Box<EvalAltResult>> {
+        Ok(c.with_saturation(num(&s, "saturation")? as f32))
+    });
+    engine.register_fn("with_value", |c: &mut ScriptColor, v: Dynamic| -> Result<ScriptColor, Box<EvalAltResult>> {
+        Ok(c.with_value(num(&v, "value")? as f32))
+    });
+    engine.register_fn("mix", |c: &mut ScriptColor, other: ScriptColor, t: Dynamic| -> Result<ScriptColor, Box<EvalAltResult>> {
+        Ok(c.mix(other, num(&t, "mix amount")? as f32))
+    });
+    engine.register_fn("hex", |c: &mut ScriptColor| c.to_hex());
+    engine.register_fn("to_string", |c: &mut ScriptColor| c.to_hex());
+
+    // ---- building a palette ----
+
+    let s = Rc::clone(&state);
+    engine.register_fn(
+        "set_palette_colors",
+        move |f: &mut FlameHandle, name: &str, colors: Array| -> Result<(), Box<EvalAltResult>> {
+            let cols = colors_from_array(&colors)?;
+            let last = cols.len().saturating_sub(1).max(1) as f32;
+            let stops = cols
+                .iter()
+                .enumerate()
+                .map(|(i, c)| ColorStop { position: i as f32 / last, color: c.to_rgb() })
+                .collect();
+            apply_palette(f, &s, name, stops)
+        },
+    );
+
+    let s = Rc::clone(&state);
+    engine.register_fn(
+        "set_palette_stops",
+        move |f: &mut FlameHandle, name: &str, stops: Array| -> Result<(), Box<EvalAltResult>> {
+            let mut built: Vec<ColorStop> = Vec::with_capacity(stops.len());
+            for entry in &stops {
+                let pair = entry
+                    .clone()
+                    .try_cast::<Array>()
+                    .ok_or_else(|| err("each stop must be [position, color]"))?;
+                if pair.len() != 2 {
+                    return Err(err("each stop must be [position, color]"));
+                }
+                let pos = num(&pair[0], "stop position")? as f32;
+                let color = pair[1]
+                    .clone()
+                    .try_cast::<ScriptColor>()
+                    .ok_or_else(|| err("the second item of a stop must be a color"))?;
+                built.push(ColorStop { position: pos.clamp(0.0, 1.0), color: color.to_rgb() });
+            }
+            // The gradient is walked in order; a script is free to list
+            // its stops in any.
+            built.sort_by(|a, b| a.position.partial_cmp(&b.position).unwrap_or(std::cmp::Ordering::Equal));
+            apply_palette(f, &s, name, built)
+        },
+    );
+}
+
+/// Two colours are the fewest that make a gradient; one would be a flat
+/// fill and none would silently blank the flame.
+fn colors_from_array(colors: &Array) -> Result<Vec<ScriptColor>, Box<EvalAltResult>> {
+    if colors.len() < 2 {
+        return Err(err("a palette needs at least two colours"));
+    }
+    colors
+        .iter()
+        .map(|c| {
+            c.clone()
+                .try_cast::<ScriptColor>()
+                .ok_or_else(|| err("expected a color — build one with color(), color_hsv() or color_hex()"))
+        })
+        .collect()
+}
+
+fn apply_palette(
+    f: &mut FlameHandle,
+    state: &Rc<RefCell<ScriptState>>,
+    name: &str,
+    stops: Vec<ColorStop>,
+) -> Result<(), Box<EvalAltResult>> {
+    if stops.len() < 2 {
+        return Err(err("a palette needs at least two stops"));
+    }
+    if stops.len() > 256 {
+        return Err(err("a palette holds at most 256 stops"));
+    }
+    let _ = state;
+    f.cfg.borrow_mut().palette = crate::scene::palette::Palette::new(name.to_string(), stops);
+    Ok(())
+}
+
 
 /// Palette choice, in three modes:
 ///

@@ -68,6 +68,10 @@ pub fn generate_mode(
         }
         for p in &meta.params {
             match p {
+                ParamDecl::Color { key, default, .. } => println!(
+                    "  {key}: colour = {}",
+                    crate::script::color::ScriptColor::from_rgb(*default).to_hex()
+                ),
                 ParamDecl::Float { key, default, min, max, .. } => {
                     println!("  {key}: number = {default}  [{min} … {max}]")
                 }
@@ -190,6 +194,11 @@ fn resolve_sets(
             })?;
 
         let parsed = match decl {
+            ParamDecl::Color { .. } => ParamValue::Color(
+                crate::script::color::ScriptColor::from_hex(value)
+                    .map_err(|e| format!("`{key}`: {e}"))?
+                    .to_rgb(),
+            ),
             ParamDecl::Float { .. } => ParamValue::Float(
                 value
                     .parse::<f64>()

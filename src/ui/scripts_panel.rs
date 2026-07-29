@@ -558,6 +558,20 @@ impl ScriptsPanel {
         for decl in &meta.params {
             let key = decl.key().to_string();
             match decl {
+                ParamDecl::Color { key: _, label, default } => {
+                    let mut v = match self.values.get(&key) {
+                        Some(ParamValue::Color(v)) => *v,
+                        _ => *default,
+                    };
+                    ui.horizontal(|ui| {
+                        // The same picker the Palette Editor, Solid panel
+                        // and background colour already use.
+                        if ui.color_edit_button_rgb(&mut v).changed() {
+                            self.values.insert(key.clone(), ParamValue::Color(v));
+                        }
+                        ui.label(label.clone());
+                    });
+                }
                 ParamDecl::Float { label, default, min, max, .. } => {
                     let mut v = match self.values.get(&key) {
                         Some(ParamValue::Float(v)) => *v,

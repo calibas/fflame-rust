@@ -1886,3 +1886,109 @@ fn only_user_scripts_can_be_deleted() {
         }
     }
 }
+
+// ============================================================================
+// Colour and palette building (Phase 7)
+// ============================================================================
+
+/// Scripts could previously only SELECT a palette. Building one is what
+/// makes palette generation a script rather than a Rust feature.
+#[test]
+fn a_script_can_build_a_palette() {
+    let source = r##"
+        script("Pal", "generator");
+        flame.add_transform();
+        let base = color_hex("#ff8800");
+        flame.set_palette_colors("Generated", [
+            color(0.0, 0.0, 0.0),
+            base,
+            base.rotate_hue(180.0),
+        ]);
+    "##;
+    let out = ScriptHost::new()
+        .run(source, &FractalConfig::default(), 1, HashMap::new())
+        .unwrap();
+    let pal = &out.config.palette;
+    assert_eq!(pal.name, "Generated");
+    assert_eq!(pal.stops.len(), 3);
+    // Evenly spaced, first and last pinned to the ends.
+    assert!((pal.stops[0].position - 0.0).abs() < 1e-6);
+    assert!((pal.stops[1].position - 0.5).abs() < 1e-6);
+    assert!((pal.stops[2].position - 1.0).abs() < 1e-6);
+    // #ff8800's complement is a blue — the point of having hue at all.
+    let c = pal.stops[2].color;
+    assert!(c[2] > c[1] && c[1] > c[0], "complement should be blue-ish: {c:?}");
+}
+
+#[test]
+fn explicit_stops_are_sorted_and_validated() {
+    let host = ScriptHost::new();
+    let run = |body: &str| {
+        let src = format!("script(\"P\", \"generator\");\nflame.add_transform();\n{body}");
+        host.run(&src, &FractalConfig::default(), 1, HashMap::new())
+    };
+
+    // Listed out of order; the gradient is walked in order, so they sort.
+    let out = run(r#"flame.set_palette_stops("S", [
+            [0.9, color(1.0, 0.0, 0.0)],
+            [0.1, color(0.0, 1.0, 0.0)],
+            [0.5, color(0.0, 0.0, 1.0)],
+        ]);"#)
+    .unwrap();
+    let pos: Vec<f32> = out.config.palette.stops.iter().map(|s| s.position).collect();
+    assert_eq!(pos, vec![0.1, 0.5, 0.9]);
+
+    // A one-colour palette is a flat fill, not a gradient; say so rather
+    // than silently blanking the flame.
+    let err = run(r#"flame.set_palette_colors("S", [color(1.0, 0.0, 0.0)]);"#).unwrap_err();
+    assert!(err.message.contains("at least two"), "{}", err.message);
+
+    let err = run(r#"flame.set_palette_colors("S", [1.0, 2.0]);"#).unwrap_err();
+    assert!(err.message.contains("expected a color"), "{}", err.message);
+
+    let err = run(r#"flame.set_palette_stops("S", [[0.0]]);"#).unwrap_err();
+    assert!(err.message.contains("[position, color]"), "{}", err.message);
+}
+
+/// The colour parameter reaches the script as a Color, and a supplied
+/// value overrides the declared default.
+#[test]
+fn color_params_round_trip() {
+    let source = r##"
+        script("P", "generator");
+        let c = param_color("base", "#ff8800");
+        flame.add_transform();
+        flame.set_palette_colors("P", [color(0.0, 0.0, 0.0), c]);
+    "##;
+    let host = ScriptHost::new();
+    let base = FractalConfig::default();
+
+    let meta = host.collect(source, &base).unwrap();
+    assert!(matches!(meta.params[0], ParamDecl::Color { .. }));
+
+    let default_run = host.run(source, &base, 1, HashMap::new()).unwrap();
+    let c = default_run.config.palette.stops[1].color;
+    assert!((c[0] - 1.0).abs() < 1e-3 && c[2] < 0.01, "declared default: {c:?}");
+
+    let mut supplied = HashMap::new();
+    supplied.insert("base".to_string(), ParamValue::Color([0.0, 0.0, 1.0]));
+    let set_run = host.run(source, &base, 1, supplied).unwrap();
+    let c = set_run.config.palette.stops[1].color;
+    assert!(c[2] > 0.99 && c[0] < 0.01, "supplied value should win: {c:?}");
+}
+
+/// A bad hex in the script itself is an error with the line, not a
+/// silent black.
+#[test]
+fn a_bad_colour_literal_is_rejected() {
+    let err = ScriptHost::new()
+        .run(
+            "script(\"P\", \"generator\");\nlet c = color_hex(\"nope\");",
+            &FractalConfig::default(),
+            1,
+            HashMap::new(),
+        )
+        .unwrap_err();
+    assert!(err.message.contains("not a colour"), "{}", err.message);
+    assert!(err.line.is_some(), "should carry a position");
+}

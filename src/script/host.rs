@@ -88,6 +88,7 @@ impl ScriptState {
             ParamDecl::Float { default, .. } => ParamValue::Float(*default),
             ParamDecl::Int { default, .. } => ParamValue::Int(*default),
             ParamDecl::Bool { default, .. } => ParamValue::Bool(*default),
+            ParamDecl::Color { default, .. } => ParamValue::Color(*default),
             ParamDecl::Choice { default, .. } => ParamValue::Choice(*default),
             ParamDecl::Text { default, .. } => ParamValue::Text(default.clone()),
         };
