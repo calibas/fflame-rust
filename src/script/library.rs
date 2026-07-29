@@ -12,7 +12,7 @@ use crate::config::fractal_config::FractalConfig;
 use super::{ScriptHost, ScriptKind};
 
 /// Starter scripts compiled in, so they exist regardless of cwd.
-const EMBEDDED: &[(&str, &str)] = &[
+pub(crate) const EMBEDDED: &[(&str, &str)] = &[
     (
         "basic_random.rhai",
         include_str!("../../assets/scripts/generators/basic_random.rhai"),
@@ -28,6 +28,10 @@ const EMBEDDED: &[(&str, &str)] = &[
     (
         "hilbert3d.rhai",
         include_str!("../../assets/scripts/generators/hilbert3d.rhai"),
+    ),
+    (
+        "turntable.rhai",
+        include_str!("../../assets/scripts/modifiers/turntable.rhai"),
     ),
     (
         "jitter.rhai",

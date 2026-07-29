@@ -1476,3 +1476,192 @@ fn path_thickness_defaults_off_and_is_appended() {
         }
     }
 }
+
+// ============================================================================
+// Phase 6 — script-defined animation
+// ============================================================================
+
+/// The animation a script builds must be one the APP can load, not just
+/// one that round-trips through our own builder. So this drives the
+/// real `AnimationController` and checks the values it evaluates.
+#[test]
+fn a_script_can_define_an_animation_the_app_can_play() {
+    let source = r#"
+        script("Spin", "generator");
+        let t = flame.add_transform();
+        t.add_variation("julian", 1.0);
+        t.set_variation_param("julian.power", 2.0);
+        t.weight = 1.0;
+
+        anim.name = "Spin";
+        anim.duration = 8;
+        anim.key("rotation", 0.0, 0.0);
+        anim.key("rotation", 8.0, 360.0);
+        t.key("weight", 0.0, 0.2);
+        t.key("weight", 8.0, 1.0);
+        t.key("julian.power", 0.0, 2.0);
+        t.key("julian.power", 8.0, 6.0);
+    "#;
+
+    let host = ScriptHost::new();
+    let out = host
+        .run(source, &FractalConfig::default(), 1, HashMap::new())
+        .unwrap();
+    let animation = out.animation.expect("the script defined an animation");
+
+    assert_eq!(animation.name, "Spin");
+    assert_eq!(animation.duration, 8.0);
+    assert!(animation.has_base_config(), "the .anim must stand alone");
+
+    // Targets are ConfigPath keys — the spelling the loader parses.
+    let targets: Vec<&str> = animation.tracks.iter().map(|t| t.target.as_str()).collect();
+    assert!(targets.contains(&"Rotation"), "got {targets:?}");
+    assert!(targets.contains(&"Transform.0.Weight"), "got {targets:?}");
+    assert!(
+        targets.contains(&"Transform.0.VariationParam.julian.power"),
+        "got {targets:?}"
+    );
+    for target in &targets {
+        assert!(
+            crate::config::ConfigPath::from_string_key(target).is_some(),
+            "the app's loader must parse `{target}`"
+        );
+    }
+
+    // And the app's own controller must evaluate them.
+    let mut controller = crate::animation::AnimationController::new();
+    controller.load(animation);
+    let at = |time: f64| -> HashMap<String, f64> {
+        controller
+            .evaluate_at_time(time)
+            .into_iter()
+            .filter_map(|(_, target, value)| value.as_f64().map(|v| (target, v)))
+            .collect()
+    };
+
+    let start = at(0.0);
+    let mid = at(4.0);
+    let end = at(8.0);
+    assert_eq!(start.get("Rotation"), Some(&0.0));
+    assert_eq!(end.get("Rotation"), Some(&360.0));
+    assert!((mid["Rotation"] - 180.0).abs() < 1e-6, "linear halfway");
+    assert!((mid["Transform.0.Weight"] - 0.6).abs() < 1e-6);
+    assert!((mid["Transform.0.VariationParam.julian.power"] - 4.0).abs() < 1e-6);
+}
+
+/// Animation is opt-in: a script produces one exactly when it asks for
+/// one. Checked against the source rather than a hand-kept list, so
+/// adding a script can't quietly make this vacuous.
+#[test]
+fn scripts_produce_an_animation_only_when_they_ask_for_one() {
+    let host = ScriptHost::new();
+    let mut animated = 0;
+    for (name, source) in super::library::EMBEDDED {
+        let out = host
+            .run(source, &FractalConfig::default(), 1, HashMap::new())
+            .unwrap_or_else(|e| panic!("{name}: {}", e.message));
+        let asked = source.contains("anim.");
+        assert_eq!(
+            out.animation.is_some(),
+            asked,
+            "{name}: animation present = {}, but the script {} mention `anim`",
+            out.animation.is_some(),
+            if asked { "does" } else { "does not" }
+        );
+        animated += asked as usize;
+    }
+    assert!(animated > 0, "no shipped script exercises animation");
+}
+
+/// Keyframe times may be written in any order; the player walks them in
+/// time order.
+#[test]
+fn keyframes_are_sorted_by_time() {
+    let source = r#"
+        script("Backwards", "generator");
+        flame.add_transform();
+        anim.key("zoom", 6.0, 3.0);
+        anim.key("zoom", 0.0, 1.0);
+        anim.key("zoom", 3.0, 2.0);
+    "#;
+    let out = ScriptHost::new()
+        .run(source, &FractalConfig::default(), 1, HashMap::new())
+        .unwrap();
+    let animation = out.animation.unwrap();
+    // Duration defaults to the last keyframe when unset.
+    assert_eq!(animation.duration, 6.0);
+
+    let crate::animation::TrackSource::Keyframes { keyframes } = &animation.tracks[0].source else {
+        panic!("expected a keyframe track");
+    };
+    let times: Vec<f64> = keyframes.iter().map(|k| k.time).collect();
+    assert_eq!(times, vec![0.0, 3.0, 6.0]);
+}
+
+/// A misspelled target is an error, not a silently dropped track — a
+/// track that quietly does nothing is invisible in a rendered animation.
+#[test]
+fn unknown_animation_targets_are_rejected() {
+    let host = ScriptHost::new();
+    let cases = [
+        (r#"anim.key("zooom", 0.0, 1.0);"#, "not an animatable setting"),
+        (
+            r#"let t = flame.add_transform(); t.key("wieght", 0.0, 1.0);"#,
+            "not an animatable transform value",
+        ),
+        (
+            r#"anim.key("zoom", 0.0, 1.0, "ease_in_sideways");"#,
+            "is not an easing",
+        ),
+        (
+            r#"anim.interpolation("zoom", "wobbly");"#,
+            "is not an interpolation",
+        ),
+    ];
+    for (body, expected) in cases {
+        let source = format!("script(\"T\", \"generator\");\n{body}");
+        let err = host
+            .run(&source, &FractalConfig::default(), 1, HashMap::new())
+            .expect_err("should have been rejected");
+        assert!(
+            err.message.contains(expected),
+            "expected {expected:?} in {:?}",
+            err.message
+        );
+    }
+}
+
+/// Both spellings work: the script's own (`camera_rotation_x`, as
+/// `config.set` takes it) and the ConfigPath key (`CameraRotationX`).
+#[test]
+fn animation_targets_accept_either_spelling() {
+    let host = ScriptHost::new();
+    let run = |body: &str| {
+        let source = format!("script(\"T\", \"generator\");\nflame.add_transform();\n{body}");
+        host.run(&source, &FractalConfig::default(), 1, HashMap::new())
+            .unwrap()
+            .animation
+            .unwrap()
+            .tracks[0]
+            .target
+            .clone()
+    };
+    assert_eq!(run(r#"anim.key("camera_rotation_x", 0.0, 10.0);"#), "CameraRotationX");
+    assert_eq!(run(r#"anim.key("CameraRotationX", 0.0, 10.0);"#), "CameraRotationX");
+    assert_eq!(run(r#"anim.key("zoom", 0.0, 2.0);"#), "Zoom");
+}
+
+/// Weight and colour belong to normal transforms only — linked and final
+/// ones always run. Say so rather than emitting a dead target.
+#[test]
+fn weight_is_rejected_on_pools_that_have_none() {
+    let source = r#"
+        script("T", "generator");
+        let f = flame.add_final_transform();
+        f.key("weight", 0.0, 1.0);
+    "#;
+    let err = ScriptHost::new()
+        .run(source, &FractalConfig::default(), 1, HashMap::new())
+        .expect_err("final transforms carry no weight");
+    assert!(err.message.contains("only exists on normal transforms"), "{}", err.message);
+}

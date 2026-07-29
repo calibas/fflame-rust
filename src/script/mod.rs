@@ -13,6 +13,7 @@
 //! Both are seeded from a pinned PRNG algorithm, so script + seed
 //! reproduces a flame byte-for-byte on desktop, web, and Python.
 
+pub mod anim;
 pub mod api;
 pub mod builtins;
 /// Headless `generate` command (desktop only — needs the filesystem).

@@ -50,6 +50,9 @@ pub(crate) struct ScriptState {
     /// silently different result.
     pub palettes: Vec<crate::scene::palette::Palette>,
     pub rng: Pcg64Mcg,
+    /// What the script asked to animate. Stays untouched — and so
+    /// produces no animation at all — unless the script uses `anim`.
+    pub anim: super::anim::AnimBuilder,
 }
 
 impl ScriptState {
@@ -71,7 +74,8 @@ impl ScriptState {
             // reproduce the same flame across platforms and across rand
             // crate versions.
             rng: Pcg64Mcg::new(expand_seed(seed)),
-            }
+            anim: super::anim::AnimBuilder::default(),
+        }
     }
 
     /// Record a declaration, or fetch the supplied value for it.
@@ -104,6 +108,9 @@ pub struct ScriptOutcome {
     pub warnings: Vec<String>,
     /// Script print()/debug() output, in order.
     pub messages: Vec<String>,
+    /// The animation the script defined, if it defined one. Carries the
+    /// flame above as its `base_config`, so it stands alone.
+    pub animation: Option<crate::animation::Animation>,
 }
 
 /// Runs sandboxed flame scripts.
@@ -174,7 +181,7 @@ impl ScriptHost {
         let engine = build_engine(Rc::clone(&cfg), Rc::clone(&state));
 
         let mut scope = Scope::new();
-        super::api::push_globals(&mut scope, Rc::clone(&cfg));
+        super::api::push_globals(&mut scope, Rc::clone(&cfg), Rc::clone(&state));
 
         engine.run_with_scope(&mut scope, text).map_err(map_error)?;
 
@@ -203,11 +210,17 @@ impl ScriptHost {
         }
 
         let config = cfg.borrow().clone();
+        // Built here rather than as the script runs: duration can default
+        // to the last keyframe, which isn't known until the script ends.
+        let script_name = state.meta.name.clone();
+        let anim = state.anim.clone();
+        let animation = anim.build(&config, &script_name, &mut state.warnings);
         Ok(ScriptOutcome {
             config,
             meta: state.meta.clone(),
             warnings: std::mem::take(&mut state.warnings),
             messages: std::mem::take(&mut state.messages),
+            animation,
         })
     }
 }

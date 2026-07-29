@@ -20,6 +20,8 @@ on the main crate by path.
   affine, variations, variation parameters — with registry validation.
 - `run_script(source, seed, params, base)` — the app's Rhai engine.
 - `variations()`, `variation_params(name)`.
+- `Animation` — a script-defined animation, with `save`/`load` for
+  `.anim`, its `duration`, `targets` and embedded `config`.
 - Ten Python tests; `run_script` output is byte-identical to
   `fractal_flame_wgpu generate` for the same script and seed.
 
@@ -159,9 +161,10 @@ Genuinely optional; listed so they are not lost.
   flame. Cost: a second registration surface alongside the Rhai one,
   with the same drift risk `builtins.rs` already carries against its
   shader sources.
-- **Animation.** `.anim` load/save and track editing — blocked on
-  Phase 6, which adds animation tracks to the script object model.
-  Should arrive through the same bindings, not a parallel API.
+- **Animation editing.** Phase 6 landed the read side: a script's
+  animation arrives as `result.animation`, and `.anim` round-trips.
+  Still missing is *building* one from Python — adding tracks and
+  keyframes to an existing animation without going through a script.
 - **Batch helpers.** `run_script` over a seed range with
   `multiprocessing`, returning a list of `Config`s. Note `run_script`
   currently holds the GIL for its duration; the script budget bounds

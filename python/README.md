@@ -61,11 +61,16 @@ subprocess.run(["fractal_flame_wgpu", "export",
                 "-w", "1920", "-H", "1080"], check=True)
 ```
 
-## Two things that will bite you otherwise
+## Three things that will bite you otherwise
 
 **Values are f32.** The flame model is 32-bit throughout (WGSL has no
 f64), so a Python float is stored rounded — set `-0.1` and read back
 `-0.10000000149011612`. Compare with a tolerance.
+
+**Angles are radians.** `rotation`, `camera_pitch` and `camera_yaw` are
+stored in radians — the app's View panel converts for display, so the
+number you see in the UI is not the number in the file. Use
+`math.radians(35)`, not `35`.
 
 **Names are checked.** `add_variation` and `set_variation_param` raise on
 an unknown variation or parameter, and `set_variation_param` lists the

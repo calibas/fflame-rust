@@ -143,6 +143,25 @@ pub fn generate_mode(
             format!(", {} final", flame.final_transforms.len())
         }
     );
+
+    // A script that defined an animation gets a .anim beside its .fflame.
+    // Written only when there is one, so scripts that don't animate leave
+    // no stray file.
+    if let Some(animation) = &outcome.animation {
+        let anim_path = Path::new(&out_path).with_extension("anim");
+        match animation.to_json() {
+            Ok(json) => match std::fs::write(&anim_path, json) {
+                Ok(()) => println!(
+                    "Wrote {} — {:.3}s, {} track(s)",
+                    anim_path.display(),
+                    animation.duration,
+                    animation.tracks.len()
+                ),
+                Err(e) => eprintln!("Error: cannot write `{}`: {e}", anim_path.display()),
+            },
+            Err(e) => eprintln!("Error: cannot serialize the animation: {e}"),
+        }
+    }
 }
 
 /// Turn `key=value` strings into typed values using the declarations.
