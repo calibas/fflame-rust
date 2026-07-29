@@ -44,3 +44,9 @@ tests/visual/current/
 *.mkv
 *.webm
 *.mov
+
+# pyfflame (standalone Python crate — its own target dir and artifacts)
+python/target/
+python/*.pyd
+python/**/__pycache__/
+python/.pytest_cache/
