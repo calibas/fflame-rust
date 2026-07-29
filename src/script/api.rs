@@ -331,6 +331,7 @@ pub(crate) fn register(
     register_config(engine, Rc::clone(&state));
     register_run_script(engine, Rc::clone(&cfg), Rc::clone(&state));
     register_colors(engine, Rc::clone(&state));
+    register_palette_slots(engine);
     register_palettes(engine, Rc::clone(&state));
     register_registry_queries(engine);
     register_builtins(engine);
@@ -1425,6 +1426,54 @@ fn register_colors(engine: &mut Engine, state: Rc<RefCell<ScriptState>>) {
             // its stops in any.
             built.sort_by(|a, b| a.position.partial_cmp(&b.position).unwrap_or(std::cmp::Ordering::Equal));
             apply_palette(f, &s, name, built)
+        },
+    );
+}
+
+/// Working on a palette slot by slot.
+///
+/// A gradient's stops sit wherever the script put them, which makes
+/// "slice it up and reorder it" fiddly and "add noise per colour"
+/// uneven. Fixed mode lays the palette out as 256 evenly spaced slots —
+/// the same conversion the Palette Editor's Fixed switch performs — and
+/// then both are just array work.
+fn register_palette_slots(engine: &mut Engine) {
+    engine.register_fn("palette_to_fixed", |f: &mut FlameHandle| {
+        f.cfg.borrow_mut().palette.convert_to_fixed();
+    });
+
+    engine.register_fn("palette_colors", |f: &mut FlameHandle| -> Array {
+        f.cfg
+            .borrow()
+            .palette
+            .stops
+            .iter()
+            .map(|s| Dynamic::from(ScriptColor::from_rgb(s.color)))
+            .collect()
+    });
+
+    engine.register_fn(
+        "set_palette_fixed",
+        |f: &mut FlameHandle, name: &str, colors: Array| -> Result<(), Box<EvalAltResult>> {
+            let cols = colors_from_array(&colors)?;
+            // Locked palettes hold exactly 256 slots. Resample rather
+            // than reject: a script that built 64 colours still means a
+            // palette, and the Palette Editor's own Fixed mode resamples
+            // the same way.
+            let last = cols.len() - 1;
+            let stops = (0..256)
+                .map(|i| {
+                    let t = i as f32 / 255.0;
+                    let x = t * last as f32;
+                    let lo = (x.floor() as usize).min(last);
+                    let hi = (lo + 1).min(last);
+                    let c = cols[lo].mix(cols[hi], x - lo as f32);
+                    ColorStop { position: t, color: c.to_rgb() }
+                })
+                .collect();
+            f.cfg.borrow_mut().palette =
+                crate::scene::palette::Palette::new_locked(name.to_string(), stops);
+            Ok(())
         },
     );
 }

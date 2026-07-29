@@ -749,6 +749,30 @@ The parameter controls are shared with the Scripts panel
 (`ui/script_params.rs`) rather than copied, since the Palette Editor is
 unlikely to be the last panel that wants them.
 
+**Palettes are built slot by slot.** `flame.palette_to_fixed()` converts
+to the 256 evenly spaced slots the Palette Editor's Fixed switch
+produces, `flame.palette_colors()` reads them out and
+`flame.set_palette_fixed(name, colors)` writes them back (resampling to
+256 rather than rejecting a shorter list). Even slots are what make the
+two effects on top simple: slicing the palette up is array work, and
+per-slot noise lands evenly instead of bunching wherever the gradient
+stops happened to sit.
+
+`random_palette.rhai` uses all three — scheme, then a slice-and-reorder
+shuffle, then H/S/V noise with a separate amount per axis. Separate axes
+are the point: nudging hue keeps the brightness structure and scatters
+the colour, nudging value keeps the colours and roughens the light, and
+the same jitter in RGB would just make mud.
+
+`iq_palette.rhai` builds Inigo Quilez's procedural palettes,
+`a + b*cos(2*PI*(c*t + d))`, with his seven published sets plus Custom.
+Three cosine waves slightly out of step sweep through hues no single hue
+ramp produces — and the classic rainbow's `d = (0, 0.33, 0.67)` is a
+third of a cycle apart, which is the same triadic 120° the Random
+Palette script rotates by, arrived at from the other direction. Verified
+against an independent evaluation of the formula rather than against
+itself.
+
 **Status: done.** All five steps are in. What is not done, and is
 additive: `run_script` returning a value, forwarding a callee's
 parameters into the caller's panel, and OKLCH beside HSV.
