@@ -9,7 +9,7 @@
 //
 // Run it, then open the Animation panel and press play.
 
-script("Turntable", "modifier");
+script("Turntable", "modifier", ["norng"]);
 
 let seconds = param("seconds", 8.0, 1.0, 120.0);
 let turns = param_int("turns", 1, 1, 8);

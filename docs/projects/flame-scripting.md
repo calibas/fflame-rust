@@ -128,6 +128,34 @@ Param values are shown as the standard slider set (reusing
 `VkbSlider`/param-UI conventions) above the Run button, with the seed
 field and Reroll.
 
+### Script flags
+
+`script(...)` takes an optional third argument, a list of switches:
+
+```rhai
+script("Turntable", "modifier", ["norng"]);
+```
+
+Two arities of one registered function, so the list stays optional and
+every script written before flags existed is untouched.
+
+`norng` says the script ignores the seed. The panel then hides the seed
+field, Reroll **and** Batch — all three are ways of asking for a
+different random result, and a control that changes nothing is worse
+than an absent one because it implies the result varies. Five of the
+eight shipped scripts are fully deterministic and declare it.
+
+Flags are a small set of named booleans rather than a free-form bag: a
+flag exists to change what the UI does, so the panel has to understand
+each one anyway. Adding one is a field on `ScriptFlags`, a match arm,
+and its use. A flag this build doesn't know is an **error** naming the
+ones it does — a silently ignored switch looks like the feature is
+broken.
+
+`norng` is a claim about behaviour, not just a UI hint, so a test runs
+every shipped script that declares it at two very different seeds and
+asserts the output is identical.
+
 ### The object model (what scripts can touch)
 
 Write access: **everything in `FractalConfig`** — flame structure,
@@ -206,6 +234,14 @@ wheel. Phase 5 showed that isn't needed: the wheel depends on the crate
 as it stands, with default features, and the linker drops everything it
 never calls (2.6 MB, no GPU or window code in it). The refactor would
 have bought nothing but risk to the editor. See Phase 5 below.
+
+The panel's editor has **Open…** and **Save As…** alongside Save and
+Revert, taking the same file-dialog route the Animation panel uses for
+`.anim`: `rfd` on desktop, the browser picker and a download on the web.
+An opened file joins the picker as an entry so the combo keeps naming
+what is actually in the editor. (The browser picker stashes its text in
+egui's temp store, which the panel collects itself — no app-level
+plumbing needed.)
 
 UI: script panel added to the existing **Random Generator panel**
 (`PanelType` addition), plus a Modifiers entry point on the current

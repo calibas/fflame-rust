@@ -15,6 +15,10 @@ use egui;
 
 use crate::config::FractalConfig;
 use crate::script::library::{self, ScriptEntry, ScriptOrigin};
+
+/// egui temp-data key the browser file picker writes into (WASM).
+#[cfg(target_arch = "wasm32")]
+const PENDING_SCRIPT_LOAD: &str = "pending_script_load_raw";
 use crate::script::{ParamDecl, ParamValue, ScriptError, ScriptHost, ScriptKind, ScriptMeta};
 
 #[derive(Default)]
@@ -142,6 +146,36 @@ impl ScriptsPanel {
         }
     }
 
+    /// Take on a script opened from an arbitrary path. It joins the
+    /// picker as an entry so the combo keeps naming what is in the
+    /// editor — otherwise the picker would still read "Turntable" while
+    /// the editor held something else entirely.
+    fn adopt_opened(&mut self, display_name: String, source: String, origin: ScriptOrigin) {
+        let kind = ScriptHost::new()
+            .collect(&source, &FractalConfig::default())
+            .ok()
+            .and_then(|m| m.kind)
+            .unwrap_or(ScriptKind::Generator);
+        self.entries.push(ScriptEntry { display_name: display_name.clone(), kind, source: source.clone(), origin });
+        self.selected = self.entries.len() - 1;
+        self.text = source;
+        // A different script means different parameters; keeping the old
+        // values would silently feed one script's settings to another.
+        self.values.clear();
+        self.meta = None;
+        self.collected_from = 0;
+        self.error = None;
+        self.messages.clear();
+        self.warnings.clear();
+        self.show_editor = true;
+        self.status = Some(format!("Opened {display_name}"));
+    }
+
+    /// Switches the script declared, e.g. `["norng"]`.
+    fn flags(&self) -> crate::script::ScriptFlags {
+        self.meta.as_ref().map(|m| m.flags).unwrap_or_default()
+    }
+
     fn declared_kind(&self) -> ScriptKind {
         self.meta
             .as_ref()
@@ -192,6 +226,16 @@ impl ScriptsPanel {
             self.reload(current);
         }
         self.refresh_meta(current);
+
+        // The browser file picker lands its text in egui's temp store;
+        // pick it up here rather than routing it through the app.
+        #[cfg(target_arch = "wasm32")]
+        if let Some(text) = ui
+            .ctx()
+            .data_mut(|d| d.remove_temp::<String>(egui::Id::new(PENDING_SCRIPT_LOAD)))
+        {
+            self.adopt_opened("Opened".to_string(), text, ScriptOrigin::Builtin);
+        }
 
         egui::ScrollArea::vertical().show(ui, |ui| {
             self.render_picker(ui, current);
@@ -347,18 +391,26 @@ impl ScriptsPanel {
         current: &FractalConfig,
         response: &mut ScriptsResponse,
     ) {
-        ui.horizontal(|ui| {
-            ui.label("Seed:");
-            ui.add(super::VkbDragValue::new(&mut self.seed).speed(1.0));
-            if ui
-                .button("Reroll")
-                .on_hover_text("Next seed — a different flame from the same script")
-                .clicked()
-            {
-                self.seed = self.seed.wrapping_add(1);
-                self.execute(current, response);
-            }
-        });
+        // A script that declared `norng` ignores the seed entirely, so
+        // the seed field, Reroll and Batch would all be controls that
+        // change nothing — worse than absent, because they imply the
+        // result varies.
+        let uses_rng = !self.flags().no_rng;
+
+        if uses_rng {
+            ui.horizontal(|ui| {
+                ui.label("Seed:");
+                ui.add(super::VkbDragValue::new(&mut self.seed).speed(1.0));
+                if ui
+                    .button("Reroll")
+                    .on_hover_text("Next seed — a different flame from the same script")
+                    .clicked()
+                {
+                    self.seed = self.seed.wrapping_add(1);
+                    self.execute(current, response);
+                }
+            });
+        }
 
         ui.horizontal(|ui| {
             let verb = match self.declared_kind() {
@@ -370,6 +422,10 @@ impl ScriptsPanel {
                 .clicked()
             {
                 self.execute(current, response);
+            }
+
+            if !uses_rng {
+                return;
             }
 
             ui.separator();
@@ -525,6 +581,78 @@ impl ScriptsPanel {
                         .clicked()
                     {
                         self.load_selected();
+                    }
+
+                    // Open / Save As take the same file-dialog route the
+                    // Animation panel uses for .anim: rfd on desktop, the
+                    // browser picker and a download on the web.
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        if ui
+                            .button("Open…")
+                            .on_hover_text("Open a .rhai script from anywhere on disk")
+                            .clicked()
+                        {
+                            let picked = rfd::FileDialog::new()
+                                .add_filter("Flame script", &["rhai"])
+                                .pick_file();
+                            if let Some(path) = picked {
+                                match std::fs::read_to_string(&path) {
+                                    Ok(text) => {
+                                        let name = path
+                                            .file_stem()
+                                            .map(|s| s.to_string_lossy().into_owned())
+                                            .unwrap_or_else(|| "Opened".to_string());
+                                        self.adopt_opened(name, text, ScriptOrigin::File(path));
+                                    }
+                                    Err(e) => self.status = Some(format!("Open failed: {e}")),
+                                }
+                            }
+                        }
+
+                        if ui
+                            .button("Save As…")
+                            .on_hover_text("Write this script to a .rhai file anywhere on disk")
+                            .clicked()
+                        {
+                            let picked = rfd::FileDialog::new()
+                                .add_filter("Flame script", &["rhai"])
+                                .set_file_name(format!("{}.rhai", self.script_name()))
+                                .save_file();
+                            if let Some(path) = picked {
+                                self.status = Some(match std::fs::write(&path, &self.text) {
+                                    Ok(()) => format!("Saved to {}", path.display()),
+                                    Err(e) => format!("Save failed: {e}"),
+                                });
+                            }
+                        }
+                    }
+
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        if ui.button("Open…").on_hover_text("Open a .rhai script").clicked() {
+                            crate::app::trigger_browser_file_picker(
+                                ".rhai",
+                                ui.ctx().clone(),
+                                PENDING_SCRIPT_LOAD,
+                            );
+                        }
+                        if ui.button("Save As…").on_hover_text("Download this script").clicked() {
+                            let name = format!(
+                                "{}.rhai",
+                                self.script_name().to_lowercase().replace(' ', "_")
+                            );
+                            self.status = Some(
+                                match crate::app::trigger_browser_download(
+                                    self.text.as_bytes(),
+                                    &name,
+                                    "text/plain",
+                                ) {
+                                    Ok(()) => format!("Downloaded {name}"),
+                                    Err(e) => format!("Download failed: {e}"),
+                                },
+                            );
+                        }
                     }
 
                     if matches!(

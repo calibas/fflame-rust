@@ -21,7 +21,7 @@ use crate::config::fractal_config::FractalConfig;
 use crate::scene::transforms::Transform;
 
 use super::host::ScriptState;
-use super::{humanize, ParamDecl, ParamValue, ScriptKind};
+use super::{humanize, ParamDecl, ParamValue, ScriptFlags, ScriptKind};
 
 /// Accept a whole number wherever a decimal is expected.
 ///
@@ -126,6 +126,41 @@ impl TransformHandle {
             ))),
         }
     }
+}
+
+
+/// Backs both arities of `script(...)`.
+fn declare_script(
+    state: &Rc<RefCell<ScriptState>>,
+    name: &str,
+    kind: &str,
+    flags: Option<Array>,
+) -> Result<(), Box<EvalAltResult>> {
+    let mut st = state.borrow_mut();
+    if st.meta.kind.is_some() {
+        return Err(err("script(...) called more than once"));
+    }
+    if !st.declared.is_empty() {
+        return Err(err("script(...) must come before any param(...) declaration"));
+    }
+    let kind = ScriptKind::parse(kind).ok_or_else(|| {
+        err(format!(
+            "unknown script kind `{kind}` — expected \"generator\" or \"modifier\""
+        ))
+    })?;
+
+    let mut parsed = ScriptFlags::default();
+    for flag in flags.unwrap_or_default() {
+        let text = flag
+            .into_string()
+            .map_err(|_| err("script flags must be strings, e.g. [\"norng\"]"))?;
+        parsed.set(&text).map_err(err)?;
+    }
+
+    st.meta.name = name.to_string();
+    st.meta.kind = Some(kind);
+    st.meta.flags = parsed;
+    Ok(())
 }
 
 // ============================================================================
@@ -310,23 +345,21 @@ pub(crate) fn register(
 
 fn register_meta(engine: &mut Engine, state: Rc<RefCell<ScriptState>>) {
     let s = Rc::clone(&state);
-    engine.register_fn("script", move |name: &str, kind: &str| -> Result<(), Box<EvalAltResult>> {
-        let mut st = s.borrow_mut();
-        if st.meta.kind.is_some() {
-            return Err(err("script(...) called more than once"));
+    // Two arities, because the flag list is optional and most scripts
+    // want nothing to do with it: `script(name, kind)` stays exactly as
+    // it was, `script(name, kind, ["norng"])` adds switches.
+    engine.register_fn("script", {
+        let s = Rc::clone(&s);
+        move |name: &str, kind: &str| -> Result<(), Box<EvalAltResult>> {
+            declare_script(&s, name, kind, None)
         }
-        if !st.declared.is_empty() {
-            return Err(err("script(...) must come before any param(...) declaration"));
-        }
-        let kind = ScriptKind::parse(kind).ok_or_else(|| {
-            err(format!(
-                "unknown script kind `{kind}` — expected \"generator\" or \"modifier\""
-            ))
-        })?;
-        st.meta.name = name.to_string();
-        st.meta.kind = Some(kind);
-        Ok(())
     });
+    engine.register_fn(
+        "script",
+        move |name: &str, kind: &str, flags: Array| -> Result<(), Box<EvalAltResult>> {
+            declare_script(&s, name, kind, Some(flags))
+        },
+    );
 
     let s = Rc::clone(&state);
     engine.register_fn(
