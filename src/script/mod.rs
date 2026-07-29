@@ -14,6 +14,7 @@
 //! reproduces a flame byte-for-byte on desktop, web, and Python.
 
 pub mod anim;
+pub mod color;
 pub mod api;
 pub mod builtins;
 /// Headless `generate` command (desktop only — needs the filesystem).
@@ -66,6 +67,8 @@ pub enum ParamDecl {
     /// Free text — L-system rules, names, anything the other kinds can't
     /// express. `max_len` keeps a pasted novel out of the flame.
     Text { key: String, label: String, default: String, max_len: usize },
+    /// A colour, rendered with the same picker the rest of the app uses.
+    Color { key: String, label: String, default: [f32; 3] },
 }
 
 impl ParamDecl {
@@ -75,7 +78,8 @@ impl ParamDecl {
             | Self::Int { key, .. }
             | Self::Bool { key, .. }
             | Self::Choice { key, .. }
-            | Self::Text { key, .. } => key,
+            | Self::Text { key, .. }
+            | Self::Color { key, .. } => key,
         }
     }
 
@@ -85,7 +89,8 @@ impl ParamDecl {
             | Self::Int { label, .. }
             | Self::Bool { label, .. }
             | Self::Choice { label, .. }
-            | Self::Text { label, .. } => label,
+            | Self::Text { label, .. }
+            | Self::Color { label, .. } => label,
         }
     }
 }
@@ -98,6 +103,7 @@ pub enum ParamValue {
     Bool(bool),
     Choice(usize),
     Text(String),
+    Color([f32; 3]),
 }
 
 /// Turn `trace_a` into `Trace A` for UI labels.

@@ -645,25 +645,99 @@ what a script produced and assert the values it evaluates at t=0, 4 and
 Not done: signal-driven tracks from scripts (`TrackSource::Signal`), and
 generators. Both are additive — the object model already has room.
 
-**Phase 7 — Colour-theory palette generation (wanted, unscheduled).**
+**Phase 7 — Palette generation, in scripts.**
+
 Today a script picks an *existing* palette (`flame.set_palette(name)`,
 `flame.random_palette()`, both seeded) or leaves the current one alone.
-The third mode — *generating* a palette — is a system of its own:
+It cannot BUILD one — and that, not the colour picker or the calling
+machinery, is the load-bearing gap.
 
-* Choose a **main** colour, optionally a **secondary** and **tertiary**.
-* Fill the rest by colour-theory relationship — **complementary**,
-  **analogous**, **monochromatic**.
-* Vary the rendering of that scheme, from a smooth gradient through to
-  deliberately mixed-up stops with noise.
+**Decision: palette generation is a script, not a shared Rust
+generator.** The earlier plan put a generator in `scene::palette` with
+the Palette UI and the script API as two callers. Scripts win instead:
+they are shareable, editable by the person who wants a different scheme,
+and they get batch-and-choose for free — a palette modifier plus the
+existing Batch button already yields a grid of options in the Fractal
+Browser. What that costs is a generate button in the Palette Editor,
+bought back by letting panels RUN scripts (below).
 
-Important: this is **not** script-only. The same generator backs the
-**Palette UI**, so a palette can be dialled up by hand or by script from
-one implementation. That shared-ownership requirement is why it is its
-own project rather than a scripting add-on — it should probably live in
-`scene::palette` with the script API and the panel as two callers.
+Four pieces, in the order they unblock each other:
 
-When it lands, the script side is one more function alongside the
-existing two; nothing about the current API has to change.
+*1. Build a palette.* `flame.set_palette_colors(name, [c, ...])` for
+evenly spaced stops and `flame.set_palette_stops(name, [[pos, c], ...])`
+for explicit ones. `Palette` is just a name and a list of
+`(position, rgb)`, so this is small — but nothing else in the phase
+works without it.
+
+*2. A colour type and a colour parameter.* `param_color("base",
+"#ff8800")` renders through `color_edit_button_rgb`, which three panels
+already use. Rhai gets a `Color` with `.r/.g/.b`, `.h/.s/.v`, and
+`rotate_hue` / `with_saturation` / `mix` / `hex`.
+
+HSV earns its place: the relationships colour theory NAMES are literally
+coordinates in it — complementary is `h + 180`, triadic `h ± 120`,
+analogous `h ± 30`, monochromatic is "hold h, vary s and v". None of
+those is simple arithmetic in RGB, and interpolating between two hues in
+RGB passes through desaturated mud. The same goes for the "mixed-up
+stops with noise" end of the dial: jittering H/S/V independently is
+meaningful, jittering R/G/B independently is not.
+
+Known limit: HSV is not perceptually uniform, so equal hue steps do not
+look equally different — yellows and greens crowd. If generated palettes
+come out uneven, OKLCH is a drop-in second constructor and accessor pair
+(~30 lines) with the same `h/s/v`-shaped API.
+
+*3. Stable script ids.* Needed so one script can name another, and
+already a latent bug: the picker keys on the DECLARED name and `reload`
+restores the selection by it, so two scripts declaring the same name
+already misbehave.
+
+The **file stem is the id** (`random_palette`). It is already the
+de-facto unique key — `discover` builds its map keyed on file name, with
+later sources shadowing earlier — so `run_script("random_palette")`
+means "whichever `random_palette.rhai` won", and a user copy shadowing a
+shipped script keeps working without a special case. Surfaced in the
+picker.
+
+Accepted consequence: shipped script FILENAMES become a public API.
+Renaming one breaks its callers, the same class of rule as append-only
+variation registration.
+
+*4. `run_script(id, params)`.* The callee works on the same config, so a
+palette script called from a generator simply sets that flame's palette.
+No return value: the shared config covers every case we have, and it
+keeps both the model and the sandbox simple.
+
+  - **Seed**: the callee CONTINUES the caller's RNG stream rather than
+    re-using its seed. Still exactly reproducible from (script, seed),
+    but two calls give two palettes instead of the same one twice.
+  - **Params**: `run_script("random_palette", #{ scheme: "complementary" })`
+    feeds the existing `provided` mechanism. The callee's parameters do
+    NOT surface in the caller's panel — the caller owns them.
+  - **Collect mode**: a no-op, so metadata collection stays fast and
+    free of side effects.
+  - **Errors and print output** are attributed to the script they came
+    from. An unattributed line number in an unknown file is a dead end
+    for this audience.
+
+**Runaway protection is not optional here**, because scripts are things
+people share. Calling a generator from a generator is allowed, so the
+guards have to be structural rather than a rule about what to call:
+
+  - A **shared operation budget** across every nested run. Rhai enforces
+    `max_operations` per evaluation, so a fresh sub-run would otherwise
+    get a fresh 5,000,000 — and `for i in 0..1000 { run_script("x") }`
+    would buy a billion. The counter accumulates through `on_progress`
+    into the script state.
+  - **Cycle detection** on the call stack of ids: A → B → A is an error
+    naming the cycle, not a hang.
+  - A **nesting depth cap**, for long chains that never repeat an id.
+
+**Panels can run scripts.** The Palette panel lists scripts carrying a
+`palette` flag (the `script(name, kind, [...])` mechanism) and runs the
+one you pick. One implementation, two surfaces, no shared Rust
+generator — and the same hook serves any panel that later wants its own
+generators.
 
 ---
 

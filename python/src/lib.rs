@@ -515,6 +515,18 @@ fn coerce_param(key: &str, value: &Bound<'_, PyAny>, decl: Option<&ParamDecl>) -
         Some(ParamDecl::Text { .. }) => Ok(ParamValue::Text(
             value.extract::<String>().map_err(|_| wrong("a string"))?,
         )),
+        // Colours arrive as "#ff8800" or an (r, g, b) triple in 0..1.
+        Some(ParamDecl::Color { .. }) => {
+            if let Ok(text) = value.extract::<String>() {
+                return fractal_flame_wgpu::script::color::ScriptColor::from_hex(&text)
+                    .map(|c| ParamValue::Color(c.to_rgb()))
+                    .map_err(PyValueError::new_err);
+            }
+            let rgb: [f32; 3] = value
+                .extract()
+                .map_err(|_| wrong("a hex string like \"#ff8800\" or an (r, g, b) triple"))?;
+            Ok(ParamValue::Color(rgb))
+        }
         Some(ParamDecl::Choice { options, .. }) => {
             // By option text (case-insensitively) or by index.
             let idx = if let Ok(s) = value.extract::<String>() {
