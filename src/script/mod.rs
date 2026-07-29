@@ -126,6 +126,127 @@ pub struct ScriptMeta {
     pub flags: ScriptFlags,
 }
 
+/// A script's own documentation: the comment block at the top of the
+/// file, read as prose.
+///
+/// The same convention the variation definitions use — a doc block
+/// above the thing it describes, plain prose with optional `# Heading`
+/// sections. Read from the SOURCE rather than from a `description(...)`
+/// call, which means it costs authors nothing (every shipped script
+/// already opens with one), needs no new syntax, and still shows for a
+/// script that fails to compile — exactly when a reader most wants to
+/// know what it was meant to do.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ScriptDoc {
+    /// The title line these blocks conventionally open with, if there
+    /// is one. Dropped from the prose rather than shown: it repeats the
+    /// script's name, which the picker is already displaying.
+    pub title: String,
+    /// The first real paragraph — a line or two of orientation, worth
+    /// showing without being asked for.
+    pub summary: String,
+    /// Everything after it. Often long: `lsystem.rhai` carries a symbol
+    /// table and a list of rules to try, so the panel keeps this behind
+    /// a disclosure.
+    pub body: String,
+}
+
+impl ScriptDoc {
+    pub fn is_empty(&self) -> bool {
+        self.summary.is_empty() && self.body.is_empty()
+    }
+}
+
+/// Whether a body line reads as a section heading.
+///
+/// Two conventions, both already in use: `# Heading`, as the variation
+/// doc blocks are written, and a bare capitalised line like
+/// `HOW IT WORKS`, which is what the shipped scripts actually use.
+/// Indented lines are never headings — that is table content.
+pub fn doc_line_is_heading(line: &str) -> bool {
+    if line.starts_with("# ") {
+        return true;
+    }
+    if line.starts_with(char::is_whitespace) || line.trim().len() < 3 {
+        return false;
+    }
+    // A heading may carry a parenthetical aside in ordinary case —
+    // `SYMBOLS  (Prusinkiewicz & Lindenmayer, ...)` — so judge the part
+    // before it.
+    let head = line.split('(').next().unwrap_or(line).trim();
+    let letters: Vec<char> = head.chars().filter(|c| c.is_alphabetic()).collect();
+    letters.len() >= 3 && letters.iter().all(|c| c.is_uppercase())
+}
+
+/// Read the leading comment block of a script as its documentation.
+///
+/// Takes the run of `//` lines at the top of the file, stopping at the
+/// first line of actual code, so a comment sitting *inside* the script
+/// is never mistaken for its description.
+pub fn parse_doc(source: &str) -> ScriptDoc {
+    let mut lines: Vec<String> = Vec::new();
+    for raw in source.lines() {
+        let trimmed = raw.trim_start();
+        if trimmed.is_empty() {
+            // A blank line before any comment is just leading space; one
+            // between comment lines is a paragraph break.
+            if !lines.is_empty() {
+                lines.push(String::new());
+            }
+            continue;
+        }
+        let Some(rest) = trimmed.strip_prefix("//") else {
+            break; // First real statement — the header is over.
+        };
+        // Accept `///` too, so a block pasted from Rust reads the same.
+        let rest = rest.strip_prefix('/').unwrap_or(rest);
+        lines.push(rest.strip_prefix(' ').unwrap_or(rest).trim_end().to_string());
+    }
+
+    while lines.first().is_some_and(|l| l.is_empty()) {
+        lines.remove(0);
+    }
+    while lines.last().is_some_and(|l| l.is_empty()) {
+        lines.pop();
+    }
+
+    // Split into paragraphs, so a leading title line can be recognised.
+    let para_end = |from: usize| -> usize {
+        lines[from..]
+            .iter()
+            .position(|l| l.is_empty())
+            .map(|i| from + i)
+            .unwrap_or(lines.len())
+    };
+
+    let mut at = 0;
+    let first_end = para_end(at);
+
+    // These blocks open with the script's name on its own line. Showing
+    // that as the description would just repeat the picker's label, so
+    // take it as a title and let the NEXT paragraph be the summary. The
+    // tell is a lone line with no sentence-ending punctuation.
+    let mut title = String::new();
+    if first_end == at + 1 && first_end < lines.len() {
+        let candidate = &lines[at];
+        if !candidate.ends_with(['.', '!', '?', ':', ',']) && !doc_line_is_heading(candidate) {
+            title = candidate.clone();
+            at = first_end + 1;
+        }
+    }
+
+    let summary_end = para_end(at);
+    let summary = lines[at..summary_end].join(" ").trim().to_string();
+    let body = lines
+        .get(summary_end + 1..)
+        .unwrap_or(&[])
+        .join("\n")
+        .trim_end()
+        .to_string();
+
+    ScriptDoc { title, summary, body }
+}
+
 /// Optional switches a script may declare, as
 /// `script("Turntable", "modifier", ["norng"])`.
 ///

@@ -128,6 +128,38 @@ Param values are shown as the standard slider set (reusing
 `VkbSlider`/param-UI conventions) above the Run button, with the seed
 field and Reroll.
 
+### Script descriptions
+
+The panel shows each script's own header comment as its description —
+the summary always visible, the rest behind a disclosure.
+
+Read from the SOURCE rather than from a `description(...)` call. That
+costs authors nothing (all eight shipped scripts already open with such
+a block), needs no new syntax, and still shows for a script that fails
+to compile — exactly when a reader most wants to know what it was meant
+to do. It follows the convention the variation definitions already use:
+a doc block above the thing it describes. (Worth noting the variation
+blocks are Rust doc comments read only in the source; `VariationDef` has
+no description field, so there was no extraction machinery to reuse —
+only the convention.)
+
+Three details came from looking at what the shipped scripts actually
+contain, not from guessing:
+
+* They open with a **title line** — the script's name. Taken as a title
+  and dropped, because showing it would just repeat the picker's label.
+  The first version used it as the summary, which made the feature
+  useless: every description read "Turntable", "L-System Curve", …
+  while the real prose stayed hidden. The test only asserted the summary
+  was non-empty, so it passed.
+* Sections are **ALL-CAPS lines** (`HOW IT WORKS`, `SOME TO TRY`), not
+  `# Heading`. Both are accepted, and a heading may carry a lower-case
+  parenthetical aside.
+* Indented lines are **tables** — the L-system symbol list — so they
+  render monospace and unjoined, while prose lines are joined into
+  paragraphs and left for egui to wrap at the panel's real width rather
+  than frozen at the source's 72 columns.
+
 ### Script flags
 
 `script(...)` takes an optional third argument, a list of switches:

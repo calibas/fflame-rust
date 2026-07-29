@@ -291,6 +291,68 @@ impl ScriptsPanel {
                 );
             }
         }
+
+        self.render_doc(ui);
+    }
+
+    /// The script's own header comment, as its description.
+    ///
+    /// The summary is always visible — for this audience a script whose
+    /// purpose you can only learn by opening the editor may as well not
+    /// be there. The rest goes behind a disclosure because it is often
+    /// long: `lsystem.rhai` carries a symbol table and a list of rules
+    /// to try, which is exactly the reference someone wants while using
+    /// it and exactly the wall of text nobody wants above the controls.
+    fn render_doc(&self, ui: &mut egui::Ui) {
+        let doc = crate::script::parse_doc(&self.text);
+        if doc.is_empty() {
+            return;
+        }
+        if !doc.summary.is_empty() {
+            ui.label(&doc.summary);
+        }
+        if doc.body.is_empty() {
+            return;
+        }
+        // Keyed by script, so opening the details for one doesn't leave
+        // the next one expanded.
+        egui::CollapsingHeader::new("About this script")
+            .id_salt(("script_doc", self.selected))
+            .default_open(false)
+            .show(ui, |ui| {
+                // Prose is hard-wrapped in the source at about 72
+                // columns. Rendering each source line as its own label
+                // would freeze that width, so consecutive prose lines
+                // are joined into a paragraph and left for egui to wrap
+                // at whatever width the panel actually has.
+                let mut para: Vec<&str> = Vec::new();
+                let mut flush = |ui: &mut egui::Ui, para: &mut Vec<&str>| {
+                    if !para.is_empty() {
+                        ui.label(egui::RichText::new(para.join(" ")).weak());
+                        para.clear();
+                    }
+                };
+                for line in doc.body.lines() {
+                    if line.is_empty() {
+                        flush(ui, &mut para);
+                        ui.add_space(4.0);
+                    } else if crate::script::doc_line_is_heading(line) {
+                        flush(ui, &mut para);
+                        ui.add_space(4.0);
+                        let text = line.strip_prefix("# ").unwrap_or(line);
+                        ui.label(egui::RichText::new(text).strong());
+                    } else if line.starts_with(char::is_whitespace) {
+                        // Indented lines are tables — the L-system symbol
+                        // list, the rules to try. Joining or proportional
+                        // text would throw their columns out of alignment.
+                        flush(ui, &mut para);
+                        ui.label(egui::RichText::new(line).weak().monospace());
+                    } else {
+                        para.push(line);
+                    }
+                }
+                flush(ui, &mut para);
+            });
     }
 
     fn render_params(&mut self, ui: &mut egui::Ui) {
