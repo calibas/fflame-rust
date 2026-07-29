@@ -287,30 +287,6 @@ impl ScriptsPanel {
                 self.reload(current);
             }
 
-            // Deletable only when the selected script is a copy in the
-            // user folder. A shipped starter has no delete: editing one
-            // saves a user copy that shadows it, and deleting THAT copy
-            // is how you get the original back.
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                let target = self.entries.get(self.selected).and_then(|e| match &e.origin {
-                    ScriptOrigin::File(path) if library::is_user_script(path) => {
-                        Some((e.display_name.clone(), path.clone()))
-                    }
-                    _ => None,
-                });
-                let hint = match &target {
-                    Some((name, path)) => format!("Delete “{name}” from {}", path.display()),
-                    None => "Only your own scripts can be deleted — the shipped ones are read-only".to_string(),
-                };
-                if ui
-                    .add_enabled(target.is_some(), egui::Button::new("🗑"))
-                    .on_hover_text(hint)
-                    .clicked()
-                {
-                    self.pending_delete = target;
-                }
-            }
         });
 
         #[cfg(not(target_arch = "wasm32"))]
@@ -328,6 +304,139 @@ impl ScriptsPanel {
         }
 
         self.render_doc(ui);
+    }
+
+    /// Save / Revert / Open / Save As / Delete — everything that acts on
+    /// the script file rather than on its text.
+    fn render_file_actions(&mut self, ui: &mut egui::Ui) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if ui
+            .button("Save")
+            .on_hover_text("Save to your scripts folder (shipped scripts are never overwritten)")
+            .clicked()
+        {
+            match library::save_user_script(&self.script_name(), &self.text) {
+                Ok(path) => {
+                    self.status = Some(format!("Saved to {}", path.display()));
+                }
+                Err(e) => self.status = Some(format!("Save failed: {e}")),
+            }
+        }
+
+        if ui
+            .button("Revert")
+            .on_hover_text("Discard edits and reload the script")
+            .clicked()
+        {
+            self.load_selected();
+        }
+
+        // Open / Save As take the same file-dialog route the
+        // Animation panel uses for .anim: rfd on desktop, the
+        // browser picker and a download on the web.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if ui
+                .button("Open…")
+                .on_hover_text("Open a .rhai script from anywhere on disk")
+                .clicked()
+            {
+                let picked = rfd::FileDialog::new()
+                    .add_filter("Flame script", &["rhai"])
+                    .pick_file();
+                if let Some(path) = picked {
+                    match std::fs::read_to_string(&path) {
+                        Ok(text) => {
+                            let name = path
+                                .file_stem()
+                                .map(|s| s.to_string_lossy().into_owned())
+                                .unwrap_or_else(|| "Opened".to_string());
+                            self.adopt_opened(name, text, ScriptOrigin::File(path));
+                        }
+                        Err(e) => self.status = Some(format!("Open failed: {e}")),
+                    }
+                }
+            }
+
+            if ui
+                .button("Save As…")
+                .on_hover_text("Write this script to a .rhai file anywhere on disk")
+                .clicked()
+            {
+                let picked = rfd::FileDialog::new()
+                    .add_filter("Flame script", &["rhai"])
+                    .set_file_name(format!("{}.rhai", self.script_name()))
+                    .save_file();
+                if let Some(path) = picked {
+                    self.status = Some(match std::fs::write(&path, &self.text) {
+                        Ok(()) => format!("Saved to {}", path.display()),
+                        Err(e) => format!("Save failed: {e}"),
+                    });
+                }
+            }
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            if ui.button("Open…").on_hover_text("Open a .rhai script").clicked() {
+                crate::app::trigger_browser_file_picker(
+                    ".rhai",
+                    ui.ctx().clone(),
+                    PENDING_SCRIPT_LOAD,
+                );
+            }
+            if ui.button("Save As…").on_hover_text("Download this script").clicked() {
+                let name = format!(
+                    "{}.rhai",
+                    self.script_name().to_lowercase().replace(' ', "_")
+                );
+                self.status = Some(
+                    match crate::app::trigger_browser_download(
+                        self.text.as_bytes(),
+                        &name,
+                        "text/plain",
+                    ) {
+                        Ok(()) => format!("Downloaded {name}"),
+                        Err(e) => format!("Download failed: {e}"),
+                    },
+                );
+            }
+        }
+
+        // Delete sits with the other file actions: it acts on
+        // the same script the rest of this row does. Enabled only
+        // for a copy in the user folder — editing a shipped
+        // starter saves a user copy that shadows it, and deleting
+        // THAT copy is how the original comes back.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            use egui::Color32;
+
+            let target = self.entries.get(self.selected).and_then(|e| match &e.origin {
+                ScriptOrigin::File(path) if library::is_user_script(path) => {
+                    Some((e.display_name.clone(), path.clone()))
+                }
+                _ => None,
+            });
+            let hint = match &target {
+                Some((name, path)) => format!("Delete “{name}” from {}", path.display()),
+                None => "Only your own scripts can be deleted — the shipped ones are read-only".to_string(),
+            };
+            if ui
+                .add_enabled(target.is_some(), egui::Button::new(egui::RichText::new("🗑").color(Color32::LIGHT_RED)))
+                .on_hover_text(hint)
+                .clicked()
+            {
+                self.pending_delete = target;
+            }
+        }
+
+        if matches!(
+            self.entries.get(self.selected).map(|e| &e.origin),
+            Some(ScriptOrigin::Builtin)
+        ) {
+            ui.label(egui::RichText::new("built-in").weak());
+        }
     }
 
     /// Ask before deleting: there is no undo for a removed file.
@@ -673,6 +782,14 @@ impl ScriptsPanel {
             .default_open(self.show_editor)
             .show(ui, |ui| {
                 self.show_editor = true;
+
+                // File actions sit above the editor: they act on the
+                // script as a whole, and a row buried under sixteen rows
+                // of code is a row you have to go looking for.
+                ui.horizontal(|ui| {
+                    self.render_file_actions(ui);
+                });
+
                 let editor = ui.add(
                     egui::TextEdit::multiline(&mut self.text)
                         // A stable id: without one the editor's id comes from
@@ -695,108 +812,6 @@ impl ScriptsPanel {
                     editor.request_focus();
                 }
 
-                ui.horizontal(|ui| {
-                    #[cfg(not(target_arch = "wasm32"))]
-                    if ui
-                        .button("Save")
-                        .on_hover_text("Save to your scripts folder (shipped scripts are never overwritten)")
-                        .clicked()
-                    {
-                        match library::save_user_script(&self.script_name(), &self.text) {
-                            Ok(path) => {
-                                self.status = Some(format!("Saved to {}", path.display()));
-                            }
-                            Err(e) => self.status = Some(format!("Save failed: {e}")),
-                        }
-                    }
-
-                    if ui
-                        .button("Revert")
-                        .on_hover_text("Discard edits and reload the script")
-                        .clicked()
-                    {
-                        self.load_selected();
-                    }
-
-                    // Open / Save As take the same file-dialog route the
-                    // Animation panel uses for .anim: rfd on desktop, the
-                    // browser picker and a download on the web.
-                    #[cfg(not(target_arch = "wasm32"))]
-                    {
-                        if ui
-                            .button("Open…")
-                            .on_hover_text("Open a .rhai script from anywhere on disk")
-                            .clicked()
-                        {
-                            let picked = rfd::FileDialog::new()
-                                .add_filter("Flame script", &["rhai"])
-                                .pick_file();
-                            if let Some(path) = picked {
-                                match std::fs::read_to_string(&path) {
-                                    Ok(text) => {
-                                        let name = path
-                                            .file_stem()
-                                            .map(|s| s.to_string_lossy().into_owned())
-                                            .unwrap_or_else(|| "Opened".to_string());
-                                        self.adopt_opened(name, text, ScriptOrigin::File(path));
-                                    }
-                                    Err(e) => self.status = Some(format!("Open failed: {e}")),
-                                }
-                            }
-                        }
-
-                        if ui
-                            .button("Save As…")
-                            .on_hover_text("Write this script to a .rhai file anywhere on disk")
-                            .clicked()
-                        {
-                            let picked = rfd::FileDialog::new()
-                                .add_filter("Flame script", &["rhai"])
-                                .set_file_name(format!("{}.rhai", self.script_name()))
-                                .save_file();
-                            if let Some(path) = picked {
-                                self.status = Some(match std::fs::write(&path, &self.text) {
-                                    Ok(()) => format!("Saved to {}", path.display()),
-                                    Err(e) => format!("Save failed: {e}"),
-                                });
-                            }
-                        }
-                    }
-
-                    #[cfg(target_arch = "wasm32")]
-                    {
-                        if ui.button("Open…").on_hover_text("Open a .rhai script").clicked() {
-                            crate::app::trigger_browser_file_picker(
-                                ".rhai",
-                                ui.ctx().clone(),
-                                PENDING_SCRIPT_LOAD,
-                            );
-                        }
-                        if ui.button("Save As…").on_hover_text("Download this script").clicked() {
-                            let name = format!(
-                                "{}.rhai",
-                                self.script_name().to_lowercase().replace(' ', "_")
-                            );
-                            self.status = Some(
-                                match crate::app::trigger_browser_download(
-                                    self.text.as_bytes(),
-                                    &name,
-                                    "text/plain",
-                                ) {
-                                    Ok(()) => format!("Downloaded {name}"),
-                                    Err(e) => format!("Download failed: {e}"),
-                                },
-                            );
-                        }
-                    }
-
-                    if matches!(
-                        self.entries.get(self.selected).map(|e| &e.origin),
-                        Some(ScriptOrigin::Builtin)
-                    ) {
-                        ui.label(egui::RichText::new("built-in").weak());
-                    }
-                });
             });
 
         // The header is clicked one frame before its body first lays out, so
