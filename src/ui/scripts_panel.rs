@@ -52,6 +52,11 @@ pub struct ScriptsPanel {
     editor_was_open: bool,
     /// One-shot: focus the editor on the next frame that draws it.
     focus_editor: bool,
+    /// The user script awaiting a delete confirmation, if any. Deleting
+    /// is irreversible and there is no undo for the filesystem, so it
+    /// takes a second click — the same shape the Palette Editor uses.
+    #[cfg(not(target_arch = "wasm32"))]
+    pending_delete: Option<(String, std::path::PathBuf)>,
     error: Option<ScriptError>,
     messages: Vec<String>,
     warnings: Vec<String>,
@@ -76,6 +81,8 @@ impl Default for ScriptsPanel {
             show_editor: false,
             editor_was_open: false,
             focus_editor: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            pending_delete: None,
             error: None,
             messages: Vec::new(),
             warnings: Vec::new(),
@@ -279,7 +286,35 @@ impl ScriptsPanel {
             if ui.button("⟳").on_hover_text("Re-scan the script folders").clicked() {
                 self.reload(current);
             }
+
+            // Deletable only when the selected script is a copy in the
+            // user folder. A shipped starter has no delete: editing one
+            // saves a user copy that shadows it, and deleting THAT copy
+            // is how you get the original back.
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let target = self.entries.get(self.selected).and_then(|e| match &e.origin {
+                    ScriptOrigin::File(path) if library::is_user_script(path) => {
+                        Some((e.display_name.clone(), path.clone()))
+                    }
+                    _ => None,
+                });
+                let hint = match &target {
+                    Some((name, path)) => format!("Delete “{name}” from {}", path.display()),
+                    None => "Only your own scripts can be deleted — the shipped ones are read-only".to_string(),
+                };
+                if ui
+                    .add_enabled(target.is_some(), egui::Button::new("🗑"))
+                    .on_hover_text(hint)
+                    .clicked()
+                {
+                    self.pending_delete = target;
+                }
+            }
         });
+
+        #[cfg(not(target_arch = "wasm32"))]
+        self.render_delete_confirmation(ui, current);
 
         match self.declared_kind() {
             ScriptKind::Generator => {
@@ -293,6 +328,44 @@ impl ScriptsPanel {
         }
 
         self.render_doc(ui);
+    }
+
+    /// Ask before deleting: there is no undo for a removed file.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn render_delete_confirmation(&mut self, ui: &mut egui::Ui, current: &FractalConfig) {
+        let Some((name, path)) = self.pending_delete.clone() else {
+            return;
+        };
+        let mut close = false;
+        egui::Window::new("Delete script")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ui.ctx(), |ui| {
+                ui.label(format!("Delete “{name}”?"));
+                // Name the file: two scripts can share a display name,
+                // and this is the thing that actually disappears.
+                ui.label(egui::RichText::new(path.display().to_string()).weak().monospace());
+                ui.separator();
+                ui.horizontal(|ui| {
+                    if ui.button("Delete").clicked() {
+                        self.status = Some(match library::delete_user_script(&path) {
+                            Ok(()) => format!("Deleted {}", path.display()),
+                            Err(e) => e,
+                        });
+                        // Re-scan: a deleted user copy may reveal the
+                        // shipped script it was shadowing.
+                        self.reload(current);
+                        close = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        close = true;
+                    }
+                });
+            });
+        if close {
+            self.pending_delete = None;
+        }
     }
 
     /// The script's own header comment, as its description.

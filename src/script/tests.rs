@@ -1841,3 +1841,48 @@ fn show_shipped_docs() {
         }
     }
 }
+
+// ============================================================================
+// Deleting user scripts
+// ============================================================================
+
+/// The safety property: only files in the user folder may be deleted.
+///
+/// `discover` hands `ScriptOrigin::File` to the shipped
+/// `assets/scripts/` files as well as to the user's copies, so origin
+/// alone does not say who owns a script. Without this guard a Delete
+/// button would remove the starters that ship with the app.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn only_user_scripts_can_be_deleted() {
+    use super::library::{delete_user_script, is_user_script, user_script_dir};
+
+    // A shipped script is never deletable, whatever the button thinks.
+    let shipped = std::path::Path::new("assets/scripts/generators/basic_random.rhai");
+    if shipped.exists() {
+        assert!(!is_user_script(shipped), "a shipped starter must not look like a user script");
+        let err = delete_user_script(shipped).expect_err("refused");
+        assert!(err.contains("not in your scripts folder"), "{err}");
+        assert!(shipped.exists(), "the shipped script must still be there");
+    }
+
+    // Neither is anything else on disk.
+    let outside = std::env::temp_dir().join("fflame_not_a_user_script.rhai");
+    std::fs::write(&outside, "// scratch\n").unwrap();
+    assert!(!is_user_script(&outside));
+    assert!(delete_user_script(&outside).is_err());
+    assert!(outside.exists(), "refusing to delete must not delete");
+    let _ = std::fs::remove_file(&outside);
+
+    // A real user script is deletable, so the guard isn't just "no".
+    if let Some(dir) = user_script_dir() {
+        if std::fs::create_dir_all(&dir).is_ok() {
+            let path = dir.join("__delete_me_test.rhai");
+            if std::fs::write(&path, "// temp\nscript(\"T\", \"generator\");\n").is_ok() {
+                assert!(is_user_script(&path), "a file in the user folder is the user's");
+                assert!(delete_user_script(&path).is_ok());
+                assert!(!path.exists(), "it should actually be gone");
+            }
+        }
+    }
+}
