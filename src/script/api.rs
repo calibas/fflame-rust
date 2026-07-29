@@ -78,6 +78,17 @@ pub struct ConfigHandle {
     cfg: Rc<RefCell<FractalConfig>>,
 }
 
+use crate::animation::EasingFunction;
+
+/// The optional animation a script may define alongside its flame.
+///
+/// Holds the script state rather than a config: keyframes describe how a
+/// parameter moves over time, which is not part of the flame itself.
+#[derive(Clone)]
+pub struct AnimHandle {
+    state: Rc<RefCell<ScriptState>>,
+}
+
 /// Points at a transform by pool + index rather than borrowing it, so a
 /// handle stays valid across other script operations. Every access is
 /// bounds-checked: a handle to a removed transform errors with a
@@ -90,6 +101,15 @@ pub struct TransformHandle {
 }
 
 impl TransformHandle {
+    /// The pool-aware reference `ConfigPath` construction needs.
+    fn xref(&self) -> crate::config::TransformRef {
+        match self.pool {
+            Pool::Normal => crate::config::TransformRef::Normal(self.idx),
+            Pool::Linked => crate::config::TransformRef::Linked(self.idx),
+            Pool::Final => crate::config::TransformRef::Final(self.idx),
+        }
+    }
+
     fn with<R>(&self, f: impl FnOnce(&mut Transform) -> R) -> Result<R, Box<EvalAltResult>> {
         let mut cfg = self.cfg.borrow_mut();
         let list = match self.pool {
@@ -109,6 +129,134 @@ impl TransformHandle {
 }
 
 // ============================================================================
+// Animation
+// ============================================================================
+
+/// `anim` — declare how the flame's parameters move over time.
+///
+/// Entirely optional: a script that never mentions `anim` produces no
+/// animation, and every existing script is unaffected.
+///
+/// ```ignore
+/// anim.name = "Spin";
+/// anim.duration = 10.0;                  // optional; defaults to the last key
+/// anim.key("rotation", 0.0, 0.0);        // same names config.set takes
+/// anim.key("rotation", 10.0, 360.0);
+/// anim.smooth("rotation");               // interpolation for the whole track
+///
+/// t.key("weight", 0.0, 0.2);             // per-transform, on the handle
+/// t.key("julian.power", 0.0, 2.0);       // variation parameters too
+/// ```
+fn register_anim(engine: &mut Engine, state: Rc<RefCell<ScriptState>>) {
+    engine.register_get("name", |a: &mut AnimHandle| {
+        a.state.borrow().anim.name.clone().unwrap_or_default()
+    });
+    engine.register_set("name", |a: &mut AnimHandle, value: &str| {
+        let mut s = a.state.borrow_mut();
+        s.anim.touched = true;
+        s.anim.name = Some(value.to_string());
+    });
+
+    engine.register_get("duration", |a: &mut AnimHandle| {
+        a.state.borrow().anim.duration.unwrap_or(0.0)
+    });
+    engine.register_set("duration", |a: &mut AnimHandle, value: Dynamic| {
+        // Whole numbers are the common case here ("10 seconds"), and Rhai
+        // hands those over as INT.
+        let seconds = num(&value, "anim.duration").unwrap_or(0.0);
+        let mut s = a.state.borrow_mut();
+        s.anim.touched = true;
+        s.anim.duration = Some(seconds);
+    });
+
+    engine.register_fn(
+        "key",
+        |a: &mut AnimHandle, target: &str, time: Dynamic, value: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            anim_key(a, target, time, value, EasingFunction::Linear)
+        },
+    );
+    engine.register_fn(
+        "key",
+        |a: &mut AnimHandle,
+         target: &str,
+         time: Dynamic,
+         value: Dynamic,
+         easing: &str|
+         -> Result<(), Box<EvalAltResult>> {
+            let easing = super::anim::parse_easing(easing).map_err(err)?;
+            anim_key(a, target, time, value, easing)
+        },
+    );
+
+    engine.register_fn(
+        "interpolation",
+        |a: &mut AnimHandle, target: &str, mode: &str| -> Result<(), Box<EvalAltResult>> {
+            let mode = super::anim::parse_interpolation(mode).map_err(err)?;
+            let target = super::anim::resolve_flame_target(target).map_err(err)?;
+            a.state.borrow_mut().anim.set_interpolation(target, mode);
+            Ok(())
+        },
+    );
+
+    // Per-transform keyframes live on the transform handle, which already
+    // knows its pool and index — the same handle the script used to build
+    // the transform in the first place.
+    let st = Rc::clone(&state);
+    engine.register_fn(
+        "key",
+        move |t: &mut TransformHandle, target: &str, time: Dynamic, value: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            transform_key(t, &st, target, time, value, EasingFunction::Linear)
+        },
+    );
+    let st = Rc::clone(&state);
+    engine.register_fn(
+        "key",
+        move |t: &mut TransformHandle,
+              target: &str,
+              time: Dynamic,
+              value: Dynamic,
+              easing: &str|
+              -> Result<(), Box<EvalAltResult>> {
+            let easing = super::anim::parse_easing(easing).map_err(err)?;
+            transform_key(t, &st, target, time, value, easing)
+        },
+    );
+}
+
+fn anim_key(
+    a: &mut AnimHandle,
+    target: &str,
+    time: Dynamic,
+    value: Dynamic,
+    easing: EasingFunction,
+) -> Result<(), Box<EvalAltResult>> {
+    let time = num(&time, "keyframe time")?;
+    let target = super::anim::resolve_flame_target(target).map_err(err)?;
+    let value = dynamic_to_json(&value)?;
+    a.state.borrow_mut().anim.add_key(target, time, value, easing);
+    Ok(())
+}
+
+fn transform_key(
+    t: &mut TransformHandle,
+    state: &Rc<RefCell<ScriptState>>,
+    target: &str,
+    time: Dynamic,
+    value: Dynamic,
+    easing: EasingFunction,
+) -> Result<(), Box<EvalAltResult>> {
+    let time = num(&time, "keyframe time")?;
+    // Bounds-check the handle first: keyframing a transform that has been
+    // removed should report that, not silently animate whatever index the
+    // handle used to point at.
+    t.with(|_| ())?;
+    let target = super::anim::resolve_transform_target(t.xref(), target).map_err(err)?;
+    let value = dynamic_to_json(&value)?;
+    state.borrow_mut().anim.add_key(target, time, value, easing);
+    Ok(())
+}
+
+// ============================================================================
 // Registration
 // ============================================================================
 
@@ -118,9 +266,14 @@ impl TransformHandle {
 /// indexer assignment on a constant, so `config["gamma"] = 2.2` and
 /// `flame.name = "x"` would fail. Rebinding them only breaks the script's
 /// own run.
-pub(crate) fn push_globals(scope: &mut Scope, cfg: Rc<RefCell<FractalConfig>>) {
+pub(crate) fn push_globals(
+    scope: &mut Scope,
+    cfg: Rc<RefCell<FractalConfig>>,
+    state: Rc<RefCell<ScriptState>>,
+) {
     scope.push("flame", FlameHandle { cfg: Rc::clone(&cfg) });
     scope.push("config", ConfigHandle { cfg });
+    scope.push("anim", AnimHandle { state });
 }
 
 pub(crate) fn register(
@@ -131,6 +284,8 @@ pub(crate) fn register(
     engine.register_type_with_name::<FlameHandle>("Flame");
     engine.register_type_with_name::<TransformHandle>("Transform");
     engine.register_type_with_name::<ConfigHandle>("Config");
+    engine.register_type_with_name::<AnimHandle>("Anim");
+    register_anim(engine, Rc::clone(&state));
 
     register_meta(engine, Rc::clone(&state));
     register_rng(engine, Rc::clone(&state));

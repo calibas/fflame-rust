@@ -392,11 +392,81 @@ impl Config {
     }
 }
 
+/// An animation a script defined: a duration and a set of parameter
+/// tracks. Opaque here — save it and open it in the app.
+#[pyclass(module = "pyfflame")]
+#[derive(Clone)]
+pub struct Animation {
+    inner: fractal_flame_wgpu::animation::Animation,
+}
+
+#[pymethods]
+impl Animation {
+    /// Total length in seconds.
+    #[getter]
+    fn duration(&self) -> f64 {
+        self.inner.duration
+    }
+
+    #[getter]
+    fn name(&self) -> String {
+        self.inner.name.clone()
+    }
+
+    /// The `ConfigPath` key each track animates, e.g. `"Zoom"` or
+    /// `"Transform.0.VariationParam.julian.power"`.
+    #[getter]
+    fn targets(&self) -> Vec<String> {
+        self.inner.tracks.iter().map(|t| t.target.clone()).collect()
+    }
+
+    /// The flame the animation was built alongside, carried inside it so
+    /// the `.anim` stands alone.
+    #[getter]
+    fn config(&self) -> Option<Config> {
+        self.inner.base_config.clone().map(Config::wrap)
+    }
+
+    fn to_json(&self) -> PyResult<String> {
+        self.inner
+            .to_json()
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    /// Write a `.anim` file.
+    fn save(&self, path: PathBuf) -> PyResult<()> {
+        let json = self.to_json()?;
+        std::fs::write(&path, json)
+            .map_err(|e| PyIOError::new_err(format!("{}: {e}", path.display())))
+    }
+
+    #[staticmethod]
+    fn load(path: PathBuf) -> PyResult<Self> {
+        let text = std::fs::read_to_string(&path)
+            .map_err(|e| PyIOError::new_err(format!("{}: {e}", path.display())))?;
+        fractal_flame_wgpu::animation::Animation::from_json(&text)
+            .map(|inner| Self { inner })
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "<pyfflame.Animation {:?} {:.3}s {} track(s)>",
+            self.inner.name,
+            self.inner.duration,
+            self.inner.tracks.len()
+        )
+    }
+}
+
 /// What a script produced: the flame, plus whatever it printed.
 #[pyclass(module = "pyfflame")]
 pub struct ScriptResult {
     #[pyo3(get)]
     config: Config,
+    /// The animation the script defined, or `None` if it defined none.
+    #[pyo3(get)]
+    animation: Option<Animation>,
     /// `print()` output, in order.
     #[pyo3(get)]
     messages: Vec<String>,
@@ -522,6 +592,7 @@ fn run_script(
     match host.run(source, &base, seed, supplied) {
         Ok(outcome) => Ok(ScriptResult {
             config: Config::wrap(outcome.config),
+            animation: outcome.animation.map(|inner| Animation { inner }),
             messages: outcome.messages,
             warnings: outcome.warnings,
         }),
@@ -550,6 +621,7 @@ fn variation_params(name: &str) -> PyResult<Vec<String>> {
 fn pyfflame(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Config>()?;
     m.add_class::<ScriptResult>()?;
+    m.add_class::<Animation>()?;
     m.add_function(wrap_pyfunction!(run_script, m)?)?;
     m.add_function(wrap_pyfunction!(variations, m)?)?;
     m.add_function(wrap_pyfunction!(variation_params, m)?)?;

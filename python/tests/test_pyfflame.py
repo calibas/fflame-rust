@@ -166,6 +166,51 @@ def test_script_errors_carry_a_line_number():
         raise AssertionError("expected ValueError")
 
 
+ANIMATED = """
+script("Anim", "generator");
+let t = flame.add_transform();
+t.add_variation("julian", 1.0);
+t.set_variation_param("julian.power", 2.0);
+t.weight = 1.0;
+anim.name = "Spin";
+anim.duration = 8;
+anim.key("rotation", 0.0, 0.0);
+anim.key("rotation", 8.0, 360.0);
+t.key("julian.power", 0.0, 2.0);
+t.key("julian.power", 8.0, 6.0);
+"""
+
+
+def test_scripts_can_define_an_animation():
+    r = ff.run_script(ANIMATED, seed=1)
+    a = r.animation
+    assert a is not None
+    assert a.name == "Spin"
+    assert a.duration == 8.0
+    assert a.targets == ["Rotation", "Transform.0.VariationParam.julian.power"]
+    # Self-contained: the .anim carries the flame it belongs to.
+    assert a.config is not None
+    assert a.config.transform_count == 1
+
+
+def test_animation_is_opt_in():
+    """Every script written before animation existed must keep producing
+    none — an empty animation would quietly replace the user's timeline."""
+    r = ff.run_script(_script("basic_random.rhai"), seed=1)
+    assert r.animation is None
+
+
+def test_anim_round_trip():
+    a = ff.run_script(ANIMATED, seed=1).animation
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "t.anim")
+        a.save(path)
+        back = ff.Animation.load(path)
+    assert back.name == a.name
+    assert back.duration == a.duration
+    assert back.targets == a.targets
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in sorted(globals().items()):

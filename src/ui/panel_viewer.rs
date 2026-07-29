@@ -330,6 +330,7 @@ pub struct PanelContext<'a> {
     pub generated_batch: &'a mut Option<Vec<crate::config::FractalConfig>>,
     pub scripts_panel: &'a mut Option<super::scripts_panel::ScriptsPanel>,
     pub script_generated: &'a mut Option<crate::config::FractalConfig>,
+    pub script_animation: &'a mut Option<crate::animation::Animation>,
 
     // Fractal browser panel state (unified presets/batch/files)
     pub fractal_browser_panel: &'a mut Option<super::fractal_browser::FractalBrowserPanel>,
@@ -1575,6 +1576,9 @@ impl<'a> PanelViewer<'a> {
             let response = panel.render(ui, &current, palettes);
             if let Some(config) = response.generated {
                 *self.context.script_generated = Some(config);
+            }
+            if let Some(animation) = response.animation {
+                *self.context.script_animation = Some(animation);
             }
             if let Some(batch) = response.batch {
                 *self.context.generated_batch = Some(batch);

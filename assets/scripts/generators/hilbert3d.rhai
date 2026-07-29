@@ -73,8 +73,12 @@ if output == "Path (finite depth)" {
 config.set("render_mode", "3d");
 config.set("preserve_z", true);
 config.set("perspective_strength", 0.15);
-config.set("camera_rotation_x", 35.0);
-config.set("camera_rotation_y", -30.0);
+// Camera angles are stored in RADIANS — the View panel converts them
+// for display. Writing 35.0 here would be 35 radians, about 2005
+// degrees, which lands on an arbitrary angle after wrapping.
+let deg = PI() / 180.0;
+config.set("camera_rotation_x", 35.0 * deg);
+config.set("camera_rotation_y", -30.0 * deg);
 // Path mode moves the geometry onto the origin (above), so the view
 // needs no pan. The attractor build has no such offset — its eight maps
 // tile the unit cube where it stands — so that one pans instead.

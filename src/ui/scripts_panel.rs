@@ -23,6 +23,10 @@ pub struct ScriptsResponse {
     pub generated: Option<FractalConfig>,
     /// A set of flames to open in the Fractal Browser.
     pub batch: Option<Vec<FractalConfig>>,
+    /// An animation the script defined, if it defined one. Loaded
+    /// alongside the flame so running the script leaves the timeline
+    /// ready to play.
+    pub animation: Option<crate::animation::Animation>,
 }
 
 pub struct ScriptsPanel {
@@ -408,6 +412,14 @@ impl ScriptsPanel {
                     self.seed,
                     outcome.config.flame.transforms.len()
                 ));
+                if let Some(animation) = &outcome.animation {
+                    self.messages.push(format!(
+                        "animation: {:.3}s, {} track(s) — loaded into the timeline",
+                        animation.duration,
+                        animation.tracks.len()
+                    ));
+                }
+                response.animation = outcome.animation;
                 response.generated = Some(outcome.config);
             }
             Err(e) => {

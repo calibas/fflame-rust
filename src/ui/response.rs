@@ -131,6 +131,8 @@ pub struct UiResponse {
     // Config produced by a flame script (Scripts panel). Full config, not
     // just a flame: scripts may write any FractalConfig field.
     pub script_generated: Option<crate::config::FractalConfig>,
+    /// An animation the script defined alongside its flame.
+    pub script_animation: Option<crate::animation::Animation>,
 
     // Audio file load requested
     pub load_audio_file: bool,
@@ -242,6 +244,7 @@ impl Default for UiResponse {
             generated_flame: None,
             generated_batch: None,
             script_generated: None,
+            script_animation: None,
             load_audio_file: false,
             load_signal_file: false,
             save_signal_file: None,

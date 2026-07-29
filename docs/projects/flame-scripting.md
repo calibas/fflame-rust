@@ -505,15 +505,66 @@ Everything still outstanding on the Python side — ergonomics, the rest
 of the model surface, wheel CI, and the nice-to-haves — is specced in
 [pyfflame.md](pyfflame.md).
 
-**Phase 6 — Animation-track generation (wanted, unscheduled).** A
-script should be able to *optionally* define and add animation tracks —
-confirmed as a wanted feature, no urgency. The object model grows an
-`anim` handle (tracks/keyframes targeting the same parameter names a
-script already writes), scripts can emit `.anim`, and Python gets it
-through the same bindings. Deliberately late: the API is shaped so this
-is an extension, not a rework. The natural form is a script declaring
-what varies rather than baking values — e.g. a generator that also
-keyframes the `spiral` parameter it just set.
+**Phase 6 — Animation-track generation.** Done.
+
+A script may optionally describe how its flame MOVES, not just what it
+is. Entirely opt-in: a script that never mentions `anim` produces no
+animation, and every script written before this is byte-identically
+unaffected (pinned by a test over the whole shipped set).
+
+```rhai
+anim.name = "Spin";
+anim.duration = 8;                      // optional — defaults to the last key
+anim.key("rotation", 0.0, 0.0);         // the same names config.set takes
+anim.key("rotation", 8.0, 360.0);
+anim.key("zoom", 0.0, 1.0, "ease_in_out");
+anim.interpolation("zoom", "smooth");   // per-track curve
+
+t.key("weight", 0.0, 0.2);              // per-transform, on the handle
+t.key("julian.power", 0.0, 2.0);        // variation params too
+```
+
+**Targets are built as `ConfigPath` values and asked for their string
+key, never hand-formatted.** Tracks address parameters by
+`to_string_key()` strings that the loader parses back with
+`from_string_key`; emitting `"Transform.0.Weight"` by hand would be a
+second spelling of the same thing, free to drift from the parser. Going
+through the enum makes every target one the loader accepts by
+construction.
+
+**Two spellings, both accepted.** `config.set` addresses fields by their
+serde name (`camera_rotation_x`) while tracks use `ConfigPath` keys
+(`CameraRotationX`). Requiring authors to know both would be a trap, and
+the two differ only by case and separators — so a snake_case name is
+converted and retried. A name that resolves to neither is an error, not
+a dropped track: a track that silently does nothing is invisible in a
+rendered animation.
+
+The `.anim` carries the flame as its `base_config`, so it stands alone.
+`generate` writes one beside the `.fflame` when the script defined one;
+the Scripts panel loads it into the timeline (binding after the config,
+so tracks resolve against the flame they were written for); Python gets
+`result.animation` with `save`/`load`.
+
+**Angles are radians.** `rotation` and the `camera_*` angles are stored
+in radians; the View panel converts for display, so the number on the
+slider is not the number in the file. Three shipped scripts had been
+setting `camera_rotation_x` to `35.0` as though it were degrees — that
+is 35 radians, about 2005 degrees, landing on an arbitrary angle after
+wrapping. Fixed to `35.0 * PI() / 180.0`, and called out here because
+nothing in the type system distinguishes the two.
+
+Ships `turntable.rhai`, a modifier that adds a seamless looping spin to
+whatever flame is open — reading `render_mode` to orbit the camera in 3D
+or rotate the image in 2D, and starting from the current angle so the
+first frame is the picture you were already looking at.
+
+Verified through the app's own `AnimationController`: the tests load
+what a script produced and assert the values it evaluates at t=0, 4 and
+8, so a script's animation cannot be well-formed-but-unplayable.
+
+Not done: signal-driven tracks from scripts (`TrackSource::Signal`), and
+generators. Both are additive — the object model already has room.
 
 **Phase 7 — Colour-theory palette generation (wanted, unscheduled).**
 Today a script picks an *existing* palette (`flame.set_palette(name)`,

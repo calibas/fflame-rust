@@ -505,6 +505,7 @@ pub struct EguiLayer {
     generated_batch: Option<Vec<crate::config::FractalConfig>>,
     /// Config produced by the Scripts panel, applied as one undo step.
     script_generated: Option<crate::config::FractalConfig>,
+    script_animation: Option<crate::animation::Animation>,
 
     // Fractal browser panel state
     fractal_browser_panel: Option<fractal_browser::FractalBrowserPanel>,
@@ -658,6 +659,7 @@ impl EguiLayer {
             generated_flame: None,
             generated_batch: None,
             script_generated: None,
+            script_animation: None,
             fractal_browser_panel: None,
             loaded_api_flame_id: None,
             loaded_api_flame_is_public: None,
@@ -1357,6 +1359,7 @@ impl EguiLayer {
                         random_generator_panel: &mut self.random_generator_panel,
                         scripts_panel: &mut self.scripts_panel,
                         script_generated: &mut self.script_generated,
+                        script_animation: &mut self.script_animation,
                         generated_flame: &mut self.generated_flame,
                         generated_batch: &mut self.generated_batch,
 
@@ -1904,6 +1907,7 @@ impl EguiLayer {
         // Take generated flame from random generator panel
         let generated_flame = self.generated_flame.take();
         let script_generated = self.script_generated.take();
+        let script_animation = self.script_animation.take();
         let generated_batch = self.generated_batch.take();
 
         UiResponse {
@@ -1954,6 +1958,7 @@ impl EguiLayer {
             path_filters_changed,
             generated_flame,
             script_generated,
+            script_animation,
             generated_batch,
             load_audio_file,
             load_signal_file,

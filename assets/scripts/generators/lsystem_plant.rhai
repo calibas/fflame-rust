@@ -169,7 +169,8 @@ if bad != "" {
             config.set("render_mode", "3d");
             config.set("preserve_z", true);
             config.set("perspective_strength", 0.12);
-            config.set("camera_rotation_x", 30.0);
+            // Radians, not degrees — the View panel converts for display.
+            config.set("camera_rotation_x", 30.0 * PI() / 180.0);
         } else {
             let box = lsystem_bounds(axiom, rules, 6, angle);
             let extent = box[2] - box[0];
