@@ -1746,3 +1746,98 @@ fn scripts_declaring_norng_really_ignore_the_seed() {
     }
     assert!(checked >= 3, "expected several shipped scripts to declare norng");
 }
+
+// ============================================================================
+// Script documentation
+// ============================================================================
+
+#[test]
+fn the_header_comment_becomes_the_description() {
+    let doc = super::parse_doc(
+        "// Turntable\n\
+         //\n\
+         // Adds a looping rotation to the flame you have open.\n\
+         //\n\
+         // # Notes\n\
+         // A full turn ends where it started.\n\
+         \n\
+         script(\"Turntable\", \"modifier\");\n\
+         // this comment is inside the script, not its description\n",
+    );
+    // The opening line is taken as a TITLE, not as the summary: it just
+    // repeats the script's name, which the picker already shows. The
+    // summary is the first real prose after it.
+    assert_eq!(doc.title, "Turntable");
+    assert_eq!(doc.summary, "Adds a looping rotation to the flame you have open.");
+    assert_eq!(doc.body, "# Notes\nA full turn ends where it started.");
+    assert!(
+        !doc.body.contains("inside the script"),
+        "the header stops at the first line of code"
+    );
+}
+
+#[test]
+fn a_multi_line_summary_joins_into_one_paragraph() {
+    let doc = super::parse_doc("// One idea spread\n// over two lines.\n//\n// Then more.\n");
+    assert_eq!(doc.summary, "One idea spread over two lines.");
+    assert_eq!(doc.body, "Then more.");
+}
+
+#[test]
+fn scripts_without_a_header_have_no_description() {
+    assert!(super::parse_doc("script(\"A\", \"generator\");").is_empty());
+    assert!(super::parse_doc("").is_empty());
+}
+
+/// A `///` block pasted from Rust reads the same as `//`, since the
+/// convention is borrowed from the variation definitions.
+#[test]
+fn rust_style_doc_comments_are_accepted() {
+    let doc = super::parse_doc("/// Summary line.\n///\n/// # Authors\n/// - somebody\n");
+    assert_eq!(doc.summary, "Summary line.");
+    assert_eq!(doc.body, "# Authors\n- somebody");
+}
+
+/// The point of this feature: the shipped scripts already carry their
+/// documentation, so it should appear without editing any of them.
+///
+/// Asserting merely that a summary EXISTS is not enough — the first
+/// version of this passed while every summary was just the script's
+/// title repeated from the picker, which is no description at all.
+#[test]
+fn every_shipped_script_already_documents_itself() {
+    for (name, source) in super::library::EMBEDDED {
+        let doc = super::parse_doc(source);
+        assert!(
+            !doc.summary.is_empty(),
+            "{name} has no leading comment block to describe it"
+        );
+        assert!(
+            doc.summary != doc.title,
+            "{name}: the summary is just the title again"
+        );
+        assert!(
+            doc.summary.len() > 25 && doc.summary.contains(' '),
+            "{name}: summary is too short to say anything: {:?}",
+            doc.summary
+        );
+    }
+}
+
+#[test]
+#[ignore = "inspection aid: cargo test -- --ignored --nocapture show_shipped_docs"]
+fn show_shipped_docs() {
+    for (name, source) in super::library::EMBEDDED {
+        let doc = super::parse_doc(source);
+        println!("\n=== {name}");
+        println!("SUMMARY: {}", doc.summary);
+        println!("TITLE:   {}", doc.title);
+        for line in doc.body.lines() {
+            let tag = if line.is_empty() { "     " }
+                else if super::doc_line_is_heading(line) { "HEAD " }
+                else if line.starts_with(char::is_whitespace) { "mono " }
+                else { "text " };
+            println!("  {tag}{line}");
+        }
+    }
+}
