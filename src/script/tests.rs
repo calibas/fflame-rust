@@ -2329,3 +2329,199 @@ fn the_shipped_palette_script_produces_a_palette() {
         "a palette script should leave the flame alone"
     );
 }
+
+// ============================================================================
+// Fixed-slot palettes, shuffling and noise
+// ============================================================================
+
+/// Fixed mode is what makes slicing and per-slot noise simple: 256 even
+/// slots instead of stops sitting wherever the script put them.
+#[test]
+fn a_script_can_work_slot_by_slot() {
+    let source = "script(\"P\", \"generator\");\n\
+        flame.add_transform();\n\
+        flame.set_palette_colors(\"G\", [color(0.0, 0.0, 0.0), color(1.0, 1.0, 1.0)]);\n\
+        flame.palette_to_fixed();\n\
+        let slots = flame.palette_colors();\n\
+        print(\"\" + slots.len());\n\
+        flame.set_palette_fixed(\"Fixed\", slots);";
+    let out = ScriptHost::new()
+        .run(source, &FractalConfig::default(), 1, HashMap::new())
+        .unwrap();
+
+    assert_eq!(out.messages[0], "256", "fixed mode is 256 slots");
+    let pal = &out.config.palette;
+    assert_eq!(pal.name, "Fixed");
+    assert_eq!(pal.stops.len(), 256);
+    assert!(pal.locked, "a fixed palette is locked");
+    // Evenly spaced, ends pinned.
+    assert!((pal.stops[0].position - 0.0).abs() < 1e-6);
+    assert!((pal.stops[255].position - 1.0).abs() < 1e-6);
+    assert!((pal.stops[128].position - 128.0 / 255.0).abs() < 1e-6);
+}
+
+/// Fewer colours than slots are resampled rather than rejected: a script
+/// that built sixteen still means a palette.
+#[test]
+fn set_palette_fixed_resamples_to_the_full_length() {
+    let source = "script(\"P\", \"generator\");\n\
+        flame.add_transform();\n\
+        let cols = [];\n\
+        for i in 0..16 { cols.push(color_hsv(i.to_float() * 22.0, 1.0, 1.0)); }\n\
+        flame.set_palette_fixed(\"R\", cols);";
+    let out = ScriptHost::new()
+        .run(source, &FractalConfig::default(), 1, HashMap::new())
+        .unwrap();
+    assert_eq!(out.config.palette.stops.len(), 256);
+    assert!(out.config.palette.locked);
+}
+
+/// The shipped script's three stages each have to do something, and the
+/// result has to stay a well-formed 256-slot palette.
+#[test]
+fn the_palette_script_shuffles_and_adds_noise() {
+    let base = FractalConfig::default();
+    let entries = super::library::discover(&base);
+    let entry = super::library::find(&entries, "random_palette").expect("shipped");
+    let host = ScriptHost::new();
+
+    let run = |params: Vec<(&str, ParamValue)>| {
+        let map: HashMap<String, ParamValue> = params
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect();
+        host.run(&entry.source, &base, 11, map).unwrap().config.palette
+    };
+
+    // Plain: a smooth 256-slot palette.
+    let plain = run(vec![]);
+    assert_eq!(plain.stops.len(), 256);
+    assert!(plain.locked, "the script leaves the palette in fixed mode");
+
+    // Shuffling reorders the slots without inventing or losing any.
+    let shuffled = run(vec![
+        ("shuffle_slices", ParamValue::Int(8)),
+        ("shuffle_amount", ParamValue::Float(1.0)),
+    ]);
+    assert_eq!(shuffled.stops.len(), 256, "still full length");
+    assert_ne!(
+        shuffled.stops.iter().map(|s| s.color[0].to_bits()).collect::<Vec<_>>(),
+        plain.stops.iter().map(|s| s.color[0].to_bits()).collect::<Vec<_>>(),
+        "shuffling must actually move something"
+    );
+    let mut a: Vec<u32> = plain.stops.iter().map(|s| s.color[0].to_bits()).collect();
+    let mut b: Vec<u32> = shuffled.stops.iter().map(|s| s.color[0].to_bits()).collect();
+    a.sort_unstable();
+    b.sort_unstable();
+    assert_eq!(a, b, "the same colours, reordered — nothing invented or lost");
+
+    // Noise on one axis only must leave the others alone, which is the
+    // whole reason for jittering in HSV rather than RGB.
+    let hue_only = run(vec![("hue_noise", ParamValue::Float(60.0))]);
+    let mut moved_hue = 0;
+    let mut moved_val = 0;
+    for (p, n) in plain.stops.iter().zip(hue_only.stops.iter()) {
+        let pc = crate::script::color::ScriptColor::from_rgb(p.color);
+        let nc = crate::script::color::ScriptColor::from_rgb(n.color);
+        if (pc.hue() - nc.hue()).abs() > 1.0 {
+            moved_hue += 1;
+        }
+        if (pc.value() - nc.value()).abs() > 0.02 {
+            moved_val += 1;
+        }
+    }
+    assert!(moved_hue > 100, "hue noise should scatter the hues: {moved_hue}");
+    assert_eq!(moved_val, 0, "and leave value alone: {moved_val} slots moved");
+}
+
+/// The procedural palette must actually evaluate Quilez's formula, not
+/// merely produce 256 of something.
+#[test]
+fn the_procedural_palette_follows_the_cosine_formula() {
+    let base = FractalConfig::default();
+    let entries = super::library::discover(&base);
+    let entry = super::library::find(&entries, "iq_palette").expect("shipped");
+    let host = ScriptHost::new();
+
+    let pal = host
+        .run(&entry.source, &base, 1, HashMap::new())
+        .unwrap()
+        .config
+        .palette;
+    assert_eq!(pal.stops.len(), 256);
+    assert!(pal.locked, "sampled straight into fixed slots");
+
+    // Default preset is the rainbow: a = b = 0.5, c = 1,
+    // d = (0, 0.33, 0.67). Check a few slots against the formula.
+    let f = |a: f32, b: f32, c: f32, d: f32, t: f32| {
+        a + b * (std::f32::consts::TAU * (c * t + d)).cos()
+    };
+    for i in [0usize, 64, 137, 255] {
+        let t = i as f32 / 255.0;
+        let want = [
+            f(0.5, 0.5, 1.0, 0.0, t),
+            f(0.5, 0.5, 1.0, 0.33, t),
+            f(0.5, 0.5, 1.0, 0.67, t),
+        ];
+        let got = pal.stops[i].color;
+        for ch in 0..3 {
+            // The palette clamps to 0..1, as the formula's output must be.
+            let want_c = want[ch].clamp(0.0, 1.0);
+            assert!(
+                (got[ch] - want_c).abs() < 2e-3,
+                "slot {i} channel {ch}: got {} want {want_c}",
+                got[ch]
+            );
+        }
+    }
+
+    // Three channels a third of a cycle apart is what makes it a
+    // rainbow: the hue should travel a long way, not sit still.
+    let hues: Vec<f32> = pal
+        .stops
+        .iter()
+        .map(|s| crate::script::color::ScriptColor::from_rgb(s.color).hue())
+        .collect();
+    let span = hues.iter().cloned().fold(0.0f32, f32::max)
+        - hues.iter().cloned().fold(360.0f32, f32::min);
+    assert!(span > 180.0, "the default preset should sweep hues: {span}");
+}
+
+/// Custom uses the declared parameters; a preset overrides them. Both
+/// halves matter — a preset that silently used the sliders, or sliders
+/// that silently did nothing, would look identical from the outside.
+#[test]
+fn presets_and_custom_differ_as_advertised() {
+    let base = FractalConfig::default();
+    let entries = super::library::discover(&base);
+    let entry = super::library::find(&entries, "iq_palette").expect("shipped");
+    let host = ScriptHost::new();
+
+    let run = |params: Vec<(&str, ParamValue)>| {
+        let map: HashMap<String, ParamValue> =
+            params.into_iter().map(|(k, v)| (k.to_string(), v)).collect();
+        host.run(&entry.source, &base, 1, map).unwrap().config.palette
+    };
+
+    // A preset ignores the sliders.
+    let preset_default = run(vec![("preset", ParamValue::Text("Bright".into()))]);
+    let preset_fiddled = run(vec![
+        ("preset", ParamValue::Text("Bright".into())),
+        ("freq_r", ParamValue::Float(5.0)),
+    ]);
+    assert_eq!(
+        preset_default.stops[100].color, preset_fiddled.stops[100].color,
+        "a preset must not be moved by the sliders it ignores"
+    );
+
+    // Custom obeys them.
+    let custom_a = run(vec![("preset", ParamValue::Text("Custom".into()))]);
+    let custom_b = run(vec![
+        ("preset", ParamValue::Text("Custom".into())),
+        ("freq_r", ParamValue::Float(5.0)),
+    ]);
+    assert_ne!(
+        custom_a.stops[100].color, custom_b.stops[100].color,
+        "Custom must use the sliders"
+    );
+}
