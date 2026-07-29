@@ -1274,18 +1274,33 @@ fn register_run_script(
     cfg: Rc<RefCell<FractalConfig>>,
     state: Rc<RefCell<ScriptState>>,
 ) {
+    let state2 = Rc::clone(&state);
     let c = Rc::clone(&cfg);
     let s = Rc::clone(&state);
     engine.register_fn("run_script", move |id: &str| -> Result<(), Box<EvalAltResult>> {
-        call_script(&c, &s, id, rhai::Map::new())
+        call_script(&c, &s, id, rhai::Map::new(), None)
     });
 
+    let c = Rc::clone(&cfg);
+    let s = Rc::clone(&state);
     engine.register_fn(
         "run_script",
         move |id: &str, params: rhai::Map| -> Result<(), Box<EvalAltResult>> {
-            call_script(&cfg, &state, id, params)
+            call_script(&c, &s, id, params, None)
         },
     );
+
+    // With a seed, the callee reproduces on its own rather than
+    // continuing the caller's stream.
+    engine.register_fn(
+        "run_script",
+        move |id: &str, params: rhai::Map, seed: i64| -> Result<(), Box<EvalAltResult>> {
+            call_script(&cfg, &state, id, params, Some(seed as u64))
+        },
+    );
+
+    let s = Rc::clone(&state2);
+    engine.register_fn("seed", move || -> i64 { s.borrow().seed as i64 });
 }
 
 fn call_script(
@@ -1293,6 +1308,7 @@ fn call_script(
     state: &Rc<RefCell<ScriptState>>,
     id: &str,
     params: rhai::Map,
+    seed: Option<u64>,
 ) -> Result<(), Box<EvalAltResult>> {
     // Collect mode only gathers the CALLER's parameters. Running the
     // callee would cost time and side effects for metadata that is not
@@ -1305,7 +1321,7 @@ fn call_script(
     for (key, value) in params {
         supplied.insert(key.to_string(), dynamic_to_param(&value)?);
     }
-    super::host::run_sub_script(cfg, state, id, supplied).map_err(err)
+    super::host::run_sub_script(cfg, state, id, supplied, seed).map_err(err)
 }
 
 /// Turn a value from a `run_script` parameter map into a ParamValue.

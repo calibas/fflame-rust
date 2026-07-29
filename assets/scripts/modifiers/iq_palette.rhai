@@ -22,9 +22,14 @@
 // arrived at from the other direction.
 //
 // PRESETS
-// The seven presets are Quilez's own published sets. Pick Custom to use
+// The seven named presets are Quilez's own published sets. Custom uses
 // the parameters below; the others ignore them and print their values,
 // so a preset you like can be copied into Custom and adjusted.
+//
+// Random rolls its own set. It is seeded like everything else, so a roll
+// you like comes back from the same seed — and Mutate in the Scripts
+// panel runs consecutive seeds, which is the quickest way to see a
+// batch and pick one.
 //
 // Frequencies above 1 repeat the palette, which a flame reads as banding
 // along its colour axis — often more interesting than a single sweep.
@@ -35,7 +40,7 @@ script("Procedural Palette", "modifier", ["palette"]);
 
 let preset = param_choice("preset", [
     "Rainbow", "Yellow-pink", "Green-blue", "Orange-blue",
-    "Pastel", "Bright", "Dark earth", "Custom"
+    "Pastel", "Bright", "Dark earth", "Random", "Custom"
 ], 0);
 
 let offset = param_color("offset", "#808080");
@@ -63,7 +68,32 @@ let b = [amplitude.r, amplitude.g, amplitude.b];
 let c = [freq_r, freq_g, freq_b];
 let d = [phase_r, phase_g, phase_b];
 
-if preset != "Custom" {
+if preset == "Random" {
+    // Offset and amplitude near a half: that is where the cosine uses
+    // the whole 0..1 range without spending most of its swing clipped
+    // flat at either end. Quilez's own sets nearly all sit there.
+    let base_a = rand(0.42, 0.58);
+    let base_b = rand(0.26, 0.46);
+    a = [base_a + rand(-0.06, 0.06), base_a + rand(-0.06, 0.06), base_a + rand(-0.06, 0.06)];
+    b = [base_b + rand(-0.08, 0.08), base_b + rand(-0.08, 0.08), base_b + rand(-0.08, 0.08)];
+
+    // Whole-number frequencies join up end to end; a fraction leaves a
+    // seam where the palette wraps. Both are useful, so weight the roll
+    // towards whole numbers and let a fraction turn up sometimes.
+    let f = pick([1.0, 1.0, 1.0, 2.0, 2.0, 3.0, 0.5, 1.5]);
+    c = [f, f, f];
+    if rand() < 0.45 {
+        // Channels on different frequencies drift in and out of step,
+        // which is what produces the sets that do not look like a plain
+        // hue ramp.
+        c = [f, f * pick([1.0, 0.5, 2.0]), f * pick([1.0, 0.5, 2.0])];
+    }
+
+    // Phase spread is what makes the hues travel: three waves in step
+    // give a grey ramp, a third of a cycle apart gives the rainbow.
+    let p0 = rand(0.0, 1.0);
+    d = [p0, p0 + rand(0.12, 0.5), p0 + rand(0.12, 0.5) + rand(0.12, 0.5)];
+} else if preset != "Custom" {
     let s = sets[preset];
     a = s[0]; b = s[1]; c = s[2]; d = s[3];
 }
@@ -88,6 +118,8 @@ print("  a offset    " + a[0] + ", " + a[1] + ", " + a[2]);
 print("  b amplitude " + b[0] + ", " + b[1] + ", " + b[2]);
 print("  c frequency " + c[0] + ", " + c[1] + ", " + c[2]);
 print("  d phase     " + d[0] + ", " + d[1] + ", " + d[2]);
-if preset != "Custom" {
+if preset == "Random" {
+    print("Rolled from seed " + seed() + " — copy the values above into Custom to keep them.");
+} else if preset != "Custom" {
     print("Preset values — choose Custom to edit them.");
 }
