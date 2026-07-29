@@ -124,7 +124,7 @@ pub static LSYSTEM_PATH: VariationDef = VariationDef {
         param!("anchored", "Anchored", bool, false, "Vertex-chain mode: connect the images of the anchor point in consecutive cells, instead of drawing each cell's entry-to-exit span. Node-rewriting (space-filling) curves need this — their spans lie on the cell-boundary lattice and overlap each other; the centre chain is the classic self-avoiding drawing."),
         param!("anchor_x", "Anchor X", unlimited_float, 0.5, -2.0, 2.0, "Anchor point x in the curve's unit-displacement frame (the attractor's bounding-box centre, set by the script)."),
         param!("anchor_y", "Anchor Y", unlimited_float, 0.0, -2.0, 2.0, "Anchor point y."),
-        param!("thickness", "Thickness", float, 0.0, 0.0, 0.2, "Half-width of the drawn line, in the curve's own units (the whole curve spans 1). Samples are offset PERPENDICULAR to the local segment: offsetting along it would only slide a point along a line the sweep already covers. Note the density trade — the same samples spread over more area, so a thick line is dimmer; raise Brightness to match."),
+        param!("thickness", "Thickness", float, 0.0, 0.0, 0.2, "Half-width of the drawn line, in the curve's own units (the whole curve spans 1). Corners are joined seamlessly: each segment is clipped at the mitre line it shares with its neighbours and the wedge the turn opens is filled, so the stroke is covered exactly once — no bright spot at a vertex. Note the density trade — the same samples spread over more area, so a thick line is dimmer; raise Brightness to match."),
         param!("soft", "Soft Edges", bool, false, "Gaussian falloff across the width instead of a flat ribbon. Flat reads as a drawn line; soft reads as a glow."),
         param!("offset_x", "Offset X", unlimited_float, 0.0, -2.0, 2.0, "Move the whole curve along x, in the curve's own units. The path is built in its own frame, so an offset of minus its centre puts the object on the origin — which is what rotation and zoom orbit around. The script sets this to centre the curve."),
         param!("offset_y", "Offset Y", unlimited_float, 0.0, -2.0, 2.0, "Move the whole curve along y."),
@@ -199,9 +199,19 @@ fn variation_lsystem_path(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: p
     }
     let t = rng_nextf(rng);
 
+    // Thickness up front: a seamless join needs the neighbouring segment
+    // directions, and each costs another walk down the map chain — wasted
+    // work on the overwhelmingly common thickness = 0.
+    let thickness = get_param(xform_id, variation_id, 79u);
+    let thick = thickness > 0.0;
+
     var seg_a: vec2<f32>;
     var seg_b: vec2<f32>;
     var frac: f32 = 0.0;
+    // Directions of the segments arriving at seg_a and leaving seg_b.
+    // Zero where there is none — the ends of the curve.
+    var dir_in = vec2<f32>(0.0, 0.0);
+    var dir_out = vec2<f32>(0.0, 0.0);
     if (anchored) {
         // Vertex chain through the anchor's image in each cell — the
         // classic space-filling drawing (anchor = attractor centre gives
@@ -216,12 +226,33 @@ fn variation_lsystem_path(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: p
         seg_a = lsystem_path_point(xform_id, variation_id, idx, iters, n, anchor);
         seg_b = lsystem_path_point(xform_id, variation_id, idx + 1u, iters, n, anchor);
         frac = clamp(ts - f32(idx), 0.0, 1.0);
+        if (thick && idx > 0u) {
+            dir_in = seg_a - lsystem_path_point(xform_id, variation_id, idx - 1u, iters, n, anchor);
+        }
+        if (thick && idx + 2u <= segs) {
+            dir_out = lsystem_path_point(xform_id, variation_id, idx + 2u, iters, n, anchor) - seg_b;
+        }
     } else {
         let idx = min(u32(t * f32(total)), total - 1u);
         let cell = lsystem_path_cell(xform_id, variation_id, idx, iters, n);
         seg_a = cell.xy;
         seg_b = cell.zw;
         frac = clamp(t * f32(total) - f32(idx), 0.0, 1.0);
+        // Cell spans need not chain, so a neighbour only counts as one
+        // where it actually meets this span — a join across a gap would
+        // be density hanging in mid-air.
+        if (thick && idx > 0u) {
+            let prev = lsystem_path_cell(xform_id, variation_id, idx - 1u, iters, n);
+            if (distance(prev.zw, seg_a) < thickness) {
+                dir_in = prev.zw - prev.xy;
+            }
+        }
+        if (thick && idx + 1u < total) {
+            let next = lsystem_path_cell(xform_id, variation_id, idx + 1u, iters, n);
+            if (distance(next.xy, seg_b) < thickness) {
+                dir_out = next.zw - next.xy;
+            }
+        }
     }
 
     var out = seg_a;
@@ -231,38 +262,107 @@ fn variation_lsystem_path(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: p
 
     // Thicken PERPENDICULAR to the segment: an offset along it would only
     // slide the sample along ground the t-sweep already covers.
-    let thickness = get_param(xform_id, variation_id, 79u);
-    if (thickness > 0.0) {
+    if (thick) {
         let soft = get_param(xform_id, variation_id, 80u) > 0.5;
-        var jit = rng_nextf(rng) * 2.0 - 1.0;
-        if (soft) {
-            // Irwin-Hall gaussian approximation, as gaussian_blur uses.
-            jit = (rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) - 2.0) * 0.5;
-        }
         let dseg = seg_b - seg_a;
         let dlen = length(dseg);
-        // Round join at each vertex, the flat twin of the pipe's join
-        // sphere: perpendicular offsets alone leave the outside of every
-        // corner notched open, and a space-filling curve is nearly all
-        // corners. Disc and shaft are sampled in proportion to their areas
-        // (pi*r^2 against 2*r*len) so density stays even across the join:
-        // p = pi*r / (pi*r + 2*len).
-        let jw = 3.14159265359 * thickness;
-        let joint = rng_nextf(rng) * (jw + 2.0 * dlen) < jw;
-        if (connect && dlen > 1e-9 && !joint) {
-            let perp = vec2<f32>(-dseg.y, dseg.x) / dlen;
-            out = out + perp * (thickness * jit);
-        } else {
-            // The join disc, centred on the vertex — and the same code
-            // serves the vertices-only case, which is all joins. Uniform
-            // over a disc needs sqrt(u); soft keeps the gaussian radius.
-            let ang = rng_nextf(rng) * 6.28318530718;
-            var rad = sqrt(rng_nextf(rng));
-            if (soft) {
-                rad = abs(jit);
+        let has_seg = connect && dlen > 1e-9;
+        let r = thickness;
+
+        if (soft || !has_seg) {
+            // A gaussian shaft has no hard edge, so its own tails round
+            // the corners; a join there would only pile density on
+            // density. Same for vertices-only, which is all corner.
+            var jit = (rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) - 2.0) * 0.5;
+            if (!soft) {
+                jit = sqrt(rng_nextf(rng));
             }
-            let base = select(out, seg_a, joint && connect);
-            out = base + vec2<f32>(cos(ang), sin(ang)) * (thickness * rad);
+            if (has_seg) {
+                let perp = vec2<f32>(-dseg.y, dseg.x) / dlen;
+                out = out + perp * (r * jit);
+            } else {
+                let ang = rng_nextf(rng) * 6.28318530718;
+                out = out + vec2<f32>(cos(ang), sin(ang)) * (r * abs(jit));
+            }
+        } else {
+            // Seamless join. The stroke around a polyline splits exactly
+            // into two kinds of piece: each segment's rectangle CLIPPED at
+            // the mitre line it shares with its neighbours, and the wedge
+            // that the turn opens on the OUTSIDE of each corner. Together
+            // they tile it — every point covered once.
+            //
+            // Getting this wrong is what the earlier attempts looked like:
+            // an unclipped rectangle plus a full disc covers the corner
+            // twice over (a visible circle), and clipping the rectangle
+            // only against the disc still leaves the two rectangles
+            // crossing outside it, since the corner square reaches r*sqrt2
+            // while the disc stops at r (the faint crescents).
+            let v = dseg / dlen;
+            let perp = vec2<f32>(-v.y, v.x);
+
+            // The mitre line at a corner has normal u + v: the one
+            // direction with a positive component along both segments, so
+            // it separates the arriving shaft from the leaving one.
+            var n0 = vec2<f32>(0.0, 0.0);
+            var phi0 = 0.0;
+            let li = length(dir_in);
+            if (li > 1e-9) {
+                let u = dir_in / li;
+                phi0 = acos(clamp(dot(u, v), -1.0, 1.0));
+                if (phi0 > 1e-4 && phi0 < 3.1) {
+                    n0 = normalize(u + v);
+                }
+            }
+            var n1 = vec2<f32>(0.0, 0.0);
+            var phi1 = 0.0;
+            let lo = length(dir_out);
+            if (lo > 1e-9) {
+                let z = dir_out / lo;
+                phi1 = acos(clamp(dot(v, z), -1.0, 1.0));
+                if (phi1 > 1e-4 && phi1 < 3.1) {
+                    n1 = normalize(v + z);
+                }
+            }
+
+            // Areas, all divided by r. The mitre takes a triangle with
+            // legs r and r*tan(phi/2) off each end; the wedge it leaves
+            // outside has area (phi/2)*r^2. tan is clamped because a
+            // near-reversal would otherwise claim more than the segment.
+            let cut0 = 0.5 * r * min(tan(0.5 * phi0), 8.0);
+            let cut1 = 0.5 * r * min(tan(0.5 * phi1), 8.0);
+            let shaft = max(2.0 * dlen - cut0 - cut1, 0.0);
+            let wedge = 0.5 * phi0 * r;
+
+            if (rng_nextf(rng) * (shaft + wedge) < wedge) {
+                // Basis (u, e2) with e2 pointing OUTSIDE the turn, so the
+                // wedge is beta in [-pi/2, phi0 - pi/2]: from the far edge
+                // of the arriving shaft round to the near edge of this one.
+                let u = dir_in / li;
+                let sgn = select(-1.0, 1.0, (u.x * v.y - u.y * v.x) > 0.0);
+                let e2 = sgn * vec2<f32>(-u.y, u.x);
+                let beta = -1.5707963268 + phi0 * rng_nextf(rng);
+                out = seg_a + (cos(beta) * u + sin(beta) * e2) * (r * sqrt(rng_nextf(rng)));
+            } else {
+                // Uniform over the rectangle minus whatever the mitres
+                // take. Rejection keeps it uniform in AREA — sampling a
+                // shortened span directly would not — and the cuts are a
+                // percent or two of the rectangle at sensible thicknesses.
+                // Falling out of the loop keeps the last sample rather
+                // than spinning.
+                var s = 0.0;
+                var o = 0.0;
+                for (var k = 0u; k < 8u; k = k + 1u) {
+                    s = rng_nextf(rng) * dlen;
+                    o = (rng_nextf(rng) * 2.0 - 1.0) * r;
+                    let rel = v * s + perp * o;
+                    let in0 = dot(n0, n0) < 0.5 || dot(rel, n0) >= 0.0;
+                    let in1 = dot(n1, n1) < 0.5 || dot(rel - dseg, n1) <= 0.0;
+                    if (in0 && in1) {
+                        break;
+                    }
+                }
+                out = seg_a + v * s + perp * o;
+            }
         }
     }
 
@@ -338,9 +438,19 @@ fn variation_lsystem_path(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: p
     }
     let t = rng_nextf(rng);
 
+    // Thickness up front: a seamless join needs the neighbouring segment
+    // directions, and each costs another walk down the map chain — wasted
+    // work on the overwhelmingly common thickness = 0.
+    let thickness = get_param(xform_id, variation_id, 79u);
+    let thick = thickness > 0.0;
+
     var seg_a: vec2<f32>;
     var seg_b: vec2<f32>;
     var frac: f32 = 0.0;
+    // Directions of the segments arriving at seg_a and leaving seg_b.
+    // Zero where there is none — the ends of the curve.
+    var dir_in = vec2<f32>(0.0, 0.0);
+    var dir_out = vec2<f32>(0.0, 0.0);
     if (anchored) {
         // Vertex chain through the anchor's image in each cell — the
         // classic space-filling drawing (anchor = attractor centre gives
@@ -355,12 +465,33 @@ fn variation_lsystem_path(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: p
         seg_a = lsystem_path_point(xform_id, variation_id, idx, iters, n, anchor);
         seg_b = lsystem_path_point(xform_id, variation_id, idx + 1u, iters, n, anchor);
         frac = clamp(ts - f32(idx), 0.0, 1.0);
+        if (thick && idx > 0u) {
+            dir_in = seg_a - lsystem_path_point(xform_id, variation_id, idx - 1u, iters, n, anchor);
+        }
+        if (thick && idx + 2u <= segs) {
+            dir_out = lsystem_path_point(xform_id, variation_id, idx + 2u, iters, n, anchor) - seg_b;
+        }
     } else {
         let idx = min(u32(t * f32(total)), total - 1u);
         let cell = lsystem_path_cell(xform_id, variation_id, idx, iters, n);
         seg_a = cell.xy;
         seg_b = cell.zw;
         frac = clamp(t * f32(total) - f32(idx), 0.0, 1.0);
+        // Cell spans need not chain, so a neighbour only counts as one
+        // where it actually meets this span — a join across a gap would
+        // be density hanging in mid-air.
+        if (thick && idx > 0u) {
+            let prev = lsystem_path_cell(xform_id, variation_id, idx - 1u, iters, n);
+            if (distance(prev.zw, seg_a) < thickness) {
+                dir_in = prev.zw - prev.xy;
+            }
+        }
+        if (thick && idx + 1u < total) {
+            let next = lsystem_path_cell(xform_id, variation_id, idx + 1u, iters, n);
+            if (distance(next.xy, seg_b) < thickness) {
+                dir_out = next.zw - next.xy;
+            }
+        }
     }
 
     var out = seg_a;
@@ -370,38 +501,107 @@ fn variation_lsystem_path(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: p
 
     // Thicken PERPENDICULAR to the segment: an offset along it would only
     // slide the sample along ground the t-sweep already covers.
-    let thickness = get_param(xform_id, variation_id, 79u);
-    if (thickness > 0.0) {
+    if (thick) {
         let soft = get_param(xform_id, variation_id, 80u) > 0.5;
-        var jit = rng_nextf(rng) * 2.0 - 1.0;
-        if (soft) {
-            // Irwin-Hall gaussian approximation, as gaussian_blur uses.
-            jit = (rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) - 2.0) * 0.5;
-        }
         let dseg = seg_b - seg_a;
         let dlen = length(dseg);
-        // Round join at each vertex, the flat twin of the pipe's join
-        // sphere: perpendicular offsets alone leave the outside of every
-        // corner notched open, and a space-filling curve is nearly all
-        // corners. Disc and shaft are sampled in proportion to their areas
-        // (pi*r^2 against 2*r*len) so density stays even across the join:
-        // p = pi*r / (pi*r + 2*len).
-        let jw = 3.14159265359 * thickness;
-        let joint = rng_nextf(rng) * (jw + 2.0 * dlen) < jw;
-        if (connect && dlen > 1e-9 && !joint) {
-            let perp = vec2<f32>(-dseg.y, dseg.x) / dlen;
-            out = out + perp * (thickness * jit);
-        } else {
-            // The join disc, centred on the vertex — and the same code
-            // serves the vertices-only case, which is all joins. Uniform
-            // over a disc needs sqrt(u); soft keeps the gaussian radius.
-            let ang = rng_nextf(rng) * 6.28318530718;
-            var rad = sqrt(rng_nextf(rng));
-            if (soft) {
-                rad = abs(jit);
+        let has_seg = connect && dlen > 1e-9;
+        let r = thickness;
+
+        if (soft || !has_seg) {
+            // A gaussian shaft has no hard edge, so its own tails round
+            // the corners; a join there would only pile density on
+            // density. Same for vertices-only, which is all corner.
+            var jit = (rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) - 2.0) * 0.5;
+            if (!soft) {
+                jit = sqrt(rng_nextf(rng));
             }
-            let base = select(out, seg_a, joint && connect);
-            out = base + vec2<f32>(cos(ang), sin(ang)) * (thickness * rad);
+            if (has_seg) {
+                let perp = vec2<f32>(-dseg.y, dseg.x) / dlen;
+                out = out + perp * (r * jit);
+            } else {
+                let ang = rng_nextf(rng) * 6.28318530718;
+                out = out + vec2<f32>(cos(ang), sin(ang)) * (r * abs(jit));
+            }
+        } else {
+            // Seamless join. The stroke around a polyline splits exactly
+            // into two kinds of piece: each segment's rectangle CLIPPED at
+            // the mitre line it shares with its neighbours, and the wedge
+            // that the turn opens on the OUTSIDE of each corner. Together
+            // they tile it — every point covered once.
+            //
+            // Getting this wrong is what the earlier attempts looked like:
+            // an unclipped rectangle plus a full disc covers the corner
+            // twice over (a visible circle), and clipping the rectangle
+            // only against the disc still leaves the two rectangles
+            // crossing outside it, since the corner square reaches r*sqrt2
+            // while the disc stops at r (the faint crescents).
+            let v = dseg / dlen;
+            let perp = vec2<f32>(-v.y, v.x);
+
+            // The mitre line at a corner has normal u + v: the one
+            // direction with a positive component along both segments, so
+            // it separates the arriving shaft from the leaving one.
+            var n0 = vec2<f32>(0.0, 0.0);
+            var phi0 = 0.0;
+            let li = length(dir_in);
+            if (li > 1e-9) {
+                let u = dir_in / li;
+                phi0 = acos(clamp(dot(u, v), -1.0, 1.0));
+                if (phi0 > 1e-4 && phi0 < 3.1) {
+                    n0 = normalize(u + v);
+                }
+            }
+            var n1 = vec2<f32>(0.0, 0.0);
+            var phi1 = 0.0;
+            let lo = length(dir_out);
+            if (lo > 1e-9) {
+                let z = dir_out / lo;
+                phi1 = acos(clamp(dot(v, z), -1.0, 1.0));
+                if (phi1 > 1e-4 && phi1 < 3.1) {
+                    n1 = normalize(v + z);
+                }
+            }
+
+            // Areas, all divided by r. The mitre takes a triangle with
+            // legs r and r*tan(phi/2) off each end; the wedge it leaves
+            // outside has area (phi/2)*r^2. tan is clamped because a
+            // near-reversal would otherwise claim more than the segment.
+            let cut0 = 0.5 * r * min(tan(0.5 * phi0), 8.0);
+            let cut1 = 0.5 * r * min(tan(0.5 * phi1), 8.0);
+            let shaft = max(2.0 * dlen - cut0 - cut1, 0.0);
+            let wedge = 0.5 * phi0 * r;
+
+            if (rng_nextf(rng) * (shaft + wedge) < wedge) {
+                // Basis (u, e2) with e2 pointing OUTSIDE the turn, so the
+                // wedge is beta in [-pi/2, phi0 - pi/2]: from the far edge
+                // of the arriving shaft round to the near edge of this one.
+                let u = dir_in / li;
+                let sgn = select(-1.0, 1.0, (u.x * v.y - u.y * v.x) > 0.0);
+                let e2 = sgn * vec2<f32>(-u.y, u.x);
+                let beta = -1.5707963268 + phi0 * rng_nextf(rng);
+                out = seg_a + (cos(beta) * u + sin(beta) * e2) * (r * sqrt(rng_nextf(rng)));
+            } else {
+                // Uniform over the rectangle minus whatever the mitres
+                // take. Rejection keeps it uniform in AREA — sampling a
+                // shortened span directly would not — and the cuts are a
+                // percent or two of the rectangle at sensible thicknesses.
+                // Falling out of the loop keeps the last sample rather
+                // than spinning.
+                var s = 0.0;
+                var o = 0.0;
+                for (var k = 0u; k < 8u; k = k + 1u) {
+                    s = rng_nextf(rng) * dlen;
+                    o = (rng_nextf(rng) * 2.0 - 1.0) * r;
+                    let rel = v * s + perp * o;
+                    let in0 = dot(n0, n0) < 0.5 || dot(rel, n0) >= 0.0;
+                    let in1 = dot(n1, n1) < 0.5 || dot(rel - dseg, n1) <= 0.0;
+                    if (in0 && in1) {
+                        break;
+                    }
+                }
+                out = seg_a + v * s + perp * o;
+            }
         }
     }
 

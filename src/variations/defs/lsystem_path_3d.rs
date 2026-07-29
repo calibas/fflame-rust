@@ -188,7 +188,7 @@ pub static LSYSTEM_PATH_3D: VariationDef = VariationDef {
         param!("anchor_x", "Anchor X", unlimited_float, 0.5, -2.0, 2.0, "Anchor point x (the attractor's centre, set by the script)."),
         param!("anchor_y", "Anchor Y", unlimited_float, 0.0, -2.0, 2.0, "Anchor point y."),
         param!("anchor_z", "Anchor Z", unlimited_float, 0.0, -2.0, 2.0, "Anchor point z."),
-        param!("thickness", "Thickness", float, 0.0, 0.0, 0.2, "Tube radius around the drawn line, in the curve's own units (the whole curve spans 1). Samples are offset in the DISC perpendicular to the local segment — offsetting along it would only slide a point along ground the sweep already covers. Note the density trade: the same samples spread through more volume, so a thick tube is dimmer; raise Brightness to match."),
+        param!("thickness", "Thickness", float, 0.0, 0.0, 0.2, "Tube radius around the drawn line, in the curve's own units (the whole curve spans 1). Samples land on the pipe SURFACE, and corners are joined seamlessly: each cylinder is clipped at the mitre plane it shares with its neighbours and the sphere patch the turn exposes is filled, so the surface is covered exactly once — no bead at a vertex. Note the density trade: the same samples spread over more surface, so a thick tube is dimmer; raise Brightness to match."),
         param!("soft", "Soft Edges", bool, false, "Gaussian shell instead of a hard surface: samples fade inward and outward from the pipe wall. Hard reads as drawn geometry; soft reads as a glow."),
         param!("offset_x", "Offset X", unlimited_float, 0.0, -2.0, 2.0, "Move the whole curve along x, in the curve's own units. The path is built in its own frame — the unit cube for a space-filling curve — so an offset of minus its centre puts the object on the origin, which is what camera rotation and zoom orbit around. The script sets this to centre the curve."),
         param!("offset_y", "Offset Y", unlimited_float, 0.0, -2.0, 2.0, "Move the whole curve along y."),
@@ -246,9 +246,19 @@ fn variation_lsystem_path_3D(p: vec2<f32>, xform_id: u32, variation_id: u32, rng
     }
     let t = rng_nextf(rng);
 
+    // Thickness up front: a seamless join needs the neighbouring segment
+    // directions, and each costs another walk down the map chain — wasted
+    // work on the overwhelmingly common thickness = 0.
+    let thickness = get_param(xform_id, variation_id, 152u);
+    let thick = thickness > 0.0;
+
     var seg_a: vec3<f32>;
     var seg_b: vec3<f32>;
     var frac: f32 = 0.0;
+    // Directions of the segments arriving at seg_a and leaving seg_b.
+    // Zero where there is none — the ends of the curve.
+    var dir_in = vec3<f32>(0.0, 0.0, 0.0);
+    var dir_out = vec3<f32>(0.0, 0.0, 0.0);
     if (anchored) {
         // Vertex chain through the anchor's image in each cell — the
         // classic space-filling drawing (anchor = attractor centre gives
@@ -264,11 +274,34 @@ fn variation_lsystem_path_3D(p: vec2<f32>, xform_id: u32, variation_id: u32, rng
         seg_a = lsp3_point(xform_id, variation_id, idx, iters, n, anchor);
         seg_b = lsp3_point(xform_id, variation_id, idx + 1u, iters, n, anchor);
         frac = clamp(ts - f32(idx), 0.0, 1.0);
+        if (thick && idx > 0u) {
+            dir_in = seg_a - lsp3_point(xform_id, variation_id, idx - 1u, iters, n, anchor);
+        }
+        if (thick && idx + 2u <= segs) {
+            dir_out = lsp3_point(xform_id, variation_id, idx + 2u, iters, n, anchor) - seg_b;
+        }
     } else {
         let idx = min(u32(t * f32(total)), total - 1u);
         seg_a = lsp3_point(xform_id, variation_id, idx, iters, n, vec3<f32>(0.0, 0.0, 0.0));
         seg_b = lsp3_point(xform_id, variation_id, idx, iters, n, vec3<f32>(1.0, 0.0, 0.0));
         frac = clamp(t * f32(total) - f32(idx), 0.0, 1.0);
+        // Cell spans need not chain, so a neighbour only counts as one
+        // where it actually meets this span — a join across a gap would
+        // be density hanging in mid-air.
+        if (thick && idx > 0u) {
+            let pa = lsp3_point(xform_id, variation_id, idx - 1u, iters, n, vec3<f32>(0.0, 0.0, 0.0));
+            let pb = lsp3_point(xform_id, variation_id, idx - 1u, iters, n, vec3<f32>(1.0, 0.0, 0.0));
+            if (distance(pb, seg_a) < thickness) {
+                dir_in = pb - pa;
+            }
+        }
+        if (thick && idx + 1u < total) {
+            let na = lsp3_point(xform_id, variation_id, idx + 1u, iters, n, vec3<f32>(0.0, 0.0, 0.0));
+            let nb = lsp3_point(xform_id, variation_id, idx + 1u, iters, n, vec3<f32>(1.0, 0.0, 0.0));
+            if (distance(na, seg_b) < thickness) {
+                dir_out = nb - na;
+            }
+        }
     }
 
     var out = seg_a;
@@ -279,11 +312,12 @@ fn variation_lsystem_path_3D(p: vec2<f32>, xform_id: u32, variation_id: u32, rng
     // Thicken into a TUBE: offset within the disc perpendicular to the
     // segment. An along-segment offset would only slide the sample along
     // ground the t-sweep already covers.
-    let thickness = get_param(xform_id, variation_id, 152u);
-    if (thickness > 0.0) {
+    if (thick) {
         let soft = get_param(xform_id, variation_id, 153u) > 0.5;
         let dseg = seg_b - seg_a;
         let dlen = length(dseg);
+        let has_seg = connect && dlen > 1e-9;
+        let r = thickness;
         // Samples land ON the pipe's outer surface, not through its volume.
         // A filled tube spreads its samples through the interior, where
         // they integrate to a soft-edged smear — a blur, not a pipe. A
@@ -295,30 +329,95 @@ fn variation_lsystem_path_3D(p: vec2<f32>, xform_id: u32, variation_id: u32, rng
             rad = 1.0 + (rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) - 2.0) * 0.35;
         }
         let ang = rng_nextf(rng) * 6.28318530718;
-        // Round join at each vertex. Consecutive discs are tilted apart by
-        // the turn, so without one the pipe is notched open on the outside
-        // of every corner — and a space-filling curve is nearly all
-        // corners. Sphere and shaft are sampled in proportion to their
-        // areas (4*pi*r^2 against 2*pi*r*len) so surface density stays
-        // even across the join: p = 2r / (2r + len).
-        let joint = rng_nextf(rng) * (2.0 * thickness + dlen) < 2.0 * thickness;
-        if (connect && dlen > 1e-9 && !joint) {
-            let dir = dseg / dlen;
-            // Any axis not parallel to dir gives a stable basis.
-            var ref_axis = vec3<f32>(0.0, 0.0, 1.0);
-            if (abs(dir.z) > 0.9) {
-                ref_axis = vec3<f32>(1.0, 0.0, 0.0);
-            }
-            let ub = normalize(cross(dir, ref_axis));
-            let vb = cross(dir, ub);
-            out = out + (ub * cos(ang) + vb * sin(ang)) * (thickness * rad);
-        } else {
-            // The join sphere, centred on the vertex — and the same code
-            // serves the vertices-only case, which is all joins.
+
+        if (soft || !has_seg) {
+            // A gaussian shell has no hard edge to seam, and
+            // vertices-only is all join: a whole sphere is right for both.
             let zc = rng_nextf(rng) * 2.0 - 1.0;
             let rc = sqrt(max(1.0 - zc * zc, 0.0));
-            let base = select(out, seg_a, joint && connect);
-            out = base + vec3<f32>(rc * cos(ang), rc * sin(ang), zc) * (thickness * rad);
+            out = out + vec3<f32>(rc * cos(ang), rc * sin(ang), zc) * (r * rad);
+        } else {
+            // Seamless join, the 3D twin of the 2D one. The pipe surface
+            // splits exactly into each segment's cylinder CLIPPED at the
+            // mitre plane it shares with its neighbours, plus the patch of
+            // the vertex sphere left exposed on the OUTSIDE of the turn.
+            //
+            // The mitre plane is the right cut because two cylinders of
+            // equal radius meet in an ellipse lying in exactly that plane
+            // — so clipping there removes precisely the part of each that
+            // was buried inside the other, which is the double density
+            // that made the join read as a drawn sphere.
+            let v = dseg / dlen;
+            var ref_axis = vec3<f32>(0.0, 0.0, 1.0);
+            if (abs(v.z) > 0.9) {
+                ref_axis = vec3<f32>(1.0, 0.0, 0.0);
+            }
+            let ub = normalize(cross(v, ref_axis));
+            let vb = cross(v, ub);
+
+            var n0 = vec3<f32>(0.0, 0.0, 0.0);
+            var phi0 = 0.0;
+            let li = length(dir_in);
+            if (li > 1e-9) {
+                let u = dir_in / li;
+                phi0 = acos(clamp(dot(u, v), -1.0, 1.0));
+                if (phi0 > 1e-4 && phi0 < 3.1) {
+                    n0 = normalize(u + v);
+                }
+            }
+            var n1 = vec3<f32>(0.0, 0.0, 0.0);
+            var phi1 = 0.0;
+            let lo = length(dir_out);
+            if (lo > 1e-9) {
+                let z = dir_out / lo;
+                phi1 = acos(clamp(dot(v, z), -1.0, 1.0));
+                if (phi1 > 1e-4 && phi1 < 3.1) {
+                    n1 = normalize(v + z);
+                }
+            }
+
+            // Areas, all divided by 2r: the mitre takes 2*r^2*tan(phi/2)
+            // off the cylinder at each end, and the exposed sphere patch
+            // is a lune of area 2*phi*r^2. tan is clamped because a
+            // near-reversal would otherwise claim more than the segment.
+            let cut0 = r * min(tan(0.5 * phi0), 8.0);
+            let cut1 = r * min(tan(0.5 * phi1), 8.0);
+            let shaft = max(3.14159265359 * dlen - cut0 - cut1, 0.0);
+            let lune = phi0 * r;
+
+            if (rng_nextf(rng) * (shaft + lune) < lune) {
+                // The lune is bounded by the planes through u and v, which
+                // meet along cross(u, v). About that axis it is uniform in
+                // height and spans exactly phi0 of azimuth, so sampling it
+                // needs no rejection.
+                let u = dir_in / li;
+                let w = normalize(cross(u, v));
+                let e2 = cross(w, u);
+                let zc = rng_nextf(rng) * 2.0 - 1.0;
+                let rc = sqrt(max(1.0 - zc * zc, 0.0));
+                let beta = -1.5707963268 + phi0 * rng_nextf(rng);
+                let dir = w * zc + (u * cos(beta) + e2 * sin(beta)) * rc;
+                out = seg_a + dir * (r * rad);
+            } else {
+                // Uniform over the cylinder minus whatever the mitres
+                // take. Rejection keeps it uniform in AREA; the cuts are a
+                // percent or two at sensible thicknesses. Falling out of
+                // the loop keeps the last sample rather than spinning.
+                var s = 0.0;
+                var off = vec3<f32>(0.0, 0.0, 0.0);
+                for (var k = 0u; k < 8u; k = k + 1u) {
+                    s = rng_nextf(rng) * dlen;
+                    let a2 = rng_nextf(rng) * 6.28318530718;
+                    off = (ub * cos(a2) + vb * sin(a2)) * (r * rad);
+                    let rel = v * s + off;
+                    let in0 = dot(n0, n0) < 0.5 || dot(rel, n0) >= 0.0;
+                    let in1 = dot(n1, n1) < 0.5 || dot(rel - dseg, n1) <= 0.0;
+                    if (in0 && in1) {
+                        break;
+                    }
+                }
+                out = seg_a + v * s + off;
+            }
         }
     }
 
@@ -387,9 +486,19 @@ fn variation_lsystem_path_3D(p: vec3<f32>, xform_id: u32, variation_id: u32, rng
     }
     let t = rng_nextf(rng);
 
+    // Thickness up front: a seamless join needs the neighbouring segment
+    // directions, and each costs another walk down the map chain — wasted
+    // work on the overwhelmingly common thickness = 0.
+    let thickness = get_param(xform_id, variation_id, 152u);
+    let thick = thickness > 0.0;
+
     var seg_a: vec3<f32>;
     var seg_b: vec3<f32>;
     var frac: f32 = 0.0;
+    // Directions of the segments arriving at seg_a and leaving seg_b.
+    // Zero where there is none — the ends of the curve.
+    var dir_in = vec3<f32>(0.0, 0.0, 0.0);
+    var dir_out = vec3<f32>(0.0, 0.0, 0.0);
     if (anchored) {
         // Vertex chain through the anchor's image in each cell — the
         // classic space-filling drawing (anchor = attractor centre gives
@@ -405,11 +514,34 @@ fn variation_lsystem_path_3D(p: vec3<f32>, xform_id: u32, variation_id: u32, rng
         seg_a = lsp3_point(xform_id, variation_id, idx, iters, n, anchor);
         seg_b = lsp3_point(xform_id, variation_id, idx + 1u, iters, n, anchor);
         frac = clamp(ts - f32(idx), 0.0, 1.0);
+        if (thick && idx > 0u) {
+            dir_in = seg_a - lsp3_point(xform_id, variation_id, idx - 1u, iters, n, anchor);
+        }
+        if (thick && idx + 2u <= segs) {
+            dir_out = lsp3_point(xform_id, variation_id, idx + 2u, iters, n, anchor) - seg_b;
+        }
     } else {
         let idx = min(u32(t * f32(total)), total - 1u);
         seg_a = lsp3_point(xform_id, variation_id, idx, iters, n, vec3<f32>(0.0, 0.0, 0.0));
         seg_b = lsp3_point(xform_id, variation_id, idx, iters, n, vec3<f32>(1.0, 0.0, 0.0));
         frac = clamp(t * f32(total) - f32(idx), 0.0, 1.0);
+        // Cell spans need not chain, so a neighbour only counts as one
+        // where it actually meets this span — a join across a gap would
+        // be density hanging in mid-air.
+        if (thick && idx > 0u) {
+            let pa = lsp3_point(xform_id, variation_id, idx - 1u, iters, n, vec3<f32>(0.0, 0.0, 0.0));
+            let pb = lsp3_point(xform_id, variation_id, idx - 1u, iters, n, vec3<f32>(1.0, 0.0, 0.0));
+            if (distance(pb, seg_a) < thickness) {
+                dir_in = pb - pa;
+            }
+        }
+        if (thick && idx + 1u < total) {
+            let na = lsp3_point(xform_id, variation_id, idx + 1u, iters, n, vec3<f32>(0.0, 0.0, 0.0));
+            let nb = lsp3_point(xform_id, variation_id, idx + 1u, iters, n, vec3<f32>(1.0, 0.0, 0.0));
+            if (distance(na, seg_b) < thickness) {
+                dir_out = nb - na;
+            }
+        }
     }
 
     var out = seg_a;
@@ -420,11 +552,12 @@ fn variation_lsystem_path_3D(p: vec3<f32>, xform_id: u32, variation_id: u32, rng
     // Thicken into a TUBE: offset within the disc perpendicular to the
     // segment. An along-segment offset would only slide the sample along
     // ground the t-sweep already covers.
-    let thickness = get_param(xform_id, variation_id, 152u);
-    if (thickness > 0.0) {
+    if (thick) {
         let soft = get_param(xform_id, variation_id, 153u) > 0.5;
         let dseg = seg_b - seg_a;
         let dlen = length(dseg);
+        let has_seg = connect && dlen > 1e-9;
+        let r = thickness;
         // Samples land ON the pipe's outer surface, not through its volume.
         // A filled tube spreads its samples through the interior, where
         // they integrate to a soft-edged smear — a blur, not a pipe. A
@@ -436,30 +569,95 @@ fn variation_lsystem_path_3D(p: vec3<f32>, xform_id: u32, variation_id: u32, rng
             rad = 1.0 + (rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) - 2.0) * 0.35;
         }
         let ang = rng_nextf(rng) * 6.28318530718;
-        // Round join at each vertex. Consecutive discs are tilted apart by
-        // the turn, so without one the pipe is notched open on the outside
-        // of every corner — and a space-filling curve is nearly all
-        // corners. Sphere and shaft are sampled in proportion to their
-        // areas (4*pi*r^2 against 2*pi*r*len) so surface density stays
-        // even across the join: p = 2r / (2r + len).
-        let joint = rng_nextf(rng) * (2.0 * thickness + dlen) < 2.0 * thickness;
-        if (connect && dlen > 1e-9 && !joint) {
-            let dir = dseg / dlen;
-            // Any axis not parallel to dir gives a stable basis.
-            var ref_axis = vec3<f32>(0.0, 0.0, 1.0);
-            if (abs(dir.z) > 0.9) {
-                ref_axis = vec3<f32>(1.0, 0.0, 0.0);
-            }
-            let ub = normalize(cross(dir, ref_axis));
-            let vb = cross(dir, ub);
-            out = out + (ub * cos(ang) + vb * sin(ang)) * (thickness * rad);
-        } else {
-            // The join sphere, centred on the vertex — and the same code
-            // serves the vertices-only case, which is all joins.
+
+        if (soft || !has_seg) {
+            // A gaussian shell has no hard edge to seam, and
+            // vertices-only is all join: a whole sphere is right for both.
             let zc = rng_nextf(rng) * 2.0 - 1.0;
             let rc = sqrt(max(1.0 - zc * zc, 0.0));
-            let base = select(out, seg_a, joint && connect);
-            out = base + vec3<f32>(rc * cos(ang), rc * sin(ang), zc) * (thickness * rad);
+            out = out + vec3<f32>(rc * cos(ang), rc * sin(ang), zc) * (r * rad);
+        } else {
+            // Seamless join, the 3D twin of the 2D one. The pipe surface
+            // splits exactly into each segment's cylinder CLIPPED at the
+            // mitre plane it shares with its neighbours, plus the patch of
+            // the vertex sphere left exposed on the OUTSIDE of the turn.
+            //
+            // The mitre plane is the right cut because two cylinders of
+            // equal radius meet in an ellipse lying in exactly that plane
+            // — so clipping there removes precisely the part of each that
+            // was buried inside the other, which is the double density
+            // that made the join read as a drawn sphere.
+            let v = dseg / dlen;
+            var ref_axis = vec3<f32>(0.0, 0.0, 1.0);
+            if (abs(v.z) > 0.9) {
+                ref_axis = vec3<f32>(1.0, 0.0, 0.0);
+            }
+            let ub = normalize(cross(v, ref_axis));
+            let vb = cross(v, ub);
+
+            var n0 = vec3<f32>(0.0, 0.0, 0.0);
+            var phi0 = 0.0;
+            let li = length(dir_in);
+            if (li > 1e-9) {
+                let u = dir_in / li;
+                phi0 = acos(clamp(dot(u, v), -1.0, 1.0));
+                if (phi0 > 1e-4 && phi0 < 3.1) {
+                    n0 = normalize(u + v);
+                }
+            }
+            var n1 = vec3<f32>(0.0, 0.0, 0.0);
+            var phi1 = 0.0;
+            let lo = length(dir_out);
+            if (lo > 1e-9) {
+                let z = dir_out / lo;
+                phi1 = acos(clamp(dot(v, z), -1.0, 1.0));
+                if (phi1 > 1e-4 && phi1 < 3.1) {
+                    n1 = normalize(v + z);
+                }
+            }
+
+            // Areas, all divided by 2r: the mitre takes 2*r^2*tan(phi/2)
+            // off the cylinder at each end, and the exposed sphere patch
+            // is a lune of area 2*phi*r^2. tan is clamped because a
+            // near-reversal would otherwise claim more than the segment.
+            let cut0 = r * min(tan(0.5 * phi0), 8.0);
+            let cut1 = r * min(tan(0.5 * phi1), 8.0);
+            let shaft = max(3.14159265359 * dlen - cut0 - cut1, 0.0);
+            let lune = phi0 * r;
+
+            if (rng_nextf(rng) * (shaft + lune) < lune) {
+                // The lune is bounded by the planes through u and v, which
+                // meet along cross(u, v). About that axis it is uniform in
+                // height and spans exactly phi0 of azimuth, so sampling it
+                // needs no rejection.
+                let u = dir_in / li;
+                let w = normalize(cross(u, v));
+                let e2 = cross(w, u);
+                let zc = rng_nextf(rng) * 2.0 - 1.0;
+                let rc = sqrt(max(1.0 - zc * zc, 0.0));
+                let beta = -1.5707963268 + phi0 * rng_nextf(rng);
+                let dir = w * zc + (u * cos(beta) + e2 * sin(beta)) * rc;
+                out = seg_a + dir * (r * rad);
+            } else {
+                // Uniform over the cylinder minus whatever the mitres
+                // take. Rejection keeps it uniform in AREA; the cuts are a
+                // percent or two at sensible thicknesses. Falling out of
+                // the loop keeps the last sample rather than spinning.
+                var s = 0.0;
+                var off = vec3<f32>(0.0, 0.0, 0.0);
+                for (var k = 0u; k < 8u; k = k + 1u) {
+                    s = rng_nextf(rng) * dlen;
+                    let a2 = rng_nextf(rng) * 6.28318530718;
+                    off = (ub * cos(a2) + vb * sin(a2)) * (r * rad);
+                    let rel = v * s + off;
+                    let in0 = dot(n0, n0) < 0.5 || dot(rel, n0) >= 0.0;
+                    let in1 = dot(n1, n1) < 0.5 || dot(rel - dseg, n1) <= 0.0;
+                    if (in0 && in1) {
+                        break;
+                    }
+                }
+                out = seg_a + v * s + off;
+            }
         }
     }
 

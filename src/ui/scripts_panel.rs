@@ -422,8 +422,17 @@ impl ScriptsPanel {
                 Some((name, path)) => format!("Delete “{name}” from {}", path.display()),
                 None => "Only your own scripts can be deleted — the shipped ones are read-only".to_string(),
             };
+            // egui dims a disabled widget's own colours, but an explicit
+            // RichText colour is taken as deliberate and left alone — so
+            // a red icon stays red, just darker, and reads as enabled.
+            // Pick the colour from the state instead.
+            let tint = if target.is_some() {
+                Color32::LIGHT_RED
+            } else {
+                ui.visuals().widgets.noninteractive.fg_stroke.color
+            };
             if ui
-                .add_enabled(target.is_some(), egui::Button::new(egui::RichText::new("🗑").color(Color32::LIGHT_RED)))
+                .add_enabled(target.is_some(), egui::Button::new(egui::RichText::new("🗑").color(tint)))
                 .on_hover_text(hint)
                 .clicked()
             {
