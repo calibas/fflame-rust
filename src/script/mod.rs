@@ -122,6 +122,44 @@ pub struct ScriptMeta {
     /// `None` when the script never called `script(...)`.
     pub kind: Option<ScriptKind>,
     pub params: Vec<ParamDecl>,
+    /// Optional switches from `script(name, kind, [...])`.
+    pub flags: ScriptFlags,
+}
+
+/// Optional switches a script may declare, as
+/// `script("Turntable", "modifier", ["norng"])`.
+///
+/// Deliberately a small set of named booleans rather than a free-form
+/// bag: a flag exists to change what the UI does, so each one has to be
+/// understood by the panel anyway. Adding one is a field here, a match
+/// arm below, and its use — and a script asking for a flag this build
+/// doesn't know is an error naming the ones it does, because a silently
+/// ignored switch looks like the feature is broken.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ScriptFlags {
+    /// The script ignores the seed, so the panel hides the seed field,
+    /// Reroll, and the batch controls — all three are ways of asking for
+    /// a different random result, which this script has none of.
+    pub no_rng: bool,
+}
+
+impl ScriptFlags {
+    /// Every flag name this build understands, for error messages.
+    pub const KNOWN: &'static [&'static str] = &["norng"];
+
+    /// Apply one flag by name.
+    pub fn set(&mut self, name: &str) -> Result<(), String> {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "norng" => self.no_rng = true,
+            other => {
+                return Err(format!(
+                    "unknown script flag `{other}` — this build knows: {}",
+                    Self::KNOWN.join(", ")
+                ))
+            }
+        }
+        Ok(())
+    }
 }
 
 /// A script failure, carrying source position when Rhai knows it.

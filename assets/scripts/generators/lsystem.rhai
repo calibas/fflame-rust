@@ -57,7 +57,7 @@
 //   Hilbert       axiom X   X=-YF+XFX+FY-   Y=+XF-YFY-FX+   angle 90
 //   Peano         axiom X   X=XFYFX+F+YFXFY-F-XFYFX   Y=YFXFY-F-XFYFX+F+YFXFY   angle 90
 
-script("L-System Curve", "generator");
+script("L-System Curve", "generator", ["norng"]);
 
 let axiom = param_string("axiom", "F");
 let rule_1 = param_string("rule_1", "F=F+F--F+F");

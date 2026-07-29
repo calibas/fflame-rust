@@ -32,7 +32,7 @@
 //   Seaweed         axiom F   F=F[+FF][-FF]F[-F][+F]F       angle 25
 //   3D tree         axiom X   X=F[\\+X][/-X][&X]FX   F=FF   angle 25
 
-script("L-System Plant", "generator");
+script("L-System Plant", "generator", ["norng"]);
 
 let axiom = param_string("axiom", "X");
 let rule_1 = param_string("rule_1", "X=F-[[X]+X]+F[+FX]-X");

@@ -16,7 +16,7 @@
 // a space-filling curve is the SOLID CUBE — correct, and mostly useful
 // with solid rendering and lighting.
 
-script("Hilbert Curve 3D", "generator");
+script("Hilbert Curve 3D", "generator", ["norng"]);
 
 let output = param_choice("output", ["Path (finite depth)", "Attractor (solid cube)"], 0);
 let iterations = param_int("iterations", 4, 1, 8);

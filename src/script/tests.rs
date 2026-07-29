@@ -1665,3 +1665,84 @@ fn weight_is_rejected_on_pools_that_have_none() {
         .expect_err("final transforms carry no weight");
     assert!(err.message.contains("only exists on normal transforms"), "{}", err.message);
 }
+
+// ============================================================================
+// Script flags
+// ============================================================================
+
+/// `script(name, kind)` and `script(name, kind, [...])` are two arities
+/// of one function, so the flag list stays optional and every script
+/// written before flags existed is untouched.
+#[test]
+fn script_flags_are_optional() {
+    let host = ScriptHost::new();
+    let meta = |src: &str| {
+        host.collect(src, &FractalConfig::default())
+            .unwrap_or_else(|e| panic!("{}", e.message))
+    };
+
+    let plain = meta(r#"script("A", "generator");"#);
+    assert!(!plain.flags.no_rng, "no flags means no switches set");
+
+    let flagged = meta(r#"script("A", "generator", ["norng"]);"#);
+    assert!(flagged.flags.no_rng);
+    assert_eq!(flagged.name, "A");
+    assert_eq!(flagged.kind, Some(ScriptKind::Generator));
+
+    // An empty list is the same as omitting it.
+    assert!(!meta(r#"script("A", "modifier", []);"#).flags.no_rng);
+}
+
+/// A flag this build doesn't know is an error naming the ones it does.
+/// A silently ignored switch looks like the feature is broken.
+#[test]
+fn unknown_script_flags_are_rejected() {
+    let host = ScriptHost::new();
+    let err = host
+        .collect(
+            r#"script("A", "generator", ["norgn"]);"#,
+            &FractalConfig::default(),
+        )
+        .expect_err("a typo'd flag must not pass silently");
+    assert!(err.message.contains("unknown script flag"), "{}", err.message);
+    assert!(err.message.contains("norng"), "must list what it does know: {}", err.message);
+
+    let err = host
+        .collect(r#"script("A", "generator", [1]);"#, &FractalConfig::default())
+        .expect_err("flags must be strings");
+    assert!(err.message.contains("must be strings"), "{}", err.message);
+}
+
+/// `norng` is a claim about behaviour, not just a UI hint: a script that
+/// declares it must genuinely produce the same flame for any seed. This
+/// checks the claim against the shipped scripts rather than trusting it.
+#[test]
+fn scripts_declaring_norng_really_ignore_the_seed() {
+    let host = ScriptHost::new();
+    let base = FractalConfig::default();
+    let mut checked = 0;
+    for (name, source) in super::library::EMBEDDED {
+        let meta = host
+            .collect(source, &base)
+            .unwrap_or_else(|e| panic!("{name}: {}", e.message));
+        if !meta.flags.no_rng {
+            continue;
+        }
+        let run = |seed: u64| {
+            serde_json::to_value(
+                &host
+                    .run(source, &base, seed, HashMap::new())
+                    .unwrap_or_else(|e| panic!("{name}: {}", e.message))
+                    .config,
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            run(1),
+            run(9_999),
+            "{name} declares `norng` but its output changes with the seed"
+        );
+        checked += 1;
+    }
+    assert!(checked >= 3, "expected several shipped scripts to declare norng");
+}

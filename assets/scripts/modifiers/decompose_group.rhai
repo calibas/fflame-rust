@@ -13,7 +13,7 @@
 // klein_group.
 // Open a flame using one of those, then run this.
 
-script("Decompose Group", "modifier");
+script("Decompose Group", "modifier", ["norng"]);
 
 // The "never immediately undo the last generator" rule. Without it the
 // walk backtracks constantly and the limit set fills in slowly.
