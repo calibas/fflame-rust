@@ -268,16 +268,22 @@ pub struct ScriptFlags {
     /// Reroll, and the batch controls — all three are ways of asking for
     /// a different random result, which this script has none of.
     pub no_rng: bool,
+    /// The script generates a palette. Lets a panel other than the
+    /// Scripts panel — the Palette Editor — offer it, which is how
+    /// palette generation reaches the place people look for it without
+    /// a second implementation behind a Rust generator.
+    pub palette: bool,
 }
 
 impl ScriptFlags {
     /// Every flag name this build understands, for error messages.
-    pub const KNOWN: &'static [&'static str] = &["norng"];
+    pub const KNOWN: &'static [&'static str] = &["norng", "palette"];
 
     /// Apply one flag by name.
     pub fn set(&mut self, name: &str) -> Result<(), String> {
         match name.trim().to_ascii_lowercase().as_str() {
             "norng" => self.no_rng = true,
+            "palette" => self.palette = true,
             other => {
                 return Err(format!(
                     "unknown script flag `{other}` — this build knows: {}",

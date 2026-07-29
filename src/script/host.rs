@@ -50,6 +50,19 @@ pub(crate) struct ScriptState {
     /// silently different result.
     pub palettes: Vec<crate::scene::palette::Palette>,
     pub rng: Pcg64Mcg,
+    /// Scripts this run may call, as (id, source). Empty unless the
+    /// caller supplied a library, so `run_script` fails with a clear
+    /// message rather than silently doing nothing.
+    pub scripts: Vec<(String, String)>,
+    /// Ids currently executing, outermost first. Both the cycle check
+    /// and the depth cap read this.
+    pub call_stack: Vec<String>,
+    /// Operations reported by each live frame, and the total from frames
+    /// that have finished. Rhai counts per evaluation, so a nested run
+    /// starts from zero — summing the live frames is what stops a script
+    /// buying a fresh budget by calling another one.
+    pub frame_ops: Vec<u64>,
+    pub ops_finished: u64,
     /// What the script asked to animate. Stays untouched — and so
     /// produces no animation at all — unless the script uses `anim`.
     pub anim: super::anim::AnimBuilder,
@@ -75,7 +88,17 @@ impl ScriptState {
             // crate versions.
             rng: Pcg64Mcg::new(expand_seed(seed)),
             anim: super::anim::AnimBuilder::default(),
+            scripts: Vec::new(),
+            call_stack: Vec::new(),
+            frame_ops: Vec::new(),
+            ops_finished: 0,
         }
+    }
+
+    /// Total operations charged so far: everything finished, plus the
+    /// latest count from every frame still running.
+    pub fn ops_total(&self) -> u64 {
+        self.ops_finished + self.frame_ops.iter().sum::<u64>()
     }
 
     /// Record a declaration, or fetch the supplied value for it.
@@ -92,12 +115,80 @@ impl ScriptState {
             ParamDecl::Choice { default, .. } => ParamValue::Choice(*default),
             ParamDecl::Text { default, .. } => ParamValue::Text(default.clone()),
         };
-        self.meta.params.push(decl);
         if self.mode == Mode::Collect {
+            self.meta.params.push(decl);
             return Ok(fallback);
         }
-        Ok(self.provided.get(&key).cloned().unwrap_or(fallback))
+        let supplied = self.provided.get(&key).cloned();
+        let value = match supplied {
+            Some(v) => coerce_to_decl(&key, v, &decl)?,
+            None => fallback,
+        };
+        self.meta.params.push(decl);
+        Ok(value)
     }
+}
+
+/// Reconcile a supplied value with the declaration it lands on.
+///
+/// The DECLARATION decides the type, not the value: a caller cannot know
+/// what the script it is calling declares, so `run_script("x", #{ scheme:
+/// "Triadic" })` hands over a string where a choice is wanted. Resolving
+/// it here means every route in — the panel, `--set`, Python, and one
+/// script calling another — agrees, instead of each coercing its own way.
+fn coerce_to_decl(key: &str, value: ParamValue, decl: &ParamDecl) -> Result<ParamValue, String> {
+    Ok(match (decl, value) {
+        // Already right.
+        (ParamDecl::Float { .. }, v @ ParamValue::Float(_))
+        | (ParamDecl::Int { .. }, v @ ParamValue::Int(_))
+        | (ParamDecl::Bool { .. }, v @ ParamValue::Bool(_))
+        | (ParamDecl::Text { .. }, v @ ParamValue::Text(_))
+        | (ParamDecl::Color { .. }, v @ ParamValue::Color(_))
+        | (ParamDecl::Choice { .. }, v @ ParamValue::Choice(_)) => v,
+
+        // A choice named rather than numbered — how anyone would write
+        // it, and unreadable as an index.
+        (ParamDecl::Choice { options, .. }, ParamValue::Text(name)) => {
+            let found = options.iter().position(|o| o.eq_ignore_ascii_case(name.trim()));
+            match found {
+                Some(i) => ParamValue::Choice(i),
+                None => {
+                    return Err(format!(
+                        "`{key}` expects one of [{}], got `{name}`",
+                        options.join(", ")
+                    ))
+                }
+            }
+        }
+        (ParamDecl::Choice { options, .. }, ParamValue::Int(i)) => {
+            let i = i.max(0) as usize;
+            if i < options.len() {
+                ParamValue::Choice(i)
+            } else {
+                return Err(format!(
+                    "`{key}` expects one of [{}], got index {i}",
+                    options.join(", ")
+                ));
+            }
+        }
+
+        // Whole numbers are numbers.
+        (ParamDecl::Float { .. }, ParamValue::Int(i)) => ParamValue::Float(i as f64),
+        (ParamDecl::Int { .. }, ParamValue::Float(f)) => ParamValue::Int(f.round() as i64),
+        (ParamDecl::Color { .. }, ParamValue::Text(text)) => {
+            ParamValue::Color(super::color::ScriptColor::from_hex(&text)?.to_rgb())
+        }
+        (ParamDecl::Text { .. }, other) => ParamValue::Text(match other {
+            ParamValue::Float(f) => f.to_string(),
+            ParamValue::Int(i) => i.to_string(),
+            ParamValue::Bool(b) => b.to_string(),
+            _ => return Err(format!("`{key}` expects text")),
+        }),
+
+        (_, other) => {
+            return Err(format!("`{key}` was given an unusable value: {other:?}"))
+        }
+    })
 }
 
 /// The result of a successful run.
@@ -119,6 +210,8 @@ pub struct ScriptOutcome {
 pub struct ScriptHost {
     /// Palettes `flame.set_palette` / `flame.random_palette` draw from.
     palettes: Vec<crate::scene::palette::Palette>,
+    /// Scripts that `run_script` can call, as (id, source).
+    scripts: Vec<(String, String)>,
 }
 
 impl ScriptHost {
@@ -128,13 +221,23 @@ impl ScriptHost {
         Self::default()
     }
 
+    /// A host whose scripts may call each other by id.
+    ///
+    /// Without this a `run_script` call fails with a message saying so,
+    /// rather than quietly doing nothing — the headless CLI and the app
+    /// both supply the discovered library.
+    pub fn with_scripts(mut self, scripts: Vec<(String, String)>) -> Self {
+        self.scripts = scripts;
+        self
+    }
+
     /// A host that lets scripts choose from `palettes`.
     ///
     /// Selection uses the script's seeded RNG, so "pick a random palette"
     /// still reproduces from script + seed — unlike the Rust random
     /// generator, which draws from the thread RNG.
     pub fn with_palettes(palettes: Vec<crate::scene::palette::Palette>) -> Self {
-        Self { palettes }
+        Self { palettes, scripts: Vec::new() }
     }
 
     /// Collect metadata and parameter declarations without keeping the
@@ -176,6 +279,7 @@ impl ScriptHost {
             params,
             self.palettes.clone(),
         )));
+        state.borrow_mut().scripts = self.scripts.clone();
 
         // Built per run: the registered closures capture this run's
         // config and state.
@@ -184,7 +288,14 @@ impl ScriptHost {
         let mut scope = Scope::new();
         super::api::push_globals(&mut scope, Rc::clone(&cfg), Rc::clone(&state));
 
-        engine.run_with_scope(&mut scope, text).map_err(map_error)?;
+        state.borrow_mut().frame_ops.push(0);
+        let result = engine.run_with_scope(&mut scope, text);
+        {
+            let mut st = state.borrow_mut();
+            let spent = st.frame_ops.pop().unwrap_or(0);
+            st.ops_finished += spent;
+        }
+        result.map_err(map_error)?;
 
         let mut state = state.borrow_mut();
 
@@ -226,6 +337,92 @@ impl ScriptHost {
     }
 }
 
+/// The most nesting `run_script` allows. Cycles are caught separately;
+/// this is for long chains that never repeat an id.
+const MAX_SCRIPT_DEPTH: usize = 8;
+
+/// Run another script against the SAME config and the same RNG stream.
+///
+/// Sharing the config is what makes this useful without a return value:
+/// a palette script called from a generator simply sets that flame's
+/// palette. Sharing the RNG stream (rather than re-using the caller's
+/// seed) keeps the whole run reproducible from script + seed while
+/// letting two calls produce two different results.
+pub(crate) fn run_sub_script(
+    cfg: &Rc<RefCell<FractalConfig>>,
+    state: &Rc<RefCell<ScriptState>>,
+    id: &str,
+    params: HashMap<String, ParamValue>,
+) -> Result<(), String> {
+    let (source, saved) = {
+        let mut st = state.borrow_mut();
+
+        if st.scripts.is_empty() {
+            return Err(format!(
+                "cannot run `{id}`: no script library is available here (try running from the app)"
+            ));
+        }
+        if st.call_stack.iter().any(|c| c == id) {
+            let mut chain = st.call_stack.clone();
+            chain.push(id.to_string());
+            return Err(format!("scripts call each other in a loop: {}", chain.join(" -> ")));
+        }
+        if st.call_stack.len() >= MAX_SCRIPT_DEPTH {
+            return Err(format!(
+                "scripts are nested more than {MAX_SCRIPT_DEPTH} deep (at `{id}`)"
+            ));
+        }
+
+        let source = match st.scripts.iter().find(|(k, _)| k == id) {
+            Some((_, src)) => src.clone(),
+            None => {
+                let mut known: Vec<&str> = st.scripts.iter().map(|(k, _)| k.as_str()).collect();
+                known.sort_unstable();
+                return Err(format!(
+                    "no script with id `{id}` (available: {})",
+                    known.join(", ")
+                ));
+            }
+        };
+
+        // The callee declares its OWN parameters; they must not land in
+        // the caller's metadata, or they would appear in its panel.
+        let saved = (
+            std::mem::take(&mut st.meta),
+            std::mem::replace(&mut st.provided, params),
+            std::mem::take(&mut st.declared),
+        );
+        st.call_stack.push(id.to_string());
+        st.frame_ops.push(0);
+        (source, saved)
+    };
+
+    let engine = build_engine(Rc::clone(cfg), Rc::clone(state));
+    let mut scope = Scope::new();
+    super::api::push_globals(&mut scope, Rc::clone(cfg), Rc::clone(state));
+    let result = engine.run_with_scope(&mut scope, &source);
+
+    {
+        let mut st = state.borrow_mut();
+        let spent = st.frame_ops.pop().unwrap_or(0);
+        st.ops_finished += spent;
+        st.call_stack.pop();
+        st.meta = saved.0;
+        st.provided = saved.1;
+        st.declared = saved.2;
+    }
+
+    // Attribute the failure: an unattributed line number in a file the
+    // reader did not open is a dead end.
+    result.map_err(|e| {
+        let mapped = map_error(e);
+        match mapped.line {
+            Some(line) => format!("in `{id}` line {line}: {}", mapped.message),
+            None => format!("in `{id}`: {}", mapped.message),
+        }
+    })
+}
+
 fn build_engine(cfg: Rc<RefCell<FractalConfig>>, state: Rc<RefCell<ScriptState>>) -> Engine {
     let mut engine = Engine::new();
 
@@ -237,6 +434,23 @@ fn build_engine(cfg: Rc<RefCell<FractalConfig>>, state: Rc<RefCell<ScriptState>>
     // No dynamic code generation: scripts are shared artifacts, and
     // eval would let one smuggle in constructs past review.
     engine.disable_symbol("eval");
+
+    // Rhai's own max_operations is per evaluation, so a script that
+    // calls another would get a whole fresh allowance for it — and a
+    // loop calling a thousand sub-scripts would buy a thousand of them.
+    // Charge every frame against one shared total instead.
+    let budget_state = Rc::clone(&state);
+    engine.on_progress(move |ops| {
+        let mut st = budget_state.borrow_mut();
+        if let Some(frame) = st.frame_ops.last_mut() {
+            *frame = ops;
+        }
+        if st.ops_total() > MAX_OPERATIONS {
+            Some(rhai::Dynamic::from("operation budget exhausted"))
+        } else {
+            None
+        }
+    });
 
     super::api::register(&mut engine, cfg, state);
     engine
@@ -270,6 +484,22 @@ fn expand_seed(seed: u64) -> u128 {
 /// Map a Rhai failure to our error type, keeping source position.
 fn map_error(err: Box<rhai::EvalAltResult>) -> ScriptError {
     let pos = err.position();
+    // A budget stop reaches us as ErrorTerminated carrying the token we
+    // returned from on_progress. Rhai renders that as bare "Script
+    // terminated", which tells the reader nothing about what to change.
+    if let rhai::EvalAltResult::ErrorTerminated(token, _) = &*err {
+        let reason = token
+            .clone()
+            .into_string()
+            .unwrap_or_else(|_| "stopped".to_string());
+        return ScriptError {
+            message: format!(
+                "{reason} — this script (and anything it called) did too much work.                  Reduce a loop count, or the depth of whatever it is building."
+            ),
+            line: pos.line(),
+            column: pos.position(),
+        };
+    }
     // Rhai appends its own position suffix to Display; strip it so the
     // message doesn't read "… (line 7, position 3) (line 7:3)".
     let raw = err.to_string();

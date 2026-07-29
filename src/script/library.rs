@@ -30,6 +30,10 @@ pub(crate) const EMBEDDED: &[(&str, &str)] = &[
         include_str!("../../assets/scripts/generators/hilbert3d.rhai"),
     ),
     (
+        "random_palette.rhai",
+        include_str!("../../assets/scripts/modifiers/random_palette.rhai"),
+    ),
+    (
         "turntable.rhai",
         include_str!("../../assets/scripts/modifiers/turntable.rhai"),
     ),

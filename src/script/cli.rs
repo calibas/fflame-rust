@@ -45,8 +45,17 @@ pub fn generate_mode(
 
     // Same palette library the app loads, so `generate` and the Scripts
     // panel resolve palette names identically.
+    // Same palette library the app loads, and the same script library,
+    // so `generate` and the Scripts panel resolve names identically —
+    // including one script calling another by id.
     let host = ScriptHost::with_palettes(
         crate::scene::palette::PaletteLibrary::new().iter().cloned().collect(),
+    )
+    .with_scripts(
+        super::library::discover(&base)
+            .into_iter()
+            .map(|e| (e.id, e.source))
+            .collect(),
     );
 
     // Collect first: it tells us the declared parameters (so --set can be

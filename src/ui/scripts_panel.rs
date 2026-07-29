@@ -222,12 +222,16 @@ impl ScriptsPanel {
                 fresh
             }
         };
-        ScriptHost::with_palettes(self.palettes.clone()).run(
-            &self.text,
-            &base,
-            seed,
-            self.values.clone(),
-        )
+        // The library the panel already discovered, so one script can
+        // call another by id exactly as it does headlessly.
+        ScriptHost::with_palettes(self.palettes.clone())
+            .with_scripts(
+                self.entries
+                    .iter()
+                    .map(|e| (e.id.clone(), e.source.clone()))
+                    .collect(),
+            )
+            .run(&self.text, &base, seed, self.values.clone())
     }
 
     pub fn render(

@@ -329,6 +329,7 @@ pub(crate) fn register(
     register_flame(engine);
     register_transform(engine);
     register_config(engine, Rc::clone(&state));
+    register_run_script(engine, Rc::clone(&cfg), Rc::clone(&state));
     register_colors(engine, Rc::clone(&state));
     register_palettes(engine, Rc::clone(&state));
     register_registry_queries(engine);
@@ -1255,6 +1256,79 @@ fn json_to_dynamic(v: &serde_json::Value) -> Dynamic {
 }
 
 // ---------------------------------------------------------------- palettes
+
+/// `run_script(id)` / `run_script(id, #{ ... })` — run another script on
+/// the same flame.
+///
+/// The callee works on the SAME config, so a palette script called from
+/// a generator simply sets that flame's palette. There is no return
+/// value: the shared config covers every case we have, and it keeps
+/// both the model and the sandbox simple.
+///
+/// The callee continues the caller's RNG stream rather than re-using its
+/// seed, so the whole run still reproduces from (script, seed) while two
+/// calls give two different results.
+fn register_run_script(
+    engine: &mut Engine,
+    cfg: Rc<RefCell<FractalConfig>>,
+    state: Rc<RefCell<ScriptState>>,
+) {
+    let c = Rc::clone(&cfg);
+    let s = Rc::clone(&state);
+    engine.register_fn("run_script", move |id: &str| -> Result<(), Box<EvalAltResult>> {
+        call_script(&c, &s, id, rhai::Map::new())
+    });
+
+    engine.register_fn(
+        "run_script",
+        move |id: &str, params: rhai::Map| -> Result<(), Box<EvalAltResult>> {
+            call_script(&cfg, &state, id, params)
+        },
+    );
+}
+
+fn call_script(
+    cfg: &Rc<RefCell<FractalConfig>>,
+    state: &Rc<RefCell<ScriptState>>,
+    id: &str,
+    params: rhai::Map,
+) -> Result<(), Box<EvalAltResult>> {
+    // Collect mode only gathers the CALLER's parameters. Running the
+    // callee would cost time and side effects for metadata that is not
+    // wanted: its parameters belong to it, not to the caller's panel.
+    if state.borrow().mode == super::host::Mode::Collect {
+        return Ok(());
+    }
+
+    let mut supplied: std::collections::HashMap<String, ParamValue> = std::collections::HashMap::new();
+    for (key, value) in params {
+        supplied.insert(key.to_string(), dynamic_to_param(&value)?);
+    }
+    super::host::run_sub_script(cfg, state, id, supplied).map_err(err)
+}
+
+/// Turn a value from a `run_script` parameter map into a ParamValue.
+///
+/// Bools are tested before integers because Rhai, like the rest of the
+/// object model here, will happily read one as the other.
+fn dynamic_to_param(value: &Dynamic) -> Result<ParamValue, Box<EvalAltResult>> {
+    if let Ok(b) = value.as_bool() {
+        return Ok(ParamValue::Bool(b));
+    }
+    if let Ok(i) = value.as_int() {
+        return Ok(ParamValue::Int(i));
+    }
+    if let Ok(f) = value.as_float() {
+        return Ok(ParamValue::Float(f));
+    }
+    if let Some(c) = value.clone().try_cast::<ScriptColor>() {
+        return Ok(ParamValue::Color(c.to_rgb()));
+    }
+    if let Ok(text) = value.clone().into_string() {
+        return Ok(ParamValue::Text(text));
+    }
+    Err(err("script parameters must be a number, true/false, a string or a color"))
+}
 
 /// `Color` — the value colour-generating scripts work in, plus the two
 /// palette builders that make generating one possible at all.
