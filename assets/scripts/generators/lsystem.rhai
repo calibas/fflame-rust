@@ -10,7 +10,7 @@
 // transforms agree on, to infinite depth, for free. Two constructions
 // are tried, automatically:
 //
-//   EDGE rewriting (Koch, dragon, Levy...): the rule replaces a drawn
+//   EDGE rewriting (Koch, Levy, Gosper...): the rule replaces a drawn
 //   edge with a shorter path — the drawn depth-1 segments are the pieces.
 //
 //   NODE rewriting (Hilbert, Peano — the space-fillers): the rule
@@ -21,6 +21,15 @@
 // Not supported: rules whose variables are two genuinely different
 // curves (not mirror images of each other) — that needs more than a flat
 // set of transforms, and the script will say so.
+//
+// Also not supported, and worth naming because it looks like it should
+// be: the HEIGHWAY DRAGON. Its depth-1 drawn path is identical to the
+// Levy C's — two segments over a right angle — and the two differ only
+// in that the dragon traverses the second one BACKWARDS. Every
+// construction here reads pieces in the direction the turtle drew them,
+// so any spelling of the dragon comes out as a Levy C. Getting it right
+// needs a piece to be reversed rather than mirrored, which nothing here
+// can express yet.
 //
 // SYMBOLS  (Prusinkiewicz & Lindenmayer, "The Algorithmic Beauty of
 // Plants" — the convention most sources follow)
@@ -51,7 +60,6 @@
 //   Koch          axiom F   F=F+F--F+F                 angle 60
 //   Koch square   axiom F   F=F+F-F-F+F                angle 90
 //   Koch island   axiom F   F=F+F-F-FF+F+F-F           angle 90
-//   Dragon        axiom F   F=F+G   G=F-G              angle 90
 //   Sierpinski    axiom F   F=+G-F-G+   G=-F+G+F-      angle 60
 //   Levy C        axiom F   F=+F--F+                   angle 45
 //   Hilbert       axiom X   X=-YF+XFX+FY-   Y=+XF-YFY-FX+   angle 90
@@ -91,7 +99,6 @@ let preset = param_choice("preset", [
     "2D · Koch snowflake",
     "2D · Koch square",
     "2D · Koch island",
-    "2D · Dragon curve",
     "2D · Sierpinski arrowhead",
     "2D · Levy C curve",
     "2D · Hilbert curve",
@@ -113,7 +120,6 @@ let presets = #{
     "2D · Koch snowflake":       ["F", "F=F+F--F+F", "", "", "", "", 60.0, 0],
     "2D · Koch square":          ["F", "F=F+F-F-F+F", "", "", "", "", 90.0, 0],
     "2D · Koch island":          ["F", "F=F+F-F-FF+F+F-F", "", "", "", "", 90.0, 0],
-    "2D · Dragon curve":         ["F", "F=F+G", "G=F-G", "", "", "", 90.0, 0],
     "2D · Sierpinski arrowhead": ["F", "F=+G-F-G+", "G=-F+G+F-", "", "", "", 60.0, 0],
     "2D · Levy C curve":         ["F", "F=+F--F+", "", "", "", "", 45.0, 0],
     "2D · Hilbert curve":        ["X", "X=-YF+XFX+FY-", "Y=+XF-YFY-FX+", "", "", "", 90.0, 0],
@@ -456,6 +462,13 @@ if bad != "" {
         if construction == "graph" {
             print("Graph-directed system: " + graph_pieces.len() + " maps across its curve types.");
             print("The word structure runs through xaos; only the axiom's curve is visible.");
+            if output == "Path (finite depth)" {
+                // The path variation walks ONE set of maps by the digits
+                // of the curve parameter; a graph-directed system has a
+                // set per curve type and picks between them by what came
+                // before, which those digits cannot encode.
+                print("Path mode does not apply to a graph-directed system — built the attractor instead.");
+            }
         } else if construction == "3d" {
             print("3D rule: " + pieces.len() + " pieces with full 3D frames.");
         } else if construction == "node" {
