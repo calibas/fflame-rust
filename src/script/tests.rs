@@ -1074,10 +1074,15 @@ fn lsystem_script_reads_rules_from_parameters() {
     let host = ScriptHost::new();
     let source = include_str!("../../assets/scripts/generators/lsystem.rhai");
     let run_with = |sets: &[(&str, &str)]| {
-        let params: HashMap<String, ParamValue> = sets
+        let mut params: HashMap<String, ParamValue> = sets
             .iter()
             .map(|(k, v)| (k.to_string(), ParamValue::Text(v.to_string())))
             .collect();
+        // The script now draws the finite-depth PATH by default; these
+        // cases are about the attractor construction, so ask for it.
+        params
+            .entry("output".to_string())
+            .or_insert_with(|| ParamValue::Text("Attractor (infinite depth)".to_string()));
         host.run(source, &FractalConfig::default(), 1, params).unwrap()
     };
 
@@ -1123,6 +1128,18 @@ fn lsystem_warns_when_the_pieces_do_not_shrink() {
             .collect();
     params.insert("angle".to_string(), ParamValue::Float(90.0));
 
+    // The script now draws the finite-depth PATH by default; this
+    // is about the attractor construction, so ask for it.
+    params.insert(
+        "output".to_string(),
+        ParamValue::Text("Attractor (infinite depth)".to_string()),
+    );
+    // The script now draws the finite-depth PATH by default; this
+    // is about the attractor construction, so ask for it.
+    params.insert(
+        "output".to_string(),
+        ParamValue::Text("Attractor (infinite depth)".to_string()),
+    );
     let out = host.run(source, &FractalConfig::default(), 1, params).unwrap();
     assert!(
         out.messages.iter().any(|m| m.contains("do not shrink")),
@@ -1152,6 +1169,12 @@ fn space_filling_rules_build_by_node_rewriting() {
     .collect();
     params.insert("angle".to_string(), ParamValue::Float(90.0));
 
+    // The script now draws the finite-depth PATH by default; this
+    // is about the attractor construction, so ask for it.
+    params.insert(
+        "output".to_string(),
+        ParamValue::Text("Attractor (infinite depth)".to_string()),
+    );
     let out = host.run(source, &FractalConfig::default(), 1, params).unwrap();
     assert!(
         out.messages.iter().any(|m| m.contains("Space-filling")),
@@ -1203,13 +1226,19 @@ fn mirrored_pieces_get_a_reflected_transform() {
     // must get a REFLECTED similarity, which flips the determinant sign.
     let host = ScriptHost::new();
     let source = include_str!("../../assets/scripts/generators/lsystem.rhai");
-    let params: HashMap<String, ParamValue> = [
+    let mut params: HashMap<String, ParamValue> = [
         ("rule_1", "F=+G-F-G+"),
         ("rule_2", "G=-F+G+F-"),
     ]
     .iter()
     .map(|(k, v)| (k.to_string(), ParamValue::Text(v.to_string())))
     .collect();
+    // The script now draws the finite-depth PATH by default; this
+    // is about the attractor construction, so ask for it.
+    params.insert(
+        "output".to_string(),
+        ParamValue::Text("Attractor (infinite depth)".to_string()),
+    );
     let out = host.run(source, &FractalConfig::default(), 1, params).unwrap();
     let ts = &out.config.flame.transforms;
     assert_eq!(ts.len(), 3, "arrowhead replaces one edge with three");
@@ -1255,7 +1284,12 @@ fn path_mode_bakes_the_maps_into_one_variation() {
     .map(|(k, v)| (k.to_string(), ParamValue::Text(v.to_string())))
     .collect();
     params.insert("angle".to_string(), ParamValue::Float(90.0));
-    params.insert("output".to_string(), ParamValue::Choice(1));
+    // By NAME, not by index: the option order is a presentation choice
+    // and moved once already when Path became the default.
+    params.insert(
+        "output".to_string(),
+        ParamValue::Text("Path (finite depth)".to_string()),
+    );
     params.insert("path_iterations".to_string(), ParamValue::Int(6));
 
     let out = host.run(source, &FractalConfig::default(), 1, params).unwrap();
@@ -2717,4 +2751,139 @@ fn the_random_preset_varies_with_the_seed() {
             "seed {seed}: neither hue ({span}) nor brightness ({vspan}) moves — a flat wash"
         );
     }
+}
+
+// ============================================================================
+// L-system presets
+// ============================================================================
+
+/// Every preset in both L-system scripts must actually build something.
+///
+/// The list is read from the script's own declaration rather than
+/// repeated here, so adding a preset adds a case automatically — a
+/// hand-kept copy would go stale the first time one is added and quietly
+/// stop testing it.
+///
+/// Four presets were dropped or replaced during development because they
+/// failed exactly this way: "2D Weed" and "3D Bush" built no transforms
+/// at all, while "2D Fan" and a 3D Koch rule built plenty and rendered
+/// as a full-frame wash or a bare squiggle. The transform count alone
+/// does not catch the last two, so this also insists the script did not
+/// report a failure in its own messages.
+#[test]
+fn every_lsystem_preset_builds_something() {
+    let base = FractalConfig::default();
+    let entries = super::library::discover(&base);
+    let host = ScriptHost::new();
+
+    for id in ["lsystem", "lsystem_plant"] {
+        let entry = super::library::find(&entries, id).unwrap_or_else(|| panic!("{id} shipped"));
+        let meta = host.collect(&entry.source, &base).unwrap();
+
+        let options = meta
+            .params
+            .iter()
+            .find_map(|p| match p {
+                ParamDecl::Choice { key, options, .. } if key == "preset" => Some(options.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{id} declares a preset parameter"));
+
+        assert!(options.len() > 8, "{id}: expected a real list, got {options:?}");
+        assert_eq!(options[0], "Custom", "{id}: Custom must be the default");
+        assert!(
+            options.iter().any(|o| o.starts_with("2D")),
+            "{id}: expected a 2D section"
+        );
+        assert!(
+            options.iter().any(|o| o.starts_with("3D")),
+            "{id}: expected a 3D section"
+        );
+
+        for option in &options {
+            let mut params: HashMap<String, ParamValue> = HashMap::new();
+            params.insert("preset".into(), ParamValue::Text(option.clone()));
+            let out = host
+                .run(&entry.source, &base, 1, params)
+                .unwrap_or_else(|e| panic!("{id} / {option}: {}", e.message));
+
+            let flame = &out.config.flame;
+            assert!(
+                !flame.transforms.is_empty(),
+                "{id} / {option}: built no transforms"
+            );
+
+            // The scripts say so in plain words when a rule defeats them,
+            // which a transform count does not reveal.
+            for m in &out.messages {
+                let low = m.to_lowercase();
+                assert!(
+                    !low.contains("could not build") && !low.contains("nothing to"),
+                    "{id} / {option}: {m}"
+                );
+            }
+        }
+    }
+}
+
+/// Custom must leave the fields alone — it is the default, so a preset
+/// leaking into it would silently override whatever the user typed.
+#[test]
+fn the_custom_preset_changes_nothing() {
+    let base = FractalConfig::default();
+    let entries = super::library::discover(&base);
+    let host = ScriptHost::new();
+
+    for id in ["lsystem", "lsystem_plant"] {
+        let entry = super::library::find(&entries, id).unwrap();
+
+        let mut custom: HashMap<String, ParamValue> = HashMap::new();
+        custom.insert("preset".into(), ParamValue::Text("Custom".into()));
+        let with_custom = host.run(&entry.source, &base, 1, custom).unwrap();
+        let untouched = host.run(&entry.source, &base, 1, HashMap::new()).unwrap();
+
+        assert_eq!(
+            serde_json::to_value(&with_custom.config).unwrap(),
+            serde_json::to_value(&untouched.config).unwrap(),
+            "{id}: Custom must behave exactly as the default"
+        );
+    }
+}
+
+/// The Curve script defaults to drawing the finite-depth PATH, which is
+/// the picture people have in mind and the only mode that works for a 3D
+/// rule whose infinite-depth limit never settles.
+#[test]
+fn the_curve_script_draws_a_path_by_default() {
+    let base = FractalConfig::default();
+    let entries = super::library::discover(&base);
+    let entry = super::library::find(&entries, "lsystem").unwrap();
+    let host = ScriptHost::new();
+
+    let out = host.run(&entry.source, &base, 1, HashMap::new()).unwrap();
+    assert_eq!(
+        out.config.flame.transforms.len(),
+        1,
+        "path mode carries the whole curve on one transform"
+    );
+    assert!(
+        out.config.flame.transforms[0]
+            .variations
+            .contains_key("lsystem_path"),
+        "expected the path variation, got {:?}",
+        out.config.flame.transforms[0].variations
+    );
+
+    // A preset may lower the depth: the 3D Hilbert has eight segments per
+    // level, so its default of five would be 32768 of them and fill the
+    // frame with mush rather than draw the curve.
+    let mut deep: HashMap<String, ParamValue> = HashMap::new();
+    deep.insert("preset".into(), ParamValue::Text("3D · Hilbert curve".into()));
+    let out = host.run(&entry.source, &base, 1, deep).unwrap();
+    let iters = out.config.flame.transforms[0]
+        .variation_params
+        .get("lsystem_path_3D.iterations")
+        .copied()
+        .expect("3D path depth");
+    assert_eq!(iters, 3.0, "the preset should ask for a shallower depth");
 }

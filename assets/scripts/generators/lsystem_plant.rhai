@@ -48,6 +48,56 @@ let stem_weight = param("stem_weight", 0.35, 0.0, 2.0);
 let stem_thickness = param("stem_thickness", 0.06, 0.0, 0.5);
 let colour_by_depth = param_bool("colour_by_depth", true);
 
+// Presets last, so the fields above read as the thing you edit and this
+// as the thing you reach for when you do not want to. Custom leaves
+// them alone; anything else overwrites axiom, rules and angle, so the
+// fields show what a preset actually is and can be edited from there.
+let preset = param_choice("preset", [
+    "Custom",
+    // The classics from Prusinkiewicz & Lindenmayer, "The Algorithmic
+    // Beauty of Plants", figure 1.24 — the six that every L-system
+    // reference reproduces.
+    "2D · Bush (ABOP a)",
+    "2D · Sparse bush (ABOP b)",
+    "2D · Bushy plant (ABOP c)",
+    "2D · Sticks (ABOP d)",
+    "2D · Fern-like (ABOP e)",
+    "2D · Fractal plant (ABOP f)",
+    "2D · Seaweed",
+    "2D · Frond",
+    // Any of & ^ \ / switches the script to the 3D turtle by itself.
+    "3D · Tree",
+    "3D · Bush",
+    "3D · Spiral tree",
+], 0);
+
+// axiom, rule 1..4, angle.
+let presets = #{
+    "2D · Bush (ABOP a)":        ["F", "F=F[+F]F[-F]F", "", "", "", 25.7],
+    "2D · Sparse bush (ABOP b)": ["F", "F=F[+F]F[-F][F]", "", "", "", 20.0],
+    "2D · Bushy plant (ABOP c)": ["F", "F=FF-[-F+F+F]+[+F-F-F]", "", "", "", 22.5],
+    "2D · Sticks (ABOP d)":      ["X", "X=F[+X]F[-X]+X", "F=FF", "", "", 20.0],
+    "2D · Fern-like (ABOP e)":   ["X", "X=F[+X][-X]FX", "F=FF", "", "", 25.7],
+    "2D · Fractal plant (ABOP f)": ["X", "X=F-[[X]+X]+F[+FX]-X", "F=FF", "", "", 22.5],
+    "2D · Seaweed":              ["F", "F=F[+FF][-FF]F[-F][+F]F", "", "", "", 25.0],
+    "2D · Frond":                ["F", "F=FF[++F][-FF]", "", "", "", 20.0],
+    // A backslash is roll-left; it needs doubling inside a string.
+    "3D · Tree":                 ["X", "X=F[\\+X][/-X][&X]FX", "F=FF", "", "", 25.0],
+    "3D · Bush":                 ["X", "X=F[&X]/////[&X]///////[&X]", "F=FF", "", "", 22.5],
+    "3D · Spiral tree":          ["X", "X=F[&+X]/////[&+X]/////[&+X]", "F=FF", "", "", 20.0],
+};
+
+if preset != "Custom" {
+    let p = presets[preset];
+    axiom = p[0];
+    rule_1 = p[1];
+    rule_2 = p[2];
+    rule_3 = p[3];
+    rule_4 = p[4];
+    angle = p[5];
+    print("Preset: " + preset);
+}
+
 // Gather the non-blank rules. A rule is one symbol, "=", a replacement.
 let rules = #{};
 let bad = "";

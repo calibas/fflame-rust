@@ -67,14 +67,81 @@ let rule_4 = param_string("rule_4", "");
 let rule_5 = param_string("rule_5", "");
 let angle = param("angle", 60.0, 0.0, 180.0);
 
-// Attractor: the pieces become ordinary transforms and the chaos game
-// draws the INFINITE-depth limit — for a space-filling rule that limit is
-// a filled square. Path: one lsystem_path variation draws the curve at a
-// chosen finite depth — the iconic Hilbert maze, a depth-6 snowflake —
-// with the palette running along the path.
-let output = param_choice("output", ["Attractor (infinite depth)", "Path (finite depth)"], 0);
+// Path draws the curve at a chosen finite depth — the iconic Hilbert
+// maze, a depth-6 snowflake — with the palette running along it. That is
+// the default because it is the picture people have in mind, and because
+// it works for rules whose infinite-depth limit does not exist: a 3D edge
+// rule usually never settles, but its depth-3 path is a perfectly good
+// curve.
+//
+// Attractor instead makes the pieces ordinary transforms and lets the
+// chaos game draw the INFINITE-depth limit. For a space-filling rule that
+// limit is a filled square — correct, and a surprise if you were
+// expecting the maze.
+let output = param_choice("output", ["Path (finite depth)", "Attractor (infinite depth)"], 0);
 let path_iterations = param_int("path_iterations", 5, 1, 12);
 let colour_pieces = param_bool("colour_pieces", true);
+
+// Presets last, so the fields above read as the thing you edit and this
+// as the thing you reach for when you do not want to. Custom leaves them
+// alone; anything else overwrites axiom, rules and angle, so the fields
+// then show what a preset actually is and can be edited from there.
+let preset = param_choice("preset", [
+    "Custom",
+    "2D · Koch snowflake",
+    "2D · Koch square",
+    "2D · Koch island",
+    "2D · Dragon curve",
+    "2D · Sierpinski arrowhead",
+    "2D · Levy C curve",
+    "2D · Hilbert curve",
+    "2D · Peano curve",
+    "2D · Gosper curve",
+    // Short on purpose. A 3D edge rule rarely has a stable
+    // infinite-depth limit — see the note at the top — so most of them
+    // are only worth drawing as a finite PATH, and most still come out
+    // as a tangle rather than a curve. These two do not.
+    "3D · Hilbert curve",
+    "3D · Zigzag",
+], 0);
+
+// axiom, rule 1..5, angle, and a suggested path depth (0 = keep yours).
+// Depth matters more than it looks: the 3D Hilbert has 8 segments per
+// level, so depth 5 is 32768 of them and fills the frame with mush,
+// while depth 3 draws the curve you picked it for.
+let presets = #{
+    "2D · Koch snowflake":       ["F", "F=F+F--F+F", "", "", "", "", 60.0, 0],
+    "2D · Koch square":          ["F", "F=F+F-F-F+F", "", "", "", "", 90.0, 0],
+    "2D · Koch island":          ["F", "F=F+F-F-FF+F+F-F", "", "", "", "", 90.0, 0],
+    "2D · Dragon curve":         ["F", "F=F+G", "G=F-G", "", "", "", 90.0, 0],
+    "2D · Sierpinski arrowhead": ["F", "F=+G-F-G+", "G=-F+G+F-", "", "", "", 60.0, 0],
+    "2D · Levy C curve":         ["F", "F=+F--F+", "", "", "", "", 45.0, 0],
+    "2D · Hilbert curve":        ["X", "X=-YF+XFX+FY-", "Y=+XF-YFY-FX+", "", "", "", 90.0, 0],
+    // Nine segments per level, so depth 5 would be 59049 of them and
+    // fill the square solid — the attractor's answer, not the curve's.
+    "2D · Peano curve":          ["X", "X=XFYFX+F+YFXFY-F-XFYFX", "Y=YFXFY-F-XFYFX+F+YFXFY", "", "", "", 90.0, 3],
+    "2D · Gosper curve":         ["F", "F=F-G--G+F++FF+G-", "G=+F-GG--G-F++F+G", "", "", "", 60.0, 0],
+    // A backslash is roll-left; it needs doubling inside a string.
+    // Depth 3, not the default 5: this curve has eight segments per
+    // level, so depth 5 is 32768 of them and fills the frame with mush.
+    "3D · Hilbert curve":        ["X", "X=^\\XF^\\XFX-F^//XFX&F+//XFX-F/X-/", "", "", "", "", 90.0, 3],
+    "3D · Zigzag":               ["F", "F=F^F+F&F-F", "", "", "", "", 45.0, 4],
+};
+
+if preset != "Custom" {
+    let p = presets[preset];
+    axiom = p[0];
+    rule_1 = p[1];
+    rule_2 = p[2];
+    rule_3 = p[3];
+    rule_4 = p[4];
+    rule_5 = p[5];
+    angle = p[6];
+    if p[7] > 0 {
+        path_iterations = p[7];
+    }
+    print("Preset: " + preset);
+}
 
 // Gather the non-blank rules. A rule is one symbol, "=", a replacement.
 let rules = #{};
