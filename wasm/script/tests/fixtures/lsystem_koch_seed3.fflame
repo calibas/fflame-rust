@@ -1,0 +1,110 @@
+{
+  "flame": {
+    "name": "Untitled",
+    "transforms": [
+      {
+        "a": 1.0,
+        "b": 0.0,
+        "c": 0.0,
+        "color": 0.5,
+        "color_speed": 0.0,
+        "d": 1.0,
+        "direct_color": 1.0,
+        "e": 0.0,
+        "f": 0.0,
+        "g": 0.0,
+        "opacity": 1.0,
+        "variation_order": [
+          "lsystem_path"
+        ],
+        "variation_params": {
+          "lsystem_path.connect": 1.0,
+          "lsystem_path.dc": 1.0,
+          "lsystem_path.iterations": 5.0,
+          "lsystem_path.m0_a": 0.33333334,
+          "lsystem_path.m0_b": -0.0,
+          "lsystem_path.m0_c": 0.0,
+          "lsystem_path.m0_d": 0.33333334,
+          "lsystem_path.m0_e": 0.0,
+          "lsystem_path.m0_f": 0.0,
+          "lsystem_path.m1_a": 0.16666667,
+          "lsystem_path.m1_b": -0.28867513,
+          "lsystem_path.m1_c": 0.28867513,
+          "lsystem_path.m1_d": 0.16666667,
+          "lsystem_path.m1_e": 0.33333334,
+          "lsystem_path.m1_f": 0.0,
+          "lsystem_path.m2_a": 0.16666667,
+          "lsystem_path.m2_b": 0.28867513,
+          "lsystem_path.m2_c": -0.28867513,
+          "lsystem_path.m2_d": 0.16666667,
+          "lsystem_path.m2_e": 0.5,
+          "lsystem_path.m2_f": 0.28867513,
+          "lsystem_path.m3_a": 0.33333334,
+          "lsystem_path.m3_b": -0.0,
+          "lsystem_path.m3_c": 0.0,
+          "lsystem_path.m3_d": 0.33333334,
+          "lsystem_path.m3_e": 0.6666667,
+          "lsystem_path.m3_f": 0.0,
+          "lsystem_path.map_count": 4.0,
+          "lsystem_path.offset_x": -0.5,
+          "lsystem_path.offset_y": -0.14433756
+        },
+        "variations": {
+          "lsystem_path": 1.0
+        },
+        "weight": 1.0
+      }
+    ]
+  },
+  "levels_gamma": 0.5,
+  "palette": {
+    "locked": false,
+    "name": "Fire",
+    "stops": [
+      {
+        "color": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "position": 0.0
+      },
+      {
+        "color": [
+          0.5,
+          0.0,
+          0.0
+        ],
+        "position": 0.25
+      },
+      {
+        "color": [
+          1.0,
+          0.3,
+          0.0
+        ],
+        "position": 0.5
+      },
+      {
+        "color": [
+          1.0,
+          0.8,
+          0.0
+        ],
+        "position": 0.75
+      },
+      {
+        "color": [
+          1.0,
+          1.0,
+          0.8
+        ],
+        "position": 1.0
+      }
+    ]
+  },
+  "preserve_z": false,
+  "render_mode": "2d",
+  "version": 3,
+  "zoom": 2.7
+}

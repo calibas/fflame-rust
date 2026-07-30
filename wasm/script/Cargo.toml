@@ -1,0 +1,40 @@
+# fflame-script — the Infinite Gallery's script evaluator, as a
+# standalone WASM module. Wraps the main crate's sandboxed script host:
+# script + seed + params (+ optional base config) in, FractalConfig
+# JSON out. No GPU, no UI — this module can live in a worker.
+#
+# Standalone: deliberately NOT a member of the main crate's build (the
+# python/ pattern). The app must be unaffected by anything here.
+
+[package]
+name = "fflame-script"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# default-features = false turns off `web-app`: without that, this
+# module would inherit the full application's wasm-bindgen exports
+# (wasm_main boots egui and all).
+fractal_flame_wgpu = { path = "../..", default-features = false }
+serde_json = "1.0"
+wasm-bindgen = "0.2"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+console_error_panic_hook = "0.1"
+
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# wasm-pack bundles wasm-opt 117, which predates rustc's bulk-memory
+# default — without these flags it rejects the module outright.
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ["-Oz", "--enable-bulk-memory", "--enable-nontrapping-float-to-int"]
