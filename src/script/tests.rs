@@ -2887,3 +2887,45 @@ fn the_curve_script_draws_a_path_by_default() {
         .expect("3D path depth");
     assert_eq!(iters, 3.0, "the preset should ask for a shallower depth");
 }
+
+/// The Heighway dragon is NOT expressible here, and this pins why so
+/// the limit is not rediscovered by shipping a wrong preset again.
+///
+/// Its depth-1 drawn path is identical to the Levy C's — two segments
+/// over a right angle — and the two differ only in that the dragon
+/// traverses the second one BACKWARDS. Every construction reads pieces
+/// in the direction the turtle drew them, so the dragon's own rules come
+/// out as a Levy C: two maps at 1/sqrt(2) with POSITIVE determinant and
+/// the apex on one side. The dragon needs the second map to carry the
+/// unit edge onto (1,0) -> (0.5,0.5) instead.
+#[test]
+fn the_dragon_rules_still_produce_a_levy_c() {
+    let base = FractalConfig::default();
+    let entries = super::library::discover(&base);
+    let entry = super::library::find(&entries, "lsystem").unwrap();
+
+    let mut params: HashMap<String, ParamValue> = HashMap::new();
+    params.insert("axiom".into(), ParamValue::Text("F".into()));
+    params.insert("rule_1".into(), ParamValue::Text("F=F+G".into()));
+    params.insert("rule_2".into(), ParamValue::Text("G=F-G".into()));
+    params.insert("angle".into(), ParamValue::Float(90.0));
+
+    let out = ScriptHost::new()
+        .run(&entry.source, &base, 1, params)
+        .unwrap();
+    let vp = &out.config.flame.transforms[0].variation_params;
+    let g = |k: &str| vp.get(&format!("lsystem_path.{k}")).copied().unwrap_or(0.0);
+
+    // Second map: forward-traversed, so its translation is the apex and
+    // not the far end. That single fact is what makes it a Levy C.
+    let (e, f) = (g("m1_e"), g("m1_f"));
+    assert!(
+        (e.abs() - 0.5).abs() < 1e-3 && (f.abs() - 0.5).abs() < 1e-3,
+        "expected the apex at (0.5, +-0.5), got ({e}, {f}) — if this now          reads (1, 0) the construction learned to reverse a piece and the          dragon has become expressible"
+    );
+    for k in 0..2 {
+        let det = g(&format!("m{k}_a")) * g(&format!("m{k}_d"))
+            - g(&format!("m{k}_b")) * g(&format!("m{k}_c"));
+        assert!(det > 0.0, "map {k} is a reflection, not a reversal: {det}");
+    }
+}
