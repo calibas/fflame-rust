@@ -124,7 +124,7 @@ new module gets a cross-check against the desktop `generate` CLI.
 ### `fflame-render.wasm`
 
 ```js
-await init()                            // one WebGPU device/queue, held for the session
+await probe()                           // fail early if WebGPU is unavailable
 await render(config_json, w, h, iterations?) → { pixels, width, height, iterations, ms }
 ```
 
@@ -133,10 +133,16 @@ await render(config_json, w, h, iterations?) → { pixels, width, height, iterat
 - Internals: the existing unified headless API
   (`renderer::render::render(device, queue, RenderJob, progress)`),
   unchanged.
-- Per-flame WGSL is compiled on first render of a variation set; the
-  existing shader cache means consecutive seeds of one generator
-  (usually the same variation set) amortize the compile across the
-  hallway.
+- **Device lifecycle (decided during build): created per render,
+  `destroy()`ed after** — the pattern the app's own WASM export uses,
+  because WebGPU defers dropped-buffer reclamation to the JS GC; a
+  long tile scroll would otherwise accumulate GPU memory until renders
+  fail black. Costs an adapter/device request and one shader compile
+  per tile — milliseconds against a multi-hundred-ms render. Full
+  version's optimization door: a persistent FlameRenderer + shader
+  cache with explicit buffer destruction (consecutive seeds of one
+  generator usually share a variation set, so the compile would
+  amortize across the hallway).
 - Deliberately excluded: UI, audio, i18n, `.flame` XML import,
   storage, PNG metadata, animation. The Animation wing needs a
   many-frame API — the door is left open, the PoC does not build it.
@@ -157,6 +163,19 @@ Minimal by instruction. One HTML file plus a small JS module:
 
 Target: **≤ ~2MB brotli** for the renderer module; the script module
 should land well under that.
+
+**Measured (release + wasm-opt -Oz, gzip -9; brotli lands lower):**
+
+| module | raw | gzip |
+| --- | --- | --- |
+| fflame-render | 3.19 MB | 0.74 MB |
+| fflame-script | 3.97 MB | 1.01 MB |
+
+Both under budget with no lever pulled. String scans confirm zero
+egui/winit/audio in either module — the `web-app` gate plus linker GC
+did the job. The dominant shared payload is the 1292 variation WGSL
+statics, as predicted (dead weight in the script module; the
+`wgsl_body!` lever below remains unpulled).
 
 Measured inputs: inline variation WGSL is 1.7MB of string data (the
 dominant payload, and text — brotli takes roughly 4–5× off it);
