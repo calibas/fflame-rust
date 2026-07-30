@@ -10,7 +10,7 @@
 // transforms agree on, to infinite depth, for free. Two constructions
 // are tried, automatically:
 //
-//   EDGE rewriting (Koch, Levy, Gosper...): the rule replaces a drawn
+//   EDGE rewriting (Koch, Levy, dragon...): the rule replaces a drawn
 //   edge with a shorter path — the drawn depth-1 segments are the pieces.
 //
 //   NODE rewriting (Hilbert, Peano — the space-fillers): the rule
@@ -22,14 +22,15 @@
 // curves (not mirror images of each other) — that needs more than a flat
 // set of transforms, and the script will say so.
 //
-// Also not supported, and worth naming because it looks like it should
-// be: the HEIGHWAY DRAGON. Its depth-1 drawn path is identical to the
-// Levy C's — two segments over a right angle — and the two differ only
-// in that the dragon traverses the second one BACKWARDS. Every
-// construction here reads pieces in the direction the turtle drew them,
-// so any spelling of the dragon comes out as a Levy C. Getting it right
-// needs a piece to be reversed rather than mirrored, which nothing here
-// can express yet.
+// MIRRORS AND REVERSALS
+// Some rules pair two symbols that draw the same curve differently.
+//   A MIRROR partner draws it reflected — Sierpinski's F/G, Hilbert's X/Y.
+//   A REVERSE partner draws it walked BACKWARDS — the Gosper curve, and
+//   the Heighway dragon, whose depth-1 drawn path is identical to the
+//   Levy C's and differs only in that.
+// Both are detected. A mirror wins where both match, which happens more
+// often than it sounds: for a rule that reads the same backwards, the
+// two are the same string operation.
 //
 // SYMBOLS  (Prusinkiewicz & Lindenmayer, "The Algorithmic Beauty of
 // Plants" — the convention most sources follow)
@@ -62,6 +63,7 @@
 //   Koch island   axiom F   F=F+F-F-FF+F+F-F           angle 90
 //   Sierpinski    axiom F   F=+G-F-G+   G=-F+G+F-      angle 60
 //   Levy C        axiom F   F=+F--F+                   angle 45
+//   Dragon        axiom F   F=F+G   G=F-G              angle 90
 //   Hilbert       axiom X   X=-YF+XFX+FY-   Y=+XF-YFY-FX+   angle 90
 //   Peano         axiom X   X=XFYFX+F+YFXFY-F-XFYFX   Y=YFXFY-F-XFYFX+F+YFXFY   angle 90
 
@@ -99,6 +101,7 @@ let preset = param_choice("preset", [
     "2D · Koch snowflake",
     "2D · Koch square",
     "2D · Koch island",
+    "2D · Dragon curve",
     "2D · Sierpinski arrowhead",
     "2D · Levy C curve",
     "2D · Hilbert curve",
@@ -120,6 +123,12 @@ let presets = #{
     "2D · Koch snowflake":       ["F", "F=F+F--F+F", "", "", "", "", 60.0, 0],
     "2D · Koch square":          ["F", "F=F+F-F-F+F", "", "", "", "", 90.0, 0],
     "2D · Koch island":          ["F", "F=F+F-F-FF+F+F-F", "", "", "", "", 90.0, 0],
+    // The Heighway dragon. Its second piece is WALKED BACKWARDS, which
+    // is the whole of what separates it from a Levy C — the two share
+    // their depth-1 drawn path exactly. G is F's reverse partner and the
+    // script now picks that up, so the plain edge form is enough; the
+    // usual "FX" axiom with X/Y rules is not needed.
+    "2D · Dragon curve":         ["F", "F=F+G", "G=F-G", "", "", "", 90.0, 0],
     "2D · Sierpinski arrowhead": ["F", "F=+G-F-G+", "G=-F+G+F-", "", "", "", 60.0, 0],
     "2D · Levy C curve":         ["F", "F=+F--F+", "", "", "", "", 45.0, 0],
     "2D · Hilbert curve":        ["X", "X=-YF+XFX+FY-", "Y=+XF-YFY-FX+", "", "", "", 90.0, 0],
@@ -291,6 +300,33 @@ if bad != "" {
         // endpoints, so the reflection has to come from the symbol, or
         // the attractor comes out as the wrong curve. Detected, not asked.
         let mirror_symbol = lsystem_mirror_symbol(rules, axiom);
+        // A REVERSE partner draws the primary's piece walked BACKWARDS
+        // rather than reflected — the difference between the Levy C and
+        // the Heighway dragon, which share their depth-1 drawn path
+        // exactly and differ only in that. Swapping a piece's endpoints
+        // is all it takes: set_segment carries the unit edge onto
+        // whatever direction it is handed.
+        //
+        // A mirror wins where both match, and both DO match often: for a
+        // rule that reads the same backwards, reversing it and mirroring
+        // it are the same string operation, so the test cannot separate
+        // them on syntax. Sierpinski and Hilbert land there and want the
+        // mirror; Gosper and the dragon have no mirror partner at all and
+        // want the reversal. Checking mirror first is what tells the two
+        // families apart.
+        let reverse_symbol = if mirror_symbol == "" {
+            lsystem_reverse_symbol(rules, axiom)
+        } else {
+            ""
+        };
+        let reversed_count = 0;
+        let orient = |q| {
+            if reverse_symbol != "" && segment_symbol(q) == reverse_symbol {
+                [q[2], q[3], q[0], q[1], q[4], q[5]]
+            } else {
+                q
+            }
+        };
 
         // The attractor's bounding box, used for framing and (in path
         // mode) for the anchor point at its centre.
@@ -398,11 +434,14 @@ if bad != "" {
             curve_centred = true;
             t.weight = 1.0;
             for k in 0..pieces.len() {
-                let d = pieces[k];
+                let d = orient.call(pieces[k]);
                 let dx = d[2] - d[0];
                 let dy = d[3] - d[1];
                 let mirrored = mirror_symbol != "" && segment_symbol(pieces[k]) == mirror_symbol;
                 if mirrored { mirrored_count += 1; }
+                if reverse_symbol != "" && segment_symbol(pieces[k]) == reverse_symbol {
+                    reversed_count += 1;
+                }
                 // The similarity carrying the unit edge onto this piece —
                 // the same matrix set_segment builds, mirror included.
                 t.set_variation_param("lsystem_path.m" + k + "_a", dx);
@@ -422,7 +461,10 @@ if bad != "" {
                 let t = flame.add_transform();
                 let mirrored = mirror_symbol != "" && segment_symbol(pieces[k]) == mirror_symbol;
                 if mirrored { mirrored_count += 1; }
-                t.set_segment(pieces[k], mirrored);
+                if reverse_symbol != "" && segment_symbol(pieces[k]) == reverse_symbol {
+                    reversed_count += 1;
+                }
+                t.set_segment(orient.call(pieces[k]), mirrored);
                 t.weight = 1.0;
                 if colour_pieces {
                     t.color = k.to_float() / pieces.len().to_float();
@@ -478,6 +520,9 @@ if bad != "" {
         }
         if mirrored_count > 0 {
             print("Mirror pair found: the " + mirrored_count + " piece(s) drawn by " + mirror_symbol + " are reflected.");
+        }
+        if reversed_count > 0 {
+            print("Reverse pair found: the " + reversed_count + " piece(s) drawn by " + reverse_symbol + " are walked backwards.");
         }
 
         if construction == "graph" {
