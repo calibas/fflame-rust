@@ -2,3 +2,7 @@
 # text by the `canonical_shader_dumps` test. Pin them to LF so a checkout
 # on a core.autocrlf machine can't rewrite them into a spurious diff.
 tests/shader_dumps/*.wgsl text eol=lf
+
+# CLI-parity fixtures are compared byte-for-byte (include_str!) against
+# run_impl output by wasm/script's tests — same autocrlf hazard.
+wasm/script/tests/fixtures/*.fflame text eol=lf
