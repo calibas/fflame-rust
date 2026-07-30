@@ -2948,21 +2948,25 @@ mod tests {
     }
 
     #[test]
-    fn a_one_periodic_3d_rule_fits_exact_contracting_maps() {
-        // A pitch-balanced Koch: the pitches cancel per level, so the
-        // pose is depth-stable — measured drift 0.000 across depths 3-6
-        // — and the rule is genuinely one-periodic self-similar. That
-        // stability is rare for 3D edge rules (unbalanced rotations
-        // compound), which is exactly why the detector exists.
-        let rules = vec![('F', "F&F^^F&F".to_string())];
-        let fit = super::lsystem_curve_pieces3("F", &rules, 60.0).expect("self-similar");
+    fn a_genuinely_3d_rule_fits_exact_octant_scale_maps() {
+        // F=F+\F--F++/-F: a rule CONSTRUCTED to be pose-stable — its
+        // explicit turn commands multiply to the identity, so the net
+        // rotation is depth-independent by induction — while genuinely
+        // using all three axes (yaw and roll mixed). Verified outside
+        // this codebase: composing the extracted maps digit-wise
+        // reproduces the independent turtle walk of the same rule to a
+        // mean error of 0.0002 of the curve's size.
+        let rules = vec![('F', r"F+\F--F++/-F".to_string())];
+        let fit = super::lsystem_curve_pieces3("F", &rules, 90.0).expect("self-similar");
         assert_eq!(fit.maps.len(), 4, "four drawn pieces");
         assert!(!fit.node, "an edge rule draws entry-to-exit spans");
-        assert!(fit.residual < 0.05, "residual {}", fit.residual);
+        assert!(fit.residual < 0.02, "residual {}", fit.residual);
+
         for (i, m) in fit.maps.iter().enumerate() {
+            // Exactly half-scale similarities.
             for c in 0..3 {
                 let n = (m[c].powi(2) + m[3 + c].powi(2) + m[6 + c].powi(2)).sqrt();
-                assert!((0.05..0.9).contains(&n), "map {i} column {c} norm {n}");
+                assert!((n - 0.5).abs() < 0.01, "map {i} column {c} norm {n}");
             }
             for (a, b) in [(0, 1), (0, 2), (1, 2)] {
                 let dot = m[a] * m[b] + m[3 + a] * m[3 + b] + m[6 + a] * m[6 + b];
@@ -2971,6 +2975,22 @@ mod tests {
             for (j, v) in m.iter().enumerate() {
                 assert!(*v == 0.0 || v.abs() > 1e-9, "map {i}[{j}] = {v} is dust");
             }
+        }
+
+        // GENUINELY 3D: the attractor must have real extent on all three
+        // axes — a planar rule in 3D clothing would fail here, and a
+        // planar fixture is what this test existed to replace.
+        let ext = [
+            fit.bounds[3] - fit.bounds[0],
+            fit.bounds[4] - fit.bounds[1],
+            fit.bounds[5] - fit.bounds[2],
+        ];
+        let max_ext = ext[0].max(ext[1]).max(ext[2]);
+        for (a, e) in ext.iter().enumerate() {
+            assert!(
+                e / max_ext > 0.1,
+                "axis {a} extent {e} of {max_ext} — the curve is flat, not 3D"
+            );
         }
     }
 

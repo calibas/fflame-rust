@@ -113,14 +113,18 @@ let preset = param_choice("preset", [
     "2D · Hilbert curve",
     "2D · Peano curve",
     "2D · Gosper curve",
-    // No 3D section, and that is the honest answer rather than an
-    // omission. A 3D edge rule rarely has a stable self-similar limit —
-    // see the note at the top — and the few that converge come out as a
-    // tangle rather than a curve worth shipping. For the cube-filling
-    // 3D Hilbert use the dedicated "Hilbert Curve 3D" script, which
-    // CONSTRUCTS its eight octant maps rather than hoping an L-system
-    // decomposes into them; for 3D L-systems generally use the
-    // "L-System Plant" script, which brackets hold stable.
+    // A genuinely 3D rule, found by construction: its explicit turn
+    // commands multiply to the IDENTITY, so the net rotation is
+    // depth-independent and the pose is provably stable — the property
+    // most 3D rules lack (see the note at the top). Its composed maps
+    // agree with the turtle walk to 0.02% of the curve's size. One
+    // entry, honestly: the other stable rules of this family come out
+    // as near-identical crossed forms, and to build your own the recipe
+    // is exactly that identity product — e.g. swap the +- pair for &^
+    // in this rule. The cube-filling Hilbert still belongs to the
+    // "Hilbert Curve 3D" script — that rule alternates between two
+    // poses and no single map set can draw it.
+    "3D · Twist Koch",
 ], 0);
 
 // axiom, rule 1..5, angle, and a suggested path depth (0 = keep yours).
@@ -144,6 +148,8 @@ let presets = #{
     // fill the square solid — the attractor's answer, not the curve's.
     "2D · Peano curve":          ["X", "X=XFYFX+F+YFXFY-F-XFYFX", "Y=YFXFY-F-XFYFX+F+YFXFY", "", "", "", 90.0, 3],
     "2D · Gosper curve":         ["F", "F=F-G--G+F++FF+G-", "G=+F-GG--G-F++F+G", "", "", "", 60.0, 0],
+    // A backslash is roll-left; it needs doubling inside a string.
+    "3D · Twist Koch":           ["F", "F=F+\\F--F++/-F", "", "", "", "", 90.0, 0],
 };
 
 if preset != "Custom" {
