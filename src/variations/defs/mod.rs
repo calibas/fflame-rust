@@ -212,6 +212,7 @@ mod cut_simple;
 mod cut_helper;
 mod cut_helper2;
 mod analytic_blurs;
+mod lsystem_tree;
 
 pub use basic::*;
 pub use advanced::*;
@@ -420,6 +421,7 @@ pub use cut_simple::*;
 pub use cut_helper::*;
 pub use cut_helper2::*;
 pub use analytic_blurs::*;
+pub use lsystem_tree::*;
 
 use super::definition::VariationDef;
 
@@ -1269,4 +1271,5 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &LSYSTEM_PATH,
     &MATRIX3D,
     &LSYSTEM_PATH_3D,
+    &LSYSTEM_TREE,
 ];

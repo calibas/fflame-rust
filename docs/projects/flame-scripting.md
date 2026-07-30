@@ -498,6 +498,20 @@ L-systems cover the full gamut across two scripts:
   and drawing recursion (`F=FF-[-F+F+F]+[+F-F-F]`, no separate stems).
   Linked transforms were considered for ordering and declined: a linked
   chain changes the walk's order, never the attractor set.
+  **Tree mode** (the 2D default) draws the FINITE depth of the book
+  figures via the `lsystem_tree` variation — each sample picks a level
+  weighted by the drawn length there (ρ^l, ρ = Σ branch scales),
+  composes that many scale-weighted branch maps, and lands on a random
+  stem segment; depth is a live parameter. Needed because the attractor
+  and the book picture are different objects once the branch system's
+  similarity dimension reaches 2 (`F=F[+F]F[-F][F]` is 5 copies at
+  0.49 → dim 2.27): every finite depth is a clean bush, the limit is a
+  filled plane — the same modality lesson as the curve script's Path
+  mode, rediscovered when the ABOP presets came out "bushy"/"clouds".
+  A stem run spanning the whole displacement (the 3D Bush's trunk —
+  every recursion site bracketed) also exposed that stem maps must be
+  contractions of the plant's measured EXTENT onto their segment, or
+  the trunk drops out of the attractor entirely.
 
 Both scripts speak **3D** (ABOP's `&`/`^` pitch and `\`/`/` roll,
 auto-detected — no mode switch): pieces come back as full 3D matrices

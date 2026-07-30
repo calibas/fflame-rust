@@ -550,6 +550,35 @@ pub fn turtle(expanded: &str, angle_deg: f64) -> Vec<Segment> {
     out
 }
 
+/// Where the turtle FINISHES a walk — brackets popped — which for a
+/// walk ending inside a branch differs from the last segment's end.
+pub fn turtle_endpoint(expanded: &str, angle_deg: f64) -> (f64, f64) {
+    let angle = angle_deg * std::f64::consts::PI / 180.0;
+    let (mut x, mut y, mut heading) = (0.0f64, 0.0f64, 0.0f64);
+    let mut stack: Vec<(f64, f64, f64)> = Vec::new();
+    for ch in expanded.chars() {
+        match ch {
+            'F' | 'G' | 'A' | 'B' | 'f' | 'g' => {
+                x += heading.cos();
+                y += heading.sin();
+            }
+            '+' => heading += angle,
+            '-' => heading -= angle,
+            '|' => heading += std::f64::consts::PI,
+            '[' => stack.push((x, y, heading)),
+            ']' => {
+                if let Some((sx, sy, sh)) = stack.pop() {
+                    x = sx;
+                    y = sy;
+                    heading = sh;
+                }
+            }
+            _ => {}
+        }
+    }
+    (x, y)
+}
+
 /// Find a symbol whose rule is the MIRROR IMAGE of another's.
 ///
 /// Curves like the Sierpinski arrowhead are built from a pair that swap
@@ -895,7 +924,11 @@ pub fn lsystem_bounds(
         if segs.len() > max_segments {
             continue;
         }
-        let Some(norm) = normalize_segments(&segs) else {
+        // Frame on the walk's true endpoint, not the last segment's end
+        // — they differ when the walk ends inside a bracket, and the
+        // plant maps live in the endpoint frame.
+        let (ex, ey) = turtle_endpoint(&expanded, angle_deg);
+        let Some(norm) = normalize_segments_about(&segs, ex, ey) else {
             continue;
         };
         let mut b = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
@@ -1318,7 +1351,7 @@ pub fn lsystem_pieces3(
         branch: bool,
     }
 
-    let walk = |exps: &Vec<(char, String)>| -> Result<(Vec<Site>, f64), String> {
+    let walk = |exps: &Vec<(char, String)>| -> Result<(Vec<Site>, [f64; 3], f64), String> {
         let body_of = |c: char| exps.iter().find(|(k, _)| *k == c).map(|(_, e)| e.as_str());
         let mut st = LTurtle3::new();
         let mut stack: Vec<LTurtle3> = Vec::new();
@@ -1353,13 +1386,17 @@ pub fn lsystem_pieces3(
         if d2 < 1e-9 {
             return Err("this system returns to where it started, so it has no unit frame".into());
         }
-        Ok((sites, d2.sqrt()))
+        Ok((sites, st.p, d2.sqrt()))
     };
 
-    let (mut fine, scale_fine) = walk(&exp_fine)?;
+    let (mut fine, endpoint_raw, scale_fine) = walk(&exp_fine)?;
     // Normalize positions by the whole displacement LENGTH only — the
     // start frame is the global frame, so no rotation is applied (unlike
     // 2D, where rotating displacement onto x̂ was a free convenience).
+    let mut endpoint_fine = endpoint_raw;
+    for k in 0..3 {
+        endpoint_fine[k] /= scale_fine;
+    }
     for s in fine.iter_mut() {
         for k in 0..3 {
             s.p1[k] /= scale_fine;
@@ -1371,7 +1408,7 @@ pub fn lsystem_pieces3(
     // frames are exact turtle states).
     if depth >= 2 {
         if let Ok(coarse_exp) = expansions_at(depth - 1) {
-            if let Ok((mut coarse, scale_coarse)) = walk(&coarse_exp) {
+            if let Ok((mut coarse, endpoint_coarse, scale_coarse)) = walk(&coarse_exp) {
                 if coarse.len() == fine.len() {
                     for s in coarse.iter_mut() {
                         for k in 0..3 {
@@ -1396,6 +1433,13 @@ pub fn lsystem_pieces3(
                                     f.p2[a] += (f.p2[a] - c.p2[a]) * k;
                                 }
                             }
+                            // The endpoint carries the same finite-depth
+                            // residual as the site positions; leave it
+                            // behind and the reframe tilts by it.
+                            for a in 0..3 {
+                                let ec = endpoint_coarse[a] / scale_coarse;
+                                endpoint_fine[a] += (endpoint_fine[a] - ec) * k;
+                            }
                         }
                     }
                 }
@@ -1407,19 +1451,15 @@ pub fn lsystem_pieces3(
     // shape every sub-copy repeats. Used to align each site's frame with
     // its measured sub-displacement.
     let whole_dir = {
-        // After normalization the whole runs from the origin a unit
-        // distance; recompute from the fine walk's final state direction.
-        let last = fine
-            .iter()
-            .map(|s| s.p2)
-            .last()
-            .unwrap_or([1.0, 0.0, 0.0]);
-        // Not exactly the endpoint (trailing turns don't move), but the
-        // endpoint of the last site is within the Richardson residual of
-        // it; direction is what matters here.
-        let n = (last[0] * last[0] + last[1] * last[1] + last[2] * last[2]).sqrt();
+        // The full walk's endpoint, brackets popped — NOT the last site's
+        // exit. For rules ending inside a bracket (e.g. `...[&X]`) the
+        // last site's exit is the pitched branch tip, which tilted this
+        // direction ~the branch angle and dragged every entry sideways
+        // through the reframe conjugation below.
+        let e = endpoint_fine;
+        let n = (e[0] * e[0] + e[1] * e[1] + e[2] * e[2]).sqrt();
         if n > 1e-9 {
-            [last[0] / n, last[1] / n, last[2] / n]
+            [e[0] / n, e[1] / n, e[2] / n]
         } else {
             [1.0, 0.0, 0.0]
         }
@@ -1511,6 +1551,57 @@ pub fn lsystem_pieces3(
     }
     for st in stems.iter_mut() {
         reframe(st);
+    }
+
+    // A stem draws a squashed copy of the WHOLE plant laid along its
+    // segment, so its map must send the plant's full extent onto the
+    // segment — scale len/extent, not len. With plain len a stem run
+    // spanning the whole displacement (e.g. the Bush's trunk, where
+    // every recursion site sits in a bracket) gets x-scale 1: not a
+    // contraction, the trunk drops out of the attractor entirely, and
+    // all that renders is foliage with squashed copies bunched at the
+    // tips. Measure the extent along the (now +x-aligned) frame from
+    // the branch maps' own attractor plus the stem endpoints and root.
+    if !stems.is_empty() {
+        let mut lo = 0.0f64;
+        let mut hi = 0.0f64;
+        let mut p = [0.3f64, 0.3, 0.3];
+        let mut state: u64 = 0x9E3779B97F4A7C15;
+        for iter in 0..20_000u32 {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let pick = ((state >> 33) as usize) % branches.len();
+            let m = &branches[pick].m;
+            p = [
+                m[0] * p[0] + m[1] * p[1] + m[2] * p[2] + m[9],
+                m[3] * p[0] + m[4] * p[1] + m[5] * p[2] + m[10],
+                m[6] * p[0] + m[7] * p[1] + m[8] * p[2] + m[11],
+            ];
+            if iter > 50 {
+                lo = lo.min(p[0]);
+                hi = hi.max(p[0]);
+            }
+        }
+        for st in stems.iter() {
+            let (t, end) = (st.m[9], st.m[9] + st.m[0]);
+            lo = lo.min(t.min(end));
+            hi = hi.max(t.max(end));
+        }
+        let extent = hi - lo;
+        if extent > 1e-9 {
+            for st in stems.iter_mut() {
+                let p1 = [st.m[9], st.m[10], st.m[11]];
+                for v in st.m[0..9].iter_mut() {
+                    *v /= extent;
+                }
+                // Re-anchor so the attractor's low edge lands on the
+                // segment start: t = p1 − A·(lo, 0, 0).
+                st.m[9] = p1[0] - st.m[0] * lo;
+                st.m[10] = p1[1] - st.m[3] * lo;
+                st.m[11] = p1[2] - st.m[6] * lo;
+            }
+        }
     }
 
     Ok(Pieces3 { branches, stems })
@@ -2061,9 +2152,22 @@ pub fn hilbert3d_maps() -> Vec<[f64; 12]> {
 /// closed figure such as a Sierpinski triangle's outline), where no such
 /// normalisation exists.
 pub fn normalize_segments(segs: &[Segment]) -> Option<Vec<Segment>> {
-    let first = segs.first()?;
     let last = segs.last()?;
-    let (dx, dy) = (last.x2 - first.x1, last.y2 - first.y1);
+    normalize_segments_about(segs, last.x2, last.y2)
+}
+
+/// Like [`normalize_segments`], but with the walk's true endpoint given
+/// explicitly. `normalize_segments` frames by the LAST SEGMENT's end,
+/// which for a bracketed walk ending inside a branch (`...[F]`) is the
+/// branch tip, not where the turtle finishes — a frame both scaled and
+/// tilted against the one the plant extraction uses.
+pub fn normalize_segments_about(
+    segs: &[Segment],
+    end_x: f64,
+    end_y: f64,
+) -> Option<Vec<Segment>> {
+    let first = segs.first()?;
+    let (dx, dy) = (end_x - first.x1, end_y - first.y1);
     let len2 = dx * dx + dy * dy;
     if len2 < 1e-12 {
         return None;

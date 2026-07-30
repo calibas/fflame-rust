@@ -1334,12 +1334,10 @@ fn path_mode_bakes_the_maps_into_one_variation() {
 fn plant_script_grows_a_fern_from_pasted_rules() {
     // The Barnsley construction end to end: branch maps at the recursion
     // sites, squashed stem maps along the drawn segments, colour by
-    // bracket depth, weights by size.
-    let host = ScriptHost::new();
+    // bracket depth, weights by size. Attractor mode — tree mode has its
+    // own test below.
     let source = include_str!("../../assets/scripts/generators/lsystem_plant.rhai");
-    let out = host
-        .run(source, &FractalConfig::default(), 1, HashMap::new())
-        .unwrap();
+    let out = run_with(source, 1, &[("mode", ParamValue::Choice(1))]).unwrap();
     let ts = &out.config.flame.transforms;
     assert_eq!(ts.len(), 7, "four branch sites plus three stems");
 
@@ -1364,15 +1362,50 @@ fn plant_script_grows_a_fern_from_pasted_rules() {
     assert!(colors.iter().any(|c| *c == 0.0), "trunk level at 0.0: {colors:?}");
 
     // Stems off means branch maps only.
-    let out = host
-        .run(
-            source,
-            &FractalConfig::default(),
-            1,
-            [("stem_weight".to_string(), ParamValue::Float(0.0))].into_iter().collect(),
-        )
-        .unwrap();
+    let out = run_with(
+        source,
+        1,
+        &[
+            ("mode", ParamValue::Choice(1)),
+            ("stem_weight", ParamValue::Float(0.0)),
+        ],
+    )
+    .unwrap();
     assert_eq!(out.config.flame.transforms.len(), 4, "stem weight 0 skips stems");
+}
+
+#[test]
+fn plant_script_tree_mode_builds_one_lsystem_tree_transform() {
+    // The default: the finite-depth drawing lives in a single transform
+    // carrying the lsystem_tree variation — branch maps for the four
+    // recursion sites, stem segments for the three drawn F runs, and
+    // the preset depth as a live parameter.
+    let source = include_str!("../../assets/scripts/generators/lsystem_plant.rhai");
+    let out = run_with(source, 1, &[]).unwrap();
+    let ts = &out.config.flame.transforms;
+    assert_eq!(ts.len(), 1, "tree mode is one transform");
+    let t = &ts[0];
+    assert!(t.variations.contains_key("lsystem_tree"));
+    let get = |k: &str| *t.variation_params.get(k).unwrap_or(&0.0) as f64;
+    assert_eq!(get("lsystem_tree.map_count") as i64, 4, "four recursion sites");
+    assert_eq!(get("lsystem_tree.stem_count") as i64, 3, "three stem runs");
+    // The default fern rule's stems all have real length.
+    for j in 0..3 {
+        let dx = get(&format!("lsystem_tree.s{j}_x2")) - get(&format!("lsystem_tree.s{j}_x1"));
+        let dy = get(&format!("lsystem_tree.s{j}_y2")) - get(&format!("lsystem_tree.s{j}_y1"));
+        assert!(
+            (dx * dx + dy * dy).sqrt() > 1e-3,
+            "stem {j} has length"
+        );
+    }
+    // Branch maps are contractions: composing them must shrink, or the
+    // finite drawing would blow up level over level.
+    for i in 0..4 {
+        let a = get(&format!("lsystem_tree.m{i}_a"));
+        let c = get(&format!("lsystem_tree.m{i}_c"));
+        let s = (a * a + c * c).sqrt();
+        assert!(s > 0.05 && s < 0.95, "branch {i} scale sane: {s}");
+    }
 }
 
 #[test]
