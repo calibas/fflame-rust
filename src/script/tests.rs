@@ -2795,16 +2795,10 @@ fn every_lsystem_preset_builds_something() {
             options.iter().any(|o| o.starts_with("2D")),
             "{id}: expected a 2D section"
         );
-        // Only the Plant script has 3D presets. The Curve script has
-        // none on purpose: a 3D edge rule rarely has a stable limit, and
-        // the ones that converge come out as tangles. Its own guard now
-        // refuses the non-shrinking ones outright.
-        if id == "lsystem_plant" {
-            assert!(
-                options.iter().any(|o| o.starts_with("3D")),
-                "{id}: expected a 3D section"
-            );
-        }
+        assert!(
+            options.iter().any(|o| o.starts_with("3D")),
+            "{id}: expected a 3D section"
+        );
 
         for option in &options {
             let mut params: HashMap<String, ParamValue> = HashMap::new();
