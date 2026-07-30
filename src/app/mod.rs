@@ -15,7 +15,8 @@ pub use render_mode::{RenderModeFSM};
 #[cfg(not(target_arch = "wasm32"))]
 pub use export::export_headless;
 
-#[cfg(target_arch = "wasm32")]
+// Consumed by `wasm_api`, which is gated on the `web-app` feature.
+#[cfg(all(target_arch = "wasm32", feature = "web-app"))]
 pub use export::export_headless_wasm;
 
 /// Trigger a browser download of binary data (WASM only)

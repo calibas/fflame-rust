@@ -36,7 +36,10 @@ mod shader_cache;
 #[cfg(test)]
 mod shader_dumps;
 
-#[cfg(target_arch = "wasm32")]
+// Gated on `web-app`, not just wasm32: its `#[wasm_bindgen]` exports
+// are collected into ANY wasm cdylib that depends on this crate, so
+// the thin gallery modules must be able to turn them off.
+#[cfg(all(target_arch = "wasm32", feature = "web-app"))]
 pub mod wasm_api;
 #[cfg(target_arch = "wasm32")]
 mod web_clipboard;
@@ -62,7 +65,10 @@ pub use app::export::ExportEngine;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
-#[cfg(target_arch = "wasm32")]
+// The application entry point. `web-app`-gated like `wasm_api`: a
+// `#[wasm_bindgen(start)]` in a dependency would boot the full app
+// inside the thin gallery modules.
+#[cfg(all(target_arch = "wasm32", feature = "web-app"))]
 #[wasm_bindgen(start)]
 pub async fn wasm_main() {
     // Set up panic hook for better error messages in browser console
