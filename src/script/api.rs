@@ -1756,6 +1756,25 @@ fn register_builtins(engine: &mut Engine) {
     // The symbol whose rule mirrors the given one, or "" if there is no
     // such pair. Pieces it draws need a reflected transform.
     engine.register_fn(
+        "lsystem_reverse_symbol",
+        |rules: rhai::Map, primary: &str| -> String {
+            let mut parsed: Vec<(char, String)> = Vec::new();
+            for (key, value) in rules.iter() {
+                if let Some(sym) = key.chars().next() {
+                    parsed.push((sym, value.clone().into_string().unwrap_or_default()));
+                }
+            }
+            parsed.sort_by_key(|(k, _)| *k);
+            primary
+                .chars()
+                .next()
+                .and_then(|p| crate::script::builtins::reverse_partner(&parsed, p))
+                .map(|c| c.to_string())
+                .unwrap_or_default()
+        },
+    );
+
+    engine.register_fn(
         "lsystem_mirror_symbol",
         |rules: rhai::Map, primary: &str| -> String {
             let mut parsed: Vec<(char, String)> = Vec::new();

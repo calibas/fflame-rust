@@ -588,6 +588,49 @@ pub fn mirror_partner(rules: &[(char, String)], primary: char) -> Option<char> {
     None
 }
 
+/// The symbol whose drawn pieces are the primary's traversed BACKWARDS.
+///
+/// The sibling of [`mirror_partner`], and the difference between the
+/// Levy C curve and the Heighway dragon — which share their depth-1
+/// drawn path exactly and differ only in the direction the second piece
+/// is walked. A mirror flips the turns; a reversal also reads the rule
+/// from the other end, because walking a path backwards visits its
+/// symbols in reverse order and meets every turn from the other side.
+///
+/// For the dragon's `F = F+G`, `G = F-G`:
+///
+/// ```text
+///   F+G  ->  reverse order  G+F  ->  flip turns  G-F  ->  swap F/G  F-G
+/// ```
+///
+/// which is exactly G's rule, so G draws F reversed. `mirror_partner`
+/// says no to the same pair, correctly: the dragon's second map has
+/// POSITIVE determinant, so it is a reversal and not a reflection.
+pub fn reverse_partner(rules: &[(char, String)], primary: char) -> Option<char> {
+    let primary_rule = rules.iter().find(|(k, _)| *k == primary)?;
+    for (other, other_rule) in rules {
+        if *other == primary {
+            continue;
+        }
+        let reversed: String = primary_rule
+            .1
+            .chars()
+            .rev()
+            .map(|c| match c {
+                '+' => '-',
+                '-' => '+',
+                c if c == primary => *other,
+                c if c == *other => primary,
+                c => c,
+            })
+            .collect();
+        if reversed == *other_rule {
+            return Some(*other);
+        }
+    }
+    None
+}
+
 /// Turtle state for the node-rewriting walk.
 #[derive(Clone, Copy)]
 struct LTurtle {

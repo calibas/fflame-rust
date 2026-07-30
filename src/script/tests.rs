@@ -2888,44 +2888,115 @@ fn the_curve_script_draws_a_path_by_default() {
     assert_eq!(iters, 3.0, "the preset should ask for a shallower depth");
 }
 
-/// The Heighway dragon is NOT expressible here, and this pins why so
-/// the limit is not rediscovered by shipping a wrong preset again.
+/// A REVERSE partner draws the primary's piece walked backwards, which
+/// is the whole of what separates the Heighway dragon from the Levy C:
+/// the two share their depth-1 drawn path exactly.
 ///
-/// Its depth-1 drawn path is identical to the Levy C's — two segments
-/// over a right angle — and the two differ only in that the dragon
-/// traverses the second one BACKWARDS. Every construction reads pieces
-/// in the direction the turtle drew them, so the dragon's own rules come
-/// out as a Levy C: two maps at 1/sqrt(2) with POSITIVE determinant and
-/// the apex on one side. The dragon needs the second map to carry the
-/// unit edge onto (1,0) -> (0.5,0.5) instead.
+/// Checked against the dragon's known IFS rather than against a picture
+/// — two maps at 1/sqrt(2), rotated 45 and 135, seated at (0,0) and
+/// (1,0), both with POSITIVE determinant. That last point is why a
+/// mirror is the wrong tool: a reflection would make one negative.
 #[test]
-fn the_dragon_rules_still_produce_a_levy_c() {
+fn the_dragon_is_built_from_a_reversed_piece() {
     let base = FractalConfig::default();
     let entries = super::library::discover(&base);
     let entry = super::library::find(&entries, "lsystem").unwrap();
 
     let mut params: HashMap<String, ParamValue> = HashMap::new();
-    params.insert("axiom".into(), ParamValue::Text("F".into()));
-    params.insert("rule_1".into(), ParamValue::Text("F=F+G".into()));
-    params.insert("rule_2".into(), ParamValue::Text("G=F-G".into()));
-    params.insert("angle".into(), ParamValue::Float(90.0));
-
-    let out = ScriptHost::new()
-        .run(&entry.source, &base, 1, params)
-        .unwrap();
-    let vp = &out.config.flame.transforms[0].variation_params;
-    let g = |k: &str| vp.get(&format!("lsystem_path.{k}")).copied().unwrap_or(0.0);
-
-    // Second map: forward-traversed, so its translation is the apex and
-    // not the far end. That single fact is what makes it a Levy C.
-    let (e, f) = (g("m1_e"), g("m1_f"));
-    assert!(
-        (e.abs() - 0.5).abs() < 1e-3 && (f.abs() - 0.5).abs() < 1e-3,
-        "expected the apex at (0.5, +-0.5), got ({e}, {f}) — if this now          reads (1, 0) the construction learned to reverse a piece and the          dragon has become expressible"
+    params.insert("preset".into(), ParamValue::Text("2D · Dragon curve".into()));
+    params.insert(
+        "output".into(),
+        ParamValue::Text("Attractor (infinite depth)".into()),
     );
-    for k in 0..2 {
-        let det = g(&format!("m{k}_a")) * g(&format!("m{k}_d"))
-            - g(&format!("m{k}_b")) * g(&format!("m{k}_c"));
-        assert!(det > 0.0, "map {k} is a reflection, not a reversal: {det}");
+    let out = ScriptHost::new().run(&entry.source, &base, 1, params).unwrap();
+
+    assert!(
+        out.messages.iter().any(|m| m.contains("Reverse pair")),
+        "the dragon needs its second piece reversed: {:?}",
+        out.messages
+    );
+
+    let t = &out.config.flame.transforms;
+    assert_eq!(t.len(), 2, "the dragon is two maps");
+    let inv_root2 = 1.0f32 / 2.0f32.sqrt();
+    for (i, tr) in t.iter().enumerate() {
+        let scale = (tr.a * tr.a + tr.c * tr.c).sqrt();
+        let det = tr.a * tr.d - tr.b * tr.c;
+        assert!(
+            (scale - inv_root2).abs() < 1e-3,
+            "map {i} scale {scale}, expected {inv_root2}"
+        );
+        assert!(det > 0.0, "map {i} is a reflection, not a reversal: {det}");
     }
+    // The second map is seated at the FAR end — the reversal made
+    // visible. Forward-traversed it would sit on the apex at (0.5, 0.5),
+    // which is exactly the Levy C.
+    let far = &t[1];
+    assert!(
+        (far.e - 1.0).abs() < 1e-3 && far.f.abs() < 1e-3,
+        "expected the second map at (1, 0), got ({}, {})",
+        far.e,
+        far.f
+    );
+}
+
+/// A mirror wins where both tests match, and both DO match for a rule
+/// that reads the same backwards — reversing and mirroring are then the
+/// same string operation. Sierpinski and Hilbert land there and want the
+/// mirror; applying the reversal as well turned the arrowhead into an
+/// open arc and broke the Hilbert maze.
+#[test]
+fn a_mirror_partner_wins_over_a_reverse_partner() {
+    let base = FractalConfig::default();
+    let entries = super::library::discover(&base);
+    let entry = super::library::find(&entries, "lsystem").unwrap();
+    let host = ScriptHost::new();
+
+    let run = |preset: &str| {
+        let mut p: HashMap<String, ParamValue> = HashMap::new();
+        p.insert("preset".into(), ParamValue::Text(preset.into()));
+        host.run(&entry.source, &base, 1, p).unwrap()
+    };
+
+    for preset in ["2D · Sierpinski arrowhead", "2D · Hilbert curve"] {
+        let out = run(preset);
+        assert!(
+            out.messages.iter().any(|m| m.contains("Mirror pair")),
+            "{preset}: expected a mirror pair, got {:?}",
+            out.messages
+        );
+        assert!(
+            !out.messages.iter().any(|m| m.contains("Reverse pair")),
+            "{preset}: a mirror must suppress the reversal, got {:?}",
+            out.messages
+        );
+    }
+
+    // And where there is no mirror, the reversal must still apply — the
+    // Gosper curve was drawn wrong until it did.
+    let gosper = run("2D · Gosper curve");
+    assert!(
+        gosper.messages.iter().any(|m| m.contains("Reverse pair")),
+        "{:?}",
+        gosper.messages
+    );
+}
+
+/// The syntactic test, on its own terms.
+#[test]
+fn reverse_partners_are_read_from_the_rule_backwards() {
+    use crate::script::builtins::{mirror_partner, reverse_partner};
+    let rules = |pairs: &[(char, &str)]| -> Vec<(char, String)> {
+        pairs.iter().map(|(c, s)| (*c, s.to_string())).collect()
+    };
+
+    // F -> "F+G": reverse the order, flip the turns, swap the symbols,
+    // and you land on G's rule exactly.
+    let dragon = rules(&[('F', "F+G"), ('G', "F-G")]);
+    assert_eq!(reverse_partner(&dragon, 'F'), Some('G'));
+    assert_eq!(mirror_partner(&dragon, 'F'), None, "not a reflection");
+
+    // Koch has one symbol and neither partner.
+    let koch = rules(&[('F', "F+F--F+F")]);
+    assert_eq!(reverse_partner(&koch, 'F'), None);
 }
