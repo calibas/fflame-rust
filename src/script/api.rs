@@ -1844,6 +1844,54 @@ fn register_builtins(engine: &mut Engine) {
         },
     );
 
+    // lsystem_curve_pieces3(axiom, rules, angle)
+    //   -> #{ maps: [[12 floats], ...], anchor, bounds, node, note }
+    // Measured self-similar pieces of a 3D curve rule: exact turtle
+    // frames, same-parity extrapolation, honest refusals in `note` for
+    // rules that drift or alternate between two poses.
+    engine.register_fn(
+        "lsystem_curve_pieces3",
+        |axiom: &str, rules: rhai::Map, angle: Dynamic| -> Result<rhai::Map, Box<EvalAltResult>> {
+            let angle = num(&angle, "turtle angle")?;
+            let mut parsed: Vec<(char, String)> = Vec::new();
+            for (key, value) in rules.iter() {
+                if let Some(sym) = key.chars().next() {
+                    parsed.push((sym, value.clone().into_string().unwrap_or_default()));
+                }
+            }
+            parsed.sort_by_key(|(k, _)| *k);
+            let mut out = rhai::Map::new();
+            match crate::script::builtins::lsystem_curve_pieces3(axiom, &parsed, angle) {
+                Ok(fit) => {
+                    let maps: Array = fit
+                        .maps
+                        .iter()
+                        .map(|m| Dynamic::from(m.iter().map(|v| Dynamic::from(*v)).collect::<Array>()))
+                        .collect();
+                    out.insert("maps".into(), Dynamic::from(maps));
+                    out.insert(
+                        "anchor".into(),
+                        Dynamic::from(fit.anchor.iter().map(|v| Dynamic::from(*v)).collect::<Array>()),
+                    );
+                    out.insert(
+                        "bounds".into(),
+                        Dynamic::from(fit.bounds.iter().map(|v| Dynamic::from(*v)).collect::<Array>()),
+                    );
+                    out.insert("node".into(), Dynamic::from(fit.node));
+                    out.insert("note".into(), Dynamic::from(String::new()));
+                }
+                Err(e) => {
+                    out.insert("maps".into(), Dynamic::from(Array::new()));
+                    out.insert("anchor".into(), Dynamic::from(Array::new()));
+                    out.insert("bounds".into(), Dynamic::from(Array::new()));
+                    out.insert("node".into(), Dynamic::from(false));
+                    out.insert("note".into(), Dynamic::from(e));
+                }
+            }
+            Ok(out)
+        },
+    );
+
     // lsystem_pieces3(axiom, rules, angle)
     //   -> #{ branches: [...], stems: [...], note: "" }
     // Pieces are [12 affine floats row-major, depth, symbol]. The 3D

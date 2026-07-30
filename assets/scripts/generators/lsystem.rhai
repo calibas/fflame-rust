@@ -42,12 +42,18 @@
 //   [ ]       start / end a branch
 //   any other letter (X, Y, ...) is a variable: it only drives rewriting
 //
-// A word of honesty about 3D CURVES: many 3D edge rules have no stable
-// self-similar limit — the rotations compound so the shape never
-// settles, and the faithful answer is a degenerate or drifting form.
-// That is the mathematics, not a bug; it is why 3D L-system art is
-// nearly always PLANTS (see the L-System Plant script), which brackets
-// hold stable.
+// A word of honesty about 3D CURVES. Rules whose rotations balance out
+// each level (a pitch matched by an un-pitch, say) are genuinely
+// self-similar and draw correctly. Most 3D rules are not: either the
+// rotations COMPOUND — the shape drifts a little further every level and
+// never settles — or the rule is only self-similar TWO LEVELS AT A TIME,
+// alternating between two poses, which no single set of maps can draw.
+// The standard 3D Hilbert L-system rule is the second kind; use the
+// dedicated "Hilbert Curve 3D" script for that curve, which constructs
+// one-level maps directly. Both conditions are MEASURED, and the script
+// says which one refused a rule instead of drawing a tangle. It is also
+// why 3D L-system art is nearly always PLANTS (see the L-System Plant
+// script), which brackets hold stable.
 //
 // Sources disagree about which letters draw. If you copy a rule that uses
 // lower-case f and g as DRAWING symbols, upper-case them — otherwise
@@ -107,18 +113,20 @@ let preset = param_choice("preset", [
     "2D · Hilbert curve",
     "2D · Peano curve",
     "2D · Gosper curve",
-    // Short on purpose. A 3D edge rule rarely has a stable
-    // infinite-depth limit — see the note at the top — so most of them
-    // are only worth drawing as a finite PATH, and most still come out
-    // as a tangle rather than a curve. These two do not.
-    "3D · Hilbert curve",
-    "3D · Zigzag",
+    // No 3D section, and that is the honest answer rather than an
+    // omission. A 3D edge rule rarely has a stable self-similar limit —
+    // see the note at the top — and the few that converge come out as a
+    // tangle rather than a curve worth shipping. For the cube-filling
+    // 3D Hilbert use the dedicated "Hilbert Curve 3D" script, which
+    // CONSTRUCTS its eight octant maps rather than hoping an L-system
+    // decomposes into them; for 3D L-systems generally use the
+    // "L-System Plant" script, which brackets hold stable.
 ], 0);
 
 // axiom, rule 1..5, angle, and a suggested path depth (0 = keep yours).
-// Depth matters more than it looks: the 3D Hilbert has 8 segments per
-// level, so depth 5 is 32768 of them and fills the frame with mush,
-// while depth 3 draws the curve you picked it for.
+// Depth matters more than it looks: Peano lays nine segments per level,
+// so depth 5 would be 59049 of them and fill the square solid, while
+// depth 3 draws the curve you picked it for.
 let presets = #{
     "2D · Koch snowflake":       ["F", "F=F+F--F+F", "", "", "", "", 60.0, 0],
     "2D · Koch square":          ["F", "F=F+F-F-F+F", "", "", "", "", 90.0, 0],
@@ -136,11 +144,6 @@ let presets = #{
     // fill the square solid — the attractor's answer, not the curve's.
     "2D · Peano curve":          ["X", "X=XFYFX+F+YFXFY-F-XFYFX", "Y=YFXFY-F-XFYFX+F+YFXFY", "", "", "", 90.0, 3],
     "2D · Gosper curve":         ["F", "F=F-G--G+F++FF+G-", "G=+F-GG--G-F++F+G", "", "", "", 60.0, 0],
-    // A backslash is roll-left; it needs doubling inside a string.
-    // Depth 3, not the default 5: this curve has eight segments per
-    // level, so depth 5 is 32768 of them and fills the frame with mush.
-    "3D · Hilbert curve":        ["X", "X=^\\XF^\\XFX-F^//XFX&F+//XFX-F/X-/", "", "", "", "", 90.0, 3],
-    "3D · Zigzag":               ["F", "F=F^F+F&F-F", "", "", "", "", 45.0, 4],
 };
 
 if preset != "Custom" {
@@ -201,12 +204,24 @@ if bad != "" {
     // Any pitch or roll command switches to the 3D construction: pieces
     // come back as full 3D matrices (a flat segment cannot carry roll).
     let is_3d = lsystem_uses_3d(axiom, rules);
+    let anchor3 = [0.0, 0.0, 0.0];
+    let bounds3 = [0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+    let node3 = false;
     if is_3d {
-        let nres = lsystem_pieces3(axiom, rules, angle);
+        // Measured pieces: exact turtle frames for the rotations, the
+        // contraction extrapolated across depths, and honest refusals
+        // for rules that drift (rotations compounding a little further
+        // every level) or alternate between two poses (the standard 3D
+        // Hilbert L-system rule — use the Hilbert Curve 3D script for
+        // that one, which constructs one-level maps directly).
+        let nres = lsystem_curve_pieces3(axiom, rules, angle);
         node_note = nres.note;
-        if nres.branches.len() >= 2 {
-            pieces = nres.branches;
+        if nres.maps.len() >= 2 {
+            pieces = nres.maps;
             construction = "3d";
+            anchor3 = nres.anchor;
+            bounds3 = nres.bounds;
+            node3 = nres.node;
         }
     }
 
@@ -287,12 +302,19 @@ if bad != "" {
     }
 
     if pieces.len() < 2 {
-        print("One generation of this rule gives: " + expanded);
-        print("That draws " + drawn.len() + " segment(s), and at least 2 are needed.");
-        print("Check the drawing symbols: F G A B draw, lower-case f and g move without drawing,");
-        print("and any other letter is ignored. The rule may also be written for a different program.");
-        if node_note != "" {
-            print("The node-rewriting construction was tried too: " + node_note);
+        if is_3d && node_note != "" {
+            // A 3D rule that was REFUSED, with the reason measured — the
+            // generic "check your drawing symbols" advice would send the
+            // reader hunting for a typo that is not there.
+            print(node_note);
+        } else {
+            print("One generation of this rule gives: " + expanded);
+            print("That draws " + drawn.len() + " segment(s), and at least 2 are needed.");
+            print("Check the drawing symbols: F G A B draw, lower-case f and g move without drawing,");
+            print("and any other letter is ignored. The rule may also be written for a different program.");
+            if node_note != "" {
+                print("The node-rewriting construction was tried too: " + node_note);
+            }
         }
     } else {
         // Some systems pair two symbols whose rules are mirror images
@@ -333,7 +355,7 @@ if bad != "" {
         let box = [0.0, 0.0, 1.0, 0.0];
         let b3 = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0];
         if is_3d {
-            b3 = lsystem_bounds3(axiom, rules, 6, angle);
+            b3 = bounds3;
         } else {
             box = lsystem_bounds(axiom, rules, 6, angle);
         }
@@ -379,6 +401,15 @@ if bad != "" {
             t.set_variation_param("lsystem_path_3D.map_count", pieces.len());
             t.set_variation_param("lsystem_path_3D.connect", 1.0);
             t.set_variation_param("lsystem_path_3D.dc", if colour_pieces { 1.0 } else { 0.0 });
+            if node3 {
+                // Node-rewriting systems draw the CENTRE chain, exactly
+                // as in 2D: their cell spans overlap on the boundary
+                // lattice, and the anchor is the attractor's centre.
+                t.set_variation_param("lsystem_path_3D.anchored", 1.0);
+                t.set_variation_param("lsystem_path_3D.anchor_x", anchor3[0]);
+                t.set_variation_param("lsystem_path_3D.anchor_y", anchor3[1]);
+                t.set_variation_param("lsystem_path_3D.anchor_z", anchor3[2]);
+            }
             // Put the curve's centre on the origin, so camera rotation
             // orbits the object rather than swinging it around. Offset
             // X/Y/Z remain live sliders for moving it afterwards.
