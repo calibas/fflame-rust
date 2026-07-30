@@ -170,6 +170,9 @@ mod minkowski_camera;
 mod stereogram;
 mod multi_kaleidoscope;
 mod spray_blur;
+mod lsystem_path;
+mod matrix_3d;
+mod lsystem_path_3d;
 mod lorentz_mobius;
 mod schottky_group;
 mod sphere_packing;
@@ -209,6 +212,7 @@ mod cut_simple;
 mod cut_helper;
 mod cut_helper2;
 mod analytic_blurs;
+mod lsystem_tree;
 
 pub use basic::*;
 pub use advanced::*;
@@ -375,6 +379,9 @@ pub use minkowski_camera::*;
 pub use stereogram::*;
 pub use multi_kaleidoscope::*;
 pub use spray_blur::*;
+pub use lsystem_path::*;
+pub use matrix_3d::*;
+pub use lsystem_path_3d::*;
 pub use lorentz_mobius::*;
 pub use schottky_group::*;
 pub use sphere_packing::*;
@@ -414,6 +421,7 @@ pub use cut_simple::*;
 pub use cut_helper::*;
 pub use cut_helper2::*;
 pub use analytic_blurs::*;
+pub use lsystem_tree::*;
 
 use super::definition::VariationDef;
 
@@ -1260,4 +1268,8 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &STEREOGRAM,
     &MULTI_KALEIDOSCOPE,
     &SPRAY_BLUR,
+    &LSYSTEM_PATH,
+    &MATRIX3D,
+    &LSYSTEM_PATH_3D,
+    &LSYSTEM_TREE,
 ];

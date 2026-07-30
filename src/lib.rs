@@ -26,6 +26,9 @@ pub mod resources;
 pub mod effects;
 pub mod audio;
 pub mod api;
+pub mod script;
+#[cfg(not(target_arch = "wasm32"))]
+pub use script::cli::generate_mode;
 // mod shader_builder; // Legacy - replaced by shader_builder_v2
 mod shader_builder_v2;
 mod shader_cache;

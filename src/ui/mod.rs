@@ -21,6 +21,7 @@ mod panel_viewer;
 mod path_editor;
 mod performance;
 mod random_generator;
+mod scripts_panel;
 pub mod response;
 mod settings;
 mod solid_panel;
@@ -36,6 +37,8 @@ mod undo_history;
 mod variation_params;
 mod view;
 pub mod workspace;
+mod palette_generate;
+mod script_params;
 mod xaos_editor;
 
 pub use export_status::{ExportKind, ExportStatus, UiReporter};
@@ -114,6 +117,11 @@ impl<'a, Num: egui_dock::egui::emath::Numeric> VkbNum<'a, Num> {
     }
     /// Write `v` back to the caller's number.
     fn commit(&mut self, v: f64) {
+        // `Numeric::from_f64` is `num as Self` for integers — truncation, not
+        // rounding. Stepping 5 up by a hair lands on 5.05 and truncates back
+        // to 5 (the Up arrow appearing dead), while stepping down lands on
+        // 4.95 and truncates to 4, so Down "worked" by accident.
+        let v = if Num::INTEGRAL { v.round() } else { v };
         self.scratch = v;
         *self.target = Num::from_f64(v);
     }
@@ -280,7 +288,10 @@ impl<Num: egui_dock::egui::emath::Numeric> egui_dock::egui::Widget for VkbSlider
             .show_value(self.show_value);
         if let Some(t) = self.text.clone() { sl = sl.text(t); }
         if let Some(sx) = &self.suffix { sl = sl.suffix(sx.clone()); }
-        if let Some(st) = self.step { sl = sl.step_by(st); }
+        // Deliberately NOT `sl.step_by(self.step)`: egui rounds the value it
+        // is HANDED, so a stored value off the step grid gets rewritten just
+        // by drawing the slider — no interaction needed. The step is a
+        // drag-feel preference, so it's applied below, on drag only.
         if let Some(c) = self.clamping { sl = sl.clamping(c); }
         if let Some(sp) = self.drag_value_speed { sl = sl.drag_value_speed(sp); }
         if !is_integer {
@@ -290,6 +301,14 @@ impl<Num: egui_dock::egui::emath::Numeric> egui_dock::egui::Widget for VkbSlider
             sl = sl
                 .custom_formatter(|v, _| precision::fmt_f32(v as f32))
                 .custom_parser(|s| s.trim().parse::<f64>().ok());
+        } else {
+            // We hand egui an f64, so it can't see that the caller's number
+            // is integral — `Slider::new` applies this itself, but only when
+            // `Num::INTEGRAL`. Without it an integer param renders with two
+            // decimals (egui derives them from the drag speed) and keyboard
+            // arrows step by the slider's pixel gradient (~0.05 over a 1..12
+            // range) instead of by 1.
+            sl = sl.integer();
         }
         let response = sl.ui(ui);
 
@@ -297,8 +316,11 @@ impl<Num: egui_dock::egui::emath::Numeric> egui_dock::egui::Widget for VkbSlider
             // Dragging the handle snaps to a round decimal — a slider is a
             // couple of hundred pixels wide, so arbitrary values are neither
             // reachable on purpose nor worth storing. Typing is exact.
-            let snapped = if !is_integer && response.dragged() && self.step.is_none() {
-                if self.logarithmic {
+            let snapped = if !is_integer && response.dragged() {
+                if let Some(step) = self.step {
+                    // Caller asked for a specific drag granularity.
+                    precision::snap_to_step(edited, self.min, step) as f64
+                } else if self.logarithmic {
                     // A linear step is wrong on a log scale — see
                     // precision::snap_to_significant.
                     precision::snap_to_significant(edited, 4) as f64
@@ -315,6 +337,49 @@ impl<Num: egui_dock::egui::emath::Numeric> egui_dock::egui::Widget for VkbSlider
         let field_type = if is_integer { "integer" } else { "decimal" };
         vkb_sync_full(ui, &response, &value_str, field_type, Some(self.min), Some(self.max));
         response
+    }
+}
+
+#[cfg(test)]
+mod slider_tests {
+    /// A step is a drag-feel preference, not a constraint on what a config
+    /// may hold — so merely DRAWING a slider must leave the stored value
+    /// alone. Regression: `egui::Slider::step_by` rounds the value it is
+    /// handed, so a `.flame` import carrying `perspective 0.0273` was
+    /// silently rewritten to 0.03 on any frame the View panel was open,
+    /// with no interaction at all.
+    #[test]
+    fn drawing_a_stepped_slider_leaves_off_grid_values_alone() {
+        let mut value = 0.0273_f32;
+        egui_dock::egui::__run_test_ui(|ui| {
+            ui.add(super::VkbSlider::new(&mut value, 0.0..=10.0).step_by(0.01));
+        });
+        assert_eq!(value, 0.0273);
+    }
+
+    /// Integer write-back must round, not truncate. `Numeric::from_f64` is
+    /// `num as Self` for integers, so a step that lands a hair short of the
+    /// next whole number fell back to the current one — which is why the Up
+    /// arrow on Iterations/Map Count appeared dead while Down worked.
+    #[test]
+    fn integer_write_back_rounds_rather_than_truncating() {
+        let mut value = 5i32;
+        super::VkbNum::new(&mut value).commit(5.999_999_9);
+        assert_eq!(value, 6);
+
+        let mut down = 5i32;
+        super::VkbNum::new(&mut down).commit(4.000_000_1);
+        assert_eq!(down, 4);
+    }
+
+    /// The same guarantee without a caller-supplied step.
+    #[test]
+    fn drawing_an_unstepped_slider_leaves_values_alone() {
+        let mut value = 0.006_f32;
+        egui_dock::egui::__run_test_ui(|ui| {
+            ui.add(super::VkbSlider::new(&mut value, 0.0..=0.2));
+        });
+        assert_eq!(value, 0.006);
     }
 }
 
@@ -393,6 +458,16 @@ pub struct EguiLayer {
     config_json_buffer: String,
     palette_editor: PaletteEditor,
 
+    /// Texture IDs the egui renderer holds a FULL image for.
+    ///
+    /// egui-wgpu panics ("tried to update a texture that has not been
+    /// allocated yet") if a partial update arrives for a texture it never
+    /// received in full. That happens when the atlas is rebuilt out from
+    /// under the renderer — notably on the web, where the browser's
+    /// scale factor changes during startup and egui rasterizes its font
+    /// atlas per pixels_per_point.
+    allocated_textures: std::collections::HashSet<egui_dock::egui::TextureId>,
+
     // Fractal texture ID (registered from renderer's texture)
     fractal_texture_id: Option<egui_dock::egui::TextureId>,
     // Track registered texture dimensions to detect resize
@@ -427,8 +502,12 @@ pub struct EguiLayer {
 
     // Random generator panel state
     random_generator_panel: Option<random_generator::RandomGeneratorPanel>,
+    scripts_panel: Option<scripts_panel::ScriptsPanel>,
     generated_flame: Option<crate::scene::randomize::RandomFlame>,
     generated_batch: Option<Vec<crate::config::FractalConfig>>,
+    /// Config produced by the Scripts panel, applied as one undo step.
+    script_generated: Option<crate::config::FractalConfig>,
+    script_animation: Option<crate::animation::Animation>,
 
     // Fractal browser panel state
     fractal_browser_panel: Option<fractal_browser::FractalBrowserPanel>,
@@ -507,6 +586,7 @@ impl EguiLayer {
             },
         );
         // Clear stale texture registrations from old surface
+        self.allocated_textures.clear();
         self.fractal_texture_id = None;
         self.fractal_texture_width = 0;
         self.fractal_texture_height = 0;
@@ -526,6 +606,7 @@ impl EguiLayer {
                 options: egui::TextureOptions::LINEAR,
             },
         );
+        self.allocated_textures.insert(egui::TextureId::Managed(0));
     }
 
     pub fn new(window: &Window, device: &Device, format: TextureFormat) -> Self {
@@ -575,8 +656,12 @@ impl EguiLayer {
             close_path_overlay: false,
             path_editor_state: path_editor::PathEditorState::new(),
             random_generator_panel: None,
+            allocated_textures: std::collections::HashSet::new(),
+            scripts_panel: None,
             generated_flame: None,
             generated_batch: None,
+            script_generated: None,
+            script_animation: None,
             fractal_browser_panel: None,
             loaded_api_flame_id: None,
             loaded_api_flame_is_public: None,
@@ -1274,6 +1359,9 @@ impl EguiLayer {
 
                         // Random generator panel state
                         random_generator_panel: &mut self.random_generator_panel,
+                        scripts_panel: &mut self.scripts_panel,
+                        script_generated: &mut self.script_generated,
+                        script_animation: &mut self.script_animation,
                         generated_flame: &mut self.generated_flame,
                         generated_batch: &mut self.generated_batch,
 
@@ -1598,8 +1686,43 @@ impl EguiLayer {
         };
 
         for (id, image_delta) in &full_output.textures_delta.set {
+            // A partial update (pos: Some) is a patch into an image the
+            // renderer is assumed to already hold. If it doesn't, egui-wgpu
+            // panics — so repair the gap instead of crashing.
+            if image_delta.pos.is_some() && !self.allocated_textures.contains(id) {
+                if *id == egui::TextureId::Managed(0) {
+                    // The font atlas: we can rebuild it in full from the
+                    // context, so seed that and let the patch apply on top.
+                    let font_image = self.ctx.fonts(|f| f.image());
+                    self.renderer.update_texture(
+                        device,
+                        queue,
+                        *id,
+                        &egui::epaint::ImageDelta {
+                            image: egui::ImageData::Color(std::sync::Arc::new(font_image)),
+                            pos: None,
+                            options: image_delta.options,
+                        },
+                    );
+                    self.allocated_textures.insert(*id);
+                } else {
+                    // Any other managed texture (user images) — we have no
+                    // way to reconstruct the base, so skip the patch. It
+                    // will be re-sent in full when its owner next changes
+                    // it; a stale texture beats a panic.
+                    log::warn!(
+                        "skipping partial update for unallocated texture {:?}",
+                        id
+                    );
+                    continue;
+                }
+            }
+
             self.renderer
                 .update_texture(device, queue, *id, image_delta);
+            if image_delta.pos.is_none() {
+                self.allocated_textures.insert(*id);
+            }
         }
 
         self.renderer
@@ -1633,6 +1756,7 @@ impl EguiLayer {
 
         for id in &full_output.textures_delta.free {
             self.renderer.free_texture(id);
+            self.allocated_textures.remove(id);
         }
 
         // Handle View menu actions BEFORE syncing flame (so changes take effect this frame)
@@ -1784,6 +1908,8 @@ impl EguiLayer {
 
         // Take generated flame from random generator panel
         let generated_flame = self.generated_flame.take();
+        let script_generated = self.script_generated.take();
+        let script_animation = self.script_animation.take();
         let generated_batch = self.generated_batch.take();
 
         UiResponse {
@@ -1833,6 +1959,8 @@ impl EguiLayer {
             animation_seek_drag_stopped,
             path_filters_changed,
             generated_flame,
+            script_generated,
+            script_animation,
             generated_batch,
             load_audio_file,
             load_signal_file,

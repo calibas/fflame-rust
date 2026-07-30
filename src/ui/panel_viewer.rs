@@ -328,6 +328,9 @@ pub struct PanelContext<'a> {
     pub random_generator_panel: &'a mut Option<super::random_generator::RandomGeneratorPanel>,
     pub generated_flame: &'a mut Option<crate::scene::randomize::RandomFlame>,
     pub generated_batch: &'a mut Option<Vec<crate::config::FractalConfig>>,
+    pub scripts_panel: &'a mut Option<super::scripts_panel::ScriptsPanel>,
+    pub script_generated: &'a mut Option<crate::config::FractalConfig>,
+    pub script_animation: &'a mut Option<crate::animation::Animation>,
 
     // Fractal browser panel state (unified presets/batch/files)
     pub fractal_browser_panel: &'a mut Option<super::fractal_browser::FractalBrowserPanel>,
@@ -634,6 +637,9 @@ impl<'a> PanelViewer<'a> {
                     *self.context.clear_variation_cache_requested = true;
                 }
             }
+            PanelType::Scripts => {
+                self.render_scripts_panel(ui);
+            }
             PanelType::Subflames => {
                 super::subflames::render_subflames_content(
                     ui,
@@ -704,6 +710,9 @@ impl<'a> PanelViewer<'a> {
     fn render_palette_editor_panel(&mut self, ui: &mut egui::Ui) {
         // Capture palette_library reference for the closure
         let palette_library = &self.context.palette_library;
+        // A generating script may still call set_palette / random_palette.
+        let palettes: Vec<crate::scene::palette::Palette> =
+            palette_library.iter().cloned().collect();
         super::palette_editor::render_palette_editor_content(
             ui,
             self.context.palette_editor,
@@ -715,6 +724,7 @@ impl<'a> PanelViewer<'a> {
             self.context.palette_import_json,
             self.context.palette_load_file,
             self.context.open_palette_library,
+            &palettes,
             |name| palette_library.has_custom_palette_named(name),
         );
     }
@@ -1552,6 +1562,30 @@ impl<'a> PanelViewer<'a> {
                     .collect();
 
                 *self.context.generated_batch = Some(configs);
+            }
+        }
+    }
+
+    /// Render the Scripts panel (generator / modifier flame scripts)
+    fn render_scripts_panel(&mut self, ui: &mut egui::Ui) {
+        if self.context.scripts_panel.is_none() {
+            *self.context.scripts_panel = Some(super::scripts_panel::ScriptsPanel::new());
+        }
+        // Scripts read the live config: modifiers start from it, and
+        // generators inherit its palette.
+        let current = self.context.config_manager.active_config().clone();
+        let palettes: Vec<crate::scene::palette::Palette> =
+            self.context.palette_library.iter().cloned().collect();
+        if let Some(panel) = self.context.scripts_panel.as_mut() {
+            let response = panel.render(ui, &current, palettes);
+            if let Some(config) = response.generated {
+                *self.context.script_generated = Some(config);
+            }
+            if let Some(animation) = response.animation {
+                *self.context.script_animation = Some(animation);
+            }
+            if let Some(batch) = response.batch {
+                *self.context.generated_batch = Some(batch);
             }
         }
     }

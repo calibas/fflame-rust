@@ -434,6 +434,33 @@ impl App {
             }
         }
 
+        // A script produced a whole config (it may set any field), so it
+        // loads wholesale rather than being folded into a default.
+        if let Some(ref config) = ui_response.script_generated {
+            if let Err(e) = self.load_config_with_undo(
+                config.clone(),
+                "history.action.run_script".to_string(),
+                None,
+            ) {
+                eprintln!("Failed to load scripted flame: {}", e);
+            }
+        }
+
+        // A script may also describe how its flame MOVES. Loaded after the
+        // config, so the tracks bind against the flame they were written
+        // for rather than the one being replaced.
+        if let Some(animation) = ui_response.script_animation.clone() {
+            let (duration, tracks) = (animation.duration, animation.tracks.len());
+            self.animation_controller.load(animation);
+            // Bind AFTER load, and after the config above went in: the
+            // tracks resolve against the flame the script wrote them for,
+            // whose transform ids only exist once it is the active config.
+            if let Some(anim) = self.animation_controller.animation.as_mut() {
+                anim.bind_to_config(self.config_manager.active_config());
+            }
+            log::info!("Loaded scripted animation: {duration:.3}s, {tracks} track(s)");
+        }
+
         // Handle generated batch from Random Generator panel
         // Configs are already self-contained with palettes embedded
         if let Some(ref configs) = ui_response.generated_batch {

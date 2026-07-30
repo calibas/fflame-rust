@@ -46,6 +46,8 @@ pub enum PanelType {
     Export,
     /// Random generator panel (generate random flames with settings)
     RandomGenerator,
+    /// Flame scripting panel (run generator / modifier scripts)
+    Scripts,
     /// Post-processing effects panel (color and density effects)
     Effects,
     /// Xaos editor panel (chaos-weighted transform transitions)
@@ -93,6 +95,7 @@ impl std::fmt::Display for PanelType {
             PanelType::SaveOnlineDialog => t!("api.save_dialog_title"),
             PanelType::Variations => t!("panels.variations"),
             PanelType::Subflames => t!("panels.subflames"),
+            PanelType::Scripts => t!("panels.scripts"),
         };
         write!(f, "{}", title)
     }
@@ -155,6 +158,7 @@ impl Workspace {
             PanelType::SaveOnlineDialog => egui::vec2(400.0, 370.0),
             PanelType::Variations => egui::vec2(450.0, 500.0),
             PanelType::Subflames => egui::vec2(320.0, 360.0),
+            PanelType::Scripts => egui::vec2(420.0, 560.0),
         }
     }
 
