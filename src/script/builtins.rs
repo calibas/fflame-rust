@@ -487,8 +487,7 @@ pub fn lsystem_expand(
             }
             if next.len() > LSYSTEM_MAX_LEN {
                 return Err(format!(
-                    "L-system grew past {LSYSTEM_MAX_LEN} symbols at generation {} — \
-                     reduce the depth or shorten the rules",
+                    "L-system grew past {LSYSTEM_MAX_LEN} symbols at generation {} —  reduce the depth or shorten the rules",
                     generation + 1
                 ));
             }
@@ -721,9 +720,7 @@ pub fn lsystem_node_segments(
             occurrences += 1;
             if ch != primary && Some(ch) != partner {
                 return Err(format!(
-                    "the rule uses `{ch}`, which is neither `{primary}` nor its mirror image — \
-                     two genuinely different sub-curves make a graph-directed IFS, which a flat \
-                     set of transforms cannot express"
+                    "the rule uses `{ch}`, which is neither `{primary}` nor its mirror image —  two genuinely different sub-curves make a graph-directed IFS, which a flat  set of transforms cannot express"
                 ));
             }
         }
@@ -984,9 +981,7 @@ pub fn lsystem_plant_segments(
         if has_rule(ch) && !is_drawing(ch) && !matches!(ch, 'f' | 'g') {
             if ch != primary && Some(ch) != partner {
                 return Err(format!(
-                    "the rule uses `{ch}`, which is neither `{primary}` nor its mirror image — \
-                     two genuinely different sub-plants make a graph-directed IFS, which a flat \
-                     set of transforms cannot express"
+                    "the rule uses `{ch}`, which is neither `{primary}` nor its mirror image —  two genuinely different sub-plants make a graph-directed IFS, which a flat  set of transforms cannot express"
                 ));
             }
         }
@@ -1267,8 +1262,7 @@ pub fn lsystem_pieces3(
         if has_rule(ch) && !is_drawing(ch) && !matches!(ch, 'f' | 'g') {
             if ch != primary && Some(ch) != partner {
                 return Err(format!(
-                    "the rule uses `{ch}`, which is neither `{primary}` nor its mirror image — \
-                     a graph-directed IFS, which a flat set of transforms cannot express"
+                    "the rule uses `{ch}`, which is neither `{primary}` nor its mirror image —  a graph-directed IFS, which a flat set of transforms cannot express"
                 ));
             }
         }
@@ -2286,15 +2280,713 @@ pub fn exclude_xaos_row(forbidden: usize, count: usize) -> Vec<f32> {
 /// and its successor gets double. Relative weights `[1,1,1,1]` with those
 /// two entries adjusted reproduce that distribution exactly.
 pub fn avoid_xaos_row(from: usize) -> [f32; 4] {
-    let mut row = [1.0f32; 4];
-    let forbidden = (from + 2) % 4;
-    row[forbidden] = 0.0;
-    row[(forbidden + 1) % 4] = 2.0;
-    row
+ let mut row = [1.0f32; 4];
+ let forbidden = (from + 2) % 4;
+ row[forbidden] = 0.0;
+ row[(forbidden + 1) % 4] = 2.0;
+ row
+}
+
+// ============================================================================
+// 3D curve extraction: exact frames, measured contraction, pose fold
+// ============================================================================
+
+/// Self-similar 3D curve pieces, measured rather than assumed.
+#[derive(Debug)]
+pub struct CurveFit3 {
+ /// One map per ruled occurrence in the primary's rule, in visiting
+ /// order, as the 12 affine floats `lsystem_path_3D` and `matrix3D`
+ /// take (linear rows xx..zz, then tx ty tz).
+ pub maps: Vec<[f64; 12]>,
+ /// Centre of the maps' own attractor — the anchored centre-chain's
+ /// anchor for space-filling systems.
+ pub anchor: [f64; 3],
+ /// Bounding box of the attractor: min xyz, then max xyz.
+ pub bounds: [f64; 6],
+ /// True for node-rewriting systems (the primary is a variable):
+ /// those need the anchored centre-chain, exactly as in 2D.
+ pub node: bool,
+ /// Worst per-piece RMS validation error over the curve's diagonal.
+ pub residual: f64,
+}
+
+/// Extract the self-similar pieces of a 3D L-system curve from EXACT
+/// turtle quantities, measuring only what has no exact source.
+///
+/// The failed approaches are worth recording, because each one shaped
+/// what stands here.
+///
+/// * Deriving map scale from the walk's start-to-end DISPLACEMENT
+/// assumed displacement scales with the curve. The standard 3D
+/// Hilbert rule's endpoints spiral inward ~0.69x per level relative
+/// to its extent, so the maps came out at scale 1.4547 where 0.5 is
+/// needed — expanding maps, segments that never join.
+/// * A least-squares fit of whole-against-slice is biased: the slice is
+/// one refinement level coarser than the whole, and that systematic
+/// shape difference pushed the fitted scale to 0.517 at one depth and
+/// 0.448 at the next. The alternating sign of that error means a
+/// naive Richardson step AMPLIFIES it.
+/// * The alternation turned out to be structural, not noise: some rules
+/// are only self-similar with PERIOD 2. The 3D Hilbert rule's
+/// normalized shape flips through roughly -I every level — its
+/// midpoint reads +0.34, -0.34, +0.34, ... down the depths. No
+/// depth-independent IFS has such a curve as its plain limit.
+///
+/// What stands:
+///
+/// * The slice for an occurrence is `R_i · C_d + p_i` with `R_i` the
+/// turtle's entry rotation and `p_i` its entry position — EXACT, no
+/// fitting.
+/// * The pose operator Q — the alternation — is folded into every map:
+/// each composition level then applies one Q, exactly as the
+/// L-system does, and for a period-1 system Q is the identity so
+/// nothing is lost where nothing was wrong. Q is estimated at every
+/// site by dividing the exact `R_i` out of a biased whole-to-slice
+/// fit, and averaged: the bias points a different way at every site,
+/// so eight orientations cancel what one global fit cannot.
+/// * Everything extrapolated is extrapolated across depths TWO apart,
+/// where the poses match and Richardson measures truncation rather
+/// than the flip.
+/// * Partner symbols are related to the primary by a rigid operator
+/// fitted at the SAME depth — exactly congruent for true partners, so
+/// that fit is bias-free and its residual is a sharp graph-directed
+/// detector.
+/// * A final validation residual with the finished maps refuses rules
+/// whose rotations compound instead of repeating: they have no
+/// self-similar limit, and no exact frame can conjure one.
+pub fn lsystem_curve_pieces3(
+ axiom: &str,
+ rules: &[(char, String)],
+ angle_deg: f64,
+) -> Result<CurveFit3, String> {
+ let angle = angle_deg * std::f64::consts::PI / 180.0;
+
+ let trimmed = axiom.trim();
+ let mut it = trimmed.chars();
+ let primary = match (it.next(), it.next()) {
+ (Some(p), None) => p,
+ _ => return Err("the axiom must be a single symbol for this construction".into()),
+    };
+    let rule = rules
+        .iter()
+        .find(|(k, _)| *k == primary)
+        .map(|(_, r)| r.clone())
+        .ok_or_else(|| format!("the axiom `{primary}` has no rule"))?;
+
+    let is_drawing = |c: char| matches!(c, 'F' | 'G' | 'A' | 'B');
+    let has_rule = |c: char| rules.iter().any(|(k, _)| *k == c);
+    let node = !is_drawing(primary);
+
+    let mut needed: Vec<char> = vec![primary];
+    for ch in rule.chars() {
+        if has_rule(ch) && !matches!(ch, 'f' | 'g') && !needed.contains(&ch) {
+            needed.push(ch);
+        }
+    }
+    const CHAR_BUDGET: usize = 400_000;
+    let expansions_at = |d: u32| -> Option<Vec<(char, String)>> {
+        let mut out = Vec::new();
+        let mut total = 0usize;
+        for &sym in &needed {
+            let e = lsystem_expand(&sym.to_string(), rules, d).ok()?;
+            total += e.len();
+            out.push((sym, e));
+        }
+        (total <= CHAR_BUDGET).then_some(out)
+    };
+    let mut depth = 9u32;
+    let (exp_fine, exp_old) = loop {
+        match (expansions_at(depth), expansions_at(depth.saturating_sub(2))) {
+            (Some(f), Some(o)) if depth >= 3 => break (f, o),
+            _ if depth <= 3 => {
+                return Err("could not expand this system deep enough to measure it".into())
+            }
+            _ => depth -= 1,
+        }
+    };
+
+    // Standalone walk of one expansion from the identity pose.
+    let walk_body = |body: &str| -> Vec<[f64; 3]> {
+        let mut st = LTurtle3::new();
+        let mut stack: Vec<LTurtle3> = Vec::new();
+        let mut pts: Vec<[f64; 3]> = vec![st.p];
+        for ch in body.chars() {
+            lsys_step3(ch, angle, &mut st, &mut stack);
+            let last = *pts.last().unwrap();
+            let p = st.p;
+            if (p[0] - last[0]).abs() + (p[1] - last[1]).abs() + (p[2] - last[2]).abs() > 1e-12 {
+                pts.push(p);
+            }
+        }
+        pts
+    };
+    let bounds_of = |pts: &[[f64; 3]]| -> [f64; 6] {
+        let mut lo = [f64::MAX; 3];
+        let mut hi = [f64::MIN; 3];
+        for p in pts {
+            for a in 0..3 {
+                lo[a] = lo[a].min(p[a]);
+                hi[a] = hi[a].max(p[a]);
+            }
+        }
+        [lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]]
+    };
+    let side_of = |b: &[f64; 6]| (b[3] - b[0]).max(b[4] - b[1]).max(b[5] - b[2]);
+
+    // The rule walked with each ruled occurrence expanded — the primary
+    // one depth greater — recording each occurrence's EXACT entry
+    // rotation and position.
+    struct Site {
+        rot: [[f64; 3]; 3],
+        pos: [f64; 3],
+        symbol: char,
+        range: (usize, usize),
+    }
+    struct Walked {
+        pts: Vec<[f64; 3]>,
+        sites: Vec<Site>,
+    }
+    let walk_rule = |exps: &Vec<(char, String)>| -> Result<Walked, String> {
+        let body_of = |c: char| exps.iter().find(|(k, _)| *k == c).map(|(_, e)| e.as_str());
+        let mut st = LTurtle3::new();
+        let mut stack: Vec<LTurtle3> = Vec::new();
+        let mut pts: Vec<[f64; 3]> = vec![st.p];
+        let mut sites: Vec<Site> = Vec::new();
+        for ch in rule.chars() {
+            let ruled = has_rule(ch) && !matches!(ch, 'f' | 'g');
+            if ruled {
+                let entry_rot = st.r;
+                let entry_pos = st.p;
+                let start = pts.len() - 1;
+                if let Some(body) = body_of(ch) {
+                    for bc in body.chars() {
+                        lsys_step3(bc, angle, &mut st, &mut stack);
+                        let last = *pts.last().unwrap();
+                        let p = st.p;
+                        if (p[0] - last[0]).abs() + (p[1] - last[1]).abs() + (p[2] - last[2]).abs()
+                            > 1e-12
+                        {
+                            pts.push(p);
+                        }
+                    }
+                }
+                let end = pts.len() - 1;
+                if end > start {
+                    sites.push(Site {
+                        rot: entry_rot,
+                        pos: entry_pos,
+                        symbol: ch,
+                        range: (start, end),
+                    });
+                }
+            } else {
+                lsys_step3(ch, angle, &mut st, &mut stack);
+                let last = *pts.last().unwrap();
+                let p = st.p;
+                if (p[0] - last[0]).abs() + (p[1] - last[1]).abs() + (p[2] - last[2]).abs() > 1e-12 {
+                    pts.push(p);
+                }
+            }
+        }
+        if sites.len() < 2 {
+            return Err("fewer than two self-similar pieces".into());
+        }
+        Ok(Walked { pts, sites })
+    };
+
+    // Two walks TWO depths apart, so every extrapolation below compares
+    // matching poses.
+    let fine = walk_rule(&exp_fine)?;
+    let old = walk_rule(&exp_old)?;
+    if fine.sites.len() != old.sites.len() {
+        return Err("the rule's structure changes between depths".into());
+    }
+    for (f, o) in fine.sites.iter().zip(old.sites.iter()) {
+        for r in 0..3 {
+            for col in 0..3 {
+                if (f.rot[r][col] - o.rot[r][col]).abs() > 1e-6 {
+                    return Err(
+                        "the pieces' orientations never settle — this rule's rotations compound instead of repeating, so it has no self-similar limit"
+                            .into(),
+                    );
+                }
+            }
+        }
+    }
+
+    let whole_bounds_raw = bounds_of(&fine.pts);
+    let s_whole = side_of(&whole_bounds_raw);
+    let s_whole_old = side_of(&bounds_of(&old.pts));
+    if s_whole < 1e-9 || s_whole_old < 1e-9 {
+        return Err("the walk never leaves its starting point".into());
+    }
+    // Extents two levels apart shrink by sigma squared.
+    let sigma = (s_whole_old / s_whole).sqrt();
+    if !(0.001..0.995).contains(&sigma) {
+        return Err(format!(
+            "the pieces do not shrink (contraction {sigma:.3}), so this rule has no  self-similar limit to draw"
+        ));
+    }
+    let q2 = (sigma * sigma) / (1.0 - sigma * sigma);
+
+    let norm_pts = |pts: &[[f64; 3]], s: f64| -> Vec<[f64; 3]> {
+        pts.iter().map(|p| [p[0] / s, p[1] / s, p[2] / s]).collect()
+    };
+    let wnorm = norm_pts(&fine.pts, s_whole);
+
+    let rot_of = |a: &[[f64; 3]; 3]| -> Option<[[f64; 3]; 3]> {
+        let sim = nearest_similarity(a)?;
+        let scale = ((sim[0][0].powi(2) + sim[1][0].powi(2) + sim[2][0].powi(2)).sqrt()
+            + (sim[0][1].powi(2) + sim[1][1].powi(2) + sim[2][1].powi(2)).sqrt()
+            + (sim[0][2].powi(2) + sim[1][2].powi(2) + sim[2][2].powi(2)).sqrt())
+            / 3.0;
+        if scale < 1e-9 {
+            return None;
+        }
+        let mut out = sim;
+        for r in 0..3 {
+            for c in 0..3 {
+                out[r][c] /= scale;
+            }
+        }
+        Some(out)
+    };
+
+    // Per-symbol operator L_c, fitted at the SAME depth so true partners
+    // are exactly congruent and the fit has no refinement bias.
+    let body_at = |exps: &Vec<(char, String)>, c: char| {
+        exps.iter().find(|(k, _)| *k == c).map(|(_, e)| e.clone()).unwrap_or_default()
+    };
+    let prim_fine = walk_body(&body_at(&exp_fine, primary));
+    let prim_old = walk_body(&body_at(&exp_old, primary));
+    let s_prim = side_of(&bounds_of(&prim_fine));
+    let mut ops: Vec<(char, [[f64; 3]; 3], [f64; 3], [f64; 3])> = Vec::new();
+    for &sym in &needed {
+        if sym == primary {
+            let id = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+            ops.push((sym, id, [0.0; 3], [0.0; 3]));
+            continue;
+        }
+        let fit_op = |dom: &[[f64; 3]], img: &[[f64; 3]]| -> ([f64; 12], f64) {
+            let (m, res) = affine_fit(dom, 0, dom.len() - 1, img, 0, img.len() - 1, false);
+            let (mr, rr) = affine_fit(dom, 0, dom.len() - 1, img, 0, img.len() - 1, true);
+            if rr < res {
+                (mr, rr)
+            } else {
+                (m, res)
+            }
+        };
+        let sym_fine = walk_body(&body_at(&exp_fine, sym));
+        let (mf, res_f) = fit_op(&prim_fine, &sym_fine);
+        if res_f > 0.02 * s_prim {
+            return Err(format!(
+                "`{sym}` draws a genuinely different curve from `{primary}` — a graph-directed system, which this construction cannot express"
+            ));
+        }
+        let sym_old = walk_body(&body_at(&exp_old, sym));
+        let (mo, _) = fit_op(&prim_old, &sym_old);
+        let lf = rot_of(&[
+            [mf[0], mf[1], mf[2]],
+            [mf[3], mf[4], mf[5]],
+            [mf[6], mf[7], mf[8]],
+        ])
+        .ok_or_else(|| format!("could not resolve how `{sym}` relates to `{primary}`"))?;
+        ops.push((sym, lf, [mf[9], mf[10], mf[11]], [mo[9], mo[10], mo[11]]));
+    }
+    let op_of = |sym: char| ops.iter().find(|(c, ..)| *c == sym).unwrap();
+
+    // POSE STABILITY, checked on landmark points rather than through a
+    // fitted operator — a fitted Q degenerates on planar walks, where
+    // the fit's null direction invents rotation that is not there.
+    // Sixteen fraction-points of each normalized walk are compared
+    // directly:
+    //
+    //   * same parity (two depths apart) must MATCH for any rule that
+    //     settles at all — a mismatch is drift, rotations compounding a
+    //     little further every level;
+    //   * consecutive parity (the whole against the primary one level
+    //     down) must match for a ONE-periodic rule — a mismatch while
+    //     same-parity holds means the shape alternates between two
+    //     poses, and no single set of maps can draw that.
+    //
+    // The standard 3D Hilbert L-system rule is the second case: its
+    // midpoint reads +0.34, -0.34, +0.34, ... down the depths. Folding
+    // the flip into the maps was tried and fixes one level, but the
+    // compositions drift — the folded maps' attractor is measurably not
+    // the cube. Expressing such a rule faithfully needs the two-level
+    // system's 64 maps, far past the variation's twelve slots.
+    let onorm = norm_pts(&old.pts, s_whole_old);
+    let pnorm = norm_pts(&prim_fine, side_of(&bounds_of(&prim_fine)).max(1e-12));
+    let wdiag = {
+        let b = bounds_of(&wnorm);
+        ((b[3] - b[0]).powi(2) + (b[4] - b[1]).powi(2) + (b[5] - b[2]).powi(2)).sqrt()
+    }
+    .max(1e-9);
+    let landmark_gap = |a: &[[f64; 3]], b: &[[f64; 3]]| -> f64 {
+        const K: usize = 16;
+        let mut sse = 0.0;
+        for j in 0..=K {
+            let f = j as f64 / K as f64;
+            let x = a[((a.len() - 1) as f64 * f).round() as usize];
+            let y = b[((b.len() - 1) as f64 * f).round() as usize];
+            for r in 0..3 {
+                sse += (x[r] - y[r]) * (x[r] - y[r]);
+            }
+        }
+        (sse / (K + 1) as f64).sqrt()
+    };
+    if landmark_gap(&wnorm, &onorm) > 0.05 * wdiag {
+        return Err(
+            "the pieces never settle into copies of the whole — this rule's rotations compound instead of repeating, so it has no self-similar limit to draw"
+                .into(),
+        );
+    }
+    if landmark_gap(&wnorm, &pnorm) > 0.05 * wdiag {
+        return Err(
+            "this rule is only self-similar two levels at a time — its shape alternates between two poses on consecutive depths, so no single set of maps can draw it. For the cube-filling Hilbert curve use the Hilbert Curve 3D script, which constructs one-level maps directly."
+                .into(),
+        );
+    }
+
+    // Per-site contraction from extents WITHIN each walk — same-depth
+    // ratios with no refinement bias, extrapolated across the pair.
+    let site_scale = |w: &Walked, s_w: f64, i: usize| -> f64 {
+        let (lo, hi) = w.sites[i].range;
+        side_of(&bounds_of(&w.pts[lo..=hi])) / s_w
+    };
+
+    // Assemble: sigma_i · R_i · L_c · Q, translation from the exact entry
+    // position (plus the operator's offset through the entry rotation).
+    let mut maps: Vec<[f64; 12]> = Vec::with_capacity(fine.sites.len());
+    for (i, (sf, so)) in fine.sites.iter().zip(old.sites.iter()).enumerate() {
+        let (_, l_c, of, oo) = op_of(sf.symbol);
+        let sig_f = site_scale(&fine, s_whole, i);
+        let sig_o = site_scale(&old, s_whole_old, i);
+        let sig_i = sig_f + (sig_f - sig_o) * q2;
+        let a = mat3_mul(&sf.rot, l_c);
+        let mut t = [0.0f64; 3];
+        for r in 0..3 {
+            let tf = (sf.rot[r][0] * of[0] + sf.rot[r][1] * of[1] + sf.rot[r][2] * of[2]
+                + sf.pos[r])
+                / s_whole;
+            let to = (so.rot[r][0] * oo[0] + so.rot[r][1] * oo[1] + so.rot[r][2] * oo[2]
+                + so.pos[r])
+                / s_whole_old;
+            t[r] = tf + (tf - to) * q2;
+        }
+        maps.push([
+            sig_i * a[0][0], sig_i * a[0][1], sig_i * a[0][2],
+            sig_i * a[1][0], sig_i * a[1][1], sig_i * a[1][2],
+            sig_i * a[2][0], sig_i * a[2][1], sig_i * a[2][2],
+            t[0], t[1], t[2],
+        ]);
+    }
+    // Composing 90-degree turns leaves 1e-15s where exact zeros belong;
+    // they make a saved flame unreadable.
+    for m in maps.iter_mut() {
+        for v in m.iter_mut() {
+            if v.abs() < 1e-9 {
+                *v = 0.0;
+            }
+        }
+    }
+
+    // Bounds and anchor of what will actually be DRAWN: the maps' own
+    // attractor, sampled by the chaos game. Computing them from the walk
+    // would re-import every pose question Q just settled.
+    let (bounds, anchor) = {
+        let mut lo = [f64::MAX; 3];
+        let mut hi = [f64::MIN; 3];
+        let mut p = [0.3f64, 0.3, 0.3];
+        let mut state: u64 = 0x9E3779B97F4A7C15;
+        for iter in 0..20_000u32 {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let pick = ((state >> 33) as usize) % maps.len();
+            let m = &maps[pick];
+            p = [
+                m[0] * p[0] + m[1] * p[1] + m[2] * p[2] + m[9],
+                m[3] * p[0] + m[4] * p[1] + m[5] * p[2] + m[10],
+                m[6] * p[0] + m[7] * p[1] + m[8] * p[2] + m[11],
+            ];
+            if iter > 50 {
+                for a in 0..3 {
+                    lo[a] = lo[a].min(p[a]);
+                    hi[a] = hi[a].max(p[a]);
+                }
+            }
+        }
+        (
+            [lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]],
+            [
+                (lo[0] + hi[0]) * 0.5,
+                (lo[1] + hi[1]) * 0.5,
+                (lo[2] + hi[2]) * 0.5,
+            ],
+        )
+    };
+
+    // Validation: with the finished maps, fraction t of the normalized
+    // whole walk must land on fraction t of each slice, in either
+    // direction. Cross-level, so it carries a small refinement bias —
+    // fine for a CHECK with a threshold, and rules whose rotations
+    // compound sail far past it.
+    let diag = {
+        let b = &bounds;
+        ((b[3] - b[0]).powi(2) + (b[4] - b[1]).powi(2) + (b[5] - b[2]).powi(2)).sqrt()
+    }
+    .max(1e-9);
+    let mut worst = 0.0f64;
+    for (site, m) in fine.sites.iter().zip(maps.iter()) {
+        let mut best = f64::MAX;
+        for rev in [false, true] {
+            let mut sse = 0.0;
+            const M: usize = 64;
+            for j in 0..=M {
+                let f = j as f64 / M as f64;
+                let x = wnorm[((wnorm.len() - 1) as f64 * f).round() as usize];
+                let g = if rev { 1.0 - f } else { f };
+                let (lo, hi) = site.range;
+                let y = wnorm[lo + ((hi - lo) as f64 * g).round() as usize];
+                for r in 0..3 {
+                    let p =
+                        m[r * 3] * x[0] + m[r * 3 + 1] * x[1] + m[r * 3 + 2] * x[2] + m[9 + r];
+                    sse += (p - y[r]) * (p - y[r]);
+                }
+            }
+            best = best.min((sse / (M + 1) as f64).sqrt());
+        }
+        worst = worst.max(best);
+    }
+    let residual = worst / diag;
+    if residual > 0.06 {
+        return Err(format!(
+            "the pieces never settle into copies of the whole (fit error {:.0}%) — this rule's rotations compound instead of repeating, so it has no self-similar limit to draw",
+            residual * 100.0
+        ));
+    }
+
+    // The same dust rule for the frame values: near-cancelling bounds
+    // produce offsets like -4.8e-28 in the saved flame otherwise.
+    let snap = |v: f64| if v.abs() < 1e-9 { 0.0 } else { v };
+    let anchor = [snap(anchor[0]), snap(anchor[1]), snap(anchor[2])];
+    let mut bounds = bounds;
+    for v in bounds.iter_mut() {
+        *v = snap(*v);
+    }
+    Ok(CurveFit3 { maps, anchor, bounds, node, residual })
+}
+
+/// Least-squares affine over sampled fraction correspondence between two
+/// point runs. Returns the 12 map floats and the RMS residual.
+fn affine_fit(
+    dom: &[[f64; 3]],
+    dlo: usize,
+    dhi: usize,
+    img: &[[f64; 3]],
+    ilo: usize,
+    ihi: usize,
+    rev: bool,
+) -> ([f64; 12], f64) {
+    const M: usize = 96;
+    let n = (M + 1) as f64;
+    let dom_at =
+        |j: usize| dom[dlo + ((dhi - dlo) as f64 * (j as f64 / M as f64)).round() as usize];
+    let img_at = |j: usize| {
+        let f = j as f64 / M as f64;
+        let f = if rev { 1.0 - f } else { f };
+        img[ilo + ((ihi - ilo) as f64 * f).round() as usize]
+    };
+    let mut xm = [0.0; 3];
+    let mut ym = [0.0; 3];
+    for j in 0..=M {
+        let x = dom_at(j);
+        let y = img_at(j);
+        for a in 0..3 {
+            xm[a] += x[a] / n;
+            ym[a] += y[a] / n;
+        }
+    }
+    let mut cxx = [[0.0f64; 3]; 3];
+    let mut cyx = [[0.0f64; 3]; 3];
+    for j in 0..=M {
+        let x = dom_at(j);
+        let y = img_at(j);
+        for r in 0..3 {
+            for c in 0..3 {
+                cxx[r][c] += (x[r] - xm[r]) * (x[c] - xm[c]);
+                cyx[r][c] += (y[r] - ym[r]) * (x[c] - xm[c]);
+            }
+        }
+    }
+    // Ridge term: a planar or collinear walk leaves the covariance
+    // rank-deficient, and junk in the null direction would otherwise
+    // masquerade as a map coefficient.
+    let ridge = 1e-9 * (cxx[0][0] + cxx[1][1] + cxx[2][2]).max(1e-12);
+    for a in 0..3 {
+        cxx[a][a] += ridge;
+    }
+    let inv = mat3_inverse(&cxx);
+    let a_mat = mat3_mul(&cyx, &inv);
+    let t = [
+        ym[0] - (a_mat[0][0] * xm[0] + a_mat[0][1] * xm[1] + a_mat[0][2] * xm[2]),
+        ym[1] - (a_mat[1][0] * xm[0] + a_mat[1][1] * xm[1] + a_mat[1][2] * xm[2]),
+        ym[2] - (a_mat[2][0] * xm[0] + a_mat[2][1] * xm[1] + a_mat[2][2] * xm[2]),
+    ];
+    let mut sse = 0.0;
+    for j in 0..=M {
+        let x = dom_at(j);
+        let y = img_at(j);
+        for r in 0..3 {
+            let p = a_mat[r][0] * x[0] + a_mat[r][1] * x[1] + a_mat[r][2] * x[2] + t[r];
+            sse += (p - y[r]) * (p - y[r]);
+        }
+    }
+    (
+        [
+            a_mat[0][0], a_mat[0][1], a_mat[0][2],
+            a_mat[1][0], a_mat[1][1], a_mat[1][2],
+            a_mat[2][0], a_mat[2][1], a_mat[2][2],
+            t[0], t[1], t[2],
+        ],
+        (sse / n).sqrt(),
+    )
+}
+
+/// Adjugate inverse with the caller responsible for conditioning.
+fn mat3_inverse(m: &[[f64; 3]; 3]) -> [[f64; 3]; 3] {
+    let det = m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+        - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+        + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+    let d = if det.abs() < 1e-18 {
+        1e-18f64.copysign(det + f64::MIN_POSITIVE)
+    } else {
+        det
+    };
+    [
+        [
+            (m[1][1] * m[2][2] - m[1][2] * m[2][1]) / d,
+            (m[0][2] * m[2][1] - m[0][1] * m[2][2]) / d,
+            (m[0][1] * m[1][2] - m[0][2] * m[1][1]) / d,
+        ],
+        [
+            (m[1][2] * m[2][0] - m[1][0] * m[2][2]) / d,
+            (m[0][0] * m[2][2] - m[0][2] * m[2][0]) / d,
+            (m[0][2] * m[1][0] - m[0][0] * m[1][2]) / d,
+        ],
+        [
+            (m[1][0] * m[2][1] - m[1][1] * m[2][0]) / d,
+            (m[0][1] * m[2][0] - m[0][0] * m[2][1]) / d,
+            (m[0][0] * m[1][1] - m[0][1] * m[1][0]) / d,
+        ],
+    ]
+}
+
+/// The nearest scaled rotation (or scaled reflection) to `a`, or None
+/// when `a` is degenerate.
+///
+/// Higham's iteration for the orthogonal polar factor converges for
+/// reflections too, so mirrored and reversed copies keep their negative
+/// determinant — projecting them to a proper rotation would undo exactly
+/// the property the caller measured.
+fn nearest_similarity(a: &[[f64; 3]; 3]) -> Option<[[f64; 3]; 3]> {
+    let mut x = *a;
+    for _ in 0..12 {
+        let inv = mat3_inverse(&x);
+        let inv_t = [
+            [inv[0][0], inv[1][0], inv[2][0]],
+            [inv[0][1], inv[1][1], inv[2][1]],
+            [inv[0][2], inv[1][2], inv[2][2]],
+        ];
+        for r in 0..3 {
+            for c in 0..3 {
+                x[r][c] = 0.5 * (x[r][c] + inv_t[r][c]);
+            }
+        }
+    }
+    let mut s = 0.0;
+    for r in 0..3 {
+        for c in 0..3 {
+            s += x[r][c] * a[r][c];
+        }
+    }
+    s /= 3.0;
+    if s.abs() < 1e-12 {
+        return None;
+    }
+    let mut out = [[0.0; 3]; 3];
+    for r in 0..3 {
+        for c in 0..3 {
+            out[r][c] = s * x[r][c];
+        }
+    }
+    Some(out)
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_hilbert_lsystem_rule_is_refused_as_two_periodic() {
+        // The standard 3D Hilbert L-system rule is only self-similar two
+        // levels at a time: its normalized shape flips through roughly
+        // -I every depth (midpoints read +0.34, -0.34, +0.34, ...).
+        // Measured directly, folding the flip into the maps fixes one
+        // level but the compositions drift — the folded maps' attractor
+        // is not the cube. No single map set can draw this rule, and the
+        // function must SAY that, naming the script that can.
+        let rules = vec![(
+            'X',
+            r"^\XF^\XFX-F^//XFX&F+//XFX-F/X-/".to_string(),
+        )];
+        let err = super::lsystem_curve_pieces3("X", &rules, 90.0)
+            .map(|f| format!("accepted with residual {}", f.residual))
+            .err()
+            .unwrap_or_else(|| panic!("should have been refused"));
+        assert!(err.contains("two levels at a time"), "{err}");
+        assert!(err.contains("Hilbert Curve 3D"), "points at the script that works: {err}");
+    }
+
+    #[test]
+    fn a_one_periodic_3d_rule_fits_exact_contracting_maps() {
+        // A pitch-balanced Koch: the pitches cancel per level, so the
+        // pose is depth-stable — measured drift 0.000 across depths 3-6
+        // — and the rule is genuinely one-periodic self-similar. That
+        // stability is rare for 3D edge rules (unbalanced rotations
+        // compound), which is exactly why the detector exists.
+        let rules = vec![('F', "F&F^^F&F".to_string())];
+        let fit = super::lsystem_curve_pieces3("F", &rules, 60.0).expect("self-similar");
+        assert_eq!(fit.maps.len(), 4, "four drawn pieces");
+        assert!(!fit.node, "an edge rule draws entry-to-exit spans");
+        assert!(fit.residual < 0.05, "residual {}", fit.residual);
+        for (i, m) in fit.maps.iter().enumerate() {
+            for c in 0..3 {
+                let n = (m[c].powi(2) + m[3 + c].powi(2) + m[6 + c].powi(2)).sqrt();
+                assert!((0.05..0.9).contains(&n), "map {i} column {c} norm {n}");
+            }
+            for (a, b) in [(0, 1), (0, 2), (1, 2)] {
+                let dot = m[a] * m[b] + m[3 + a] * m[3 + b] + m[6 + a] * m[6 + b];
+                assert!(dot.abs() < 0.01, "map {i} columns {a},{b} dot {dot}");
+            }
+            for (j, v) in m.iter().enumerate() {
+                assert!(*v == 0.0 || v.abs() > 1e-9, "map {i}[{j}] = {v} is dust");
+            }
+        }
+    }
+
+    #[test]
+    fn a_drifting_3d_rule_is_refused_as_compounding() {
+        // Unbalanced pitch: the pose rotates a little further every
+        // level (measured midpoints walk 0.46, 0.49, 0.38, 0.24, 0.13
+        // across depths) — no two poses, no limit, just drift.
+        let rules = vec![('F', "F+F--F+F^F&F".to_string())];
+        let err = super::lsystem_curve_pieces3("F", &rules, 60.0)
+            .map(|f| format!("accepted with residual {}", f.residual))
+            .err()
+            .unwrap_or_else(|| panic!("should have been refused"));
+        assert!(err.contains("compound"), "{err}");
+    }
+
     use super::*;
 
     fn approx(a: f64, b: f64, tol: f64, what: &str) {

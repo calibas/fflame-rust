@@ -2795,10 +2795,16 @@ fn every_lsystem_preset_builds_something() {
             options.iter().any(|o| o.starts_with("2D")),
             "{id}: expected a 2D section"
         );
-        assert!(
-            options.iter().any(|o| o.starts_with("3D")),
-            "{id}: expected a 3D section"
-        );
+        // Only the Plant script has 3D presets. The Curve script has
+        // none on purpose: a 3D edge rule rarely has a stable limit, and
+        // the ones that converge come out as tangles. Its own guard now
+        // refuses the non-shrinking ones outright.
+        if id == "lsystem_plant" {
+            assert!(
+                options.iter().any(|o| o.starts_with("3D")),
+                "{id}: expected a 3D section"
+            );
+        }
 
         for option in &options {
             let mut params: HashMap<String, ParamValue> = HashMap::new();
@@ -2874,18 +2880,54 @@ fn the_curve_script_draws_a_path_by_default() {
         out.config.flame.transforms[0].variations
     );
 
-    // A preset may lower the depth: the 3D Hilbert has eight segments per
-    // level, so its default of five would be 32768 of them and fill the
-    // frame with mush rather than draw the curve.
+    // A preset may lower the depth: Peano lays down nine segments per
+    // level, so the default of five would be 59049 of them and fill the
+    // square solid rather than draw the curve.
     let mut deep: HashMap<String, ParamValue> = HashMap::new();
-    deep.insert("preset".into(), ParamValue::Text("3D · Hilbert curve".into()));
+    deep.insert("preset".into(), ParamValue::Text("2D · Peano curve".into()));
     let out = host.run(&entry.source, &base, 1, deep).unwrap();
     let iters = out.config.flame.transforms[0]
         .variation_params
-        .get("lsystem_path_3D.iterations")
+        .get("lsystem_path.iterations")
         .copied()
-        .expect("3D path depth");
+        .expect("path depth");
     assert_eq!(iters, 3.0, "the preset should ask for a shallower depth");
+}
+
+/// The standard 3D Hilbert L-system rule is only self-similar two
+/// levels at a time — its shape alternates between two poses — so no
+/// single set of maps can draw it. The script must say exactly that and
+/// name the script that CAN draw the cube-filling curve, rather than
+/// produce the disconnected tangle the old extraction drew.
+#[test]
+fn a_two_periodic_3d_rule_is_refused_with_a_pointer() {
+    let base = FractalConfig::default();
+    let entries = super::library::discover(&base);
+    let entry = super::library::find(&entries, "lsystem").unwrap();
+
+    let mut params: HashMap<String, ParamValue> = HashMap::new();
+    params.insert("axiom".into(), ParamValue::Text("X".into()));
+    params.insert(
+        "rule_1".into(),
+        ParamValue::Text("X=^\\XF^\\XFX-F^//XFX&F+//XFX-F/X-/".into()),
+    );
+    params.insert("angle".into(), ParamValue::Float(90.0));
+
+    let out = ScriptHost::new().run(&entry.source, &base, 1, params).unwrap();
+    assert!(
+        out.messages.iter().any(|m| m.contains("two levels at a time")),
+        "expected the two-pose refusal: {:?}",
+        out.messages
+    );
+    assert!(
+        out.messages.iter().any(|m| m.contains("Hilbert Curve 3D")),
+        "and the pointer at the script that works: {:?}",
+        out.messages
+    );
+    assert!(
+        out.config.flame.transforms.is_empty(),
+        "nothing should be built from a rule that cannot converge"
+    );
 }
 
 /// A REVERSE partner draws the primary's piece walked backwards, which
