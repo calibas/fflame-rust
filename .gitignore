@@ -36,3 +36,17 @@ scripts/gen_su_mobius_table/su_custom_init.wgsl
 # Visual regression working output — full-size 800x600 renders, ~40 MB per
 # run. Only tests/visual/baseline/ (160x120 thumbnails) is tracked.
 tests/visual/current/
+
+# Video files. Animation exports land in the project root by default, and
+# they are large (tens of MB) — easy to sweep into a commit with `git add
+# -A`, painful to remove afterwards.
+*.mp4
+*.mkv
+*.webm
+*.mov
+
+# pyfflame (standalone Python crate — its own target dir and artifacts)
+python/target/
+python/*.pyd
+python/**/__pycache__/
+python/.pytest_cache/

@@ -71,6 +71,7 @@ menu:
   window_effects: "✨ Effects"
   window_variations: "🌀 Variations"
   window_subflames: "✨ Subflames"
+  window_scripts: "📜 Scripts"
   window_xaos_editor: "🔀 Xaos Editor"
   window_signal: "📊 Signals"
   window_account: "👤 Account"
@@ -151,6 +152,7 @@ panels:
   solid_lighting: "Solid & Lighting"
   variations: "Variations"
   subflames: "Subflames"
+  scripts: "Scripts"
 
 variations_panel:
   total: "%{count} total"
@@ -829,6 +831,7 @@ history:
     load_preset: "Load Preset"
     new_flame: "New Flame"
     random_flame: "Random Flame"
+    run_script: "Run Script"
     import_flame_xml: "Import Flame XML"
     load_animation_config: "Load Animation Config"
     animation_exit: "Animation Exit"
@@ -921,6 +924,12 @@ triangle_editor:
 
 # Palette Editor Panel
 palette_editor:
+  generate: "Generate from script"
+  generate_none: "No palette scripts found. A script offers itself here by declaring the palette flag."
+  generate_rescan: "Re-scan the script folders"
+  generate_run: "Generate"
+  generate_seed: "Seed:"
+  generate_reroll: "Reroll"
   title: "Palette Editor"
   palette_name: "Palette Name:"
   gradient_preview: "Gradient Preview:"
