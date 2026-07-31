@@ -258,7 +258,7 @@ impl VariationInfo {
             wgsl_function,
             features,
             is_core: false,
-            wgsl_source: Some(dl.shader_2d.clone()),
+            wgsl_source: dl.shader_2d.clone(),
             wgsl_source_3d: dl.shader_3d.clone(),
             wgsl_source_init: dl.shader_init.clone(),
             init_param_count: dl.init_param_count,
@@ -531,6 +531,36 @@ impl VariationRegistry {
                 );
                 return;
             }
+        }
+
+        // A missing 2D body is legal for exactly one category.
+        //
+        // `only_3d` is filtered out of the active set in 2D builds
+        // before any source lookup, so it never needs one. For every
+        // other category a `None` would reach the emit loop's
+        // `else { continue }` and become a silent no-op — the variation
+        // would download, register, and contribute nothing. Refusing
+        // here keeps that loud, which is the property that made
+        // `shader_2d` required in the first place.
+        let category = VariationCategory::from_api_str(&dl.category);
+        if dl.shader_2d.is_none() && category != VariationCategory::Only3D {
+            log::error!(
+                "Refusing API variation '{}': no shader_2d, and its category \
+                 `{}` is not `only_3d`. Without a 2D body it would render \
+                 nothing in 2D flames with no error.",
+                dl.name,
+                dl.category
+            );
+            return;
+        }
+        // ...and an only_3d variation with no 3D body has nothing at all.
+        if category == VariationCategory::Only3D && dl.shader_3d.is_none() {
+            log::error!(
+                "Refusing API variation '{}': category `only_3d` with no \
+                 shader_3d — it would render nothing in any mode.",
+                dl.name
+            );
+            return;
         }
         let info = VariationInfo::from_download(dl);
         if !self.ordered_names.contains(&info.name) {

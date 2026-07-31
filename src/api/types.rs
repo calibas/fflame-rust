@@ -506,7 +506,17 @@ pub struct VariationDownload {
     pub writes_color: bool,
     #[serde(default)]
     pub parameters: Vec<ApiVariationParameter>,
-    pub shader_2d: String,
+    /// The 2D body. **Optional only for `only_3d`** — see
+    /// `VariationRegistry::register_from_api`, which refuses `None` for
+    /// any other category rather than letting it become a silent skip.
+    ///
+    /// An `only_3d` variation is filtered out of the active set in 2D
+    /// builds *before* any source lookup
+    /// (`ShaderBuilder::active_with_local_indices`), so a 2D body would
+    /// never be read. Requiring a vestigial one would mean dead data a
+    /// curator writes, a reviewer reads, and nothing can validate.
+    #[serde(default)]
+    pub shader_2d: Option<String>,
     #[serde(default)]
     pub shader_3d: Option<String>,
     /// Number of init-derived parameters this variation produces.
