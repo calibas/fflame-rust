@@ -30,7 +30,9 @@ pub struct RenderedTile {
     pub ms: f64,
 }
 
-async fn create_device() -> Result<(wgpu::Device, wgpu::Queue), String> {
+/// Returns the device, its queue, and the adapter's maximum 2D texture
+/// dimension — the ceiling a render must respect.
+async fn create_device() -> Result<(wgpu::Device, wgpu::Queue, u32), String> {
     let backends = if cfg!(target_arch = "wasm32") {
         wgpu::Backends::BROWSER_WEBGPU
     } else {
@@ -72,7 +74,8 @@ async fn create_device() -> Result<(wgpu::Device, wgpu::Queue), String> {
         required_features |= wgpu::Features::FLOAT32_FILTERABLE;
     }
 
-    adapter
+    let max_dim = limits.max_texture_dimension_2d;
+    let (device, queue) = adapter
         .request_device(&wgpu::DeviceDescriptor {
             label: Some("Gallery Renderer Device"),
             required_features,
@@ -82,16 +85,37 @@ async fn create_device() -> Result<(wgpu::Device, wgpu::Queue), String> {
             trace: Default::default(),
         })
         .await
-        .map_err(|e| format!("device request failed: {e:?}"))
+        .map_err(|e| format!("device request failed: {e:?}"))?;
+
+    // wgpu's default handler PANICS on a validation error. In wasm a
+    // panic poisons the module: every later call fails and the page has
+    // to reload. This module promises `Result`, so route uncaptured
+    // errors to the log and let the render return its own error
+    // instead. (Dimensions are checked up front, but a config can be
+    // hostile in ways no up-front check enumerates.)
+    device.on_uncaptured_error(std::sync::Arc::new(|e| {
+        log::error!("wgpu error (render will fail): {e}");
+    }));
+
+    Ok((device, queue, max_dim))
 }
 
 /// Probe for a usable adapter without rendering — lets a page fail
 /// early with a clear message instead of on the first tile.
 pub async fn probe_impl() -> Result<(), String> {
-    let (device, _queue) = create_device().await?;
+    let (device, _queue, _max_dim) = create_device().await?;
     device.destroy();
     Ok(())
 }
+
+/// Upper bound on a single render's chaos-game budget.
+///
+/// A config carries its own `max_iterations`, and a config is a
+/// shareable artifact — one asking for 5e11 ground for 90 seconds and
+/// was still going when killed, which in a browser is a frozen tab or a
+/// GPU reset. 8e9 is far above any sensible tile (the gallery uses 3e7)
+/// while keeping a hostile file to seconds rather than forever.
+const MAX_RENDER_ITERATIONS: u64 = 8_000_000_000;
 
 pub async fn render_impl(
     config_json: &str,
@@ -102,14 +126,29 @@ pub async fn render_impl(
     if width == 0 || height == 0 {
         return Err("width and height must be nonzero".into());
     }
-    let config = FractalConfig::from_json(config_json)
+    let mut config = FractalConfig::from_json(config_json)
         .map_err(|e| format!("config did not parse: {e}"))?;
 
-    let (device, queue) = create_device().await?;
+    let (device, queue, max_dim) = create_device().await?;
 
+    // Check dimensions against what the adapter actually allows, BEFORE
+    // any texture is created. Unchecked, an oversized request reached
+    // wgpu's validation and panicked (`Dimension X value 8193 exceeds
+    // the limit of 8192`) instead of returning this error.
+    if width > max_dim || height > max_dim {
+        device.destroy();
+        return Err(format!(
+            "{width}x{height} exceeds this device's maximum texture dimension of {max_dim}"
+        ));
+    }
+
+    // Clamp the chaos-game budget from BOTH sources: the caller's
+    // argument and the config's own `max_iterations`, either of which
+    // can be hostile.
+    config.max_iterations = config.max_iterations.min(MAX_RENDER_ITERATIONS);
     let mut job = RenderJob::new(&config, width, height);
     if let Some(iters) = target_iterations {
-        job = job.with_iterations(iters);
+        job = job.with_iterations(iters.min(MAX_RENDER_ITERATIONS));
     }
     let result = unified_render(&device, &queue, job, &mut NoProgress).await;
 

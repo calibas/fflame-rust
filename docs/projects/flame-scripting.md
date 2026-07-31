@@ -266,6 +266,28 @@ Apply-time validation (script-error on violation, not clamp-and-hope):
 thousands), call depth 64, max array 100k, max string 1 MB, no modules,
 no `eval`. Heavy math does not run in-script — see built-ins (§4).
 
+**Limits on what a script can ask the NATIVE side for** (added after a
+security review; each closed a confirmed abort or hang):
+
+| limit | value | why |
+| --- | --- | --- |
+| transforms per pool | 128 (`MAX_TRANSFORMS`) | was uncapped until render time — a script built 200,000, which also armed the O(n²) `set_xaos` table |
+| xaos row length | 128 | `vec![1.0f32; count]` took an unbounded `i64`; `exclude_xaos_row(0, i64::MAX)` aborted the process on one line |
+| L-system rule | 4096 chars | the piece walks are `rule × body`; a 200k rule ran ~10¹¹ native steps and never returned |
+| L-system axiom | 4096 chars | same walk |
+| rules per system | 64 | bounds the partner search, which is O(rules × rule length) |
+
+The structural point behind all of them: **the operation budget cannot
+see native work.** `on_progress` fires between interpreter operations,
+so a single built-in call runs to completion however long it takes —
+and the Scripts panel runs on the UI thread, so there is nothing to
+interrupt it. Bounding the *input* is what keeps the walk bounded.
+A wall-clock deadline inside the walks is still worth adding; it is the
+general fix, of which these caps are the specific one.
+
+For scale: the longest rule in any shipped script is the Peano curve's
+21 characters, so these ceilings are orders of magnitude above real use.
+
 ---
 
 ## 3. Architecture and factoring

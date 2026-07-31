@@ -158,6 +158,18 @@ ctx.putImageData(new ImageData(new Uint8ClampedArray(t.pixels), t.width, t.heigh
   config's own `max_iterations`. Rule of thumb: quality scales with
   iterations **per pixel** — 30M at 512×512 (~115/px) is a good tile,
   and a 2× larger edge wants ~4× the iterations for the same look.
+- **Inputs are treated as hostile**, because a config and a URL are both
+  shareable artifacts:
+  - dimensions are checked against the device's
+    `max_texture_dimension_2d` (commonly 8192) and rejected with an
+    error — they are not passed through to fail deeper;
+  - the iteration budget is clamped to 8e9, from *both* the argument and
+    the config's own `max_iterations` (an unclamped 5e11 ran for 90+
+    seconds — a frozen tab);
+  - wgpu validation errors are captured rather than left to panic. This
+    matters in wasm: a panic poisons the module, so one bad request
+    would otherwise kill the renderer until the page reloads.
+  Renders still fail by returning `Err`; the module should never abort.
 - **Serialize renders** (one at a time). The gallery uses a one-deep
   promise queue; concurrent calls would contend for the GPU and win
   nothing.

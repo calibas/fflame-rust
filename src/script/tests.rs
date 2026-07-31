@@ -3069,3 +3069,112 @@ fn reverse_partners_are_read_from_the_rule_backwards() {
     let koch = rules(&[('F', "F+F--F+F")]);
     assert_eq!(reverse_partner(&koch, 'F'), None);
 }
+
+// ---------------------------------------------------------------- limits
+//
+// Each of these reproduces an attack that was confirmed to abort or hang
+// the process before the guard existed. A shared script is meant to be
+// safe to run; these are the cases where it was not.
+
+#[test]
+fn a_xaos_row_cannot_ask_for_an_unbounded_allocation() {
+    // `vec![1.0f32; count]` with an unbounded count: i64::MAX aborted
+    // the process with `capacity overflow` from this single line.
+    let err = run(
+        r#"script("X", "generator"); exclude_xaos_row(0, 9223372036854775807);"#,
+        1,
+    )
+    .unwrap_err();
+    assert!(err.message.contains("at most"), "{err}");
+
+    let err = run(
+        r#"script("X", "generator"); repeat_xaos_row(0, 9223372036854775807);"#,
+        1,
+    )
+    .unwrap_err();
+    assert!(err.message.contains("at most"), "{err}");
+
+    // A legitimate row still works.
+    let out = run(
+        r#"script("X", "generator"); print("" + exclude_xaos_row(1, 4).len());"#,
+        1,
+    )
+    .unwrap();
+    assert_eq!(out.messages, vec!["4"]);
+}
+
+#[test]
+fn transforms_stop_at_the_renderer_limit() {
+    // Unbounded, a script built 200,000 transforms — undrawable, and it
+    // armed the O(n^2) table build in set_xaos.
+    let err = run(
+        r#"script("X", "generator"); for i in 0..200 { flame.add_transform(); }"#,
+        1,
+    )
+    .unwrap_err();
+    assert!(err.message.contains("at most"), "{err}");
+
+    // Up to the limit is fine.
+    let out = run(
+        r#"script("X", "generator");
+           for i in 0..128 { flame.add_transform(); }
+           print("" + flame.transform_count());"#,
+        1,
+    )
+    .unwrap();
+    assert_eq!(out.messages, vec!["128"]);
+}
+
+#[test]
+fn an_oversized_lsystem_rule_is_refused_before_the_walk() {
+    // The piece walks are rule.chars() x body.chars(). A 200,000-char
+    // rule of "[X" made one call run without returning (measured: still
+    // going at 60s, uninterruptible — the op budget cannot see native
+    // work, and the panel runs on the UI thread).
+    let script = r#"
+        script("X", "generator");
+        let r = "[X";
+        while r.len() < 200000 { r += r; }
+        lsystem_plant_pieces("X", #{"X": r}, 25.0);
+    "#;
+    let err = run(script, 1).unwrap_err();
+    assert!(err.message.contains("the limit is"), "{err}");
+
+    // A real rule — the fern — is nowhere near the ceiling.
+    let out = run(
+        r#"script("X", "generator");
+           let p = lsystem_plant_pieces("X", #{"X": "F-[[X]+X]+F[+FX]-X", "F": "FF"}, 22.5);
+           print("" + p.branches.len());"#,
+        1,
+    )
+    .unwrap();
+    assert_eq!(out.messages, vec!["4"]);
+}
+
+#[test]
+fn oversized_lsystem_input_is_refused_on_every_entry_point() {
+    // The cap belongs at the boundary, not on one function: every entry
+    // point taking a rule set funnels into the same check.
+    let big = "F".repeat(5000);
+    for call in [
+        "lsystem(\"F\", #{\"F\": R}, 2)",
+        "lsystem_bounds(\"F\", #{\"F\": R}, 3, 60.0)",
+        "lsystem_bounds3(\"F\", #{\"F\": R}, 3, 60.0)",
+        "lsystem_pieces3(\"F\", #{\"F\": R}, 60.0)",
+        "lsystem_node_pieces(\"F\", #{\"F\": R}, 60.0)",
+        "lsystem_graph_pieces(\"F\", #{\"F\": R}, 60.0)",
+        "lsystem_curve_pieces3(\"F\", #{\"F\": R}, 60.0)",
+    ] {
+        let script = format!(
+            "script(\"X\", \"generator\"); let R = \"{big}\"; {call};"
+        );
+        let err = match run(&script, 1) {
+            Err(e) => e,
+            Ok(_) => panic!("`{call}` accepted an oversized rule"),
+        };
+        assert!(
+            err.message.contains("the limit is"),
+            "`{call}` failed for the wrong reason: {err}"
+        );
+    }
+}
