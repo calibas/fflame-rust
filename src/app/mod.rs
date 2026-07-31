@@ -535,13 +535,26 @@ pub struct App {
     // Variation fetching: when loading a flame that references unknown
     // variations, fetch them from the API in parallel and pause rendering
     // until done (or timeout).
+    /// Completed fetches, tagged with the batch that asked for them.
+    ///
+    /// The tag is load-bearing. A timed-out batch's threads keep running
+    /// and push here whenever they finish — possibly *after* the next
+    /// batch has started. Untagged, the next drain counted those as its
+    /// own and decremented its pending count, finalizing it early and
+    /// registering variations nobody asked for. Clearing the vector on
+    /// trigger does not fix that: the late push happens after the clear.
     pub(super) variation_fetch_results: std::sync::Arc<std::sync::Mutex<
-        Vec<(String, Result<crate::api::types::VariationDownload, String>)>
+        Vec<(u64, String, Result<crate::api::types::VariationDownload, String>)>
     >>,
     pub(super) variation_fetch_in_progress: bool,
     pub(super) variation_fetch_started: Option<web_time::Instant>,
     /// Number of in-flight fetches; when this drops to 0, processing is complete
     pub(super) variation_fetch_pending_count: usize,
+    /// Monotonic batch id. Results not carrying the current value are
+    /// stragglers from an abandoned batch and are discarded.
+    pub(super) variation_fetch_epoch: u64,
+    /// What the current batch is still waiting on, for the timeout message.
+    pub(super) variation_fetch_names: Vec<String>,
 
     // API connectivity tracking
     pub(super) health_check_result: std::sync::Arc<std::sync::Mutex<Option<crate::api::HealthCheckOutcome>>>,
@@ -682,6 +695,8 @@ impl App {
             variation_fetch_results: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             variation_fetch_in_progress: false,
             variation_fetch_started: None,
+            variation_fetch_epoch: 0,
+            variation_fetch_names: Vec::new(),
             variation_fetch_pending_count: 0,
             health_check_result: std::sync::Arc::new(std::sync::Mutex::new(None)),
             health_check_in_progress: false,

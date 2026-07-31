@@ -204,6 +204,74 @@ pub fn file_exists(key: &Path) -> bool {
     false
 }
 
+/// Names of the entries stored directly under `prefix`.
+///
+/// Desktop: the file names in that directory. WASM: the localStorage
+/// keys beginning `<prefix>/`, with the prefix stripped. Either way the
+/// caller gets bare entry names (`julia.json`), not full paths, so both
+/// platforms are handled by the same code.
+///
+/// A missing prefix is not an error — it means nothing has been stored
+/// yet, which is the normal first-run state.
+///
+/// This exists because localStorage has no directory listing, and the
+/// WASM half of the variation cache was consequently **write-only**: it
+/// stored downloads and could never enumerate them, so every web
+/// session re-downloaded everything and "Clear Cache" always reported
+/// zero. `Storage` does expose `length()`/`key(i)`, so enumeration was
+/// always possible — it had simply been stubbed out with a TODO.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn list_entries(prefix: &Path) -> StorageResult<Vec<String>> {
+    let dir = match get_app_data_dir() {
+        Ok(d) => d.join(prefix),
+        Err(e) => return Err(e),
+    };
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir(&dir).map_err(StorageError::from)?.flatten() {
+        if let Some(name) = entry.file_name().to_str() {
+            out.push(name.to_string());
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn list_entries(prefix: &Path) -> StorageResult<Vec<String>> {
+    use web_sys::window;
+
+    let window = window().ok_or_else(|| {
+        StorageError::NotAvailable("No window object available".to_string())
+    })?;
+    let storage = window
+        .local_storage()
+        .map_err(|_| StorageError::NotAvailable("localStorage not available".to_string()))?
+        .ok_or_else(|| StorageError::NotAvailable("localStorage is null".to_string()))?;
+
+    let prefix = format!("{}/", prefix.to_str().unwrap_or(""));
+    let len = storage.length().map_err(|_| {
+        StorageError::Io(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "localStorage.length failed",
+        ))
+    })?;
+
+    let mut out = Vec::new();
+    for i in 0..len {
+        let Ok(Some(key)) = storage.key(i) else { continue };
+        let Some(rest) = key.strip_prefix(&prefix) else { continue };
+        // Direct children only, matching the desktop read_dir semantics.
+        if !rest.is_empty() && !rest.contains('/') {
+            out.push(rest.to_string());
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

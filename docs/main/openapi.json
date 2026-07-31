@@ -3599,13 +3599,31 @@
           "display_name",
           "version",
           "phase",
+          "features",
           "needs_rng",
-          "needs_affine",
+          "needs_transform",
           "writes_color",
           "parameters",
-          "init_param_count"
+          "init_param_count",
+          "state_count",
+          "aliases",
+          "authors"
         ],
         "properties": {
+          "aliases": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Foreign-app names that resolve to this variation on `.flame` import\n(Apophysis/JWildfire `linear3D` → our `linear`)."
+          },
+          "authors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Historical attribution — the designers, in order. **Not** a foreign key\nto `users`; these are people, not accounts."
+          },
           "category": {
             "type": [
               "string",
@@ -3618,8 +3636,22 @@
               "null"
             ]
           },
+          "description_plain": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`description` with markdown syntax stripped, for clients without a\nmarkdown renderer. Absent falls back to showing `description` raw,\nwhich degrades readably."
+          },
           "display_name": {
             "type": "string"
+          },
+          "features": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The §6.1 capability array — **authoritative for all thirteen flags**.\nA payload carrying `features` supersedes the legacy bools below rather\nthan merging with them, and an unrecognised name is dropped with a\nwarning client-side rather than rejecting the variation, so adding a\ncapability is never a breaking change in the server→client direction."
           },
           "id": {
             "type": "string",
@@ -3632,10 +3664,11 @@
           "name": {
             "type": "string"
           },
-          "needs_affine": {
-            "type": "boolean"
-          },
           "needs_rng": {
+            "type": "boolean",
+            "description": "Legacy signature-shaping bools, superseded by `features` but still\nserved during the transition. `needs_transform` was `needs_affine`\nuntil migration 76; the client has carried a serde alias throughout."
+          },
+          "needs_transform": {
             "type": "boolean"
           },
           "parameters": {
@@ -3646,6 +3679,14 @@
           },
           "phase": {
             "$ref": "#/components/schemas/VariationPhase"
+          },
+          "plot_emits": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "`Feature::PlotEmits(u8)` — the one engine feature carrying a payload,\nso it cannot ride the `features` string array.\n\n`None` is the *only* encoding of absence. **`0` means \"does not emit\"**,\nnot \"emits zero\", so a stored `0` would be a second spelling of `None`\n— and `plot_emits.is_some()`, which reads as \"has the feature\", would\nbe wrong for exactly that input. Migration 75 rejects it."
           },
           "shader_2d": {
             "type": [
@@ -3665,6 +3706,17 @@
               "null"
             ]
           },
+          "shader_state_init": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Per-(thread, xform, variation) f32 slots persisted across the inner\niteration loop, paired with the WGSL that seeds them beyond zero-fill.\n\nUncapped: state lives in a separate buffer sized dynamically from the\nflame, so it neither joins the packed-parameter sum nor needs a ceiling."
+          },
           "version": {
             "type": "integer",
             "format": "int32"
@@ -3676,7 +3728,7 @@
       },
       "VariationListItem": {
         "type": "object",
-        "description": "Lightweight shape used by `GET /api/variations`. Omits `parameters` and\nthe shader sources so a full catalog list stays small; clients hit\n`GET /api/variations/{name}` for full data.\n\nThe bar for a field here is that a **browse/select decision** can be made\nfrom it. Engine wiring (`phase`, `needs_rng`, `needs_affine`,\n`writes_color`, `init_param_count`, and `state_count` when it lands) does\nnot qualify — registration always happens from the detail payload, so\nwiring on the list is bytes with no consumer, fetched for the whole corpus\nunder the manifest-driven catalog.\n\nThose five were trimmed on 2026-07-31 after the client confirmed nothing\ndeclares them and nothing uses `deny_unknown_fields`. This shape is now\nthe client's documented §2 plus `has_shader_3d`.\nSee docs/api-shared-resources-server.md §1.2.",
+        "description": "Lightweight shape used by `GET /api/variations`. Omits `parameters` and\nthe shader sources so a full catalog list stays small; clients hit\n`GET /api/variations/{name}` for full data.\n\nThe bar for a field here is that a **browse/select decision** can be made\nfrom it. Engine wiring (`phase`, `features`, `needs_rng`, `needs_transform`,\n`writes_color`, `init_param_count`, and `state_count` when it lands) does\nnot qualify — registration always happens from the detail payload, so\nwiring on the list is bytes with no consumer, fetched for the whole corpus\nunder the manifest-driven catalog.\n\nThose five were trimmed on 2026-07-31 after the client confirmed nothing\ndeclares them and nothing uses `deny_unknown_fields`. This shape is now\nthe client's documented §2 plus `has_shader_3d`.\nSee docs/api-shared-resources-server.md §1.2.",
         "required": [
           "id",
           "name",
@@ -3703,7 +3755,7 @@
           },
           "downloadable": {
             "type": "boolean",
-            "description": "Whether a client may fetch and register this variation at runtime.\n\nNot \"has a shader\". `subflame_wf` has a real 2D shader on the client —\nit calls `subflame_iterate` and reads the subflame storage buffers —\nit is simply **built-in-only by nature**, so there is nothing servable\nto store. Saying `downloadable: false` states that truthfully while\nkeeping the row in the catalog for the browsing app and the panel.\n\nEarns its place by the same rule as `has_shader_3d`: \"don't try to\nfetch this\" is exactly a browse-or-select decision. It also underwrites\nthe download contract — if it's downloadable, it has a shader — which\nis what lets `VariationDownload.shader_2d` stay a required `String`\nclient-side instead of an `Option` that would degrade to a silent skip.\n\nOne-directional: see `variations_downloadable_has_shader` in migration\n70 for why a shader won't stay sufficient (name-gated helper libraries)."
+            "description": "Whether a client may fetch and register this variation at runtime.\n\nNot \"has a shader\". `subflame_wf` has a real 2D shader on the client —\nit calls `subflame_iterate` and reads the subflame storage buffers —\nit is simply **built-in-only by nature**, so there is nothing servable\nto store. Saying `downloadable: false` states that truthfully while\nkeeping the row in the catalog for the browsing app and the panel.\n\nEarns its place by the same rule as `has_shader_3d`: \"don't try to\nfetch this\" is exactly a browse-or-select decision. It also underwrites\nthe download contract — **if it's downloadable, it has a shader the\nclient can use for its category**:\n\n* any category → `shader_2d` required. A NULL there would reach the\n  emit loop's `else { continue }` and silently contribute nothing.\n* `only_3d` → `shader_3d` suffices. The engine removes these from the\n  active set in 2D builds *before any source lookup*, so a 2D body is\n  never read and requiring one would mean dead data that looks\n  meaningful (migration 74).\n\nOne-directional: see `variations_downloadable_has_shader` for why a\nshader won't stay *sufficient* either (name-gated helper libraries)."
           },
           "has_shader_3d": {
             "type": "boolean",
@@ -3766,7 +3818,8 @@
         "enum": [
           "pre",
           "normal",
-          "post"
+          "post",
+          "any"
         ]
       },
       "Visibility": {

@@ -21,9 +21,18 @@ impl App {
             false,
         );
 
+        // New batch: anything still in flight from a previous one is now
+        // a straggler and must not be counted against this batch.
+        self.variation_fetch_epoch = self.variation_fetch_epoch.wrapping_add(1);
+        let epoch = self.variation_fetch_epoch;
+        if let Ok(mut slot) = self.variation_fetch_results.lock() {
+            slot.clear();
+        }
+
         self.variation_fetch_in_progress = true;
         self.variation_fetch_started = Some(web_time::Instant::now());
         self.variation_fetch_pending_count = names.len();
+        self.variation_fetch_names = names.clone();
         self.paused = true;
 
         let base_url = crate::api::API_BASE_URL.to_string();
@@ -41,7 +50,7 @@ impl App {
                 let result = api.fetch_variation(&url_name).await
                     .map_err(|e| e.to_string());
                 if let Ok(mut s) = slot.lock() {
-                    s.push((url_name, result));
+                    s.push((epoch, url_name, result));
                 }
                 window.request_redraw();
             });
@@ -52,7 +61,7 @@ impl App {
                 let result = pollster::block_on(api.fetch_variation(&url_name))
                     .map_err(|e| e.to_string());
                 if let Ok(mut s) = slot.lock() {
-                    s.push((url_name, result));
+                    s.push((epoch, url_name, result));
                 }
                 window.request_redraw();
             });
@@ -70,19 +79,45 @@ impl App {
         if let Some(started) = self.variation_fetch_started {
             if started.elapsed() > std::time::Duration::from_secs(VARIATION_FETCH_TIMEOUT_SECS) {
                 log::error!("Variation fetch timed out after {}s", VARIATION_FETCH_TIMEOUT_SECS);
-                self.finalize_variation_fetches(true);
+                // Tell the user. `finalize` used to take a `had_failures`
+                // flag and ignore it, so a timeout resumed rendering in
+                // silence and the flame just drew wrong.
+                let names = std::mem::take(&mut self.variation_fetch_names).join(", ");
+                self.egui_layer.show_api_notification(
+                    &rust_i18n::t!("api.variation_fetch_timeout", names = names),
+                    true,
+                );
+                self.finalize_variation_fetches();
                 return;
             }
         }
 
         // Drain any completed fetches
-        let new_results: Vec<(String, Result<VariationDownload, String>)> = {
+        let drained: Vec<(u64, String, Result<VariationDownload, String>)> = {
             let mut slot = match self.variation_fetch_results.lock() {
                 Ok(s) => s,
                 Err(_) => return,
             };
             std::mem::take(&mut *slot)
         };
+        // Drop stragglers from an abandoned batch. Counting them here is
+        // what finalized the current batch early.
+        let epoch = self.variation_fetch_epoch;
+        let mut stale = 0usize;
+        let new_results: Vec<(String, Result<VariationDownload, String>)> = drained
+            .into_iter()
+            .filter_map(|(e, name, result)| {
+                if e == epoch {
+                    Some((name, result))
+                } else {
+                    stale += 1;
+                    None
+                }
+            })
+            .collect();
+        if stale > 0 {
+            log::debug!("Discarded {stale} variation fetch result(s) from an earlier batch");
+        }
 
         if new_results.is_empty() {
             return;
@@ -116,7 +151,7 @@ impl App {
         }
 
         if self.variation_fetch_pending_count == 0 {
-            self.finalize_variation_fetches(!failed.is_empty());
+            self.finalize_variation_fetches();
             if !failed.is_empty() {
                 self.egui_layer.show_api_notification(
                     &rust_i18n::t!("api.variation_fetch_failed", names = failed.join(", ")),
@@ -149,10 +184,17 @@ impl App {
         }
     }
 
-    fn finalize_variation_fetches(&mut self, _had_failures: bool) {
+    /// Reset fetch state and rebuild the shader.
+    ///
+    /// Deliberately says nothing to the user: the two call sites need
+    /// different messages (timeout vs. partial failure), so each shows
+    /// its own. The old signature took a `had_failures` flag and ignored
+    /// it, which is why a timeout was silent.
+    fn finalize_variation_fetches(&mut self) {
         self.variation_fetch_in_progress = false;
         self.variation_fetch_started = None;
         self.variation_fetch_pending_count = 0;
+        self.variation_fetch_names.clear();
         self.paused = false;
         // Trigger a render reset so the new shader (with the fetched variations)
         // takes effect immediately.
