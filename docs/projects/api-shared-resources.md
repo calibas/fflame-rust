@@ -179,37 +179,25 @@ shipped variations are built-in and never downloaded. The risk is a
 then **mis-renders with no warning**. `from_download` hardcodes
 `state_count: 0`, and the code already flags this as deferred.
 
-### 3.2 Proposed schema (additive, back-compatible)
+### 3.2 The schema lives in VARIATIONS_WIRE_FORMAT.md
 
-```jsonc
-{
-  // ... existing fields unchanged ...
+**[VARIATIONS_WIRE_FORMAT.md](VARIATIONS_WIRE_FORMAT.md) is the
+canonical client↔API variation contract** — endpoints, payloads,
+parameter types, the WGSL function contract, versioning, aliases. It
+predates this plan and stays authoritative; do not restate its schema
+here.
 
-  // Authoritative when present. Falls back to the legacy
-  // needs_rng / needs_transform / writes_color bools when absent.
-  "features": ["needs_rng", "always_z", "replace"],
+What this review contributed back into it:
 
-  // Per-thread state slots (get_state / set_state in the shader).
-  "state_count": 0,
-  "shader_state_init": null,
+- **§6.1** — the gap is wider than the three fields §6 listed. The full
+  13-feature measurement above, the 38% figure, the proposed `features`
+  array, and the "ignore unknown features with a warning" rule.
+- **§7** — `description_plain` alongside the markdown `description`,
+  per decision 4, with the reasoning for stripping server-side.
 
-  // Foreign names for .flame import matching.
-  "aliases": [],
-
-  // Decision 4 — also on the list/manifest form.
-  "author": "…",
-  "description": "…markdown…"
-}
-```
-
-Feature names, all thirteen: `needs_rng`, `needs_transform`,
-`writes_color`, `writes_rgb`, `needs_accum`, `always_z`, `never_z`,
-`replace`, `can_hide`, `volume_side_emit`, `analytic_blur`, `needs_w`,
-`needs_mobius_lib`. Their meanings live in
-`src/variations/definition.rs`; the server only carries them.
-
-An unknown feature string should be **ignored with a warning**, not an
-error, so a newer server can serve an older client.
+Its §9 already anticipated effects: *"When effects move to the API, the
+wire format should mirror the variation contract one-for-one... Decide
+once, apply twice."* §4.4 below follows that instruction.
 
 ### 3.3 Manifest-driven catalog
 
@@ -411,10 +399,10 @@ Target behaviour, matching what variations already do:
   with a message naming the conflict, rather than silently overriding.
 - Same rule for API-sourced scripts and local plugins.
 
-**Migration matters here.** Anyone who already relies on a shadowing
-copy will see it stop loading. The change should detect that case on
-startup and offer to rename rather than just refusing — a silent
-disappearance would look like data loss.
+**Do this now, before anyone depends on it.** Scripting has not
+shipped to users, so there are no shadowing copies in the wild and no
+migration path is needed — just the behaviour change and the doc
+comment. Deferring it is what would create a migration.
 
 Note the cost this removes: today "shipped script FILENAMES are a
 public API" because `run_script(id)` resolves by stem and a user copy
@@ -492,24 +480,21 @@ repo knows not to remove the endpoint.
 
 ## 7. Cross-cutting client work
 
-### 7.1 Markdown descriptions need a renderer
+### 7.1 Descriptions — no markdown renderer, ever
 
-Decision 4 puts markdown descriptions on every resource. Today **there
-is no markdown renderer in the app**, and the variations panel does not
-display descriptions at all. Options, cheapest first:
+**Decided:** this app is not getting a markdown renderer. The server
+carries `description` (markdown, for the browsing app) *and*
+`description_plain` (syntax stripped). The app shows the plain version;
+if it is absent it shows the raw markdown, which degrades readably.
 
-- **Render as plain text.** Markdown degrades readably; headings and
-  emphasis show as literal `#` and `*`. Zero cost, slightly scruffy.
-- **A minimal inline subset** — bold, italics, code, links, paragraphs
-  — hand-rolled against egui's `RichText`. Perhaps 150 lines, no new
-  dependency, covers what a resource description realistically uses.
-- **`egui_commonmark`.** Full support including tables and images, at
-  the cost of a dependency that must build on WASM.
+Stripping happens **server-side, once**, so both consumers agree and
+neither client carries markdown-parsing code. Recorded in
+[VARIATIONS_WIRE_FORMAT.md §7](VARIATIONS_WIRE_FORMAT.md); applies
+identically to effects and scripts.
 
-The separate browsing app presumably renders markdown properly, so the
-in-app bar is lower — a description is a paragraph or two in a side
-panel. **Recommendation: the minimal subset**, with plain text as the
-fallback if it turns out descriptions are mostly prose anyway.
+The client work is therefore just *display*: the variations panel shows
+no description at all today, so the field needs a home in the UI
+regardless of format.
 
 ### 7.2 A shared "downloadable resource" shape
 
@@ -526,25 +511,130 @@ than after. Not worth factoring speculatively before then.
 
 ---
 
-## 8. Sequencing
+## 8. Client-side task list
 
-1. **Regenerate the OpenAPI spec (§0.1).** Otherwise both sides build
-   against a stale contract. Cheap, unblocks everything.
-2. **Variation schema extension + manifest + the three bug fixes
-   (§3).** Small, additive, makes an existing feature honest, and
-   proves the manifest pattern on the subsystem that already works.
-3. **Script local cache (§5.5).** Independent of the API; closes the
-   web "cannot save a script" gap by itself.
-4. **Scripts CRUD (§5)**, including the shadowing removal and its
-   migration.
-5. **Local plugins (§2).** Shares the registration work with §3 and
-   gives custom authors somewhere to go before effects land.
-6. **Downloadable effects (§4)** — the largest build, and the one that
-   benefits most from the patterns above being settled. Factor the
-   shared resource machinery here (§7.2).
-7. **Standalone palette save (§6).** Whenever convenient.
+Everything this side needs, grouped by workstream. Sizes are rough:
+**S** = a sitting, **M** = a day or two, **L** = a project.
+Tick as they land; add freely.
 
-Two items are worth doing regardless of where they fall: the
-**compile-failure path** (§1), which today can take down a render, and
-the **script wall-clock deadline**, which should precede public script
-browsing.
+### 8.0 Do first — cheap and unblocking
+
+- [ ] **S** — Regenerate `docs/main/openapi.json` from the live server
+  (§0.1). Four months stale, missing two endpoints the client uses
+  daily. Both sides are otherwise building against fiction.
+- [ ] **S** — Remove built-in shadowing for scripts (§5.2). No
+  migration needed *today*; deferring it creates one.
+
+### 8.1 Correctness, independent of any new feature
+
+These are live defects, not future work.
+
+- [ ] **S** — WASM variation cache is write-only: `list_cached()` is a
+  stub, so web re-downloads everything each session and "Clear Cache"
+  reports 0 and does nothing. Needs a localStorage key index.
+- [ ] **S** — Timed-out variation fetches leak into the next batch
+  (`variation_fetch_results` is never cleared), finalizing it early;
+  `finalize` also ignores `had_failures`, so a timeout is silent.
+- [ ] **S** — A missing `shader_3d` silently drops the variation in 3D
+  rather than falling back or reporting.
+- [ ] **M** — Compile-failure path (§1): a downloaded resource whose
+  shader fails to compile must disable itself and report, not take the
+  render down. Applies to variations now, effects later.
+- [ ] **S** — Provenance in the UI: built-in / downloaded / local. The
+  variations panel shows "API v#"; effects show nothing.
+- [ ] **M** — Wall-clock deadline inside the L-system builtin walks —
+  the recorded gap from the script-sandbox review (the operation budget
+  structurally cannot see native work). **Before public script
+  browsing.**
+
+### 8.2 Variations
+
+- [ ] **S** — Consume the `features` array
+  ([WIRE_FORMAT §6.1](VARIATIONS_WIRE_FORMAT.md)), superseding the
+  three legacy bools; ignore unknown feature strings with a warning.
+- [ ] **S** — Consume `state_count` / `shader_state_init`; stop
+  hardcoding `state_count: 0` in `from_download`.
+- [ ] **S** — Consume `description_plain` + `authors`; give them a home
+  in the panel (no description is shown at all today).
+- [ ] **M** — Manifest-driven catalog (§3.3): fetch `GET
+  /api/variations`, cache with etag, revalidate conditionally. This
+  gives `list_variations()` — currently dead code — its purpose.
+- [ ] **M** — Variations panel lists **everything**: built-in, local,
+  downloaded, and available-not-downloaded, with per-row state.
+- [ ] **S** — Offline behaviour: a failed manifest fetch shows what is
+  present, not an error.
+- [ ] **S** — Offer updates when a catalog `version` exceeds the cached
+  copy (today `register_from_api` replaces silently).
+
+### 8.3 Scripts
+
+- [ ] **M** — Local cache / local store. On WASM this *is* the only
+  storage — closes "a web user cannot save a script at all", and is
+  worth doing **before and independently of** the API.
+- [ ] **S** — Fork-on-edit for built-ins (§5.2), paired with 8.0.
+- [ ] **M** — CRUD client calls against §5.4.
+- [ ] **M** — Panel: sign-in-aware list (mine / built-in / public),
+  save-to-cloud, update-conflict handling.
+- [ ] **S** — Derive and send `kind` / `flags` / `description` from the
+  collect pass; treat source as authoritative on load.
+- [ ] **M** — Public browse UI. Gated on the 8.1 deadline item, since
+  this is the point where users run strangers' code.
+
+### 8.4 Local-only plugins (§2)
+
+- [ ] **S** — Source tag on registry entries
+  (`Builtin | Api | Local`), replacing the `is_core` bool.
+- [ ] **M** — Plugin load path: desktop folder, WASM localStorage under
+  a key prefix distinct from the download cache.
+- [ ] **S** — Reject name collisions with a message naming the
+  conflict; never shadow.
+- [ ] **S** — Never upload a local plugin — assert it at the API
+  boundary, not just by convention.
+- [ ] **M** — Warn when saving or uploading a flame that depends on a
+  local plugin: it will not render for anyone else, or for the same
+  user on another device.
+- [ ] **S** — Missing-resource path distinguishes "downloadable" from
+  "you do not have this plugin".
+
+### 8.5 Effects — the large build (§4)
+
+- [ ] **M** — `Lazy<EffectRegistry>` → `Lazy<RwLock<…>>` plus
+  `global_effect_registry_mut()`. 17 call sites, 5 files, mechanical.
+- [ ] **S** — `EffectInfo` holds source *or* path, plus source tag and
+  `version`.
+- [ ] **M** — Source-accepting compilation, preserving the
+  `// INCLUDE_BLEND_MODES` splice.
+- [ ] **M** — Effect cache, mirroring the variation cache — with the
+  WASM key index done right rather than inheriting 8.1's bug.
+- [ ] **M** — On-demand fetch trigger. The hook exists;
+  `effect_chain.rs` detects unknown types and only logs.
+- [ ] **M** — Manifest + panel listing everything, matching 8.2.
+- [ ] **S** — Replace the dead `Effect` struct in `src/api/types.rs`
+  with `EffectDownload`.
+- [ ] **S** — Publish-time validation the server needs from us: 16
+  params, 32 slots, f32-only, one category (§4.3).
+
+### 8.6 Palettes — deferred
+
+- [ ] **S** — Standalone palette upload + a button in the palette
+  editor (§6). Low priority; recorded so the endpoint is not removed.
+
+### 8.7 Shared machinery (§7.2)
+
+- [ ] **L** — Factor manifest + cache + on-demand fetch + registration
+  + provenance once, when effects are built. Three hand-copies of
+  `variation_fetch.rs` / `variation_cache.rs` would triple-maintain the
+  same bugs — 8.1's write-only WASM cache being exactly the kind that
+  gets duplicated. Not worth factoring speculatively before then.
+
+### Suggested order
+
+8.0 → 8.1 (the three cheap defects) → 8.2 → 8.3 local store → 8.3 rest
+→ 8.4 → 8.5 (factoring 8.7 as it goes) → 8.6 whenever.
+
+Rationale: the cheap correctness items make the existing feature honest
+before it gets a UI that exposes it; variations prove the manifest
+pattern on the subsystem that already works; the script local store is
+the single highest user-visible win and needs no server; effects are
+last because they are the largest and benefit most from every pattern
+above being settled.

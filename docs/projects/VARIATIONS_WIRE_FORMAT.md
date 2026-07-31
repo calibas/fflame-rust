@@ -249,6 +249,55 @@ hardcodes these defaults with a note that the API contract hasn't been
 extended. Built-in variations (`VariationInfo::from_def`) wire them
 through correctly.
 
+### 6.1 The gap is wider than three fields
+
+Measured across the 646 shipped variations (2026-07-31). The wire
+format carries **3 of the engine's 13 `Feature` flags** — `needs_rng`,
+`needs_transform`, `writes_color`. Everything else defaults to absent:
+
+| Feature | On the wire? | Shipped variations using it |
+| ------- | ------------ | --------------------------- |
+| `NeedsRng`, `NeedsTransform`, `WritesColor` | yes | 297 / 123 / 77 |
+| `AlwaysZ` | **no** | 173 |
+| `Replace` | **no** | 47 |
+| `CanHide` | **no** | 39 |
+| `WritesRgb` | **no** | 20 |
+| `NeverZ` | **no** | 16 |
+| `NeedsW` | **no** | 12 |
+| `NeedsAccum` | **no** (§6) | 11 |
+| `NeedsMobiusLib` | **no** | 9 |
+| `VolumeSideEmit` | **no** | 2 |
+| `AnalyticBlur` | **no** | 2 |
+| `state_count > 0` | **no** (§6) | 27 |
+
+**245 of 646 (38%)** use at least one thing the wire format cannot
+express. To be precise about the risk: nothing breaks today, because
+shipped variations are built-in and never travel over the wire. The
+failure mode is a **server-hosted variation** needing one of these — it
+deserializes, compiles, and then **renders incorrectly with no
+warning**, because the missing flag silently changes the generated
+function signature or the plot behaviour.
+
+`AlwaysZ` is the one to note: 173 variations, and its absence means a
+variation's z contribution is zeroed whenever `preserve_z` is false.
+
+**Proposed shape** — a single array supersedes the three legacy bools
+when present, so old payloads keep working and future flags need no
+further schema changes:
+
+```jsonc
+"features": ["needs_rng", "always_z", "replace"]
+```
+
+All thirteen names: `needs_rng`, `needs_transform`, `writes_color`,
+`writes_rgb`, `needs_accum`, `always_z`, `never_z`, `replace`,
+`can_hide`, `volume_side_emit`, `analytic_blur`, `needs_w`,
+`needs_mobius_lib`. Semantics live in
+[src/variations/definition.rs](../../src/variations/definition.rs); the
+server only carries them. **An unknown feature string should be ignored
+with a warning, not rejected**, so a newer server can serve an older
+client.
+
 Design background:
 [docs/projects/intra-iteration-state-and-accum.md](intra-iteration-state-and-accum.md).
 
@@ -289,6 +338,23 @@ ships per variation.
 | `authors: Vec<String>` | `VariationListItem` + `VariationDownload` | Original designer(s). Order-preserving (multiple authors are common — ports + extensions). Free-form `"Name (year)"` style; **not** a foreign key to `users` — these are historical attribution, not platform accounts. |
 | `description: Option<String>` on `ApiVariationParameter` | `VariationDownload.parameters[*]` | Per-parameter help / tooltip prose. Param names alone (`hypergon`, `super_n3`, `popcorn2_3D_c`) are extremely obtuse without explanation. |
 | `aliases: Vec<String>` | `VariationListItem` + `VariationDownload` | Foreign-app names that resolve to this variation on `.flame` XML import (e.g. `linear3D` for our `linear`). See §10. |
+| `description_plain: Option<String>` | `VariationListItem` + `VariationDownload` | The same prose with markdown syntax stripped, for clients that do not render markdown. See below. |
+
+**`description` is markdown; `description_plain` is what this app
+shows.** The browsing app renders markdown properly. This app has no
+markdown renderer and is not getting one — a dependency and a rendering
+pass are not worth it for a paragraph in a side panel. So the server
+carries **both**: the markdown source, and a plain-text version with
+the syntax characters stripped.
+
+Stripping server-side rather than client-side is deliberate: it happens
+once, both consumers agree on the result, and neither client needs
+markdown-parsing code. If `description_plain` is absent the client falls
+back to showing `description` raw, which degrades readably — headings
+and emphasis just appear as literal `#` and `*`.
+
+The same pair applies to per-parameter descriptions and to effects and
+scripts when they land (§9).
 
 **Versioning policy.** The whole initial corpus ships at `version =
 1`. The app and the API are released in lockstep — there's no in-flight
