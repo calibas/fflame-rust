@@ -253,6 +253,15 @@ pub fn generate() -> serde_json::Value {
         // Absent from the wire today.
         "payload_features": [
             {
+                "$comment": "engine_clamp is verified against \
+                             ShaderBuilder::plot_emit_cap, which takes the MAX \
+                             across a flame's active variations and applies \
+                             .min(16). It is not a shared or additive budget: \
+                             two variations declaring 16 still yield 16. So a \
+                             per-row CHECK is the right shape, and a value \
+                             above the clamp is silently reduced rather than \
+                             rejected — the catalog would advertise a number \
+                             that never takes effect.",
                 "wire": "plot_emits",
                 "kind": "u8",
                 "shipped_variations": plot_emits_users,
