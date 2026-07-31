@@ -100,6 +100,52 @@ struct VariationDownload {
 compatibility with older API payloads — the client will read either,
 but new payloads should use `needs_transform`.
 
+### 3.1 `shader_2d` stays required — mark the variation instead
+
+`shader_2d` is `Option<String>` server-side and a required `String`
+here, and `subflame_wf` violates it today: its shaders are
+deliberately NULL, so `GET /api/variations/subflame_wf` would fail
+this deserializer outright. Latent only because the client has it
+built in and never fetches it.
+
+**Recommendation: keep `shader_2d` required, and flag the variation on
+the LIST as not downloadable.**
+
+```jsonc
+// VariationListItem
+"downloadable": true   // false => built-in only, do not fetch detail
+```
+
+Why not the alternatives:
+
+- **`Option<String>` on the client** deserializes cleanly and then
+  fails *worse*. `VariationInfo.wgsl_source` is already `Option`, and
+  the builder's response to `None` is `continue` — the variation is
+  skipped and contributes nothing, silently. That is the same
+  degradation class as the missing-`shader_3d` bug, which is on the
+  fix list precisely because it is invisible. Trading a loud
+  deserialization error for a silent no-op is the wrong direction.
+- **Excluding shaderless variations from the catalog** makes it
+  silently incomplete. `subflame_wf` is a variation users *can* use —
+  the browsing app should document it and the panel should list it. It
+  simply is not something to download.
+- **Serving `""`** was correctly rejected upstream: it satisfies the
+  type and moves the failure to shader compilation.
+
+The flag is honest about what is actually true — *this variation is
+built into the client; there is nothing to fetch* — and it matches the
+rule `has_shader_3d` established: a list field earns its place when a
+browse-or-select decision can be made from it. "Do not attempt to
+download this" is exactly such a decision.
+
+It also keeps the download contract clean: **if a variation is
+downloadable, it has a shader.** No consumer has to handle a null one.
+
+Note the property generalises beyond `subflame_wf` — see §4.1. Any
+variation whose WGSL depends on engine infrastructure (subflame
+buffers, name-gated helper libraries) is built-in-only for the same
+reason, so the flag will not stay a one-row special case.
+
 ### `ApiVariationParameter`
 
 ```rust
@@ -201,13 +247,53 @@ Notes the API team needs to know:
   parameter buffer. User parameters live at slots
   `[0, parameters.len())`, init-derived parameters live at
   `[parameters.len(), parameters.len() + init_param_count)`.
-- **3D auto-wrapper**: if `shader_3d` is `None`, the client generates a
-  2D-pass-through wrapper. So a pure-2D variation needs only
-  `shader_2d`; a true 3D variation should provide both.
+- **No 3D auto-wrapper.** This section previously claimed the client
+  generates a 2D-pass-through wrapper when `shader_3d` is `None`. It
+  does not — it **skips the variation entirely** in 3D flames, so the
+  variation silently contributes nothing. The fallback was removed
+  deliberately: it masked shader-validation crashes where a
+  vec2-returning function got called from a vec3 accumulator. A
+  variation meant to work in 3D must ship `shader_3d`. `has_shader_3d`
+  on the list exists so this is visible before download rather than as
+  a variation that renders nothing.
 
 Reference: signature builder in
 [src/shader_builder_v2.rs](../../src/shader_builder_v2.rs) (search
 `pre_variations`, `normal_variations`, `post_variations` codegen).
+
+### 4.1 A downloaded shader must be self-contained
+
+The builder splices several helper libraries into the assembled shader,
+but **only for variations it recognises by name**:
+
+| helper | trigger |
+| ------ | ------- |
+| `noise.wgsl` | name is `dc_perlin`, `crackle`, `dc_crackle_wf` |
+| `voronoi.wgsl` | name is `crackle`, `dc_crackle_wf` |
+| `fractwf.wgsl` | name matches `fract_*_wf` |
+| `subflame.wgsl` | the flame uses a subflame |
+| `complex.wgsl` | always present |
+| Möbius SL(2,C) lib | **`Feature::NeedsMobiusLib`** |
+
+Consequence for curation: **a server-hosted variation cannot reach the
+name-gated helpers.** Its WGSL must define everything it calls, apart
+from the shader-wide primitives (`get_param`, `get_state`, `rng_*`,
+`complex.wgsl`) and any library it can request declaratively. Today
+`NeedsMobiusLib` is the only declarative one — which is a further
+reason the `features` array of §6.1 matters: it is the sole mechanism
+by which a downloaded variation can pull in infrastructure.
+
+A shader referring to, say, `simplex_noise_3d` without being named
+`crackle` compiles to an undefined-function error at pipeline build.
+Worth validating at publish time if cheap; otherwise it is a curation
+checklist item.
+
+**This is why some variations cannot be served at all.** `subflame_wf`
+has a perfectly real `wgsl_2d`, but it calls `subflame_iterate` and
+reads the subflame storage buffers — engine infrastructure that cannot
+travel over the wire. It is *built-in-only by nature*, not a variation
+that happens to lack a shader. See §3.1 for how the wire format should
+say so.
 
 ---
 
