@@ -4,6 +4,35 @@ Reference for the variation wire contract between this client and the
 fractalsforall API. Use this when changing either side; the client's
 expectations are listed here so the API repo can stay aligned.
 
+> **The vocabularies in this document are generated. Read them from
+> [`docs/generated/variation-contract.json`](../generated/variation-contract.json),
+> not from the prose here.**
+>
+> Categories, phases, features, parameter types, engine limits and the
+> helper-library gating table are emitted by
+> [`src/variations/contract.rs`](../../src/variations/contract.rs) from
+> the enums that define them, with counts measured across the shipped
+> corpus. A test fails the build when the committed copy drifts:
+>
+> ```text
+> UPDATE_CONTRACT=1 cargo test --lib contract_is_current
+> ```
+>
+> Why: five of this document's hand-written vocabularies turned out to
+> be wrong within two days of cross-repo work — a category that never
+> existed (`parameterized`), a category with no wire spelling
+> (`only_3d`), a described-but-absent 3D fallback, a missing phase
+> covering 84% of the corpus (`any`), and a payload-carrying feature
+> that cannot be a string (`plot_emits`). Each left a reader **worse
+> off than no doc**: they manufactured distinctions that did not exist
+> and made silent defects read as graceful behaviour. A hand-maintained
+> cross-repo contract decays asymmetrically — the parts nobody
+> exercises rot fastest, and those are exactly what someone reaches for
+> when doing something new.
+>
+> Prose here explains *why* and records decisions. Anything that is a
+> list of values belongs in the generated file.
+
 Variations are **read-only on the client**: the server is the source of
 truth, the client fetches and caches. There is no create / update /
 delete from this side.
@@ -260,6 +289,50 @@ Notes the API team needs to know:
 Reference: signature builder in
 [src/shader_builder_v2.rs](../../src/shader_builder_v2.rs) (search
 `pre_variations`, `normal_variations`, `post_variations` codegen).
+
+### 4.2 `phase` is missing its largest value
+
+`ApiVariationPhase` is `pre | normal | post`. The engine's
+`VariationPhase` has a fourth, **`Any`**, and it is not a rare corner:
+
+| phase | shipped variations | on the wire |
+| ----- | -----------------: | ----------- |
+| `pre` | 23 | yes |
+| `normal` | 56 | yes |
+| `post` | 22 | yes |
+| **`any`** | **545** | **no** |
+
+`Any` is the opt-in marker for JWildfire's per-instance `fx_priority`
+override: the shader builder honours a stored priority **only** when
+the variation's declared phase is `Any` (`shader_builder_v2.rs`, search
+`VariationPhase::Any`). Pre/Normal/Post variations are locked to their
+phase and ignore it.
+
+So a server-hosted variation that ought to be `Any` must currently be
+sent as one of the other three, and arrives locked — silently losing
+phase-override support. 84% of the corpus is in that state. Same shape
+as the other gaps: invisible because nothing exercises it yet.
+
+**Add `"any"` to `ApiVariationPhase`.** Additive; older clients that
+do not know it can fall back to `normal`, which is exactly the
+behaviour they have today.
+
+### 4.3 `plot_emits` needs its own field, not a features entry
+
+`Feature::PlotEmits(u8)` carries a payload — the per-call emission cap
+— so it cannot be one string in the `features: [...]` array of §6.1.
+Three shipped variations use it (`PlotEmits(16)` ×2, `PlotEmits(3)`).
+
+Give it its own optional integer field, the way `init_param_count` and
+`state_count` already have theirs:
+
+```jsonc
+"plot_emits": 16   // omit or 0 when the variation does not emit
+```
+
+The engine clamps to 16 and drops excess `emit_plot` calls, so a value
+above that is silently ineffective rather than an error — worth a
+publish-time check.
 
 ### 4.1 A downloaded shader must be self-contained
 

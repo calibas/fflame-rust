@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod definition;
 pub mod defs;
+pub mod contract;
 pub mod analytic_blur;
 
 use definition::VariationDef;
@@ -97,6 +98,33 @@ pub enum VariationPhase {
 }
 
 impl VariationPhase {
+    /// Every variant, for contract generation.
+    pub const ALL: &'static [VariationPhase] = &[
+        VariationPhase::Pre,
+        VariationPhase::Normal,
+        VariationPhase::Post,
+        VariationPhase::Any,
+    ];
+
+    /// The canonical wire spelling.
+    ///
+    /// **`any` has no counterpart in `ApiVariationPhase` today**, which
+    /// is a real gap rather than a naming detail: 545 of the 646
+    /// shipped variations are `Any`, and the phase is what decides
+    /// whether a variation honours JWildfire's per-instance
+    /// `fx_priority` override (`ShaderBuilder` ignores the override for
+    /// anything that is not `Any`). A downloaded variation serialized
+    /// as `normal` therefore silently loses phase-override support.
+    /// See §4.2 of `docs/projects/VARIATIONS_WIRE_FORMAT.md`.
+    pub fn to_api_str(self) -> &'static str {
+        match self {
+            VariationPhase::Pre => "pre",
+            VariationPhase::Normal => "normal",
+            VariationPhase::Post => "post",
+            VariationPhase::Any => "any",
+        }
+    }
+
     /// The JWildfire `fx_priority` integer a variation runs at in its
     /// natural (no-override) phase: `Pre`→−1, `Normal`/`Any`→0, `Post`→1.
     /// Used on import to decide whether a parsed `fx_priority` is an

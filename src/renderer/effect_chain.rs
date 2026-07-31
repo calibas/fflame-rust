@@ -142,11 +142,11 @@ use crate::effects::{global_effect_registry, EffectCategory, EffectInstance};
 /// `max_uniform_buffer_binding_size` of a default device and 4.5× the
 /// 16 KiB the WASM build requests. That would mean moving effect
 /// parameters to a storage buffer — a real change, not a constant bump.
-const MAX_EFFECT_PARAMS: usize = 48;
+pub const MAX_EFFECT_PARAMS: usize = 48;
 
 /// Maximum number of effect slots in the shared params buffer
 /// Supports up to 32 effects running in a single frame
-const MAX_EFFECT_SLOTS: usize = 32;
+pub const MAX_EFFECT_SLOTS: usize = 32;
 
 /// Alignment for uniform buffer dynamic offsets (256 bytes is typical minimum)
 const UNIFORM_BUFFER_OFFSET_ALIGNMENT: u64 = 256;
