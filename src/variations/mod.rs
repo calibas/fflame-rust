@@ -362,6 +362,21 @@ fn api_phase_to_runtime(api: &crate::api::types::ApiVariationPhase) -> Variation
 impl VariationCategory {
     /// Parse from API string (matches API's snake_case).
     /// Unknown values map to Plugin as a safe default.
+    ///
+    /// Every variant must have an arm. `Only3D` had none, which made it
+    /// unexpressable over the wire — and it is the one category that is
+    /// FUNCTIONAL rather than cosmetic: it is dropped from 2D shaders
+    /// (see `ShaderBuilder::active_with_local_indices`). A downloaded
+    /// Only3D variation therefore arrived as `Plugin` and was compiled
+    /// into 2D shaders, where by definition it has no meaningful
+    /// reading. Latent so far only because no shipped variation uses
+    /// the category.
+    ///
+    /// The bare `"3d"` arm is a legacy server spelling that collapses
+    /// three categories into one; it resolves to `Depth3D`, which is
+    /// wrong for the 114 `Full3D` variations. Kept so old payloads
+    /// still parse, but the bulk import should send the real value —
+    /// see §5 of `docs/projects/VARIATIONS_WIRE_FORMAT.md`.
     pub fn from_api_str(s: &str) -> Self {
         match s {
             "basic_2d" | "basic2d" => Self::Basic2D,
@@ -369,7 +384,25 @@ impl VariationCategory {
             "depth_3d" | "depth3d" | "3d" => Self::Depth3D,
             "rotation_3d" | "rotation3d" => Self::Rotation3D,
             "full_3d" | "full3d" => Self::Full3D,
+            "only_3d" | "only3d" => Self::Only3D,
             _ => Self::Plugin,
+        }
+    }
+
+    /// The canonical wire spelling — the inverse of [`from_api_str`].
+    ///
+    /// Having both directions in one place is what lets a round-trip
+    /// test assert every variant survives, which is how the missing
+    /// `Only3D` arm would have been caught.
+    pub fn to_api_str(self) -> &'static str {
+        match self {
+            Self::Basic2D => "basic_2d",
+            Self::Advanced2D => "advanced_2d",
+            Self::Depth3D => "depth_3d",
+            Self::Rotation3D => "rotation_3d",
+            Self::Full3D => "full_3d",
+            Self::Only3D => "only_3d",
+            Self::Plugin => "plugin",
         }
     }
 }
@@ -636,5 +669,60 @@ pub fn load_cached_api_variations() {
     let mut registry = global_registry_mut();
     for download in cached {
         registry.register_from_api(&download);
+    }
+}
+
+#[cfg(test)]
+mod category_wire_tests {
+    use super::VariationCategory as C;
+
+    /// Every variant must survive a round trip.
+    ///
+    /// `Only3D` had no `from_api_str` arm, so it silently became
+    /// `Plugin` — and `Only3D` is the one category the shader builder
+    /// ACTS on (it is dropped from 2D shaders). A downloaded variation
+    /// in that category was therefore compiled into 2D shaders where it
+    /// has no meaningful reading. This test is the cheap thing that
+    /// would have caught it.
+    #[test]
+    fn every_category_survives_the_wire() {
+        for c in [
+            C::Basic2D,
+            C::Advanced2D,
+            C::Depth3D,
+            C::Rotation3D,
+            C::Full3D,
+            C::Only3D,
+            C::Plugin,
+        ] {
+            assert_eq!(
+                C::from_api_str(c.to_api_str()),
+                c,
+                "`{}` does not round-trip",
+                c.to_api_str()
+            );
+        }
+    }
+
+    /// Unknown strings degrade to Plugin rather than failing — a newer
+    /// server may serve a category this client has not learned yet.
+    #[test]
+    fn unknown_categories_fall_back_rather_than_fail() {
+        assert_eq!(C::from_api_str("something_new"), C::Plugin);
+        // Spellings the server has actually served. `parametric` and
+        // `basic` are pre-import vocabulary; §5 wrongly claimed
+        // `parameterized` was recognised — none of them are.
+        for legacy in ["basic", "parametric", "parameterized", "pre", "post", "blur"] {
+            assert_eq!(C::from_api_str(legacy), C::Plugin, "`{legacy}`");
+        }
+    }
+
+    /// The legacy `3d` spelling collapses three categories into one.
+    /// Documented, not endorsed: it resolves to Depth3D, which is wrong
+    /// for the 114 Full3D variations.
+    #[test]
+    fn the_legacy_3d_spelling_is_lossy() {
+        assert_eq!(C::from_api_str("3d"), C::Depth3D);
+        assert_ne!(C::from_api_str("3d"), C::Full3D);
     }
 }
