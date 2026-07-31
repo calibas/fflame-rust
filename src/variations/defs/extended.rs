@@ -48,7 +48,7 @@ fn variation_ztranslate(p: vec3<f32>) -> vec3<f32> {
 /// - Joel Faber
 pub static JULIA3D: VariationDef = VariationDef {
     name: "julia3D",
-    aliases: &[],
+    aliases: &["julia3d"],
     display_name: "Julia3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Any,
@@ -774,7 +774,7 @@ fn variation_julia3Dz(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
 /// axes. Each axis has its own twist coefficient.
 pub static CURL3D: VariationDef = VariationDef {
     name: "curl3D",
-    aliases: &[],
+    aliases: &["curl3d"],
     display_name: "Curl3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Any,

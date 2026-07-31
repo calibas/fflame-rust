@@ -164,6 +164,8 @@ variations_panel:
   category_only_3d: "3D Only"
   category_plugin: "Plugin / API"
   source_built_in: "built-in"
+  flame_uses_downloaded: "⚠ This flame uses %{count} downloaded variation(s)"
+  flame_uses_downloaded_hint: "These did not ship with the app — their shader code was fetched from the online library. Built-in variations are reviewed; downloaded ones run the same way but come from elsewhere."
   two_d_only_hint: "This variation has no 3D shader. In a 3D flame it is skipped entirely and contributes nothing, even with a weight set."
   source_api: "API"
   clear_cache_btn: "Clear Variation Cache (%{count})"

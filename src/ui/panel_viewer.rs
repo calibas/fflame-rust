@@ -632,7 +632,7 @@ impl<'a> PanelViewer<'a> {
                 self.render_save_online_dialog(ui);
             }
             PanelType::Variations => {
-                let response = super::variations::render_variations_panel(ui);
+                let response = super::variations::render_variations_panel(ui, self.context.flame);
                 if response.clear_cache_requested {
                     *self.context.clear_variation_cache_requested = true;
                 }
