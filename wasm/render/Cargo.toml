@@ -1,0 +1,49 @@
+# fflame-render — the Infinite Gallery's renderer, as a standalone
+# WASM module. FractalConfig JSON + dimensions in, raw RGBA pixels out
+# (canvas.putImageData on the JS side; PNG encoding, if wanted, is
+# canvas.toBlob — no image codecs in here).
+#
+# Standalone: deliberately NOT a member of the main crate's build (the
+# python/ pattern). The app must be unaffected by anything here.
+
+[package]
+name = "fflame-render"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# default-features = false turns off `web-app`: without that, this
+# module would inherit the full application's wasm-bindgen exports.
+fractal_flame_wgpu = { path = "../..", default-features = false }
+# The main crate's render API speaks `egui_wgpu::wgpu` types; using the
+# same re-export guarantees type identity. default-features = false —
+# egui itself is never referenced and the linker drops it (verified by
+# string scan, as with wasm/script).
+egui-wgpu = { version = "0.34", default-features = false }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+log = "0.4"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+console_error_panic_hook = "0.1"
+
+[dev-dependencies]
+pollster = { version = "0.4", features = ["macro"] }
+
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# wasm-pack bundles wasm-opt 117, which predates rustc's bulk-memory
+# default — without these flags it rejects the module outright.
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ["-Oz", "--enable-bulk-memory", "--enable-nontrapping-float-to-int"]
