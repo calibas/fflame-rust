@@ -170,25 +170,31 @@ fn resolve_params(
     Ok(out)
 }
 
-/// The embedded script library, with each script's kind, doc summary
-/// and declared parameters — everything a picker needs in one call.
+/// The embedded script library, with each script's kind, doc summary,
+/// flags and declared parameters — everything a picker needs in one
+/// call. `flags.norng` matters to a gallery: such a script ignores the
+/// seed, so a hallway of it would show one image over and over.
 pub fn list_scripts_impl() -> Result<String, String> {
     let base = FractalConfig::default();
     let h = host(&base);
     let mut out = Vec::new();
     for entry in library::discover(&base) {
         let doc = parse_doc(&entry.source);
-        let params: Vec<serde_json::Value> = match h.collect(&entry.source, &base) {
-            Ok(meta) => meta.params.iter().map(decl_json).collect(),
+        let (params, flags) = match h.collect(&entry.source, &base) {
+            Ok(meta) => (
+                meta.params.iter().map(decl_json).collect::<Vec<_>>(),
+                serde_json::json!({ "norng": meta.flags.no_rng, "palette": meta.flags.palette }),
+            ),
             // A broken script still lists (its doc says what it meant
             // to be); it just offers no parameters.
-            Err(_) => Vec::new(),
+            Err(_) => (Vec::new(), serde_json::json!({ "norng": false, "palette": false })),
         };
         out.push(serde_json::json!({
             "id": entry.id,
             "name": entry.display_name,
             "kind": entry.kind.as_str(),
             "summary": doc.summary,
+            "flags": flags,
             "params": params,
         }));
     }
@@ -216,6 +222,7 @@ pub fn collect_params_impl(source: &str) -> Result<String, String> {
     serde_json::to_string(&serde_json::json!({
         "name": meta.name,
         "kind": meta.kind.map(ScriptKind::as_str),
+        "flags": { "norng": meta.flags.no_rng, "palette": meta.flags.palette },
         "params": params,
     }))
     .map_err(|e| e.to_string())
@@ -246,12 +253,22 @@ pub fn run_impl(
     let outcome = h.run(source, &base, seed, params).map_err(|e| e.to_string())?;
 
     let config_json = outcome.config.to_json().map_err(|e| e.to_string())?;
+    // A script that defined an animation gets it in the envelope — the
+    // `.anim` JSON the CLI would write beside the `.fflame`, standalone
+    // (it carries the flame as its base_config). Null otherwise. This
+    // is the Animation wing's door: a turntable room is useless if its
+    // animation is silently dropped.
+    let animation_json = match &outcome.animation {
+        Some(a) => serde_json::Value::String(a.to_json().map_err(|e| e.to_string())?),
+        None => serde_json::Value::Null,
+    };
     serde_json::to_string(&serde_json::json!({
         "name": outcome.meta.name,
         "kind": outcome.meta.kind.map(ScriptKind::as_str),
         "warnings": outcome.warnings,
         "messages": outcome.messages,
         "config_json": config_json,
+        "animation_json": animation_json,
     }))
     .map_err(|e| e.to_string())
 }

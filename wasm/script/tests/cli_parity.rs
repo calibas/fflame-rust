@@ -69,4 +69,33 @@ fn the_library_lists_the_embedded_scripts_with_params() {
     // And the source getter round-trips an id from the listing.
     let src = fflame_script::script_source_impl("jitter").expect("source by id");
     assert!(src.contains("script("));
+
+    // Flags surface: a gallery must know turntable ignores the seed
+    // (a norng hallway would show one image over and over) and that
+    // the palette scripts belong in a palette picker.
+    let turntable = arr.iter().find(|e| e["id"] == "turntable").expect("listed");
+    assert_eq!(turntable["flags"]["norng"], true);
+    let iq = arr.iter().find(|e| e["id"] == "iq_palette").expect("listed");
+    assert_eq!(iq["flags"]["palette"], true);
+}
+
+#[test]
+fn a_script_defined_animation_rides_in_the_envelope() {
+    // The Animation wing's door: turntable defines an animation, and
+    // the envelope must carry it — the same .anim JSON the CLI writes.
+    let source = include_str!("../../../assets/scripts/modifiers/turntable.rhai");
+    let out = fflame_script::run_impl(source, 1, "{}", None).expect("runs");
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let anim = v["animation_json"].as_str().expect("animation present");
+    let parsed: serde_json::Value = serde_json::from_str(anim).expect("animation is JSON");
+    assert!(
+        !parsed["tracks"].as_array().unwrap().is_empty(),
+        "turntable defines at least one track"
+    );
+
+    // And a script with no animation says null, not a missing key.
+    let jitter = include_str!("../../../assets/scripts/modifiers/jitter.rhai");
+    let out = fflame_script::run_impl(jitter, 1, "{}", None).expect("runs");
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert!(v["animation_json"].is_null());
 }
