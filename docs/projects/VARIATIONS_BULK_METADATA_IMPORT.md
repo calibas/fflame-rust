@@ -202,6 +202,27 @@ Hybrid Rust + Python, per the analysis in earlier coordination:
   types and defaults, WGSL bodies, version) as JSON. Avoids
   reimplementing Rust parsing for `r#"..."#` raw strings and macro
   expansion.
+
+  **Built 2026-07-31** ([src/bin/export_variations_json.rs](../../src/bin/export_variations_json.rs)).
+  646 variations, 3.2 MB — generated on demand into the gitignored
+  `output/`, not committed, since it carries every WGSL body.
+
+  Two things it does beyond the original sketch:
+
+  * **Vocabularies come from `to_api_str`**, the same source as
+    [`docs/generated/variation-contract.json`](../generated/variation-contract.json),
+    so the dump cannot disagree with the contract about what a category
+    or feature is called. It also emits the newer wire fields the
+    sketch predates: `features[]`, `state_count`, `shader_state_init`,
+    `plot_emits`, `aliases`.
+  * **It embeds `contract_shape`.** A dump merged against a mismatched
+    vocabulary is exactly the failure this whole line of work exists to
+    prevent, so the fingerprint travels with the data and the merge can
+    refuse rather than silently produce rows nobody can read.
+
+  `description`, `description_plain` and `authors` are emitted as
+  explicit nulls rather than omitted, so the Python pass has a visible
+  merge target instead of adding keys that were never there.
 - **Python script** reads the JSON, then opens each `.rs` file in
   `defs/` and extracts description + authors + per-param descriptions
   from the structured `///` comments using tree-sitter-rust or
