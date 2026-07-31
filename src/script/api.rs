@@ -564,16 +564,35 @@ fn register_rng(engine: &mut Engine, state: Rc<RefCell<ScriptState>>) {
 /// build in `set_xaos` (`vec![vec![1.0; n]; n]`), which at that count
 /// asks for tens of gigabytes and aborts the process. Refusing here
 /// gives the script an error it can read instead.
+///
+/// **The budget is shared across all three pools.** `MAX_TRANSFORMS`
+/// bounds `normals + linkeds + finals` together — they are packed into
+/// one `[0, MAX_TRANSFORMS)` region before the subflame slots begin, and
+/// `Buffers::update_transforms` panics on the total, not per pool. The
+/// first version of this cap checked each pool separately, which let a
+/// script build 128 + 128 + 128 and abort at render with
+/// "Flame has 256 total transform slots". Caught by comparing the
+/// generated contract's `transforms_per_flame` against the API's
+/// per-pool schema.
 pub(crate) const MAX_SCRIPT_TRANSFORMS: usize = crate::gpu::buffers::MAX_TRANSFORMS;
+
+/// Total parent transform slots a flame occupies — the quantity
+/// `MAX_TRANSFORMS` actually bounds.
+fn total_transform_slots(cfg: &FractalConfig) -> usize {
+    cfg.flame.transforms.len()
+        + cfg.flame.linked_transforms.len()
+        + cfg.flame.final_transforms.len()
+}
 
 fn register_flame(engine: &mut Engine) {
     engine.register_fn(
         "add_transform",
         |f: &mut FlameHandle| -> Result<TransformHandle, Box<EvalAltResult>> {
             let mut cfg = f.cfg.borrow_mut();
-            if cfg.flame.transforms.len() >= MAX_SCRIPT_TRANSFORMS {
+            // Shared budget: normals + linkeds + finals together.
+            if total_transform_slots(&cfg) >= MAX_SCRIPT_TRANSFORMS {
                 return Err(err(format!(
-                    "a flame holds at most {MAX_SCRIPT_TRANSFORMS} transforms"
+                    "a flame holds at most {MAX_SCRIPT_TRANSFORMS} transforms in total (normals + linked + final)"
                 )));
             }
             cfg.flame.transforms.push(Transform::new());
@@ -589,9 +608,10 @@ fn register_flame(engine: &mut Engine) {
         "add_final_transform",
         |f: &mut FlameHandle| -> Result<TransformHandle, Box<EvalAltResult>> {
             let mut cfg = f.cfg.borrow_mut();
-            if cfg.flame.final_transforms.len() >= MAX_SCRIPT_TRANSFORMS {
+            // Shared budget: normals + linkeds + finals together.
+            if total_transform_slots(&cfg) >= MAX_SCRIPT_TRANSFORMS {
                 return Err(err(format!(
-                    "a flame holds at most {MAX_SCRIPT_TRANSFORMS} final transforms"
+                    "a flame holds at most {MAX_SCRIPT_TRANSFORMS} transforms in total (normals + linked + final)"
                 )));
             }
             cfg.flame.final_transforms.push(Transform::new());
@@ -607,9 +627,10 @@ fn register_flame(engine: &mut Engine) {
         "add_linked_transform",
         |f: &mut FlameHandle| -> Result<TransformHandle, Box<EvalAltResult>> {
             let mut cfg = f.cfg.borrow_mut();
-            if cfg.flame.linked_transforms.len() >= MAX_SCRIPT_TRANSFORMS {
+            // Shared budget: normals + linkeds + finals together.
+            if total_transform_slots(&cfg) >= MAX_SCRIPT_TRANSFORMS {
                 return Err(err(format!(
-                    "a flame holds at most {MAX_SCRIPT_TRANSFORMS} linked transforms"
+                    "a flame holds at most {MAX_SCRIPT_TRANSFORMS} transforms in total (normals + linked + final)"
                 )));
             }
             cfg.flame.linked_transforms.push(Transform::new());

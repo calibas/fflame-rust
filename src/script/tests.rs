@@ -3123,6 +3123,34 @@ fn transforms_stop_at_the_renderer_limit() {
     )
     .unwrap();
     assert_eq!(out.messages, vec!["128"]);
+
+    // The budget is SHARED across the three pools, not per pool.
+    //
+    // MAX_TRANSFORMS bounds normals + linkeds + finals together — they
+    // pack into one [0, MAX_TRANSFORMS) region — and
+    // `Buffers::update_transforms` panics on the total. Checking each
+    // pool separately let a script build 128 + 128 and abort at render
+    // with "Flame has 256 total transform slots".
+    let err = run(
+        r#"script("X", "generator");
+           for i in 0..128 { flame.add_transform(); }
+           flame.add_final_transform();"#,
+        1,
+    )
+    .unwrap_err();
+    assert!(err.message.contains("in total"), "{err}");
+
+    // A mixed flame that fits the shared budget is accepted.
+    let out = run(
+        r#"script("X", "generator");
+           for i in 0..100 { flame.add_transform(); }
+           for i in 0..20  { flame.add_linked_transform(); }
+           for i in 0..8   { flame.add_final_transform(); }
+           print("ok");"#,
+        1,
+    )
+    .unwrap();
+    assert_eq!(out.messages, vec!["ok"]);
 }
 
 #[test]

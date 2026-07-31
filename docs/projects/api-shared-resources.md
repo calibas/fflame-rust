@@ -564,6 +564,14 @@ These are live defects, not future work.
   render down. Applies to variations now, effects later.
 - [ ] **S** — Provenance in the UI: built-in / downloaded / local. The
   variations panel shows "API v#"; effects show nothing.
+- [ ] **S** — Measure stored flames against `transforms_per_flame`
+  (128, shared across normals + linked + final). The API's schema is
+  more permissive — 100 per pool, so 300 — and the engine PANICS on the
+  total, not per pool. Tightening is free if nothing stored exceeds 128
+  and a decision if anything does; either way the measurement comes
+  first, since a tighter rule would reject flames that were valid when
+  saved. `variations_per_flame` (100) and `variation_slots_per_flame`
+  (1600) are unchecked server-side too.
 - [ ] **M** — Wall-clock deadline inside the L-system builtin walks —
   the recorded gap from the script-sandbox review (the operation budget
   structurally cannot see native work). **Before public script
