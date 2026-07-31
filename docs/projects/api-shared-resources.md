@@ -308,13 +308,35 @@ Roughly in dependency order:
 Hard limits. The server should validate against them at publish time
 so a bad effect never reaches a client:
 
-- **`MAX_EFFECT_PARAMS = 16`** — the per-effect uniform is a fixed
-  `[[f32; 4]; 4]`. An effect declaring more cannot be represented.
+- **`MAX_EFFECT_PARAMS = 48`** — the per-effect uniform is a fixed
+  `[[f32; 4]; 12]`. An effect declaring more cannot be represented;
+  the extras are silently dropped.
 - **`MAX_EFFECT_SLOTS = 32`** — effects per frame, across both chains.
 - Parameters are **`f32` only** (`params: HashMap<String, f32>`).
   Booleans and enums encode as floats, as the built-ins do.
 - Exactly one category, `density` or `color`, deciding pipeline
   position.
+
+**The effect cap is the opposite kind of number to the variation one,
+and confusing them would be expensive.** A variation's parameters go
+into a dynamically packed buffer, so its old 16 was obsolete and the
+cap is a policy choice (512, well under the 1600 the engine can
+actually hold). An effect's parameters go into a *fixed-size uniform*,
+so 48 is physical capacity. **The API's check must equal it, never
+exceed it** — an API that accepts more produces effects that upload
+cleanly and then render wrong, which is the worst failure shape
+available here.
+
+Raised from 16 to 48 on 2026-07-31, ahead of effects that need it. It
+was free: the slot stride is 256 B (set by the uniform offset
+alignment, not by the struct), so anything up to 240 B of parameters
+costs nothing and the buffer stays 32 × 256 B = 8 KiB. Beyond ~60 it
+stops being free *and* stops being possible — 512 parameters would
+need ~72 KiB, over the 64 KiB `max_uniform_buffer_binding_size` of a
+default device and 4.5× the 16 KiB the WASM build requests. That would
+mean moving effect parameters to a storage buffer: a real change, not
+a constant bump. A `const` assertion in `effect_chain.rs` fails the
+build if the struct ever outgrows the stride.
 
 ### 4.4 Proposed wire format
 

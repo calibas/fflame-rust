@@ -12,7 +12,7 @@
 const PI: f32 = 3.14159265359;
 
 struct EffectParams {
-    params: array<vec4<f32>, 4>,
+    params: array<vec4<f32>, 12>,
     width: u32,
     height: u32,
     _padding: vec2<f32>,
