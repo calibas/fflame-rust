@@ -702,8 +702,23 @@ These are live defects, not future work.
 - [ ] **M** — Manifest + panel listing everything, matching 8.2.
 - [ ] **S** — Replace the dead `Effect` struct in `src/api/types.rs`
   with `EffectDownload`.
-- [ ] **S** — Publish-time validation the server needs from us: 16
-  params, 32 slots, f32-only, one category (§4.3).
+- [x] **S** — ~~Publish-time validation the server needs from us~~ —
+  superseded: the cap is **48**, not 16 (raised 2026-07-31), and the
+  numbers now ship in the generated contract rather than prose.
+- [x] **S** — ~~Export the 15 built-in effects for the catalog~~
+  **DONE** — `cargo run --bin export_effects_json`, 15 effects, 77 KB:
+  WGSL, parameter schemas, display names, category and
+  `requires_blend_modes` per effect. Shader source is RAW, with the
+  `// INCLUDE_BLEND_MODES` marker intact, so the shared library is not
+  baked into all 12 effects that splice it.
+
+  Two gaps it surfaced, both places effects have not caught up with
+  variations, and both emitted as nulls rather than papered over:
+  `EffectParameter` has no `description` field (VariationParameter
+  does, and 2836 `param!` macros populate it), and `EffectInfo` has no
+  `display_name` — the curated labels live in `locales/en.yml` and the
+  exporter reads them there. `sobel_edges` is "Edge Glow", so deriving
+  a display name from the key would have been wrong.
 
 ### 8.6 Palettes — deferred
 
