@@ -1,0 +1,12 @@
+# getrandom 0.3 (reached via rand 0.9 -> rand_core 0.9) refuses to build
+# for wasm32-unknown-unknown unless a backend is selected explicitly.
+# Selecting it takes BOTH halves: the `wasm_js` feature (in Cargo.toml)
+# and this cfg flag. Enabling only the feature still fails to compile —
+# the error message says so, and it is easy to misread as the feature
+# being broken.
+#
+# Target-scoped, so native builds are untouched. Cargo discovers config
+# by walking parent directories, so this also applies to the standalone
+# crates under wasm/ even though they are separate workspaces.
+[target.wasm32-unknown-unknown]
+rustflags = ['--cfg', 'getrandom_backend="wasm_js"']

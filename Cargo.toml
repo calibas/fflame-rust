@@ -18,7 +18,7 @@ log = "0.4"
 anyhow = "1.0"
 bytemuck = { version = "1.14", features = ["derive"] }
 half = "2.4"
-rand = { version = "0.8", features = ["getrandom"] }
+rand = { version = "0.9", features = ["os_rng"] }
 web-time = "1.1"
 rfd = "0.15"
 once_cell = "1.19"
@@ -26,7 +26,11 @@ chrono = "0.4"
 webbrowser = "1.0"
 
 # Optional
-image = "0.25"
+# PNG (export, thumbnail cache, visual-regression compare) and JPEG
+# (API thumbnail upload) are the only codecs used. Default features
+# also pull AVIF encoding (ravif -> rav1e), which dragged in the old
+# rand 0.8 line — a dependency we neither use nor want to patch.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 png = "0.17"
 futures = "0.3"
 quick-xml = "0.36"
@@ -46,7 +50,12 @@ ringbuf = "0.4"
 # wasm32-unknown-unknown without a cfg flag). We only need `std`; rhai
 # still gets ahash's compile-time-rng, which it depends on directly.
 rhai = { version = "1.25.1", default-features = false, features = ["std"] }
-rand_pcg = "0.3"
+# Pinned to rand 0.9's rand_core. NOTE: the PCG64-MCG stream and the
+# `Uniform` distributions built on it are what `script + seed` MEANS —
+# a shareable artifact. The wasm/script CLI-parity fixtures assert the
+# generated flames byte-for-byte, so any drift here fails the build
+# rather than silently redefining every published seed.
+rand_pcg = "0.9"
 
 # WASM-specific dependencies
 [target.'cfg(target_arch = "wasm32")'.dependencies]
@@ -112,7 +121,15 @@ web-sys = { version = "0.3", features = [
 js-sys = "0.3"
 console_error_panic_hook = "0.1"
 console_log = "1.0"
-getrandom = { version = "0.2", features = ["js"] }
+# rand 0.9's OS entropy source. On wasm32 getrandom 0.3 refuses to
+# compile unless a backend is named BOTH as a feature and as a cfg flag
+# — the cfg lives in `.cargo/config.toml` at the repo root, which cargo
+# also picks up for the standalone wasm/ crates (config discovery walks
+# parent directories, workspace boundaries notwithstanding).
+# The old `getrandom 0.2 + js` entry here was for rand 0.8; 0.2 now
+# survives only under `const-random-macro`, a proc-macro built for the
+# HOST, where a browser backend is meaningless.
+getrandom = { version = "0.3", features = ["wasm_js"] }
 # egui-wgpu default features pull in `wgpu/default` + `wgpu/webgl`.
 # wgpu/default enables dx12, which we don't want (transitive dep
 # skew with gpu-allocator's windows-rs) and webgl is incompatible

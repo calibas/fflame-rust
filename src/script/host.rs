@@ -515,6 +515,77 @@ fn expand_seed(seed: u64) -> u128 {
     ((hi << 64) | lo) | 1
 }
 
+/// The script RNG's draws, pinned to a fixed algorithm.
+///
+/// Same rationale as `expand_seed` above, learned the hard way: the raw
+/// PCG64-MCG stream is a stable published spec, but the mapping FROM
+/// that stream to a float or a bounded integer is a library
+/// implementation detail. rand 0.9 changed the integer one (it accepts
+/// a word 0.8 rejected), which silently rewrote every flame any script
+/// had ever produced from a given seed — caught by the `wasm/script`
+/// CLI-parity fixtures during the 0.8 → 0.9 upgrade.
+///
+/// So the mapping is ours now. These reproduce rand 0.8.5's
+/// `sample_single` / `Standard` exactly (verified against it across
+/// tens of thousands of draws over many seeds and ranges), which keeps
+/// every seed shared before this change meaning what it meant. The
+/// `random_stream_is_pinned` test guards the result.
+///
+/// Only `next_u64` is taken from the dependency — the one piece that is
+/// the generator's own defined output.
+pub(crate) mod draw {
+    use rand::RngCore;
+    use rand_pcg::Pcg64Mcg;
+
+    /// Uniform `f64` in `[0, 1)` — 53 bits, multiply-based.
+    pub fn unit(rng: &mut Pcg64Mcg) -> f64 {
+        const SCALE: f64 = 1.0 / ((1u64 << 53) as f64);
+        SCALE * ((rng.next_u64() >> 11) as f64)
+    }
+
+    /// Uniform `f64` in `[low, high)`.
+    ///
+    /// Builds a value in `[1, 2)` by pasting an exponent onto random
+    /// mantissa bits, then maps it affinely; the retry guards the case
+    /// where rounding lands the result exactly on `high`.
+    pub fn range_f64(rng: &mut Pcg64Mcg, low: f64, high: f64) -> f64 {
+        let scale = high - low;
+        loop {
+            let v12 = f64::from_bits((rng.next_u64() >> 12) | 0x3FF0_0000_0000_0000);
+            let res = (v12 - 1.0) * scale + low;
+            if res < high || low >= high {
+                return res;
+            }
+        }
+    }
+
+    /// Uniform integer in `0..range` (`range == 0` means the full
+    /// 64-bit range). Widening multiply with a rejection zone.
+    ///
+    /// Fixed-width by construction: `usize` is 64-bit on desktop and
+    /// 32-bit on wasm32, and rand dispatched to a different integer
+    /// implementation for each — which forked the stream between
+    /// platforms before every call site was cast to `u64`.
+    pub fn below(rng: &mut Pcg64Mcg, range: u64) -> u64 {
+        if range == 0 {
+            return rng.next_u64();
+        }
+        let zone = (range << range.leading_zeros()).wrapping_sub(1);
+        loop {
+            let prod = (rng.next_u64() as u128) * (range as u128);
+            if (prod as u64) <= zone {
+                return (prod >> 64) as u64;
+            }
+        }
+    }
+
+    /// Uniform `i64` in `low..=high`.
+    pub fn range_i64(rng: &mut Pcg64Mcg, low: i64, high: i64) -> i64 {
+        let span = (high as i128 - low as i128 + 1) as u64;
+        low.wrapping_add(below(rng, span) as i64)
+    }
+}
+
 /// Map a Rhai failure to our error type, keeping source position.
 fn map_error(err: Box<rhai::EvalAltResult>) -> ScriptError {
     let pos = err.position();
@@ -542,4 +613,76 @@ fn map_error(err: Box<rhai::EvalAltResult>) -> ScriptError {
         None => raw,
     };
     ScriptError { message, line: pos.line(), column: pos.position() }
+}
+
+#[cfg(test)]
+mod draw_tests {
+    use super::draw;
+    use rand_pcg::Pcg64Mcg;
+
+    fn rng() -> Pcg64Mcg {
+        Pcg64Mcg::new(super::expand_seed(12345))
+    }
+
+    /// Golden values for the pinned draws.
+    ///
+    /// These were produced by rand 0.8.5 — the library whose behaviour
+    /// this module froze — and verified against it across tens of
+    /// thousands of samples before the 0.9 upgrade landed. They are the
+    /// unit-level twin of `random_stream_is_pinned`: if they move, every
+    /// script+seed anyone has shared now names a different flame, so
+    /// treat a failure as a breaking change rather than a number to
+    /// update.
+    #[test]
+    fn pinned_draws_match_their_golden_values() {
+        let mut r = rng();
+        let unit: Vec<f64> = (0..3).map(|_| draw::unit(&mut r)).collect();
+        assert_eq!(
+            unit,
+            vec![0.46722037666755534, 0.5145249938710224, 0.024093919998681823]
+        );
+
+        let mut r = rng();
+        let ranged: Vec<f64> = (0..3).map(|_| draw::range_f64(&mut r, -2.0, 5.0)).collect();
+        assert_eq!(
+            ranged,
+            vec![1.2705426366728876, 1.6016749570971562, -1.8313425600092272]
+        );
+
+        let mut r = rng();
+        let ints: Vec<i64> = (0..5).map(|_| draw::range_i64(&mut r, 0, 1_000_000)).collect();
+        assert_eq!(ints, vec![467220, 514525, 24093, 548020, 641899]);
+
+        let mut r = rng();
+        let picks: Vec<u64> = (0..6).map(|_| draw::below(&mut r, 7)).collect();
+        assert_eq!(picks, vec![3, 3, 0, 3, 4, 6]);
+    }
+
+    /// Edge cases the script API never reaches but the helpers accept.
+    #[test]
+    fn draw_below_handles_degenerate_ranges() {
+        let mut r = rng();
+        // A single-value range consumes a word and always yields 0.
+        assert_eq!(draw::below(&mut r, 1), 0);
+        // Range 0 means "the whole 64-bit space" — no rejection loop, so
+        // it is exactly one raw word off the stream.
+        use rand::RngCore;
+        let mut r = rng();
+        assert_eq!(draw::below(&mut r, 0), rng().next_u64());
+        // The largest ranges must still terminate and stay in bounds.
+        let mut r = rng();
+        for _ in 0..64 {
+            assert!(draw::below(&mut r, u64::MAX) < u64::MAX);
+        }
+    }
+
+    /// An inclusive range spanning negatives maps without overflow.
+    #[test]
+    fn draw_range_i64_spans_negatives() {
+        let mut r = rng();
+        for _ in 0..200 {
+            let v = draw::range_i64(&mut r, -1000, 1000);
+            assert!((-1000..=1000).contains(&v), "out of range: {v}");
+        }
+    }
 }

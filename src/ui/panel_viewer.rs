@@ -1548,7 +1548,7 @@ impl<'a> PanelViewer<'a> {
                         // Assign palette - configs must be self-contained
                         if use_random_palette && palette_count > 0 {
                             // Pick a random palette from the library
-                            let idx = rand::random::<usize>() % palette_count;
+                            let idx = rand::random_range(0..palette_count);
                             if let Some(palette) = self.context.palette_library.get(idx) {
                                 config.palette = palette.clone();
                             }

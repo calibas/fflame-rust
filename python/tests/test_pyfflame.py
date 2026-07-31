@@ -133,16 +133,18 @@ def test_choice_params_accept_a_name_or_an_index():
     src = _script("lsystem.rhai")
     common = dict(axiom="X", rule_1="X=-YF+XFX+FY-", rule_2="Y=+XF-YFY-FX+", angle=90.0)
 
+    # "Path (finite depth)" is option 0 — the script's default since
+    # path mode became the recommended output.
     by_name = ff.run_script(src, seed=3, params=dict(common, output="Path (finite depth)")).config
-    by_index = ff.run_script(src, seed=3, params=dict(common, output=1)).config
+    by_index = ff.run_script(src, seed=3, params=dict(common, output=0)).config
     assert json.loads(by_name.to_json()) == json.loads(by_index.to_json())
 
     # One transform carries the whole finite-depth curve.
     assert by_name.transform_count == 1
     assert by_name.get_variation_params(0)["lsystem_path.iterations"] > 0
 
-    # Index 0 is the other option, so it must build something different.
-    attractor = ff.run_script(src, seed=3, params=dict(common, output=0)).config
+    # Index 1 is the other option, so it must build something different.
+    attractor = ff.run_script(src, seed=3, params=dict(common, output=1)).config
     assert attractor.transform_count > 1
 
 
