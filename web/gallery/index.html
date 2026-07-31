@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Infinite Gallery — PoC</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #0e0e11; color: #ddd; font: 14px/1.4 system-ui, sans-serif; }
+  header {
+    position: sticky; top: 0; z-index: 10; background: #16161acc; backdrop-filter: blur(6px);
+    padding: 10px 16px; border-bottom: 1px solid #2a2a30;
+    display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+  }
+  header h1 { font-size: 15px; margin: 0 12px 0 0; font-weight: 600; color: #fff; }
+  select, input, button {
+    background: #222228; color: #ddd; border: 1px solid #3a3a42; border-radius: 4px; padding: 4px 8px;
+  }
+  button { cursor: pointer; } button:hover { background: #2e2e36; }
+  .rooms { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .room-chip { background: #26323f; border: 1px solid #3a5068; border-radius: 12px; padding: 2px 10px; }
+  .room-chip button { border: none; background: none; color: #f88; padding: 0 0 0 6px; }
+  #room-params { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  #room-params label { display: flex; gap: 4px; align-items: center; font-size: 12px; color: #aaa; }
+  #room-params input, #room-params select { max-width: 110px; }
+  #status { color: #8a8; font-size: 12px; margin-left: auto; }
+  #grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 12px; padding: 16px; max-width: 1400px; margin: 0 auto;
+  }
+  .tile { position: relative; aspect-ratio: 1; background: #17171c; border: 1px solid #26262d; border-radius: 6px; overflow: hidden; }
+  .tile canvas { width: 100%; height: 100%; display: block; image-rendering: auto; cursor: pointer; }
+  .tile .seed { position: absolute; left: 8px; bottom: 6px; font-size: 12px; color: #fffa; text-shadow: 0 1px 2px #000; }
+  .tile .wait { position: absolute; inset: 0; display: grid; place-items: center; color: #666; font-size: 12px; }
+  .tile .err { color: #e77; padding: 10px; font-size: 12px; }
+  #overlay { position: fixed; inset: 0; background: #000d; display: none; place-items: center; z-index: 20; }
+  #overlay.open { display: grid; }
+  #overlay canvas { max-width: 92vmin; max-height: 92vmin; }
+  #fatal { padding: 40px; color: #e77; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Infinite Gallery <span style="color:#777;font-weight:400">(PoC — 2D wing)</span></h1>
+  <label>Hallway <select id="hall"></select></label>
+  <label>Seed <input id="seed" type="number" value="0" min="0" style="width:90px"></label>
+  <div class="rooms" id="applied"></div>
+  <label>Room <select id="room"></select></label>
+  <span id="room-params"></span>
+  <button id="enter">Walk through →</button>
+  <span id="status">loading…</span>
+</header>
+<div id="grid"></div>
+<div id="fatal" hidden></div>
+<div id="overlay"><canvas id="big"></canvas></div>
+<script type="module" src="gallery.js"></script>
+<!--
+  Serve from the REPO ROOT (the page imports ../../wasm/{script,render}/pkg):
+      wasm-pack build --target web --release   (in wasm/script and wasm/render)
+      python -m http.server 8000               (in the repo root)
+      http://localhost:8000/web/gallery/
+  Requires WebGPU (Chrome/Edge 113+, Firefox 121+).
+-->
+</body>
+</html>

@@ -50,3 +50,7 @@ python/target/
 python/*.pyd
 python/**/__pycache__/
 python/.pytest_cache/
+
+# Infinite Gallery thin wasm crates (standalone, python/-style)
+wasm/*/target/
+wasm/*/pkg/

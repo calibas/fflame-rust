@@ -142,7 +142,15 @@ aes-gcm = "0.10"
 base64 = "0.22"
 
 [features]
-default = []
+# `web-app`: the browser application's wasm-bindgen export surface
+# (`wasm_main` boot + the `WasmApi` bindings). ON by default so the
+# desktop app, the wasm-pack app build and pyfflame are unchanged.
+# wasm-bindgen collects `#[wasm_bindgen]` exports from the ENTIRE
+# dependency graph, so the thin gallery crates (wasm/render,
+# wasm/script) depend on this crate with default-features = false —
+# without the gate they would silently inherit the whole application.
+default = ["web-app"]
+web-app = []
 
 [build-dependencies]
 chrono = "0.4"
