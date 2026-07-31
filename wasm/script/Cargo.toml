@@ -1,4 +1,4 @@
-# fflame-script — the Infinite Gallery's script evaluator, as a
+# fflame-script — the Endless Gallery's script evaluator, as a
 # standalone WASM module. Wraps the main crate's sandboxed script host:
 # script + seed + params (+ optional base config) in, FractalConfig
 # JSON out. No GPU, no UI — this module can live in a worker.

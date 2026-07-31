@@ -224,3 +224,29 @@ if __name__ == "__main__":
                 failures += 1
                 print(f"FAIL {name}: {exc}")
     raise SystemExit(1 if failures else 0)
+
+
+def test_seeds_wrap_on_a_ring_of_2_to_the_64():
+    """The gallery is a loop, and every door agrees on its shape.
+
+    The step after u64::MAX is 0; the step before 0 is u64::MAX. So -1
+    names the SAME position as 2**64 - 1 (not 2**63 - 1, which is
+    i64::MAX and sits mid-ring). Python ints are unbounded and signed,
+    so this used to raise OverflowError while the identical value
+    worked in the browser."""
+    src = _script("basic_random.rhai")
+    at = lambda s: ff.run_script(src, seed=s).config.to_json()
+    M = 2 ** 64
+
+    assert at(-1) == at(M - 1), "-1 is the last position"
+    assert at(M) == at(0), "one past the top is the start"
+    assert at(M + 1) == at(1)
+    assert at(-2) == at(M - 2)
+    assert at(3 * M + 7) == at(7), "any multiple of the ring reduces away"
+
+    # Not degenerate, and 2**63-1 is an interior position.
+    assert at(0) != at(M - 1)
+    assert at(2 ** 63 - 1) != at(M - 1), "2**63-1 is mid-ring, not the end"
+
+    # Absurdly large values reduce rather than raising.
+    at(10 ** 40)

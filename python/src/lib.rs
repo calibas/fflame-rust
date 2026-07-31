@@ -570,6 +570,22 @@ fn coerce_param(key: &str, value: &Bound<'_, PyAny>, decl: Option<&ParamDecl>) -
     }
 }
 
+/// Reduce any Python integer onto the seed ring.
+///
+/// Seeds are a circle of 2^64: `u64::MAX + 1` is `0`, and `-1` is the
+/// step before `0` (= `u64::MAX`). Python ints are unbounded and
+/// signed, so without this a negative or oversized seed raised
+/// OverflowError here while the SAME value worked in the browser —
+/// wasm-bindgen already reduces BigInt to u64 mod 2^64.
+///
+/// `value & (2**64 - 1)` is exactly that reduction: Python's bitwise
+/// and treats negatives as infinite two's complement, so it agrees with
+/// JavaScript's `BigInt.asUintN(64, x)` bit for bit.
+fn seed_on_the_ring(seed: &Bound<'_, PyAny>) -> PyResult<u64> {
+    let mask = (u64::MAX).into_pyobject(seed.py())?;
+    seed.call_method1("__and__", (mask,))?.extract::<u64>()
+}
+
 /// Run a Rhai flame script — the same sandboxed engine, and the same
 /// seeded RNG, the app uses, so a given (script, seed, params) produces
 /// the same flame here as in the editor.
@@ -577,14 +593,21 @@ fn coerce_param(key: &str, value: &Bound<'_, PyAny>, decl: Option<&ParamDecl>) -
 /// `params` supplies the script's declared parameters by name; anything
 /// unsupplied takes the script's own default. `base` is the flame a
 /// modifier script starts from (generators ignore it).
+///
+/// `seed` is taken modulo 2^64, so it wraps like the gallery's endless
+/// loop: any integer names a position, and `-1` is `u64::MAX`.
 #[pyfunction]
-#[pyo3(signature = (source, seed=1, params=None, base=None))]
+#[pyo3(signature = (source, seed=None, params=None, base=None))]
 fn run_script(
     source: &str,
-    seed: u64,
+    seed: Option<&Bound<'_, PyAny>>,
     params: Option<&Bound<'_, PyDict>>,
     base: Option<Config>,
 ) -> PyResult<ScriptResult> {
+    let seed = match seed {
+        Some(v) => seed_on_the_ring(v)?,
+        None => 1,
+    };
     let base = base.map(|c| c.inner).unwrap_or_default();
     let host = ScriptHost::new();
 

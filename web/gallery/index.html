@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Infinite Gallery — PoC</title>
+<title>Endless Gallery — PoC</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
   :root { color-scheme: dark; }
@@ -41,9 +41,12 @@
 </head>
 <body>
 <header>
-  <h1>Infinite Gallery <span style="color:#777;font-weight:400">(PoC — 2D wing)</span></h1>
+  <h1>Endless Gallery <span style="color:#777;font-weight:400">(PoC — 2D wing)</span></h1>
   <label>Hallway <select id="hall"></select></label>
-  <label>Seed <input id="seed" type="number" value="0" min="0" style="width:90px"></label>
+  <!-- type=text, not number: seeds run to 2^64-1, past what a number
+       input can hold exactly, and negatives are valid positions (they
+       count back from the end of the loop). -->
+  <label>Seed <input id="seed" type="text" inputmode="numeric" value="0" style="width:170px"></label>
   <div class="rooms" id="applied"></div>
   <label>Room <select id="room"></select></label>
   <span id="room-params"></span>

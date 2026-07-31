@@ -1,4 +1,4 @@
-# Infinite Gallery: standalone WASM renderer + script evaluator
+# Endless Gallery: standalone WASM renderer + script evaluator
 
 **Status:** Delivered (all four phases; browser-verified). The
 finished gallery will live in a separate repo; what this repo delivers
@@ -12,7 +12,7 @@ there; this doc keeps the vision and the decision record.
 
 ## 1. The vision (context for the modules' design)
 
-An "Infinite Gallery" web page: an endless scroll of randomly
+An "Endless Gallery" web page: an endless scroll of randomly
 generated fractals, all rendered on the fly in the visitor's browser.
 Nothing is stored server-side — a position in the gallery IS a random
 seed, so the whole state fits in a URL.
@@ -45,6 +45,26 @@ random-flame + random-palette pairing shares one seed), it keeps the
 URL to a single seed, and it makes image *n* a pure function of
 (generator, rooms, n). Rooms are *not* independently re-rollable; their
 fixed choices are parameters in the URL, not seeds.
+
+**Seeds are a ring of 2⁶⁴ (decided):** the gallery is *endless*, so the
+seed space is a circle, not a line. The step after `u64::MAX` is `0`;
+the step before `0` is `u64::MAX`. Any integer names a position,
+reduced modulo 2⁶⁴, which makes `-1` the last room — **not** `2⁶³−1`,
+which is `i64::MAX` and sits halfway round.
+
+wasm-bindgen already did this on the BigInt boundary, so the browser
+was the only door that behaved: Python raised `OverflowError` and the
+CLI rejected the value outright. All four now apply the same reduction
+(`asUintN(64)` / `x & (2**64-1)` / `i128 as u64`), verified to produce
+byte-identical flames at the boundary. Two traps worth remembering for
+the real gallery, both fixed in the PoC page:
+
+- `Number` is exact only to 2⁵³−1 — 1/2048th of the ring — and *rounds*
+  instead of wrapping. Seeds are `BigInt` end to end; `parseInt` and
+  `Number` never touch them.
+- Deciding how far to walk by comparing seeds (`next < seed + 12`)
+  inverts once the value wraps, stalling at the end of the ring. Count
+  positions instead.
 
 **Tile spec (decided):** 512×512 at 30M total iterations
 (~115 samples/pixel) for the PoC. Both are user-editable settings in

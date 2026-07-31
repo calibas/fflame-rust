@@ -99,3 +99,35 @@ fn a_script_defined_animation_rides_in_the_envelope() {
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
     assert!(v["animation_json"].is_null());
 }
+
+/// Seeds are a circle of 2^64, and every door must agree on it.
+///
+/// The gallery is a loop: the step after `u64::MAX` is `0`, and the step
+/// before `0` is `u64::MAX`. `-1` therefore names the SAME position as
+/// `2^64 - 1` (not `2^63 - 1`, which is `i64::MAX` and sits mid-ring).
+/// Each entry point reduces onto that ring its own way — wasm-bindgen on
+/// the BigInt boundary, Python's `x & (2**64-1)`, the CLI's `i128 as
+/// u64` — so this pins the shared meaning at the Rust core they all
+/// reach.
+#[test]
+fn the_seed_ring_wraps_at_both_ends() {
+    let source = include_str!("../../../assets/scripts/generators/basic_random.rhai");
+    let at = |seed: u64| {
+        let out = fflame_script::run_impl(source, seed, "{}", None).expect("runs");
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        v["config_json"].as_str().unwrap().to_string()
+    };
+
+    // The two ends of the ring are one step apart.
+    let top = at(u64::MAX);
+    let zero = at(0);
+    assert_eq!(top, at((0u64).wrapping_sub(1)), "0 - 1 must be u64::MAX");
+    assert_eq!(zero, at(u64::MAX.wrapping_add(1)), "u64::MAX + 1 must be 0");
+
+    // And the ring is not degenerate: distinct positions differ.
+    assert_ne!(top, zero, "the ends must still be different flames");
+
+    // i64::MAX is an ordinary interior position, NOT the end. Guards the
+    // 2^63 / 2^64 confusion this test exists to settle.
+    assert_ne!(at(i64::MAX as u64), top, "2^63-1 is mid-ring, not the end");
+}

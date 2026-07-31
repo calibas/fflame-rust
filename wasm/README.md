@@ -1,7 +1,7 @@
 # fflame WASM modules — usage guide
 
 Two standalone WebAssembly modules extracted from the fractal-flame
-renderer, built to power the Infinite Gallery (and any other web
+renderer, built to power the Endless Gallery (and any other web
 embedding). This guide is self-contained on purpose — copy it into
 whatever repo consumes the modules.
 
@@ -117,21 +117,52 @@ neither can shift under a dependency bump. Enforced by
 `tests/cli_parity.rs` (native, against committed CLI fixtures) and
 `check_node_parity.mjs` (the built wasm artifact under Node).
 
-### Seeds
+### Seeds — a ring of 2⁶⁴
+
+**Seeds are a circle, not a line.** The step after `u64::MAX` is `0`,
+and the step before `0` is `u64::MAX`. A gallery is a loop, so walking
+past either end continues rather than stopping or erroring.
+
+```
+… 18446744073709551614 → 18446744073709551615 → 0 → 1 → 2 …
+                                      (wraps here)
+```
 
 - Full range **u64**: `0` … `18_446_744_073_709_551_615` (2⁶⁴−1).
-  There is no earlier rollover — nothing special happens at 2³² — and
-  it is not reachable by incrementing.
-- Distinct seeds are distinct random streams; consecutive seeds are
-  deliberately scrambled far apart (SplitMix64 expansion), so
-  "reroll = seed + 1" gives an unrelated flame, and a hallway walk
-  never drifts through similar images.
-- **JS caveat:** `Number` is only exact to 2⁵³−1
-  (`9_007_199_254_740_991`). If a seed can exceed that, keep it as a
-  `BigInt`/string end-to-end (URL → `BigInt(str)` → `run`). Anything
-  that routes a seed through `parseInt`/`Number` silently caps the
-  usable range at 2⁵³−1 — plenty for a gallery, but know where the
-  edge is.
+  Nothing special happens at 2³² or 2⁵³ — those are language limits,
+  not ring boundaries.
+- **`-1` is the last position** (`2⁶⁴−1`), i.e. one step back from the
+  start. Note it is *not* `2⁶³−1` — that value is `i64::MAX` and sits
+  exactly halfway round the ring, an ordinary interior position.
+- Any integer names a position: values are reduced modulo 2⁶⁴, so
+  `2⁶⁴ ≡ 0`, `2⁶⁴+1 ≡ 1`, `-2 ≡ 2⁶⁴−2`.
+- Distinct positions are unrelated random streams; consecutive seeds
+  are deliberately scrambled far apart (SplitMix64 expansion), so
+  "reroll = seed + 1" gives an unrelated flame and a walk never drifts
+  through near-identical images.
+
+Every door applies the same reduction, so a position means the same
+thing wherever it is opened — verified by test at each one:
+
+| door | how a seed is given | reduction |
+| --- | --- | --- |
+| JS / wasm | `BigInt` — `run(src, -1n, "{}")` | wasm-bindgen, mod 2⁶⁴ |
+| Python | any `int` — `run_script(src, seed=-1)` | `x & (2**64 - 1)` |
+| CLI | `--seed -1` | `i128 as u64` |
+| Rust | `u64` | already on the ring |
+
+**JS caveat — this is the one that bites.** `Number` is exact only to
+2⁵³−1 (`9_007_199_254_740_991`), which is 1/2048th of the ring, and it
+*rounds* rather than wrapping. Keep seeds as `BigInt` end to end:
+
+```js
+const onRing = (v) => BigInt.asUintN(64, v);   // the same mod 2^64
+let seed = onRing(BigInt(urlValue));           // never parseInt/Number
+seed = onRing(seed + 1n);                      // walks past the top to 0
+```
+
+Also avoid comparing seeds to decide how far to walk — `next < seed + n`
+inverts once the value wraps. Count positions instead.
 
 ## `fflame-render`
 
