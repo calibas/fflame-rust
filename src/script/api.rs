@@ -556,36 +556,70 @@ fn register_rng(engine: &mut Engine, state: Rc<RefCell<ScriptState>>) {
 
 // ------------------------------------------------------------------- flame
 
+/// The renderer's hard ceiling, enforced at creation time too.
+///
+/// It used to bind only at render time, so a script could push
+/// transforms until it ran out of operations — 200,000 in a measured
+/// run. That is a config nothing can draw, and it arms the O(n²) table
+/// build in `set_xaos` (`vec![vec![1.0; n]; n]`), which at that count
+/// asks for tens of gigabytes and aborts the process. Refusing here
+/// gives the script an error it can read instead.
+pub(crate) const MAX_SCRIPT_TRANSFORMS: usize = crate::gpu::buffers::MAX_TRANSFORMS;
+
 fn register_flame(engine: &mut Engine) {
-    engine.register_fn("add_transform", |f: &mut FlameHandle| -> TransformHandle {
-        let mut cfg = f.cfg.borrow_mut();
-        cfg.flame.transforms.push(Transform::new());
-        TransformHandle {
-            cfg: Rc::clone(&f.cfg),
-            pool: Pool::Normal,
-            idx: cfg.flame.transforms.len() - 1,
-        }
-    });
+    engine.register_fn(
+        "add_transform",
+        |f: &mut FlameHandle| -> Result<TransformHandle, Box<EvalAltResult>> {
+            let mut cfg = f.cfg.borrow_mut();
+            if cfg.flame.transforms.len() >= MAX_SCRIPT_TRANSFORMS {
+                return Err(err(format!(
+                    "a flame holds at most {MAX_SCRIPT_TRANSFORMS} transforms"
+                )));
+            }
+            cfg.flame.transforms.push(Transform::new());
+            Ok(TransformHandle {
+                cfg: Rc::clone(&f.cfg),
+                pool: Pool::Normal,
+                idx: cfg.flame.transforms.len() - 1,
+            })
+        },
+    );
 
-    engine.register_fn("add_final_transform", |f: &mut FlameHandle| -> TransformHandle {
-        let mut cfg = f.cfg.borrow_mut();
-        cfg.flame.final_transforms.push(Transform::new());
-        TransformHandle {
-            cfg: Rc::clone(&f.cfg),
-            pool: Pool::Final,
-            idx: cfg.flame.final_transforms.len() - 1,
-        }
-    });
+    engine.register_fn(
+        "add_final_transform",
+        |f: &mut FlameHandle| -> Result<TransformHandle, Box<EvalAltResult>> {
+            let mut cfg = f.cfg.borrow_mut();
+            if cfg.flame.final_transforms.len() >= MAX_SCRIPT_TRANSFORMS {
+                return Err(err(format!(
+                    "a flame holds at most {MAX_SCRIPT_TRANSFORMS} final transforms"
+                )));
+            }
+            cfg.flame.final_transforms.push(Transform::new());
+            Ok(TransformHandle {
+                cfg: Rc::clone(&f.cfg),
+                pool: Pool::Final,
+                idx: cfg.flame.final_transforms.len() - 1,
+            })
+        },
+    );
 
-    engine.register_fn("add_linked_transform", |f: &mut FlameHandle| -> TransformHandle {
-        let mut cfg = f.cfg.borrow_mut();
-        cfg.flame.linked_transforms.push(Transform::new());
-        TransformHandle {
-            cfg: Rc::clone(&f.cfg),
-            pool: Pool::Linked,
-            idx: cfg.flame.linked_transforms.len() - 1,
-        }
-    });
+    engine.register_fn(
+        "add_linked_transform",
+        |f: &mut FlameHandle| -> Result<TransformHandle, Box<EvalAltResult>> {
+            let mut cfg = f.cfg.borrow_mut();
+            if cfg.flame.linked_transforms.len() >= MAX_SCRIPT_TRANSFORMS {
+                return Err(err(format!(
+                    "a flame holds at most {MAX_SCRIPT_TRANSFORMS} linked transforms"
+                )));
+            }
+            cfg.flame.linked_transforms.push(Transform::new());
+            Ok(TransformHandle {
+                cfg: Rc::clone(&f.cfg),
+                pool: Pool::Linked,
+                idx: cfg.flame.linked_transforms.len() - 1,
+            })
+        },
+    );
 
     engine.register_fn("transform_count", |f: &mut FlameHandle| -> i64 {
         f.cfg.borrow().flame.transforms.len() as i64
@@ -1639,6 +1673,59 @@ fn apply_segment(
 
 // ------------------------------------------------------------- built-ins
 
+/// Ceilings on L-system input, checked before any walk begins.
+///
+/// The rewrite step was already capped (`LSYSTEM_MAX_LEN`), but the
+/// piece-extraction walks are `rule.chars() × body.chars()` nested
+/// loops, and at depth 1 the "expansion" IS the rule. Rhai hands out
+/// strings up to 1,000,000 characters, so a long enough rule made one
+/// call run on the order of 10^11 native steps: a measured 200,000-char
+/// rule of `[X` never returned. Nothing interrupts it — `on_progress`
+/// fires between INTERPRETER operations and cannot see native work, and
+/// the Scripts panel runs on the UI thread.
+///
+/// Unbalanced `[` compound it: the bracket stack pushes without a cap,
+/// so the same rule also grows the stack for the whole walk. Bounding
+/// the input bounds both.
+///
+/// Real rules are tiny — the longest shipped one is the Peano curve's
+/// 21 characters — so these sit orders of magnitude above any genuine
+/// use.
+const MAX_RULE_LEN: usize = 4096;
+const MAX_RULES: usize = 64;
+const MAX_AXIOM_LEN: usize = 4096;
+
+/// Reject an L-system input that would make a walk run unbounded.
+///
+/// Call before parsing a rules map; `parsed` is checked afterwards so
+/// the limits apply however the caller built it.
+fn check_lsystem_input(
+    axiom: &str,
+    parsed: &[(char, String)],
+) -> Result<(), Box<EvalAltResult>> {
+    if axiom.len() > MAX_AXIOM_LEN {
+        return Err(err(format!(
+            "axiom is {} characters; the limit is {MAX_AXIOM_LEN}",
+            axiom.len()
+        )));
+    }
+    if parsed.len() > MAX_RULES {
+        return Err(err(format!(
+            "{} rules supplied; the limit is {MAX_RULES}",
+            parsed.len()
+        )));
+    }
+    for (symbol, replacement) in parsed {
+        if replacement.len() > MAX_RULE_LEN {
+            return Err(err(format!(
+                "rule `{symbol}` is {} characters; the limit is {MAX_RULE_LEN}",
+                replacement.len()
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Group recipes and the helpers that map them onto transforms.
 fn register_builtins(engine: &mut Engine) {
     use crate::script::builtins::{avoid_xaos_row, schottky_generators, Circle};
@@ -1736,6 +1823,7 @@ fn register_builtins(engine: &mut Engine) {
             // Deterministic order, so a script's output never depends on
             // map iteration order.
             parsed.sort_by_key(|(k, _)| *k);
+            check_lsystem_input(axiom, &parsed)?;
             let depth = depth.clamp(0, 32) as u32;
             crate::script::builtins::lsystem_expand(axiom, &parsed, depth).map_err(err)
         },
@@ -1765,6 +1853,13 @@ fn register_builtins(engine: &mut Engine) {
                 }
             }
             parsed.sort_by_key(|(k, _)| *k);
+            // Partner search is O(rules × rule length) with a fresh
+            // string per comparison. No axiom here, and the signature is
+            // infallible, so over-large input degrades to the neutral
+            // answer — "no partner" — rather than grinding.
+            if check_lsystem_input("", &parsed).is_err() {
+                return String::new();
+            }
             primary
                 .chars()
                 .next()
@@ -1784,6 +1879,10 @@ fn register_builtins(engine: &mut Engine) {
                 }
             }
             parsed.sort_by_key(|(k, _)| *k);
+            // See lsystem_reverse_symbol: same cost, same degradation.
+            if check_lsystem_input("", &parsed).is_err() {
+                return String::new();
+            }
             primary
                 .chars()
                 .next()
@@ -1819,6 +1918,7 @@ fn register_builtins(engine: &mut Engine) {
                 }
             }
             parsed.sort_by_key(|(k, _)| *k);
+            check_lsystem_input(axiom, &parsed)?;
             let mut out = rhai::Map::new();
             match crate::script::builtins::lsystem_graph_pieces(axiom, &parsed, angle) {
                 Ok(pieces) => {
@@ -1860,6 +1960,7 @@ fn register_builtins(engine: &mut Engine) {
                 }
             }
             parsed.sort_by_key(|(k, _)| *k);
+            check_lsystem_input(axiom, &parsed)?;
             let mut out = rhai::Map::new();
             match crate::script::builtins::lsystem_curve_pieces3(axiom, &parsed, angle) {
                 Ok(fit) => {
@@ -1908,6 +2009,7 @@ fn register_builtins(engine: &mut Engine) {
                 }
             }
             parsed.sort_by_key(|(k, _)| *k);
+            check_lsystem_input(axiom, &parsed)?;
             let piece_arr = |p: &crate::script::builtins::Piece3| -> Dynamic {
                 let mut a: Array = p.m.iter().map(|v| Dynamic::from(*v)).collect();
                 a.push(Dynamic::from(p.depth as f64));
@@ -1955,6 +2057,7 @@ fn register_builtins(engine: &mut Engine) {
                 }
             }
             parsed.sort_by_key(|(k, _)| *k);
+            check_lsystem_input(axiom, &parsed)?;
             let b = crate::script::builtins::lsystem_bounds3(
                 axiom,
                 &parsed,
@@ -2014,6 +2117,7 @@ fn register_builtins(engine: &mut Engine) {
                 }
             }
             parsed.sort_by_key(|(k, _)| *k);
+            check_lsystem_input(axiom, &parsed)?;
             let mut out = rhai::Map::new();
             match crate::script::builtins::lsystem_plant_segments(axiom, &parsed, angle) {
                 Ok(p) => {
@@ -2083,6 +2187,7 @@ fn register_builtins(engine: &mut Engine) {
                 }
             }
             parsed.sort_by_key(|(k, _)| *k);
+            check_lsystem_input(axiom, &parsed)?;
             let mut out = rhai::Map::new();
             match crate::script::builtins::lsystem_node_segments(axiom, &parsed, angle) {
                 Ok(segs) => {
@@ -2112,6 +2217,7 @@ fn register_builtins(engine: &mut Engine) {
                 }
             }
             parsed.sort_by_key(|(k, _)| *k);
+            check_lsystem_input(axiom, &parsed)?;
             // Well inside the engine's array limit, since this walk stays
             // in Rust and never becomes a script value.
             const MAX_SEGMENTS: usize = 400_000;
@@ -2252,6 +2358,15 @@ fn register_builtins(engine: &mut Engine) {
             if count == 0 {
                 return Err(err("exclude_xaos_row needs at least one transform"));
             }
+            // A xaos row has one entry per transform, so it cannot
+            // outgrow the transform ceiling. Unbounded, `count` reached
+            // `vec![1.0f32; count]` directly: i64::MAX aborted the
+            // process with `capacity overflow` from one line of script.
+            if count > MAX_SCRIPT_TRANSFORMS {
+                return Err(err(format!(
+                    "a xaos row holds at most {MAX_SCRIPT_TRANSFORMS} entries, got {count}"
+                )));
+            }
             Ok(crate::script::builtins::exclude_xaos_row(forbidden, count)
                 .iter()
                 .map(|v| Dynamic::from(*v as f64))
@@ -2305,6 +2420,12 @@ fn register_builtins(engine: &mut Engine) {
             let from = usize::try_from(from).map_err(|_| err("index must be >= 0"))?;
             if count == 0 || from >= count {
                 return Err(err("repeat_xaos_row: index outside the mirror count"));
+            }
+            // Same unbounded `vec![_; count]` as exclude_xaos_row.
+            if count > MAX_SCRIPT_TRANSFORMS {
+                return Err(err(format!(
+                    "a xaos row holds at most {MAX_SCRIPT_TRANSFORMS} entries, got {count}"
+                )));
             }
             Ok(crate::script::builtins::repeat_xaos_row(from, count)
                 .iter()
