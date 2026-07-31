@@ -57,6 +57,11 @@ pub struct ScriptsPanel {
     /// takes a second click — the same shape the Palette Editor uses.
     #[cfg(not(target_arch = "wasm32"))]
     pending_delete: Option<(String, std::path::PathBuf)>,
+    /// A fork just wrote a new file: rescan and select it (by id), then
+    /// show this message. Deferred because the Save button is rendered
+    /// where the base config — which `reload` needs — is not in scope.
+    #[cfg(not(target_arch = "wasm32"))]
+    pending_fork: Option<(String, String)>,
     error: Option<ScriptError>,
     messages: Vec<String>,
     warnings: Vec<String>,
@@ -83,6 +88,8 @@ impl Default for ScriptsPanel {
             focus_editor: false,
             #[cfg(not(target_arch = "wasm32"))]
             pending_delete: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            pending_fork: None,
             error: None,
             messages: Vec::new(),
             warnings: Vec::new(),
@@ -112,11 +119,22 @@ impl ScriptsPanel {
     /// selection jump to whichever happened to be found first.
     fn reload(&mut self, base: &FractalConfig) {
         let previous = self.entries.get(self.selected).map(|e| e.id.clone());
-        self.entries = library::discover(base);
+        let (entries, conflicts) = library::discover_with_conflicts(base);
+        self.entries = entries;
         self.selected = previous
             .and_then(|id| self.entries.iter().position(|e| e.id == id))
             .unwrap_or(0);
         self.load_selected();
+        // Say so in the panel. A file the user saved is missing from the
+        // list, and the reason must not be console-only.
+        if !conflicts.is_empty() {
+            let list = conflicts.join(", ");
+            self.status = Some(if conflicts.len() == 1 {
+                format!("`{list}.rhai` in your scripts folder was not loaded — that is a shipped script's name. Rename it to use it.")
+            } else {
+                format!("These in your scripts folder were not loaded — they take shipped scripts' names: {list}. Rename them to use them.")
+            });
+        }
     }
 
     fn load_selected(&mut self) {
@@ -269,6 +287,18 @@ impl ScriptsPanel {
             self.render_output(ui);
         });
 
+        // Land a fork: rescan so the new file is in the list, select it,
+        // then restore the message (`load_selected` clears the status).
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some((id, message)) = self.pending_fork.take() {
+            self.reload(current);
+            if let Some(i) = self.entries.iter().position(|e| e.id == id) {
+                self.selected = i;
+                self.load_selected();
+            }
+            self.status = Some(message);
+        }
+
         response
     }
 
@@ -339,14 +369,35 @@ impl ScriptsPanel {
         #[cfg(not(target_arch = "wasm32"))]
         if ui
             .button("Save")
-            .on_hover_text("Save to your scripts folder (shipped scripts are never overwritten)")
+            .on_hover_text(
+                "Save to your scripts folder. Editing a shipped script saves a renamed copy \
+                 and switches to it — the original is never changed.",
+            )
             .clicked()
         {
-            match library::save_user_script(&self.script_name(), &self.text) {
-                Ok(path) => {
-                    self.status = Some(format!("Saved to {}", path.display()));
+            let desired = self.script_name();
+            if self.selected_is_shipped() {
+                // Fork rather than shadow. A shipped stem is reserved, so
+                // saving under it would produce a file `discover` then
+                // ignores — the edit would appear to vanish.
+                let stem = library::free_user_script_stem(&desired);
+                match library::save_user_script(&stem, &self.text) {
+                    Ok(path) => {
+                        self.pending_fork = Some((
+                            stem.clone(),
+                            format!(
+                                "Shipped scripts are read-only — saved a copy as `{stem}` ({})",
+                                path.display()
+                            ),
+                        ));
+                    }
+                    Err(e) => self.status = Some(format!("Save failed: {e}")),
                 }
-                Err(e) => self.status = Some(format!("Save failed: {e}")),
+            } else {
+                match library::save_user_script(&desired, &self.text) {
+                    Ok(path) => self.status = Some(format!("Saved to {}", path.display())),
+                    Err(e) => self.status = Some(format!("Save failed: {e}")),
+                }
             }
         }
 
@@ -717,6 +768,21 @@ impl ScriptsPanel {
             if mutated { " (original first)" } else { "" }
         ));
         response.batch = Some(configs);
+    }
+
+    /// Whether the selected entry ships with the app, and so must be
+    /// forked rather than overwritten.
+    ///
+    /// `ScriptOrigin::File` alone does not answer this: `discover` gives
+    /// it to BOTH the shipped `assets/scripts/` copies and the user's
+    /// own, so the path has to be checked.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn selected_is_shipped(&self) -> bool {
+        match self.entries.get(self.selected).map(|e| &e.origin) {
+            Some(ScriptOrigin::Builtin) => true,
+            Some(ScriptOrigin::File(path)) => !library::is_user_script(path),
+            None => false,
+        }
     }
 
     fn script_name(&self) -> String {
