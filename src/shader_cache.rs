@@ -539,6 +539,75 @@ impl ShaderCache {
         &self.constants
     }
 
+    /// Parse the assembled WGSL before the device sees it.
+    ///
+    /// `create_shader_module` reports a malformed module through wgpu's
+    /// uncaptured-error handler, which **panics** by default — so a
+    /// single downloaded variation with bad WGSL took the whole app
+    /// down, and the message pointed at a line in generated source the
+    /// user has never seen.
+    ///
+    /// Parsing here costs a few ms on a cache miss (builds are cached;
+    /// this is not per frame) and turns that into a recoverable error
+    /// with the culprits named. naga is wgpu's own front end, reached
+    /// through its re-export, so this is the same parser that would
+    /// have rejected it a moment later.
+    ///
+    /// Syntax only — a semantic error (calling a helper the flame did
+    /// not splice in) still reaches the device. Catching those needs a
+    /// full `naga::valid::Validator` pass; worth doing if downloaded
+    /// shaders ever start failing that way, but syntax is what a
+    /// hand-authored or truncated download gets wrong.
+    ///
+    /// **Desktop only.** The wasm build takes wgpu with only `webgpu` +
+    /// `wgsl`, so `wgpu::naga` is configured out — on the web the
+    /// *browser* is the WGSL front end, and bundling naga purely to
+    /// pre-check would add a parser to a binary whose size budget the
+    /// Endless Gallery work exists to protect. There, the browser
+    /// reports through the same uncaptured-error handler installed in
+    /// `gpu::device`, so a bad shader still costs the render rather than
+    /// the session — it just arrives without the culprit named.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn validate_wgsl(source: &str, label: &str) -> Result<(), String> {
+        match wgpu::naga::front::wgsl::parse_str(source) {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                // Name the non-core variations in play: with the built-in
+                // corpus compiling in CI, a downloaded one is the
+                // overwhelmingly likely culprit and the user can act on
+                // the name.
+                let registry = crate::variations::global_registry();
+                let suspects: Vec<&str> = registry
+                    .all()
+                    .iter()
+                    .filter(|v| !v.is_core)
+                    .map(|v| v.name.as_str())
+                    .collect();
+                let blame = if suspects.is_empty() {
+                    "No downloaded variations are registered, so this is a \
+                     bug in the built-in shader assembly."
+                        .to_string()
+                } else {
+                    format!(
+                        "Downloaded variations currently registered: {}. \
+                         Clearing the variation cache will restore rendering.",
+                        suspects.join(", ")
+                    )
+                };
+                Err(format!(
+                    "Generated WGSL for `{label}` failed to parse.\n{}\n\n{blame}",
+                    e.emit_to_string(source)
+                ))
+            }
+        }
+    }
+
+    /// WASM stub — the browser validates. See the desktop version.
+    #[cfg(target_arch = "wasm32")]
+    fn validate_wgsl(_source: &str, _label: &str) -> Result<(), String> {
+        Ok(())
+    }
+
     /// Create a compute pipeline from shader source
     fn create_compute_pipeline(
         device: &Device,
@@ -546,6 +615,14 @@ impl ShaderCache {
         source: &str,
         label: &str,
     ) -> ComputePipeline {
+        if let Err(msg) = Self::validate_wgsl(source, label) {
+            // Logged rather than swallowed: the caller has no error
+            // channel today, so handing the source on unchanged keeps
+            // the existing behaviour (wgpu will reject it) while making
+            // the REASON legible first. Previously the panic arrived
+            // with no attribution at all.
+            log::error!("{msg}");
+        }
         let shader_module = device.create_shader_module(ShaderModuleDescriptor {
             label: Some(label),
             source: ShaderSource::Wgsl(source.into()),
@@ -643,5 +720,46 @@ impl ShaderCache {
             cache: None,
         });
         (Some(source), Some(pipeline), pair_count)
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod validate_tests {
+    use super::ShaderCache;
+
+    /// Malformed WGSL must be caught with a legible message before the
+    /// device sees it.
+    ///
+    /// Previously `create_shader_module` handed it straight to wgpu,
+    /// whose default handler panics — so one downloaded variation with
+    /// bad shader code killed the app, and the message pointed at a
+    /// line of generated source the user had never seen.
+    #[test]
+    fn malformed_wgsl_is_rejected_with_a_readable_message() {
+        let bad = "fn broken( -> vec2<f32> { return; }";
+        let err = ShaderCache::validate_wgsl(bad, "Test Shader")
+            .expect_err("malformed WGSL must not validate");
+        assert!(err.contains("Test Shader"), "names the shader: {err}");
+        // naga's rendered diagnostic, not just a type name.
+        assert!(err.contains("broken") || err.contains("expected"), "{err}");
+    }
+
+    /// Valid WGSL passes — a validator that rejects working shaders
+    /// would be worse than the panic it replaces.
+    #[test]
+    fn valid_wgsl_passes() {
+        let good = "fn f(p: vec2<f32>) -> vec2<f32> { return p * 2.0; }";
+        assert!(ShaderCache::validate_wgsl(good, "Test Shader").is_ok());
+    }
+
+    /// With no downloaded variations registered, the message must not
+    /// blame one — it says the assembly itself is at fault.
+    #[test]
+    fn the_message_does_not_invent_a_culprit() {
+        let err = ShaderCache::validate_wgsl("fn broken( ->", "T").unwrap_err();
+        assert!(
+            err.contains("built-in shader assembly"),
+            "with nothing downloaded, blame belongs at home: {err}"
+        );
     }
 }

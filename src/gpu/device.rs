@@ -202,6 +202,20 @@ impl GpuContext {
             }
         ).await?;
 
+        // wgpu's default handler PANICS on any uncaptured validation
+        // error. That is the wrong trade once the app compiles shader
+        // code it did not write: one downloaded variation with bad WGSL
+        // took the whole application down, and the message pointed at a
+        // line of generated source the user has never seen.
+        //
+        // Logging instead means a bad shader costs the render, not the
+        // session — the user can clear the variation cache and carry on.
+        // `ShaderCache::validate_wgsl` runs first and names the likely
+        // culprit, so this is the backstop rather than the explanation.
+        device.on_uncaptured_error(std::sync::Arc::new(|e| {
+            log::error!("wgpu error (the current render will fail): {e}");
+        }));
+
         log::info!(
             "Device max_storage_buffer_binding_size: {} bytes ({} MB)",
             device.limits().max_storage_buffer_binding_size,

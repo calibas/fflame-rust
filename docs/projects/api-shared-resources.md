@@ -574,9 +574,26 @@ These are live defects, not future work.
   2D-only entries from the registry — no plumbing out of the shader
   builder. The panel half is also what `has_shader_3d` will feed once
   the manifest lands (8.2).
-- [ ] **M** — Compile-failure path (§1): a downloaded resource whose
-  shader fails to compile must disable itself and report, not take the
-  render down. Applies to variations now, effects later.
+- [x] **M** — ~~Compile-failure path~~ **DONE, in two halves.**
+  `create_shader_module` handed bad WGSL straight to wgpu, whose
+  default handler PANICS — one downloaded variation with broken shader
+  code killed the app, pointing at a line of generated source the user
+  has never seen. Now: `gpu::device` installs an uncaptured-error
+  handler so a bad shader costs the render, not the session; and
+  `ShaderCache::validate_wgsl` parses the assembled WGSL with naga
+  first, naming the registered downloaded variations as likely culprits
+  and suggesting Clear Cache.
+
+  **Desktop only for the naming half** — the wasm build configures
+  `wgpu::naga` out (the browser is the WGSL front end there), and
+  bundling a parser purely to pre-check would tax the binary the
+  Endless Gallery size budget protects. On web the handler still keeps
+  the session alive; the message just arrives unattributed.
+
+  Syntax only. A semantic error (calling a helper the flame did not
+  splice in — see WIRE_FORMAT §4.1) still reaches the device; catching
+  those needs a full `naga::valid::Validator` pass, worth adding if
+  downloaded shaders start failing that way.
 - [x] **S** — ~~Provenance in the UI~~ **DONE for variations.** The
   per-row `API v#` tag was already there and is the wrong instrument
   for §1's question — "is this flame about to run third-party code"
@@ -590,7 +607,11 @@ These are live defects, not future work.
   a provenance marker would have exactly one value — the same
   no-browse-or-select-decision argument that kept `state_count` off the
   list payload. It lands with 8.5, where the source tag becomes real.
-- [ ] **S** — Measure stored flames against `transforms_per_flame`
+- [x] **S** — ~~Measure stored flames against `transforms_per_flame`~~
+  **DONE on the API side** — their
+  `no_stored_flame_exceeds_engine_transform_cap` reads the cap from the
+  generated contract and passes on dev, so nothing stored blocks
+  tightening. The prod query is recorded beside it. Original note:
   (128, shared across normals + linked + final). The API's schema is
   more permissive — 100 per pool, so 300 — and the engine PANICS on the
   total, not per pool. Tightening is free if nothing stored exceeds 128
@@ -598,10 +619,22 @@ These are live defects, not future work.
   first, since a tighter rule would reject flames that were valid when
   saved. `variations_per_flame` (100) and `variation_slots_per_flame`
   (1600) are unchecked server-side too.
-- [ ] **M** — Wall-clock deadline inside the L-system builtin walks —
-  the recorded gap from the script-sandbox review (the operation budget
-  structurally cannot see native work). **Before public script
-  browsing.**
+- [x] **M** — ~~Wall-clock deadline inside the L-system builtin walks~~
+  **DONE — as a STEP budget, not a clock.** Writing it down as
+  wall-clock was a mistake: script + seed must name one exact flame on
+  every machine, so an abort that depends on host speed makes the same
+  script succeed on a desktop and fail on a phone. That would have
+  traded a DoS bound for the determinism guarantee the rest of this
+  work exists to protect. `MAX_TURTLE_STEPS = 20M`, charged per body
+  expansion so the hot loop is untouched, tripping at the identical
+  point everywhere.
+
+  Honest note on the bound: the input caps had already taken the worst
+  case from ~10^11 steps to ~1.6e9, and I could **not** reproduce a
+  multi-second hang end to end afterwards — the depth-stepdown's
+  interaction with `CHAR_BUDGET` keeps real walks small. The budget is
+  a backstop against that interaction changing, not a fix for a
+  reproduced hang.
 
 ### 8.2 Variations
 
