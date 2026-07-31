@@ -231,6 +231,71 @@ pub enum Feature {
     NeedsMobiusLib,
 }
 
+impl Feature {
+    /// Every FLAG-like variant, so a generator can enumerate them.
+    ///
+    /// [`Feature::PlotEmits`] is deliberately absent: it carries a `u8`
+    /// payload, so it cannot be one entry in a `features: [string]`
+    /// array. On the wire it belongs in its own optional field —
+    /// `plot_emits: u8` — the way `init_param_count` and `state_count`
+    /// already are. Three shipped variations use it.
+    ///
+    /// Adding a variant without adding it here is caught by the
+    /// exhaustive `match` in [`Self::to_api_str`] plus the
+    /// `all_features_are_listed` test — the point being that the wire
+    /// vocabulary is derived from this enum rather than transcribed
+    /// into a document that then rots.
+    pub const ALL: &'static [Feature] = &[
+        Feature::NeedsRng,
+        Feature::NeedsTransform,
+        Feature::WritesColor,
+        Feature::WritesRgb,
+        Feature::NeedsAccum,
+        Feature::AlwaysZ,
+        Feature::NeverZ,
+        Feature::Replace,
+        Feature::CanHide,
+        Feature::VolumeSideEmit,
+        Feature::AnalyticBlur,
+        Feature::NeedsW,
+        Feature::NeedsMobiusLib,
+    ];
+
+    /// The canonical wire spelling for the API's `features` array.
+    ///
+    /// snake_case of the variant name. Exhaustive on purpose: a new
+    /// feature fails to compile here rather than silently missing from
+    /// the contract.
+    pub fn to_api_str(self) -> &'static str {
+        match self {
+            Feature::NeedsRng => "needs_rng",
+            Feature::NeedsTransform => "needs_transform",
+            Feature::WritesColor => "writes_color",
+            Feature::WritesRgb => "writes_rgb",
+            Feature::NeedsAccum => "needs_accum",
+            Feature::AlwaysZ => "always_z",
+            Feature::NeverZ => "never_z",
+            Feature::Replace => "replace",
+            Feature::CanHide => "can_hide",
+            Feature::VolumeSideEmit => "volume_side_emit",
+            Feature::AnalyticBlur => "analytic_blur",
+            Feature::NeedsW => "needs_w",
+            Feature::NeedsMobiusLib => "needs_mobius_lib",
+            // Payload-carrying: the NAME goes here, the count travels in
+            // its own `plot_emits` field. See `ALL`.
+            Feature::PlotEmits(_) => "plot_emits",
+        }
+    }
+
+    /// Inverse of [`Self::to_api_str`]. Unknown strings return `None`
+    /// so a caller can ignore-with-a-warning: a newer server may send a
+    /// feature this client has not learned yet, and rejecting the whole
+    /// variation over it would be worse than dropping the flag.
+    pub fn from_api_str(s: &str) -> Option<Feature> {
+        Feature::ALL.iter().copied().find(|f| f.to_api_str() == s)
+    }
+}
+
 /// Static definition of a variation
 ///
 /// Each variation is defined as a const with all its metadata and WGSL code.
