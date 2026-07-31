@@ -663,6 +663,23 @@ impl VariationRegistry {
     /// VariationInfo lookup. Useful at XML import time when the caller
     /// wants to record the canonical name on the Transform (so the rest
     /// of the pipeline never sees the alias).
+    /// Foreign-app aliases pointing at `canonical`, sorted.
+    ///
+    /// The alias index is stored alias → canonical because that is the
+    /// direction lookups go; the corpus export needs the inverse, and
+    /// sorting keeps the dump byte-stable across HashMap iteration
+    /// order.
+    pub fn aliases_for(&self, canonical: &str) -> Vec<String> {
+        let mut out: Vec<String> = self
+            .aliases
+            .iter()
+            .filter(|(_, v)| v.as_str() == canonical)
+            .map(|(k, _)| k.clone())
+            .collect();
+        out.sort();
+        out
+    }
+
     pub fn resolve_alias<'a>(&'a self, name: &'a str) -> &'a str {
         if self.variations.contains_key(name) {
             return name;
