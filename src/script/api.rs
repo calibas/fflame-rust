@@ -14,7 +14,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use rand::Rng;
+use crate::script::host::draw;
 use rhai::{Array, Dynamic, Engine, EvalAltResult, Position, Scope};
 
 use crate::config::fractal_config::FractalConfig;
@@ -498,7 +498,7 @@ fn register_meta(engine: &mut Engine, state: Rc<RefCell<ScriptState>>) {
 
 fn register_rng(engine: &mut Engine, state: Rc<RefCell<ScriptState>>) {
     let s = Rc::clone(&state);
-    engine.register_fn("rand", move || -> f64 { s.borrow_mut().rng.gen::<f64>() });
+    engine.register_fn("rand", move || -> f64 { draw::unit(&mut s.borrow_mut().rng) });
 
     let s = Rc::clone(&state);
     engine.register_fn(
@@ -508,7 +508,7 @@ fn register_rng(engine: &mut Engine, state: Rc<RefCell<ScriptState>>) {
             if min >= max {
                 return Ok(min);
             }
-            Ok(s.borrow_mut().rng.gen_range(min..max))
+            Ok(draw::range_f64(&mut s.borrow_mut().rng, min, max))
         },
     );
 
@@ -517,13 +517,13 @@ fn register_rng(engine: &mut Engine, state: Rc<RefCell<ScriptState>>) {
         if min >= max {
             return min;
         }
-        s.borrow_mut().rng.gen_range(min..=max)
+        draw::range_i64(&mut s.borrow_mut().rng, min, max)
     });
 
     let s = Rc::clone(&state);
     engine.register_fn("chance", move |p: Dynamic| -> Result<bool, Box<EvalAltResult>> {
         let p = num(&p, "chance")?;
-        Ok(s.borrow_mut().rng.gen::<f64>() < p)
+        Ok(draw::unit(&mut s.borrow_mut().rng) < p)
     });
 
     let s = Rc::clone(&state);
@@ -536,7 +536,7 @@ fn register_rng(engine: &mut Engine, state: Rc<RefCell<ScriptState>>) {
         // each — same seed, different draw. Fixed width keeps the stream
         // identical everywhere, which the whole "script + seed" promise
         // rests on.
-        let i = s.borrow_mut().rng.gen_range(0..items.len() as u64) as usize;
+        let i = draw::below(&mut s.borrow_mut().rng, items.len() as u64) as usize;
         Ok(items[i].clone())
     });
 
@@ -547,7 +547,7 @@ fn register_rng(engine: &mut Engine, state: Rc<RefCell<ScriptState>>) {
         // Fisher–Yates against the seeded stream, so shuffles reproduce.
         for i in (1..out.len()).rev() {
             // u64 for the same reason as pick().
-            let j = st.rng.gen_range(0..=i as u64) as usize;
+            let j = draw::below(&mut st.rng, i as u64 + 1) as usize;
             out.swap(i, j);
         }
         out
@@ -1576,7 +1576,7 @@ fn register_palettes(engine: &mut Engine, state: Rc<RefCell<ScriptState>>) {
                 ));
             }
             let count = st.palettes.len() as u64;
-            let i = st.rng.gen_range(0..count) as usize;
+            let i = draw::below(&mut st.rng, count) as usize;
             let chosen = st.palettes[i].clone();
             let name = chosen.name.clone();
             f.cfg.borrow_mut().palette = chosen;

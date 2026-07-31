@@ -30,7 +30,10 @@ use fractal_flame_wgpu::variations::global_registry;
 
 /// A complete flame: the model plus its camera, colour and render
 /// settings — the same structure a `.fflame` file holds.
-#[pyclass(module = "pyfflame")]
+// `from_py_object`: pyo3 is making this derive opt-in for Clone
+// pyclasses. Config needs it — `run_script(base=...)` takes one BY
+// VALUE from Python.
+#[pyclass(module = "pyfflame", from_py_object)]
 #[derive(Clone)]
 pub struct Config {
     inner: FractalConfig,
@@ -394,7 +397,10 @@ impl Config {
 
 /// An animation a script defined: a duration and a set of parameter
 /// tracks. Opaque here — save it and open it in the app.
-#[pyclass(module = "pyfflame")]
+// `skip_from_py_object`: Animation is only ever RETURNED to Python,
+// never taken as an argument, so the derive would add nothing but an
+// implicit clone-on-extract.
+#[pyclass(module = "pyfflame", skip_from_py_object)]
 #[derive(Clone)]
 pub struct Animation {
     inner: fractal_flame_wgpu::animation::Animation,

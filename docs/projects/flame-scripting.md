@@ -81,6 +81,28 @@ Caveat to document for users: floating-point math in the *script* is
 f64 and deterministic; tiny cross-platform differences can only enter
 through the renderer, not the generated config.
 
+**Update (rand 0.9 upgrade): the DRAWS are pinned too, not just the
+generator.** Pinning `Pcg64Mcg` turned out to be half the job. The raw
+PCG stream is a stable published spec, but the mapping *from* that
+stream to a float or a bounded integer is a library implementation
+detail — and rand 0.9 changed the integer one (it accepts a word 0.8
+rejected, shifting every subsequent draw). The `wasm/script`
+CLI-parity fixtures caught it: same seed, different flame.
+
+So `script::host::draw` now owns all four draws the script API makes
+(`unit`, `range_f64`, `below`, `range_i64`), reproducing rand 0.8.5's
+`Standard`/`sample_single` exactly — verified against rand 0.8 across
+tens of thousands of samples over many seeds and ranges before the
+upgrade landed. Only `next_u64` still comes from the dependency, which
+is the one piece that is the generator's own defined output. Guarded
+by `draw_tests::pinned_draws_match_their_golden_values` (unit level)
+and `random_stream_is_pinned` (end to end).
+
+Related trap, already handled at the call sites: `usize` is 64-bit on
+desktop and 32-bit on wasm32, and rand dispatched to a *different*
+integer implementation for each — so a `gen_range(0..len)` forked the
+stream between platforms. Every script draw takes a fixed-width `u64`.
+
 ---
 
 ## 2. Script model

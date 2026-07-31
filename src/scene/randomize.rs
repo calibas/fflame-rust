@@ -159,7 +159,7 @@ fn random_render_settings<R: Rng>(settings: &RandomGeneratorSettings, rng: &mut 
     if settings.enable_3d {
         (
             RenderMode::ThreeD,
-            rng.gen_range(settings.perspective_min..=settings.perspective_max),
+            rng.random_range(settings.perspective_min..=settings.perspective_max),
         )
     } else {
         (RenderMode::TwoD, 0.0)
@@ -169,7 +169,7 @@ fn random_render_settings<R: Rng>(settings: &RandomGeneratorSettings, rng: &mut 
 /// Generate a random flame **with** its render settings (the form the Random
 /// Generator panel needs, since `enable_3d` now sets config-level fields).
 pub fn generate_random_flame_bundle(settings: &RandomGeneratorSettings) -> RandomFlame {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let (render_mode, perspective_strength) = random_render_settings(settings, &mut rng);
     let flame = generate_random_flame_with_rng(settings, &mut rng);
     RandomFlame { flame, render_mode, perspective_strength }
@@ -182,14 +182,14 @@ pub fn generate_random_flame() -> Flame {
 
 /// Generate a random flame using the provided settings
 pub fn generate_random_flame_with_settings(settings: &RandomGeneratorSettings) -> Flame {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     generate_random_flame_with_rng(settings, &mut rng)
 }
 
 /// Generate a random flame using provided settings and RNG (for seeded generation)
 pub fn generate_random_flame_with_rng<R: Rng>(settings: &RandomGeneratorSettings, rng: &mut R) -> Flame {
     // Random number of transforms within range
-    let num_transforms = rng.gen_range(settings.transform_count_min..=settings.transform_count_max);
+    let num_transforms = rng.random_range(settings.transform_count_min..=settings.transform_count_max);
 
     let mut transforms = Vec::with_capacity(num_transforms + settings.symmetry.transform_count());
 
@@ -247,7 +247,7 @@ pub fn generate_batch(settings: &RandomGeneratorSettings) -> Vec<RandomFlame> {
         }
     } else {
         // Use thread RNG
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         for i in 0..settings.batch_count {
             results.push(gen_one(settings, &mut rng, i));
         }
@@ -354,26 +354,26 @@ fn random_transform_with_settings<R: Rng>(
     let mut transform = Transform::default();
 
     // Random affine parameters within settings ranges
-    let neg_scale = settings.allow_negative_scale && rng.gen_bool(0.3);
-    transform.a = rng.gen_range(settings.scale_min..=settings.scale_max) * if neg_scale { -1.0 } else { 1.0 };
-    transform.d = rng.gen_range(settings.scale_min..=settings.scale_max) * if neg_scale && rng.gen_bool(0.5) { -1.0 } else { 1.0 };
+    let neg_scale = settings.allow_negative_scale && rng.random_bool(0.3);
+    transform.a = rng.random_range(settings.scale_min..=settings.scale_max) * if neg_scale { -1.0 } else { 1.0 };
+    transform.d = rng.random_range(settings.scale_min..=settings.scale_max) * if neg_scale && rng.random_bool(0.5) { -1.0 } else { 1.0 };
 
     // Shear components
-    transform.b = rng.gen_range(settings.shear_min..=settings.shear_max);
-    transform.c = rng.gen_range(settings.shear_min..=settings.shear_max);
+    transform.b = rng.random_range(settings.shear_min..=settings.shear_max);
+    transform.c = rng.random_range(settings.shear_min..=settings.shear_max);
 
     // Translation components
-    transform.e = rng.gen_range(settings.translate_min..=settings.translate_max);
-    transform.f = rng.gen_range(settings.translate_min..=settings.translate_max);
+    transform.e = rng.random_range(settings.translate_min..=settings.translate_max);
+    transform.f = rng.random_range(settings.translate_min..=settings.translate_max);
 
     // Weight
-    transform.weight = rng.gen_range(settings.weight_min..=settings.weight_max);
+    transform.weight = rng.random_range(settings.weight_min..=settings.weight_max);
 
     // Color: spread across palette based on transform index
     if settings.distribute_colors_evenly {
         transform.color = (index as f32 + 0.5) / total as f32;
     } else {
-        transform.color = rng.gen_range(0.0..1.0);
+        transform.color = rng.random_range(0.0..1.0);
     }
 
     // Build list of enabled variations
@@ -387,20 +387,20 @@ fn random_transform_with_settings<R: Rng>(
         transform.set_variation("linear", 1.0);
     } else {
         // Add random variations
-        let num_variations = rng.gen_range(
+        let num_variations = rng.random_range(
             settings.variations_per_transform_min..=settings.variations_per_transform_max
         );
 
         for _ in 0..num_variations {
-            let var_idx = rng.gen_range(0..enabled.len());
+            let var_idx = rng.random_range(0..enabled.len());
             let var_name = enabled[var_idx];
-            let weight = rng.gen_range(settings.variation_weight_min..=settings.variation_weight_max);
+            let weight = rng.random_range(settings.variation_weight_min..=settings.variation_weight_max);
             transform.set_variation(var_name, weight);
         }
 
         // Ensure first transform has linear if requested
         if index == 0 && settings.always_include_linear && transform.get_variation("linear") == 0.0 {
-            transform.set_variation("linear", rng.gen_range(0.3..0.7));
+            transform.set_variation("linear", rng.random_range(0.3..0.7));
         }
     }
 

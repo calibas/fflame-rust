@@ -396,7 +396,7 @@ impl App {
 
             // Use a random palette from the library
             if self.palette_library.len() > 0 {
-                let palette_idx = rand::random::<usize>() % self.palette_library.len();
+                let palette_idx = rand::random_range(0..self.palette_library.len());
                 if let Some(palette) = self.palette_library.get(palette_idx) {
                     new_config.palette = palette.clone();
                 }
@@ -422,7 +422,7 @@ impl App {
 
             // Use a random palette from the library
             if self.palette_library.len() > 0 {
-                let palette_idx = rand::random::<usize>() % self.palette_library.len();
+                let palette_idx = rand::random_range(0..self.palette_library.len());
                 if let Some(palette) = self.palette_library.get(palette_idx) {
                     new_config.palette = palette.clone();
                 }
