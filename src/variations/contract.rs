@@ -385,7 +385,77 @@ mod tests {
             shader_3d: s3d.map(|x| x.into()),
             init_param_count: 0,
             shader_init: None,
+            features: Vec::new(),
+            state_count: 0,
+            shader_state_init: None,
+            aliases: Vec::new(),
+            plot_emits: 0,
+            authors: Vec::new(),
+            description_plain: None,
         }
+    }
+
+    /// The wire fields land before the server sends them.
+    ///
+    /// Every new field is `serde(default)`, so declaring them first is
+    /// forward-compatible and the client is ready the day the migration
+    /// lands rather than a coordination round later. These pin the three
+    /// behaviours that make that safe.
+    #[test]
+    fn the_features_array_supersedes_the_legacy_bools() {
+        let mut dl = download("f", "advanced_2d", Some("fn f(){}"), None);
+
+        // Absent array: fall back to the bools, as older payloads need.
+        dl.needs_rng = true;
+        dl.writes_color = true;
+        let info = super::super::VariationInfo::from_download(&dl);
+        assert!(info.has_feature(Feature::NeedsRng));
+        assert!(info.has_feature(Feature::WritesColor));
+
+        // Present array: authoritative, and it can express what the
+        // bools never could.
+        dl.features = vec!["always_z".into(), "needs_accum".into()];
+        let info = super::super::VariationInfo::from_download(&dl);
+        assert!(info.has_feature(Feature::AlwaysZ), "173 variations need this");
+        assert!(info.has_feature(Feature::NeedsAccum));
+        assert!(
+            !info.has_feature(Feature::NeedsRng),
+            "the array must supersede the bools, not merge with them"
+        );
+    }
+
+    /// An unknown feature is dropped with a warning, never fatal — a
+    /// newer server has to be able to serve an older client, or every
+    /// future capability becomes a breaking change.
+    #[test]
+    fn an_unknown_feature_does_not_reject_the_variation() {
+        let mut dl = download("f", "advanced_2d", Some("fn f(){}"), None);
+        dl.features = vec!["needs_rng".into(), "invented_next_year".into()];
+        let info = super::super::VariationInfo::from_download(&dl);
+        assert!(info.has_feature(Feature::NeedsRng));
+        assert_eq!(info.features.len(), 1, "the unknown one is dropped, not kept");
+    }
+
+    /// state_count was hardcoded to 0, which silently mis-rendered any
+    /// stateful server-hosted variation: slots allocated, read as zeros.
+    /// plot_emits rides in its own field because it carries a payload.
+    #[test]
+    fn state_and_plot_emits_come_off_the_wire_now() {
+        let mut dl = download("s", "advanced_2d", Some("fn f(){}"), None);
+        dl.state_count = 4;
+        dl.shader_state_init = Some("fn init(){}".into());
+        dl.plot_emits = 3;
+        let info = super::super::VariationInfo::from_download(&dl);
+        assert_eq!(info.state_count, 4);
+        assert!(info.wgsl_source_state_init.is_some());
+        assert_eq!(info.plot_emit_cap(), 3);
+
+        // Zero means "does not emit", not "emits zero".
+        let mut dl2 = download("t", "advanced_2d", Some("fn f(){}"), None);
+        dl2.plot_emits = 0;
+        let info2 = super::super::VariationInfo::from_download(&dl2);
+        assert_eq!(info2.plot_emit_cap(), 0);
+        assert!(!info2.features.iter().any(|f| matches!(f, Feature::PlotEmits(_))));
     }
 
     /// `only_3d` may omit `shader_2d`; nothing else may.
