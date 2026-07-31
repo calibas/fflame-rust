@@ -337,6 +337,30 @@ mod tests {
         }
     }
 
+    /// The lowercase aliases added for API name compatibility must
+    /// actually resolve, and must not have been silently discarded.
+    ///
+    /// `register_from_def` drops an alias that collides with an existing
+    /// name or another alias — correct, but it means adding one is not
+    /// self-verifying: the warning goes to a log nobody reads.
+    #[test]
+    fn lowercase_aliases_resolve_to_their_capital_d_variations() {
+        let reg = crate::variations::global_registry();
+        for (alias, canonical) in [
+            ("blur3d", "blur3D"),
+            ("julia3d", "julia3D"),
+            ("curl3d", "curl3D"),
+            ("post_curl3d", "post_curl3D"),
+        ] {
+            assert_eq!(
+                reg.resolve_alias(alias), canonical,
+                "`{alias}` must resolve to `{canonical}`"
+            );
+            assert!(reg.has(alias), "`{alias}` must be findable");
+            assert!(reg.get(alias).is_some_and(|v| v.name == canonical));
+        }
+    }
+
     /// Unknown features degrade rather than reject.
     #[test]
     fn unknown_features_are_ignorable() {

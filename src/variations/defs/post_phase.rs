@@ -464,7 +464,7 @@ fn variation_post_curl(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
 /// twist coefficient.
 pub static POST_CURL3D: VariationDef = VariationDef {
     name: "post_curl3D",
-    aliases: &[],
+    aliases: &["post_curl3d"],
     display_name: "Post Curl 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Post,

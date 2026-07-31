@@ -577,8 +577,19 @@ These are live defects, not future work.
 - [ ] **M** — Compile-failure path (§1): a downloaded resource whose
   shader fails to compile must disable itself and report, not take the
   render down. Applies to variations now, effects later.
-- [ ] **S** — Provenance in the UI: built-in / downloaded / local. The
-  variations panel shows "API v#"; effects show nothing.
+- [x] **S** — ~~Provenance in the UI~~ **DONE for variations.** The
+  per-row `API v#` tag was already there and is the wrong instrument
+  for §1's question — "is this flame about to run third-party code"
+  was answerable only by scrolling 646 rows. The panel now leads with
+  the downloaded variations *this flame* uses, extracted as a pure
+  `downloaded_variations_in_use` so the rule is testable rather than
+  buried in layout code. An unknown name is deliberately NOT reported:
+  it is missing, not untrusted, and the fetch path owns it.
+
+  **Effects deferred, on purpose.** Every effect is built-in today, so
+  a provenance marker would have exactly one value — the same
+  no-browse-or-select-decision argument that kept `state_count` off the
+  list payload. It lands with 8.5, where the source tag becomes real.
 - [ ] **S** — Measure stored flames against `transforms_per_flame`
   (128, shared across normals + linked + final). The API's schema is
   more permissive — 100 per pool, so 300 — and the engine PANICS on the

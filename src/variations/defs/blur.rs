@@ -48,7 +48,7 @@ fn variation_zblur(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
 /// 3D counterpart of Gaussian Blur.
 pub static BLUR3D: VariationDef = VariationDef {
     name: "blur3D",
-    aliases: &[],
+    aliases: &["blur3d"],
     display_name: "Blur 3D",
     category: VariationCategory::Full3D,
     phase: VariationPhase::Any,
