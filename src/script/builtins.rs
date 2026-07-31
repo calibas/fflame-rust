@@ -667,6 +667,52 @@ struct LTurtle {
     h: f64,
 }
 
+/// Bound on turtle steps in one L-system extraction call.
+///
+/// The recorded gap from the script-sandbox review was "the operation
+/// budget cannot see native work", and the fix was written down as a
+/// wall-clock deadline. **A clock is the wrong instrument here**, and
+/// using one would have cost more than it bought: script + seed must
+/// name one exact flame on every machine, so an abort that depends on
+/// how fast the host is makes the same script succeed on a desktop and
+/// fail on a phone. A counted budget trips at the identical point
+/// everywhere, and bounds the work just as well.
+///
+/// Why a bound is still needed after the input caps: those took the
+/// worst case from ~10^11 steps to ~1.6e9 (4096 rule sites x a 400,000
+/// character body), which is still roughly half a minute of
+/// uninterruptible native work on the UI thread.
+///
+/// 20 million is ~50x the largest legitimate walk (the shipped presets
+/// land in the low hundreds of thousands) and caps the worst case well
+/// under a second.
+const MAX_TURTLE_STEPS: u64 = 20_000_000;
+
+/// Counts turtle steps and refuses past [`MAX_TURTLE_STEPS`].
+///
+/// Deliberately counts STEPS rather than measuring time — see the
+/// constant's docs for why determinism rules a clock out.
+struct StepBudget {
+    used: u64,
+}
+
+impl StepBudget {
+    fn new() -> Self {
+        Self { used: 0 }
+    }
+
+    /// Charge `n` steps. `Err` once the budget is gone.
+    fn charge(&mut self, n: u64) -> Result<(), String> {
+        self.used = self.used.saturating_add(n);
+        if self.used > MAX_TURTLE_STEPS {
+            return Err(format!(
+                "this L-system is too large to extract — it needs more than                  {MAX_TURTLE_STEPS} turtle steps. Shorten the rules, or use                  fewer recursion sites."
+            ));
+        }
+        Ok(())
+    }
+}
+
 fn lsys_step(ch: char, angle: f64, st: &mut LTurtle, stack: &mut Vec<LTurtle>) {
     match ch {
         // Position-wise, drawing and moving are the same walk.
@@ -1069,6 +1115,7 @@ pub fn lsystem_plant_segments(
     //   drawing otherwise              -> stem (expanded span if ruled,
     //                                    a single step if not)
     let walk = |exps: &Vec<(char, String)>| -> Result<(Vec<Segment>, Vec<Segment>), String> {
+        let mut budget = StepBudget::new();
         let body_of = |c: char| exps.iter().find(|(k, _)| *k == c).map(|(_, e)| e.as_str());
         let mut st = LTurtle { x: 0.0, y: 0.0, h: 0.0 };
         let mut stack: Vec<LTurtle> = Vec::new();
@@ -1081,6 +1128,7 @@ pub fn lsystem_plant_segments(
                 // Variable recursion site.
                 let (sx, sy) = (st.x, st.y);
                 if let Some(body) = body_of(ch) {
+                    budget.charge(body.len() as u64)?;
                     for bc in body.chars() {
                         lsys_step(bc, angle, &mut st, &mut stack);
                     }
@@ -1089,6 +1137,7 @@ pub fn lsystem_plant_segments(
             } else if is_drawing(ch) {
                 let (sx, sy) = (st.x, st.y);
                 if let Some(body) = body_of(ch) {
+                    budget.charge(body.len() as u64)?;
                     for bc in body.chars() {
                         lsys_step(bc, angle, &mut st, &mut stack);
                     }
@@ -1352,6 +1401,7 @@ pub fn lsystem_pieces3(
     }
 
     let walk = |exps: &Vec<(char, String)>| -> Result<(Vec<Site>, [f64; 3], f64), String> {
+        let mut budget = StepBudget::new();
         let body_of = |c: char| exps.iter().find(|(k, _)| *k == c).map(|(_, e)| e.as_str());
         let mut st = LTurtle3::new();
         let mut stack: Vec<LTurtle3> = Vec::new();
@@ -1850,6 +1900,7 @@ pub fn lsystem_graph_pieces(
 
     // Walk one type's rule against a set of expansions.
     let walk_type = |v: char, exps: &Vec<(char, String)>| -> Result<TypeWalk, String> {
+        let mut budget = StepBudget::new();
         let body_of = |c: char| exps.iter().find(|(k, _)| *k == c).map(|(_, e)| e.as_str());
         let mut st = LTurtle3::new();
         let mut stack: Vec<LTurtle3> = Vec::new();
@@ -1859,6 +1910,7 @@ pub fn lsystem_graph_pieces(
             if is_var(ch) {
                 let entry = st;
                 if let Some(body) = body_of(ch) {
+                    budget.charge(body.len() as u64)?;
                     for bc in body.chars() {
                         lsys_step3(bc, angle, &mut st, &mut stack);
                     }
@@ -1866,6 +1918,7 @@ pub fn lsystem_graph_pieces(
                 sites.push(Site { p1: entry.p, p2: st.p, r: entry.r, depth: nest, occ: ch });
             } else if is_drawing(ch) && has_rule(ch) {
                 if let Some(body) = body_of(ch) {
+                    budget.charge(body.len() as u64)?;
                     for bc in body.chars() {
                         lsys_step3(bc, angle, &mut st, &mut stack);
                     }
@@ -2551,6 +2604,7 @@ pub fn lsystem_curve_pieces3(
         sites: Vec<Site>,
     }
     let walk_rule = |exps: &Vec<(char, String)>| -> Result<Walked, String> {
+        let mut budget = StepBudget::new();
         let body_of = |c: char| exps.iter().find(|(k, _)| *k == c).map(|(_, e)| e.as_str());
         let mut st = LTurtle3::new();
         let mut stack: Vec<LTurtle3> = Vec::new();
@@ -2563,6 +2617,7 @@ pub fn lsystem_curve_pieces3(
                 let entry_pos = st.p;
                 let start = pts.len() - 1;
                 if let Some(body) = body_of(ch) {
+                    budget.charge(body.len() as u64)?;
                     for bc in body.chars() {
                         lsys_step3(bc, angle, &mut st, &mut stack);
                         let last = *pts.last().unwrap();
@@ -3030,6 +3085,45 @@ fn nearest_similarity(a: &[[f64; 3]; 3]) -> Option<[[f64; 3]; 3]> {
 
 #[cfg(test)]
 mod tests {
+    /// The step budget stops at exactly the same point on every machine.
+    ///
+    /// It counts STEPS rather than measuring time on purpose. The task
+    /// was written down as a wall-clock deadline, and a clock would have
+    /// broken the guarantee the rest of this work protects: script +
+    /// seed must name one exact flame everywhere, so an abort that
+    /// depends on host speed makes the same script succeed on a desktop
+    /// and fail on a phone. Determinism is the reason, not performance.
+    #[test]
+    fn the_step_budget_is_deterministic_and_bounded() {
+        let mut b = super::StepBudget::new();
+        assert!(b.charge(super::MAX_TURTLE_STEPS - 1).is_ok());
+        assert!(b.charge(1).is_ok(), "exactly at the limit is allowed");
+        let err = b.charge(1).expect_err("one past the limit must fail");
+        assert!(err.contains("too large to extract"), "{err}");
+
+        // Saturating, so a huge single charge cannot wrap past the check.
+        let mut b2 = super::StepBudget::new();
+        assert!(b2.charge(u64::MAX).is_err());
+    }
+
+    /// Every shipped preset must stay well inside the budget — a bound
+    /// that legitimate content trips is worse than no bound.
+    #[test]
+    fn shipped_lsystem_presets_are_far_inside_the_budget() {
+        // The fern, the densest shipped plant rule.
+        let rules = vec![('X', "F-[[X]+X]+F[+FX]-X".to_string()), ('F', "FF".to_string())];
+        assert!(
+            super::lsystem_plant_segments("X", &rules, 22.5).is_ok(),
+            "the shipped fern must extract"
+        );
+        // Peano, the densest shipped curve rule.
+        let peano = vec![
+            ('X', "XFYFX+F+YFXFY-F-XFYFX".to_string()),
+            ('Y', "YFXFY-F-XFYFX+F+YFXFY".to_string()),
+        ];
+        assert!(super::lsystem_node_segments("X", &peano, 90.0).is_ok());
+    }
+
     #[test]
     fn the_hilbert_lsystem_rule_is_refused_as_two_periodic() {
         // The standard 3D Hilbert L-system rule is only self-similar two
