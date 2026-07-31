@@ -44,6 +44,15 @@ pub fn render_variations_panel(ui: &mut egui::Ui) -> VariationsPanelResponse {
                         ui.horizontal(|ui| {
                             ui.label(&v.display_name);
                             ui.weak(format!("({})", v.name));
+                            // A variation with no 3D body is DROPPED from a
+                            // 3D flame — it keeps its weight and contributes
+                            // nothing, which is invisible in the render.
+                            // Marking it here is the cheap half of the fix;
+                            // the build also logs when it actually happens.
+                            if v.wgsl_source_3d.is_none() {
+                                ui.weak("· 2D only")
+                                    .on_hover_text(t!("variations_panel.two_d_only_hint"));
+                            }
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {

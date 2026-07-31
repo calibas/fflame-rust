@@ -164,6 +164,7 @@ variations_panel:
   category_only_3d: "3D Only"
   category_plugin: "Plugin / API"
   source_built_in: "built-in"
+  two_d_only_hint: "This variation has no 3D shader. In a 3D flame it is skipped entirely and contributes nothing, even with a weight set."
   source_api: "API"
   clear_cache_btn: "Clear Variation Cache (%{count})"
 
@@ -1085,6 +1086,7 @@ api:
   loading_flame_generic: "Loading flame..."
   loading_animation: "Loading animation..."
   loading_variations: "Loading variations: %{names}..."
+  variation_fetch_timeout: "Timed out loading variations: %{names}. Fractal may render incorrectly."
   variation_fetch_failed: "Couldn't load variations: %{names}. Fractal may render incorrectly."
   variation_cache_cleared: "Cleared %{count} cached variations"
   variation_cache_clear_failed: "Failed to clear variation cache: %{error}"

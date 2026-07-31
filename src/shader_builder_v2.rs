@@ -1417,6 +1417,21 @@ impl ShaderBuilder {
                         // (the silent fallback historically masked a class of
                         // shader-validation crashes where a vec2-returning
                         // function got called from a vec3 accumulator).
+                        if info.wgsl_source_3d.is_none() {
+                            // Skipping is right; being SILENT about it was
+                            // not. The variation is in the flame, carries a
+                            // weight, and contributes nothing — which reads
+                            // as "this variation does nothing" rather than
+                            // "this variation is 2D-only". Fires once per
+                            // shader rebuild, not per frame: builds are
+                            // cached.
+                            log::warn!(
+                                "Variation '{name}' has no 3D shader and is being \
+                                 dropped from this 3D flame — it will contribute \
+                                 nothing. (2D-only variations are marked in the \
+                                 Variations panel.)"
+                            );
+                        }
                         info.wgsl_source_3d.as_deref()
                     } else {
                         info.wgsl_source.as_deref()

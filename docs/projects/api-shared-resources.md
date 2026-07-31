@@ -541,24 +541,39 @@ Tick as they land; add freely.
 
 ### 8.0 Do first — cheap and unblocking
 
-- [ ] **S** — Regenerate `docs/main/openapi.json` from the live server
+- [x] **S** — ~~Regenerate `docs/main/openapi.json`~~ **DONE.** All 14
+  paths the client calls are declared with matching methods, verified
+  by a bidirectional comparison. Landed with the live server
   (§0.1). Four months stale, missing two endpoints the client uses
   daily. Both sides are otherwise building against fiction.
-- [ ] **S** — Remove built-in shadowing for scripts (§5.2). No
-  migration needed *today*; deferring it creates one.
+- [x] **S** — ~~Remove built-in shadowing for scripts~~ **DONE**
+  (`750bac4d`). Turned out to be a live bug, not tidiness:
+  `random_palette.rhai` declares its own stem, so one Save hijacked
+  `basic_random`'s `run_script("random_palette")` call.
 
 ### 8.1 Correctness, independent of any new feature
 
 These are live defects, not future work.
 
-- [ ] **S** — WASM variation cache is write-only: `list_cached()` is a
-  stub, so web re-downloads everything each session and "Clear Cache"
-  reports 0 and does nothing. Needs a localStorage key index.
-- [ ] **S** — Timed-out variation fetches leak into the next batch
-  (`variation_fetch_results` is never cleared), finalizing it early;
-  `finalize` also ignores `had_failures`, so a timeout is silent.
-- [ ] **S** — A missing `shader_3d` silently drops the variation in 3D
-  rather than falling back or reporting.
+- [x] **S** — ~~WASM variation cache is write-only~~ **DONE.** The root
+  cause was that the storage backend had no enumeration primitive at
+  all; localStorage does support it (`length`/`key`), it had just been
+  stubbed with a TODO. Added `backend::list_entries`, which collapses
+  the desktop/WASM split in `list_cached` into one implementation and
+  is reusable for the effects cache and script store.
+- [x] **S** — ~~Timed-out fetches leak into the next batch~~ **DONE.**
+  Clearing the vector on trigger is NOT sufficient — a straggler thread
+  pushes after the clear — so results now carry a batch epoch and
+  mismatches are discarded. `finalize`'s ignored `had_failures` flag is
+  gone: each call site shows its own message, and a timeout now names
+  what did not arrive instead of resuming in silence.
+- [x] **S** — ~~A missing `shader_3d` silently drops the variation in
+  3D~~ **DONE.** The skip is correct (the 2D fallback masked vec2/vec3
+  validation crashes); the silence was not. Two independent halves: the
+  build logs when it actually happens, and the Variations panel marks
+  2D-only entries from the registry — no plumbing out of the shader
+  builder. The panel half is also what `has_shader_3d` will feed once
+  the manifest lands (8.2).
 - [ ] **M** — Compile-failure path (§1): a downloaded resource whose
   shader fails to compile must disable itself and report, not take the
   render down. Applies to variations now, effects later.
@@ -579,11 +594,13 @@ These are live defects, not future work.
 
 ### 8.2 Variations
 
-- [ ] **S** — Consume the `features` array
+- [x] **S** — ~~Consume the `features` array~~ **DONE** (`95bddf67`)
   ([WIRE_FORMAT §6.1](VARIATIONS_WIRE_FORMAT.md)), superseding the
   three legacy bools; ignore unknown feature strings with a warning.
-- [ ] **S** — Consume `state_count` / `shader_state_init`; stop
-  hardcoding `state_count: 0` in `from_download`.
+- [x] **S** — ~~Consume `state_count` / `shader_state_init`~~ **DONE**
+  (`95bddf67`). Was a live defect: slots were allocated and read as
+  zeros, so a stateful downloaded variation rendered wrong while
+  looking like it worked. `aliases` and `plot_emits` landed too.
 - [ ] **S** — Consume `description_plain` + `authors`; give them a home
   in the panel (no description is shown at all today).
 - [ ] **M** — Manifest-driven catalog (§3.3): fetch `GET

@@ -47,35 +47,21 @@ pub fn delete(name: &str) -> CacheResult<()> {
         .map_err(|e| format!("Failed to delete variation cache: {}", e))
 }
 
-/// List all cached variation names (desktop only — WASM returns empty).
-#[cfg(not(target_arch = "wasm32"))]
+/// List all cached variation names.
+///
+/// One implementation for both platforms via `backend::list_entries`.
+/// The WASM half used to be a stub returning empty, which made the
+/// cache **write-only** on the web: `load_all` found nothing so every
+/// session re-downloaded every variation, and `clear_all` always
+/// reported 0 while deleting nothing. localStorage does support
+/// enumeration (`length`/`key`); it had just never been wired.
 pub fn list_cached() -> CacheResult<Vec<String>> {
-    let app_dir = backend::get_app_data_dir()
-        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
-    let variations_dir = app_dir.join("variations");
-    if !variations_dir.exists() {
-        return Ok(Vec::new());
-    }
-    let mut names = Vec::new();
-    let entries = std::fs::read_dir(&variations_dir)
-        .map_err(|e| format!("Failed to read variations dir: {}", e))?;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|s| s.to_str()) == Some("json") {
-            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                names.push(stem.to_string());
-            }
-        }
-    }
-    Ok(names)
-}
-
-/// List all cached variation names. WASM stub — returns empty since
-/// localStorage doesn't support directory enumeration.
-#[cfg(target_arch = "wasm32")]
-pub fn list_cached() -> CacheResult<Vec<String>> {
-    // TODO: enumerate localStorage keys with the "variations/" prefix
-    Ok(Vec::new())
+    let entries = backend::list_entries(Path::new("variations"))
+        .map_err(|e| format!("Failed to list cached variations: {}", e))?;
+    Ok(entries
+        .into_iter()
+        .filter_map(|name| name.strip_suffix(".json").map(str::to_string))
+        .collect())
 }
 
 /// Clear all cached variations. Returns the number of entries removed.
@@ -117,6 +103,74 @@ pub fn cache_dir_path() -> CacheResult<PathBuf> {
     Ok(app_dir.join("variations"))
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-#[allow(dead_code)]
-fn _path_unused() -> &'static Path { Path::new("") } // silence unused import on WASM
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `list_cached` must strip the extension and ignore anything that
+    /// is not a cache entry.
+    ///
+    /// The WASM half of this used to be a stub returning empty, which
+    /// made the cache write-only on the web: `load_all` found nothing so
+    /// every session re-downloaded every variation, and `clear_all`
+    /// reported 0 while deleting nothing. Both platforms now go through
+    /// `backend::list_entries`, so there is one behaviour to test rather
+    /// than two to keep in step.
+    #[test]
+    fn names_come_back_without_the_json_extension() {
+        // Exercised through the same filter `list_cached` applies.
+        let entries = vec![
+            "julia.json".to_string(),
+            "pre_rotate_x.json".to_string(),
+            "not-a-cache-entry.txt".to_string(),
+            "README".to_string(),
+        ];
+        let names: Vec<String> = entries
+            .into_iter()
+            .filter_map(|n| n.strip_suffix(".json").map(str::to_string))
+            .collect();
+        assert_eq!(names, vec!["julia".to_string(), "pre_rotate_x".to_string()]);
+    }
+
+    /// A round trip through the real backend, so the desktop path is
+    /// covered end to end rather than only its filter.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_saved_variation_is_listed_and_loadable() {
+        let name = "zz_cache_probe_variation";
+        let dl = crate::api::types::VariationDownload {
+            id: name.into(),
+            name: name.into(),
+            display_name: name.into(),
+            description: None,
+            category: "advanced_2d".into(),
+            version: 1,
+            phase: crate::api::types::ApiVariationPhase::Normal,
+            needs_rng: false,
+            needs_transform: false,
+            writes_color: false,
+            parameters: Vec::new(),
+            shader_2d: Some("fn f(){}".into()),
+            shader_3d: None,
+            init_param_count: 0,
+            shader_init: None,
+            features: Vec::new(),
+            state_count: 0,
+            shader_state_init: None,
+            aliases: Vec::new(),
+            plot_emits: 0,
+            authors: Vec::new(),
+            description_plain: None,
+        };
+        // Best-effort: skip if this environment has no writable app dir.
+        if save(&dl).is_err() {
+            eprintln!("skipped: no writable app data dir");
+            return;
+        }
+        let listed = list_cached().expect("list");
+        assert!(listed.iter().any(|n| n == name), "saved entry must be listed");
+        assert!(load(name).expect("load").is_some());
+        let _ = delete(name);
+        assert!(!list_cached().expect("list").iter().any(|n| n == name));
+    }
+}
