@@ -216,19 +216,83 @@ Reference: signature builder in
 The client maps the `category` string via
 `VariationCategory::from_api_str()`
 ([src/variations/mod.rs](../../src/variations/mod.rs)). Unknown strings
-fall through to `Plugin`. Current recognised values (snake_case):
+fall through to `Plugin`.
 
-- `basic_2d`
-- `advanced_2d`
-- `depth_3d`
-- `rotation_3d`
-- `full_3d`
-- `parameterized`
-- `plugin` (default for anything unrecognised)
+**Category is functional, not cosmetic.** `only_3d` is dropped from 2D
+shaders (`ShaderBuilder::active_with_local_indices`) — it names
+variations with no meaningful 2D reading at all. Every other category
+is UI grouping. Getting `only_3d` wrong means a variation compiled into
+a shader where it cannot work; getting the others wrong only misfiles
+it in the panel.
 
-If the API wants a new category to show up as a first-class UI bucket,
-this enum must learn about it on the client side too — coordinate
-before shipping.
+### The canonical vocabulary
+
+| wire string | client variant | shipped variations |
+| ----------- | -------------- | -----------------: |
+| `basic_2d` | `Basic2D` | 7 |
+| `advanced_2d` | `Advanced2D` | 415 |
+| `depth_3d` | `Depth3D` | 17 |
+| `rotation_3d` | `Rotation3D` | 6 |
+| `full_3d` | `Full3D` | 114 |
+| `only_3d` | `Only3D` | 0 (defined, unused) |
+| `plugin` | `Plugin` (default) | 87 |
+
+Counts measured across the 646 shipped variations on 2026-07-31.
+`from_api_str` also accepts the no-underscore spellings (`basic2d`, …).
+`to_api_str` is the inverse; a round-trip test asserts every variant
+survives both directions.
+
+### Divergence found 2026-07-31, and how it resolves
+
+The server was serving a different vocabulary — `basic` (53 rows),
+`parametric` (30), `3d`, plus `pre` / `post` / `blur` — of which only
+`advanced_2d` and `plugin` (1 row each) matched. Everything else fell
+through to `Plugin`, so the panel had no working grouping. Invisible
+only because `list_variations()` is still dead code; the manifest work
+is exactly what would have exposed it.
+
+**Resolution: the client enum is canonical, and the bulk import carries
+the categories already assigned in `defs/`.** This is not two
+vocabularies to reconcile — the server's ~118 rows are the set the
+import replaces with 646, so its spellings are superseded rather than
+negotiated. No hand reclassification is needed, and the lossy `3d`
+collapse dissolves on its own: those rows get real `depth_3d` /
+`rotation_3d` / `full_3d` values from the definitions.
+
+Two of the old values are not categories at all and should not become
+any:
+
+* `pre` / `post` — that is **phase**, which is already its own field
+  (`ApiVariationPhase`, §4). A variation has both.
+* `blur` — an effect-kind notion with no category slot; those rows take
+  whatever their definition assigns.
+
+Client-side bugs this surfaced, both now fixed:
+
+* This section previously listed `parameterized` as recognised. It
+  never was — there is no such arm and no such enum variant, so those
+  30 server rows were becoming `Plugin` exactly like the rest. The doc
+  was wrong, not the code.
+* `Only3D` had **no wire spelling at all**, which made the one
+  functionally significant category unexpressable: a downloaded
+  variation in it arrived as `Plugin` and was compiled into 2D shaders.
+  Latent only because nothing ships in that category yet.
+
+The legacy `"3d"` spelling still parses, to `Depth3D`, so old payloads
+keep working — but it is wrong for the 114 `Full3D` variations and
+should not be sent after the import.
+
+### Nullability
+
+`category` is a required `String` on `VariationListItem` and
+`VariationDownload`, with no `serde(default)`. **A single NULL row
+would fail deserialization of the entire list response**, not just that
+row. The column must be `NOT NULL` server-side. (If it ever needs to be
+optional, the client field has to gain a default in the same release —
+not after.)
+
+If the API wants a new category to be a first-class UI bucket, this
+enum must learn it too — coordinate before shipping.
 
 ---
 
