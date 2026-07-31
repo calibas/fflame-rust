@@ -1,9 +1,12 @@
 # Infinite Gallery: standalone WASM renderer + script evaluator
 
-**Status:** PoC in progress on the `infinite-gallery` branch. The
+**Status:** Delivered (all four phases; browser-verified). The
 finished gallery will live in a separate repo; what this repo delivers
 is the two production-grade WASM modules it will be built on, plus a
-deliberately minimal proof-of-concept page.
+deliberately minimal proof-of-concept page. **The copyable usage guide
+for consumers is [`wasm/README.md`](../../wasm/README.md)** — module
+APIs, the envelope format, seed semantics, and testing commands live
+there; this doc keeps the vision and the decision record.
 
 ---
 
@@ -115,6 +118,13 @@ for (const room of rooms) {
     config = run_on(room.source, n, room.params, config);
 }
 ```
+
+Additions that emerged during the build: the run envelope carries
+`animation_json` (a script-defined animation — the turntable modifier
+was silently dropping its output; this is the Animation wing's door),
+and listings carry `flags` (`norng` — the script ignores the seed, so
+a gallery must not build a seed-varying hallway on it; `palette` — it
+belongs in a palette picker).
 
 Determinism is inherited: scripts draw from the pinned
 `rand_pcg::Pcg64Mcg`, so script + seed ⇒ byte-identical JSON on
