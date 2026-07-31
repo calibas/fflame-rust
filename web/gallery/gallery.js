@@ -1,4 +1,4 @@
-// Infinite Gallery — proof of concept.
+// Endless Gallery — proof of concept.
 //
 // The two wasm modules do all the work: fflame-script turns
 // (generator, rooms, seed) into a FractalConfig, fflame-render turns
@@ -20,11 +20,24 @@ const BIG = 1024;
 const BIG_ITERS = 120_000_000;
 
 const $ = (id) => document.getElementById(id);
+
+// The gallery is a LOOP. Seeds are a circle of 2^64: the step after
+// u64::MAX is 0, and the step before 0 is u64::MAX. `BigInt.asUintN(64,
+// x)` is that reduction, and it is the same one the other three doors
+// apply — wasm-bindgen on the BigInt boundary, Python's `x & (2**64-1)`,
+// the CLI's `i128 as u64` — so a position means the same thing wherever
+// it is opened.
+//
+// Everything here is BigInt end to end. Number would have silently
+// capped the walk at 2^53 (Number.MAX_SAFE_INTEGER), which is only
+// 1/2048th of the ring and would round rather than wrap.
+const RING = 1n << 64n;
+const onRing = (v) => BigInt.asUintN(64, v);
 const state = {
   scripts: [],          // from list_scripts()
   hall: "basic_random",
   rooms: [],            // [{id, params: {key: value}}]
-  seed: 0,              // first tile's seed
+  seed: 0n,             // first tile's seed (BigInt — see RING)
   sources: new Map(),   // id -> source
   epoch: 0,             // bumped on any state change; stale renders drop
 };
@@ -34,7 +47,13 @@ const state = {
 function readHash() {
   const h = new URLSearchParams(location.hash.replace(/^#/, ""));
   if (h.get("hall")) state.hall = h.get("hall");
-  state.seed = Math.max(0, parseInt(h.get("seed") ?? "0", 10) || 0);
+  // Any integer names a position, including a negative one: -1 is the
+  // last room in the loop.
+  try {
+    state.seed = onRing(BigInt(h.get("seed") ?? "0"));
+  } catch {
+    state.seed = 0n;   // unparseable seed -> the start of the hallway
+  }
   state.rooms = (h.get("rooms") ?? "").split(",").filter(Boolean).map((r) => {
     const i = r.indexOf(":");
     return i < 0
@@ -46,7 +65,7 @@ function readHash() {
 function writeHash() {
   const h = new URLSearchParams();
   h.set("hall", state.hall);
-  h.set("seed", String(state.seed));
+  h.set("seed", state.seed.toString());
   if (state.rooms.length) {
     h.set("rooms", state.rooms.map((r) =>
       Object.keys(r.params).length
@@ -67,10 +86,10 @@ function sourceOf(id) {
 // (generator, rooms, seed n) -> config JSON. Every stage runs with the
 // same hallway seed — the deliberate, documented convention.
 function configFor(seed) {
-  let env = JSON.parse(script.run(sourceOf(state.hall), BigInt(seed), "{}"));
+  let env = JSON.parse(script.run(sourceOf(state.hall), seed, "{}"));
   for (const room of state.rooms) {
     env = JSON.parse(script.run_on(
-      sourceOf(room.id), BigInt(seed), JSON.stringify(room.params), env.config_json));
+      sourceOf(room.id), seed, JSON.stringify(room.params), env.config_json));
   }
   return env.config_json;
 }
@@ -129,15 +148,14 @@ $("overlay").onclick = () => $("overlay").classList.remove("open");
 // --------------------------------------------------- the endless grid
 
 const grid = $("grid");
-let nextSeed = 0;
+let nextSeed = 0n;
 
 const watcher = new IntersectionObserver((entries) => {
   for (const e of entries) {
     if (!e.isIntersecting) continue;
     watcher.unobserve(e.target);
-    const seed = Number(e.target.dataset.seed);
-    renderTile(e.target, seed);
-    topUp(seed);
+    renderTile(e.target, BigInt(e.target.dataset.seed));
+    topUp(e.target);
   }
 }, { rootMargin: "600px" });
 
@@ -151,16 +169,28 @@ function addTile(seed) {
   watcher.observe(el);
 }
 
-function topUp(revealedSeed) {
-  // Keep a screenful of tiles ahead of the deepest one revealed.
-  while (nextSeed < revealedSeed + 12) addTile(nextSeed++);
+function topUp(revealedEl) {
+  // Keep a screenful of tiles ahead of the one just revealed, counted
+  // by POSITION rather than by seed value. `nextSeed < seed + 12` is
+  // meaningless on a circle: crossing u64::MAX wraps nextSeed back to a
+  // small number, the comparison inverts, and the walk stalls at the
+  // end of the ring instead of continuing through it.
+  let ahead = 0;
+  for (let el = revealedEl.nextElementSibling; el; el = el.nextElementSibling) ahead++;
+  for (; ahead < 12; ahead++) {
+    addTile(nextSeed);
+    nextSeed = onRing(nextSeed + 1n);
+  }
 }
 
 function rebuild() {
   state.epoch++;
   grid.replaceChildren();
   nextSeed = state.seed;
-  for (let i = 0; i < 12; i++) addTile(nextSeed++);
+  for (let i = 0; i < 12; i++) {
+    addTile(nextSeed);
+    nextSeed = onRing(nextSeed + 1n);
+  }
   writeHash();
 }
 
@@ -245,9 +275,17 @@ function wireHeader() {
     renderAppliedRooms();
     rebuild();
   };
-  $("seed").value = state.seed;
+  $("seed").value = state.seed.toString();
   $("seed").onchange = () => {
-    state.seed = Math.max(0, parseInt($("seed").value, 10) || 0);
+    // Any integer is a valid position — including a negative one, which
+    // counts back from the end of the loop. Keep it out of Number:
+    // parseInt would round anything past 2^53.
+    try {
+      state.seed = onRing(BigInt($("seed").value.trim() || "0"));
+    } catch {
+      state.seed = 0n;
+    }
+    $("seed").value = state.seed.toString();
     rebuild();
   };
 }

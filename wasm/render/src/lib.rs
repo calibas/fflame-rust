@@ -1,4 +1,4 @@
-//! fflame-render — the Infinite Gallery's renderer.
+//! fflame-render — the Endless Gallery's renderer.
 //!
 //! One call: a `FractalConfig` JSON string (exactly what the script
 //! module's `config_json` field carries, or any `.fflame` file) plus

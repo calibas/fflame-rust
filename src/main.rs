@@ -12,6 +12,24 @@ struct Cli {
     command: Option<Commands>,
 }
 
+/// Parse a seed onto the ring: any integer, reduced modulo 2^64.
+///
+/// Seeds are a circle — `u64::MAX + 1` is `0`, and `-1` is the step
+/// before `0` (= `u64::MAX`). `u64` alone rejected both `-1` and
+/// anything past the top, which made the CLI the odd one out: the
+/// browser already accepted them (wasm-bindgen reduces BigInt mod
+/// 2^64), so the same seed worked on the web and failed here.
+///
+/// `i128 as u64` truncates to the low 64 bits — two's complement, the
+/// same reduction as JavaScript's `BigInt.asUintN(64, x)` and Python's
+/// `x & (2**64 - 1)`.
+#[cfg(not(target_arch = "wasm32"))]
+fn seed_on_the_ring(s: &str) -> Result<u64, String> {
+    s.parse::<i128>()
+        .map(|v| v as u64)
+        .map_err(|_| format!("`{s}` is not a whole number"))
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Subcommand)]
 enum Commands {
@@ -28,8 +46,12 @@ enum Commands {
         #[arg(short, long)]
         output: Option<String>,
 
-        /// Seed — the same script and seed always produce the same flame
-        #[arg(long, default_value_t = 0)]
+        /// Seed — the same script and seed always produce the same
+        /// flame. Wraps modulo 2^64, so -1 is the last seed
+        // allow_hyphen_values: without it clap reads the leading `-` of
+        // `--seed -1` as the start of another flag and never reaches the
+        // parser.
+        #[arg(long, default_value_t = 0, value_parser = seed_on_the_ring, allow_hyphen_values = true)]
         seed: u64,
 
         /// Starting config for modifier scripts

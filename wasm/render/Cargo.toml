@@ -1,4 +1,4 @@
-# fflame-render — the Infinite Gallery's renderer, as a standalone
+# fflame-render — the Endless Gallery's renderer, as a standalone
 # WASM module. FractalConfig JSON + dimensions in, raw RGBA pixels out
 # (canvas.putImageData on the JS side; PNG encoding, if wanted, is
 # canvas.toBlob — no image codecs in here).
