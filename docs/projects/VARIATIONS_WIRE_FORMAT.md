@@ -438,6 +438,18 @@ corpus is `version = 1` and the field rarely changes.
   `description + authors` at the effect level. Decide once, apply
   twice.
 
+  **One thing must NOT be applied twice: the parameter cap.** A
+  variation's parameters are packed into a dynamically sized buffer, so
+  its limit is a policy choice — 512 per variation, chosen so no single
+  one monopolizes the 1600-slot budget the flame's whole active set
+  shares (largest today: `su_custom` at 259). An effect's parameters
+  live in a **fixed-size uniform**, so its limit is physical capacity:
+  `MAX_EFFECT_PARAMS = 48`, raised from 16 on 2026-07-31. The API's
+  effect check must equal 48 exactly. Accepting more would let effects
+  upload cleanly and then render wrong, since parameters past the end
+  of the uniform are silently dropped. See
+  [api-shared-resources.md §4.3](api-shared-resources.md).
+
 ---
 
 ## 10. Aliases for foreign-app name compatibility

@@ -10,7 +10,7 @@
 struct EffectParams {
     // Parameters packed into vec4s for uniform buffer alignment
     // Access as: params[i/4][i%4] or use helper below
-    params: array<vec4<f32>, 4>,
+    params: array<vec4<f32>, 12>,
     width: u32,
     height: u32,
     _padding: vec2<f32>,

@@ -123,8 +123,26 @@ use wgpu::{
 
 use crate::effects::{global_effect_registry, EffectCategory, EffectInstance};
 
-/// Maximum number of effect parameters per effect
-const MAX_EFFECT_PARAMS: usize = 16;
+/// Maximum number of effect parameters per effect.
+///
+/// This is a HARD limit, not a soft one: the parameters live in a
+/// fixed-size uniform, so an effect declaring more has nowhere to put
+/// them — the extras are silently dropped. The API's publish-time check
+/// must therefore match this number exactly, never exceed it.
+///
+/// **Why 48 and not more.** Each effect gets one slot in a shared
+/// uniform buffer, and the slot stride is set by
+/// `UNIFORM_BUFFER_OFFSET_ALIGNMENT` (256 B), not by the struct — so
+/// everything up to 240 B of parameters is free, and the buffer stays
+/// 32 × 256 B = 8 KiB. 48 floats (192 B, + 16 B of width/height/pad =
+/// 208 B) sits inside that with room spare.
+///
+/// Going much beyond ~60 stops being free and stops being possible:
+/// 512 parameters would need ~72 KiB, over the 64 KiB
+/// `max_uniform_buffer_binding_size` of a default device and 4.5× the
+/// 16 KiB the WASM build requests. That would mean moving effect
+/// parameters to a storage buffer — a real change, not a constant bump.
+const MAX_EFFECT_PARAMS: usize = 48;
 
 /// Maximum number of effect slots in the shared params buffer
 /// Supports up to 32 effects running in a single frame
@@ -134,19 +152,43 @@ const MAX_EFFECT_SLOTS: usize = 32;
 const UNIFORM_BUFFER_OFFSET_ALIGNMENT: u64 = 256;
 
 /// GPU uniform buffer for effect parameters
-/// Uses [[f32; 4]; 4] layout to match WGSL array<vec4<f32>, 4> for uniform alignment
-/// Total size: 80 bytes (params=64 + width=4 + height=4 + padding=8 for 16-byte alignment)
+///
+/// `[[f32; 4]; 12]` to match WGSL `array<vec4<f32>, 12>` — vec4 groups
+/// because a uniform array's stride must be 16-byte aligned. The 12
+/// must stay in step with `MAX_EFFECT_PARAMS` (48 = 12 × 4) and with
+/// the struct declared in every `shaders/effects/**/*.wgsl`; a mismatch
+/// is a binding-size validation error at pipeline creation.
+///
+/// Total size: 208 bytes (params=192 + width=4 + height=4 + padding=8
+/// for 16-byte alignment), inside the 256-byte slot stride.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct EffectParams {
-    /// Effect parameters (up to 16 floats, packed as 4 vec4s for alignment)
-    params: [[f32; 4]; 4],
+    /// Effect parameters (`MAX_EFFECT_PARAMS` floats, packed as vec4s
+    /// for alignment)
+    params: [[f32; 4]; MAX_EFFECT_PARAMS / 4],
     /// Texture dimensions
     width: u32,
     height: u32,
     /// Padding to align struct to 16 bytes (WGSL uniform buffer requirement)
     _padding: [f32; 2],
 }
+
+// The uniform packs parameters in vec4 groups, so the count must divide
+// by 4, and the whole struct must fit the slot stride. Both are checked
+// here rather than discovered as a wgpu validation error at pipeline
+// creation — or, worse, as parameters that silently stop arriving.
+const _: () = {
+    assert!(
+        MAX_EFFECT_PARAMS % 4 == 0,
+        "MAX_EFFECT_PARAMS must be a multiple of 4 (uniform arrays pack as vec4)"
+    );
+    assert!(
+        std::mem::size_of::<EffectParams>() as u64 <= UNIFORM_BUFFER_OFFSET_ALIGNMENT,
+        "EffectParams no longer fits one slot stride — raising MAX_EFFECT_PARAMS \
+         past ~60 needs a storage buffer, not a bigger uniform"
+    );
+};
 
 /// A compiled effect pipeline ready for execution
 struct CompiledEffect {
@@ -683,7 +725,7 @@ impl EffectChainRunner {
 
         // Update params buffer at the allocated slot offset
         let mut params = EffectParams {
-            params: [[0.0; 4]; 4],
+            params: [[0.0; 4]; MAX_EFFECT_PARAMS / 4],
             width,
             height,
             _padding: [0.0; 2],

@@ -8,7 +8,7 @@
 //   params[2] = sigma_range (0.05-0.5): Range/intensity falloff (smaller = more edge preservation)
 
 struct EffectParams {
-    params: array<vec4<f32>, 4>,
+    params: array<vec4<f32>, 12>,
     width: u32,
     height: u32,
     _padding: vec2<f32>,
