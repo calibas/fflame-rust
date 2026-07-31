@@ -504,6 +504,50 @@ pub struct VariationDownload {
     /// gains `vc: ptr<function, f32>`. Old API responses default to false.
     #[serde(default)]
     pub writes_color: bool,
+    /// Capability flags, superseding the three legacy bools above when
+    /// present. Names come from `Feature::to_api_str`; see the generated
+    /// contract for the full set.
+    ///
+    /// Declared ahead of the server sending it: `serde(default)` makes
+    /// the field forward-compatible, so the client is ready the day the
+    /// migration lands rather than a coordination round later. An
+    /// unknown string is **ignored with a warning** — a newer server
+    /// must be able to serve an older client.
+    #[serde(default)]
+    pub features: Vec<String>,
+
+    /// Per-(thread, xform, variation) f32 state slots. Was hardcoded to
+    /// 0 on this side, which silently mis-rendered any stateful
+    /// server-hosted variation.
+    #[serde(default)]
+    pub state_count: usize,
+
+    /// Optional WGSL seeding state beyond the default zero-fill.
+    #[serde(default)]
+    pub shader_state_init: Option<String>,
+
+    /// Foreign-app names that resolve to this variation on `.flame`
+    /// import (e.g. `linear3D` for `linear`).
+    ///
+    /// §3 of the wire-format doc has listed this as though it were
+    /// already here; it was not. Sixth instance of that class.
+    #[serde(default)]
+    pub aliases: Vec<String>,
+
+    /// Per-call emission cap (`Feature::PlotEmits`). Its own field
+    /// rather than a `features` entry because it carries a payload; the
+    /// engine clamps to 16.
+    #[serde(default)]
+    pub plot_emits: u8,
+
+    /// Attribution and the markdown-stripped description. Presentation
+    /// only — deliberately NOT loaded into `VariationInfo`, so the
+    /// in-memory footprint stays flat however much prose ships.
+    #[serde(default)]
+    pub authors: Vec<String>,
+    #[serde(default)]
+    pub description_plain: Option<String>,
+
     #[serde(default)]
     pub parameters: Vec<ApiVariationParameter>,
     /// The 2D body. **Optional only for `only_3d`** — see

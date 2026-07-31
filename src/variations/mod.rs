@@ -237,18 +237,36 @@ impl VariationInfo {
 
         let wgsl_function = format!("variation_{}", dl.name);
 
-        // API contract still exposes the old bool fields. Derive the
-        // runtime `features` slice from them here so the rest of the
-        // codebase only ever sees the consolidated representation.
-        // (When the API contract gets extended to ship a Vec<Feature>
-        // directly, drop this derivation and read it through.)
+        // The `features` array is authoritative when present; the three
+        // legacy bools are the fallback for payloads predating it. That
+        // ordering is what lets a newer server serve an older client and
+        // vice versa without a flag day.
+        //
+        // An unrecognised feature name is IGNORED WITH A WARNING rather
+        // than rejected: refusing the whole variation over one unknown
+        // flag would make every future capability a breaking change.
         use crate::variations::definition::Feature;
         let mut features: Vec<Feature> = Vec::new();
-        if dl.needs_rng { features.push(Feature::NeedsRng); }
-        if dl.needs_transform { features.push(Feature::NeedsTransform); }
-        if dl.writes_color { features.push(Feature::WritesColor); }
-        // dl.needs_accum / writes_rgb don't exist in the API contract yet
-        // — default to absent. Same reason state_count defaults to 0 below.
+        if dl.features.is_empty() {
+            if dl.needs_rng { features.push(Feature::NeedsRng); }
+            if dl.needs_transform { features.push(Feature::NeedsTransform); }
+            if dl.writes_color { features.push(Feature::WritesColor); }
+        } else {
+            for name in &dl.features {
+                match Feature::from_api_str(name) {
+                    Some(f) => features.push(f),
+                    None => log::warn!(
+                        "Variation '{}': ignoring unknown feature `{name}` —                          this client does not know it yet",
+                        dl.name
+                    ),
+                }
+            }
+        }
+        // Payload-carrying, so it rides in its own field rather than the
+        // array. 0 means "does not emit".
+        if dl.plot_emits > 0 {
+            features.push(Feature::PlotEmits(dl.plot_emits));
+        }
 
         Self {
             name: dl.name.clone(),
@@ -262,11 +280,11 @@ impl VariationInfo {
             wgsl_source_3d: dl.shader_3d.clone(),
             wgsl_source_init: dl.shader_init.clone(),
             init_param_count: dl.init_param_count,
-            // API-loaded variations do not yet carry state metadata.
-            // Default to stateless until the API contract is extended
-            // (separate project — only adds fields, no breakage).
-            state_count: 0,
-            wgsl_source_state_init: None,
+            // Now carried on the wire. Previously hardcoded to 0/None,
+            // which silently mis-rendered any stateful server-hosted
+            // variation: the slots were allocated and read as zeros.
+            state_count: dl.state_count,
+            wgsl_source_state_init: dl.shader_state_init.clone(),
             parameters,
             version: dl.version,
         }
@@ -565,6 +583,28 @@ impl VariationRegistry {
         let info = VariationInfo::from_download(dl);
         if !self.ordered_names.contains(&info.name) {
             self.ordered_names.push(info.name.clone());
+        }
+        // Index foreign-app aliases, same rules as built-ins: first
+        // registration wins, and an alias may not shadow a real
+        // variation name. Without this a downloaded variation resolved
+        // only by its canonical name, so a `.flame` importing it under a
+        // foreign spelling silently found nothing.
+        for alias in &dl.aliases {
+            if let Some(existing) = self.aliases.get(alias) {
+                log::warn!(
+                    "Alias '{}' already maps to '{}'; ignoring duplicate from '{}'",
+                    alias, existing, info.name
+                );
+                continue;
+            }
+            if self.variations.contains_key(alias) {
+                log::warn!(
+                    "Alias '{}' for '{}' conflicts with an existing variation name; ignoring",
+                    alias, info.name
+                );
+                continue;
+            }
+            self.aliases.insert(alias.clone(), info.name.clone());
         }
         log::info!("Registered API variation '{}' v{}", info.name, info.version);
         self.variations.insert(info.name.clone(), info);

@@ -112,16 +112,34 @@ struct VariationDownload {
     parameters: Vec<ApiVariationParameter>,   // serde(default)
     init_param_count: usize,                  // serde(default)
 
+    // Capability flags — authoritative when present, superseding the
+    // three bools above. Unknown names ignored with a warning.
+    features: Vec<String>,              // serde(default)
+
+    // Per-(thread, xform, variation) state
+    state_count: usize,                 // serde(default)
+    shader_state_init: Option<String>,  // serde(default)
+
+    // Payload-carrying capability; own field, not a features entry
+    plot_emits: u8,                     // serde(default); engine clamps to 16
+
+    // Presentation only — NOT loaded into VariationInfo
+    authors: Vec<String>,               // serde(default)
+    description_plain: Option<String>,  // serde(default); markdown stripped
+
     // Shader sources
-    shader_2d: String,                  // required
+    shader_2d: Option<String>,          // required EXCEPT for only_3d (§3.2)
     shader_3d: Option<String>,          // optional; client auto-generates
                                         //   a 2D-pass-through 3D wrapper
                                         //   when None
     shader_init: Option<String>,        // optional; required when
                                         //   init_param_count > 0
 
-    // PLANNED — pending API rollout. See §7.
-    authors: Vec<String>,               // serde(default); see §2
+    // NOTE: every field above marked serde(default) is declared on the
+    // client BEFORE the server sends it. That is deliberate — additive
+    // fields are forward-compatible, so the client is ready the day the
+    // migration lands instead of a coordination round later.
+
 }
 ```
 
