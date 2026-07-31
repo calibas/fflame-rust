@@ -366,6 +366,64 @@ mod tests {
         assert_ne!(shape_fingerprint(&before), shape_fingerprint(&after));
     }
 
+    fn download(name: &str, category: &str, s2d: Option<&str>, s3d: Option<&str>)
+        -> crate::api::types::VariationDownload
+    {
+        crate::api::types::VariationDownload {
+            id: name.into(),
+            name: name.into(),
+            display_name: name.into(),
+            description: None,
+            category: category.into(),
+            version: 1,
+            phase: crate::api::types::ApiVariationPhase::Normal,
+            needs_rng: false,
+            needs_transform: false,
+            writes_color: false,
+            parameters: Vec::new(),
+            shader_2d: s2d.map(|x| x.into()),
+            shader_3d: s3d.map(|x| x.into()),
+            init_param_count: 0,
+            shader_init: None,
+        }
+    }
+
+    /// `only_3d` may omit `shader_2d`; nothing else may.
+    ///
+    /// The engine filters `only_3d` out of the active set in 2D builds
+    /// *before* any source lookup, so a 2D body would never be read —
+    /// requiring a vestigial one means dead data a curator writes, a
+    /// reviewer reads, and nothing can validate.
+    ///
+    /// For every other category a missing 2D body reaches the emit
+    /// loop's `else { continue }` and becomes a silent no-op: the
+    /// variation downloads, registers, and contributes nothing. That is
+    /// the failure the original required-String settlement existed to
+    /// prevent, and refusing here preserves it.
+    #[test]
+    fn only_3d_may_omit_its_2d_body_and_nothing_else_may() {
+        let mut reg = super::super::VariationRegistry::new();
+
+        // Legitimate: only_3d with a 3D body and no 2D body.
+        reg.register_from_api(&download("emit3d", "only_3d", None, Some("fn f(){}")));
+        assert!(reg.has("emit3d"), "only_3d without shader_2d must register");
+
+        // The dangerous case: any other category missing its 2D body.
+        reg.register_from_api(&download("sneaky", "advanced_2d", None, Some("fn f(){}")));
+        assert!(
+            !reg.has("sneaky"),
+            "a non-only_3d variation with no shader_2d must be refused, not              registered to silently render nothing"
+        );
+
+        // And only_3d with NO body at all is useless in every mode.
+        reg.register_from_api(&download("empty", "only_3d", None, None));
+        assert!(!reg.has("empty"), "only_3d with no shader_3d must be refused");
+
+        // The ordinary shape still works.
+        reg.register_from_api(&download("fine", "advanced_2d", Some("fn f(){}"), None));
+        assert!(reg.has("fine"));
+    }
+
     /// Prose must not churn the pin: a reworded `$comment` is not a
     /// shape change, and treating it as one would train consumers to
     /// re-pin without reading.

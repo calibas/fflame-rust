@@ -140,6 +140,10 @@ built in and never fetches it.
 **Recommendation: keep `shader_2d` required, and flag the variation on
 the LIST as not downloadable.**
 
+> **Amended 2026-07-31 — one exception: `only_3d`.** See §3.2. The rule
+> below still holds for every other category; the exception exists
+> because the category itself carries the disambiguating fact.
+
 ```jsonc
 // VariationListItem
 "downloadable": true   // false => built-in only, do not fetch detail
@@ -169,6 +173,54 @@ download this" is exactly such a decision.
 
 It also keeps the download contract clean: **if a variation is
 downloadable, it has a shader.** No consumer has to handle a null one.
+
+### 3.2 The one exception: `only_3d`
+
+An `only_3d` variation may send `shader_2d: null`. This does **not**
+reopen the settlement above; it is the one case the settlement's own
+reasoning excludes.
+
+That settlement rested on `None` degrading to a **silent skip** being a
+bug — the variation downloads, registers, and contributes nothing with
+no error. For `only_3d` in a 2D flame, the engine never reaches that
+skip: `ShaderBuilder::active_with_local_indices` removes the variation
+from the active set **before any source lookup**, because the category
+means "no meaningful 2D reading at all". The 2D body would never be
+read.
+
+So requiring one produces a vestigial shader: dead data a curator
+writes, a reviewer reads, and nothing can validate — the worst kind,
+because it looks meaningful.
+
+It also removes a trap. A `downloadable = true AND shader_2d IS NOT
+NULL` constraint fires for a legitimate `only_3d` variation, and the
+curator then sees one error with two ways out: add a fake 2D body, or
+set `downloadable = false` — which silently makes a working 3D
+variation unfetchable. Nothing at the point of failure distinguishes
+them. Allowing the null makes the constraint stop firing for the
+legitimate case, so the wrong door is never offered.
+
+The client enforces the narrow form: `shader_2d` is `Option<String>`,
+and `register_from_api` **refuses** a `None` for any other category —
+loudly, rather than registering something that renders nothing. It
+also refuses `only_3d` with no `shader_3d`, which would be useless in
+every mode. Both are pinned by
+`only_3d_may_omit_its_2d_body_and_nothing_else_may`.
+
+Server-side the equivalent is a conditional check:
+
+```sql
+CHECK (
+  NOT downloadable
+  OR shader_2d IS NOT NULL
+  OR (category = 'only_3d' AND shader_3d IS NOT NULL)
+)
+```
+
+**Nothing ships in `only_3d` today** (0 of 646), and it is the one
+category the engine acts on — the profile of a thing that breaks the
+first time it is used. Worth a fixture on both sides before the first
+one is curated, not after.
 
 Note the property generalises beyond `subflame_wf` — see §4.1. Any
 variation whose WGSL depends on engine infrastructure (subflame
