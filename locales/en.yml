@@ -168,6 +168,16 @@ variations_panel:
   flame_uses_downloaded_hint: "These did not ship with the app — their shader code was fetched from the online library. Built-in variations are reviewed; downloaded ones run the same way but come from elsewhere."
   two_d_only_hint: "This variation has no 3D shader. In a 3D flame it is skipped entirely and contributes nothing, even with a weight set."
   source_api: "API"
+  catalog_header: "Online library — %{total} catalogued, %{available} not installed"
+  catalog_updates: "%{count} downloaded variation(s) have a newer version"
+  catalog_all_present: "Everything in the catalog is already installed."
+  catalog_on_demand: "Fetched automatically when a flame uses one:"
+  catalog_builtin_only: "%{count} more are built into newer builds of the app"
+  catalog_builtin_only_hint: "These are part of the render engine rather than downloadable shader code, so they cannot be fetched — a newer build of the app would include them."
+  row_update: "Update available: have v%{have}, v%{available} online"
+  row_authors: "by %{authors}"
+  update_btn: "Update"
+  update_all_btn: "Update all %{count}"
   clear_cache_btn: "Clear Variation Cache (%{count})"
 
 # Random Generator Panel

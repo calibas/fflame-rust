@@ -41,6 +41,8 @@ impl App {
         self.handle_url_load();
         self.handle_variation_fetches();
         self.handle_clear_variation_cache(ui_response);
+        self.handle_variation_updates(ui_response);
+        self.refresh_variation_catalog();
     }
 
     /// Handle config export, save, and import operations

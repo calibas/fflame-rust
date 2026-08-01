@@ -645,17 +645,55 @@ These are live defects, not future work.
   (`95bddf67`). Was a live defect: slots were allocated and read as
   zeros, so a stateful downloaded variation rendered wrong while
   looking like it worked. `aliases` and `plot_emits` landed too.
-- [ ] **S** — Consume `description_plain` + `authors`; give them a home
-  in the panel (no description is shown at all today).
-- [ ] **M** — Manifest-driven catalog (§3.3): fetch `GET
-  /api/variations`, cache with etag, revalidate conditionally. This
-  gives `list_variations()` — currently dead code — its purpose.
-- [ ] **M** — Variations panel lists **everything**: built-in, local,
-  downloaded, and available-not-downloaded, with per-row state.
-- [ ] **S** — Offline behaviour: a failed manifest fetch shows what is
-  present, not an error.
-- [ ] **S** — Offer updates when a catalog `version` exceeds the cached
-  copy (today `register_from_api` replaces silently).
+- [x] **S** — ~~Consume `description_plain` + `authors`~~ **DONE.** Both
+  now render under the row they belong to. Worth noting *why* this had
+  to wait for the catalog: built-in descriptions live in Rust doc
+  comments, which do not exist at runtime, so the catalog is the only
+  route by which prose reaches a variation row — including for the 646
+  that ship with the app. Nothing local could have supplied it.
+- [x] **M** — ~~Manifest-driven catalog (§3.3)~~ **DONE**, with one
+  deliberate omission. `refresh_variation_catalog()` fetches `GET
+  /api/variations` once per session in the background and caches it to
+  `variations/_catalog.json`, giving `list_variations()` — dead code
+  until now — its purpose. It does **not** pause the render or pop a
+  notification: the catalog is panel metadata, not something a frame
+  depends on.
+
+  **Etag revalidation deferred.** `CachedCatalog` carries the `version`
+  field for it, but the server sends no etag on this endpoint yet and a
+  once-per-session full fetch of ~650 shaderless rows is not the cost
+  worth optimising first.
+- [x] **M** — ~~Variations panel lists everything~~ **DONE.** The
+  registry listing (installed, by category) now sits under a catalog
+  section carrying what the registry structurally cannot know: what
+  exists elsewhere. `summarize()` is pure and lives in
+  `storage::variation_catalog`, so the bucketing is tested without an
+  egui context — which bucket a variation lands in decides whether the
+  user is offered a download that cannot succeed.
+
+  `BuiltInOnlyElsewhere` is the bucket that earns its keep: catalogued,
+  real, and not fetchable, because it is part of the render engine
+  rather than downloadable shader code (`subflame_wf`'s shape). Calling
+  it "Available" would offer a fetch that fails; omitting it would make
+  the catalog look short.
+
+  **Local plugins are still absent** — there is no `Local` source to
+  list until 8.4 introduces one.
+- [x] **S** — ~~Offline behaviour~~ **DONE.** A failed fetch logs at
+  *info* and changes nothing on screen: the cached catalog and the
+  installed listing are both still true. An app that renders fractals
+  perfectly well with no network should not grow an error panel because
+  a metadata endpoint was unreachable, and a user who has never signed
+  in should never see one at all — with no catalog, the section is
+  simply not drawn.
+- [x] **S** — ~~Offer updates on a version bump~~ **DONE.** A stale
+  downloaded copy is marked in place and in the catalog section, with
+  per-row **Update** and **Update all**. The action re-uses the install
+  path exactly — `register_from_api` replaces a non-core entry and the
+  cache write overwrites — so "update" is "install again" with no
+  second code path to keep in step. A built-in is filtered out before
+  the fetch: it can never be replaced by a download, so the request
+  would spend 30 seconds discovering a no-op.
 
 ### 8.3 Scripts
 

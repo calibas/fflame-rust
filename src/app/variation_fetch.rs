@@ -161,11 +161,103 @@ impl App {
         }
     }
 
+    /// Refresh the variation catalog once per session, in the
+    /// background.
+    ///
+    /// Deliberately NOT gated on `variation_fetch_in_progress` and
+    /// deliberately not pausing the render: the catalog is metadata for
+    /// the panel, not something a frame depends on. A failure is a
+    /// logged warning and nothing else — the cached copy (or an empty
+    /// listing) is a correct answer, and an app that renders fractals
+    /// offline should not surface a modal because a catalog endpoint
+    /// was unreachable.
+    pub(super) fn refresh_variation_catalog(&mut self) {
+        if !self.catalog_fetch_started {
+            self.catalog_fetch_started = true;
+            let slot = self.catalog_fetch_result.clone();
+            let base = crate::api::API_BASE_URL.to_string();
+            let window = self.window.clone();
+
+            #[cfg(target_arch = "wasm32")]
+            wasm_bindgen_futures::spawn_local(async move {
+                let api = crate::api::ApiState::new(&base);
+                let r = api.list_variations().await.map_err(|e| e.to_string());
+                if let Ok(mut s) = slot.lock() { *s = Some(r); }
+                window.request_redraw();
+            });
+
+            #[cfg(not(target_arch = "wasm32"))]
+            std::thread::spawn(move || {
+                let api = crate::api::ApiState::new(&base);
+                let r = pollster::block_on(api.list_variations()).map_err(|e| e.to_string());
+                if let Ok(mut s) = slot.lock() { *s = Some(r); }
+                window.request_redraw();
+            });
+            return;
+        }
+
+        let drained = match self.catalog_fetch_result.lock() {
+            Ok(mut s) => s.take(),
+            Err(_) => return,
+        };
+        let Some(result) = drained else { return };
+
+        match result {
+            Ok(items) => {
+                log::info!("Variation catalog: {} entries", items.len());
+                let catalog = crate::storage::variation_catalog::CachedCatalog {
+                    items,
+                    version: None,
+                };
+                if let Err(e) = crate::storage::variation_catalog::save(&catalog) {
+                    log::warn!("Could not cache the variation catalog: {e}");
+                }
+                self.variation_catalog = Some(catalog);
+            }
+            Err(e) => {
+                // Offline is a normal state, not an error condition.
+                log::info!(
+                    "Variation catalog unavailable ({e}) — showing what is installed{}",
+                    if self.variation_catalog.is_some() {
+                        " plus the last cached listing"
+                    } else {
+                        ""
+                    }
+                );
+            }
+        }
+    }
+
+    /// Re-fetch downloaded variations the catalog says are stale.
+    ///
+    /// Deliberately the same path as a first install: `register_from_api`
+    /// replaces a non-core entry outright and `variation_cache::save`
+    /// overwrites, so "update" is "install again" and there is no second
+    /// code path to keep in step.
+    pub(super) fn handle_variation_updates(&mut self, ui_response: &UiResponse) {
+        if ui_response.variation_update_requested.is_empty() {
+            return;
+        }
+        // A built-in can never be replaced by a download, so asking to
+        // update one is a no-op the fetch would spend 30s discovering.
+        let registry = crate::variations::global_registry();
+        let names: Vec<String> = ui_response
+            .variation_update_requested
+            .iter()
+            .filter(|n| registry.get(n).is_none_or(|v| !v.is_core))
+            .cloned()
+            .collect();
+        self.trigger_variation_fetches(names);
+    }
+
     /// Handle the user clicking "Clear Variation Cache" in the Variations panel.
     pub(super) fn handle_clear_variation_cache(&mut self, ui_response: &UiResponse) {
         if !ui_response.clear_variation_cache_requested {
             return;
         }
+        let _ = crate::storage::variation_catalog::clear();
+        self.variation_catalog = None;
+        self.catalog_fetch_started = false; // re-fetch on the next frame
         match crate::storage::variation_cache::clear_all() {
             Ok(count) => {
                 crate::variations::global_registry_mut().clear_api();

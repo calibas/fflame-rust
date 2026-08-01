@@ -907,6 +907,7 @@ impl EguiLayer {
         api_state: &crate::app::ApiContentState,
         current_user_id: Option<&str>,
         fly_mode_active: bool,
+        variation_catalog: Option<&crate::storage::variation_catalog::CachedCatalog>,
     ) -> UiResponse {
         // Sync compact mode from workspace (handles layout switches from menus)
         let is_compact = workspace.is_compact();
@@ -1082,6 +1083,7 @@ impl EguiLayer {
         let mut open_save_online_dialog = false;
         let mut load_api_animation_id: Option<String> = None;
         let mut clear_variation_cache_requested = false;
+        let mut variation_update_requested: Vec<String> = Vec::new();
 
         // Path filters
         let mut path_filters_changed: Option<Vec<crate::gpu::buffers::GpuPathFilter>> = None;
@@ -1222,6 +1224,7 @@ impl EguiLayer {
                 .id(egui::Id::new("main_dock_area"))
                 .show(ctx, &mut panel_viewer::PanelViewer {
                     context: panel_viewer::PanelContext {
+                        variation_catalog,
                         // Core state
                         config_manager,
                         flame,
@@ -1394,6 +1397,7 @@ impl EguiLayer {
                         open_save_online_dialog: &mut open_save_online_dialog,
                         load_api_animation_id: &mut load_api_animation_id,
                         clear_variation_cache_requested: &mut clear_variation_cache_requested,
+                        variation_update_requested: &mut variation_update_requested,
                         compact_mode: self.compact_mode,
                     },
                     touch_tracker: &mut self.touch_tracker,
@@ -1974,6 +1978,7 @@ impl EguiLayer {
             loaded_api_flame_animations,
             load_api_animation_id,
             clear_variation_cache_requested,
+            variation_update_requested,
         }
     }
 
