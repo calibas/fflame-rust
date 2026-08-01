@@ -163,6 +163,8 @@ pub struct UiResponse {
     pub load_api_animation_id: Option<String>,
     // Variations panel: clear all API-loaded variations from cache+registry
     pub clear_variation_cache_requested: bool,
+    /// Downloaded variations to re-fetch at the catalog's version.
+    pub variation_update_requested: Vec<String>,
 }
 
 /// API save action type (flame only — animation is separate)
@@ -257,6 +259,7 @@ impl Default for UiResponse {
             loaded_api_flame_animations: Vec::new(),
             load_api_animation_id: None,
             clear_variation_cache_requested: false,
+            variation_update_requested: Vec::new(),
         }
     }
 }

@@ -174,6 +174,10 @@ pub struct PanelContext<'a> {
     /// Set by the View panel's fly-mode toggle button. Consumed by App.
     pub fly_mode_toggle_requested: &'a mut bool,
     pub flame: &'a mut crate::scene::transforms::Flame,
+    /// Last-fetched server variation catalog, if one has ever been
+    /// fetched. `None` offline-and-never-fetched; the Variations panel
+    /// simply omits its catalog section rather than showing an error.
+    pub variation_catalog: Option<&'a crate::storage::variation_catalog::CachedCatalog>,
 
     // Libraries
     pub preset_library: &'a crate::scene::presets::PresetLibrary,
@@ -365,6 +369,9 @@ pub struct PanelContext<'a> {
     pub open_save_online_dialog: &'a mut bool,
     pub load_api_animation_id: &'a mut Option<String>,
     pub clear_variation_cache_requested: &'a mut bool,
+    /// Downloaded variations the Variations panel asked to re-fetch at
+    /// the catalog's version. Consumed by App.
+    pub variation_update_requested: &'a mut Vec<String>,
 
     // Compact mode (cached from system settings)
     pub compact_mode: bool,
@@ -632,9 +639,12 @@ impl<'a> PanelViewer<'a> {
                 self.render_save_online_dialog(ui);
             }
             PanelType::Variations => {
-                let response = super::variations::render_variations_panel(ui, self.context.flame);
+                let response = super::variations::render_variations_panel(ui, self.context.flame, self.context.variation_catalog);
                 if response.clear_cache_requested {
                     *self.context.clear_variation_cache_requested = true;
+                }
+                if !response.update_requested.is_empty() {
+                    *self.context.variation_update_requested = response.update_requested;
                 }
             }
             PanelType::Scripts => {

@@ -19,6 +19,7 @@ pub mod custom_palettes;
 pub mod settings;
 pub mod thumbnail_cache;
 pub mod variation_cache;
+pub mod variation_catalog;
 
 pub use backend::{StorageError, StorageResult};
 pub use custom_palettes::CustomPaletteLibrary;

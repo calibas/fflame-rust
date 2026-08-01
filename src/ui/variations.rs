@@ -38,6 +38,108 @@ pub fn downloaded_variations_in_use(
         .collect()
 }
 
+/// The catalog section: what exists server-side versus what is here.
+///
+/// Silent when there is no catalog. An app that renders fractals
+/// perfectly well offline should not grow an error panel because a
+/// metadata endpoint was unreachable — and a user who has never signed
+/// in has no reason to see one at all.
+///
+/// Returns the names the user asked to re-download.
+fn render_catalog_summary(
+    ui: &mut egui::Ui,
+    catalog: Option<&crate::storage::variation_catalog::CachedCatalog>,
+    registry: &crate::variations::VariationRegistry,
+) -> Vec<String> {
+    use crate::storage::variation_catalog::summarize;
+
+    let mut update_requested = Vec::new();
+
+    let Some(catalog) = catalog else { return update_requested };
+    if catalog.items.is_empty() {
+        return update_requested;
+    }
+
+    let crate::storage::variation_catalog::CatalogSummary {
+        available,
+        updatable,
+        builtin_only_elsewhere,
+    } = summarize(&catalog.items, |name| registry.get(name).map(|v| (v.is_core, v.version)));
+
+    egui::CollapsingHeader::new(t!(
+        "variations_panel.catalog_header",
+        total = catalog.items.len(),
+        available = available.len()
+    ))
+    .default_open(!updatable.is_empty())
+    .show(ui, |ui| {
+        if !updatable.is_empty() {
+            ui.label(
+                egui::RichText::new(t!(
+                    "variations_panel.catalog_updates",
+                    count = updatable.len()
+                ))
+                .strong(),
+            );
+            for (item, have, avail) in &updatable {
+                ui.horizontal(|ui| {
+                    ui.weak(format!("{} — have v{have}, v{avail} available", item.display_name));
+                    // Re-fetching by name overwrites the cached copy:
+                    // `register_from_api` replaces a non-core entry, so
+                    // the same path that installs also updates.
+                    if ui.small_button(t!("variations_panel.update_btn")).clicked() {
+                        update_requested.push(item.name.clone());
+                    }
+                });
+            }
+            if updatable.len() > 1
+                && ui
+                    .button(t!("variations_panel.update_all_btn", count = updatable.len()))
+                    .clicked()
+            {
+                update_requested.extend(updatable.iter().map(|(i, _, _)| i.name.clone()));
+            }
+            ui.add_space(4.0);
+        }
+
+        if available.is_empty() {
+            ui.weak(t!("variations_panel.catalog_all_present"));
+        } else {
+            // Fetched on demand when a flame references one, so this is
+            // a listing rather than a set of buttons — a download-all
+            // control would pull shader code the user has no use for.
+            ui.weak(t!("variations_panel.catalog_on_demand"));
+            for item in available.iter().take(40) {
+                ui.horizontal(|ui| {
+                    ui.weak(&item.display_name);
+                    if !item.has_shader_3d {
+                        ui.weak("· 2D only");
+                    }
+                });
+                if let Some(d) = item.description_plain.as_ref().filter(|d| !d.is_empty()) {
+                    ui.indent(format!("cat_desc_{}", item.name), |ui| {
+                        ui.weak(d);
+                    });
+                }
+            }
+            if available.len() > 40 {
+                ui.weak(format!("… and {} more", available.len() - 40));
+            }
+        }
+
+        if builtin_only_elsewhere > 0 {
+            ui.add_space(4.0);
+            ui.weak(t!(
+                "variations_panel.catalog_builtin_only",
+                count = builtin_only_elsewhere
+            ))
+            .on_hover_text(t!("variations_panel.catalog_builtin_only_hint"));
+        }
+    });
+
+    update_requested
+}
+
 /// Render the Variations panel.
 ///
 /// `flame` is the current flame, used only to answer "does this run any
@@ -46,6 +148,7 @@ pub fn downloaded_variations_in_use(
 pub fn render_variations_panel(
     ui: &mut egui::Ui,
     flame: &crate::scene::transforms::Flame,
+    catalog: Option<&crate::storage::variation_catalog::CachedCatalog>,
 ) -> VariationsPanelResponse {
     let mut response = VariationsPanelResponse::default();
 
@@ -85,6 +188,22 @@ pub fn render_variations_panel(
     }
 
     ui.add_space(4.0);
+
+    // What the server has that this client does not — the half of the
+    // picture the registry cannot show. Absent when offline, which is a
+    // normal state: the listing below is still the truth about what is
+    // installed, just not about what exists.
+    response.update_requested = render_catalog_summary(ui, catalog, &registry);
+
+    ui.add_space(4.0);
+
+    // Prose and update state, keyed by name. Built-in descriptions live
+    // in Rust doc comments, invisible at runtime, so the catalog is the
+    // only route by which any description reaches a row — including for
+    // variations that shipped with the app.
+    let by_name: std::collections::HashMap<&str, &crate::api::types::VariationListItem> = catalog
+        .map(|c| c.items.iter().map(|i| (i.name.as_str(), i)).collect())
+        .unwrap_or_default();
 
     {
         let categories = [
@@ -130,6 +249,36 @@ pub fn render_variations_panel(
                                 },
                             );
                         });
+                        if let Some(item) = by_name.get(v.name.as_str()) {
+                            use crate::storage::variation_catalog::{merge_state, CatalogState};
+                            if let CatalogState::UpdateAvailable { have, available } =
+                                merge_state(item, Some((v.is_core, v.version)))
+                            {
+                                ui.indent(format!("upd_{}", v.name), |ui| {
+                                    ui.label(
+                                        egui::RichText::new(t!(
+                                            "variations_panel.row_update",
+                                            have = have,
+                                            available = available
+                                        ))
+                                        .color(ui.visuals().warn_fg_color),
+                                    );
+                                });
+                            }
+                            ui.indent(format!("meta_{}", v.name), |ui| {
+                                if let Some(d) =
+                                    item.description_plain.as_ref().filter(|d| !d.is_empty())
+                                {
+                                    ui.weak(d);
+                                }
+                                if !item.authors.is_empty() {
+                                    ui.weak(t!(
+                                        "variations_panel.row_authors",
+                                        authors = item.authors.join(", ")
+                                    ));
+                                }
+                            });
+                        }
                         if !v.parameters.is_empty() {
                             ui.indent(format!("params_{}", v.name), |ui| {
                                 for p in &v.parameters {
@@ -162,6 +311,9 @@ pub fn render_variations_panel(
 #[derive(Default)]
 pub struct VariationsPanelResponse {
     pub clear_cache_requested: bool,
+    /// Downloaded variations the user asked to re-fetch at the catalog's
+    /// version. Re-uses the install path, which overwrites.
+    pub update_requested: Vec<String>,
 }
 
 #[cfg(test)]

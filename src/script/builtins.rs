@@ -1413,6 +1413,7 @@ pub fn lsystem_pieces3(
             if variable || is_drawing(ch) {
                 let entry = st;
                 if let Some(body) = if ruled { body_of(ch) } else { None } {
+                    budget.charge(body.len() as u64)?;
                     for bc in body.chars() {
                         lsys_step3(bc, angle, &mut st, &mut stack);
                     }

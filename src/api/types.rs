@@ -583,4 +583,29 @@ pub struct VariationListItem {
     pub version: u32,
     #[serde(default)]
     pub description: Option<String>,
+
+    // Declared ahead of the server sending them, as with
+    // `VariationDownload` — every one is `serde(default)`, so an older
+    // payload simply leaves them empty.
+    /// Markdown stripped, for clients that do not render markdown. This
+    /// one is not a nicety: the panel shows no description at all today,
+    /// and built-in descriptions live in Rust doc comments that are
+    /// invisible at runtime. The catalog is the ONLY way prose reaches
+    /// the app for a variation it already ships.
+    #[serde(default)]
+    pub description_plain: Option<String>,
+    #[serde(default)]
+    pub authors: Vec<String>,
+    /// False when the variation is built-in-only — engine-integral, so
+    /// there is nothing to fetch. See WIRE_FORMAT §3.1.
+    #[serde(default = "default_true")]
+    pub downloadable: bool,
+    /// Whether a 3D body exists. A variation without one is dropped
+    /// entirely from 3D flames, so this is a browse-time decision.
+    #[serde(default = "default_true")]
+    pub has_shader_3d: bool,
+}
+
+fn default_true() -> bool {
+    true
 }

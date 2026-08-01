@@ -553,6 +553,21 @@ pub struct App {
     /// Monotonic batch id. Results not carrying the current value are
     /// stragglers from an abandoned batch and are discarded.
     pub(super) variation_fetch_epoch: u64,
+
+    /// The server's variation catalog, for the panel's merged listing.
+    ///
+    /// Loaded from cache at startup so the panel works offline, then
+    /// refreshed once in the background. `None` means neither a cache
+    /// nor a successful fetch — the panel then shows only what is
+    /// installed, which is still the truth, just less of it.
+    pub(super) variation_catalog: Option<crate::storage::variation_catalog::CachedCatalog>,
+    /// In-flight catalog fetch. Same shared-slot shape as the variation
+    /// fetches; no epoch needed because there is only ever one and a
+    /// stale result is merely old data, not a miscount.
+    pub(super) catalog_fetch_result: std::sync::Arc<std::sync::Mutex<
+        Option<Result<Vec<crate::api::types::VariationListItem>, String>>
+    >>,
+    pub(super) catalog_fetch_started: bool,
     /// What the current batch is still waiting on, for the timeout message.
     pub(super) variation_fetch_names: Vec<String>,
 
@@ -696,6 +711,9 @@ impl App {
             variation_fetch_in_progress: false,
             variation_fetch_started: None,
             variation_fetch_epoch: 0,
+            variation_catalog: crate::storage::variation_catalog::load(),
+            catalog_fetch_result: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            catalog_fetch_started: false,
             variation_fetch_names: Vec::new(),
             variation_fetch_pending_count: 0,
             health_check_result: std::sync::Arc::new(std::sync::Mutex::new(None)),
@@ -1202,6 +1220,7 @@ impl App {
             &self.api_state,
             self.current_user_id.as_deref(),
             self.fly_mode,
+            self.variation_catalog.as_ref(),
         );
 
         // Consume fly-mode responses produced by the UI this frame.
