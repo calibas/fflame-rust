@@ -458,8 +458,11 @@ GET    /api/search/scripts?q=…   → public browse
   "name": "grand_julian",            // stem-like key
   "display_name": "Grand Julian",    // from script("…") — derived
   "kind": "generator",               // derived; stored for filtering
-  "author": "…",
+  "user_id": "…",                    // owner
+  "display_name": "…",               // owner's, for stem namespacing
+  "authors": ["…"],                  // CREDIT, not ownership; [] is normal
   "description": "…markdown…",       // from the header comment — derived
+                                     // no description_plain: client strips
   "source": "…rhai…",                // authoritative
   "version": 3,
   "visibility": "private",           // private | unlisted | public
@@ -516,17 +519,68 @@ adding it now is an unconsumed field on a published payload, and this
 session established that those are the ones that can never be removed,
 because you cannot prove nobody reads them.
 
+**`authors` is credit; `user_id` is ownership. They are additive.**
+Renamed from `author` for consistency with variations and effects, but
+it does not mean the same thing here and the two must not be conflated.
+On variations and effects `authors` is the *only* attribution —
+free-form "Name (year)", explicitly not a foreign key, because those
+people mostly are not platform accounts. A script has both: `user_id`
+owns it (permissions, namespacing, `display_name/stem`), while `authors`
+credits whoever wrote it, possibly someone who has never used the app —
+a ported script, a technique from a paper.
+
+So a script written from scratch by its uploader has `authors: []` and
+the UI falls back to `display_name`. A ported one credits the original
+while still being owned by its uploader. Treating `authors` as "the
+author field" would duplicate `display_name` on every original script,
+which is the version of this that goes wrong.
+
+**`description_plain` is client-side for scripts, and only for
+scripts.** This is a deliberate exception to
+[VARIATIONS_WIRE_FORMAT](VARIATIONS_WIRE_FORMAT.md) §7's "the same pair
+applies to effects and scripts". A variation's prose is authored
+metadata with no client-side source to re-derive from, so the stripped
+copy must travel and both consumers agree on one result. A script's
+description is *derived from its source*, by `parse_doc`, and the source
+is authoritative and always present — so a stored plain copy would be a
+derivation of a derivation, a third representation of the same bytes
+with its own way to go stale against a source the client re-reads on
+every load anyway.
+
+`script::strip_markdown` does it client-side. Inline syntax only; block
+structure (`# Heading`, indented tables, list markers) is left for the
+panel, which already renders it structurally.
+
+**`version` on PUT is optimistic — and means something different here
+than on variations and effects.** Desktop app and browser tab share no
+store, which is exactly the case last-write-wins loses data in, silently
+and unnoticeably.
+
+The collision to name explicitly: on variations and effects `version` is
+a *cache-invalidation key*, and §7 says prose edits deliberately do not
+bump it so clients keep cached copies. An optimistic token must bump on
+every write, unconditionally. Same field name, opposite rules.
+
+One field serves both for scripts because **the source is the content**.
+There is no prose-vs-payload split like a variation's
+description-vs-WGSL, so there is no edit that should leave a cached copy
+valid — bump-on-every-write is simultaneously correct for both purposes.
+That reasoning is specific to scripts and does not transfer back; nobody
+should later "harmonise" the three.
+
+`UPDATE … WHERE id = ? AND user_id = ? AND version = ?` returns zero
+rows for three different reasons, and collapsing them makes conflict
+handling unwritable. Existence and ownership are checked first (404 /
+403), then version (409), with the current version and `updated_at` in
+the 409 body so the client can choose between refetch-and-merge and
+warn. The version travels in the request body rather than an `If-Match`
+header: the API is JSON end to end with no ETag machinery, so a header
+would be the only one of its kind — **agreed, no preference for the
+HTTP-idiomatic form here**, since there is no intermediary cache to
+benefit from it.
+
 #### 5.4.2 Open
 
-- **`author` vs `authors`.** Variations and effects both emit
-  `authors: []`; §5.4 says `author`. "Decide once, apply twice" — lean
-  `authors`, since co-authored ports are already common.
-- **`description_plain` is missing** from the script shape. Variations
-  and effects carry the stripped copy alongside the markdown precisely
-  because the client has no markdown renderer.
-- **`version` on PUT** — optimistic (send what you hold, 409 on
-  mismatch) or last-write-wins? Lean optimistic: this is user content
-  edited from a desktop app and a browser tab that share no store.
 - **`flags` as a closed server-side set?** The client warns on an
   unknown flag and drops it, so the vocabulary can grow without a
   coordinated deploy; a closed-set CHECK would remove that. The known

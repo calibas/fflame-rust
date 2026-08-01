@@ -646,8 +646,16 @@ markdown-parsing code. If `description_plain` is absent the client falls
 back to showing `description` raw, which degrades readably — headings
 and emphasis just appear as literal `#` and `*`.
 
-The same pair applies to per-parameter descriptions and to effects and
-scripts when they land (§9).
+The same pair applies to per-parameter descriptions and to effects.
+
+**Scripts are the exception, deliberately.** A script's description is
+*derived from its source* by `parse_doc`, and the source is
+authoritative and always present client-side — so a server-stored plain
+copy would be a derivation of a derivation, able to go stale against
+something the client re-reads on every load. Scripts therefore carry
+only the markdown `description`, and `script::strip_markdown` produces
+the plain form locally. See
+[api-shared-resources §5.4.1](api-shared-resources.md).
 
 **Versioning policy.** The whole initial corpus ships at `version =
 1`. The app and the API are released in lockstep — there's no in-flight
