@@ -812,8 +812,9 @@ pipeline never sees the alias.
 
 **Server-side.** The `variations` table needs an `aliases TEXT[]
 NOT NULL DEFAULT '{}'` column. Backfill is empty for existing
-rows; subsequent migrations populate where needed. See
-[api-v2-server-side.md](api-v2-server-side.md) for the SQL plan.
+rows; subsequent migrations populate where needed. Shipped — the
+schema lives in the API repository, and `docs/main/openapi.json` is
+the authority on what it serves.
 
 ---
 
