@@ -12,6 +12,7 @@ mod util;
 pub mod scene;
 pub mod renderer;
 pub mod contract;
+pub mod provenance;
 pub mod config;
 pub mod profiler;
 pub mod version;

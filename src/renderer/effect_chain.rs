@@ -8,54 +8,31 @@ use std::collections::HashMap;
 use egui_wgpu::wgpu;
 
 // ============================================================================
-// WASM: Embed effect shaders at compile time (no filesystem access)
-// Desktop: Load from filesystem at runtime (allows hot-reloading)
+// Shader sources
+//
+// Every shipped shader is embedded (see `effects::embedded_shaders`).
+// Desktop additionally prefers an on-disk copy when there is one, so a
+// shader can be edited without a rebuild — but its ABSENCE is no longer
+// an error, which it used to be on both counts below.
 // ============================================================================
 
-/// Embedded effect shaders for WASM builds
-#[cfg(target_arch = "wasm32")]
-mod embedded_shaders {
-    // Common includes
-    pub const BLEND_MODES: &str = include_str!("../../shaders/effects/common/blend_modes.wgsl");
-
-    // Color effects
-    pub const CHROMATIC_ABERRATION: &str = include_str!("../../shaders/effects/color/chromatic_aberration.wgsl");
-    pub const DOMAIN_WARP: &str = include_str!("../../shaders/effects/color/domain_warp.wgsl");
-    pub const FILM_GRAIN: &str = include_str!("../../shaders/effects/color/film_grain.wgsl");
-    pub const HUE_CYCLE: &str = include_str!("../../shaders/effects/color/hue_cycle.wgsl");
-    pub const KALEIDOSCOPE: &str = include_str!("../../shaders/effects/color/kaleidoscope.wgsl");
-    pub const PLASMA: &str = include_str!("../../shaders/effects/color/plasma.wgsl");
-    pub const SIMPLEX_NOISE: &str = include_str!("../../shaders/effects/color/simplex_noise.wgsl");
-    pub const SOBEL_EDGES: &str = include_str!("../../shaders/effects/color/sobel_edges.wgsl");
-    pub const TUNNEL: &str = include_str!("../../shaders/effects/color/tunnel.wgsl");
-    pub const VIGNETTE: &str = include_str!("../../shaders/effects/color/vignette.wgsl");
-    pub const WORLEY_NOISE: &str = include_str!("../../shaders/effects/color/worley_noise.wgsl");
-    pub const JULIA: &str = include_str!("../../shaders/effects/color/julia.wgsl");
-
-    // Density effects
-    pub const BILATERAL_BLUR: &str = include_str!("../../shaders/effects/density/bilateral_blur.wgsl");
-    pub const DENSITY_BLUR: &str = include_str!("../../shaders/effects/density/density_blur.wgsl");
-    pub const SHARPEN: &str = include_str!("../../shaders/effects/density/sharpen.wgsl");
-}
-
-/// Load common include file
+/// The shared blend-mode library that 12 of the 15 shipped effects
+/// splice in.
+///
+/// Same arrangement as an effect's own shader: embedded, with the
+/// on-disk copy preferred on desktop when it is there. It used to log an
+/// error and return an EMPTY STRING when the file was missing, which
+/// meant every effect that spliced it compiled against nothing and
+/// failed with a WGSL error naming a function the reader never wrote.
 fn load_blend_modes() -> String {
-    #[cfg(target_arch = "wasm32")]
-    {
-        embedded_shaders::BLEND_MODES.to_string()
-    }
-
     #[cfg(not(target_arch = "wasm32"))]
-    {
-        std::fs::read_to_string("shaders/effects/common/blend_modes.wgsl")
-            .unwrap_or_else(|e| {
-                log::error!("Failed to load blend_modes.wgsl: {}", e);
-                String::new()
-            })
+    if let Ok(from_disk) = std::fs::read_to_string("shaders/effects/common/blend_modes.wgsl") {
+        return from_disk;
     }
+    crate::effects::embedded_shaders::BLEND_MODES.to_string()
 }
 
-/// Process shader includes by replacing markers with include content
+/// Process shader includes by replacing markers with include content.
 fn process_shader_includes(source: String) -> String {
     const BLEND_MODES_MARKER: &str = "// INCLUDE_BLEND_MODES";
 
@@ -67,45 +44,15 @@ fn process_shader_includes(source: String) -> String {
     }
 }
 
-/// Load effect shader source by path
-/// - WASM: Returns embedded shader source
-/// - Desktop: Loads from filesystem
-/// - Processes include markers (e.g., // INCLUDE_BLEND_MODES)
-fn load_effect_shader(shader_path: &str) -> Result<String, String> {
-    let source = {
-        #[cfg(target_arch = "wasm32")]
-        {
-            // Map shader path to embedded source
-            match shader_path {
-                "effects/color/chromatic_aberration.wgsl" => Ok(embedded_shaders::CHROMATIC_ABERRATION.to_string()),
-                "effects/color/domain_warp.wgsl" => Ok(embedded_shaders::DOMAIN_WARP.to_string()),
-                "effects/color/film_grain.wgsl" => Ok(embedded_shaders::FILM_GRAIN.to_string()),
-                "effects/color/hue_cycle.wgsl" => Ok(embedded_shaders::HUE_CYCLE.to_string()),
-                "effects/color/kaleidoscope.wgsl" => Ok(embedded_shaders::KALEIDOSCOPE.to_string()),
-                "effects/color/plasma.wgsl" => Ok(embedded_shaders::PLASMA.to_string()),
-                "effects/color/simplex_noise.wgsl" => Ok(embedded_shaders::SIMPLEX_NOISE.to_string()),
-                "effects/color/sobel_edges.wgsl" => Ok(embedded_shaders::SOBEL_EDGES.to_string()),
-                "effects/color/tunnel.wgsl" => Ok(embedded_shaders::TUNNEL.to_string()),
-                "effects/color/vignette.wgsl" => Ok(embedded_shaders::VIGNETTE.to_string()),
-                "effects/color/worley_noise.wgsl" => Ok(embedded_shaders::WORLEY_NOISE.to_string()),
-                "effects/color/julia.wgsl" => Ok(embedded_shaders::JULIA.to_string()),
-                "effects/density/bilateral_blur.wgsl" => Ok(embedded_shaders::BILATERAL_BLUR.to_string()),
-                "effects/density/density_blur.wgsl" => Ok(embedded_shaders::DENSITY_BLUR.to_string()),
-                "effects/density/sharpen.wgsl" => Ok(embedded_shaders::SHARPEN.to_string()),
-                _ => Err(format!("Unknown effect shader: {}", shader_path)),
-            }
-        }
-
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let full_path = format!("shaders/{}", shader_path);
-            std::fs::read_to_string(&full_path)
-                .map_err(|e| format!("Failed to load effect shader {}: {}", full_path, e))
-        }
-    };
-
-    // Process includes
-    source.map(process_shader_includes)
+/// An effect's WGSL, includes spliced.
+///
+/// The splice happens **here** rather than at rest, which is why the
+/// exported corpus keeps the `// INCLUDE_BLEND_MODES` marker intact: a
+/// pre-spliced copy would bake the shared library into all twelve
+/// effects that use it, and a downloaded effect would arrive carrying a
+/// second copy of code the client already has.
+fn effect_wgsl(source: &crate::effects::EffectSource) -> String {
+    process_shader_includes(source.wgsl())
 }
 use wgpu::{
     BindGroupDescriptor, BindGroupEntry, BindGroupLayout, BindGroupLayoutDescriptor,
@@ -422,13 +369,7 @@ impl EffectChainRunner {
         };
 
         // Load shader source (embedded for WASM, filesystem for desktop)
-        let shader_source = match load_effect_shader(&effect_info.shader_path) {
-            Ok(source) => source,
-            Err(e) => {
-                log::error!("{}", e);
-                return;
-            }
-        };
+        let shader_source = effect_wgsl(&effect_info.source);
 
         // Create shader module
         let shader_module = device.create_shader_module(ShaderModuleDescriptor {

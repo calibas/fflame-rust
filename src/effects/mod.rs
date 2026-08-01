@@ -8,6 +8,8 @@
 //! Empty lists = zero cost (no render passes, no texture allocations).
 
 use std::collections::HashMap;
+use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use rust_i18n::t;
@@ -53,6 +55,100 @@ pub struct EffectParameter {
     pub description: Option<String>,
 }
 
+/// Every shipped effect shader, compiled in.
+///
+/// Always present, on every target. Desktop prefers the on-disk copy
+/// when there is one (see [`EffectSource`]) so a shader can be edited
+/// without a rebuild; this is what makes a binary run from anywhere.
+pub mod embedded_shaders {
+    // Common includes
+    pub const BLEND_MODES: &str = include_str!("../../shaders/effects/common/blend_modes.wgsl");
+
+    // Color effects
+    pub const CHROMATIC_ABERRATION: &str = include_str!("../../shaders/effects/color/chromatic_aberration.wgsl");
+    pub const DOMAIN_WARP: &str = include_str!("../../shaders/effects/color/domain_warp.wgsl");
+    pub const FILM_GRAIN: &str = include_str!("../../shaders/effects/color/film_grain.wgsl");
+    pub const HUE_CYCLE: &str = include_str!("../../shaders/effects/color/hue_cycle.wgsl");
+    pub const KALEIDOSCOPE: &str = include_str!("../../shaders/effects/color/kaleidoscope.wgsl");
+    pub const PLASMA: &str = include_str!("../../shaders/effects/color/plasma.wgsl");
+    pub const SIMPLEX_NOISE: &str = include_str!("../../shaders/effects/color/simplex_noise.wgsl");
+    pub const SOBEL_EDGES: &str = include_str!("../../shaders/effects/color/sobel_edges.wgsl");
+    pub const TUNNEL: &str = include_str!("../../shaders/effects/color/tunnel.wgsl");
+    pub const VIGNETTE: &str = include_str!("../../shaders/effects/color/vignette.wgsl");
+    pub const WORLEY_NOISE: &str = include_str!("../../shaders/effects/color/worley_noise.wgsl");
+    pub const JULIA: &str = include_str!("../../shaders/effects/color/julia.wgsl");
+
+    // Density effects
+    pub const BILATERAL_BLUR: &str = include_str!("../../shaders/effects/density/bilateral_blur.wgsl");
+    pub const DENSITY_BLUR: &str = include_str!("../../shaders/effects/density/density_blur.wgsl");
+    pub const SHARPEN: &str = include_str!("../../shaders/effects/density/sharpen.wgsl");
+}
+
+/// Where an effect's WGSL comes from.
+///
+/// # The arrangement, and the bug it fixes
+///
+/// Built-in effects are **embedded** with `include_str!` and, on
+/// desktop, superseded by the on-disk copy under `shaders/` when one is
+/// there. That is the same arrangement shipped scripts have: edit the
+/// file, restart, see the change, with no recompile — while a binary
+/// run from a directory that has no `shaders/` still works.
+///
+/// It did not work before. `embedded_shaders` was already compiled into
+/// every build, but the desktop path read the filesystem and **errored
+/// if the file was missing** rather than falling back to the copy it was
+/// already carrying. Every effect then failed to compile with a log line
+/// and rendered nothing.
+///
+/// The web path was worse than missing: a hardcoded `match` over the
+/// fifteen shipped paths with `_ => Err("Unknown effect shader")`, so a
+/// downloaded effect was not unimplemented but *inexpressible*.
+#[derive(Clone, Debug)]
+pub enum EffectSource {
+    /// Ships with the app. `path` is only a desktop override hint.
+    Builtin { embedded: &'static str, path: &'static str },
+    /// Downloaded or locally installed: the WGSL travels with it.
+    ///
+    /// There is no path to fall back to, which is correct — a resource
+    /// the app did not ship has no place under `shaders/`.
+    Owned(String),
+}
+
+impl EffectSource {
+    /// The WGSL, before include processing.
+    ///
+    /// Never fails: a built-in always has its embedded copy, and an
+    /// owned one holds its source outright. That is a deliberate change
+    /// from the previous `Result` — every failure mode it modelled was
+    /// a missing file the binary already contained.
+    pub fn wgsl(&self) -> String {
+        match self {
+            Self::Builtin { embedded, path } => {
+                // Desktop only: prefer the working copy so a shader can
+                // be edited without a rebuild. Absent or unreadable
+                // falls through to the embedded copy rather than
+                // failing, which is the fix.
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Ok(from_disk) = std::fs::read_to_string(format!("shaders/{path}")) {
+                    return from_disk;
+                }
+                let _ = path;
+                (*embedded).to_string()
+            }
+            Self::Owned(src) => src.clone(),
+        }
+    }
+
+    /// The shader path, for the corpus exporter and for diagnostics.
+    /// `None` for anything that did not ship.
+    pub fn path(&self) -> Option<&'static str> {
+        match self {
+            Self::Builtin { path, .. } => Some(path),
+            Self::Owned(_) => None,
+        }
+    }
+}
+
 /// Metadata for a registered effect
 #[derive(Clone, Debug)]
 pub struct EffectInfo {
@@ -62,11 +158,17 @@ pub struct EffectInfo {
     /// Category determines pipeline position
     pub category: EffectCategory,
 
-    /// Path to shader file relative to shaders/ directory
-    pub shader_path: String,
+    /// Where the WGSL comes from.
+    pub source: EffectSource,
 
     /// Parameters for this effect
     pub parameters: Vec<EffectParameter>,
+
+    /// Where this effect came from, and therefore whether it is
+    /// third-party code, cache, or updatable. See
+    /// [`crate::provenance::Provenance`] for why those are three
+    /// questions rather than one bool.
+    pub provenance: crate::provenance::Provenance,
 }
 
 impl EffectInfo {
@@ -135,11 +237,13 @@ impl EffectInstance {
     /// expects `fixup_ids` to assign an ID later (deserialize) can
     /// construct with `id: 0`.
     pub fn new(effect_type: &str) -> Self {
-        let params = if let Some(info) = global_effect_registry().get(effect_type) {
+        let registry = global_effect_registry();
+        let params = if let Some(info) = registry.get(effect_type) {
             info.default_params()
         } else {
             HashMap::new()
         };
+        drop(registry);
 
         Self {
             id: crate::scene::transforms::next_id(),
@@ -160,10 +264,12 @@ impl EffectInstance {
     pub fn get_param(&self, param_name: &str) -> f32 {
         if let Some(&value) = self.params.get(param_name) {
             value
-        } else if let Some(info) = global_effect_registry().get(&self.effect_type) {
-            info.get_param_default(param_name).unwrap_or(0.0)
         } else {
-            0.0
+            let registry = global_effect_registry();
+            match registry.get(&self.effect_type) {
+                Some(info) => info.get_param_default(param_name).unwrap_or(0.0),
+                None => 0.0,
+            }
         }
     }
 
@@ -247,15 +353,31 @@ impl Default for EffectRegistry {
 }
 
 /// Global effect registry singleton
-static EFFECT_REGISTRY: Lazy<EffectRegistry> = Lazy::new(|| {
+static EFFECT_REGISTRY: Lazy<RwLock<EffectRegistry>> = Lazy::new(|| {
     let mut registry = EffectRegistry::new();
     register_builtin_effects(&mut registry);
-    registry
+    RwLock::new(registry)
 });
 
-/// Get the global effect registry
-pub fn global_effect_registry() -> &'static EffectRegistry {
-    &EFFECT_REGISTRY
+/// Read guard on the global effect registry.
+///
+/// Behind a lock because effects are no longer a closed set: a
+/// downloaded or locally installed effect is registered at runtime, the
+/// way `register_from_api` already does for variations. Registration
+/// used to be compile-time only, which is why this returned a plain
+/// reference.
+///
+/// **Bind the guard to a variable** before using what it lends out.
+/// `global_effect_registry().get(x)` drops the guard at the end of the
+/// statement, so anything borrowed from it dies with it.
+pub fn global_effect_registry() -> RwLockReadGuard<'static, EffectRegistry> {
+    EFFECT_REGISTRY.read().expect("effect registry RwLock poisoned")
+}
+
+/// Write guard on the global effect registry. Use sparingly — only for
+/// adding or removing effects that did not ship with the app.
+pub fn global_effect_registry_mut() -> RwLockWriteGuard<'static, EffectRegistry> {
+    EFFECT_REGISTRY.write().expect("effect registry RwLock poisoned")
 }
 
 /// Register all built-in effects
@@ -266,7 +388,11 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
     registry.register(EffectInfo {
         name: "vignette".to_string(),
         category: EffectCategory::Color,
-        shader_path: "effects/color/vignette.wgsl".to_string(),
+        source: EffectSource::Builtin {
+            embedded: embedded_shaders::VIGNETTE,
+            path: "effects/color/vignette.wgsl",
+        },
+        provenance: crate::provenance::Provenance::Builtin,
         parameters: vec![
             EffectParameter {
                 name: "intensity".to_string(),
@@ -311,7 +437,11 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
     registry.register(EffectInfo {
         name: "film_grain".to_string(),
         category: EffectCategory::Color,
-        shader_path: "effects/color/film_grain.wgsl".to_string(),
+        source: EffectSource::Builtin {
+            embedded: embedded_shaders::FILM_GRAIN,
+            path: "effects/color/film_grain.wgsl",
+        },
+        provenance: crate::provenance::Provenance::Builtin,
         parameters: vec![
             EffectParameter {
                 name: "intensity".to_string(),
@@ -347,7 +477,11 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
     registry.register(EffectInfo {
         name: "chromatic_aberration".to_string(),
         category: EffectCategory::Color,
-        shader_path: "effects/color/chromatic_aberration.wgsl".to_string(),
+        source: EffectSource::Builtin {
+            embedded: embedded_shaders::CHROMATIC_ABERRATION,
+            path: "effects/color/chromatic_aberration.wgsl",
+        },
+        provenance: crate::provenance::Provenance::Builtin,
         parameters: vec![
             EffectParameter {
                 name: "amount".to_string(),
@@ -392,7 +526,11 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
     registry.register(EffectInfo {
         name: "hue_shift".to_string(),
         category: EffectCategory::Color,
-        shader_path: "effects/color/hue_cycle.wgsl".to_string(),
+        source: EffectSource::Builtin {
+            embedded: embedded_shaders::HUE_CYCLE,
+            path: "effects/color/hue_cycle.wgsl",
+        },
+        provenance: crate::provenance::Provenance::Builtin,
         parameters: vec![
             EffectParameter {
                 name: "offset".to_string(),
@@ -430,7 +568,11 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
     registry.register(EffectInfo {
         name: "density_blur".to_string(),
         category: EffectCategory::Density,
-        shader_path: "effects/density/density_blur.wgsl".to_string(),
+        source: EffectSource::Builtin {
+            embedded: embedded_shaders::DENSITY_BLUR,
+            path: "effects/density/density_blur.wgsl",
+        },
+        provenance: crate::provenance::Provenance::Builtin,
         parameters: vec![
             EffectParameter {
                 name: "radius".to_string(),
@@ -466,7 +608,11 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
     registry.register(EffectInfo {
         name: "sharpen".to_string(),
         category: EffectCategory::Density,
-        shader_path: "effects/density/sharpen.wgsl".to_string(),
+        source: EffectSource::Builtin {
+            embedded: embedded_shaders::SHARPEN,
+            path: "effects/density/sharpen.wgsl",
+        },
+        provenance: crate::provenance::Provenance::Builtin,
         parameters: vec![
             EffectParameter {
                 name: "amount".to_string(),
@@ -493,7 +639,11 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
     registry.register(EffectInfo {
         name: "bilateral_blur".to_string(),
         category: EffectCategory::Density,
-        shader_path: "effects/density/bilateral_blur.wgsl".to_string(),
+        source: EffectSource::Builtin {
+            embedded: embedded_shaders::BILATERAL_BLUR,
+            path: "effects/density/bilateral_blur.wgsl",
+        },
+        provenance: crate::provenance::Provenance::Builtin,
         parameters: vec![
             EffectParameter {
                 name: "radius".to_string(),
@@ -531,7 +681,11 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
     registry.register(EffectInfo {
         name: "kaleidoscope".to_string(),
         category: EffectCategory::Color,
-        shader_path: "effects/color/kaleidoscope.wgsl".to_string(),
+        source: EffectSource::Builtin {
+            embedded: embedded_shaders::KALEIDOSCOPE,
+            path: "effects/color/kaleidoscope.wgsl",
+        },
+        provenance: crate::provenance::Provenance::Builtin,
         parameters: vec![
             EffectParameter {
                 name: "segments".to_string(),
@@ -603,7 +757,11 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
     registry.register(EffectInfo {
         name: "plasma".to_string(),
         category: EffectCategory::Color,
-        shader_path: "effects/color/plasma.wgsl".to_string(),
+        source: EffectSource::Builtin {
+            embedded: embedded_shaders::PLASMA,
+            path: "effects/color/plasma.wgsl",
+        },
+        provenance: crate::provenance::Provenance::Builtin,
         parameters: vec![
             EffectParameter {
                 name: "intensity".to_string(),
@@ -666,7 +824,11 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
     registry.register(EffectInfo {
         name: "tunnel".to_string(),
         category: EffectCategory::Color,
-        shader_path: "effects/color/tunnel.wgsl".to_string(),
+        source: EffectSource::Builtin {
+            embedded: embedded_shaders::TUNNEL,
+            path: "effects/color/tunnel.wgsl",
+        },
+        provenance: crate::provenance::Provenance::Builtin,
         parameters: vec![
             EffectParameter {
                 name: "speed".to_string(),
@@ -729,7 +891,11 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
     registry.register(EffectInfo {
         name: "sobel_edges".to_string(),
         category: EffectCategory::Color,
-        shader_path: "effects/color/sobel_edges.wgsl".to_string(),
+        source: EffectSource::Builtin {
+            embedded: embedded_shaders::SOBEL_EDGES,
+            path: "effects/color/sobel_edges.wgsl",
+        },
+        provenance: crate::provenance::Provenance::Builtin,
         parameters: vec![
             EffectParameter {
                 name: "intensity".to_string(),
@@ -783,7 +949,11 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
     registry.register(EffectInfo {
         name: "domain_warp".to_string(),
         category: EffectCategory::Color,
-        shader_path: "effects/color/domain_warp.wgsl".to_string(),
+        source: EffectSource::Builtin {
+            embedded: embedded_shaders::DOMAIN_WARP,
+            path: "effects/color/domain_warp.wgsl",
+        },
+        provenance: crate::provenance::Provenance::Builtin,
         parameters: vec![
             EffectParameter {
                 name: "intensity".to_string(),
@@ -846,7 +1016,11 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
     registry.register(EffectInfo {
         name: "simplex_noise".to_string(),
         category: EffectCategory::Color,
-        shader_path: "effects/color/simplex_noise.wgsl".to_string(),
+        source: EffectSource::Builtin {
+            embedded: embedded_shaders::SIMPLEX_NOISE,
+            path: "effects/color/simplex_noise.wgsl",
+        },
+        provenance: crate::provenance::Provenance::Builtin,
         parameters: vec![
             EffectParameter {
                 name: "intensity".to_string(),
@@ -918,7 +1092,11 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
     registry.register(EffectInfo {
         name: "worley_noise".to_string(),
         category: EffectCategory::Color,
-        shader_path: "effects/color/worley_noise.wgsl".to_string(),
+        source: EffectSource::Builtin {
+            embedded: embedded_shaders::WORLEY_NOISE,
+            path: "effects/color/worley_noise.wgsl",
+        },
+        provenance: crate::provenance::Provenance::Builtin,
         parameters: vec![
             EffectParameter {
                 name: "intensity".to_string(),
@@ -990,7 +1168,11 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
     registry.register(EffectInfo {
         name: "julia".to_string(),
         category: EffectCategory::Color,
-        shader_path: "effects/color/julia.wgsl".to_string(),
+        source: EffectSource::Builtin {
+            embedded: embedded_shaders::JULIA,
+            path: "effects/color/julia.wgsl",
+        },
+        provenance: crate::provenance::Provenance::Builtin,
         parameters: vec![
             EffectParameter {
                 name: "mode".to_string(),
