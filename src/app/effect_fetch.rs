@@ -85,6 +85,79 @@ impl App {
         }
     }
 
+/// Refresh the effect catalog once per session, in the background.
+    ///
+    /// Same terms as the variation catalog: not gated on any fetch, not
+    /// pausing the render, and a failure is an info-level log. The
+    /// catalog is panel metadata, not something a frame depends on.
+    pub(super) fn refresh_effect_catalog(&mut self) {
+        if !self.effect_catalog_started {
+            self.effect_catalog_started = true;
+            let slot = self.effect_catalog_result.clone();
+            let base = crate::api::API_BASE_URL.to_string();
+            let window = self.window.clone();
+            let token = self.config_manager.system_settings().get_auth_token();
+
+            let job = async move {
+                let mut api = crate::api::ApiState::new(&base);
+                if let Some(t) = token {
+                    api.set_token(&t);
+                }
+                api.list_effects().await.map_err(|e| e.to_string())
+            };
+
+            #[cfg(target_arch = "wasm32")]
+            wasm_bindgen_futures::spawn_local(async move {
+                let r = job.await;
+                if let Ok(mut s) = slot.lock() { *s = Some(r); }
+                window.request_redraw();
+            });
+
+            #[cfg(not(target_arch = "wasm32"))]
+            std::thread::spawn(move || {
+                let r = pollster::block_on(job);
+                if let Ok(mut s) = slot.lock() { *s = Some(r); }
+                window.request_redraw();
+            });
+            return;
+        }
+
+        let drained = match self.effect_catalog_result.lock() {
+            Ok(mut s) => s.take(),
+            Err(_) => return,
+        };
+        let Some(result) = drained else { return };
+
+        match result {
+            Ok(items) => {
+                let fetchable = items.iter().filter(|i| i.downloadable).count();
+                log::info!(
+                    "Effect catalog: {} entries, {fetchable} fetchable",
+                    items.len()
+                );
+                let catalog = crate::storage::effect_catalog::CachedEffectCatalog {
+                    items,
+                    version: None,
+                };
+                if let Err(e) = crate::storage::effect_catalog::save(&catalog) {
+                    log::warn!("Could not cache the effect catalog: {e}");
+                }
+                self.effect_catalog = Some(catalog);
+            }
+            Err(e) => {
+                // Offline is a normal state, not an error condition.
+                log::info!(
+                    "Effect catalog unavailable ({e}) — showing what is installed{}",
+                    if self.effect_catalog.is_some() {
+                        " plus the last cached listing"
+                    } else {
+                        ""
+                    }
+                );
+            }
+        }
+    }
+
     fn poll_effect_fetches(&mut self) {
         let drained: Vec<(String, Result<EffectDownload, String>)> =
             match self.effect_fetch_results.lock() {

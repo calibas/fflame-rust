@@ -106,7 +106,7 @@ pub struct ApiTransformWire {
 // Effects
 // ============================================================================
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EffectListItem {
     pub id: String,
     pub name: String,

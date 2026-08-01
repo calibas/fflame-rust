@@ -252,7 +252,7 @@ pub fn render_variations_panel(
                         if let Some(item) = by_name.get(v.name.as_str()) {
                             use crate::storage::variation_catalog::{merge_state, CatalogState};
                             if let CatalogState::UpdateAvailable { have, available } =
-                                merge_state(item, Some((v.is_core, v.version)))
+                                merge_state(*item, Some((v.is_core, v.version)))
                             {
                                 ui.indent(format!("upd_{}", v.name), |ui| {
                                     ui.label(

@@ -61,8 +61,26 @@ pub fn list_cached() -> CacheResult<Vec<String>> {
     Ok(entries
         .into_iter()
         .filter_map(|name| name.strip_suffix(".json").map(str::to_string))
+        .filter(|name| !is_metadata_entry(name))
         .collect())
 }
+
+/// Entries whose name begins with `_` are metadata, not resources.
+///
+/// The catalog lives in the same prefix as the cache (`_catalog.json`),
+/// so without this it comes back as a cached entry named `_catalog`:
+/// `load_all` fails to parse it and warns on every startup, and
+/// `clear_all` counts it — so "Clear Cache (N)" reports one more than
+/// there are cached resources, and deletes the catalog as though it were
+/// one of them.
+///
+/// The convention is safe because a server name has to be a valid
+/// identifier to reach the cache at all, and none begins with an
+/// underscore.
+fn is_metadata_entry(name: &str) -> bool {
+    name.starts_with('_')
+}
+
 
 /// Clear all cached variations. Returns the number of entries removed.
 pub fn clear_all() -> CacheResult<usize> {
