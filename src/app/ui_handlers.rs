@@ -43,6 +43,8 @@ impl App {
         self.handle_clear_variation_cache(ui_response);
         self.handle_variation_updates(ui_response);
         self.refresh_variation_catalog();
+        self.poll_script_cloud();
+        self.handle_script_cloud_request(ui_response.script_cloud_request.clone());
     }
 
     /// Handle config export, save, and import operations

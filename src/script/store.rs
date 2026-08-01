@@ -145,7 +145,12 @@ pub fn load(stem: &str) -> Option<String> {
 /// structural replacement for the old canonicalize-and-compare guard,
 /// which existed because `ScriptOrigin::File` covered shipped files too.
 pub fn delete(stem: &str) -> Result<(), String> {
-    backend::delete_file(&key_for(stem)).map_err(|e| format!("cannot delete `{stem}`: {e}"))
+    backend::delete_file(&key_for(stem)).map_err(|e| format!("cannot delete `{stem}`: {e}"))?;
+    // Forget the link as well, or a stem reused later inherits the
+    // previous script's cloud identity — and, worse, its provenance:
+    // deleting a downloaded script and writing your own under the same
+    // name would leave yours marked as somebody else's.
+    clear_link(stem)
 }
 
 /// Every script in the user's store, as `(stem, source)`.
@@ -188,6 +193,111 @@ pub fn location_of(stem: &str) -> String {
 #[cfg(target_arch = "wasm32")]
 pub fn location_of(_stem: &str) -> String {
     "this browser (not the cloud — it stays on this device)".to_string()
+}
+
+// ============================================================================
+// What a stored script is linked to, and where it came from
+// ============================================================================
+
+/// Per-script metadata that is not the source.
+///
+/// Kept in one sidecar file rather than beside each script, because a
+/// `.rhai` file has nowhere to put it and a header comment is the
+/// script's own prose, not ours to write into.
+///
+/// Two things live here, and they are needed by different features that
+/// turn out to want the same record:
+///
+/// * **The cloud link** — an id and the version last seen. Without it,
+///   an update after a restart is impossible: optimistic concurrency
+///   needs the version you read, and "the version you read" does not
+///   survive a process that forgot which server script this even is.
+/// * **Provenance** — whether this came from somebody else. This is the
+///   part that must be persistent rather than a UI flag, because saving
+///   a downloaded script would otherwise make it the user's own and
+///   trusted, laundering the cross-call restriction through Save.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ScriptLink {
+    /// The server id, when this script exists there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cloud_id: Option<String>,
+    /// The version last read from the server — what an update sends
+    /// back, and what a 409 compares against.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<u32>,
+    /// `owner_display_name/name`, the globally unique human-readable key
+    /// the server's unique display names make possible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    /// Somebody else wrote this.
+    ///
+    /// Adopting a script — saving it locally — does not make it yours in
+    /// the sense that matters here. The user chose to keep it; they did
+    /// not read it. So this survives the save, and
+    /// `ScriptHost::with_untrusted` keeps applying.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub from_others: bool,
+}
+
+fn links_path() -> PathBuf {
+    Path::new(PREFIX).join("_links.json")
+}
+
+/// Every stored link, keyed by stem.
+///
+/// A corrupt file is treated as absent rather than fatal: losing it
+/// costs a re-link, and failing every script listing over it would be
+/// the wrong trade. The one thing that is NOT safe to lose silently is
+/// `from_others`, so [`is_untrusted`] fails closed — see there.
+pub fn load_links() -> std::collections::BTreeMap<String, ScriptLink> {
+    match backend::read_file(&links_path()) {
+        Ok(json) => serde_json::from_str(&json).unwrap_or_else(|e| {
+            log::warn!("Discarding unreadable script link file: {e}");
+            Default::default()
+        }),
+        Err(_) => Default::default(),
+    }
+}
+
+fn save_links(links: &std::collections::BTreeMap<String, ScriptLink>) -> Result<(), String> {
+    let json = serde_json::to_string_pretty(links)
+        .map_err(|e| format!("cannot serialize script links: {e}"))?;
+    backend::write_file(&links_path(), &json)
+        .map_err(|e| format!("cannot write script links: {e}"))
+}
+
+/// The link for one script, if it has one.
+pub fn link_of(stem: &str) -> Option<ScriptLink> {
+    load_links().get(stem).cloned()
+}
+
+/// Record (or replace) a script's link.
+pub fn set_link(stem: &str, link: ScriptLink) -> Result<(), String> {
+    let mut links = load_links();
+    links.insert(stem.to_string(), link);
+    save_links(&links)
+}
+
+/// Forget a script's link. Called by [`delete`], so a stem that is
+/// reused later does not inherit the previous script's cloud identity.
+pub fn clear_link(stem: &str) -> Result<(), String> {
+    let mut links = load_links();
+    if links.remove(stem).is_none() {
+        return Ok(());
+    }
+    save_links(&links)
+}
+
+/// Whether a stored script must run under the cross-call restriction.
+///
+/// Note the asymmetry with [`load_links`]: an unreadable link file is
+/// tolerated everywhere else, because the cost is a re-link. Here the
+/// cost is running somebody else's script as if it were the user's, so
+/// a link that exists and says so is believed, and the *absence* of a
+/// link means locally authored — which is true, because every path that
+/// brings in a foreign script writes one.
+pub fn is_untrusted(stem: &str) -> bool {
+    link_of(stem).is_some_and(|l| l.from_others)
 }
 
 #[cfg(test)]

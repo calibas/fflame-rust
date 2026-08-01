@@ -916,17 +916,64 @@ These are live defects, not future work.
 
   The web half only started working now: Save was desktop-only, so a
   browser user editing a built-in got no fork and no copy.
-- [ ] **M** — CRUD client calls against §5.4.
-- [ ] **M** — Panel: sign-in-aware list (mine / built-in / public),
-  save-to-cloud, update-conflict handling.
-- [ ] **S** — Derive and send `kind` / `flags` / `description` from the
-  collect pass; treat source as authoritative on load.
-- [ ] **M** — Public browse UI. **No longer gated** — the sandbox
-  precondition (§8.1's step budget) is done, and its coverage is
-  complete across all four native walks. This is still the point where
-  users run strangers' code, so it stays last in this section: what
-  remains is the UI work plus showing provenance clearly enough that
-  running a stranger's script is a decision rather than an accident.
+- [x] **M** — ~~CRUD client calls~~ **DONE.** Six calls against §5.4,
+  built against `openapi.json` rather than against the shape I had
+  assumed — which was wrong in two ways the compiler could not catch:
+  `display_name` is the SCRIPT's name (the owner's is
+  `owner_display_name`), and `display_name`/`kind` are required on
+  create rather than optional.
+- [x] **S** — ~~Derive and send `kind` / `flags` / `description`~~
+  **DONE**, in `sync::script_to_create_request`. Publishing is refused
+  for a script that does not COMPILE — there is nothing to derive, and
+  values its source cannot reproduce would be invisible to the uploader
+  and visible to everyone browsing. A script that compiles but never
+  calls `script(name, kind)` IS published: `collect` defaults it to a
+  generator with a warning, and because that default is part of the
+  derivation, every client re-deriving computes the same answer.
+  Deterministic, not invented.
+- [x] **M** — ~~Panel: sign-in-aware, save-to-cloud, conflict
+  handling~~ **DONE.** The online section is drawn only when signed in;
+  offering Publish to someone who cannot use it is worse than not
+  showing it, since the local store is the entire feature for a
+  signed-out user and it works.
+
+  A 409 is a **decision**, not an error message, so it renders as a
+  banner that stays until made: *Overwrite with mine* (retry against
+  their version — the "I looked and I still want mine" path, and it has
+  to be a click rather than an automatic retry) or *Load theirs*.
+- [x] **M** — ~~Public browse UI~~ **DONE.** Search, results with owner
+  and credit shown separately, and one sentence stating what opening
+  one means — said once where the action is, rather than left to be
+  inferred from a download button.
+
+**The piece that made both of the last two possible: `ScriptLink`.**
+A sidecar (`scripts/_links.json`) carrying each stored script's cloud id,
+last-seen version, and whether somebody else wrote it. All three are
+load-bearing:
+
+- Without the id and version, an update after a restart is impossible —
+  optimistic concurrency needs the version you read, and that does not
+  survive a process that forgot which server script this is.
+- **`from_others` must be persistent, not a UI flag.** Adopting a
+  downloaded script makes it `ScriptOrigin::User`; if trust were read
+  from the origin, pressing Save would launder away the cross-call
+  restriction. The user chose to keep the script — they did not read it.
+- `delete` clears the link, so a reused stem cannot inherit the previous
+  script's cloud identity *or* its provenance. Writing your own script
+  under a freed name must not leave it marked as somebody else's.
+
+Two defects found while building, both silent:
+
+- **Adopt and Refetch are not the same operation.** Resolving a conflict
+  on your own script by adopting would save a second copy under a freed
+  stem *and* mark your own work as somebody else's, so it would run
+  under the cross-call restriction from then on. They look
+  interchangeable — both fetch a script and write it locally — and
+  reusing one for the other is the natural mistake.
+- **An adoption writes to the store from a background task**, so the
+  panel never learned the script existed. A generation counter fixes it;
+  the panel holds only `&ScriptCloudState` and so cannot clear a flag,
+  but it can remember the last value it acted on.
 
 ### 8.4 Local-only plugins (§2)
 
