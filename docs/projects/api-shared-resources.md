@@ -503,12 +503,26 @@ whatever that machine happens to have under a name — different results
 per machine, and a stranger's script reaching the user's. Restricting to
 shipped stems is the only option that renders identically everywhere.
 
-**Enforcement is the client's, and a `dependencies` field is
+**Enforcement is the client's — DONE — and a `dependencies` field is
 deliberately NOT reserved.** The server cannot enforce this:
 `run_script(some_variable)` is not statically resolvable, so a
 server-side check would catch literal call sites and miss dynamic ones —
 a guard that looks like enforcement and is not. Unlike the blend marker,
 where the marker/call correlation is exact.
+
+Built in `script::host` before anything can be fetched, on the same
+reasoning §5.2 used: doing it after would mean a migration. An
+untrusted script may call shipped stems only, and the check runs
+*before* the id is resolved so the refusal cannot report whether the
+user has a script by that name.
+
+The rule is "any untrusted frame on the stack", not "the immediate
+caller" — otherwise `downloaded -> shipped -> user` would launder the
+restriction through one hop. That divergence is unreachable from real
+scripts (it needs a shipped script that calls a user one, and shipped
+scripts are compiled in), which is exactly why the rule is a free
+function tested on data: an engine-driven test would pass under either
+reading while appearing to pin the stricter one.
 
 And the restriction is what makes reserving unnecessary. If downloaded
 scripts may only call shipped stems, no published script can *have* a

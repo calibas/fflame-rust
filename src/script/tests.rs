@@ -3359,3 +3359,166 @@ fn shipped_script_prose_is_not_corrupted() {
         }
     }
 }
+
+// ============================================================================
+// Untrusted (downloaded) scripts: cross-call restriction
+// ============================================================================
+
+/// A library with one shipped script and one user script, so "may it
+/// call this" has both answers available.
+fn cross_call_host() -> super::ScriptHost {
+    super::ScriptHost::new().with_scripts(vec![
+        // A real shipped stem, so `is_builtin_stem` says yes.
+        (
+            "random_palette".to_string(),
+            super::library::EMBEDDED
+                .iter()
+                .find(|(n, _)| *n == "random_palette.rhai")
+                .map(|(_, s)| (*s).to_string())
+                .expect("random_palette ships"),
+        ),
+        // The user's own. Not a shipped stem.
+        (
+            "my_helper".to_string(),
+            "script(\"My Helper\", \"modifier\");\n".to_string(),
+        ),
+    ])
+}
+
+/// The property: a downloaded script cannot reach the user's scripts.
+///
+/// Without this, `run_script("my_helper")` in a downloaded script binds
+/// to whatever that machine happens to have under that name — a
+/// different render on every machine, and a stranger's code invoking
+/// the user's.
+#[test]
+fn a_downloaded_script_cannot_call_the_users_own() {
+    let base = FractalConfig::default();
+    let src = "script(\"Nosy\", \"generator\");\nrun_script(\"my_helper\");\n";
+
+    // Trusted: the call resolves normally.
+    cross_call_host()
+        .run(src, &base, 1, Default::default())
+        .expect("a trusted script may call a user script");
+
+    // Untrusted entry: refused.
+    let err = cross_call_host()
+        .with_untrusted_entry()
+        .run(src, &base, 1, Default::default())
+        .expect_err("a downloaded script must not reach a user script");
+    let msg = format!("{err}");
+    assert!(msg.contains("only call scripts that ship"), "{msg}");
+    assert!(msg.contains("my_helper"), "{msg}");
+}
+
+/// ...but shipped scripts stay callable, or the restriction would make
+/// every downloaded script useless rather than safe.
+#[test]
+fn a_downloaded_script_may_still_call_shipped_ones() {
+    let base = FractalConfig::default();
+    let src = "script(\"Polite\", \"generator\");\nrun_script(\"random_palette\");\n";
+    cross_call_host()
+        .with_untrusted_entry()
+        .run(src, &base, 1, Default::default())
+        .expect("shipped stems remain callable");
+}
+
+/// The restriction follows a downloaded script into the library, not
+/// just at the entry point: a *user* script may call a downloaded one,
+/// and the downloaded one is restricted from there on.
+#[test]
+fn the_restriction_applies_to_a_downloaded_script_called_from_a_trusted_one() {
+    let base = FractalConfig::default();
+    let host = super::ScriptHost::new()
+        .with_scripts(vec![
+            (
+                "downloaded".to_string(),
+                "script(\"Downloaded\", \"modifier\");\nrun_script(\"my_helper\");\n".to_string(),
+            ),
+            (
+                "my_helper".to_string(),
+                "script(\"My Helper\", \"modifier\");\n".to_string(),
+            ),
+        ])
+        .with_untrusted(vec!["downloaded".to_string()]);
+
+    // The trusted entry script calls the downloaded one, which then
+    // tries to reach the user's helper.
+    let src = "script(\"Mine\", \"generator\");\nrun_script(\"downloaded\");\n";
+    let err = host
+        .run(src, &base, 1, Default::default())
+        .expect_err("the downloaded frame must still be restricted");
+    assert!(format!("{err}").contains("only call scripts that ship"), "{err}");
+}
+
+/// The rule is "any untrusted frame on the stack", not "the immediate
+/// caller" — so a downloaded script cannot launder a call through a
+/// trusted one.
+///
+/// No shipped script does this today and none can be made to without a
+/// recompile, but "safe because of what the corpus happens to contain"
+/// is not a property.
+///
+/// Tested against the rule directly rather than by driving the engine.
+/// That is not a shortcut: the chain that separates the two readings —
+/// `downloaded -> shipped -> user` — cannot be built from real scripts,
+/// because reaching it needs a shipped script that calls a user one and
+/// shipped scripts are compiled in. An engine-driven test would pass
+/// under either rule while looking like it pinned the stricter one.
+#[test]
+fn a_downloaded_frame_anywhere_on_the_stack_restricts() {
+    use super::host::cross_calls_restricted;
+
+    let untrusted: std::collections::HashSet<String> =
+        ["downloaded".to_string()].into_iter().collect();
+    let stack = |ids: &[&str]| -> Vec<String> { ids.iter().map(|s| s.to_string()).collect() };
+
+    // The case the strict rule exists for: the top frame is trusted, but
+    // a downloaded one is still below it.
+    assert!(cross_calls_restricted(false, &stack(&["downloaded", "shipped"]), &untrusted));
+    // Outermost, innermost, alone — all the same answer.
+    assert!(cross_calls_restricted(false, &stack(&["downloaded"]), &untrusted));
+    assert!(cross_calls_restricted(false, &stack(&["mine", "downloaded"]), &untrusted));
+
+    // Nothing untrusted anywhere: unrestricted.
+    assert!(!cross_calls_restricted(false, &stack(&["mine", "shipped"]), &untrusted));
+    assert!(!cross_calls_restricted(false, &[], &untrusted));
+
+    // The entry script carries no id on the stack, so it needs its own
+    // flag — and that is the ordinary case, not the edge one.
+    assert!(cross_calls_restricted(true, &[], &untrusted));
+    assert!(cross_calls_restricted(true, &stack(&["shipped"]), &untrusted));
+}
+
+/// The refusal is decided before the id is resolved.
+///
+/// Otherwise the error would report whether a script by that name
+/// exists — telling a downloaded script what the user has installed,
+/// which is exactly the kind of question it should not be able to ask.
+#[test]
+fn the_refusal_does_not_leak_whether_the_target_exists() {
+    let base = FractalConfig::default();
+    let present = "script(\"A\", \"generator\");\nrun_script(\"my_helper\");\n";
+    let absent = "script(\"A\", \"generator\");\nrun_script(\"no_such_script\");\n";
+
+    let a = format!(
+        "{}",
+        cross_call_host()
+            .with_untrusted_entry()
+            .run(present, &base, 1, Default::default())
+            .expect_err("refused")
+    );
+    let b = format!(
+        "{}",
+        cross_call_host()
+            .with_untrusted_entry()
+            .run(absent, &base, 1, Default::default())
+            .expect_err("refused")
+    );
+
+    // Same shape of message either way, and neither lists the library.
+    assert!(a.contains("only call scripts that ship"), "{a}");
+    assert!(b.contains("only call scripts that ship"), "{b}");
+    assert!(!a.contains("available:"), "the trusted path's listing leaked: {a}");
+    assert!(!b.contains("available:"), "{b}");
+}
