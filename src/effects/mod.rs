@@ -536,19 +536,46 @@ pub fn check_download(dl: &crate::api::types::EffectDownload) -> Result<EffectIn
 }
 
 impl EffectRegistry {
-    /// Register an effect fetched from the API.
+    /// Register an effect from a download payload.
+    ///
+    /// Source-tagged rather than duplicated: a local plugin is the same
+    /// object from a different source, so it takes this path with
+    /// `Provenance::Local` instead of a parallel entry point that would
+    /// have to be kept in step with every refusal added here.
     ///
     /// Refuses rather than degrades, for the reason variations do: an
     /// effect that registers and renders nothing looks like a broken
     /// feature, and the user has no way to find out why.
-    pub fn register_from_api(&mut self, dl: &crate::api::types::EffectDownload) -> Result<(), String> {
-        if self.get(&dl.name).is_some_and(|e| e.provenance.is_builtin()) {
-            return Err(format!(
-                "effect `{}` is built in; a download cannot replace it",
-                dl.name
-            ));
+    pub fn register_from_api(
+        &mut self,
+        dl: &crate::api::types::EffectDownload,
+        provenance: crate::provenance::Provenance,
+    ) -> Result<(), String> {
+        if let Some(existing) = self.get(&dl.name) {
+            // Never shadow, in either direction. Displacing a built-in
+            // would change what a shared flame renders; displacing a
+            // local plugin would replace the user's own work with
+            // somebody else's, which is the worse of the two.
+            match existing.provenance {
+                crate::provenance::Provenance::Builtin => {
+                    return Err(format!(
+                        "effect `{}` is built in; it cannot be replaced",
+                        dl.name
+                    ))
+                }
+                crate::provenance::Provenance::Local
+                    if !matches!(provenance, crate::provenance::Provenance::Local) =>
+                {
+                    return Err(format!(
+                        "effect `{}` is a local plugin of yours; a download cannot replace it",
+                        dl.name
+                    ))
+                }
+                _ => {}
+            }
         }
-        let info = check_download(dl)?;
+        let mut info = check_download(dl)?;
+        info.provenance = provenance;
         self.register(info);
         Ok(())
     }
@@ -1616,7 +1643,10 @@ mod download_tests {
         let mut reg = EffectRegistry::new();
         register_builtin_effects(&mut reg);
         let e = reg
-            .register_from_api(&dl("vignette", Some("fn main() {}")))
+            .register_from_api(
+                &dl("vignette", Some("fn main() {}")),
+                crate::provenance::Provenance::Api { version: 1 },
+            )
             .expect_err("must refuse");
         assert!(e.contains("built in"), "{e}");
         assert!(

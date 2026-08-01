@@ -580,7 +580,7 @@ impl ShaderCache {
                 let suspects: Vec<&str> = registry
                     .all()
                     .iter()
-                    .filter(|v| !v.is_core)
+                    .filter(|v| v.provenance.is_third_party())
                     .map(|v| v.name.as_str())
                     .collect();
                 let blame = if suspects.is_empty() {

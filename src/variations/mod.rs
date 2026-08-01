@@ -162,8 +162,15 @@ pub struct VariationInfo {
     /// download time). Lookup via [`Self::has_feature`].
     pub features: Vec<crate::variations::definition::Feature>,
 
-    /// Whether this is a core (built-in) or plugin variation
-    pub is_core: bool,
+    /// Where this came from: shipped, downloaded, or a local plugin.
+    ///
+    /// Replaced `is_core: bool` **and** a separate `version: u32`. The
+    /// bool could not distinguish a download from a local plugin, and
+    /// the two answer differently to "is this clearable cache" and "can
+    /// this be updated". Keeping the version beside it duplicated what
+    /// `Provenance::Api` already carries, and a duplicate is a thing to
+    /// keep in step.
+    pub provenance: crate::provenance::Provenance,
 
     /// Optional: WGSL source code for 2D (for plugins loaded at runtime)
     pub wgsl_source: Option<String>,
@@ -194,9 +201,6 @@ pub struct VariationInfo {
     /// Parameters for this variation
     pub parameters: Vec<VariationParameter>,
 
-    /// Version number. Built-in variations use 0; API-loaded variations
-    /// use the server's version. Used for cache invalidation.
-    pub version: u32,
 }
 
 impl VariationInfo {
@@ -223,7 +227,10 @@ impl VariationInfo {
     }
 
     /// Create from an API VariationDownload response
-    pub fn from_download(dl: &crate::api::types::VariationDownload) -> Self {
+    pub fn from_download(
+        dl: &crate::api::types::VariationDownload,
+        provenance: crate::provenance::Provenance,
+    ) -> Self {
         let parameters = dl.parameters.iter().map(|p| VariationParameter {
             name: p.name.clone(),
             display_name: p.display_name.clone(),
@@ -274,7 +281,7 @@ impl VariationInfo {
             phase: api_phase_to_runtime(&dl.phase),
             wgsl_function,
             features,
-            is_core: false,
+            provenance,
             wgsl_source: dl.shader_2d.clone(),
             wgsl_source_3d: dl.shader_3d.clone(),
             wgsl_source_init: dl.shader_init.clone(),
@@ -285,7 +292,6 @@ impl VariationInfo {
             state_count: dl.state_count,
             wgsl_source_state_init: dl.shader_state_init.clone(),
             parameters,
-            version: dl.version,
         }
     }
 
@@ -298,7 +304,7 @@ impl VariationInfo {
             phase: def.phase.clone(),
             wgsl_function: def.wgsl_function_name(),
             features: def.features.to_vec(),
-            is_core: true, // All VariationDef are core variations
+            provenance: crate::provenance::Provenance::Builtin,
             wgsl_source: Some(def.wgsl_2d.to_string()),
             wgsl_source_3d: Some(def.wgsl_3d.to_string()),
             wgsl_source_init: def.wgsl_init.map(|s| s.to_string()),
@@ -306,7 +312,6 @@ impl VariationInfo {
             state_count: def.state_count,
             wgsl_source_state_init: def.wgsl_state_init.map(|s| s.to_string()),
             parameters: def.parameters_to_runtime(),
-            version: 0,
         }
     }
 
@@ -543,11 +548,33 @@ impl VariationRegistry {
     /// If a variation with the same name already exists, it's replaced
     /// (e.g., when a newer version is fetched). Built-in variations
     /// can't be replaced — the call is rejected with a logged warning.
-    pub fn register_from_api(&mut self, dl: &crate::api::types::VariationDownload) {
+    /// Register a variation from a download payload.
+    ///
+    /// Source-tagged rather than duplicated: a local plugin is **the
+    /// same object from a different source**, so it takes this path with
+    /// `Provenance::Local` instead of a parallel `register_from_local`
+    /// that would have to be kept in step with every refusal added here.
+    pub fn register_from_api(
+        &mut self,
+        dl: &crate::api::types::VariationDownload,
+        provenance: crate::provenance::Provenance,
+    ) {
         if let Some(existing) = self.variations.get(&dl.name) {
-            if existing.is_core {
+            if existing.provenance.is_builtin() {
                 log::warn!(
                     "Cannot register API variation '{}' — name conflicts with built-in",
+                    dl.name
+                );
+                return;
+            }
+            // Nor may a download displace the user's own plugin. §0
+            // decision 3: collisions are reported, never shadowed — and
+            // here the direction matters, because silently replacing
+            // something the user wrote with something they did not is
+            // the worse of the two failures.
+            if matches!(existing.provenance, crate::provenance::Provenance::Local) {
+                log::warn!(
+                    "Cannot register API variation '{}' — you have a local plugin by that name",
                     dl.name
                 );
                 return;
@@ -583,7 +610,7 @@ impl VariationRegistry {
             );
             return;
         }
-        let info = VariationInfo::from_download(dl);
+        let info = VariationInfo::from_download(dl, provenance);
         if !self.ordered_names.contains(&info.name) {
             self.ordered_names.push(info.name.clone());
         }
@@ -609,16 +636,34 @@ impl VariationRegistry {
             }
             self.aliases.insert(alias.clone(), info.name.clone());
         }
-        log::info!("Registered API variation '{}' v{}", info.name, info.version);
+        log::info!("Registered variation '{}' ({})", info.name, info.provenance.label());
         self.variations.insert(info.name.clone(), info);
         self.version = self.version.wrapping_add(1);
     }
 
-    /// Remove all API-loaded (non-core) variations.
-    /// Built-in variations are preserved. Used by the "Clear Variation Cache" action.
+    /// Remove one variation by name, whatever its provenance.
+    ///
+    /// Not used by Clear Cache — that is [`Self::clear_api`], which is
+    /// provenance-aware. This is for uninstalling a plugin and for
+    /// tests that must not leak into the global registry.
+    pub fn remove_by_name(&mut self, name: &str) -> bool {
+        let removed = self.variations.remove(name).is_some();
+        if removed {
+            self.aliases.retain(|_, target| target != name);
+            self.version = self.version.wrapping_add(1);
+        }
+        removed
+    }
+
+    /// Remove every downloaded variation.
+    ///
+    /// Built-ins are compiled in, and **local plugins are the user's own
+    /// files** — clearing a cache is not an invitation to delete either.
+    /// The old filter was `!is_core`, which would have taken local
+    /// plugins with it the moment they existed.
     pub fn clear_api(&mut self) {
         let removed: Vec<String> = self.variations.iter()
-            .filter(|(_, info)| !info.is_core)
+            .filter(|(_, info)| info.provenance.is_cached_download())
             .map(|(name, _)| name.clone())
             .collect();
         for name in &removed {
@@ -755,6 +800,82 @@ pub fn global_registry_mut() -> RwLockWriteGuard<'static, VariationRegistry> {
     registry_lock().write().expect("variation registry RwLock poisoned")
 }
 
+/// Resources a flame uses that nobody else can resolve.
+///
+/// A flame is shared as **names**, not definitions — so one that leans
+/// on a local plugin renders correctly for its author and for nobody
+/// else, including the same person on another device. There is no error
+/// at the far end either: the name is simply unknown, and the fetch that
+/// would normally rescue it has nothing to fetch.
+///
+/// Returned rather than warned about here, so the caller decides
+/// whether this is a save (mention it) or an upload (mention it
+/// louder).
+pub fn local_plugin_dependencies(config: &crate::config::FractalConfig) -> Vec<String> {
+    let registry = global_registry();
+    let mut out: Vec<String> = config
+        .flame
+        .active_variation_names_ordered(&registry)
+        .into_iter()
+        .filter(|name| {
+            registry
+                .get(name)
+                .is_some_and(|v| matches!(v.provenance, crate::provenance::Provenance::Local))
+        })
+        .collect();
+    drop(registry);
+
+    let effects = crate::effects::global_effect_registry();
+    for e in config.color_effects.iter().chain(config.density_effects.iter()) {
+        if effects
+            .get(&e.effect_type)
+            .is_some_and(|i| matches!(i.provenance, crate::provenance::Provenance::Local))
+            && !out.contains(&e.effect_type)
+        {
+            out.push(e.effect_type.clone());
+        }
+    }
+    out
+}
+
+/// Why a name a flame references cannot be resolved.
+///
+/// The distinction §8.4 asks for. "We can fetch this" and "you are
+/// missing a plugin" look identical from the config — both are just a
+/// name the registry does not know — but they need opposite responses,
+/// and telling a user to wait for a download that will never come is
+/// worse than telling them nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MissingReason {
+    /// The catalog lists it and says it can be fetched.
+    Downloadable,
+    /// The catalog lists it but it is not fetchable — engine-integral,
+    /// or not yet seeded server-side.
+    KnownButNotFetchable,
+    /// Nothing knows this name. Almost always a local plugin the sender
+    /// has and the receiver does not.
+    ProbablyAPlugin,
+    /// No catalog has been fetched, so the question cannot be answered.
+    /// Distinct from `ProbablyAPlugin` — being offline is not evidence.
+    Unknown,
+}
+
+/// Classify a missing name against the cached catalog.
+pub fn classify_missing(
+    name: &str,
+    catalog: Option<&crate::storage::variation_catalog::CachedCatalog>,
+) -> MissingReason {
+    let Some(catalog) = catalog else {
+        return MissingReason::Unknown;
+    };
+    match catalog.items.iter().find(|i| i.name == name) {
+        Some(item) if item.downloadable => MissingReason::Downloadable,
+        Some(_) => MissingReason::KnownButNotFetchable,
+        None if catalog.items.is_empty() => MissingReason::Unknown,
+        None => MissingReason::ProbablyAPlugin,
+    }
+}
+
 /// Scan a flame's transforms for variation names not registered.
 /// Returns the deduplicated list of missing names (empty if all are present).
 pub fn missing_variations_in(flame: &crate::scene::transforms::Flame) -> Vec<String> {
@@ -786,7 +907,8 @@ pub fn load_cached_api_variations() {
     }
     let mut registry = global_registry_mut();
     for download in cached {
-        registry.register_from_api(&download);
+        let provenance = crate::provenance::Provenance::Api { version: download.version };
+        registry.register_from_api(&download, provenance);
     }
 }
 

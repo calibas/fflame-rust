@@ -856,3 +856,77 @@ mod script_payload_tests {
         assert_eq!(crate::api::urlencode("café"), "caf%C3%A9");
     }
 }
+
+#[cfg(test)]
+mod plugin_boundary_tests {
+    use super::*;
+    use crate::provenance::Provenance;
+
+    /// A local plugin's CODE must never leave this machine.
+    ///
+    /// §8.4 asks for this to be asserted at the API boundary rather than
+    /// held as a convention, and the checkable form is this: a flame
+    /// travels as variation **names** plus its own parameters, never as
+    /// definitions. So there is no payload a plugin's WGSL could ride
+    /// out on, and adding one would break this test rather than pass
+    /// review.
+    ///
+    /// The client also exposes no endpoint that uploads a variation or
+    /// an effect — those are server-curated, read-only (§0 decision 1) —
+    /// which is why this checks the one payload that mentions them at
+    /// all.
+    #[test]
+    fn a_flame_payload_carries_names_not_definitions() {
+        let plugin_wgsl = "fn variation_my_plugin(p: vec2<f32>) -> vec2<f32> { return p * 2.0; }";
+        let dl = crate::api::types::VariationDownload {
+            id: "my_plugin".into(),
+            name: "my_plugin".into(),
+            display_name: "My Plugin".into(),
+            description: None,
+            category: "advanced_2d".into(),
+            version: 1,
+            phase: crate::api::types::ApiVariationPhase::Normal,
+            needs_rng: false,
+            needs_transform: false,
+            writes_color: false,
+            parameters: Vec::new(),
+            shader_2d: Some(plugin_wgsl.into()),
+            shader_3d: None,
+            init_param_count: 0,
+            shader_init: None,
+            features: Vec::new(),
+            state_count: 0,
+            shader_state_init: None,
+            aliases: Vec::new(),
+            plot_emits: 0,
+            authors: Vec::new(),
+            description_plain: None,
+        };
+        crate::variations::global_registry_mut()
+            .register_from_api(&dl, Provenance::Local);
+
+        let mut config = FractalConfig::default();
+        let mut t = crate::scene::transforms::Transform::new();
+        t.set_variation("my_plugin", 1.0);
+        config.flame.transforms = vec![t];
+
+        let req = config_to_create_request(&config, Some("test")).expect("payload");
+        let json = serde_json::to_string(&req).expect("serialize");
+
+        assert!(json.contains("my_plugin"), "the NAME must travel — that is how it resolves");
+        assert!(
+            !json.contains(plugin_wgsl),
+            "the plugin's shader must NOT travel: {json}"
+        );
+        assert!(
+            !json.contains("shader_2d"),
+            "no definition-shaped field belongs in a flame payload"
+        );
+
+        // ...and the app knows this flame is not portable.
+        let deps = crate::variations::local_plugin_dependencies(&config);
+        assert_eq!(deps, vec!["my_plugin".to_string()]);
+
+        crate::variations::global_registry_mut().remove_by_name("my_plugin");
+    }
+}

@@ -34,7 +34,7 @@ pub fn downloaded_variations_in_use(
     flame
         .active_variation_names_ordered(registry)
         .into_iter()
-        .filter(|name| registry.get(name).is_some_and(|v| !v.is_core))
+        .filter(|name| registry.get(name).is_some_and(|v| v.provenance.is_third_party()))
         .collect()
 }
 
@@ -64,7 +64,8 @@ fn render_catalog_summary(
         available,
         updatable,
         builtin_only_elsewhere,
-    } = summarize(&catalog.items, |name| registry.get(name).map(|v| (v.is_core, v.version)));
+        local_overrides,
+    } = summarize(&catalog.items, |name| registry.get(name).map(|v| v.provenance.clone()));
 
     egui::CollapsingHeader::new(t!(
         "variations_panel.catalog_header",
@@ -127,6 +128,24 @@ fn render_catalog_summary(
             }
         }
 
+        // A local plugin standing in front of a catalog entry. Worth
+        // naming rather than counting: the user chose that name, and it
+        // now means something different from what the catalog means by
+        // it — so a flame of theirs using it will not render elsewhere.
+        if !local_overrides.is_empty() {
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new(t!(
+                    "variations_panel.catalog_local_override",
+                    count = local_overrides.len()
+                ))
+                .color(ui.visuals().warn_fg_color),
+            );
+            for item in &local_overrides {
+                ui.weak(&item.name);
+            }
+        }
+
         if builtin_only_elsewhere > 0 {
             ui.add_space(4.0);
             ui.weak(t!(
@@ -154,7 +173,13 @@ pub fn render_variations_panel(
 
     let registry = global_registry();
     let total = registry.all().iter().count();
-    let api_count = registry.all().iter().filter(|v| !v.is_core).count();
+    // Only downloads are cache. Clearing must not offer to remove the
+    // user's own plugins, and counting them here would say it does.
+    let api_count = registry
+        .all()
+        .iter()
+        .filter(|v| v.provenance.is_cached_download())
+        .count();
 
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(t!("variations_panel.total", count = total)).strong());
@@ -240,19 +265,14 @@ pub fn render_variations_panel(
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
-                                    let source = if v.is_core {
-                                        t!("variations_panel.source_built_in").to_string()
-                                    } else {
-                                        format!("{} v{}", t!("variations_panel.source_api"), v.version)
-                                    };
-                                    ui.weak(source);
+                                    ui.weak(v.provenance.label());
                                 },
                             );
                         });
                         if let Some(item) = by_name.get(v.name.as_str()) {
                             use crate::storage::variation_catalog::{merge_state, CatalogState};
                             if let CatalogState::UpdateAvailable { have, available } =
-                                merge_state(*item, Some((v.is_core, v.version)))
+                                merge_state(*item, Some(&v.provenance))
                             {
                                 ui.indent(format!("upd_{}", v.name), |ui| {
                                     ui.label(
@@ -341,7 +361,7 @@ mod tests {
     #[test]
     fn a_flame_reports_the_third_party_code_it_runs() {
         let mut registry = crate::variations::VariationRegistry::new();
-        registry.register_from_api(&api_download("borrowed_thing"));
+        registry.register_from_api(&api_download("borrowed_thing"), crate::provenance::Provenance::Api { version: 3 });
 
         // Built-ins only — nothing to warn about.
         let mut flame = Flame::default();

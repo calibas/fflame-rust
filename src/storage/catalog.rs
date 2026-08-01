@@ -8,6 +8,8 @@
 //! lands in is what decides whether the user is offered a download that
 //! cannot succeed.
 
+use crate::provenance::Provenance;
+
 /// What a catalog row needs to expose to be merged.
 ///
 /// Deliberately three accessors rather than a shared struct: the wire
@@ -39,30 +41,51 @@ pub enum CatalogState {
     /// In the catalog but not fetchable, and this client does not have
     /// it. Shown so the catalog is not silently incomplete.
     BuiltInOnlyElsewhere,
+    /// A **local plugin** holds this name.
+    ///
+    /// Its own state rather than folded into `Downloaded`, because a
+    /// local plugin's version means something different: it is whatever
+    /// the user's file says, not a server counter, so comparing it
+    /// against the catalog would offer an "update" that replaces the
+    /// user's own work with a stranger's. And it is the collision worth
+    /// surfacing — §0 decision 3 says a name clash is reported, never
+    /// shadowed.
+    LocalOverride,
 }
 
 /// Merge one catalog row against what is installed.
 ///
 /// Pure, so the state machine is testable without a network or a
-/// registry singleton. `installed` answers `(is_builtin, version)`.
+/// registry singleton.
+///
+/// `installed` is the [`Provenance`] of what this client holds under
+/// that name, or `None`. Taking the provenance rather than a
+/// `(bool, u32)` pair is what keeps a local plugin out of the update
+/// path: there is no way to spell "installed, version 3" without also
+/// saying where it came from.
 ///
 /// The rules, in order of precedence:
 ///
-/// 1. A resource the client has built in is `BuiltIn` — it cannot be
-///    replaced by a download, and both registries refuse to try.
-/// 2. Installed-and-downloaded compares versions; the catalog winning
-///    means an update exists.
-/// 3. Not installed splits on `downloadable`, because "you can fetch
+/// 1. Built in → `BuiltIn`. It cannot be replaced by a download, and
+///    both registries refuse to try.
+/// 2. A local plugin → `LocalOverride`. Never an update candidate; the
+///    version in a plugin file is the user's, not a server counter.
+/// 3. Downloaded compares versions; the catalog winning means an update.
+/// 4. Not installed splits on `downloadable`, because "you can fetch
 ///    this" and "this exists but you cannot have it" are different
 ///    answers, and collapsing them offers a fetch that fails.
-pub fn merge_state<T: CatalogItem>(item: &T, installed: Option<(bool, u32)>) -> CatalogState {
+pub fn merge_state<T: CatalogItem>(
+    item: &T,
+    installed: Option<&Provenance>,
+) -> CatalogState {
     match installed {
-        Some((true, _)) => CatalogState::BuiltIn,
-        Some((false, have)) => {
-            if item.version() > have {
-                CatalogState::UpdateAvailable { have, available: item.version() }
+        Some(Provenance::Builtin) => CatalogState::BuiltIn,
+        Some(Provenance::Local) => CatalogState::LocalOverride,
+        Some(Provenance::Api { version: have }) => {
+            if item.version() > *have {
+                CatalogState::UpdateAvailable { have: *have, available: item.version() }
             } else {
-                CatalogState::Downloaded { version: have }
+                CatalogState::Downloaded { version: *have }
             }
         }
         None if item.downloadable() => CatalogState::Available,
@@ -83,29 +106,40 @@ pub struct CatalogSummary<'a, T> {
     /// Real, catalogued, and unreachable from here. Counted rather than
     /// listed because there is no action to offer.
     pub builtin_only_elsewhere: usize,
+    /// Names where a local plugin stands in front of a catalog entry.
+    /// Worth naming rather than counting: the user chose that name and
+    /// may want to know it now clashes.
+    pub local_overrides: Vec<&'a T>,
 }
 
 impl<T> Default for CatalogSummary<'_, T> {
     fn default() -> Self {
-        Self { available: Vec::new(), updatable: Vec::new(), builtin_only_elsewhere: 0 }
+        Self {
+            available: Vec::new(),
+            updatable: Vec::new(),
+            builtin_only_elsewhere: 0,
+            local_overrides: Vec::new(),
+        }
     }
 }
 
 /// Partition a catalog against what is installed.
 ///
-/// `installed` answers `(is_builtin, version)` for a name, or `None`.
+/// `installed` answers the [`Provenance`] held under a name, or `None`.
 pub fn summarize<'a, T: CatalogItem>(
     items: &'a [T],
-    installed: impl Fn(&str) -> Option<(bool, u32)>,
+    installed: impl Fn(&str) -> Option<Provenance>,
 ) -> CatalogSummary<'a, T> {
     let mut out = CatalogSummary::default();
     for item in items {
-        match merge_state(item, installed(item.name())) {
+        let here = installed(item.name());
+        match merge_state(item, here.as_ref()) {
             CatalogState::Available => out.available.push(item),
             CatalogState::UpdateAvailable { have, available } => {
                 out.updatable.push((item, have, available))
             }
             CatalogState::BuiltInOnlyElsewhere => out.builtin_only_elsewhere += 1,
+            CatalogState::LocalOverride => out.local_overrides.push(item),
             CatalogState::BuiltIn | CatalogState::Downloaded { .. } => {}
         }
     }
@@ -176,11 +210,11 @@ mod tests {
         // be replaced by a download, and offering an update the client
         // would then refuse to install is worse than saying nothing.
         assert_eq!(
-            merge_state(&variation("linear", 99, true), Some((true, 0))),
+            merge_state(&variation("linear", 99, true), Some(&Provenance::Builtin)),
             CatalogState::BuiltIn
         );
         assert_eq!(
-            merge_state(&effect("vignette", 99, true), Some((true, 0))),
+            merge_state(&effect("vignette", 99, true), Some(&Provenance::Builtin)),
             CatalogState::BuiltIn
         );
     }
@@ -188,15 +222,15 @@ mod tests {
     #[test]
     fn a_newer_catalog_version_is_an_update() {
         assert_eq!(
-            merge_state(&variation("x", 5, true), Some((false, 3))),
+            merge_state(&variation("x", 5, true), Some(&Provenance::Api { version: 3 })),
             CatalogState::UpdateAvailable { have: 3, available: 5 }
         );
         assert_eq!(
-            merge_state(&variation("x", 3, true), Some((false, 3))),
+            merge_state(&variation("x", 3, true), Some(&Provenance::Api { version: 3 })),
             CatalogState::Downloaded { version: 3 }
         );
         assert_eq!(
-            merge_state(&variation("x", 2, true), Some((false, 3))),
+            merge_state(&variation("x", 2, true), Some(&Provenance::Api { version: 3 })),
             CatalogState::Downloaded { version: 3 }
         );
     }
@@ -238,9 +272,9 @@ mod tests {
             variation("subflame_wf", 1, false),
         ];
         let s = summarize(&items, |name| match name {
-            "linear" => Some((true, 0)),
-            "fetched_old" => Some((false, 3)),
-            "fetched_current" => Some((false, 3)),
+            "linear" => Some(Provenance::Builtin),
+            "fetched_old" => Some(Provenance::Api { version: 3 }),
+            "fetched_current" => Some(Provenance::Api { version: 3 }),
             _ => None,
         });
 
@@ -252,6 +286,32 @@ mod tests {
         assert_eq!(s.updatable[0].0.name, "fetched_old");
         assert_eq!((s.updatable[0].1, s.updatable[0].2), (3, 5));
         assert_eq!(s.builtin_only_elsewhere, 1);
+    }
+
+    /// A local plugin is never an update candidate, and never silently
+    /// replaced.
+    ///
+    /// Its version is whatever the user's file says, not a server
+    /// counter — comparing them would offer to replace the user's own
+    /// work with a stranger's, and the higher number would usually win.
+    #[test]
+    fn a_local_plugin_is_reported_not_updated() {
+        // Catalog says v99; the local plugin still wins its name.
+        assert_eq!(
+            merge_state(&variation("mine", 99, true), Some(&Provenance::Local)),
+            CatalogState::LocalOverride
+        );
+
+        let items = vec![variation("mine", 99, true), variation("theirs", 1, true)];
+        let s = summarize(&items, |n| (n == "mine").then_some(Provenance::Local));
+        assert_eq!(s.local_overrides.len(), 1);
+        assert_eq!(s.local_overrides[0].name, "mine");
+        assert!(s.updatable.is_empty(), "a local plugin is not updatable");
+        assert_eq!(
+            s.available.iter().map(|i| i.name.as_str()).collect::<Vec<_>>(),
+            vec!["theirs"],
+            "and it does not suppress the rest of the catalog"
+        );
     }
 
     #[test]

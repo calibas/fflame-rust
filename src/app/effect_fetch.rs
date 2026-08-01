@@ -177,7 +177,10 @@ impl App {
                     // this build rejects would only mean rejecting it
                     // again on every future startup.
                     let outcome = crate::effects::global_effect_registry_mut()
-                        .register_from_api(&dl);
+                        .register_from_api(
+                            &dl,
+                            crate::provenance::Provenance::Api { version: dl.version },
+                        );
                     match outcome {
                         Ok(()) => {
                             if let Err(e) = crate::storage::effect_cache::save(&dl) {

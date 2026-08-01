@@ -139,7 +139,7 @@ pub fn generate() -> serde_json::Value {
 
     for name in registry.names() {
         let Some(info) = registry.get(name) else { continue };
-        if !info.is_core {
+        if !info.provenance.is_builtin() {
             continue; // contract describes the shipped corpus
         }
         total += 1;
@@ -546,14 +546,14 @@ mod tests {
         // Absent array: fall back to the bools, as older payloads need.
         dl.needs_rng = true;
         dl.writes_color = true;
-        let info = crate::variations::VariationInfo::from_download(&dl);
+        let info = crate::variations::VariationInfo::from_download(&dl, crate::provenance::Provenance::Api { version: dl.version });
         assert!(info.has_feature(Feature::NeedsRng));
         assert!(info.has_feature(Feature::WritesColor));
 
         // Present array: authoritative, and it can express what the
         // bools never could.
         dl.features = vec!["always_z".into(), "needs_accum".into()];
-        let info = crate::variations::VariationInfo::from_download(&dl);
+        let info = crate::variations::VariationInfo::from_download(&dl, crate::provenance::Provenance::Api { version: dl.version });
         assert!(info.has_feature(Feature::AlwaysZ), "173 variations need this");
         assert!(info.has_feature(Feature::NeedsAccum));
         assert!(
@@ -569,7 +569,7 @@ mod tests {
     fn an_unknown_feature_does_not_reject_the_variation() {
         let mut dl = download("f", "advanced_2d", Some("fn f(){}"), None);
         dl.features = vec!["needs_rng".into(), "invented_next_year".into()];
-        let info = crate::variations::VariationInfo::from_download(&dl);
+        let info = crate::variations::VariationInfo::from_download(&dl, crate::provenance::Provenance::Api { version: dl.version });
         assert!(info.has_feature(Feature::NeedsRng));
         assert_eq!(info.features.len(), 1, "the unknown one is dropped, not kept");
     }
@@ -583,7 +583,7 @@ mod tests {
         dl.state_count = 4;
         dl.shader_state_init = Some("fn init(){}".into());
         dl.plot_emits = 3;
-        let info = crate::variations::VariationInfo::from_download(&dl);
+        let info = crate::variations::VariationInfo::from_download(&dl, crate::provenance::Provenance::Api { version: dl.version });
         assert_eq!(info.state_count, 4);
         assert!(info.wgsl_source_state_init.is_some());
         assert_eq!(info.plot_emit_cap(), 3);
@@ -591,7 +591,7 @@ mod tests {
         // Zero means "does not emit", not "emits zero".
         let mut dl2 = download("t", "advanced_2d", Some("fn f(){}"), None);
         dl2.plot_emits = 0;
-        let info2 = crate::variations::VariationInfo::from_download(&dl2);
+        let info2 = crate::variations::VariationInfo::from_download(&dl2, crate::provenance::Provenance::Api { version: dl2.version });
         assert_eq!(info2.plot_emit_cap(), 0);
         assert!(!info2.features.iter().any(|f| matches!(f, Feature::PlotEmits(_))));
     }
@@ -610,25 +610,27 @@ mod tests {
     /// prevent, and refusing here preserves it.
     #[test]
     fn only_3d_may_omit_its_2d_body_and_nothing_else_may() {
+        const API: crate::provenance::Provenance =
+            crate::provenance::Provenance::Api { version: 1 };
         let mut reg = crate::variations::VariationRegistry::new();
 
         // Legitimate: only_3d with a 3D body and no 2D body.
-        reg.register_from_api(&download("emit3d", "only_3d", None, Some("fn f(){}")));
+        reg.register_from_api(&download("emit3d", "only_3d", None, Some("fn f(){}")), API);
         assert!(reg.has("emit3d"), "only_3d without shader_2d must register");
 
         // The dangerous case: any other category missing its 2D body.
-        reg.register_from_api(&download("sneaky", "advanced_2d", None, Some("fn f(){}")));
+        reg.register_from_api(&download("sneaky", "advanced_2d", None, Some("fn f(){}")), API);
         assert!(
             !reg.has("sneaky"),
             "a non-only_3d variation with no shader_2d must be refused, not registered to silently render nothing"
         );
 
         // And only_3d with NO body at all is useless in every mode.
-        reg.register_from_api(&download("empty", "only_3d", None, None));
+        reg.register_from_api(&download("empty", "only_3d", None, None), API);
         assert!(!reg.has("empty"), "only_3d with no shader_3d must be refused");
 
         // The ordinary shape still works.
-        reg.register_from_api(&download("fine", "advanced_2d", Some("fn f(){}"), None));
+        reg.register_from_api(&download("fine", "advanced_2d", Some("fn f(){}"), None), API);
         assert!(reg.has("fine"));
     }
 
