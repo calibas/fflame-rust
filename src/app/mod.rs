@@ -5,6 +5,7 @@ mod config;
 mod ui_handlers;
 mod gpu_updates;
 mod animation_update;
+mod effect_fetch;
 mod variation_fetch;
 pub mod script_cloud;
 mod fly_camera;
@@ -502,6 +503,11 @@ pub struct App {
     pub(super) current_user_id: Option<String>,
     /// Online-library state for the Scripts panel, and the slot its
     /// background requests land in.
+    /// Effects fetched on demand: results in flight, and the names
+    /// already tried this session so a miss is not retried every frame.
+    pub(super) effect_fetch_results:
+        std::sync::Arc<std::sync::Mutex<Vec<(String, Result<crate::api::types::EffectDownload, String>)>>>,
+    pub(super) effect_fetch_attempted: std::collections::HashSet<String>,
     pub(super) script_cloud: script_cloud::ScriptCloudState,
     pub(super) script_cloud_results: script_cloud::ScriptCloudSlot,
     /// Parallel to config history: for each FullConfig snapshot, stores
@@ -594,6 +600,11 @@ impl App {
 
         // Load any API variations cached from previous sessions into the global registry
         crate::variations::load_cached_api_variations();
+        // Same treatment for effects. A cached entry the current build
+        // would refuse is dropped rather than registered — the refusal
+        // rules belong to the app, not to the cache, so tightening one
+        // must apply to what is already on disk.
+        crate::storage::effect_cache::load_all_into_registry();
 
         // Use global preset library singleton
         let preset_library = global_preset_library();
@@ -698,6 +709,8 @@ impl App {
             signal_manager: crate::signal::SignalManager::new(),
             api_state: ApiContentState::default(),
             current_user_id: None,
+            effect_fetch_results: Default::default(),
+            effect_fetch_attempted: Default::default(),
             script_cloud: Default::default(),
             script_cloud_results: Default::default(),
             api_state_history: std::collections::HashMap::new(),

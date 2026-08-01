@@ -380,6 +380,180 @@ pub fn global_effect_registry_mut() -> RwLockWriteGuard<'static, EffectRegistry>
     EFFECT_REGISTRY.write().expect("effect registry RwLock poisoned")
 }
 
+/// Effect names a flame asked for that this build does not have.
+///
+/// Recorded at compile time (in the shader sense) rather than scanned
+/// out of the config, because that is where the answer is already known
+/// — `EffectChain` looks each one up and finds nothing. The variation
+/// equivalent, `missing_variations_in`, scans the flame instead; it can,
+/// because a variation's absence is visible from the config alone,
+/// whereas an effect's depends on what the registry holds right now.
+///
+/// Drained by the app, which turns it into a fetch.
+static MISSING_EFFECTS: Lazy<std::sync::Mutex<std::collections::BTreeSet<String>>> =
+    Lazy::new(Default::default);
+
+/// Note that a flame referenced an effect that is not registered.
+pub fn note_missing_effect(name: &str) {
+    if let Ok(mut set) = MISSING_EFFECTS.lock() {
+        set.insert(name.to_string());
+    }
+}
+
+/// Take the recorded names, leaving the set empty.
+///
+/// Draining rather than reading keeps a failed fetch from re-triggering
+/// every frame: the render records the name again next time it tries to
+/// compile, so a genuinely still-missing effect comes back, but a
+/// failure the user has already been told about does not spin.
+pub fn take_missing_effects() -> Vec<String> {
+    match MISSING_EFFECTS.lock() {
+        Ok(mut set) => std::mem::take(&mut *set).into_iter().collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
+// ============================================================================
+// Registering an effect that did not ship with the app
+// ============================================================================
+
+/// Every function the shared blend-mode library defines.
+///
+/// Parsed from the library itself rather than listed here. A
+/// transcribed list is the same trap as the name-gated helper table and
+/// the reserved script stems: it goes stale silently, and the failure
+/// shows up as a downloaded effect that will not compile for a reason
+/// nobody can see. Add a function to `blend_modes.wgsl` and this
+/// follows.
+fn blend_library_symbols() -> &'static [String] {
+    static SYMBOLS: Lazy<Vec<String>> = Lazy::new(|| {
+        embedded_shaders::BLEND_MODES
+            .lines()
+            .filter_map(|l| l.trim().strip_prefix("fn "))
+            .filter_map(|rest| rest.split('(').next())
+            .map(|n| n.trim().to_string())
+            .filter(|n| !n.is_empty())
+            .collect()
+    });
+    &SYMBOLS
+}
+
+/// A library function this shader calls but does not define.
+///
+/// Returns the first one found, for the error message. A shader that
+/// *defines* `fn luminance(...)` itself is not calling ours, so it is
+/// not reported.
+fn missing_blend_library_symbol(shader: &str) -> Option<&'static str> {
+    blend_library_symbols().iter().find_map(|sym| {
+        let call = format!("{sym}(");
+        let definition = format!("fn {sym}(");
+        if shader.contains(&call) && !shader.contains(&definition) {
+            // The `&'static` comes from the leaked Lazy, which lives for
+            // the process.
+            Some(sym.as_str())
+        } else {
+            None
+        }
+    })
+}
+
+/// Why an effect from the API cannot be registered.
+///
+/// Separated from the registry so the rules are testable without a
+/// registry singleton, and so each one can say what it actually
+/// objects to.
+pub fn check_download(dl: &crate::api::types::EffectDownload) -> Result<EffectInfo, String> {
+    let name = dl.name.clone();
+
+    let category = match dl.category.as_deref() {
+        Some("density") => EffectCategory::Density,
+        Some("color") => EffectCategory::Color,
+        other => {
+            return Err(format!(
+                "effect `{name}`: category must be `density` or `color`, got {other:?}. \
+                 The category IS the pipeline position, so there is no safe default."
+            ))
+        }
+    };
+
+    // Null until the server's shaders are seeded. Registering one would
+    // produce an effect that appears in the panel, accepts parameters,
+    // and renders nothing.
+    let shader = dl.shader.clone().filter(|s| !s.trim().is_empty()).ok_or_else(|| {
+        format!(
+            "effect `{name}` carries no shader (downloadable={}), so there is nothing \
+             to compile",
+            dl.downloadable
+        )
+    })?;
+
+    // Physical uniform capacity, not policy: the params live in a fixed
+    // `[[f32; 4]; 12]`. Over it, the tail would be silently dropped.
+    if dl.parameters.len() > crate::renderer::effect_chain::MAX_EFFECT_PARAMS {
+        return Err(format!(
+            "effect `{name}` declares {} parameters; the uniform holds {}",
+            dl.parameters.len(),
+            crate::renderer::effect_chain::MAX_EFFECT_PARAMS
+        ));
+    }
+
+    // The splice happens on the marker, not on the flag. A shader that
+    // calls into the shared library without the marker compiles against
+    // nothing and fails naming a function its author never wrote — the
+    // exact confusing failure `load_blend_modes` used to produce for
+    // built-ins.
+    const MARKER: &str = "// INCLUDE_BLEND_MODES";
+    if !shader.contains(MARKER) {
+        if let Some(sym) = missing_blend_library_symbol(&shader) {
+            return Err(format!(
+                "effect `{name}` calls `{sym}` from the shared blend-mode library but \
+                 does not include it — add `{MARKER}` to the shader"
+            ));
+        }
+    }
+
+    let parameters = dl
+        .parameters
+        .iter()
+        .map(|p| EffectParameter {
+            name: p.name.clone(),
+            display_name: p.display_name.clone(),
+            param_type: crate::variations::api_param_type_to_runtime_pub(&p.param_type),
+            default_value: p.default_value,
+            min_value: p.min_value,
+            max_value: p.max_value,
+            description: p.description.clone(),
+        })
+        .collect();
+
+    Ok(EffectInfo {
+        name,
+        category,
+        source: EffectSource::Owned(shader),
+        parameters,
+        provenance: crate::provenance::Provenance::Api { version: dl.version },
+    })
+}
+
+impl EffectRegistry {
+    /// Register an effect fetched from the API.
+    ///
+    /// Refuses rather than degrades, for the reason variations do: an
+    /// effect that registers and renders nothing looks like a broken
+    /// feature, and the user has no way to find out why.
+    pub fn register_from_api(&mut self, dl: &crate::api::types::EffectDownload) -> Result<(), String> {
+        if self.get(&dl.name).is_some_and(|e| e.provenance.is_builtin()) {
+            return Err(format!(
+                "effect `{}` is built in; a download cannot replace it",
+                dl.name
+            ));
+        }
+        let info = check_download(dl)?;
+        self.register(info);
+        Ok(())
+    }
+}
+
 /// Register all built-in effects
 fn register_builtin_effects(registry: &mut EffectRegistry) {
     // === Color Effects (after tonemap) ===
@@ -1308,5 +1482,146 @@ mod tests {
         let mut instance = EffectInstance::new("vignette");
         instance.set_param("intensity", 0.8);
         assert!((instance.get_param("intensity") - 0.8).abs() < 0.001);
+    }
+}
+
+#[cfg(test)]
+mod download_tests {
+    use super::*;
+    use crate::api::types::{ApiParamType, ApiVariationParameter, EffectDownload};
+
+    fn dl(name: &str, shader: Option<&str>) -> EffectDownload {
+        EffectDownload {
+            id: name.into(),
+            name: name.into(),
+            display_name: name.into(),
+            category: Some("color".into()),
+            authors: Vec::new(),
+            description: None,
+            description_plain: None,
+            version: 1,
+            parameters: Vec::new(),
+            shader: shader.map(|s| s.into()),
+            requires_blend_modes: false,
+            downloadable: true,
+        }
+    }
+
+    fn param(n: &str) -> ApiVariationParameter {
+        ApiVariationParameter {
+            name: n.into(),
+            display_name: n.into(),
+            param_type: ApiParamType::Float,
+            default_value: 0.0,
+            min_value: None,
+            max_value: None,
+            description: None,
+        }
+    }
+
+    /// The ordinary case still works, or every refusal below is just a
+    /// broken feature.
+    #[test]
+    fn a_well_formed_effect_registers() {
+        let info = check_download(&dl("swirl", Some("fn main() {}"))).expect("registers");
+        assert_eq!(info.name, "swirl");
+        assert_eq!(info.category, EffectCategory::Color);
+        assert_eq!(info.provenance, crate::provenance::Provenance::Api { version: 1 });
+        assert!(info.source.path().is_none(), "a download has no shipped path");
+    }
+
+    /// `shader` is null until the server seeds them. Registering one
+    /// would put an effect in the panel that accepts parameters and
+    /// renders nothing.
+    #[test]
+    fn an_effect_with_no_shader_is_refused() {
+        let e = check_download(&dl("empty", None)).expect_err("must refuse");
+        assert!(e.contains("no shader"), "{e}");
+        // Whitespace is not a shader either.
+        assert!(check_download(&dl("blank", Some("   \n"))).is_err());
+    }
+
+    /// The category IS the pipeline position, so there is no safe
+    /// default to fall back on.
+    #[test]
+    fn a_bad_category_is_refused_rather_than_defaulted() {
+        let mut d = dl("odd", Some("fn main() {}"));
+        d.category = Some("sideways".into());
+        assert!(check_download(&d).unwrap_err().contains("density"));
+        d.category = None;
+        assert!(check_download(&d).is_err());
+    }
+
+    /// Over the uniform's physical capacity the tail would be silently
+    /// dropped — the effect would work, just not all of it.
+    #[test]
+    fn too_many_parameters_are_refused() {
+        let mut d = dl("greedy", Some("fn main() {}"));
+        d.parameters = (0..crate::renderer::effect_chain::MAX_EFFECT_PARAMS + 1)
+            .map(|i| param(&format!("p{i}")))
+            .collect();
+        let e = check_download(&d).expect_err("must refuse");
+        assert!(e.contains("uniform holds"), "{e}");
+
+        // Exactly at capacity is fine.
+        d.parameters.pop();
+        assert!(check_download(&d).is_ok());
+    }
+
+    /// A shader that calls the shared library without including it
+    /// compiles against nothing and fails naming a function its author
+    /// never wrote.
+    #[test]
+    fn calling_the_blend_library_without_including_it_is_refused() {
+        let d = dl("needy", Some("fn main() { let c = blend_screen(a, b); }"));
+        let e = check_download(&d).expect_err("must refuse");
+        assert!(e.contains("blend_screen"), "{e}");
+        assert!(e.contains("INCLUDE_BLEND_MODES"), "{e}");
+
+        // With the marker it is fine — the splice happens on the marker.
+        let ok = dl(
+            "polite",
+            Some("// INCLUDE_BLEND_MODES\nfn main() { let c = blend_screen(a, b); }"),
+        );
+        assert!(check_download(&ok).is_ok());
+    }
+
+    /// The guard covers the WHOLE library, not just `blend_*`. A shader
+    /// calling `luminance` fails exactly as hard.
+    #[test]
+    fn the_guard_covers_every_symbol_the_library_defines() {
+        let syms = blend_library_symbols();
+        assert!(syms.len() > 15, "parsed {} symbols", syms.len());
+        assert!(syms.iter().any(|s| s == "luminance"), "{syms:?}");
+        assert!(syms.iter().any(|s| s == "rgb_to_hsl"), "{syms:?}");
+
+        let d = dl("lumen", Some("fn main() { let l = luminance(c); }"));
+        assert!(check_download(&d).unwrap_err().contains("luminance"));
+    }
+
+    /// A shader that defines its own function of the same name is not
+    /// calling ours, so it must not be refused.
+    #[test]
+    fn a_shader_that_defines_the_symbol_itself_is_fine() {
+        let d = dl(
+            "selfsufficient",
+            Some("fn luminance(c: vec3<f32>) -> f32 { return c.g; }\nfn main() { luminance(x); }"),
+        );
+        assert!(check_download(&d).is_ok());
+    }
+
+    /// A built-in cannot be replaced by a download, matching variations.
+    #[test]
+    fn a_download_cannot_replace_a_builtin() {
+        let mut reg = EffectRegistry::new();
+        register_builtin_effects(&mut reg);
+        let e = reg
+            .register_from_api(&dl("vignette", Some("fn main() {}")))
+            .expect_err("must refuse");
+        assert!(e.contains("built in"), "{e}");
+        assert!(
+            reg.get("vignette").unwrap().provenance.is_builtin(),
+            "the built-in must survive"
+        );
     }
 }

@@ -107,12 +107,87 @@ pub struct ApiTransformWire {
 // ============================================================================
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct Effect {
+pub struct EffectListItem {
     pub id: String,
     pub name: String,
-    pub effect_stage: ApiEffectStage,
+    #[serde(default)]
+    pub display_name: String,
+    /// Pipeline position: `density` runs before tonemap, `color` after.
+    /// Served as `category` to match the variation payload — it is the
+    /// same column as the server's `effect_stage`, because an effect's
+    /// category *is* its stage.
+    #[serde(default)]
+    pub category: Option<String>,
+    #[serde(default)]
+    pub authors: Vec<String>,
+    #[serde(default)]
     pub description: Option<String>,
+    /// Markdown stripped, for a client with no markdown renderer. Unlike
+    /// scripts, an effect has no client-side source to re-derive prose
+    /// from, so this has to travel.
+    #[serde(default)]
+    pub description_plain: Option<String>,
+    #[serde(default)]
+    pub version: u32,
+    /// Whether a client may fetch and register this at runtime.
+    ///
+    /// False for every row until the server's shaders are seeded. That
+    /// is the honest statement of the interim — the alternative is a
+    /// client discovering it by fetching one and finding nothing to
+    /// compile.
+    #[serde(default)]
+    pub downloadable: bool,
 }
+
+/// Full detail for `GET /api/effects/{name}` — carries the WGSL.
+///
+/// `Serialize` as well as `Deserialize`: the cache stores the payload
+/// verbatim, so a field this build does not yet read still survives a
+/// round trip rather than being silently dropped on write.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EffectDownload {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
+    pub category: Option<String>,
+    #[serde(default)]
+    pub authors: Vec<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub description_plain: Option<String>,
+    #[serde(default)]
+    pub version: u32,
+    /// Served verbatim, same wire shape as a variation's parameters —
+    /// see [`ApiEffectParameter`].
+    #[serde(default)]
+    pub parameters: Vec<ApiEffectParameter>,
+    /// The WGSL. **Nullable**: null until the server's shader seed
+    /// migration lands, which is exactly when `downloadable` flips true.
+    /// Registration refuses a null one rather than registering an effect
+    /// that would render nothing.
+    #[serde(default)]
+    pub shader: Option<String>,
+    /// Whether the shader needs the `// INCLUDE_BLEND_MODES` splice.
+    ///
+    /// Advisory: the client splices on the marker actually present, so
+    /// this is cross-checked rather than trusted. A shader that calls
+    /// into the shared library without the marker is refused — it would
+    /// otherwise fail to compile naming a function nobody wrote.
+    #[serde(default)]
+    pub requires_blend_modes: bool,
+    #[serde(default)]
+    pub downloadable: bool,
+}
+
+/// One parameter of a downloaded effect.
+///
+/// Deliberately the *same type* as a variation's, not a copy of its
+/// shape. The API serves both verbatim from one format, and two structs
+/// that must stay identical are two structs that will not.
+pub type ApiEffectParameter = ApiVariationParameter;
 
 // ============================================================================
 // Variations (read-only from API)

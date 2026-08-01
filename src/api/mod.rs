@@ -588,6 +588,29 @@ impl ApiState {
         client::api_get(&url, &token).await
     }
 
+    // ========================================================================
+    // Effects
+    // ========================================================================
+
+    /// The effect catalog — everything the server knows, without shaders.
+    pub async fn list_effects(&self) -> FetchResult<Vec<types::EffectListItem>> {
+        let token = self.require_token()?;
+        let url = build_url(API_BASE_URL, "/api/effects");
+        client::api_get(&url, &token).await
+    }
+
+    /// One effect, with its WGSL.
+    ///
+    /// `shader` may still be null — the server serves the row before its
+    /// shader is seeded, and says so through `downloadable`. Registration
+    /// refuses a null one rather than adding an effect that renders
+    /// nothing.
+    pub async fn fetch_effect(&self, name: &str) -> FetchResult<types::EffectDownload> {
+        let token = self.require_token()?;
+        let url = build_url(API_BASE_URL, &format!("/api/effects/{name}"));
+        client::api_get(&url, &token).await
+    }
+
     pub async fn fetch_variation(&self, name: &str) -> FetchResult<types::VariationDownload> {
         let url = build_url(API_BASE_URL, &format!("/api/variations/{}", name));
         // Use empty token — variations are publicly readable
