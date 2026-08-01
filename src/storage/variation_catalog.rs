@@ -82,186 +82,43 @@ pub fn clear() -> CatalogResult<()> {
     backend::delete_file(&path).map_err(|e| format!("Failed to delete catalog cache: {e}"))
 }
 
-/// What the panel needs to know about one catalogued variation.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CatalogState {
-    /// Ships with the app. Nothing to fetch.
-    BuiltIn,
-    /// Downloaded, and the catalog agrees on the version.
-    Downloaded { version: u32 },
-    /// Downloaded, but the server has a newer version.
-    UpdateAvailable { have: u32, available: u32 },
-    /// In the catalog, not installed. Fetchable.
-    Available,
-    /// In the catalog but marked built-in-only, and this client does not
-    /// have it — engine-integral, so it can never be fetched. Shown so
-    /// the catalog is not silently incomplete.
-    BuiltInOnlyElsewhere,
-}
-
-/// Merge the catalog against what is installed.
+/// The shared merge, re-exported so callers keep one import.
 ///
-/// Pure, so the state machine is testable without a network or a
-/// registry singleton. The rules, in order of precedence:
-///
-/// 1. A variation the client has built in is `BuiltIn` — it cannot be
-///    replaced by a download, and `register_from_api` refuses to try.
-/// 2. Installed-and-downloaded compares versions; the catalog winning
-///    means an update exists.
-/// 3. Not installed splits on `downloadable`, because "you can fetch
-///    this" and "this exists but is engine-integral" are different
-///    answers and collapsing them would misreport `subflame_wf`.
-pub fn merge_state(
-    item: &VariationListItem,
-    installed: Option<(bool, u32)>,
-) -> CatalogState {
-    match installed {
-        Some((true, _)) => CatalogState::BuiltIn,
-        Some((false, have)) => {
-            if item.version > have {
-                CatalogState::UpdateAvailable { have, available: item.version }
-            } else {
-                CatalogState::Downloaded { version: have }
-            }
-        }
-        None if item.downloadable => CatalogState::Available,
-        None => CatalogState::BuiltInOnlyElsewhere,
-    }
-}
-
-/// The catalog split into the buckets the panel renders.
-///
-/// Borrows from the catalog rather than cloning: the whole point is a
-/// listing of up to several hundred entries rendered every frame.
-#[derive(Debug, Default)]
-pub struct CatalogSummary<'a> {
-    /// Fetchable and not installed.
-    pub available: Vec<&'a VariationListItem>,
-    /// Installed but behind: `(item, have, available)`.
-    pub updatable: Vec<(&'a VariationListItem, u32, u32)>,
-    /// Real, catalogued, and unreachable from here — engine-integral
-    /// variations this build does not have. Counted rather than listed
-    /// because there is no action to offer.
-    pub builtin_only_elsewhere: usize,
-}
-
-/// Partition a catalog against what is installed.
-///
-/// Separated from the panel so the bucketing is testable without an
-/// egui context: which bucket a variation lands in decides whether the
-/// user is offered a download that cannot succeed.
-///
-/// `installed` answers `(is_core, version)` for a name, or `None`.
-pub fn summarize<'a>(
-    items: &'a [VariationListItem],
-    installed: impl Fn(&str) -> Option<(bool, u32)>,
-) -> CatalogSummary<'a> {
-    let mut out = CatalogSummary::default();
-    for item in items {
-        match merge_state(item, installed(&item.name)) {
-            CatalogState::Available => out.available.push(item),
-            CatalogState::UpdateAvailable { have, available } => {
-                out.updatable.push((item, have, available))
-            }
-            CatalogState::BuiltInOnlyElsewhere => out.builtin_only_elsewhere += 1,
-            CatalogState::BuiltIn | CatalogState::Downloaded { .. } => {}
-        }
-    }
-    out
-}
+/// The state machine moved to [`super::catalog`] when effects needed
+/// the identical thing — it only ever reads a version and a
+/// `downloadable` flag, so two copies would have been two copies to
+/// keep in step.
+pub use super::catalog::{merge_state, summarize, CatalogState, CatalogSummary};
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn item(name: &str, version: u32, downloadable: bool) -> VariationListItem {
-        VariationListItem {
-            id: name.into(),
-            name: name.into(),
-            display_name: name.into(),
-            category: "advanced_2d".into(),
-            version,
-            description: None,
-            description_plain: None,
-            authors: Vec::new(),
-            downloadable,
-            has_shader_3d: true,
+    /// The cache path is one file, not a directory of them: the catalog
+    /// is fetched and replaced whole, so per-entry storage would only
+    /// add ways for it to be half-updated.
+    #[test]
+    fn the_catalog_is_stored_as_one_file() {
+        assert_eq!(
+            catalog_path(),
+            std::path::PathBuf::from("variations").join("_catalog.json")
+        );
+    }
+
+    /// A corrupt cache is absent, not fatal: it is a convenience copy of
+    /// something re-fetchable, so failing the panel over it would be the
+    /// wrong trade.
+    #[test]
+    fn an_unreadable_cache_reads_as_absent() {
+        let path = catalog_path();
+        let had = backend::read_file(&path).ok();
+        backend::write_file(&path, "{ this is not json").expect("write");
+        assert!(load().is_none(), "garbage must not panic or half-parse");
+        match had {
+            Some(original) => backend::write_file(&path, &original).expect("restore"),
+            None => {
+                let _ = clear();
+            }
         }
-    }
-
-    #[test]
-    fn built_in_beats_everything() {
-        // Even if the catalog claims a newer version: a built-in cannot
-        // be replaced by a download, and offering an update the client
-        // would then refuse to install is worse than saying nothing.
-        let s = merge_state(&item("linear", 99, true), Some((true, 0)));
-        assert_eq!(s, CatalogState::BuiltIn);
-    }
-
-    #[test]
-    fn a_newer_catalog_version_is_an_update() {
-        assert_eq!(
-            merge_state(&item("x", 5, true), Some((false, 3))),
-            CatalogState::UpdateAvailable { have: 3, available: 5 }
-        );
-        // Same or older is not.
-        assert_eq!(
-            merge_state(&item("x", 3, true), Some((false, 3))),
-            CatalogState::Downloaded { version: 3 }
-        );
-        assert_eq!(
-            merge_state(&item("x", 2, true), Some((false, 3))),
-            CatalogState::Downloaded { version: 3 }
-        );
-    }
-
-    /// The panel's whole listing in one pass: every bucket, and nothing
-    /// in two of them.
-    #[test]
-    fn a_catalog_partitions_into_the_buckets_the_panel_shows() {
-        let items = vec![
-            item("linear", 9, true),        // built in here
-            item("fetched_old", 5, true),   // downloaded, stale
-            item("fetched_current", 3, true),
-            item("not_here_yet", 1, true),
-            item("subflame_wf", 1, false),  // engine-integral, absent
-        ];
-        let s = summarize(&items, |name| match name {
-            "linear" => Some((true, 0)),
-            "fetched_old" => Some((false, 3)),
-            "fetched_current" => Some((false, 3)),
-            _ => None,
-        });
-
-        assert_eq!(s.available.iter().map(|i| i.name.as_str()).collect::<Vec<_>>(),
-                   vec!["not_here_yet"]);
-        assert_eq!(s.updatable.len(), 1);
-        assert_eq!(s.updatable[0].0.name, "fetched_old");
-        assert_eq!((s.updatable[0].1, s.updatable[0].2), (3, 5));
-        assert_eq!(s.builtin_only_elsewhere, 1);
-        // `linear` and `fetched_current` are present and current — they
-        // appear in the registry listing, not in any catalog bucket.
-    }
-
-    /// Offline with nothing cached: no buckets, and specifically no
-    /// "everything is installed" claim derived from an empty catalog.
-    #[test]
-    fn an_empty_catalog_yields_nothing() {
-        let s = summarize(&[], |_| None);
-        assert!(s.available.is_empty());
-        assert!(s.updatable.is_empty());
-        assert_eq!(s.builtin_only_elsewhere, 0);
-    }
-
-    #[test]
-    fn not_installed_splits_on_downloadable() {
-        assert_eq!(merge_state(&item("x", 1, true), None), CatalogState::Available);
-        // subflame_wf's shape: catalogued, real, but engine-integral.
-        // Reporting it as "Available" would offer a fetch that cannot
-        // succeed; omitting it would make the catalog look incomplete.
-        assert_eq!(
-            merge_state(&item("subflame_wf", 1, false), None),
-            CatalogState::BuiltInOnlyElsewhere
-        );
     }
 }

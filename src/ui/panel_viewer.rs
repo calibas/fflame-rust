@@ -375,6 +375,9 @@ pub struct PanelContext<'a> {
     /// Online-library state the Scripts panel reads, and the slot it
     /// writes a request into. Owned by App.
     pub script_cloud: &'a crate::app::script_cloud::ScriptCloudState,
+    /// Last-fetched effect catalog, if there is one. `None` offline and
+    /// never-fetched; the panel simply omits its catalog section.
+    pub effect_catalog: Option<&'a crate::storage::effect_catalog::CachedEffectCatalog>,
     pub script_cloud_request: &'a mut Option<crate::app::script_cloud::ScriptCloudRequest>,
     /// Whether anyone is signed in — the panel shows its online section
     /// only then, rather than offering actions that cannot work.
@@ -1671,6 +1674,7 @@ impl<'a> PanelViewer<'a> {
             ui,
             self.context.config_manager,
             self.context.animation_controller,
+            self.context.effect_catalog,
         );
     }
 

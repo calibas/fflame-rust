@@ -993,19 +993,97 @@ Two defects found while building, both silent:
 
 ### 8.5 Effects — the large build (§4)
 
-- [ ] **M** — `Lazy<EffectRegistry>` → `Lazy<RwLock<…>>` plus
-  `global_effect_registry_mut()`. 17 call sites, 5 files, mechanical.
-- [ ] **S** — `EffectInfo` holds source *or* path, plus source tag and
-  `version`.
-- [ ] **M** — Source-accepting compilation, preserving the
-  `// INCLUDE_BLEND_MODES` splice.
-- [ ] **M** — Effect cache, mirroring the variation cache — with the
-  WASM key index done right rather than inheriting 8.1's bug.
-- [ ] **M** — On-demand fetch trigger. The hook exists;
-  `effect_chain.rs` detects unknown types and only logs.
-- [ ] **M** — Manifest + panel listing everything, matching 8.2.
-- [ ] **S** — Replace the dead `Effect` struct in `src/api/types.rs`
-  with `EffectDownload`.
+- [x] **M** — ~~`Lazy<RwLock<EffectRegistry>>` + `_mut()`~~ **DONE.**
+  19 call sites, 6 files. Two had to be restructured rather than
+  substituted: a guard cannot be dropped at the end of the statement
+  that borrows from it.
+- [x] **S** — ~~`EffectInfo` holds source~~ **DONE**, as
+  `EffectSource::Builtin { embedded, path } | Owned(String)` — embedded
+  always, with the on-disk copy preferred on desktop, exactly the
+  arrangement `assets/scripts/` has.
+- [x] **M** — ~~Source-accepting compilation~~ **DONE**, splice intact.
+
+  **This fixed a bug live in every shipped desktop build.**
+  `embedded_shaders` was already compiled into every target, but the
+  desktop path read `shaders/` relative to cwd and *errored* when the
+  file was missing rather than falling back to the copy it already had.
+  Run the binary from anywhere else and every effect logged an error and
+  rendered nothing. Proven by rendering one flame from two directories:
+  old `be8669f0`/`e593f8ff` (differ), new `be8669f0`/`be8669f0` (match),
+  and the new render is byte-identical to the old one where effects
+  already worked.
+
+  `load_blend_modes` was worse: a missing file logged an error and
+  returned an **empty string**, so all twelve effects that splice it
+  compiled against nothing and failed naming a function the reader never
+  wrote.
+
+  The WASM path is gone. It was a hardcoded match over the fifteen
+  shipped paths with `_ => Err(...)`, which made a downloaded effect not
+  unimplemented but **inexpressible** — the client could not have
+  consumed the corpus format this repo already exports.
+- [x] **M** — ~~Effect cache~~ **DONE**, and it registers *before* it
+  saves, so a payload this build refuses is not stored to be refused
+  again on every startup. Startup applies today's rules to what is
+  already on disk, so a refusal tightened later reaches cached entries
+  rather than being bypassed by them.
+- [x] **M** — ~~On-demand fetch~~ **DONE.** Recorded where the answer is
+  already known — `EffectChain` looks each name up while compiling and
+  finds nothing — rather than by scanning the config, because unlike a
+  missing variation, a missing effect depends on what the registry holds
+  right now.
+
+  Rendering is deliberately **not** paused, unlike a variation fetch: a
+  flame missing a variation renders something wrong, a flame missing an
+  effect renders the un-effected image.
+
+  `compile_effects` runs every frame and never caches a failure, so
+  nothing needs invalidating when an effect arrives — and a
+  still-missing effect re-records its name every frame, which is why
+  `effect_fetch_attempted` exists. Without it a server that does not
+  have the effect would be asked sixty times a second, which is the
+  ordinary case while `downloadable` is false.
+- [x] **M** — ~~Manifest + panel~~ **DONE**, sharing 8.2's state machine
+  rather than copying it: `storage::catalog` holds `CatalogState` /
+  `merge_state` / `summarize` behind a three-method `CatalogItem` trait,
+  and both subsystems implement it.
+
+  The interim renders honestly. Every effect row is `downloadable:
+  false` until the server seeds its shaders, so the whole catalog merges
+  to `BuiltInOnlyElsewhere` — listed, counted, offered no fetch. Calling
+  them Available would offer a download that returns a null shader and
+  gets refused.
+- [x] **S** — ~~Replace the dead `Effect` struct~~ **DONE** —
+  `EffectDownload` + `EffectListItem`. Effect parameters reuse the
+  variation parameter type outright rather than copying its shape: the
+  API serves both verbatim from one format, and two structs that must
+  stay identical are two structs that will not.
+
+**Registration refuses rather than degrades**, for the reason variations
+do — an effect that registers and renders nothing looks like a broken
+feature with no way to find out why. Four refusals: no shader, unknown
+category (the category *is* the pipeline position, so there is no safe
+default), over the 48-parameter uniform capacity, and a shader that
+calls the shared blend-mode library without including it.
+
+That last guard reads its symbol list **out of** the library rather than
+transcribing one, and it mattered: the library exports `luminance`,
+`rgb_to_hsl` and `set_luminance` as well as `blend_*`, and a hand-written
+list of blend functions — the obvious version — would have missed them.
+
+**Two bugs found in my own earlier work while building this.**
+
+`variation_cache::list_cached` listed `variations/*.json`, which
+includes the catalog `_catalog.json` written in 8.2. So `load_all`
+failed to parse it and warned on every startup, and `clear_all` counted
+it — "Clear Variation Cache (N)" reported one more than there were
+cached variations, and deleted the catalog as though it were one. Both
+caches now skip `_`-prefixed entries as metadata.
+
+Four script-store tests were **flaky, not failing**: `set_link` is
+read-modify-write over one shared file, so parallel tests clobbered each
+other even with distinct stems. They passed for two commits by luck of
+scheduling.
 - [x] **S** — ~~Publish-time validation the server needs from us~~ —
   superseded: the cap is **48**, not 16 (raised 2026-07-31), and the
   numbers now ship in the generated contract rather than prose.

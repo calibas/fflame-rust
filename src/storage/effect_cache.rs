@@ -62,7 +62,19 @@ pub fn list_cached() -> CacheResult<Vec<String>> {
     Ok(entries
         .into_iter()
         .filter_map(|n| n.strip_suffix(".json").map(str::to_string))
+        .filter(|n| !is_metadata_entry(n))
         .collect())
+}
+
+/// Entries whose name begins with `_` are metadata, not resources.
+///
+/// `effect_catalog` stores `_catalog.json` under this same prefix. The
+/// variation cache shipped without this filter, so its catalog came back
+/// as a cached variation named `_catalog` — a parse warning on every
+/// startup, an off-by-one in "Clear Cache (N)", and the catalog deleted
+/// as though it were one of the entries.
+fn is_metadata_entry(name: &str) -> bool {
+    name.starts_with('_')
 }
 
 /// Clear the cache. Returns how many entries went.
@@ -131,6 +143,27 @@ mod tests {
         }
     }
 
+    /// The catalog shares this prefix and must not read back as a
+    /// cached effect. This is the bug the variation cache shipped with.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn the_catalog_file_is_not_listed_as_an_effect() {
+        let name = "effect-listing-probe";
+        let _ = delete(name);
+        save(&sample(name)).expect("save");
+        crate::storage::effect_catalog::save(&Default::default()).expect("catalog");
+
+        let listed = list_cached().expect("list");
+        assert!(listed.iter().any(|n| n == name), "the real entry is listed");
+        assert!(
+            !listed.iter().any(|n| n.starts_with('_')),
+            "metadata must not be listed as a resource: {listed:?}"
+        );
+
+        delete(name).expect("cleanup");
+        let _ = crate::storage::effect_catalog::clear();
+    }
+
     #[test]
     fn names_come_back_without_the_json_extension() {
         assert_eq!(cache_path("swirl"), PathBuf::from("effects").join("swirl.json"));
@@ -141,7 +174,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn an_effect_survives_a_save_and_can_be_cleared() {
-        let name = "__effect_cache_round_trip";
+        let name = "effect-cache-round-trip";
         let _ = delete(name);
 
         assert!(load(name).unwrap().is_none(), "not cached yet");

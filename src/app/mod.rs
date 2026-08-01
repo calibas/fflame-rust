@@ -508,6 +508,12 @@ pub struct App {
     pub(super) effect_fetch_results:
         std::sync::Arc<std::sync::Mutex<Vec<(String, Result<crate::api::types::EffectDownload, String>)>>>,
     pub(super) effect_fetch_attempted: std::collections::HashSet<String>,
+    /// Last-fetched effect catalog, and the once-per-session refresh.
+    pub(super) effect_catalog: Option<crate::storage::effect_catalog::CachedEffectCatalog>,
+    pub(super) effect_catalog_result: std::sync::Arc<
+        std::sync::Mutex<Option<Result<Vec<crate::api::types::EffectListItem>, String>>>,
+    >,
+    pub(super) effect_catalog_started: bool,
     pub(super) script_cloud: script_cloud::ScriptCloudState,
     pub(super) script_cloud_results: script_cloud::ScriptCloudSlot,
     /// Parallel to config history: for each FullConfig snapshot, stores
@@ -711,6 +717,9 @@ impl App {
             current_user_id: None,
             effect_fetch_results: Default::default(),
             effect_fetch_attempted: Default::default(),
+            effect_catalog: crate::storage::effect_catalog::load(),
+            effect_catalog_result: Default::default(),
+            effect_catalog_started: false,
             script_cloud: Default::default(),
             script_cloud_results: Default::default(),
             api_state_history: std::collections::HashMap::new(),
@@ -1245,6 +1254,7 @@ impl App {
             self.fly_mode,
             self.variation_catalog.as_ref(),
             &self.script_cloud,
+            self.effect_catalog.as_ref(),
             signed_in,
         );
 

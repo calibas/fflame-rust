@@ -909,6 +909,7 @@ impl EguiLayer {
         fly_mode_active: bool,
         variation_catalog: Option<&crate::storage::variation_catalog::CachedCatalog>,
         script_cloud: &crate::app::script_cloud::ScriptCloudState,
+        effect_catalog: Option<&crate::storage::effect_catalog::CachedEffectCatalog>,
         signed_in: bool,
     ) -> UiResponse {
         // Sync compact mode from workspace (handles layout switches from menus)
@@ -1402,6 +1403,7 @@ impl EguiLayer {
                         clear_variation_cache_requested: &mut clear_variation_cache_requested,
                         variation_update_requested: &mut variation_update_requested,
                         script_cloud,
+                        effect_catalog,
                         script_cloud_request: &mut script_cloud_request,
                         signed_in,
                         compact_mode: self.compact_mode,

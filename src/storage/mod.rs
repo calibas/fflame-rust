@@ -18,7 +18,9 @@ pub mod credentials;
 pub mod custom_palettes;
 pub mod settings;
 pub mod thumbnail_cache;
+pub mod catalog;
 pub mod effect_cache;
+pub mod effect_catalog;
 pub mod variation_cache;
 pub mod variation_catalog;
 
