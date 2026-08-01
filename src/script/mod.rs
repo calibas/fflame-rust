@@ -579,6 +579,26 @@ impl ScriptFlags {
         }
         Ok(())
     }
+
+    /// The canonical names of the flags that are set.
+    ///
+    /// Round-trips through [`Self::set`]. Note what it cannot do: flags
+    /// live here as bools, so one this build did not recognise was
+    /// already dropped by the collect pass and cannot be reproduced.
+    /// Anything derived from a script and sent upstream is therefore
+    /// always a subset of [`Self::KNOWN`] — which is why the server has
+    /// to store what it is given verbatim rather than expect a
+    /// round-trip through a client to be lossless.
+    pub fn to_names(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        if self.no_rng {
+            out.push("norng".to_string());
+        }
+        if self.palette {
+            out.push("palette".to_string());
+        }
+        out
+    }
 }
 
 /// A script failure, carrying source position when Rhai knows it.

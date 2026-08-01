@@ -806,13 +806,13 @@
         ],
         "responses": {
           "200": {
-            "description": "List all available effects",
+            "description": "Browse catalog — no shader or parameters",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/Effect"
+                    "$ref": "#/components/schemas/EffectListItem"
                   }
                 }
               }
@@ -840,11 +840,11 @@
         ],
         "responses": {
           "200": {
-            "description": "Effect found",
+            "description": "Effect with parameters and WGSL",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Effect"
+                  "$ref": "#/components/schemas/EffectDownload"
                 }
               }
             }
@@ -1682,6 +1682,225 @@
         }
       }
     },
+    "/api/scripts": {
+      "get": {
+        "tags": [
+          "routes::scripts"
+        ],
+        "operationId": "list_my_scripts",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ScriptListItem"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "routes::scripts"
+        ],
+        "operationId": "create_script",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateScriptRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScriptResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/scripts/{id}": {
+      "get": {
+        "tags": [
+          "routes::scripts"
+        ],
+        "operationId": "get_script",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Script ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScriptResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "routes::scripts"
+        ],
+        "operationId": "update_script",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Script ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateScriptRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScriptResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the owner"
+          },
+          "404": {
+            "description": "No such script"
+          },
+          "409": {
+            "description": "Stale version — refetch and merge",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScriptConflict"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "routes::scripts"
+        ],
+        "operationId": "delete_script",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Script ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
     "/api/search/flames": {
       "get": {
         "tags": [
@@ -1800,6 +2019,60 @@
             "bearer_auth": []
           }
         ]
+      }
+    },
+    "/api/search/scripts": {
+      "get": {
+        "tags": [
+          "routes::scripts"
+        ],
+        "operationId": "search_scripts",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ScriptListItem"
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/tags": {
@@ -2791,22 +3064,91 @@
           }
         }
       },
-      "Effect": {
+      "CreateScriptRequest": {
         "type": "object",
         "required": [
-          "id",
           "name",
-          "effect_stage"
+          "display_name",
+          "kind",
+          "source"
         ],
         "properties": {
+          "authors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "description": {
             "type": [
               "string",
               "null"
             ]
           },
-          "effect_stage": {
+          "display_name": {
+            "type": "string"
+          },
+          "flags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ScriptKind"
+          },
+          "name": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "visibility": {
+            "$ref": "#/components/schemas/Visibility"
+          }
+        }
+      },
+      "EffectDownload": {
+        "type": "object",
+        "description": "Full detail for `GET /api/effects/{name}` — carries the WGSL.",
+        "required": [
+          "id",
+          "name",
+          "display_name",
+          "authors",
+          "version",
+          "category",
+          "parameters",
+          "requires_blend_modes",
+          "downloadable"
+        ],
+        "properties": {
+          "authors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "category": {
             "$ref": "#/components/schemas/EffectStage"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description_plain": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "downloadable": {
+            "type": "boolean"
           },
           "id": {
             "type": "string",
@@ -2814,6 +3156,129 @@
           },
           "name": {
             "type": "string"
+          },
+          "parameters": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EffectParameter"
+            },
+            "description": "Served verbatim; see `EffectParameter`. Capped at 48 by\n`effects_param_cap` — physical uniform capacity, not policy."
+          },
+          "requires_blend_modes": {
+            "type": "boolean",
+            "description": "Whether the compiled shader needs the `// INCLUDE_BLEND_MODES` splice\nof `shaders/effects/common/blend_modes.wgsl`."
+          },
+          "shader": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "NULL until the shader seed migration lands, which is exactly when\n`downloadable` flips true."
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
+      "EffectListItem": {
+        "type": "object",
+        "description": "Browse payload for `GET /api/effects`.\n\nSame rule as `VariationListItem`: a field earns a place here if a\n**browse-or-select decision** can be made from it. The shader is the whole\nweight of the payload and is never needed to choose an effect, so it lives\non the detail endpoint only.",
+        "required": [
+          "id",
+          "name",
+          "display_name",
+          "authors",
+          "version",
+          "category",
+          "downloadable"
+        ],
+        "properties": {
+          "authors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "category": {
+            "$ref": "#/components/schemas/EffectStage",
+            "description": "The pipeline position — `density` runs before tonemap, `color` after.\n\nServed as `category` to match the client's wire format and the\nvariation payload. It is the **same column** as `effect_stage`; there is\ndeliberately no second column, because an effect's category *is* its\nstage (client §4.3: \"exactly one category, `density` or `color`,\ndeciding pipeline position\")."
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description_plain": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "downloadable": {
+            "type": "boolean",
+            "description": "Whether a client may fetch and register this effect at runtime.\n\nFalse for every row until the shaders are seeded — which is the honest\nstatement of the interim, rather than letting a client discover it by\nfetching one and finding nothing to compile."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
+      "EffectParameter": {
+        "type": "object",
+        "description": "Documentation-only shape for one entry of `effects.parameters`.\n\nAs with `VariationParameter`, the server does **not** deserialize into\nthis — `EffectDownload.parameters` is served verbatim. The typed version of\nthe variation equivalent lost data twice (a dropped `description`, a 500 on\nthe externally-tagged enum form), and effects mirror that wire format\none-for-one, so they would inherit both.\n\nEvery value is an `f32` on the wire and in the uniform regardless of type;\n`param_type` drives UI rendering only.",
+        "required": [
+          "name",
+          "display_name",
+          "param_type",
+          "default_value"
+        ],
+        "properties": {
+          "default_value": {
+            "type": "number",
+            "format": "double"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "max_value": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "min_value": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "name": {
+            "type": "string"
+          },
+          "param_type": {
+            "type": "object",
+            "description": "Either a bare string or externally tagged `{\"enum\": {\"choices\": [...]}}`."
           }
         }
       },
@@ -3252,6 +3717,190 @@
           }
         }
       },
+      "ScriptConflict": {
+        "type": "object",
+        "description": "Returned with `409 Conflict` when the submitted version is stale.\n\nCarries enough for the client to decide between refetch-and-merge and\nwarn-the-user. Deliberately not the whole script — a client that wants the\ncurrent content can GET it, and a script's source can be 256 KB.",
+        "required": [
+          "id",
+          "current_version",
+          "updated_at"
+        ],
+        "properties": {
+          "current_version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The version currently stored. Yours was older."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ScriptKind": {
+        "type": "string",
+        "enum": [
+          "generator",
+          "modifier"
+        ]
+      },
+      "ScriptListItem": {
+        "type": "object",
+        "description": "Browse payload. Omits `source` — the whole weight of the record, and never\nneeded to decide whether you want a script.",
+        "required": [
+          "id",
+          "user_id",
+          "owner_display_name",
+          "name",
+          "display_name",
+          "kind",
+          "flags",
+          "authors",
+          "version",
+          "visibility",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "authors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "flags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ScriptKind"
+          },
+          "name": {
+            "type": "string"
+          },
+          "owner_display_name": {
+            "type": "string",
+            "description": "The owner's display name.\n\nCarried because `users.display_name` is case-insensitively unique\n(migration 37), which makes `display_name/name` a globally unique,\nstable, human-readable key — what a client needs to namespace two\nauthors' `grand_julian` on import without inventing a disambiguator or\nshowing a UUID fragment."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "user_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "visibility": {
+            "$ref": "#/components/schemas/Visibility"
+          }
+        }
+      },
+      "ScriptResponse": {
+        "type": "object",
+        "description": "Detail payload — carries the source.",
+        "required": [
+          "id",
+          "user_id",
+          "owner_display_name",
+          "name",
+          "display_name",
+          "kind",
+          "flags",
+          "authors",
+          "source",
+          "version",
+          "visibility",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "authors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "flags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ScriptKind"
+          },
+          "name": {
+            "type": "string"
+          },
+          "owner_display_name": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string",
+            "description": "Authoritative. The client re-derives `display_name` / `kind` / `flags` /\n`description` from this on load; a mismatch means our stored metadata is\nstale, not that the script is wrong."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "user_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Send this back on PUT. See `UpdateScriptRequest::version`."
+          },
+          "visibility": {
+            "$ref": "#/components/schemas/Visibility"
+          }
+        }
+      },
       "SetTagsRequest": {
         "type": "object",
         "required": [
@@ -3409,6 +4058,57 @@
           }
         }
       },
+      "UpdateScriptRequest": {
+        "type": "object",
+        "required": [
+          "name",
+          "display_name",
+          "kind",
+          "source",
+          "visibility",
+          "version"
+        ],
+        "properties": {
+          "authors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "flags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ScriptKind"
+          },
+          "name": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The version you last read. **Required** — updates are optimistic.\n\nA desktop app and a browser tab don't share a store, so last-write-wins\nwould silently discard whichever edit lost the race, with nothing to\nnotice it by. A stale version gets `409 Conflict` carrying the current\n`version` and `updated_at`, so the client can refetch and merge rather\nthan guess."
+          },
+          "visibility": {
+            "$ref": "#/components/schemas/Visibility"
+          }
+        }
+      },
       "UpsertUserPaletteRequest": {
         "type": "object",
         "description": "`PUT /api/users/me/palettes/{hash}` body — adds or updates a library entry.",
@@ -3462,7 +4162,8 @@
         "required": [
           "flames",
           "animations",
-          "palettes"
+          "palettes",
+          "scripts"
         ],
         "properties": {
           "animations": {
@@ -3472,6 +4173,9 @@
             "$ref": "#/components/schemas/ResourceUsage"
           },
           "palettes": {
+            "$ref": "#/components/schemas/ResourceUsage"
+          },
+          "scripts": {
             "$ref": "#/components/schemas/ResourceUsage"
           }
         }
@@ -3600,9 +4304,6 @@
           "version",
           "phase",
           "features",
-          "needs_rng",
-          "needs_transform",
-          "writes_color",
           "parameters",
           "init_param_count",
           "state_count",
@@ -3651,7 +4352,7 @@
             "items": {
               "type": "string"
             },
-            "description": "The §6.1 capability array — **authoritative for all thirteen flags**.\nA payload carrying `features` supersedes the legacy bools below rather\nthan merging with them, and an unrecognised name is dropped with a\nwarning client-side rather than rejecting the variation, so adding a\ncapability is never a breaking change in the server→client direction."
+            "description": "The §6.1 capability array — **the only encoding of the thirteen flags**.\n\n`needs_rng` / `needs_transform` / `writes_color` were separate boolean\ncolumns until migration 82; they are now strings in here like the other\nten. An unrecognised name is dropped with a warning client-side rather\nthan rejecting the variation, so adding a capability is never a breaking\nchange in the server→client direction."
           },
           "id": {
             "type": "string",
@@ -3664,18 +4365,12 @@
           "name": {
             "type": "string"
           },
-          "needs_rng": {
-            "type": "boolean",
-            "description": "Legacy signature-shaping bools, superseded by `features` but still\nserved during the transition. `needs_transform` was `needs_affine`\nuntil migration 76; the client has carried a serde alias throughout."
-          },
-          "needs_transform": {
-            "type": "boolean"
-          },
           "parameters": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/VariationParameter"
-            }
+            },
+            "description": "Served **verbatim**. Nothing in the server reads inside it — the only\nconsumer of its structure is `jsonb_array_length(parameters)` in\n`variations_param_slot_cap`, which is SQL. Parsing it here would add a\nway to lose data and no way to gain any; see `VariationParameter` for\nthe two ways an earlier typed version did exactly that."
           },
           "phase": {
             "$ref": "#/components/schemas/VariationPhase"
@@ -3720,15 +4415,12 @@
           "version": {
             "type": "integer",
             "format": "int32"
-          },
-          "writes_color": {
-            "type": "boolean"
           }
         }
       },
       "VariationListItem": {
         "type": "object",
-        "description": "Lightweight shape used by `GET /api/variations`. Omits `parameters` and\nthe shader sources so a full catalog list stays small; clients hit\n`GET /api/variations/{name}` for full data.\n\nThe bar for a field here is that a **browse/select decision** can be made\nfrom it. Engine wiring (`phase`, `features`, `needs_rng`, `needs_transform`,\n`writes_color`, `init_param_count`, and `state_count` when it lands) does\nnot qualify — registration always happens from the detail payload, so\nwiring on the list is bytes with no consumer, fetched for the whole corpus\nunder the manifest-driven catalog.\n\nThose five were trimmed on 2026-07-31 after the client confirmed nothing\ndeclares them and nothing uses `deny_unknown_fields`. This shape is now\nthe client's documented §2 plus `has_shader_3d`.\nSee docs/api-shared-resources-server.md §1.2.",
+        "description": "Lightweight shape used by `GET /api/variations`. Omits `parameters` and\nthe shader sources so a full catalog list stays small; clients hit\n`GET /api/variations/{name}` for full data.\n\nThe bar for a field here is that a **browse/select decision** can be made\nfrom it. Engine wiring (`phase`, `features`, `init_param_count`,\n`state_count`) does not qualify — registration always happens from the\ndetail payload, so wiring on the list is bytes with no consumer, fetched for\nthe whole corpus under the manifest-driven catalog.\n\nFive such fields were trimmed on 2026-07-31 after the client confirmed\nnothing declares them and nothing uses `deny_unknown_fields`; three of those\nno longer exist at all (migration 82). This shape is the client's documented\n§2 plus `has_shader_3d` and `downloadable`.\nSee docs/api-shared-resources-server.md §1.2.",
         "required": [
           "id",
           "name",
@@ -3776,7 +4468,7 @@
       },
       "VariationParameter": {
         "type": "object",
-        "description": "Metadata describing one parameter a variation accepts. Stored as a JSONB\narray on `variations.parameters` and decoded on reads.",
+        "description": "Documentation-only shape for one entry of `variations.parameters`.\n\n**The server does not deserialize into this.** `Variation.parameters` is a\n`serde_json::Value` served verbatim; this struct exists so the OpenAPI spec\nstill describes the shape. Round-tripping through a typed struct could only\nlose data, and did: an earlier version omitted `description`, so all 3,231\nper-parameter descriptions were silently dropped on read, and typed\n`param_type` as `String`, which 500s on the 129 parameters whose type is\nthe enum object below.",
         "required": [
           "name",
           "display_name",
@@ -3787,6 +4479,13 @@
           "default_value": {
             "type": "number",
             "format": "double"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Per-parameter help text. Names like `hypergon`, `super_n3` and\n`popcorn2_3D_c` are opaque without it."
           },
           "display_name": {
             "type": "string"
@@ -3809,7 +4508,8 @@
             "type": "string"
           },
           "param_type": {
-            "type": "string"
+            "type": "object",
+            "description": "Either a bare string — `float`, `unlimited_float`, `integer`,\n`unlimited_integer`, `boolean`, `angle` — or externally tagged\n`{\"enum\": {\"choices\": [...]}}`. The authoritative list is\n`param_types` in `docs/generated/engine-contract.json`.\n\nDrives UI rendering and validation only, never storage: every value is\nan `f32` on the wire and in the GPU buffer regardless of type."
           }
         }
       },
