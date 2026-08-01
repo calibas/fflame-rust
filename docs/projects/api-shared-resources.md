@@ -477,11 +477,20 @@ GET    /api/search/scripts?q=…   → public browse
   save-to-cloud, conflict handling on update, fork-on-edit (§5.2).
 - **Security note.** Unlike variations and effects, scripts are *user
   content* — public browsing means running strangers' code. The
-  sandbox that makes that survivable was recently bounded (operation
-  budget, input caps on the L-system builtins, transform and xaos
-  ceilings). The recorded gap is that the budget cannot see native
-  work, which a wall-clock deadline would close. Worth doing **before**
-  public script browsing ships, not after.
+  sandbox that makes that survivable is bounded on four axes:
+  the Rhai operation budget, input caps on the L-system builtins,
+  transform and xaos ceilings, and — closing the recorded gap that the
+  operation budget cannot see native work — a **step** budget inside
+  the native walks (§8.1). Not a wall-clock deadline: see that item for
+  why a host-speed-dependent abort would have traded a DoS bound for
+  the determinism guarantee this whole effort exists to protect.
+
+  Coverage is now complete rather than partial. Every one of the four
+  walks that expands a rule body per symbol — the quadratic shape, the
+  only one that can outrun `LSYSTEM_MAX_LEN` — charges the budget. The
+  3D walk in `lsystem_pieces3` allocated a budget and never spent from
+  it until `2bf9865e`; a compiler warning about the unused binding is
+  what surfaced it.
 
 ---
 
@@ -741,8 +750,12 @@ These are live defects, not future work.
   save-to-cloud, update-conflict handling.
 - [ ] **S** — Derive and send `kind` / `flags` / `description` from the
   collect pass; treat source as authoritative on load.
-- [ ] **M** — Public browse UI. Gated on the 8.1 deadline item, since
-  this is the point where users run strangers' code.
+- [ ] **M** — Public browse UI. **No longer gated** — the sandbox
+  precondition (§8.1's step budget) is done, and its coverage is
+  complete across all four native walks. This is still the point where
+  users run strangers' code, so it stays last in this section: what
+  remains is the UI work plus showing provenance clearly enough that
+  running a stranger's script is a decision rather than an accident.
 
 ### 8.4 Local-only plugins (§2)
 
