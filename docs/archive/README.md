@@ -31,6 +31,15 @@ Archive is organized by topic area in subdirectories:
 - Investigation reports and design decisions
 - See [histogram/README.md](histogram/README.md) for details
 
+**api-v1-v2/** - The client's first API integration and the v2 wire-format
+redesign (4 documents)
+- Auth, flame/palette sync, desktop vs browser transports
+- The v2 root-transform split, inline palettes, version-keyed config migration
+- Superseded by [projects/api-shared-resources.md](../projects/api-shared-resources.md),
+  which is still ACTIVE and deliberately not archived
+- See [api-v1-v2/README.md](api-v1-v2/README.md) for what each one is
+  outdated about
+
 **Add more topic directories as needed:**
 - `archive/ui-evolution/` - UI redesign history
 - `archive/shader-system/` - Shader system evolution
