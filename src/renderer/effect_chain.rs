@@ -363,6 +363,13 @@ impl EffectChainRunner {
         let effect_info = match registry.get(effect_name) {
             Some(info) => info,
             None => {
+                // Record it rather than only logging. A flame can name
+                // an effect this build has never heard of — the same
+                // situation `missing_variations_in` handles — and the
+                // app fetches it on demand. Logging alone meant the
+                // effect silently did nothing and the console was the
+                // only place that said why.
+                crate::effects::note_missing_effect(effect_name);
                 log::warn!("Unknown effect: {}", effect_name);
                 return;
             }

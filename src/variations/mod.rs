@@ -373,6 +373,10 @@ pub enum VariationCategory {
 /// bounded by the count of distinct enum-bearing variations loaded
 /// from the API — small in practice (one allocation per choice plus
 /// one for the slice, freed never but never re-allocated either).
+pub fn api_param_type_to_runtime_pub(api: &crate::api::types::ApiParamType) -> ParamType {
+    api_param_type_to_runtime(api)
+}
+
 fn api_param_type_to_runtime(api: &crate::api::types::ApiParamType) -> ParamType {
     use crate::api::types::ApiParamType;
     match api {
