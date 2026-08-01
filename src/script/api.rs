@@ -798,10 +798,13 @@ fn register_flame(engine: &mut Engine) {
         "add_effect",
         |f: &mut FlameHandle, name: &str| -> Result<(), Box<EvalAltResult>> {
             use crate::effects::{global_effect_registry, EffectCategory, EffectInstance};
-            let info = global_effect_registry()
+            // The guard has to outlive `info`, which borrows from it.
+            let registry = global_effect_registry();
+            let category = registry
                 .get(name)
-                .ok_or_else(|| err(format!("unknown effect `{name}`")))?;
-            let category = info.category;
+                .ok_or_else(|| err(format!("unknown effect `{name}`")))?
+                .category;
+            drop(registry);
             let instance = EffectInstance::new(name);
             let mut cfg = f.cfg.borrow_mut();
             match category {

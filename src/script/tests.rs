@@ -3614,6 +3614,25 @@ fn a_non_string_flag_is_still_an_error() {
 // Provenance survives adoption
 // ============================================================================
 
+/// Serialize every test that touches the script store's link file.
+///
+/// `set_link` is read-modify-write over one shared `_links.json`, so two
+/// tests running in parallel lose each other's writes even when their
+/// stems differ: both read the map, both insert, the second write wins
+/// and the first entry is gone.
+///
+/// This is a test-harness problem rather than a product one — the app
+/// only touches links from the main thread, since background results are
+/// folded in by `poll_script_cloud`. But it made the tests **flaky**
+/// rather than failing, which is worse: they passed for two commits by
+/// luck of scheduling before one lost the race.
+fn link_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    // A poisoned lock means another link test panicked. That failure is
+    // reported on its own; this one should still run.
+    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// Saving somebody else's script does not make it yours.
 ///
 /// This is the hole that would otherwise open the moment browsing
@@ -3623,6 +3642,7 @@ fn a_non_string_flag_is_still_an_error() {
 /// keep the script; they did not read it.
 #[test]
 fn adopting_a_downloaded_script_keeps_it_untrusted() {
+    let _guard = link_test_lock();
     use super::store;
     let stem = "adopted-from-elsewhere";
     let _ = store::delete(stem);
@@ -3656,6 +3676,7 @@ fn adopting_a_downloaded_script_keeps_it_untrusted() {
 /// leave it marked as somebody else's.
 #[test]
 fn deleting_a_script_forgets_where_it_came_from() {
+    let _guard = link_test_lock();
     use super::store;
     let stem = "reused-stem-test";
     let _ = store::delete(stem);
@@ -3681,6 +3702,7 @@ fn deleting_a_script_forgets_where_it_came_from() {
 /// every path bringing in a foreign script writes one.
 #[test]
 fn no_link_means_local() {
+    let _guard = link_test_lock();
     use super::store;
     assert!(!store::is_untrusted("a-stem-that-was-never-stored"));
 }
@@ -3699,6 +3721,7 @@ fn no_link_means_local() {
 /// cross-call restriction from then on.
 #[test]
 fn refetching_your_own_script_keeps_it_yours() {
+    let _guard = link_test_lock();
     use super::store;
     let stem = "refetch-keeps-ownership";
     let _ = store::delete(stem);
@@ -3746,6 +3769,7 @@ fn refetching_your_own_script_keeps_it_yours() {
 /// a free stem rather than overwriting whatever is already there.
 #[test]
 fn adopting_takes_a_free_stem_and_marks_provenance() {
+    let _guard = link_test_lock();
     use super::store;
     // A shipped stem is reserved, so adoption must not try to take it
     // even if the server let the name through.
