@@ -15,6 +15,7 @@ use egui;
 
 use crate::config::FractalConfig;
 use crate::script::library::{self, ScriptEntry, ScriptOrigin};
+use crate::script::store;
 
 /// egui temp-data key the browser file picker writes into (WASM).
 #[cfg(target_arch = "wasm32")]
@@ -52,15 +53,15 @@ pub struct ScriptsPanel {
     editor_was_open: bool,
     /// One-shot: focus the editor on the next frame that draws it.
     focus_editor: bool,
-    /// The user script awaiting a delete confirmation, if any. Deleting
-    /// is irreversible and there is no undo for the filesystem, so it
-    /// takes a second click — the same shape the Palette Editor uses.
-    #[cfg(not(target_arch = "wasm32"))]
-    pending_delete: Option<(String, std::path::PathBuf)>,
-    /// A fork just wrote a new file: rescan and select it (by id), then
-    /// show this message. Deferred because the Save button is rendered
-    /// where the base config — which `reload` needs — is not in scope.
-    #[cfg(not(target_arch = "wasm32"))]
+    /// The user script awaiting a delete confirmation, as
+    /// `(display name, stem)`. Deleting is irreversible and there is no
+    /// undo for a store, so it takes a second click — the same shape the
+    /// Palette Editor uses.
+    pending_delete: Option<(String, String)>,
+    /// A fork just wrote a new script: rescan and select it (by id),
+    /// then show this message. Deferred because the Save button is
+    /// rendered where the base config — which `reload` needs — is not
+    /// in scope.
     pending_fork: Option<(String, String)>,
     error: Option<ScriptError>,
     messages: Vec<String>,
@@ -86,9 +87,7 @@ impl Default for ScriptsPanel {
             show_editor: false,
             editor_was_open: false,
             focus_editor: false,
-            #[cfg(not(target_arch = "wasm32"))]
             pending_delete: None,
-            #[cfg(not(target_arch = "wasm32"))]
             pending_fork: None,
             error: None,
             messages: Vec::new(),
@@ -130,9 +129,9 @@ impl ScriptsPanel {
         if !conflicts.is_empty() {
             let list = conflicts.join(", ");
             self.status = Some(if conflicts.len() == 1 {
-                format!("`{list}.rhai` in your scripts folder was not loaded — that is a shipped script's name. Rename it to use it.")
+                format!("Your script `{list}` was not loaded — that is a shipped script's name. Rename it to use it.")
             } else {
-                format!("These in your scripts folder were not loaded — they take shipped scripts' names: {list}. Rename them to use them.")
+                format!("These of your scripts were not loaded — they take shipped scripts' names: {list}. Rename them to use them.")
             });
         }
     }
@@ -274,7 +273,7 @@ impl ScriptsPanel {
             .ctx()
             .data_mut(|d| d.remove_temp::<String>(egui::Id::new(PENDING_SCRIPT_LOAD)))
         {
-            self.adopt_opened("Opened".to_string(), text, ScriptOrigin::Builtin);
+            self.adopt_opened("Opened".to_string(), text, ScriptOrigin::External);
         }
 
         egui::ScrollArea::vertical().show(ui, |ui| {
@@ -289,7 +288,6 @@ impl ScriptsPanel {
 
         // Land a fork: rescan so the new file is in the list, select it,
         // then restore the message (`load_selected` clears the status).
-        #[cfg(not(target_arch = "wasm32"))]
         if let Some((id, message)) = self.pending_fork.take() {
             self.reload(current);
             if let Some(i) = self.entries.iter().position(|e| e.id == id) {
@@ -334,7 +332,6 @@ impl ScriptsPanel {
 
         });
 
-        #[cfg(not(target_arch = "wasm32"))]
         self.render_delete_confirmation(ui, current);
 
         match self.declared_kind() {
@@ -366,11 +363,10 @@ impl ScriptsPanel {
     /// Save / Revert / Open / Save As / Delete — everything that acts on
     /// the script file rather than on its text.
     fn render_file_actions(&mut self, ui: &mut egui::Ui) {
-        #[cfg(not(target_arch = "wasm32"))]
         if ui
             .button("Save")
             .on_hover_text(
-                "Save to your scripts folder. Editing a shipped script saves a renamed copy \
+                "Save to your own scripts. Editing a shipped script saves a renamed copy \
                  and switches to it — the original is never changed.",
             )
             .clicked()
@@ -378,24 +374,28 @@ impl ScriptsPanel {
             let desired = self.script_name();
             if self.selected_is_shipped() {
                 // Fork rather than shadow. A shipped stem is reserved, so
-                // saving under it would produce a file `discover` then
+                // saving under it would produce a script `discover` then
                 // ignores — the edit would appear to vanish.
-                let stem = library::free_user_script_stem(&desired);
-                match library::save_user_script(&stem, &self.text) {
-                    Ok(path) => {
+                match store::save(&store::free_stem(&desired), &self.text) {
+                    Ok(stem) => {
+                        let location = store::location_of(&stem);
                         self.pending_fork = Some((
                             stem.clone(),
                             format!(
-                                "Shipped scripts are read-only — saved a copy as `{stem}` ({})",
-                                path.display()
+                                "Shipped scripts are read-only — saved a copy as `{stem}` ({location})"
                             ),
                         ));
                     }
                     Err(e) => self.status = Some(format!("Save failed: {e}")),
                 }
             } else {
-                match library::save_user_script(&desired, &self.text) {
-                    Ok(path) => self.status = Some(format!("Saved to {}", path.display())),
+                match store::save(&desired, &self.text) {
+                    // The stem, not `desired`: a name needing sanitizing
+                    // lands somewhere else, and saying "Saved to <the
+                    // name you typed>" would be a lie about where.
+                    Ok(stem) => {
+                        self.status = Some(format!("Saved to {}", store::location_of(&stem)))
+                    }
                     Err(e) => self.status = Some(format!("Save failed: {e}")),
                 }
             }
@@ -429,7 +429,7 @@ impl ScriptsPanel {
                                 .file_stem()
                                 .map(|s| s.to_string_lossy().into_owned())
                                 .unwrap_or_else(|| "Opened".to_string());
-                            self.adopt_opened(name, text, ScriptOrigin::File(path));
+                            self.adopt_opened(name, text, ScriptOrigin::External);
                         }
                         Err(e) => self.status = Some(format!("Open failed: {e}")),
                     }
@@ -481,24 +481,22 @@ impl ScriptsPanel {
             }
         }
 
-        // Delete sits with the other file actions: it acts on
-        // the same script the rest of this row does. Enabled only
-        // for a copy in the user folder — editing a shipped
-        // starter saves a user copy that shadows it, and deleting
-        // THAT copy is how the original comes back.
-        #[cfg(not(target_arch = "wasm32"))]
+        // Delete sits with the other file actions: it acts on the same
+        // script the rest of this row does. Enabled only for the user's
+        // own — editing a shipped starter forks it, and deleting THAT
+        // fork is how the original comes back.
         {
             use egui::Color32;
 
-            let target = self.entries.get(self.selected).and_then(|e| match &e.origin {
-                ScriptOrigin::File(path) if library::is_user_script(path) => {
-                    Some((e.display_name.clone(), path.clone()))
-                }
-                _ => None,
+            let target = self.entries.get(self.selected).and_then(|e| {
+                (e.origin == ScriptOrigin::User).then(|| (e.display_name.clone(), e.id.clone()))
             });
             let hint = match &target {
-                Some((name, path)) => format!("Delete “{name}” from {}", path.display()),
-                None => "Only your own scripts can be deleted — the shipped ones are read-only".to_string(),
+                Some((name, stem)) => {
+                    format!("Delete “{name}” ({})", store::location_of(stem))
+                }
+                None => "Only your own scripts can be deleted — the shipped ones are read-only"
+                    .to_string(),
             };
             // egui dims a disabled widget's own colours, but an explicit
             // RichText colour is taken as deliberate and left alone — so
@@ -510,7 +508,10 @@ impl ScriptsPanel {
                 ui.visuals().widgets.noninteractive.fg_stroke.color
             };
             if ui
-                .add_enabled(target.is_some(), egui::Button::new(egui::RichText::new("🗑").color(tint)))
+                .add_enabled(
+                    target.is_some(),
+                    egui::Button::new(egui::RichText::new("🗑").color(tint)),
+                )
                 .on_hover_text(hint)
                 .clicked()
             {
@@ -526,10 +527,9 @@ impl ScriptsPanel {
         }
     }
 
-    /// Ask before deleting: there is no undo for a removed file.
-    #[cfg(not(target_arch = "wasm32"))]
+    /// Ask before deleting: there is no undo for a removed script.
     fn render_delete_confirmation(&mut self, ui: &mut egui::Ui, current: &FractalConfig) {
-        let Some((name, path)) = self.pending_delete.clone() else {
+        let Some((name, stem)) = self.pending_delete.clone() else {
             return;
         };
         let mut close = false;
@@ -539,18 +539,22 @@ impl ScriptsPanel {
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ui.ctx(), |ui| {
                 ui.label(format!("Delete “{name}”?"));
-                // Name the file: two scripts can share a display name,
-                // and this is the thing that actually disappears.
-                ui.label(egui::RichText::new(path.display().to_string()).weak().monospace());
+                // Name the location: two scripts can share a display
+                // name, and this is the thing that actually disappears.
+                ui.label(
+                    egui::RichText::new(store::location_of(&stem))
+                        .weak()
+                        .monospace(),
+                );
                 ui.separator();
                 ui.horizontal(|ui| {
                     if ui.button("Delete").clicked() {
-                        self.status = Some(match library::delete_user_script(&path) {
-                            Ok(()) => format!("Deleted {}", path.display()),
+                        self.status = Some(match store::delete(&stem) {
+                            Ok(()) => format!("Deleted “{name}”"),
                             Err(e) => e,
                         });
-                        // Re-scan: a deleted user copy may reveal the
-                        // shipped script it was shadowing.
+                        // Re-scan: a deleted fork may reveal the shipped
+                        // script it was forked from.
                         self.reload(current);
                         close = true;
                     }
@@ -773,14 +777,14 @@ impl ScriptsPanel {
     /// Whether the selected entry ships with the app, and so must be
     /// forked rather than overwritten.
     ///
-    /// `ScriptOrigin::File` alone does not answer this: `discover` gives
-    /// it to BOTH the shipped `assets/scripts/` copies and the user's
-    /// own, so the path has to be checked.
-    #[cfg(not(target_arch = "wasm32"))]
+    /// The origin answers it directly. It did not always: a single
+    /// `File(PathBuf)` variant covered both the shipped `assets/scripts/`
+    /// copies and the user's own, so this had to canonicalize the path
+    /// and compare — a check that could not exist on the web at all.
     fn selected_is_shipped(&self) -> bool {
         match self.entries.get(self.selected).map(|e| &e.origin) {
-            Some(ScriptOrigin::Builtin) => true,
-            Some(ScriptOrigin::File(path)) => !library::is_user_script(path),
+            Some(ScriptOrigin::Builtin) | Some(ScriptOrigin::Shipped(_)) => true,
+            Some(ScriptOrigin::User) | Some(ScriptOrigin::External) => false,
             None => false,
         }
     }

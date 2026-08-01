@@ -1,9 +1,15 @@
 //! Finding scripts: shipped starters plus the user's own.
 //!
-//! Two sources on desktop — `assets/scripts/{generators,modifiers}/` next
-//! to the executable's working directory, and a writable user folder
-//! under the app data dir. The starters are ALSO embedded, so the panel
-//! is never empty when the binary runs from somewhere without `assets/`.
+//! Three sources. The starters are **embedded**, so the panel is never
+//! empty when the binary runs from somewhere without `assets/`; on
+//! desktop their live disk copies under `assets/scripts/{generators,
+//! modifiers}/` supersede them, so editing a file and restarting shows
+//! the change without a recompile. The user's own scripts come from
+//! [`super::store`], which works on both desktop and the web.
+//!
+//! Writing, deleting and enumerating the user's scripts all live in
+//! `store`. What lives here is the merge: which source wins, and which
+//! user script is refused for taking a shipped name.
 
 use std::path::PathBuf;
 
@@ -55,12 +61,27 @@ pub(crate) const EMBEDDED: &[(&str, &str)] = &[
     ),
 ];
 
+/// Where a script came from — and therefore who owns it.
+///
+/// The old two-variant form lumped the shipped `assets/scripts/` files
+/// in with the user's own under a single `File(PathBuf)`, so origin
+/// alone could not answer "may this be deleted"; the panel asked a
+/// separate path-canonicalizing check to find out — which could not
+/// exist on the web, where there are no paths.
+/// Splitting the variants makes ownership structural: a `User` script is
+/// the user's, and nothing else is, on either platform.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScriptOrigin {
     /// Compiled in — read-only; edits are saved as a user copy.
     Builtin,
-    /// On disk, under `assets/scripts/` or the user folder.
-    File(PathBuf),
+    /// A shipped script's live disk copy under `assets/scripts/`.
+    /// Desktop only, and still the app's file rather than the user's.
+    Shipped(PathBuf),
+    /// The user's own, in [`super::store`]. Editable and deletable.
+    User,
+    /// Opened from outside every store — an ad-hoc file the panel is
+    /// holding but does not own, so Save must ask where to put it.
+    External,
 }
 
 #[derive(Debug, Clone)]
@@ -96,7 +117,7 @@ impl ScriptEntry {
             ScriptKind::Generator => "Generator",
             ScriptKind::Modifier => "Modifier",
         };
-        let mark = if matches!(self.origin, ScriptOrigin::Builtin) { "" } else { " *" };
+        let mark = if matches!(self.origin, ScriptOrigin::User) { " *" } else { "" };
         format!("{tag} · {}{mark}", self.display_name)
     }
 }
@@ -109,14 +130,6 @@ impl ScriptEntry {
 /// the user happens to have saved.
 pub fn find(entries: &[ScriptEntry], id: &str) -> Option<ScriptEntry> {
     entries.iter().find(|e| e.id == id).cloned()
-}
-
-/// Where the user's own scripts live (created on demand by [`save_user_script`]).
-#[cfg(not(target_arch = "wasm32"))]
-pub fn user_script_dir() -> Option<PathBuf> {
-    crate::storage::backend::get_app_data_dir()
-        .ok()
-        .map(|d| d.join("scripts"))
 }
 
 /// Is this stem the name of a script that ships with the app?
@@ -153,15 +166,13 @@ pub fn is_builtin_stem(stem: &str) -> bool {
 ///
 /// Returns the merged library and the stems that were refused.
 ///
-/// `is_user` is supplied by the caller rather than derived here: telling
-/// a user file from a shipped one needs the filesystem
-/// ([`is_user_script`] canonicalizes paths), and keeping that out makes
-/// the rule itself testable.
+/// The classification used to be passed in as data, because telling a
+/// user file from a shipped one needed the filesystem. It no longer
+/// does: [`ScriptOrigin::User`] says so directly, on both platforms.
 struct FoundScript {
     name: String,
     source: String,
     origin: ScriptOrigin,
-    is_user: bool,
 }
 
 fn merge_sources(
@@ -176,9 +187,9 @@ fn merge_sources(
 
     for f in found {
         let stem = f.name.trim_end_matches(".rhai");
-        // Only a USER file can be refused; shipped sources are allowed to
-        // supersede each other (embedded <- assets).
-        if f.is_user && is_builtin_stem(stem) {
+        // Only a USER script can be refused; shipped sources are allowed
+        // to supersede each other (embedded <- assets).
+        if f.origin == ScriptOrigin::User && is_builtin_stem(stem) {
             refused.push(stem.to_string());
             continue;
         }
@@ -189,7 +200,7 @@ fn merge_sources(
 }
 
 /// All available scripts: embedded starters, `assets/scripts/`, then the
-/// user folder.
+/// user's own store.
 ///
 /// A shipped script's disk copy supersedes its embedded copy — same
 /// script, live version. A **user** script may not take a shipped name;
@@ -209,43 +220,36 @@ pub fn discover(base: &FractalConfig) -> Vec<ScriptEntry> {
 /// nobody reads the console to find out why their file vanished from a
 /// list.
 pub fn discover_with_conflicts(base: &FractalConfig) -> (Vec<ScriptEntry>, Vec<String>) {
-    let mut raw: Vec<(String, String, ScriptOrigin)> = Vec::new();
-
-    for (name, source) in EMBEDDED {
-        raw.push(((*name).to_string(), (*source).to_string(), ScriptOrigin::Builtin));
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        for sub in ["generators", "modifiers"] {
-            collect_dir(&PathBuf::from("assets/scripts").join(sub), &mut raw);
-        }
-        if let Some(dir) = user_script_dir() {
-            collect_dir(&dir, &mut raw);
-        }
-    }
-
-    // Classify here, where the filesystem is available; `merge_sources`
-    // then applies the rule without touching it.
-    let found: Vec<FoundScript> = raw
-        .into_iter()
-        .map(|(name, source, origin)| {
-            let is_user = match &origin {
-                ScriptOrigin::Builtin => false,
-                #[cfg(not(target_arch = "wasm32"))]
-                ScriptOrigin::File(path) => is_user_script(path),
-                #[cfg(target_arch = "wasm32")]
-                ScriptOrigin::File(_) => true,
-            };
-            FoundScript { name, source, origin, is_user }
+    // Precedence order: embedded, then the shipped disk copies, then the
+    // user's own. `merge_sources` applies the rule.
+    let mut found: Vec<FoundScript> = EMBEDDED
+        .iter()
+        .map(|(name, source)| FoundScript {
+            name: (*name).to_string(),
+            source: (*source).to_string(),
+            origin: ScriptOrigin::Builtin,
         })
         .collect();
+
+    #[cfg(not(target_arch = "wasm32"))]
+    for sub in ["generators", "modifiers"] {
+        collect_dir(&PathBuf::from("assets/scripts").join(sub), &mut found);
+    }
+
+    // The user's own, from the cross-platform store. This is the half
+    // that did not exist on the web at all.
+    for (stem, source) in super::store::list() {
+        found.push(FoundScript {
+            name: format!("{stem}.rhai"),
+            source,
+            origin: ScriptOrigin::User,
+        });
+    }
 
     let (by_name, refused) = merge_sources(found);
     for stem in &refused {
         log::warn!(
-            "Ignoring your script `{stem}.rhai`: `{stem}` is a shipped script's name. \
-             Rename it to load it."
+            "Ignoring your script `{stem}`: that is a shipped script's name. Rename it to load it."
         );
     }
 
@@ -285,7 +289,7 @@ pub fn discover_with_conflicts(base: &FractalConfig) -> (Vec<ScriptEntry>, Vec<S
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn collect_dir(dir: &std::path::Path, out: &mut Vec<(String, String, ScriptOrigin)>) {
+fn collect_dir(dir: &std::path::Path, out: &mut Vec<FoundScript>) {
     let Ok(read) = std::fs::read_dir(dir) else {
         return;
     };
@@ -298,110 +302,14 @@ fn collect_dir(dir: &std::path::Path, out: &mut Vec<(String, String, ScriptOrigi
             continue;
         };
         match std::fs::read_to_string(&path) {
-            Ok(source) => out.push((name.to_string(), source, ScriptOrigin::File(path.clone()))),
+            Ok(source) => out.push(FoundScript {
+                name: name.to_string(),
+                source,
+                origin: ScriptOrigin::Shipped(path.clone()),
+            }),
             Err(e) => log::warn!("Cannot read script {}: {e}", path.display()),
         }
     }
-}
-
-/// The file stem `save_user_script` would use for this name.
-///
-/// Exposed so a caller can tell in advance whether a name is free —
-/// the sanitizing is what decides, not the raw string.
-pub fn user_script_stem(file_name: &str) -> String {
-    let safe: String = file_name
-        .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
-        .collect();
-    safe.trim_matches('_').to_string()
-}
-
-/// A stem near `desired` that no shipped script has claimed.
-///
-/// Returns `desired` untouched when it is free; otherwise appends
-/// `-copy`, then `-copy-2`, and so on. Used to fork a shipped script
-/// rather than shadow it.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn free_user_script_stem(desired: &str) -> String {
-    let base = user_script_stem(desired);
-    if !is_builtin_stem(&base) {
-        return base;
-    }
-    let candidate = format!("{base}-copy");
-    if !is_builtin_stem(&candidate) {
-        return candidate;
-    }
-    // Practically unreachable — no shipped script is named `x-copy` —
-    // but a bounded search beats an unbounded loop.
-    (2..1000)
-        .map(|n| format!("{base}-copy-{n}"))
-        .find(|s| !is_builtin_stem(s))
-        .unwrap_or_else(|| format!("{base}-copy-x"))
-}
-
-/// Write a script to the user folder.
-///
-/// Always the user folder, never `assets/`, so the shipped originals
-/// stay intact.
-///
-/// **Refuses a shipped script's name.** Such a file would be ignored by
-/// [`discover`] anyway; failing here means the user finds out at the
-/// moment of saving rather than wondering why their script vanished
-/// from the list. Callers wanting to fork a shipped script should take
-/// a name from [`free_user_script_stem`] first.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn save_user_script(file_name: &str, source: &str) -> Result<PathBuf, String> {
-    let dir = user_script_dir().ok_or("cannot locate the application data folder")?;
-    let stem = user_script_stem(file_name);
-    if is_builtin_stem(&stem) {
-        return Err(format!(
-            "`{stem}` is a shipped script's name — save it under a different one"
-        ));
-    }
-    std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
-    let path = dir.join(format!("{stem}.rhai"));
-    std::fs::write(&path, source).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
-    Ok(path)
-}
-
-/// Whether a script file lives in the user folder, and is therefore the
-/// user's to delete.
-///
-/// This matters because `discover` gives `ScriptOrigin::File` to BOTH
-/// the shipped `assets/scripts/` files and the user's own copies — the
-/// origin alone does not say who owns a script. Without this check a
-/// Delete button would happily remove the starters that ship with the
-/// app.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn is_user_script(path: &std::path::Path) -> bool {
-    let Some(dir) = user_script_dir() else {
-        return false;
-    };
-    // Compare canonical paths so `..` or a symlinked data folder cannot
-    // dress a shipped file up as a user one.
-    match (path.canonicalize(), dir.canonicalize()) {
-        (Ok(path), Ok(dir)) => path.starts_with(dir),
-        // An un-canonicalizable path (already deleted, say) is not one we
-        // are willing to delete.
-        _ => false,
-    }
-}
-
-/// Delete a script from the user folder.
-///
-/// Refuses anything outside it, so a shipped starter can never be
-/// removed — the worst case is that a user script the person wrote
-/// themselves goes. Shipped scripts are unaffected by anything here;
-/// to "reset" one, delete the fork and select the original.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn delete_user_script(path: &std::path::Path) -> Result<(), String> {
-    if !is_user_script(path) {
-        return Err(format!(
-            "{} is not in your scripts folder, so it will not be deleted",
-            path.display()
-        ));
-    }
-    std::fs::remove_file(path).map_err(|e| format!("cannot delete {}: {e}", path.display()))
 }
 
 #[cfg(test)]
@@ -413,15 +321,13 @@ mod tests {
             name: name.to_string(),
             source: source.to_string(),
             origin: ScriptOrigin::Builtin,
-            is_user: false,
         }
     }
     fn user(name: &str, source: &str) -> FoundScript {
         FoundScript {
             name: name.to_string(),
             source: source.to_string(),
-            origin: ScriptOrigin::File(std::path::PathBuf::from(name)),
-            is_user: true,
+            origin: ScriptOrigin::User,
         }
     }
 
@@ -452,7 +358,7 @@ mod tests {
     #[test]
     fn the_disk_copy_of_a_shipped_script_still_wins() {
         let mut assets = shipped("basic_random.rhai", "FROM_ASSETS");
-        assets.origin = ScriptOrigin::File(std::path::PathBuf::from(
+        assets.origin = ScriptOrigin::Shipped(std::path::PathBuf::from(
             "assets/scripts/generators/basic_random.rhai",
         ));
         let (merged, refused) = merge_sources(vec![
@@ -469,33 +375,6 @@ mod tests {
         let (merged, refused) = merge_sources(vec![user("my_thing.rhai", "MINE")]);
         assert!(refused.is_empty());
         assert_eq!(merged["my_thing.rhai"].0, "MINE");
-    }
-
-    /// Forking picks a name that is free, and leaves a free name alone.
-    #[cfg(not(target_arch = "wasm32"))]
-    #[test]
-    fn forking_avoids_every_shipped_name() {
-        assert_eq!(free_user_script_stem("my_thing"), "my_thing");
-        assert_eq!(free_user_script_stem("random_palette"), "random_palette-copy");
-        // The sanitizer runs first: "Basic Random" is not a shipped stem.
-        assert_eq!(free_user_script_stem("Basic Random"), "Basic_Random");
-        for (name, _) in EMBEDDED {
-            let stem = name.trim_end_matches(".rhai");
-            assert!(
-                !is_builtin_stem(&free_user_script_stem(stem)),
-                "fork of `{stem}` still collides"
-            );
-        }
-    }
-
-    /// Saving under a shipped name fails loudly rather than writing a
-    /// file `discover` would then ignore.
-    #[cfg(not(target_arch = "wasm32"))]
-    #[test]
-    fn saving_under_a_shipped_name_is_refused() {
-        let err = save_user_script("random_palette", "script(\"x\", \"generator\");")
-            .expect_err("should refuse a shipped name");
-        assert!(err.contains("shipped script"), "{err}");
     }
 
     #[test]

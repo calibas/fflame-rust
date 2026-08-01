@@ -1913,45 +1913,67 @@ fn show_shipped_docs() {
 // Deleting user scripts
 // ============================================================================
 
-/// The safety property: only files in the user folder may be deleted.
+/// The safety property: nothing outside the user's own store can be
+/// deleted.
 ///
-/// `discover` hands `ScriptOrigin::File` to the shipped
-/// `assets/scripts/` files as well as to the user's copies, so origin
-/// alone does not say who owns a script. Without this guard a Delete
-/// button would remove the starters that ship with the app.
-#[cfg(not(target_arch = "wasm32"))]
+/// This used to be enforced by canonicalizing a path and checking it
+/// against the user folder, because `ScriptOrigin::File` covered the
+/// shipped `assets/scripts/` copies too. It is now structural: `delete`
+/// takes a stem and builds the key itself, so there is no path for a
+/// caller to aim elsewhere, and `ScriptOrigin::User` is the only origin
+/// the panel offers a Delete button for.
+///
+/// What is left to test is that the structure actually holds — a stem
+/// that tries to climb out lands inside the store anyway.
 #[test]
-fn only_user_scripts_can_be_deleted() {
-    use super::library::{delete_user_script, is_user_script, user_script_dir};
+fn deleting_cannot_reach_outside_the_user_store() {
+    use super::store;
 
-    // A shipped script is never deletable, whatever the button thinks.
+    // A shipped starter is not in the store, so there is nothing to
+    // delete under its name and the file on disk is untouched.
     let shipped = std::path::Path::new("assets/scripts/generators/basic_random.rhai");
-    if shipped.exists() {
-        assert!(!is_user_script(shipped), "a shipped starter must not look like a user script");
-        let err = delete_user_script(shipped).expect_err("refused");
-        assert!(err.contains("not in your scripts folder"), "{err}");
-        assert!(shipped.exists(), "the shipped script must still be there");
-    }
+    let existed = shipped.exists();
+    assert!(store::delete("basic_random").is_err(), "nothing to delete");
+    assert_eq!(shipped.exists(), existed, "the shipped script must be untouched");
 
-    // Neither is anything else on disk.
-    let outside = std::env::temp_dir().join("fflame_not_a_user_script.rhai");
-    std::fs::write(&outside, "// scratch\n").unwrap();
-    assert!(!is_user_script(&outside));
-    assert!(delete_user_script(&outside).is_err());
-    assert!(outside.exists(), "refusing to delete must not delete");
-    let _ = std::fs::remove_file(&outside);
+    // A hostile stem is sanitized into the store rather than escaping
+    // it. Write one, confirm it landed under a mangled name, remove it.
+    let hostile = "../../evil";
+    let stem = store::stem_for(hostile);
+    assert!(!stem.contains('/') && !stem.contains('\\'), "{stem}");
+    store::save(&stem, "// scratch
+").expect("saves under the mangled name");
+    assert!(store::load(&stem).is_some());
+    store::delete(&stem).expect("and deletes again");
+    assert!(store::load(&stem).is_none());
+}
 
-    // A real user script is deletable, so the guard isn't just "no".
-    if let Some(dir) = user_script_dir() {
-        if std::fs::create_dir_all(&dir).is_ok() {
-            let path = dir.join("__delete_me_test.rhai");
-            if std::fs::write(&path, "// temp\nscript(\"T\", \"generator\");\n").is_ok() {
-                assert!(is_user_script(&path), "a file in the user folder is the user's");
-                assert!(delete_user_script(&path).is_ok());
-                assert!(!path.exists(), "it should actually be gone");
-            }
-        }
-    }
+/// The user's store round-trips, and a saved script shows up in
+/// `discover` — the property that makes a saved script usable rather
+/// than merely written.
+#[test]
+fn a_saved_script_appears_in_the_library() {
+    use super::store;
+    let stem = "library-visibility-test";
+    let source = "// A test script.
+script(\"Visibility Test\", \"generator\");
+";
+    let _ = store::delete(stem);
+    store::save(stem, source).expect("save");
+
+    let entries = super::library::discover(&crate::config::FractalConfig::default());
+    let found = entries
+        .iter()
+        .find(|e| e.id == stem)
+        .expect("a saved script must be listed");
+    assert_eq!(found.display_name, "Visibility Test");
+    assert_eq!(found.origin, super::library::ScriptOrigin::User);
+    // The picker marks the user's own with a trailing asterisk.
+    assert!(found.label().ends_with(" *"), "{}", found.label());
+
+    store::delete(stem).expect("cleanup");
+    let after = super::library::discover(&crate::config::FractalConfig::default());
+    assert!(!after.iter().any(|e| e.id == stem), "and it goes away again");
 }
 
 // ============================================================================
