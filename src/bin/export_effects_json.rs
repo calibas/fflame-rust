@@ -32,11 +32,13 @@
 //!   An earlier version of this comment claimed the field did not exist
 //!   at all. The emitted null was right for the wrong reason, which is
 //!   the kind of wrongness that survives review.
-//! * **`EffectInfo` has no `display_name`.** The curated English labels
-//!   live in `locales/en.yml` under `effects.<name>.name`, which is
-//!   where this reads them from — the panel itself still shows the raw
-//!   registry key. Worth promoting to a struct field eventually, the
-//!   way variations already have.
+//! * **`EffectInfo::display_name` is empty for every built-in.** That is
+//!   deliberate, not missing: the curated English labels live in
+//!   `locales/en.yml` under `effects.<name>.name`, which is both where
+//!   translations can exist and where a name like "Edge Glow" for
+//!   `sobel_edges` is recorded. `translated_name()` reads the locale
+//!   first and falls back to the declared label, so this exports the
+//!   curated name for a built-in and the author's for anything else.
 
 use fractal_flame_wgpu::effects::{global_effect_registry, EffectCategory};
 use fractal_flame_wgpu::variations::ParamType;
@@ -79,12 +81,10 @@ fn main() {
         let shader = info.source.wgsl();
         let requires_blend_modes = shader.contains("// INCLUDE_BLEND_MODES");
 
-        // Curated English label. Not on EffectInfo — see the module docs.
-        let key = format!("effects.{}.name", info.name);
-        let display_name = {
-            let t = rust_i18n::t!(&key);
-            if t == key { info.name.clone() } else { t.to_string() }
-        };
+        // Locale first, falling back to whatever the effect declares —
+        // one rule, shared with the panel, rather than a second copy of
+        // the miss-detection that could drift from it.
+        let display_name = info.translated_name();
 
         if info.parameters.len() > 48 {
             over_param_cap.push(format!("{} ({})", info.name, info.parameters.len()));
