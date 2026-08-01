@@ -133,7 +133,7 @@ fn main() {
                      authored. Shader source is RAW — the \
                      `// INCLUDE_BLEND_MODES` marker is intact and \
                      requires_blend_modes says whether it is present.",
-        "contract_shape": fractal_flame_wgpu::variations::contract::generate()["shape"],
+        "contract_shape": fractal_flame_wgpu::contract::generate()["shape"],
         "count": rows.len(),
         "effects": rows,
     });

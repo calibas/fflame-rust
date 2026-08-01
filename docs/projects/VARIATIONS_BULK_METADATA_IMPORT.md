@@ -210,7 +210,7 @@ Hybrid Rust + Python, per the analysis in earlier coordination:
   Two things it does beyond the original sketch:
 
   * **Vocabularies come from `to_api_str`**, the same source as
-    [`docs/generated/variation-contract.json`](../generated/variation-contract.json),
+    [`docs/generated/engine-contract.json`](../generated/engine-contract.json),
     so the dump cannot disagree with the contract about what a category
     or feature is called. It also emits the newer wire fields the
     sketch predates: `features[]`, `state_count`, `shader_state_init`,

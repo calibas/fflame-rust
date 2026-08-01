@@ -467,6 +467,77 @@ GET    /api/search/scripts?q=…   → public browse
 }
 ```
 
+#### 5.4.1 Settled
+
+**Reserved names — rejected at create, regardless of visibility.**
+Shipped stems are reserved client-side: `merge_sources` refuses a user
+script that takes one rather than shadowing it (8.0, which was a live
+bug — one Save hijacked `basic_random`'s `run_script("random_palette")`
+call). So accepting such a name stores a script *nobody* can run, its
+author included: the local refusal does not care where the script came
+from or who owns it.
+
+The list ships **in the generated contract** (`scripts.builtin_scripts`
+in [`docs/generated/engine-contract.json`](../generated/engine-contract.json)),
+read from the embedded starters. Transcribing ten stems into the API
+would be the name-gating trap in a third guise — the same implicit
+cross-repo dependency as the helper libraries and the blend marker, and
+it would go stale in exactly the same silence. A test asserts the
+contract reserves precisely what `is_builtin_stem` refuses, so the
+generator reading the wrong source fails here rather than in the field.
+
+**`name` is per-user unique; `id` is identity.** `users.display_name` is
+case-insensitively unique server-side (migration 37), so
+`display_name/stem` is already a globally unique, stable, human-readable
+key — the client's import-rename rule uses it instead of inventing a
+disambiguator or showing UUID fragments. Both script payloads carry
+`user_id` and `display_name`, as `FlameResponse` already does.
+
+**Cross-calls: downloaded scripts may call only shipped stems.**
+`run_script(id)` resolves against the *whole* local library, the user's
+own scripts included, so an unrestricted downloaded script would bind to
+whatever that machine happens to have under a name — different results
+per machine, and a stranger's script reaching the user's. Restricting to
+shipped stems is the only option that renders identically everywhere.
+
+**Enforcement is the client's, and a `dependencies` field is
+deliberately NOT reserved.** The server cannot enforce this:
+`run_script(some_variable)` is not statically resolvable, so a
+server-side check would catch literal call sites and miss dynamic ones —
+a guard that looks like enforcement and is not. Unlike the blend marker,
+where the marker/call correlation is exact.
+
+And the restriction is what makes reserving unnecessary. If downloaded
+scripts may only call shipped stems, no published script can *have* a
+non-builtin dependency, so when dependencies land the backfill is
+provably empty — every existing row correctly means `[]`, with no old
+sources to parse. Adding the column later is one additive migration;
+adding it now is an unconsumed field on a published payload, and this
+session established that those are the ones that can never be removed,
+because you cannot prove nobody reads them.
+
+#### 5.4.2 Open
+
+- **`author` vs `authors`.** Variations and effects both emit
+  `authors: []`; §5.4 says `author`. "Decide once, apply twice" — lean
+  `authors`, since co-authored ports are already common.
+- **`description_plain` is missing** from the script shape. Variations
+  and effects carry the stripped copy alongside the markdown precisely
+  because the client has no markdown renderer.
+- **`version` on PUT** — optimistic (send what you hold, 409 on
+  mismatch) or last-write-wins? Lean optimistic: this is user content
+  edited from a desktop app and a browser tab that share no store.
+- **`flags` as a closed server-side set?** The client warns on an
+  unknown flag and drops it, so the vocabulary can grow without a
+  coordinated deploy; a closed-set CHECK would remove that. The known
+  set is in the contract under `scripts.flags.known`.
+- **Client-asserted metadata.** The server has no Rhai engine, so
+  `kind` / `flags` / `display_name` are whatever the uploader sent —
+  a public listing filtered by `kind=generator` filters on data that
+  could be wrong. Cosmetic, and "source is authoritative" already
+  covers correctness; noted so it is a known property rather than a
+  surprise.
+
 ### 5.5 Client work
 
 - **Local cache** so scripts survive offline and load fast. On WASM

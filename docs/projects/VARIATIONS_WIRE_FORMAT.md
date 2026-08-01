@@ -5,12 +5,12 @@ fractalsforall API. Use this when changing either side; the client's
 expectations are listed here so the API repo can stay aligned.
 
 > **The vocabularies in this document are generated. Read them from
-> [`docs/generated/variation-contract.json`](../generated/variation-contract.json),
+> [`docs/generated/engine-contract.json`](../generated/engine-contract.json),
 > not from the prose here.**
 >
 > Categories, phases, features, parameter types, engine limits and the
 > helper-library gating table are emitted by
-> [`src/variations/contract.rs`](../../src/variations/contract.rs) from
+> [`src/contract.rs`](../../src/contract.rs) from
 > the enums that define them, with counts measured across the shipped
 > corpus. A test fails the build when the committed copy drifts:
 >

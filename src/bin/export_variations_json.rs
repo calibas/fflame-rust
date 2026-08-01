@@ -14,7 +14,7 @@
 //! first-class struct fields, so no comment parsing is needed for them.
 //!
 //! Vocabularies come from `to_api_str`, the same source as
-//! `docs/generated/variation-contract.json`, so the dump cannot disagree
+//! `docs/generated/engine-contract.json`, so the dump cannot disagree
 //! with the contract about what a category or feature is called.
 //!
 //! ```text
@@ -122,9 +122,9 @@ fn main() {
                      Structural data only: `description`, `description_plain` \
                      and `authors` are nulls for the Python doc-comment pass \
                      to fill (see VARIATIONS_BULK_METADATA_IMPORT.md §4.1). \
-                     Vocabularies match docs/generated/variation-contract.json \
+                     Vocabularies match docs/generated/engine-contract.json \
                      by construction — both read to_api_str.",
-        "contract_shape": fractal_flame_wgpu::variations::contract::generate()["shape"],
+        "contract_shape": fractal_flame_wgpu::contract::generate()["shape"],
         "count": rows.len(),
         "variations": rows,
     });
