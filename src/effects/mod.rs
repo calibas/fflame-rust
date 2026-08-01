@@ -158,6 +158,18 @@ pub struct EffectInfo {
     /// Category determines pipeline position
     pub category: EffectCategory,
 
+    /// The name to show.
+    ///
+    /// Built-in effects leave this empty and are labelled from
+    /// `locales/*.yml`, where the curated names live (`sobel_edges` is
+    /// "Edge Glow", so deriving one from the key would be wrong) and
+    /// where translations can exist at all.
+    ///
+    /// Anything that did not ship must carry its own: a plugin author
+    /// cannot add a locale entry, and a downloaded effect's label
+    /// arrives on the wire. See [`Self::translated_name`].
+    pub display_name: String,
+
     /// Where the WGSL comes from.
     pub source: EffectSource,
 
@@ -172,10 +184,28 @@ pub struct EffectInfo {
 }
 
 impl EffectInfo {
-    /// Get the translated display name for this effect
+    /// The label to show for this effect.
+    ///
+    /// Locale first, so a built-in keeps its curated and translatable
+    /// name. `rust-i18n` returns the **key** when there is no entry, so
+    /// a miss has to be detected rather than trusted — otherwise
+    /// `effects.plugin_example_tint.name` is what reaches the user, which
+    /// is exactly what happened before this fell back.
+    ///
+    /// A plugin can never have a locale entry, so the fallback is not an
+    /// edge case for them; it is the only path they take.
     pub fn translated_name(&self) -> String {
         let key = format!("effects.{}.name", self.name);
-        t!(&key).to_string()
+        let translated = t!(&key);
+        if translated != key {
+            return translated.to_string();
+        }
+        if !self.display_name.is_empty() {
+            return self.display_name.clone();
+        }
+        // Nothing declared a label. The raw name is a poor title but an
+        // honest one, and it is at least the thing the user typed.
+        self.name.clone()
     }
 
     /// Get the default value for a parameter by name
@@ -528,6 +558,10 @@ pub fn check_download(dl: &crate::api::types::EffectDownload) -> Result<EffectIn
 
     Ok(EffectInfo {
         name,
+        // Was dropped on the floor here. `EffectInfo` had no field for
+        // it, so a downloaded or local effect fell through to the locale
+        // lookup, missed, and displayed the raw key.
+        display_name: dl.display_name.clone(),
         category,
         source: EffectSource::Owned(shader),
         parameters,
@@ -588,6 +622,9 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
     // Vignette - darken edges
     registry.register(EffectInfo {
         name: "vignette".to_string(),
+        // Empty on purpose: built-ins are labelled from
+        // `locales/*.yml`, where the curated names live.
+        display_name: String::new(),
         category: EffectCategory::Color,
         source: EffectSource::Builtin {
             embedded: embedded_shaders::VIGNETTE,
@@ -637,6 +674,9 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
     // Film Grain - per-pixel random noise
     registry.register(EffectInfo {
         name: "film_grain".to_string(),
+        // Empty on purpose: built-ins are labelled from
+        // `locales/*.yml`, where the curated names live.
+        display_name: String::new(),
         category: EffectCategory::Color,
         source: EffectSource::Builtin {
             embedded: embedded_shaders::FILM_GRAIN,
@@ -677,6 +717,9 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
     // Chromatic Aberration - RGB channel offset
     registry.register(EffectInfo {
         name: "chromatic_aberration".to_string(),
+        // Empty on purpose: built-ins are labelled from
+        // `locales/*.yml`, where the curated names live.
+        display_name: String::new(),
         category: EffectCategory::Color,
         source: EffectSource::Builtin {
             embedded: embedded_shaders::CHROMATIC_ABERRATION,
@@ -726,6 +769,9 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
     // Hue Shift - static hue rotation (animate via keyframes)
     registry.register(EffectInfo {
         name: "hue_shift".to_string(),
+        // Empty on purpose: built-ins are labelled from
+        // `locales/*.yml`, where the curated names live.
+        display_name: String::new(),
         category: EffectCategory::Color,
         source: EffectSource::Builtin {
             embedded: embedded_shaders::HUE_CYCLE,
@@ -768,6 +814,9 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
     // Density Blur - blur weighted by density
     registry.register(EffectInfo {
         name: "density_blur".to_string(),
+        // Empty on purpose: built-ins are labelled from
+        // `locales/*.yml`, where the curated names live.
+        display_name: String::new(),
         category: EffectCategory::Density,
         source: EffectSource::Builtin {
             embedded: embedded_shaders::DENSITY_BLUR,
@@ -808,6 +857,9 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
     // Sharpen - detail enhancement
     registry.register(EffectInfo {
         name: "sharpen".to_string(),
+        // Empty on purpose: built-ins are labelled from
+        // `locales/*.yml`, where the curated names live.
+        display_name: String::new(),
         category: EffectCategory::Density,
         source: EffectSource::Builtin {
             embedded: embedded_shaders::SHARPEN,
@@ -839,6 +891,9 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
     // Bilateral Blur - edge-preserving blur
     registry.register(EffectInfo {
         name: "bilateral_blur".to_string(),
+        // Empty on purpose: built-ins are labelled from
+        // `locales/*.yml`, where the curated names live.
+        display_name: String::new(),
         category: EffectCategory::Density,
         source: EffectSource::Builtin {
             embedded: embedded_shaders::BILATERAL_BLUR,
@@ -881,6 +936,9 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
     // Kaleidoscope - N-fold rotational symmetry
     registry.register(EffectInfo {
         name: "kaleidoscope".to_string(),
+        // Empty on purpose: built-ins are labelled from
+        // `locales/*.yml`, where the curated names live.
+        display_name: String::new(),
         category: EffectCategory::Color,
         source: EffectSource::Builtin {
             embedded: embedded_shaders::KALEIDOSCOPE,
@@ -957,6 +1015,9 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
     // Plasma - classic demoscene effect
     registry.register(EffectInfo {
         name: "plasma".to_string(),
+        // Empty on purpose: built-ins are labelled from
+        // `locales/*.yml`, where the curated names live.
+        display_name: String::new(),
         category: EffectCategory::Color,
         source: EffectSource::Builtin {
             embedded: embedded_shaders::PLASMA,
@@ -1024,6 +1085,9 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
     // Tunnel - infinite tunnel effect
     registry.register(EffectInfo {
         name: "tunnel".to_string(),
+        // Empty on purpose: built-ins are labelled from
+        // `locales/*.yml`, where the curated names live.
+        display_name: String::new(),
         category: EffectCategory::Color,
         source: EffectSource::Builtin {
             embedded: embedded_shaders::TUNNEL,
@@ -1091,6 +1155,9 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
     // Sobel Edges - neon edge detection
     registry.register(EffectInfo {
         name: "sobel_edges".to_string(),
+        // Empty on purpose: built-ins are labelled from
+        // `locales/*.yml`, where the curated names live.
+        display_name: String::new(),
         category: EffectCategory::Color,
         source: EffectSource::Builtin {
             embedded: embedded_shaders::SOBEL_EDGES,
@@ -1149,6 +1216,9 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
     // Domain Warp - organic noise distortion
     registry.register(EffectInfo {
         name: "domain_warp".to_string(),
+        // Empty on purpose: built-ins are labelled from
+        // `locales/*.yml`, where the curated names live.
+        display_name: String::new(),
         category: EffectCategory::Color,
         source: EffectSource::Builtin {
             embedded: embedded_shaders::DOMAIN_WARP,
@@ -1216,6 +1286,9 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
     // Simplex Noise - psychedelic noise overlay
     registry.register(EffectInfo {
         name: "simplex_noise".to_string(),
+        // Empty on purpose: built-ins are labelled from
+        // `locales/*.yml`, where the curated names live.
+        display_name: String::new(),
         category: EffectCategory::Color,
         source: EffectSource::Builtin {
             embedded: embedded_shaders::SIMPLEX_NOISE,
@@ -1292,6 +1365,9 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
     // Worley Noise - cellular patterns
     registry.register(EffectInfo {
         name: "worley_noise".to_string(),
+        // Empty on purpose: built-ins are labelled from
+        // `locales/*.yml`, where the curated names live.
+        display_name: String::new(),
         category: EffectCategory::Color,
         source: EffectSource::Builtin {
             embedded: embedded_shaders::WORLEY_NOISE,
@@ -1368,6 +1444,9 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
     // Julia/Mandelbrot - fractal overlay
     registry.register(EffectInfo {
         name: "julia".to_string(),
+        // Empty on purpose: built-ins are labelled from
+        // `locales/*.yml`, where the curated names live.
+        display_name: String::new(),
         category: EffectCategory::Color,
         source: EffectSource::Builtin {
             embedded: embedded_shaders::JULIA,
@@ -1653,5 +1732,77 @@ mod download_tests {
             reg.get("vignette").unwrap().provenance.is_builtin(),
             "the built-in must survive"
         );
+    }
+}
+
+#[cfg(test)]
+mod label_tests {
+    use super::*;
+
+    /// A built-in is labelled from the locale, where the curated name
+    /// lives. `sobel_edges` is "Edge Glow", so a name derived from the
+    /// registry key would be wrong, not merely ugly.
+    #[test]
+    fn a_builtin_takes_its_curated_locale_name() {
+        let reg = global_effect_registry();
+        let sobel = reg.get("sobel_edges").expect("ships");
+        assert!(sobel.display_name.is_empty(), "built-ins carry no inline label");
+        assert_eq!(sobel.translated_name(), "Edge Glow");
+    }
+
+    /// A plugin or downloaded effect uses the label it declares.
+    ///
+    /// It has no other option: `rust-i18n` returns the KEY on a miss,
+    /// and a plugin author cannot add a locale entry. Before this fell
+    /// back, `effects.plugin_example_tint.name` is what appeared in the
+    /// effect picker — found by using the app, not by a test.
+    #[test]
+    fn a_plugin_uses_the_label_it_declares() {
+        let info = EffectInfo {
+            name: "plugin_example_tint".into(),
+            display_name: "Plugin Example (Tint)".into(),
+            category: EffectCategory::Color,
+            source: EffectSource::Owned("fn main() {}".into()),
+            parameters: Vec::new(),
+            provenance: crate::provenance::Provenance::Local,
+        };
+        assert_eq!(info.translated_name(), "Plugin Example (Tint)");
+        assert!(
+            !info.translated_name().contains("effects."),
+            "a locale key must never reach the user"
+        );
+    }
+
+    /// Declaring nothing at all still gives a usable label rather than
+    /// a key.
+    #[test]
+    fn a_nameless_effect_falls_back_to_its_registry_name() {
+        let info = EffectInfo {
+            name: "unnamed_thing".into(),
+            display_name: String::new(),
+            category: EffectCategory::Color,
+            source: EffectSource::Owned("fn main() {}".into()),
+            parameters: Vec::new(),
+            provenance: crate::provenance::Provenance::Local,
+        };
+        assert_eq!(info.translated_name(), "unnamed_thing");
+    }
+
+    /// Every shipped effect must have its locale entry. A missing one
+    /// now degrades quietly to the raw name instead of showing a key,
+    /// which is better for the user and worse for noticing — so this
+    /// checks the whole corpus.
+    #[test]
+    fn every_shipped_effect_has_a_curated_label() {
+        let reg = global_effect_registry();
+        for info in reg.all() {
+            let label = info.translated_name();
+            assert_ne!(
+                label, info.name,
+                "`{}` has no `effects.{}.name` in locales/en.yml",
+                info.name, info.name
+            );
+            assert!(!label.starts_with("effects."), "{label}");
+        }
     }
 }
