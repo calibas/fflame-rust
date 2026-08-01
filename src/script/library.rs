@@ -108,6 +108,14 @@ pub struct ScriptEntry {
     pub kind: ScriptKind,
     pub source: String,
     pub origin: ScriptOrigin,
+    /// Somebody else wrote this — it came from the online library.
+    ///
+    /// Read from the store's link record, not from the origin, and that
+    /// distinction is the point: adopting a downloaded script makes it
+    /// `ScriptOrigin::User`, and if trust were derived from the origin
+    /// alone, pressing Save would launder away the cross-call
+    /// restriction. The user chose to keep it; they did not read it.
+    pub untrusted: bool,
 }
 
 impl ScriptEntry {
@@ -117,7 +125,13 @@ impl ScriptEntry {
             ScriptKind::Generator => "Generator",
             ScriptKind::Modifier => "Modifier",
         };
-        let mark = if matches!(self.origin, ScriptOrigin::User) { " *" } else { "" };
+        let mark = if self.untrusted {
+            " ↓"
+        } else if matches!(self.origin, ScriptOrigin::User) {
+            " *"
+        } else {
+            ""
+        };
         format!("{tag} · {}{mark}", self.display_name)
     }
 }
@@ -173,15 +187,16 @@ struct FoundScript {
     name: String,
     source: String,
     origin: ScriptOrigin,
+    untrusted: bool,
 }
 
 fn merge_sources(
     found: Vec<FoundScript>,
 ) -> (
-    std::collections::BTreeMap<String, (String, ScriptOrigin)>,
+    std::collections::BTreeMap<String, (String, ScriptOrigin, bool)>,
     Vec<String>,
 ) {
-    let mut by_name: std::collections::BTreeMap<String, (String, ScriptOrigin)> =
+    let mut by_name: std::collections::BTreeMap<String, (String, ScriptOrigin, bool)> =
         std::collections::BTreeMap::new();
     let mut refused = Vec::new();
 
@@ -193,7 +208,7 @@ fn merge_sources(
             refused.push(stem.to_string());
             continue;
         }
-        by_name.insert(f.name, (f.source, f.origin));
+        by_name.insert(f.name, (f.source, f.origin, f.untrusted));
     }
 
     (by_name, refused)
@@ -228,6 +243,7 @@ pub fn discover_with_conflicts(base: &FractalConfig) -> (Vec<ScriptEntry>, Vec<S
             name: (*name).to_string(),
             source: (*source).to_string(),
             origin: ScriptOrigin::Builtin,
+            untrusted: false,
         })
         .collect();
 
@@ -238,11 +254,14 @@ pub fn discover_with_conflicts(base: &FractalConfig) -> (Vec<ScriptEntry>, Vec<S
 
     // The user's own, from the cross-platform store. This is the half
     // that did not exist on the web at all.
+    let links = super::store::load_links();
     for (stem, source) in super::store::list() {
+        let untrusted = links.get(&stem).is_some_and(|l| l.from_others);
         found.push(FoundScript {
             name: format!("{stem}.rhai"),
             source,
             origin: ScriptOrigin::User,
+            untrusted,
         });
     }
 
@@ -256,7 +275,7 @@ pub fn discover_with_conflicts(base: &FractalConfig) -> (Vec<ScriptEntry>, Vec<S
     let host = ScriptHost::new();
     let mut entries: Vec<ScriptEntry> = by_name
         .into_iter()
-        .map(|(name, (source, origin))| {
+        .map(|(name, (source, origin, untrusted))| {
             let id = name.trim_end_matches(".rhai").to_string();
             // Read the declared name/kind. A script that fails to parse is
             // still listed — under its file name — so the user can select
@@ -276,6 +295,7 @@ pub fn discover_with_conflicts(base: &FractalConfig) -> (Vec<ScriptEntry>, Vec<S
                     .unwrap_or(ScriptKind::Generator),
                 source,
                 origin,
+                untrusted,
             }
         })
         .collect();
@@ -306,6 +326,7 @@ fn collect_dir(dir: &std::path::Path, out: &mut Vec<FoundScript>) {
                 name: name.to_string(),
                 source,
                 origin: ScriptOrigin::Shipped(path.clone()),
+                untrusted: false,
             }),
             Err(e) => log::warn!("Cannot read script {}: {e}", path.display()),
         }
@@ -321,6 +342,7 @@ mod tests {
             name: name.to_string(),
             source: source.to_string(),
             origin: ScriptOrigin::Builtin,
+            untrusted: false,
         }
     }
     fn user(name: &str, source: &str) -> FoundScript {
@@ -328,6 +350,7 @@ mod tests {
             name: name.to_string(),
             source: source.to_string(),
             origin: ScriptOrigin::User,
+            untrusted: false,
         }
     }
 

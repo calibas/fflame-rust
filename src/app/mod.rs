@@ -6,6 +6,7 @@ mod ui_handlers;
 mod gpu_updates;
 mod animation_update;
 mod variation_fetch;
+pub mod script_cloud;
 mod fly_camera;
 pub mod export;
 pub mod render_mode;
@@ -499,6 +500,10 @@ pub struct App {
     /// Current authenticated user's ID (from /api/users/me). None when signed out.
     /// Used for ownership checks when deciding whether to allow Update vs Save as Copy.
     pub(super) current_user_id: Option<String>,
+    /// Online-library state for the Scripts panel, and the slot its
+    /// background requests land in.
+    pub(super) script_cloud: script_cloud::ScriptCloudState,
+    pub(super) script_cloud_results: script_cloud::ScriptCloudSlot,
     /// Parallel to config history: for each FullConfig snapshot, stores
     /// (before_api_state, after_api_state). Keyed by the history index of
     /// the snapshot. Delta-level undo/redo doesn't touch api_state.
@@ -693,6 +698,8 @@ impl App {
             signal_manager: crate::signal::SignalManager::new(),
             api_state: ApiContentState::default(),
             current_user_id: None,
+            script_cloud: Default::default(),
+            script_cloud_results: Default::default(),
             api_state_history: std::collections::HashMap::new(),
             current_api_snapshot_idx: None,
             api_pending_visibility: None,
@@ -1185,6 +1192,9 @@ impl App {
         // Pass current connectivity state to UI layer
         self.egui_layer.api_connectivity = self.api_connectivity;
 
+        // Read before the call: `config_manager` goes in mutably, so the
+        // sign-in check cannot be an argument expression.
+        let signed_in = self.config_manager.system_settings().is_signed_in();
         let ui_response = self.egui_layer.render_ui(
             &self.gpu.device,
             &self.gpu.queue,
@@ -1221,6 +1231,8 @@ impl App {
             self.current_user_id.as_deref(),
             self.fly_mode,
             self.variation_catalog.as_ref(),
+            &self.script_cloud,
+            signed_in,
         );
 
         // Consume fly-mode responses produced by the UI this frame.

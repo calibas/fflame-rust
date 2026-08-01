@@ -71,6 +71,17 @@ pub struct ScriptsPanel {
     /// Snapshot of the loaded palette library, refreshed each frame from
     /// the app so newly loaded packs are selectable.
     palettes: Vec<crate::scene::palette::Palette>,
+    /// The script in the editor was opened from the online library and
+    /// has not been stored yet, so no link record exists to say so.
+    opened_untrusted: bool,
+    /// The public-search box. Lives here rather than in app state
+    /// because it is editor furniture, not a result.
+    browse_query: String,
+    /// The `library_generation` this panel last re-scanned for. An
+    /// adoption writes to the store from a background task, and without
+    /// this the new script would not appear until something else
+    /// happened to trigger a re-scan.
+    seen_library_generation: u64,
 }
 
 impl Default for ScriptsPanel {
@@ -95,6 +106,9 @@ impl Default for ScriptsPanel {
             status: None,
             initialized: false,
             palettes: Vec::new(),
+            opened_untrusted: false,
+            browse_query: String::new(),
+            seen_library_generation: 0,
         }
     }
 }
@@ -137,6 +151,9 @@ impl ScriptsPanel {
     }
 
     fn load_selected(&mut self) {
+        // The flag belongs to the adopted script, not to the panel:
+        // leaving it set would mark the NEXT selection as downloaded.
+        self.opened_untrusted = false;
         self.text = self
             .entries
             .get(self.selected)
@@ -183,7 +200,13 @@ impl ScriptsPanel {
     /// picker as an entry so the combo keeps naming what is in the
     /// editor — otherwise the picker would still read "Turntable" while
     /// the editor held something else entirely.
-    fn adopt_opened(&mut self, display_name: String, source: String, origin: ScriptOrigin) {
+    fn adopt_opened(
+        &mut self,
+        display_name: String,
+        source: String,
+        origin: ScriptOrigin,
+        untrusted: bool,
+    ) {
         let kind = ScriptHost::new()
             .collect(&source, &FractalConfig::default())
             .ok()
@@ -196,7 +219,9 @@ impl ScriptsPanel {
             kind,
             source: source.clone(),
             origin,
+            untrusted,
         });
+        self.opened_untrusted = untrusted;
         self.selected = self.entries.len() - 1;
         self.text = source;
         // A different script means different parameters; keeping the old
@@ -246,14 +271,28 @@ impl ScriptsPanel {
         };
         // The library the panel already discovered, so one script can
         // call another by id exactly as it does headlessly.
-        ScriptHost::with_palettes(self.palettes.clone())
-            .with_scripts(
-                self.entries
-                    .iter()
-                    .map(|e| (e.id.clone(), e.source.clone()))
-                    .collect(),
-            )
-            .run(&self.text, &base, seed, self.values.clone())
+        let mut host = ScriptHost::with_palettes(self.palettes.clone()).with_scripts(
+            self.entries
+                .iter()
+                .map(|e| (e.id.clone(), e.source.clone()))
+                .collect(),
+        );
+
+        // Downloaded scripts may only call shipped ones. Both halves are
+        // needed: the library set covers a downloaded script reached
+        // through `run_script`, and the entry flag covers the ordinary
+        // case — the user pressed Run on something they downloaded,
+        // which puts no id on the call stack at all.
+        host = host.with_untrusted(
+            self.entries
+                .iter()
+                .filter(|e| e.untrusted)
+                .map(|e| e.id.clone()),
+        );
+        if self.selected_is_untrusted() {
+            host = host.with_untrusted_entry();
+        }
+        host.run(&self.text, &base, seed, self.values.clone())
     }
 
     pub fn render(
@@ -261,6 +300,9 @@ impl ScriptsPanel {
         ui: &mut egui::Ui,
         current: &FractalConfig,
         palettes: Vec<crate::scene::palette::Palette>,
+        cloud: &crate::app::script_cloud::ScriptCloudState,
+        signed_in: bool,
+        cloud_request: &mut Option<crate::app::script_cloud::ScriptCloudRequest>,
     ) -> ScriptsResponse {
         let mut response = ScriptsResponse::default();
         self.palettes = palettes;
@@ -271,6 +313,12 @@ impl ScriptsPanel {
         }
         self.refresh_meta(current);
 
+        // A background adoption wrote to the store; pick it up.
+        if cloud.library_generation != self.seen_library_generation {
+            self.seen_library_generation = cloud.library_generation;
+            self.reload(current);
+        }
+
         // The browser file picker lands its text in egui's temp store;
         // pick it up here rather than routing it through the app.
         #[cfg(target_arch = "wasm32")]
@@ -278,7 +326,7 @@ impl ScriptsPanel {
             .ctx()
             .data_mut(|d| d.remove_temp::<String>(egui::Id::new(PENDING_SCRIPT_LOAD)))
         {
-            self.adopt_opened("Opened".to_string(), text, ScriptOrigin::External);
+            self.adopt_opened("Opened".to_string(), text, ScriptOrigin::External, false);
         }
 
         egui::ScrollArea::vertical().show(ui, |ui| {
@@ -289,6 +337,9 @@ impl ScriptsPanel {
             self.render_run_controls(ui, current, &mut response);
             self.render_editor(ui);
             self.render_output(ui);
+            // Last: the local script is the primary object, and the
+            // online library is what you can do WITH it.
+            self.render_cloud(ui, cloud, signed_in, cloud_request);
         });
 
         // Land a fork: rescan so the new file is in the list, select it,
@@ -434,7 +485,7 @@ impl ScriptsPanel {
                                 .file_stem()
                                 .map(|s| s.to_string_lossy().into_owned())
                                 .unwrap_or_else(|| "Opened".to_string());
-                            self.adopt_opened(name, text, ScriptOrigin::External);
+                            self.adopt_opened(name, text, ScriptOrigin::External, false);
                         }
                         Err(e) => self.status = Some(format!("Open failed: {e}")),
                     }
@@ -570,6 +621,301 @@ impl ScriptsPanel {
             });
         if close {
             self.pending_delete = None;
+        }
+    }
+
+/// The online library: what you have published, and what other
+    /// people have.
+    ///
+    /// Drawn only when signed in. Offering Publish to somebody who
+    /// cannot use it is worse than not showing it — the local store is
+    /// the whole feature for a signed-out user, and it works.
+    fn render_cloud(
+        &mut self,
+        ui: &mut egui::Ui,
+        cloud: &crate::app::script_cloud::ScriptCloudState,
+        signed_in: bool,
+        request: &mut Option<crate::app::script_cloud::ScriptCloudRequest>,
+    ) {
+        use crate::app::script_cloud::ScriptCloudRequest as Req;
+
+        if !signed_in {
+            return;
+        }
+
+        ui.separator();
+        egui::CollapsingHeader::new("Online library")
+            .default_open(false)
+            .show(ui, |ui| {
+                if let Some(status) = &cloud.status {
+                    let colour = if cloud.status_is_error {
+                        egui::Color32::from_rgb(240, 120, 120)
+                    } else {
+                        egui::Color32::from_rgb(140, 200, 140)
+                    };
+                    ui.colored_label(colour, status);
+                }
+
+                // A conflict is a decision, so it stays until made.
+                if let Some((stem, c)) = &cloud.conflict {
+                    self.render_conflict(ui, stem, c, cloud.busy, request);
+                }
+
+                ui.add_space(4.0);
+                self.render_publish_controls(ui, cloud, request);
+
+                ui.add_space(6.0);
+                ui.separator();
+
+                // ---- mine -------------------------------------------
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Published by you").strong());
+                    if ui
+                        .add_enabled(!cloud.busy, egui::Button::new("Refresh").small())
+                        .clicked()
+                    {
+                        *request = Some(Req::ListMine);
+                    }
+                });
+                if !cloud.mine_loaded {
+                    ui.weak("Not loaded — press Refresh.");
+                } else if cloud.mine.is_empty() {
+                    ui.weak("You have not published any scripts.");
+                } else {
+                    for item in &cloud.mine {
+                        Self::render_cloud_row(ui, item, false, cloud.busy, request);
+                    }
+                }
+
+                ui.add_space(6.0);
+                ui.separator();
+
+                // ---- browse -----------------------------------------
+                ui.label(egui::RichText::new("Public scripts").strong());
+                ui.horizontal(|ui| {
+                    let entry = ui.add(
+                        egui::TextEdit::singleline(&mut self.browse_query)
+                            .hint_text("search…")
+                            .desired_width(160.0),
+                    );
+                    let go = ui.add_enabled(!cloud.busy, egui::Button::new("Search")).clicked();
+                    if go || (entry.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+                    {
+                        *request = Some(Req::Search(self.browse_query.clone()));
+                    }
+                });
+
+                // Running a stranger's script is the thing this section
+                // makes possible, so say what that means once, here,
+                // rather than leaving it to be inferred from a download
+                // button.
+                ui.weak(
+                    "Opening one saves a copy locally. Scripts from other people run with \
+                     restrictions: they may only call scripts that ship with the app.",
+                );
+
+                if cloud.browse.is_empty() {
+                    ui.weak(if cloud.browse_query.is_empty() {
+                        "No results yet."
+                    } else {
+                        "Nothing matched."
+                    });
+                } else {
+                    for item in &cloud.browse {
+                        Self::render_cloud_row(ui, item, true, cloud.busy, request);
+                    }
+                }
+            });
+    }
+
+    /// Publish / update for the script in the editor.
+    fn render_publish_controls(
+        &self,
+        ui: &mut egui::Ui,
+        cloud: &crate::app::script_cloud::ScriptCloudState,
+        request: &mut Option<crate::app::script_cloud::ScriptCloudRequest>,
+    ) {
+        use crate::app::script_cloud::ScriptCloudRequest as Req;
+        use crate::script::library::ScriptOrigin;
+
+        let Some(entry) = self.entries.get(self.selected) else { return };
+
+        // Only the user's own stored scripts can be published: a shipped
+        // one is not theirs to publish, and an unsaved editor buffer has
+        // no stem for the server to key on.
+        if entry.origin != ScriptOrigin::User {
+            ui.weak("Save this script first to publish it.");
+            return;
+        }
+        if entry.untrusted {
+            ui.weak("This came from somebody else — republishing it is not yours to do.");
+            return;
+        }
+
+        let link = crate::script::store::link_of(&entry.id).unwrap_or_default();
+        let stem = entry.id.clone();
+        let source = self.text.clone();
+
+        ui.horizontal(|ui| match (link.cloud_id.clone(), link.version) {
+            (Some(cloud_id), Some(version)) => {
+                if ui
+                    .add_enabled(!cloud.busy, egui::Button::new("Update online"))
+                    .on_hover_text(format!(
+                        "Push this edit as version {}. Refused if somebody saved after you \
+                         loaded it.",
+                        version + 1
+                    ))
+                    .clicked()
+                {
+                    *request = Some(Req::Update { stem: stem.clone(), cloud_id: cloud_id.clone(), source: source.clone(), version });
+                }
+                if ui
+                    .add_enabled(!cloud.busy, egui::Button::new("Unpublish"))
+                    .on_hover_text("Remove it from the server. Your local copy stays.")
+                    .clicked()
+                {
+                    *request = Some(Req::Unpublish { stem: stem.clone(), cloud_id });
+                }
+                ui.weak(format!("v{version}"));
+            }
+            _ => {
+                if ui
+                    .add_enabled(!cloud.busy, egui::Button::new("Publish (private)"))
+                    .on_hover_text("Upload it to your account. Private until you change it.")
+                    .clicked()
+                {
+                    *request = Some(Req::Publish {
+                        stem: stem.clone(),
+                        source: source.clone(),
+                        visibility: crate::api::types::ApiVisibility::Private,
+                    });
+                }
+                if ui
+                    .add_enabled(!cloud.busy, egui::Button::new("Publish (public)"))
+                    .on_hover_text("Upload it and let anyone find it.")
+                    .clicked()
+                {
+                    *request = Some(Req::Publish {
+                        stem,
+                        source,
+                        visibility: crate::api::types::ApiVisibility::Public,
+                    });
+                }
+            }
+        });
+    }
+
+    /// Somebody else saved first. Offer the two real choices.
+    fn render_conflict(
+        &self,
+        ui: &mut egui::Ui,
+        stem: &str,
+        c: &crate::api::types::ScriptConflict,
+        busy: bool,
+        request: &mut Option<crate::app::script_cloud::ScriptCloudRequest>,
+    ) {
+        use crate::app::script_cloud::ScriptCloudRequest as Req;
+
+        egui::Frame::group(ui.style())
+            .fill(ui.visuals().warn_fg_color.linear_multiply(0.08))
+            .show(ui, |ui| {
+                ui.label(
+                    egui::RichText::new(format!("`{stem}` changed on the server"))
+                        .strong(),
+                );
+                ui.weak(format!(
+                    "It is now version {}{}. Your edit was against an older one, so it was \
+                     not saved.",
+                    c.current_version,
+                    c.updated_at
+                        .as_ref()
+                        .map(|t| format!(", updated {t}"))
+                        .unwrap_or_default()
+                ));
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(!busy, egui::Button::new("Overwrite with mine"))
+                        .on_hover_text(
+                            "Push your version anyway, discarding the change somebody else \
+                             made.",
+                        )
+                        .clicked()
+                    {
+                        // Their version is what we now claim to have
+                        // read, so the retry is accepted — this IS the
+                        // "I looked and I still want mine" path, and it
+                        // must be an explicit click rather than an
+                        // automatic retry.
+                        *request = Some(Req::Update {
+                            stem: stem.to_string(),
+                            cloud_id: c.id.clone(),
+                            source: self.text.clone(),
+                            version: c.current_version,
+                        });
+                    }
+                    if ui
+                        .add_enabled(!busy, egui::Button::new("Load theirs"))
+                        .on_hover_text(
+                            "Replace your local copy with the server's version, discarding \
+                             your edit.",
+                        )
+                        .clicked()
+                    {
+                        // Refetch, not Adopt: this is still YOUR script.
+                        // Adopting would save a second copy under a
+                        // freed stem and mark it as somebody else's.
+                        *request = Some(Req::Refetch {
+                            stem: stem.to_string(),
+                            id: c.id.clone(),
+                        });
+                    }
+                });
+            });
+    }
+
+    /// One row of a cloud listing.
+    fn render_cloud_row(
+        ui: &mut egui::Ui,
+        item: &crate::api::types::ScriptListItem,
+        show_owner: bool,
+        busy: bool,
+        request: &mut Option<crate::app::script_cloud::ScriptCloudRequest>,
+    ) {
+        use crate::app::script_cloud::ScriptCloudRequest as Req;
+
+        ui.horizontal(|ui| {
+            ui.label(&item.display_name);
+            if show_owner && !item.owner_display_name.is_empty() {
+                // The globally unique key — `owner/name` — rather than a
+                // UUID fragment, which is what the server's unique
+                // display names are for.
+                ui.weak(format!("by {}", item.owner_display_name));
+            }
+            if let Some(k) = &item.kind {
+                ui.weak(format!("· {k}"));
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.add_enabled(!busy, egui::Button::new("Open").small()).clicked() {
+                    *request = Some(Req::Adopt { id: item.id.clone() });
+                }
+            });
+        });
+        if let Some(d) = item.description.as_ref().filter(|d| !d.is_empty()) {
+            ui.indent(("cloud_desc", &item.id), |ui| {
+                // The wire carries markdown; this app renders none, so
+                // strip locally. Scripts deliberately have no
+                // `description_plain` — see `script::strip_markdown`.
+                let plain = crate::script::strip_markdown(d);
+                let first = plain.lines().next().unwrap_or_default();
+                ui.weak(first);
+            });
+        }
+        if !item.authors.is_empty() {
+            ui.indent(("cloud_authors", &item.id), |ui| {
+                // Credit, not ownership: `owner_display_name` is who
+                // uploaded it, `authors` is who wrote it.
+                ui.weak(format!("credit: {}", item.authors.join(", ")));
+            });
         }
     }
 
@@ -795,6 +1141,16 @@ impl ScriptsPanel {
     /// `File(PathBuf)` variant covered both the shipped `assets/scripts/`
     /// copies and the user's own, so this had to canonicalize the path
     /// and compare — a check that could not exist on the web at all.
+    /// Whether the script in the editor came from somebody else.
+    ///
+    /// `opened_untrusted` covers a script pulled straight from browse
+    /// into the editor, which has no store entry yet; otherwise the
+    /// entry carries what the store's link record says.
+    fn selected_is_untrusted(&self) -> bool {
+        self.opened_untrusted
+            || self.entries.get(self.selected).is_some_and(|e| e.untrusted)
+    }
+
     fn selected_is_shipped(&self) -> bool {
         match self.entries.get(self.selected).map(|e| &e.origin) {
             Some(ScriptOrigin::Builtin) | Some(ScriptOrigin::Shipped(_)) => true,

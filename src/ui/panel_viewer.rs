@@ -372,6 +372,13 @@ pub struct PanelContext<'a> {
     /// Downloaded variations the Variations panel asked to re-fetch at
     /// the catalog's version. Consumed by App.
     pub variation_update_requested: &'a mut Vec<String>,
+    /// Online-library state the Scripts panel reads, and the slot it
+    /// writes a request into. Owned by App.
+    pub script_cloud: &'a crate::app::script_cloud::ScriptCloudState,
+    pub script_cloud_request: &'a mut Option<crate::app::script_cloud::ScriptCloudRequest>,
+    /// Whether anyone is signed in — the panel shows its online section
+    /// only then, rather than offering actions that cannot work.
+    pub signed_in: bool,
 
     // Compact mode (cached from system settings)
     pub compact_mode: bool,
@@ -639,7 +646,11 @@ impl<'a> PanelViewer<'a> {
                 self.render_save_online_dialog(ui);
             }
             PanelType::Variations => {
-                let response = super::variations::render_variations_panel(ui, self.context.flame, self.context.variation_catalog);
+                let response = super::variations::render_variations_panel(
+                    ui,
+                    self.context.flame,
+                    self.context.variation_catalog,
+                );
                 if response.clear_cache_requested {
                     *self.context.clear_variation_cache_requested = true;
                 }
@@ -1587,7 +1598,14 @@ impl<'a> PanelViewer<'a> {
         let palettes: Vec<crate::scene::palette::Palette> =
             self.context.palette_library.iter().cloned().collect();
         if let Some(panel) = self.context.scripts_panel.as_mut() {
-            let response = panel.render(ui, &current, palettes);
+            let response = panel.render(
+                ui,
+                &current,
+                palettes,
+                self.context.script_cloud,
+                self.context.signed_in,
+                self.context.script_cloud_request,
+            );
             if let Some(config) = response.generated {
                 *self.context.script_generated = Some(config);
             }

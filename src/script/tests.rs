@@ -3609,3 +3609,156 @@ fn a_non_string_flag_is_still_an_error() {
         .expect_err("a non-string flag must fail");
     assert!(format!("{err}").contains("must be strings"), "{err}");
 }
+
+// ============================================================================
+// Provenance survives adoption
+// ============================================================================
+
+/// Saving somebody else's script does not make it yours.
+///
+/// This is the hole that would otherwise open the moment browsing
+/// lands: a downloaded script saved locally becomes
+/// `ScriptOrigin::User`, and if trust were read from the origin, Save
+/// would launder away the cross-call restriction. The user chose to
+/// keep the script; they did not read it.
+#[test]
+fn adopting_a_downloaded_script_keeps_it_untrusted() {
+    use super::store;
+    let stem = "adopted-from-elsewhere";
+    let _ = store::delete(stem);
+
+    store::save(stem, "script(\"Theirs\", \"generator\");\n").expect("save");
+    store::set_link(
+        stem,
+        store::ScriptLink {
+            cloud_id: Some("abc".into()),
+            version: Some(3),
+            owner: Some("someone/theirs".into()),
+            from_others: true,
+        },
+    )
+    .expect("link");
+
+    assert!(store::is_untrusted(stem), "provenance must survive the save");
+
+    let entries = super::library::discover(&crate::config::FractalConfig::default());
+    let e = entries.iter().find(|e| e.id == stem).expect("listed");
+    assert!(e.untrusted, "the library must carry it through to the panel");
+    assert_eq!(e.origin, super::library::ScriptOrigin::User, "it IS the user's copy");
+    assert!(e.label().ends_with(" ↓"), "and it is marked as such: {}", e.label());
+
+    store::delete(stem).expect("cleanup");
+}
+
+/// Deleting a script forgets its link, so a stem reused later does not
+/// inherit the previous script's cloud identity — or, worse, its
+/// provenance: writing your own script under a freed name must not
+/// leave it marked as somebody else's.
+#[test]
+fn deleting_a_script_forgets_where_it_came_from() {
+    use super::store;
+    let stem = "reused-stem-test";
+    let _ = store::delete(stem);
+
+    store::save(stem, "script(\"Theirs\", \"generator\");\n").unwrap();
+    store::set_link(
+        stem,
+        store::ScriptLink { from_others: true, cloud_id: Some("x".into()), ..Default::default() },
+    )
+    .unwrap();
+    assert!(store::is_untrusted(stem));
+
+    store::delete(stem).unwrap();
+    assert!(store::link_of(stem).is_none(), "the link must go with the script");
+
+    // The same name, now the user's own work.
+    store::save(stem, "script(\"Mine\", \"generator\");\n").unwrap();
+    assert!(!store::is_untrusted(stem), "a reused stem must not inherit provenance");
+    store::delete(stem).unwrap();
+}
+
+/// An absent link means locally authored, and that is safe because
+/// every path bringing in a foreign script writes one.
+#[test]
+fn no_link_means_local() {
+    use super::store;
+    assert!(!store::is_untrusted("a-stem-that-was-never-stored"));
+}
+
+// ============================================================================
+// Adopting versus refetching
+// ============================================================================
+
+/// Resolving a conflict on your OWN script must not mark it as somebody
+/// else's, and must not leave a second copy behind.
+///
+/// The two operations look interchangeable — both fetch a script and
+/// write it locally — and reusing the adopt path for "load theirs" is
+/// the natural mistake. It fails in two ways at once, both silent: a
+/// duplicate under a freed stem, and your own script running under the
+/// cross-call restriction from then on.
+#[test]
+fn refetching_your_own_script_keeps_it_yours() {
+    use super::store;
+    let stem = "refetch-keeps-ownership";
+    let _ = store::delete(stem);
+
+    store::save(stem, "script(\"Mine v1\", \"generator\");\n").unwrap();
+    store::set_link(
+        stem,
+        store::ScriptLink {
+            cloud_id: Some("id-1".into()),
+            version: Some(4),
+            owner: Some("me/mine".into()),
+            from_others: false,
+        },
+    )
+    .unwrap();
+
+    // What the Refetch handler does: overwrite in place, preserving
+    // whatever `from_others` already said.
+    let was_theirs = store::link_of(stem).is_some_and(|l| l.from_others);
+    let saved = store::save(stem, "script(\"Mine v2\", \"generator\");\n").unwrap();
+    store::set_link(
+        &saved,
+        store::ScriptLink {
+            cloud_id: Some("id-1".into()),
+            version: Some(5),
+            owner: Some("me/mine".into()),
+            from_others: was_theirs,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(saved, stem, "in place — not a second copy under a freed stem");
+    assert!(!store::is_untrusted(stem), "your own script stays yours");
+    assert_eq!(store::link_of(stem).unwrap().version, Some(5));
+    assert!(store::load(stem).unwrap().contains("v2"));
+
+    // Exactly one copy.
+    let mine: Vec<_> = store::list().into_iter().filter(|(s, _)| s.starts_with(stem)).collect();
+    assert_eq!(mine.len(), 1, "{mine:?}");
+
+    store::delete(stem).unwrap();
+}
+
+/// ...while adopting somebody else's genuinely does mark it, and picks
+/// a free stem rather than overwriting whatever is already there.
+#[test]
+fn adopting_takes_a_free_stem_and_marks_provenance() {
+    use super::store;
+    // A shipped stem is reserved, so adoption must not try to take it
+    // even if the server let the name through.
+    assert_eq!(store::free_stem("random_palette"), "random_palette-copy");
+
+    let stem = store::free_stem("adopt-free-stem-test");
+    let _ = store::delete(&stem);
+    let saved = store::save(&stem, "script(\"Theirs\", \"generator\");\n").unwrap();
+    store::set_link(
+        &saved,
+        store::ScriptLink { from_others: true, ..Default::default() },
+    )
+    .unwrap();
+    assert!(store::is_untrusted(&saved));
+    store::delete(&saved).unwrap();
+}

@@ -908,6 +908,8 @@ impl EguiLayer {
         current_user_id: Option<&str>,
         fly_mode_active: bool,
         variation_catalog: Option<&crate::storage::variation_catalog::CachedCatalog>,
+        script_cloud: &crate::app::script_cloud::ScriptCloudState,
+        signed_in: bool,
     ) -> UiResponse {
         // Sync compact mode from workspace (handles layout switches from menus)
         let is_compact = workspace.is_compact();
@@ -1084,6 +1086,7 @@ impl EguiLayer {
         let mut load_api_animation_id: Option<String> = None;
         let mut clear_variation_cache_requested = false;
         let mut variation_update_requested: Vec<String> = Vec::new();
+        let mut script_cloud_request: Option<crate::app::script_cloud::ScriptCloudRequest> = None;
 
         // Path filters
         let mut path_filters_changed: Option<Vec<crate::gpu::buffers::GpuPathFilter>> = None;
@@ -1398,6 +1401,9 @@ impl EguiLayer {
                         load_api_animation_id: &mut load_api_animation_id,
                         clear_variation_cache_requested: &mut clear_variation_cache_requested,
                         variation_update_requested: &mut variation_update_requested,
+                        script_cloud,
+                        script_cloud_request: &mut script_cloud_request,
+                        signed_in,
                         compact_mode: self.compact_mode,
                     },
                     touch_tracker: &mut self.touch_tracker,
@@ -1979,6 +1985,7 @@ impl EguiLayer {
             load_api_animation_id,
             clear_variation_cache_requested,
             variation_update_requested,
+            script_cloud_request,
         }
     }
 
