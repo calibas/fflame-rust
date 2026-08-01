@@ -57,6 +57,14 @@ pub(crate) struct ScriptState {
     /// Ids currently executing, outermost first. Both the cycle check
     /// and the depth cap read this.
     pub call_stack: Vec<String>,
+    /// Library ids that did not come from this app — downloaded scripts.
+    /// See [`ScriptState::cross_calls_restricted`].
+    pub untrusted: HashSet<String>,
+    /// Whether the ENTRY script is untrusted. It has no id on the call
+    /// stack, so it cannot be covered by `untrusted` alone — and the
+    /// entry script is the ordinary case for "the user pressed Run on
+    /// something they downloaded".
+    pub entry_untrusted: bool,
     /// Operations reported by each live frame, and the total from frames
     /// that have finished. Rhai counts per evaluation, so a nested run
     /// starts from zero — summing the live frames is what stops a script
@@ -69,6 +77,23 @@ pub(crate) struct ScriptState {
     /// What the script asked to animate. Stays untouched — and so
     /// produces no animation at all — unless the script uses `anim`.
     pub anim: super::anim::AnimBuilder,
+}
+
+/// The cross-call rule, as a free function.
+///
+/// Lifted out of [`ScriptState`] so it can be tested on data. It has to
+/// be: the "any frame" reading only differs from "the immediate caller"
+/// on `downloaded -> shipped -> user`, and that chain cannot be built
+/// from real scripts — reaching it needs a shipped script that calls a
+/// user one, and shipped scripts are compiled in. A test driving the
+/// engine would therefore pass under either rule while appearing to
+/// pin the stricter one.
+pub(crate) fn cross_calls_restricted(
+    entry_untrusted: bool,
+    call_stack: &[String],
+    untrusted: &HashSet<String>,
+) -> bool {
+    entry_untrusted || call_stack.iter().any(|id| untrusted.contains(id))
 }
 
 impl ScriptState {
@@ -93,10 +118,32 @@ impl ScriptState {
             anim: super::anim::AnimBuilder::default(),
             scripts: Vec::new(),
             call_stack: Vec::new(),
+            untrusted: HashSet::new(),
+            entry_untrusted: false,
             frame_ops: Vec::new(),
             ops_finished: 0,
             seed,
         }
+    }
+
+    /// Whether `run_script` is currently limited to shipped scripts.
+    ///
+    /// True once any untrusted frame is on the stack — including the
+    /// entry script, which has no id there.
+    ///
+    /// # Why "any frame", not "the immediate caller"
+    ///
+    /// A downloaded script may only call shipped ones, and shipped
+    /// scripts only call each other, so the two rules agree on
+    /// everything that exists today. They diverge on
+    /// `downloaded -> shipped -> ?`: under an immediate-caller rule the
+    /// shipped frame would be unrestricted again and could reach a user
+    /// script, laundering the restriction through one hop. No shipped
+    /// script does that, and none can be made to without a recompile —
+    /// but "safe because of what the shipped corpus happens to contain"
+    /// is not a property, and the stricter rule costs one `any`.
+    pub fn cross_calls_restricted(&self) -> bool {
+        cross_calls_restricted(self.entry_untrusted, &self.call_stack, &self.untrusted)
     }
 
     /// Total operations charged so far: everything finished, plus the
@@ -216,6 +263,11 @@ pub struct ScriptHost {
     palettes: Vec<crate::scene::palette::Palette>,
     /// Scripts that `run_script` can call, as (id, source).
     scripts: Vec<(String, String)>,
+    /// Library ids that came from the online library rather than from
+    /// this app or this user.
+    untrusted: HashSet<String>,
+    /// Whether the script about to be RUN is itself untrusted.
+    entry_untrusted: bool,
 }
 
 impl ScriptHost {
@@ -248,6 +300,48 @@ impl ScriptHost {
     /// both supply the discovered library.
     pub fn with_scripts(mut self, scripts: Vec<(String, String)>) -> Self {
         self.scripts = scripts;
+        self
+    }
+
+    /// Mark library ids as untrusted — downloaded, not shipped and not
+    /// the user's own.
+    ///
+    /// # What this restricts, and why it is not paranoia
+    ///
+    /// `run_script(id)` resolves against the *whole* discovered library,
+    /// the user's own scripts included. Left alone, a downloaded script
+    /// calling `run_script("helper")` binds to whatever that machine
+    /// happens to have under that name: it would render differently on
+    /// every machine, and a stranger's script would be able to invoke
+    /// the user's.
+    ///
+    /// So an untrusted script may call **shipped stems only**. Those are
+    /// reserved names ([`super::library::is_builtin_stem`]) that always
+    /// resolve to the compiled-in script, which is what makes the
+    /// restriction meaningful rather than a name check.
+    ///
+    /// # The second reason this shape was chosen
+    ///
+    /// It also keeps the eventual dependency model honest. If no
+    /// published script can have a non-builtin dependency, then when
+    /// dependencies are modelled the backfill is provably empty — every
+    /// existing script correctly means `[]`, with no old sources to
+    /// parse. That is why the API deliberately does **not** reserve a
+    /// `dependencies` field today.
+    pub fn with_untrusted(mut self, ids: impl IntoIterator<Item = String>) -> Self {
+        self.untrusted = ids.into_iter().collect();
+        self
+    }
+
+    /// Mark the script about to be run as untrusted.
+    ///
+    /// Separate from [`Self::with_untrusted`] because the entry script
+    /// never appears on the call stack, and "the user pressed Run on a
+    /// script they downloaded" is the ordinary case rather than the edge
+    /// one. Forgetting this would leave exactly the hole the restriction
+    /// exists to close.
+    pub fn with_untrusted_entry(mut self) -> Self {
+        self.entry_untrusted = true;
         self
     }
 
@@ -299,7 +393,12 @@ impl ScriptHost {
             params,
             self.palettes.clone(),
         )));
-        state.borrow_mut().scripts = self.scripts.clone();
+        {
+            let mut st = state.borrow_mut();
+            st.scripts = self.scripts.clone();
+            st.untrusted = self.untrusted.clone();
+            st.entry_untrusted = self.entry_untrusted;
+        }
 
         // Built per run: the registered closures capture this run's
         // config and state.
@@ -391,6 +490,18 @@ pub(crate) fn run_sub_script(
         if st.call_stack.len() >= MAX_SCRIPT_DEPTH {
             return Err(format!(
                 "scripts are nested more than {MAX_SCRIPT_DEPTH} deep (at `{id}`)"
+            ));
+        }
+        // A downloaded script may only call shipped ones. Checked before
+        // the id is resolved, so the refusal does not depend on whether
+        // the target happens to exist — otherwise the error message
+        // would report whether the user has a script by that name, which
+        // is the sort of thing a downloaded script should not be able to
+        // ask.
+        if st.cross_calls_restricted() && !super::library::is_builtin_stem(id) {
+            return Err(format!(
+                "a downloaded script may only call scripts that ship with the app, \
+                 and `{id}` is not one of them"
             ));
         }
 
