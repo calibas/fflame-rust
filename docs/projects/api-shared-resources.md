@@ -697,10 +697,45 @@ These are live defects, not future work.
 
 ### 8.3 Scripts
 
-- [ ] **M** — Local cache / local store. On WASM this *is* the only
-  storage — closes "a web user cannot save a script at all", and is
-  worth doing **before and independently of** the API.
-- [ ] **S** — Fork-on-edit for built-ins (§5.2), paired with 8.0.
+- [x] **M** — ~~Local cache / local store~~ **DONE.** `script::store`
+  routes save / load / delete / list through `storage::backend`, so the
+  user's own scripts work on the web as well as on desktop. This closes
+  "a web user cannot save a script at all" — every one of those four
+  operations was `#[cfg(not(target_arch = "wasm32"))]`, so a browser
+  user could edit a script in the panel and the text died with the tab.
+  Desktop paths are byte-identical to before (`<app data>/scripts/`), so
+  nothing needs migrating.
+
+  On the web this store is **not** a cache of something the server
+  holds; it is the only copy. Hence a per-script 256 KB cap checked
+  before the write: localStorage is a browser-wide quota shared with
+  system settings and the palette, variation and thumbnail caches, and
+  one runaway paste should not be able to evict all of it.
+
+  The change that made this tractable was to key scripts by **stem**
+  rather than path. `ScriptOrigin` splits `File(PathBuf)` into
+  `Shipped(PathBuf)` / `User` / `External`, so "may this be deleted" is
+  answered by the variant instead of by canonicalizing a path and
+  comparing it against the user folder — a check that could not exist in
+  a browser. `delete` takes a stem and builds the key itself, so there
+  is no path for a caller to aim outside the store.
+
+  `save` returns the stem it **actually** used, which is not always the
+  name it was given: sanitizing turns "My Script" into `My_Script`, and
+  a caller that assumes otherwise reports the wrong location and selects
+  the wrong entry after a fork. That was a live bug in the version this
+  replaced, and it is silent — the write succeeds either way.
+- [x] **S** — ~~Fork-on-edit for built-ins~~ **DONE**, on the reading
+  that the fork happens on **Save** rather than on the first keystroke:
+  forking per keystroke would litter the store with copies made by
+  accidental typing, and §5.2's requirement — "the user keeps editing
+  without interruption and the built-in is untouched" — holds either
+  way. Editing a shipped script and saving writes `<name>-copy` and
+  switches the editor to it. Paired with 8.0's shadowing removal, which
+  is what makes the fork necessary rather than optional.
+
+  The web half only started working now: Save was desktop-only, so a
+  browser user editing a built-in got no fork and no copy.
 - [ ] **M** — CRUD client calls against §5.4.
 - [ ] **M** — Panel: sign-in-aware list (mine / built-in / public),
   save-to-cloud, update-conflict handling.

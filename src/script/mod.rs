@@ -22,6 +22,7 @@ pub mod builtins;
 pub mod cli;
 pub mod host;
 pub mod library;
+pub mod store;
 
 #[cfg(test)]
 mod tests;
