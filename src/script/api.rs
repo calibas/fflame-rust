@@ -151,12 +151,32 @@ fn declare_script(
         ))
     })?;
 
+    // An unrecognised flag WARNS and is dropped; it does not fail the
+    // script.
+    //
+    // Both flags are UI affordances and nothing else — `norng` hides the
+    // seed controls, `palette` offers the script in the Palette Editor.
+    // Neither touches the flame that gets rendered, so an unknown one
+    // cannot make a script produce a wrong result; it can only mean a
+    // missing affordance. Refusing to run over that is disproportionate,
+    // and with public script browsing live it would make an older build
+    // reject scripts that would otherwise run correctly.
+    //
+    // This is what lets the vocabulary grow without a coordinated
+    // release. A malformed flag — a number where a string belongs — is
+    // still an error: that is the author's mistake, not a version skew.
     let mut parsed = ScriptFlags::default();
+    let mut unknown_flags = Vec::new();
     for flag in flags.unwrap_or_default() {
         let text = flag
             .into_string()
             .map_err(|_| err("script flags must be strings, e.g. [\"norng\"]"))?;
-        parsed.set(&text).map_err(err)?;
+        if let Err(e) = parsed.set(&text) {
+            unknown_flags.push(e);
+        }
+    }
+    for e in unknown_flags {
+        st.warnings.push(e);
     }
 
     st.meta.name = name.to_string();

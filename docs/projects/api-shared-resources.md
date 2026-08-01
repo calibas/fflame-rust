@@ -593,12 +593,44 @@ would be the only one of its kind — **agreed, no preference for the
 HTTP-idiomatic form here**, since there is no intermediary cache to
 benefit from it.
 
+**`flags` stays an open vocabulary — and the client now actually
+behaves the way I said it did.**
+
+I reported "the client warns on an unknown flag and drops it". It did
+not: `declare_script` propagated the error, so a script declaring a flag
+this build did not know **failed to run**. I had described variation
+*features* — which genuinely warn and drop — and carried the claim into
+the generated contract, where the API repo read it and built on it. The
+one artifact whose whole purpose is to stop hand-maintained cross-repo
+claims from going stale, carrying a hand-maintained claim that was never
+true.
+
+The behaviour is now what was documented, and on its own merits rather
+than to make the sentence true. Both flags are UI affordances — `norng`
+hides the seed controls, `palette` offers the script in the Palette
+Editor — so neither touches the rendered flame and a dropped one costs
+an affordance, never a wrong result. With public browsing live, hard
+erroring means an older build refuses a newer script that would have run
+correctly. **A flag that affected output could not be degraded this way,
+and adding one would be a breaking change.**
+
+The original design's concern was right and is preserved: a silently
+ignored switch looks like a broken feature, so the warning is carried on
+`ScriptMeta` and shown by the **collect** pass — a typo'd `norgn`
+surfaces while editing, as it did when it was an error, rather than
+waiting for Run. A malformed flag (a number where a string belongs) is
+still a hard error: author mistake, not version skew.
+
+**No server-side normalisation, but not for the reason given.** Flag
+names are matched case- and whitespace-insensitively client-side, so
+`NoRng` already works and lowercasing upstream would repair nothing.
+Storing verbatim is still right — rewriting what an author wrote is not
+the server's job — and `MAX_SCRIPT_FLAG_LEN` is the correct shape for
+the real gap, since it bounds payload without touching the vocabulary.
+
 #### 5.4.2 Open
 
-- **`flags` as a closed server-side set?** The client warns on an
-  unknown flag and drops it, so the vocabulary can grow without a
-  coordinated deploy; a closed-set CHECK would remove that. The known
-  set is in the contract under `scripts.flags.known`.
+- Nothing. See §8.3 for the client work that remains.
 - **Client-asserted metadata.** The server has no Rhai engine, so
   `kind` / `flags` / `display_name` are whatever the uploader sent —
   a public listing filtered by `kind=generator` filters on data that

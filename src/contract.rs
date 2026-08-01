@@ -324,8 +324,16 @@ pub fn generate() -> serde_json::Value {
                 "$comment": "The client WARNS on an unknown flag and drops it, \
                              so the vocabulary can grow without a coordinated \
                              deploy. A server-side closed-set CHECK would \
-                             remove that property — worth knowing before \
-                             choosing to add one.",
+                             remove that property. Flag names are matched \
+                             case- and whitespace-insensitively HERE, so \
+                             normalising them upstream would change nothing \
+                             and would only rewrite what the author wrote. \
+                             Both flags are UI affordances — `norng` hides the \
+                             seed controls, `palette` offers the script in the \
+                             Palette Editor — so a dropped one costs an \
+                             affordance, never a wrong flame. A flag that \
+                             affected OUTPUT could not be degraded this way, \
+                             and adding one would be a breaking change.",
                 "known": ScriptFlags::KNOWN,
             },
         },
