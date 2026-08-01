@@ -19,6 +19,7 @@ pub mod custom_palettes;
 pub mod settings;
 pub mod thumbnail_cache;
 pub mod catalog;
+pub mod resource_store;
 pub mod effect_cache;
 pub mod plugins;
 pub mod effect_catalog;
@@ -48,7 +49,7 @@ pub use thumbnail_cache::{ThumbnailCache, GalleryItem, TextureCache};
 /// Idempotent — registering the same resource twice is a replace, and
 /// the collision rules make a second call a no-op.
 pub fn load_installed_resources() -> plugins::PluginLoadReport {
-    crate::variations::load_cached_api_variations();
+    variation_cache::load_all_into_registry();
     effect_cache::load_all_into_registry();
     plugins::load_all()
 }
