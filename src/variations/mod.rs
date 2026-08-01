@@ -897,21 +897,6 @@ pub fn missing_variations_in(flame: &crate::scene::transforms::Flame) -> Vec<Str
     missing.into_iter().collect()
 }
 
-/// Load all cached API variations from disk/storage and register them.
-/// Call once at app startup, after the global registry is initialized.
-/// Errors for individual variations are logged but don't fail the load.
-pub fn load_cached_api_variations() {
-    let cached = crate::storage::variation_cache::load_all();
-    if cached.is_empty() {
-        return;
-    }
-    let mut registry = global_registry_mut();
-    for download in cached {
-        let provenance = crate::provenance::Provenance::Api { version: download.version };
-        registry.register_from_api(&download, provenance);
-    }
-}
-
 #[cfg(test)]
 mod category_wire_tests {
     use super::VariationCategory as C;

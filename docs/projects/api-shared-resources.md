@@ -1189,11 +1189,52 @@ scheduling.
 
 ### 8.7 Shared machinery (§7.2)
 
-- [ ] **L** — Factor manifest + cache + on-demand fetch + registration
-  + provenance once, when effects are built. Three hand-copies of
-  `variation_fetch.rs` / `variation_cache.rs` would triple-maintain the
-  same bugs — 8.1's write-only WASM cache being exactly the kind that
-  gets duplicated. Not worth factoring speculatively before then.
+Most of this happened during 8.5, as the suggested order intended:
+`storage::catalog` (the merge state machine behind a `CatalogItem`
+trait), `provenance::Provenance`, `backend::list_entries`,
+`load_installed_resources`, and effect parameters reusing the variation
+parameter type outright rather than copying its shape.
+
+What remained was measured rather than assumed. Similarity between the
+pairs, after normalising away the `variation`/`effect` naming:
+
+| | shared | verdict |
+|---|---|---|
+| catalogs | **71%** (44/55 lines) | factor |
+| caches | 43% (56/128) | factor the middle |
+| fetch modules | 35% (75/158) | **leave alone** |
+
+- [x] **S** — ~~Factor the storage half~~ **DONE.** One
+  `storage::resource_store` holding the cache primitives, the
+  `CachedCatalog<T>`, and the metadata-entry rule.
+
+  **The evidence was not the percentages — it was the same bug
+  appearing twice.** `is_metadata_entry` was literally copy-pasted into
+  both caches, because the `_catalog.json`-listed-as-a-resource defect
+  existed in `variation_cache` from 8.2 and was only found while writing
+  `effect_catalog`, then had to be repaired in both. This section
+  predicted "triple-maintain the same bugs"; it arrived at **n = 2**,
+  which is when to act rather than wait for a third.
+- [x] **S** — ~~Decide about the fetch modules~~ **DONE — deliberately
+  NOT factored**, revising this section's original estimate.
+
+  At 35% they are the least similar of the three, and every difference
+  is semantic rather than incidental:
+
+  - variations **pause rendering**, effects do not — a flame missing a
+    variation renders something *wrong*, one missing an effect renders
+    the un-effected image, which is fine to look at;
+  - variations discard stragglers by **epoch tag**, effects use an
+    **attempted-set**, because `compile_effects` re-records a missing
+    name on every frame and would otherwise ask the server sixty times
+    a second;
+  - variations carry a 30-second **timeout watchdog**; effects have
+    nothing to watch, because nothing is blocked on them.
+
+  A generic fetch would have to be parameterised on all three, so the
+  abstraction would *encode* the differences rather than remove them,
+  and read worse than two honest modules. The estimate here was **L**
+  on the assumption that all four pieces factor together; three do.
 
 ### Suggested order
 
