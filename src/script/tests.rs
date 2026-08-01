@@ -1760,20 +1760,39 @@ fn script_flags_are_optional() {
     assert!(!meta(r#"script("A", "modifier", []);"#).flags.no_rng);
 }
 
-/// A flag this build doesn't know is an error naming the ones it does.
-/// A silently ignored switch looks like the feature is broken.
+/// A flag this build doesn't know is REPORTED, naming the ones it does —
+/// and reported by the collect pass, so a typo shows while editing.
+///
+/// This was a hard error until public script browsing made version skew
+/// real: an older build must still run a newer script rather than
+/// refuse it, since both flags are UI affordances and a dropped one
+/// costs an affordance, never a wrong flame.
+///
+/// The original concern — "a silently ignored switch looks like the
+/// feature is broken" — is what the warning preserves. Degrading the
+/// error without carrying warnings onto `ScriptMeta` would have traded
+/// that concern away, delaying the typo report until the user pressed
+/// Run.
 #[test]
-fn unknown_script_flags_are_rejected() {
+fn unknown_script_flags_are_reported_by_the_collect_pass() {
     let host = ScriptHost::new();
-    let err = host
+    let meta = host
         .collect(
             r#"script("A", "generator", ["norgn"]);"#,
             &FractalConfig::default(),
         )
-        .expect_err("a typo'd flag must not pass silently");
-    assert!(err.message.contains("unknown script flag"), "{}", err.message);
-    assert!(err.message.contains("norng"), "must list what it does know: {}", err.message);
+        .expect("a typo'd flag must not stop the script");
+    assert_eq!(meta.warnings.len(), 1, "{:?}", meta.warnings);
+    assert!(meta.warnings[0].contains("unknown script flag"), "{:?}", meta.warnings);
+    assert!(
+        meta.warnings[0].contains("norng"),
+        "must list what it does know: {:?}",
+        meta.warnings
+    );
+    assert!(!meta.flags.no_rng, "the typo must not set the flag it resembles");
 
+    // A malformed flag is still an error — that is the author's mistake,
+    // not version skew.
     let err = host
         .collect(r#"script("A", "generator", [1]);"#, &FractalConfig::default())
         .expect_err("flags must be strings");
@@ -3521,4 +3540,72 @@ fn the_refusal_does_not_leak_whether_the_target_exists() {
     assert!(b.contains("only call scripts that ship"), "{b}");
     assert!(!a.contains("available:"), "the trusted path's listing leaked: {a}");
     assert!(!b.contains("available:"), "{b}");
+}
+
+// ============================================================================
+// Script flags: an open vocabulary
+// ============================================================================
+
+/// An unknown flag warns and is dropped — it does not stop the script.
+///
+/// This is what makes the flag vocabulary growable without a lockstep
+/// release, and with public script browsing live it is what stops an
+/// older build rejecting a newer script that would run correctly.
+///
+/// Safe precisely because both flags are UI affordances: `norng` hides
+/// the seed controls, `palette` offers the script in the Palette
+/// Editor. Neither touches the rendered flame, so a dropped flag costs
+/// an affordance, never a wrong result. A flag that DID affect output
+/// could not be treated this way.
+#[test]
+fn an_unknown_flag_warns_rather_than_failing_the_script() {
+    let base = FractalConfig::default();
+    let out = ScriptHost::new()
+        .run(
+            r#"script("Future", "generator", ["norng", "invented_next_year"]);
+               flame.add_transform();"#,
+            &base,
+            1,
+            Default::default(),
+        )
+        .expect("an unknown flag must not fail the script");
+
+    assert_eq!(
+        out.warnings.len(),
+        1,
+        "the unknown flag must be reported, not swallowed: {:?}",
+        out.warnings
+    );
+    assert!(out.warnings[0].contains("invented_next_year"), "{:?}", out.warnings);
+    // ...and the flag it DID understand still took effect.
+    assert!(!out.config.flame.transforms.is_empty());
+}
+
+/// Flag spelling is normalised client-side, so nothing upstream needs
+/// to be.
+///
+/// Worth pinning because the opposite belief leads somewhere bad: a
+/// server that lowercases flags on the way in looks like a kindness and
+/// is really rewriting user content to fix a problem that does not
+/// exist.
+#[test]
+fn flag_names_are_case_and_space_insensitive() {
+    let base = FractalConfig::default();
+    for spelling in ["norng", "NoRng", "NORNG", "  norng  "] {
+        let src = format!("script(\"A\", \"generator\", [\"{spelling}\"]);");
+        let meta = ScriptHost::new().collect(&src, &base).expect("collects");
+        assert!(meta.flags.no_rng, "`{spelling}` should set the flag");
+    }
+}
+
+/// A malformed flag is still an error: a number where a string belongs
+/// is the author's mistake, not version skew, and degrading it would
+/// hide a typo behind a warning nobody reads.
+#[test]
+fn a_non_string_flag_is_still_an_error() {
+    let base = FractalConfig::default();
+    let err = ScriptHost::new()
+        .run(r#"script("A", "generator", [42]);"#, &base, 1, Default::default())
+        .expect_err("a non-string flag must fail");
+    assert!(format!("{err}").contains("must be strings"), "{err}");
 }

@@ -360,7 +360,9 @@ impl ScriptHost {
     /// same way it will on the real run.
     pub fn collect(&self, text: &str, base: &FractalConfig) -> Result<ScriptMeta, ScriptError> {
         let out = self.execute(text, base, 0, HashMap::new(), Mode::Collect)?;
-        Ok(out.meta)
+        let mut meta = out.meta;
+        meta.warnings = out.warnings;
+        Ok(meta)
     }
 
     /// Run a script for real.

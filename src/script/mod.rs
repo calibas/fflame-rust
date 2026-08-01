@@ -131,6 +131,15 @@ pub struct ScriptMeta {
     pub params: Vec<ParamDecl>,
     /// Optional switches from `script(name, kind, [...])`.
     pub flags: ScriptFlags,
+    /// Anything the collect pass wanted to say — an unknown flag, most
+    /// of the time.
+    ///
+    /// Carried on the metadata rather than only on a run's outcome so
+    /// the panel can show it *while editing*. An unknown flag used to be
+    /// a hard error, which surfaced a typo the moment the collect pass
+    /// ran; degrading it to a warning without this would have delayed
+    /// that until the user pressed Run.
+    pub warnings: Vec<String>,
 }
 
 /// A script's own documentation: the comment block at the top of the
@@ -548,6 +557,15 @@ impl ScriptFlags {
     pub const KNOWN: &'static [&'static str] = &["norng", "palette"];
 
     /// Apply one flag by name.
+    ///
+    /// Case- and whitespace-insensitive: `NoRng` and ` norng ` both
+    /// work, so nothing downstream needs to normalise flag spelling —
+    /// and a server that "helpfully" lowercased them would be doing
+    /// work that changes nothing here.
+    ///
+    /// The `Err` is a **warning**, not a failure. `declare_script`
+    /// records it and carries on; see there for why an unknown flag
+    /// must not stop a script running.
     pub fn set(&mut self, name: &str) -> Result<(), String> {
         match name.trim().to_ascii_lowercase().as_str() {
             "norng" => self.no_rng = true,

@@ -164,6 +164,11 @@ impl ScriptsPanel {
                 // so editing a script doesn't reset the sliders.
                 let keys: Vec<String> = meta.params.iter().map(|p| p.key().to_string()).collect();
                 self.values.retain(|k, _| keys.contains(k));
+                // Collect-time warnings show while editing. A typo'd flag
+                // is the case that matters: it stopped being a hard error
+                // so that an older build would still run a newer script,
+                // and without this the typo would go unreported until Run.
+                self.warnings = meta.warnings.clone();
                 self.meta = Some(meta);
                 self.error = None;
             }
