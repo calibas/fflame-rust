@@ -604,19 +604,9 @@ impl App {
         let gpu = GpuContext::new(window.clone()).await.expect("GPU init failed");
         let mut egui_layer = EguiLayer::new(&window, &gpu.device, gpu.config.format);
 
-        // Load any API variations cached from previous sessions into the global registry
-        crate::variations::load_cached_api_variations();
-        // Same treatment for effects. A cached entry the current build
-        // would refuse is dropped rather than registered — the refusal
-        // rules belong to the app, not to the cache, so tightening one
-        // must apply to what is already on disk.
-        crate::storage::effect_cache::load_all_into_registry();
-        // Plugins LAST, so a collision is detected against everything
-        // already present and the user's file is the one refused. That
-        // direction is deliberate: refusing a plugin is recoverable
-        // (rename it), whereas displacing a curated resource would
-        // change what a shared flame renders.
-        let plugin_report = crate::storage::plugins::load_all();
+        // Cached downloads, then local plugins. Shared with the headless
+        // entry points so there is one order rather than two.
+        let plugin_report = crate::storage::load_installed_resources();
         // A refused plugin must be REPORTED. The user installed a file
         // and it is not there; a log line is not a report, and this is
         // the one moment they can connect the absence to a cause.

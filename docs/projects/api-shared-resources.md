@@ -1035,6 +1035,31 @@ Two defects found while building, both silent:
   a flame you can still open yourself is legitimate, and the plugin may
   be submitted for curation later. This is a fact the user needs, not a
   mistake to prevent.
+- [x] **S** — ~~Tested end to end with real plugin files~~ **DONE.**
+  `assets/plugins-example/` ships one variation and one effect. Both are
+  deliberately **no-ops at their defaults** — the variation equals
+  `linear`, the effect's `amount = 0` changes nothing — so a byte-identical
+  render proves the plugin's own shader compiled and ran, and a changed
+  render proves its parameters reached the GPU. Both held.
+
+  Testing found two bugs that no unit test would have.
+
+  **Headless never loaded plugins or cached downloads.**
+  `load_cached_api_variations` and `plugins::load_all` were called from
+  `App::new` only, so a CLI export dropped both and said nothing — a
+  missing variation is a weight contributing zero, not an error. That
+  was live for downloads since §8.2. Now one
+  `storage::load_installed_resources` shared by every entry point, with
+  refusals on stderr for headless runs.
+
+  **The include marker was a substring, not a directive.**
+  `process_shader_includes` replaced *every* occurrence, so a shader
+  whose comment merely QUOTES `// INCLUDE_BLEND_MODES` got two hundred
+  lines of library spliced into the middle of a sentence, then failed to
+  compile pointing at a line its author never wrote. No built-in quotes
+  the marker; the first plugin written to document it hit this
+  immediately. Now matched only when alone on its line, with a repeat
+  dropped rather than duplicated.
 - [x] **S** — ~~Missing-resource path distinguishes the two~~ **DONE.**
   From the config they look identical — both are a name the registry
   does not know — but they need opposite responses, and telling

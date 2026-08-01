@@ -88,6 +88,22 @@ pub fn desktop_main() {
     pollster::block_on(run()).expect("Failed to run app");
 }
 
+/// Load installed resources for a headless run, and say what happened.
+///
+/// Headless has no notification area, so refusals go to stderr — a
+/// batch export that quietly dropped a plugin would produce wrong images
+/// with a zero exit code, which is the worst combination available.
+#[cfg(not(target_arch = "wasm32"))]
+fn report_installed_resources() {
+    let report = crate::storage::load_installed_resources();
+    if !report.loaded.is_empty() {
+        eprintln!("Loaded {} local plugin(s): {}", report.loaded.len(), report.loaded.join(", "));
+    }
+    for (name, why) in &report.refused {
+        eprintln!("WARNING: plugin `{name}` was not loaded: {why}");
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 pub fn export_mode(input: &str, output: &str, width: Option<u32>, height: Option<u32>, category: Option<String>, iterations_per_thread: Option<u32>, dump_shader: bool, transparent: bool, premultiplied: bool, engine: crate::app::export::ExportEngine, supersample: bool) {
     env_logger::init();
@@ -97,6 +113,11 @@ pub fn export_mode(input: &str, output: &str, width: Option<u32>, height: Option
     // Enable inlined constants for CLI export - compiles flame data as shader constants
     // for maximum performance (eliminates buffer reads, enables dead code elimination)
     shader_builder_v2::enable_inlined_constants();
+    // Cached downloads and local plugins. A headless render must see
+    // the same registry the GUI does — otherwise exporting a flame that
+    // uses either drops it silently, since a missing variation is a
+    // weight contributing zero rather than an error.
+    report_installed_resources();
     pollster::block_on(export_async(input, output, width, height, category, iterations_per_thread, transparent, premultiplied, engine, supersample)).expect("Export failed");
 }
 
@@ -115,6 +136,9 @@ pub fn export_animation_mode(
     env_logger::init();
     // Enable inlined constants for animation export - maximum shader performance
     shader_builder_v2::enable_inlined_constants();
+    // Same reason as `export_mode`: an animation is a long batch of
+    // renders, so a silently dropped plugin costs every frame of it.
+    report_installed_resources();
     pollster::block_on(export_animation_async(config_path, animation_path, output_path, width, height, fps, iterations_per_thread, video_settings, audio)).expect("Animation export failed");
 }
 

@@ -32,16 +32,46 @@ fn load_blend_modes() -> String {
     crate::effects::embedded_shaders::BLEND_MODES.to_string()
 }
 
-/// Process shader includes by replacing markers with include content.
+/// Splice include markers, one line at a time.
+///
+/// The marker is a **directive on its own line**, not a magic substring.
+/// The difference is not pedantry: a plain `source.replace` also fires
+/// on the marker QUOTED IN PROSE, so a shader whose header comment
+/// mentions `// INCLUDE_BLEND_MODES` gets the whole library spliced into
+/// the middle of a sentence. It then fails to compile pointing at a line
+/// its author never wrote — the same confusing failure the empty-string
+/// fallback used to produce.
+///
+/// No built-in does that, which is why it went unnoticed; the first
+/// plugin written to demonstrate the marker hit it immediately.
+///
+/// A second standalone marker is dropped rather than spliced: two copies
+/// of the library is a redefinition error, and a duplicated directive
+/// clearly means "include it", not "include it twice".
 fn process_shader_includes(source: String) -> String {
     const BLEND_MODES_MARKER: &str = "// INCLUDE_BLEND_MODES";
 
-    if source.contains(BLEND_MODES_MARKER) {
-        let blend_modes = load_blend_modes();
-        source.replace(BLEND_MODES_MARKER, &blend_modes)
-    } else {
-        source
+    if !source.lines().any(|l| l.trim() == BLEND_MODES_MARKER) {
+        return source;
     }
+
+    let blend_modes = load_blend_modes();
+    let mut spliced = false;
+    let mut out = Vec::new();
+    for line in source.lines() {
+        if line.trim() == BLEND_MODES_MARKER {
+            if spliced {
+                log::warn!("Ignoring a repeated `{BLEND_MODES_MARKER}` — already included");
+                continue;
+            }
+            spliced = true;
+            out.push(blend_modes.clone());
+        } else {
+            out.push(line.to_string());
+        }
+    }
+    out.join("
+")
 }
 
 /// An effect's WGSL, includes spliced.
@@ -883,5 +913,62 @@ impl EffectChainRunner {
     /// Get the dimensions of the effect chain
     pub fn dimensions(&self) -> (u32, u32) {
         (self.width, self.height)
+    }
+}
+
+#[cfg(test)]
+mod include_tests {
+    use super::process_shader_includes;
+
+    const MARKER: &str = "// INCLUDE_BLEND_MODES";
+
+    /// A marker on its own line is a directive and gets spliced.
+    #[test]
+    fn a_standalone_marker_is_replaced() {
+        let out = process_shader_includes(format!("fn a() {{}}\n{MARKER}\nfn b() {{}}"));
+        assert!(out.contains("fn apply_blend"), "the library must be spliced in");
+        assert!(!out.contains(MARKER), "and the directive consumed");
+        assert!(out.contains("fn a()") && out.contains("fn b()"));
+    }
+
+    /// A marker QUOTED IN PROSE is not a directive.
+    ///
+    /// A plain `replace` fires on it, splicing two hundred lines of
+    /// library into the middle of a sentence — the shader then fails to
+    /// compile pointing at a line its author never wrote. No built-in
+    /// quotes the marker, which is why this went unnoticed until the
+    /// first plugin written to *document* it did exactly that.
+    #[test]
+    fn a_marker_quoted_in_a_comment_is_left_alone() {
+        let src = format!("// this shader uses the `{MARKER}` splice.\nfn a() {{}}");
+        let out = process_shader_includes(src.clone());
+        assert_eq!(out, src, "prose must survive untouched");
+        assert!(!out.contains("fn apply_blend"));
+    }
+
+    /// ...and a shader that both documents and uses the marker gets
+    /// exactly one copy of the library.
+    #[test]
+    fn documenting_and_using_the_marker_splices_once() {
+        let src = format!("// mentions `{MARKER}` in prose\n{MARKER}\nfn a() {{}}");
+        let out = process_shader_includes(src);
+        assert_eq!(out.matches("fn apply_blend").count(), 1);
+        assert!(out.contains(&format!("`{MARKER}`")), "the prose copy stays");
+    }
+
+    /// A repeated directive includes once. Two copies of the library is
+    /// a redefinition error, and a duplicated directive plainly means
+    /// "include it", not "include it twice".
+    #[test]
+    fn a_repeated_directive_includes_once() {
+        let out = process_shader_includes(format!("{MARKER}\nfn a() {{}}\n{MARKER}"));
+        assert_eq!(out.matches("fn apply_blend").count(), 1);
+    }
+
+    /// No marker, no change — and no cost.
+    #[test]
+    fn a_shader_without_the_marker_is_untouched() {
+        let src = "fn a() {}".to_string();
+        assert_eq!(process_shader_includes(src.clone()), src);
     }
 }
