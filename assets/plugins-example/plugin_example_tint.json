@@ -1,0 +1,44 @@
+{
+  "id": "plugin_example_tint",
+  "name": "plugin_example_tint",
+  "display_name": "Plugin Example (Tint)",
+  "description": "A worked example of a local **effect** plugin. Amount 0 is a no-op, so any change in the render is the plugin actually running.",
+  "description_plain": null,
+  "category": "color",
+  "version": 1,
+  "parameters": [
+    {
+      "name": "amount",
+      "display_name": "Amount",
+      "param_type": "float",
+      "default_value": 0.0,
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "description": "Blend toward the tint. 0.0 leaves the image alone."
+    },
+    {
+      "name": "hue",
+      "display_name": "Hue",
+      "param_type": "float",
+      "default_value": 0.55,
+      "min_value": 0.0,
+      "max_value": 1.0,
+      "description": "Target hue, 0-1 around the wheel."
+    },
+    {
+      "name": "blend_mode",
+      "display_name": "Blend Mode",
+      "param_type": "integer",
+      "default_value": 0.0,
+      "min_value": 0.0,
+      "max_value": 12.0,
+      "description": "See the shared blend-mode library."
+    }
+  ],
+  "shader": "// Plugin Example \u2014 a worked example of a local effect plugin.\n//\n// Tints the image toward a hue, using the shared blend-mode library so\n// this also exercises the `// INCLUDE_BLEND_MODES` splice.\n//   params[0] = amount (0-1)\n//   params[1] = hue shift (0-1)\n//   params[2] = blend_mode\n\nstruct EffectParams {\n    params: array<vec4<f32>, 12>,\n    width: u32,\n    height: u32,\n    _padding: vec2<f32>,\n}\n\nfn get_param(index: u32) -> f32 {\n    return effect_params.params[index / 4u][index % 4u];\n}\n\nstruct VertexOutput {\n    @builtin(position) position: vec4<f32>,\n    @location(0) uv: vec2<f32>,\n}\n\n@group(0) @binding(0) var input_texture: texture_2d<f32>;\n@group(0) @binding(1) var input_sampler: sampler;\n@group(0) @binding(2) var<uniform> effect_params: EffectParams;\n\n// INCLUDE_BLEND_MODES\n\n@vertex\nfn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {\n    var output: VertexOutput;\n    let x = f32((vertex_index & 1u) << 2u);\n    let y = f32((vertex_index & 2u) << 1u);\n    output.position = vec4<f32>(x - 1.0, 1.0 - y, 0.0, 1.0);\n    output.uv = vec2<f32>(x * 0.5, y * 0.5);\n    return output;\n}\n\n@fragment\nfn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {\n    let amount = get_param(0u);\n    let hue = get_param(1u);\n    let blend_mode = i32(get_param(2u));\n\n    let original = textureSample(input_texture, input_sampler, input.uv);\n\n    // Uses `luminance` and `hsl_to_rgb` from the shared library \u2014 the\n    // reason `requires_blend_modes` is true, and the reason a missing\n    // splice would fail to compile naming a function nobody wrote.\n    let l = luminance(original.rgb);\n    let tint = hsl_to_rgb(vec3<f32>(hue, 0.6, l));\n\n    let result = apply_blend(original.rgb, tint, blend_mode, amount);\n    return vec4<f32>(result, original.a);\n}",
+  "requires_blend_modes": true,
+  "authors": [
+    "fflame docs"
+  ],
+  "downloadable": false
+}

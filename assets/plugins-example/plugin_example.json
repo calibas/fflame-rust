@@ -1,0 +1,45 @@
+{
+  "id": "plugin_example",
+  "name": "plugin_example",
+  "display_name": "Plugin Example",
+  "description": "A worked example of a local plugin.\n\nIdentical to `linear` at its defaults, so any difference in the render is the plugin's parameters actually reaching the shader.",
+  "description_plain": null,
+  "category": "advanced_2d",
+  "version": 1,
+  "phase": "normal",
+  "needs_rng": false,
+  "needs_transform": false,
+  "writes_color": false,
+  "parameters": [
+    {
+      "name": "scale",
+      "display_name": "Scale",
+      "param_type": "float",
+      "default_value": 1.0,
+      "min_value": 0.0,
+      "max_value": 4.0,
+      "description": "Uniform scale. 1.0 leaves the point where linear would."
+    },
+    {
+      "name": "twist",
+      "display_name": "Twist",
+      "param_type": "float",
+      "default_value": 0.0,
+      "min_value": -6.0,
+      "max_value": 6.0,
+      "description": "Rotates by an angle proportional to radius. 0.0 is no twist, which is what makes the defaults exactly linear."
+    }
+  ],
+  "shader_2d": "fn variation_plugin_example(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {\n    let scale = get_param(xform_id, variation_id, 0u);\n    let twist = get_param(xform_id, variation_id, 1u);\n    let r = length(p);\n    let a = atan2(p.y, p.x) + twist * r;\n    return vec2<f32>(cos(a), sin(a)) * r * scale;\n}",
+  "shader_3d": "fn variation_plugin_example(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {\n    let scale = get_param(xform_id, variation_id, 0u);\n    let twist = get_param(xform_id, variation_id, 1u);\n    let r = length(p.xy);\n    let a = atan2(p.y, p.x) + twist * r;\n    return vec3<f32>(cos(a) * r * scale, sin(a) * r * scale, p.z * scale);\n}",
+  "init_param_count": 0,
+  "shader_init": null,
+  "features": [],
+  "state_count": 0,
+  "shader_state_init": null,
+  "aliases": [],
+  "plot_emits": 0,
+  "authors": [
+    "fflame docs"
+  ]
+}
