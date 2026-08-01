@@ -3228,3 +3228,134 @@ fn oversized_lsystem_input_is_refused_on_every_entry_point() {
         );
     }
 }
+
+// ============================================================================
+// Markdown stripping (client-side, for script prose)
+// ============================================================================
+
+/// The case that would actually bite: this codebase's prose is full of
+/// `snake_case`, and naive `_`-emphasis stripping mangles it.
+///
+/// Not hypothetical — every shipped script's header comment names other
+/// scripts and API functions this way, so getting it wrong would corrupt
+/// the descriptions of the ten scripts that ship.
+#[test]
+fn underscores_in_identifiers_survive() {
+    use super::strip_markdown;
+    for s in [
+        "run_script(\"random_palette\") from basic_random",
+        "lsystem_plant and lsystem_pieces3",
+        "a_b_c_d_e",
+        "snake_case_name at the end",
+        "__leading and trailing__ around snake_case_word",
+    ] {
+        let out = strip_markdown(s);
+        assert!(
+            out.contains("_") || !s.contains("_"),
+            "identifiers lost their underscores: {s:?} -> {out:?}"
+        );
+    }
+    // Specifically: the identifier is untouched.
+    assert_eq!(
+        strip_markdown("call run_script from basic_random"),
+        "call run_script from basic_random"
+    );
+    // ...while real emphasis at word boundaries still strips.
+    assert_eq!(strip_markdown("this is _emphasis_ here"), "this is emphasis here");
+    assert_eq!(strip_markdown("_bold_ start"), "bold start");
+}
+
+/// Inline syntax goes; the text stays.
+#[test]
+fn inline_syntax_is_removed() {
+    use super::strip_markdown;
+    assert_eq!(strip_markdown("**bold**"), "bold");
+    assert_eq!(strip_markdown("*italic*"), "italic");
+    assert_eq!(strip_markdown("`code_span`"), "code_span");
+    assert_eq!(strip_markdown("see [the docs](http://x/y) now"), "see the docs now");
+    assert_eq!(strip_markdown("![a picture](img.png)"), "a picture");
+    assert_eq!(strip_markdown("**bold with *italic* inside**"), "bold with italic inside");
+    assert_eq!(strip_markdown("escaped \\*not emphasis\\*"), "escaped *not emphasis*");
+}
+
+/// A doubled backslash is left alone, deviating from CommonMark on
+/// purpose.
+///
+/// `\\` means one literal backslash in markdown. Here it is an L-system
+/// turtle symbol: two shipped scripts document `& ^ \ /` as pitch and
+/// roll, and applying the strict rule silently rewrites their prose.
+/// Both shipped cases are covered by
+/// `shipped_script_prose_is_not_corrupted`; this pins the rule itself,
+/// so nobody "fixes" `md_escapable` back to CommonMark without seeing
+/// why it is not.
+#[test]
+fn a_doubled_backslash_is_a_turtle_symbol_not_an_escape() {
+    use super::strip_markdown;
+    assert_eq!(strip_markdown("& ^ \\\\ / roll"), "& ^ \\\\ / roll");
+    assert_eq!(strip_markdown("X=F[\\\\+X][/-X]"), "X=F[\\\\+X][/-X]");
+    // The escapes that matter still work.
+    assert_eq!(strip_markdown("\\*literal\\*"), "*literal*");
+    assert_eq!(strip_markdown("\\`tick\\`"), "`tick`");
+}
+
+/// A code span is literal: markdown inside it is content, not syntax.
+#[test]
+fn code_spans_keep_their_contents_verbatim() {
+    use super::strip_markdown;
+    assert_eq!(strip_markdown("`a * b`"), "a * b");
+    assert_eq!(strip_markdown("`**stars**`"), "**stars**");
+    assert_eq!(strip_markdown("`[not a link](x)`"), "[not a link](x)");
+}
+
+/// Unpaired delimiters are text, not syntax — arithmetic and prose
+/// asterisks must survive, or the stripper corrupts the thing it is
+/// supposed to clean.
+#[test]
+fn unpaired_delimiters_pass_through() {
+    use super::strip_markdown;
+    assert_eq!(strip_markdown("2 * 3 * 4"), "2 * 3 * 4");
+    assert_eq!(strip_markdown("a lone * asterisk"), "a lone * asterisk");
+    assert_eq!(strip_markdown("unclosed `backtick"), "unclosed `backtick");
+    assert_eq!(strip_markdown("[not a link"), "[not a link");
+    assert_eq!(strip_markdown("[text] (spaced)"), "[text] (spaced)");
+    // The picker's own user-script marker, which is prose here.
+    assert_eq!(strip_markdown("Generator - Basic Random *"), "Generator - Basic Random *");
+}
+
+/// Block structure is NOT touched: the panel renders headings, indented
+/// tables and list markers structurally, and a stripper that ate `# `
+/// would silently disable that.
+#[test]
+fn block_structure_is_left_alone() {
+    use super::strip_markdown;
+    assert_eq!(strip_markdown("# Heading"), "# Heading");
+    assert_eq!(strip_markdown("- a list item"), "- a list item");
+    assert_eq!(strip_markdown("    F   draw forward"), "    F   draw forward");
+    // Multi-line keeps its line breaks, so paragraphs still split.
+    assert_eq!(strip_markdown("one\n\ntwo"), "one\n\ntwo");
+    // ...but inline syntax inside a heading still goes.
+    assert_eq!(strip_markdown("# A **strong** heading"), "# A strong heading");
+}
+
+/// Every shipped script's prose must survive the round trip unharmed
+/// where it contains no markdown — the strongest available check that
+/// this cannot corrupt what actually ships.
+#[test]
+fn shipped_script_prose_is_not_corrupted() {
+    use super::strip_markdown;
+    for (name, source) in super::library::EMBEDDED {
+        let doc = super::parse_doc(source);
+        for (what, text) in [("summary", &doc.summary), ("body", &doc.body)] {
+            let stripped = strip_markdown(text);
+            // No shipped script uses markdown emphasis or links today, so
+            // stripping must be the identity. If one starts using it,
+            // this fails and the expectation gets revisited deliberately.
+            assert_eq!(
+                &stripped, text,
+                "{name}'s {what} changed under stripping — either it now uses \
+                 markdown (fine, update this test) or the stripper is eating \
+                 something it should not"
+            );
+        }
+    }
+}

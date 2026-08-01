@@ -581,8 +581,14 @@ impl ScriptsPanel {
         if doc.is_empty() {
             return;
         }
+        // Descriptions are markdown on the wire (§5.4) and this app has
+        // no markdown renderer. Scripts strip client-side rather than
+        // carrying a `description_plain` the way variations do: the
+        // description is DERIVED from the source, which is authoritative
+        // and always present, so a stored plain copy would be a
+        // derivation of a derivation with its own way to go stale.
         if !doc.summary.is_empty() {
-            ui.label(&doc.summary);
+            ui.label(crate::script::strip_markdown(&doc.summary));
         }
         if doc.body.is_empty() {
             return;
@@ -601,7 +607,8 @@ impl ScriptsPanel {
                 let mut para: Vec<&str> = Vec::new();
                 let mut flush = |ui: &mut egui::Ui, para: &mut Vec<&str>| {
                     if !para.is_empty() {
-                        ui.label(egui::RichText::new(para.join(" ")).weak());
+                        let text = crate::script::strip_markdown(&para.join(" "));
+                        ui.label(egui::RichText::new(text).weak());
                         para.clear();
                     }
                 };
@@ -612,7 +619,9 @@ impl ScriptsPanel {
                     } else if crate::script::doc_line_is_heading(line) {
                         flush(ui, &mut para);
                         ui.add_space(4.0);
-                        let text = line.strip_prefix("# ").unwrap_or(line);
+                        let text = crate::script::strip_markdown(
+                            line.strip_prefix("# ").unwrap_or(line),
+                        );
                         ui.label(egui::RichText::new(text).strong());
                     } else if line.starts_with(char::is_whitespace) {
                         // Indented lines are tables — the L-system symbol

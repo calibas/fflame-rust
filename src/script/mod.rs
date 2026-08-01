@@ -185,6 +185,273 @@ pub fn doc_line_is_heading(line: &str) -> bool {
     letters.len() >= 3 && letters.iter().all(|c| c.is_uppercase())
 }
 
+/// Strip inline markdown syntax, leaving the text.
+///
+/// # Why this is client-side, unlike variations and effects
+///
+/// Variations and effects carry `description_plain` on the wire: their
+/// prose is authored metadata with no client-side source to re-derive
+/// from, so the stripped copy has to travel and both consumers agree on
+/// one result.
+///
+/// A script's description is different in kind — it is *derived from the
+/// source*, by [`parse_doc`], and the source is authoritative and always
+/// present. Storing a stripped copy server-side would be a derivation of
+/// a derivation: a third representation of the same bytes, able to go
+/// stale against a source the client re-reads on every load anyway.
+///
+/// # What it does and does not touch
+///
+/// **Inline only.** Block structure — `# Heading`, indented table
+/// blocks, list markers — is left exactly as it is, because the Scripts
+/// panel already understands those and renders them structurally. A
+/// stripper that also ate `# ` would silently disable the panel's
+/// heading detection.
+///
+/// Indented lines are skipped **entirely**, not merely preserved: they
+/// are code blocks, so their contents are literal. Agreeing with the
+/// renderer there is not pedantry — `lsystem.rhai` documents the turtle
+/// roll symbols in an indented table with a doubled backslash, which
+/// reads as an escape sequence to anything that strips inline syntax.
+///
+/// So: code spans, links, images, and `*`/`_` emphasis.
+///
+/// # The underscore rule earns its keep
+///
+/// This codebase's prose is full of `snake_case` — `basic_random`,
+/// `run_script`, `lsystem_plant`. Naive `_`-emphasis stripping turns
+/// "a `run_script` call from basic_random" into mangled text, and would
+/// do it to the very scripts that ship. So `_` only opens a span when
+/// the character before it is not alphanumeric, and only closes when the
+/// character after it is not — CommonMark's intraword rule, and the
+/// reason `*` and `_` cannot share a code path.
+pub fn strip_markdown(text: &str) -> String {
+    // Line by line: a delimiter never pairs across a line break, and
+    // keeping the split means block structure survives untouched.
+    text.lines()
+        .map(|line| {
+            // An indented line is a code block — literal in markdown, and
+            // already rendered verbatim as a monospace table by the
+            // Scripts panel. The stripper has to agree with the renderer,
+            // or the panel shows one thing and the description another.
+            // `lsystem.rhai`'s symbol table is the live case: it
+            // documents the turtle roll symbols with a doubled
+            // backslash, which reads as an escape sequence anywhere else.
+            if line.starts_with(char::is_whitespace) {
+                line.to_string()
+            } else {
+                strip_markdown_line(line)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Length of the run of `ch` starting at `i`.
+fn md_run_len(b: &[char], i: usize, ch: char) -> usize {
+    let mut n = 0;
+    while i + n < b.len() && b[i + n] == ch {
+        n += 1;
+    }
+    n
+}
+
+/// A markdown punctuation character a lone `\` may escape.
+///
+/// `\` itself is absent because a run of two or more is handled as
+/// content before this is consulted — see the `'\\'` arm of
+/// [`strip_markdown_line`] for why.
+fn md_escapable(c: char) -> bool {
+    "`*_{}[]()#+-.!>~|".contains(c)
+}
+
+/// Find the closing run for an emphasis span opening at `i`.
+///
+/// Returns the closer's start index. Requires the same run length, so
+/// `*a**` does not pair — and applies the flanking rules that keep
+/// arithmetic (`2 * 3`) and identifiers (`snake_case`) intact.
+fn md_find_emphasis_close(b: &[char], i: usize, ch: char, n: usize) -> Option<usize> {
+    // Left-flanking: the run must be followed by non-whitespace.
+    if b.get(i + n).is_none_or(|c| c.is_whitespace()) {
+        return None;
+    }
+    // Intraword `_` does not open.
+    if ch == '_' && i > 0 && b[i - 1].is_alphanumeric() {
+        return None;
+    }
+
+    let mut j = i + n;
+    while j < b.len() {
+        if b[j] != ch {
+            j += 1;
+            continue;
+        }
+        let m = md_run_len(b, j, ch);
+        // Right-flanking: preceded by non-whitespace, and non-empty span.
+        let closes = m == n
+            && j > i + n
+            && !b[j - 1].is_whitespace()
+            && (ch != '_' || b.get(j + m).is_none_or(|c| !c.is_alphanumeric()));
+        if closes {
+            return Some(j);
+        }
+        j += m;
+    }
+    None
+}
+
+/// `[text](url)` / `![alt](url)` — returns `(text range, index after)`.
+fn md_parse_link(b: &[char], open: usize) -> Option<(usize, usize)> {
+    let mut depth = 0usize;
+    let mut j = open;
+    while j < b.len() {
+        match b[j] {
+            '\\' => j += 1,
+            '[' => depth += 1,
+            ']' => {
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+            }
+            _ => {}
+        }
+        j += 1;
+    }
+    if j >= b.len() || b[j] != ']' || b.get(j + 1) != Some(&'(') {
+        return None;
+    }
+    // Scan the destination to its closing paren.
+    let mut k = j + 2;
+    let mut pdepth = 1usize;
+    while k < b.len() && pdepth > 0 {
+        match b[k] {
+            '\\' => k += 1,
+            '(' => pdepth += 1,
+            ')' => pdepth -= 1,
+            _ => {}
+        }
+        k += 1;
+    }
+    if pdepth != 0 {
+        return None;
+    }
+    Some((j, k))
+}
+
+fn strip_markdown_line(line: &str) -> String {
+    let b: Vec<char> = line.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+
+    while i < b.len() {
+        match b[i] {
+            // A RUN of backslashes is content, not escaping.
+            //
+            // The deviation from CommonMark lives here, and it has to be
+            // decided on the run rather than per character: taking
+            // `\\+` one at a time, the first backslash is literal and
+            // the second escapes the `+`, so one backslash silently
+            // disappears — which is what `X=F[\\+X][/-X]` in
+            // `lsystem_plant.rhai` is. Deciding on the whole run makes
+            // `\\ /` and `\\+X` behave the same way, which is the only
+            // version a reader can predict.
+            '\\' => {
+                let n = md_run_len(&b, i, '\\');
+                if n >= 2 {
+                    out.extend(&b[i..i + n]);
+                    i += n;
+                } else if b.get(i + 1).is_some_and(|c| md_escapable(*c)) {
+                    out.push(b[i + 1]);
+                    i += 2;
+                } else {
+                    out.push('\\');
+                    i += 1;
+                }
+            }
+            // A code span's contents are literal — no further stripping.
+            '`' => {
+                let n = md_run_len(&b, i, '`');
+                let mut j = i + n;
+                let close = loop {
+                    if j >= b.len() {
+                        break None;
+                    }
+                    if b[j] == '`' && md_run_len(&b, j, '`') == n {
+                        break Some(j);
+                    }
+                    j += 1;
+                };
+                match close {
+                    Some(j) => {
+                        out.extend(&b[i + n..j]);
+                        i = j + n;
+                    }
+                    None => {
+                        out.push('`');
+                        i += 1;
+                    }
+                }
+            }
+            // Images strip to their alt text, same as a link's label.
+            '!' if b.get(i + 1) == Some(&'[') => {
+                match md_parse_link(&b, i + 1) {
+                    Some((text_end, after)) => {
+                        out.push_str(&strip_markdown_line(
+                            &b[i + 2..text_end].iter().collect::<String>(),
+                        ));
+                        i = after;
+                    }
+                    None => {
+                        out.push('!');
+                        i += 1;
+                    }
+                }
+            }
+            '[' => match md_parse_link(&b, i) {
+                Some((text_end, after)) => {
+                    out.push_str(&strip_markdown_line(
+                        &b[i + 1..text_end].iter().collect::<String>(),
+                    ));
+                    i = after;
+                }
+                None => {
+                    out.push('[');
+                    i += 1;
+                }
+            },
+            ch @ ('*' | '_') => {
+                let n = md_run_len(&b, i, ch);
+                // Runs of 3+ are rare and ambiguous; passing one through
+                // beats mangling it.
+                let close = if n <= 2 {
+                    md_find_emphasis_close(&b, i, ch, n)
+                } else {
+                    None
+                };
+                match close {
+                    Some(j) => {
+                        // Recurse so nesting works: `**bold *and* more**`.
+                        out.push_str(&strip_markdown_line(
+                            &b[i + n..j].iter().collect::<String>(),
+                        ));
+                        i = j + n;
+                    }
+                    None => {
+                        out.extend(&b[i..i + n]);
+                        i += n;
+                    }
+                }
+            }
+            c => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
 /// Read the leading comment block of a script as its documentation.
 ///
 /// Takes the run of `//` lines at the top of the file, stopping at the
