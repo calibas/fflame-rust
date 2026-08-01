@@ -118,7 +118,7 @@ impl App {
             &self.config_manager.active_config().flame
         );
         if !missing.is_empty() {
-            self.trigger_variation_fetches(missing);
+            self.report_or_fetch_missing(missing);
         }
 
         Ok(())

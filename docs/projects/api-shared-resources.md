@@ -977,19 +977,74 @@ Two defects found while building, both silent:
 
 ### 8.4 Local-only plugins (§2)
 
-- [ ] **S** — Source tag on registry entries
-  (`Builtin | Api | Local`), replacing the `is_core` bool.
-- [ ] **M** — Plugin load path: desktop folder, WASM localStorage under
-  a key prefix distinct from the download cache.
-- [ ] **S** — Reject name collisions with a message naming the
-  conflict; never shadow.
-- [ ] **S** — Never upload a local plugin — assert it at the API
-  boundary, not just by convention.
-- [ ] **M** — Warn when saving or uploading a flame that depends on a
-  local plugin: it will not render for anyone else, or for the same
-  user on another device.
-- [ ] **S** — Missing-resource path distinguishes "downloadable" from
-  "you do not have this plugin".
+- [x] **S** — ~~Source tag~~ **DONE.** `Provenance` replaced
+  `is_core: bool` **and** a separate `version: u32` on `VariationInfo`;
+  effects got it in §8.5. The duplicate version was the more dangerous
+  half — it is what a `merge_state` would have compared, so a local
+  plugin's file version would have been read as a server counter.
+  Three call sites needed genuinely different answers rather than a
+  substitution, because the questions come apart:
+
+  | | shipped | downloaded | local plugin |
+  |---|---|---|---|
+  | third-party code? | no | **yes** | **yes** |
+  | in the download cache? | no | **yes** | no |
+  | updatable? | no | **yes** | no |
+
+  `clear_api` filtered on `!is_core`, which would have swept the user's
+  own plugins into Clear Cache the moment they existed — deleting their
+  files under a label that says "cache".
+- [x] **M** — ~~Plugin load path~~ **DONE.** `storage::plugins`, under
+  `plugins/variations/` and `plugins/effects/` — a prefix neither cache
+  enumerates, so "Clear Cache never destroys the user's work" is
+  structural rather than a rule to remember.
+
+  A plugin file is **the same JSON as the download payload**, so it
+  takes the same registration path with `Provenance::Local` rather than
+  a parallel `register_from_local` that would need every future refusal
+  copied into it. Installing validates through that same code, so a
+  file that would be refused later is refused while the user is looking
+  at it.
+
+  The **file name is the identity**, not the `name` inside it —
+  otherwise two files could claim one name and which won would depend
+  on directory order.
+- [x] **S** — ~~Reject name collisions~~ **DONE**, in both directions,
+  which is the part worth stating. A plugin may not take a built-in's
+  name (shadowing `linear` would change what every shared flame
+  renders). And a **download may not displace a plugin** — the worse
+  direction, since it replaces the user's own work with somebody
+  else's and they never asked for it.
+
+  Plugins load LAST at startup, so a collision is detected against
+  everything already present and the user's file is the one refused:
+  refusing is recoverable (rename it), displacing a curated resource is
+  not.
+
+  Refusals are **reported**, not just logged. A plugin the user
+  installed that then does not appear is exactly the case where a
+  console line is not a report.
+- [x] **S** — ~~Never upload a local plugin~~ **DONE**, asserted at the
+  boundary. A flame travels as variation **names** plus its own
+  parameters, never as definitions — so there is no payload a plugin's
+  WGSL could ride out on, and a test fails if one appears. The client
+  also exposes no endpoint that uploads a variation or effect at all;
+  those are read-only by §0 decision 1.
+- [x] **M** — ~~Warn on save or upload~~ **DONE**, on both the
+  save-to-file and upload paths. A notice rather than a refusal: saving
+  a flame you can still open yourself is legitimate, and the plugin may
+  be submitted for curation later. This is a fact the user needs, not a
+  mistake to prevent.
+- [x] **S** — ~~Missing-resource path distinguishes the two~~ **DONE.**
+  From the config they look identical — both are a name the registry
+  does not know — but they need opposite responses, and telling
+  somebody to wait for a fetch that cannot succeed is worse than
+  telling them nothing.
+
+  Four cases, not two. `Unknown` is separate from `ProbablyAPlugin`
+  because **being offline is not evidence**: with no catalog fetched,
+  the honest move is to try the fetch and let it fail rather than
+  accuse the flame of needing a plugin.
 
 ### 8.5 Effects — the large build (§4)
 

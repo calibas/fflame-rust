@@ -51,7 +51,7 @@ fn main() {
 
     for name in registry.names() {
         let Some(info) = registry.get(name) else { continue };
-        if !info.is_core {
+        if !info.provenance.is_builtin() {
             // A cached API download that happens to be registered in
             // this session is not part of the shipped corpus.
             skipped_non_core += 1;

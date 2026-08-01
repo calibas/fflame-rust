@@ -109,7 +109,10 @@ pub fn load_all_into_registry() {
     let mut ok = 0usize;
     for name in names {
         match load(&name) {
-            Ok(Some(dl)) => match registry.register_from_api(&dl) {
+            Ok(Some(dl)) => match registry.register_from_api(
+                &dl,
+                crate::provenance::Provenance::Api { version: dl.version },
+            ) {
                 Ok(()) => ok += 1,
                 Err(e) => log::warn!("Dropping cached effect '{name}': {e}"),
             },

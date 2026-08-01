@@ -68,6 +68,46 @@ impl App {
         }
     }
 
+/// Split missing variations into "we can fetch this" and "you are
+    /// missing a plugin", and act differently on each.
+    ///
+    /// From the config the two look identical — both are a name the
+    /// registry does not know. They need opposite responses: one is a
+    /// download away, the other never arrives, and telling somebody to
+    /// wait for a fetch that cannot succeed is worse than telling them
+    /// nothing. A flame is shared as names, so the second case is what
+    /// opening somebody's flame that used their own plugin looks like.
+    pub(super) fn report_or_fetch_missing(&mut self, missing: Vec<String>) {
+        use crate::variations::MissingReason;
+
+        let mut fetchable = Vec::new();
+        let mut unresolvable = Vec::new();
+        for name in missing {
+            match crate::variations::classify_missing(&name, self.variation_catalog.as_ref()) {
+                // Unknown means no catalog has been fetched. Being
+                // offline is not evidence that a name is a plugin, so
+                // this tries the fetch and lets it fail honestly.
+                MissingReason::Downloadable | MissingReason::Unknown => fetchable.push(name),
+                MissingReason::KnownButNotFetchable | MissingReason::ProbablyAPlugin => {
+                    unresolvable.push(name)
+                }
+            }
+        }
+
+        if !unresolvable.is_empty() {
+            self.egui_layer.show_api_notification(
+                &rust_i18n::t!(
+                    "api.variations_need_a_plugin",
+                    names = unresolvable.join(", ")
+                ),
+                true,
+            );
+        }
+        if !fetchable.is_empty() {
+            self.trigger_variation_fetches(fetchable);
+        }
+    }
+
     /// Poll for completed variation fetches, register successes, and finalize when done.
     /// Called every frame while a fetch is in progress.
     pub(super) fn handle_variation_fetches(&mut self) {
@@ -133,7 +173,10 @@ impl App {
                     if let Err(e) = crate::storage::variation_cache::save(&download) {
                         log::warn!("Failed to cache variation '{}': {}", download.name, e);
                     }
-                    crate::variations::global_registry_mut().register_from_api(&download);
+                    crate::variations::global_registry_mut().register_from_api(
+                        &download,
+                        crate::provenance::Provenance::Api { version: download.version },
+                    );
                     succeeded += 1;
                 }
                 Err(e) => {
@@ -244,7 +287,10 @@ impl App {
         let names: Vec<String> = ui_response
             .variation_update_requested
             .iter()
-            .filter(|n| registry.get(n).is_none_or(|v| !v.is_core))
+            // Only a downloaded copy can be updated. A built-in cannot
+            // be replaced, and a local plugin is the user's own file —
+            // an "update" would overwrite their work.
+            .filter(|n| registry.get(n).is_none_or(|v| v.provenance.is_cached_download()))
             .cloned()
             .collect();
         self.trigger_variation_fetches(names);

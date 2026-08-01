@@ -54,12 +54,7 @@ fn render_effect_catalog(
 
     let registry = global_effect_registry();
     let summary = summarize(&catalog.items, |name| {
-        registry.get(name).map(|e| {
-            (
-                e.provenance.is_builtin(),
-                e.provenance.version().unwrap_or(0),
-            )
-        })
+        registry.get(name).map(|e| e.provenance.clone())
     });
     let installed = catalog
         .items

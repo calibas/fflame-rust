@@ -602,7 +602,7 @@ impl App {
         #[cfg(target_arch = "wasm32")] url_animation_id: Option<String>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let gpu = GpuContext::new(window.clone()).await.expect("GPU init failed");
-        let egui_layer = EguiLayer::new(&window, &gpu.device, gpu.config.format);
+        let mut egui_layer = EguiLayer::new(&window, &gpu.device, gpu.config.format);
 
         // Load any API variations cached from previous sessions into the global registry
         crate::variations::load_cached_api_variations();
@@ -611,6 +611,27 @@ impl App {
         // rules belong to the app, not to the cache, so tightening one
         // must apply to what is already on disk.
         crate::storage::effect_cache::load_all_into_registry();
+        // Plugins LAST, so a collision is detected against everything
+        // already present and the user's file is the one refused. That
+        // direction is deliberate: refusing a plugin is recoverable
+        // (rename it), whereas displacing a curated resource would
+        // change what a shared flame renders.
+        let plugin_report = crate::storage::plugins::load_all();
+        // A refused plugin must be REPORTED. The user installed a file
+        // and it is not there; a log line is not a report, and this is
+        // the one moment they can connect the absence to a cause.
+        if !plugin_report.refused.is_empty() {
+            let list = plugin_report
+                .refused
+                .iter()
+                .map(|(n, why)| format!("{n} ({why})"))
+                .collect::<Vec<_>>()
+                .join("; ");
+            egui_layer.show_api_notification(
+                &format!("Some plugins were not loaded — {list}"),
+                true,
+            );
+        }
 
         // Use global preset library singleton
         let preset_library = global_preset_library();
