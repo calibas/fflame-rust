@@ -622,3 +622,237 @@ pub fn animation_response_to_animation(resp: &AnimationResponse) -> crate::anima
         loop_mode: resp.loop_mode.into(),
     }
 }
+
+// ============================================================================
+// Scripts
+// ============================================================================
+
+/// Build a create/update payload from a script's source.
+///
+/// Everything but `source` is **derived** by the collect pass, because
+/// the server has no Rhai engine and cannot compute any of it. That is
+/// also why the client re-derives on load rather than trusting what
+/// comes back: the source is authoritative, the stored metadata is a
+/// search index.
+///
+/// # Why this returns a Result
+///
+/// `display_name` and `kind` are required by the schema, and a script
+/// that does not compile has neither — there is nothing to derive from.
+/// Publishing it would put values in the server's search index that its
+/// own source cannot produce, and since every client re-derives on load,
+/// the mismatch would be invisible to the uploader and visible to
+/// everyone browsing.
+///
+/// A script that compiles but never calls `script(name, kind)` is a
+/// different case and is allowed: `collect` defaults it to a generator
+/// with a warning, and because that default is part of the derivation
+/// every client computes the same answer. Deterministic, not invented.
+///
+/// A broken script still saves **locally**, where there is no schema to
+/// satisfy. That is the split: the local store takes anything, the
+/// cloud takes what can be described.
+pub fn script_to_create_request(
+    name: &str,
+    source: &str,
+    visibility: Option<crate::api::types::ApiVisibility>,
+    version: Option<u32>,
+) -> Result<crate::api::types::ScriptCreateRequest, String> {
+    let meta = crate::script::ScriptHost::new()
+        .collect(source, &FractalConfig::default())
+        .map_err(|e| {
+            format!("this script does not compile, so it cannot be published: {}", e.message)
+        })?;
+
+    // `collect` guarantees a kind: a script that never calls
+    // `script(name, kind)` is defaulted to a generator, with a warning
+    // the author sees in the panel. Publishing that is safe rather than
+    // a lie — the default is part of the derivation, so every client
+    // reloading the source computes the same value. The `unwrap_or` is
+    // for the type, not for a case that happens.
+    let kind = meta.kind.unwrap_or(crate::script::ScriptKind::Generator);
+    let display_name = if meta.name.is_empty() { name.to_string() } else { meta.name.clone() };
+
+    let doc = crate::script::parse_doc(source);
+    // Markdown as written. The server stores the author's text; every
+    // client strips for itself (see `script::strip_markdown`).
+    let description = match (doc.summary.is_empty(), doc.body.is_empty()) {
+        (true, true) => None,
+        (false, true) => Some(doc.summary.clone()),
+        (true, false) => Some(doc.body.clone()),
+        (false, false) => Some(format!("{}\n\n{}", doc.summary, doc.body)),
+    };
+
+    Ok(crate::api::types::ScriptCreateRequest {
+        name: name.to_string(),
+        display_name,
+        kind: kind.as_str().to_string(),
+        // Credit is not derivable from source, and is not ownership —
+        // the uploader is already `user_id`. Empty until there is a way
+        // for an author to state it, which is the correct default: a
+        // script written by its uploader has no separate credit.
+        authors: Vec::new(),
+        description,
+        source: source.to_string(),
+        flags: meta.flags.to_names(),
+        visibility,
+        version,
+    })
+}
+
+#[cfg(test)]
+mod script_payload_tests {
+    use super::*;
+    use crate::api::types::ScriptConflict;
+
+    const GOOD: &str = "// Grand Julian\n\
+                        //\n\
+                        // Makes a **julia** with `run_script` friends.\n\
+                        script(\"Grand Julian\", \"generator\", [\"norng\"]);\n";
+
+    /// Everything but the source is derived, and derived from the
+    /// source rather than from the file name.
+    #[test]
+    fn the_payload_is_derived_from_the_source() {
+        let req = script_to_create_request("grand_julian", GOOD, None, None)
+            .expect("a well-formed script publishes");
+
+        assert_eq!(req.name, "grand_julian", "the stem is the key");
+        assert_eq!(req.display_name, "Grand Julian", "from script(...), not the stem");
+        assert_eq!(req.kind, "generator");
+        assert_eq!(req.flags, vec!["norng".to_string()]);
+        assert_eq!(req.source, GOOD, "the source travels verbatim");
+        assert!(req.version.is_none(), "create carries no version");
+
+        // Markdown as the author wrote it — stripping is every client's
+        // own business, and the server stores the original.
+        let d = req.description.expect("the header comment becomes the description");
+        assert!(d.contains("**julia**"), "markdown must survive: {d}");
+        assert!(!d.contains("Grand Julian\n\n"), "the title line is not prose: {d}");
+    }
+
+    /// Credit is empty by default, and that is correct rather than
+    /// unfinished: the uploader is already `user_id`, so an original
+    /// script has no separate credit to state.
+    #[test]
+    fn authors_defaults_to_empty_because_ownership_is_a_different_field() {
+        let req = script_to_create_request("x", GOOD, None, None).unwrap();
+        assert!(req.authors.is_empty());
+    }
+
+    /// A script that does not compile cannot be published.
+    ///
+    /// `display_name` and `kind` are required by the schema and neither
+    /// exists for a broken script. Inventing a kind would put a value in
+    /// the server's search index that the source contradicts — and since
+    /// the client re-derives on load, the lie would be invisible to the
+    /// uploader and visible to everyone browsing.
+    #[test]
+    fn a_broken_script_is_refused_rather_than_guessed_at() {
+        let err = script_to_create_request("x", "this is not rhai ((", None, None)
+            .expect_err("a script that does not compile cannot be published");
+        assert!(err.contains("does not compile"), "{err}");
+    }
+
+    /// A script that compiles but never declares itself IS publishable.
+    ///
+    /// The host defaults it to a generator with a warning, and that
+    /// default is part of the derivation — so a client reloading the
+    /// source computes the same kind the server stored. Refusing would
+    /// be treating a deterministic default as if it were a guess.
+    #[test]
+    fn an_undeclared_script_publishes_with_the_kind_every_client_derives() {
+        let src = "let a = 1;";
+        let req = script_to_create_request("x", src, None, None)
+            .expect("an undeclared script is defaulted, not refused");
+        assert_eq!(req.kind, "generator");
+        assert_eq!(req.display_name, "x", "falls back to the stem");
+
+        // The property that makes it safe: re-deriving gives the same
+        // answer, so the stored metadata never contradicts the source.
+        let meta = crate::script::ScriptHost::new()
+            .collect(src, &FractalConfig::default())
+            .unwrap();
+        assert_eq!(
+            meta.kind.map(|k| k.as_str().to_string()),
+            Some(req.kind.clone()),
+            "the stored kind must be what a reload derives"
+        );
+        assert!(
+            meta.warnings.iter().any(|w| w.contains("script(name, kind)")),
+            "and the author is told: {:?}",
+            meta.warnings
+        );
+    }
+
+    /// A published script is still saveable locally — the local store
+    /// has no schema to satisfy, and the one thing you must be able to
+    /// do with a broken script is keep it somewhere.
+    #[test]
+    fn the_local_store_still_takes_what_the_cloud_refuses() {
+        let broken = "this is not rhai ((";
+        assert!(script_to_create_request("x", broken, None, None).is_err());
+        assert!(
+            crate::script::store::check_name("keeps_working", broken).is_ok(),
+            "a broken script must still be storable locally"
+        );
+    }
+
+    /// The version rides in the body on update, and only on update.
+    #[test]
+    fn update_carries_the_version_it_read() {
+        let req = script_to_create_request("x", GOOD, None, Some(7)).unwrap();
+        assert_eq!(req.version, Some(7));
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains("\"version\":7"), "{json}");
+
+        // Create omits it entirely rather than sending 0, which the
+        // server would read as a stale version rather than as absence.
+        let create = script_to_create_request("x", GOOD, None, None).unwrap();
+        let json = serde_json::to_string(&create).unwrap();
+        assert!(!json.contains("version"), "{json}");
+    }
+
+    /// A 409 body is recoverable from the error, because both transports
+    /// put the raw response body into `Http::message`.
+    ///
+    /// Worth pinning: 403 and 404 are converted to their own variants
+    /// *before* the body is read, and only the fall-through path keeps
+    /// it. A 409 is on the fall-through path, which is the only reason
+    /// this works at all.
+    #[test]
+    fn a_conflict_is_recoverable_from_the_error() {
+        let body = r#"{"id":"abc","current_version":9,"updated_at":"2026-08-01T00:00:00Z"}"#;
+        let e = crate::resources::FetchError::Http {
+            status: 409,
+            message: body.to_string(),
+        };
+        let c = ScriptConflict::from_error(&e).expect("a 409 body parses");
+        assert_eq!(c.current_version, 9);
+        assert_eq!(c.id, "abc");
+
+        // Anything else is not a conflict, including a 409 whose body is
+        // not JSON — better no answer than a fabricated version number.
+        assert!(ScriptConflict::from_error(&crate::resources::FetchError::Forbidden).is_none());
+        assert!(ScriptConflict::from_error(&crate::resources::FetchError::Http {
+            status: 409,
+            message: "Conflict".to_string(),
+        })
+        .is_none());
+        assert!(ScriptConflict::from_error(&crate::resources::FetchError::Http {
+            status: 500,
+            message: body.to_string(),
+        })
+        .is_none());
+    }
+
+    /// Search queries are escaped. `&` in a query would otherwise end
+    /// the parameter and start a bogus one.
+    #[test]
+    fn a_search_query_is_percent_encoded() {
+        assert_eq!(crate::api::urlencode("a & b"), "a+%26+b");
+        assert_eq!(crate::api::urlencode("julia"), "julia");
+        assert_eq!(crate::api::urlencode("#tag/x"), "%23tag%2Fx");
+        assert_eq!(crate::api::urlencode("café"), "caf%C3%A9");
+    }
+}

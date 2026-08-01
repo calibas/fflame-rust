@@ -61,6 +61,29 @@ pub enum HealthCheckOutcome {
 /// On 401, retries once before reporting TokenExpired. This avoids
 /// false logouts caused by stale pooled connections after sleep/wake
 /// — a dead TCP socket can produce spurious 401s on the first attempt.
+/// Percent-encode a query-string value.
+///
+/// Written rather than pulled in: the only need is one parameter, and
+/// the unreserved set from RFC 3986 is short enough to state.
+///
+/// NOTE: `SearchFlamesParams::to_query_string` interpolates its values
+/// raw, so a flame name containing `&` or `#` still corrupts that URL.
+/// Left alone here because it is a live path with its own behaviour to
+/// re-check, not because it is correct.
+pub(crate) fn urlencode(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for b in value.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            b' ' => out.push('+'),
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
 pub async fn check_api_health(base_url: &str, token: &str) -> HealthCheckOutcome {
     let url = build_url(base_url, "/api/users/me");
     match client::api_get::<ApiUser>(&url, token).await {
@@ -469,6 +492,102 @@ impl ApiState {
 
     /// Fetch the full definition of a variation by name.
     /// Variations are public — no authentication required.
+    // ========================================================================
+    // Scripts
+    // ========================================================================
+
+    /// The caller's own scripts.
+    pub async fn list_my_scripts(
+        &self,
+        page: u32,
+        per_page: u32,
+    ) -> FetchResult<Vec<types::ScriptListItem>> {
+        let token = self.require_token()?;
+        let url = build_url(
+            API_BASE_URL,
+            &format!("/api/scripts?page={page}&per_page={per_page}"),
+        );
+        client::api_get(&url, &token).await
+    }
+
+    /// Create a script. Returns the server's copy — including the id,
+    /// and the version to hold for the next update.
+    pub async fn create_script(
+        &self,
+        name: &str,
+        source: &str,
+        visibility: Option<ApiVisibility>,
+    ) -> FetchResult<types::ScriptResponse> {
+        let token = self.require_token()?;
+        let req = sync::script_to_create_request(name, source, visibility, None)
+            .map_err(FetchError::Parse)?;
+        let url = build_url(API_BASE_URL, "/api/scripts");
+        client::api_post(&url, &req, &token).await
+    }
+
+    /// Fetch one script, source included.
+    pub async fn load_script(&self, id: &str) -> FetchResult<types::ScriptResponse> {
+        let token = self.require_token()?;
+        let url = build_url(API_BASE_URL, &format!("/api/scripts/{id}"));
+        client::api_get(&url, &token).await
+    }
+
+    /// Update a script, optimistically.
+    ///
+    /// `version` is the one the client last read; the server refuses
+    /// with 409 if somebody wrote first. Not pessimism — a desktop app
+    /// and a browser tab share no store, which is exactly the case
+    /// last-write-wins loses data in, silently and with nothing to
+    /// notice it by.
+    ///
+    /// On refusal, [`types::ScriptConflict::from_error`] recovers the
+    /// current version so the caller can offer a choice rather than an
+    /// apology.
+    pub async fn update_script(
+        &self,
+        id: &str,
+        name: &str,
+        source: &str,
+        visibility: Option<ApiVisibility>,
+        version: u32,
+    ) -> FetchResult<types::ScriptResponse> {
+        let token = self.require_token()?;
+        let req = sync::script_to_create_request(name, source, visibility, Some(version))
+            .map_err(FetchError::Parse)?;
+        let url = build_url(API_BASE_URL, &format!("/api/scripts/{id}"));
+        client::api_put(&url, &req, &token).await
+    }
+
+    pub async fn delete_script(&self, id: &str) -> FetchResult<()> {
+        let token = self.require_token()?;
+        let url = build_url(API_BASE_URL, &format!("/api/scripts/{id}"));
+        client::api_delete(&url, &token).await
+    }
+
+    /// Public script search.
+    ///
+    /// This is the point where a user can run code somebody else wrote.
+    /// Whatever surfaces these results owes them visible provenance, and
+    /// anything loaded from here must be run through
+    /// `ScriptHost::with_untrusted` — which is what makes running one
+    /// survivable rather than merely allowed.
+    pub async fn search_public_scripts(
+        &self,
+        query: &str,
+        page: u32,
+        per_page: u32,
+    ) -> FetchResult<Vec<types::ScriptListItem>> {
+        let token = self.require_token()?;
+        let url = build_url(
+            API_BASE_URL,
+            &format!(
+                "/api/search/scripts?q={}&page={page}&per_page={per_page}",
+                urlencode(query)
+            ),
+        );
+        client::api_get(&url, &token).await
+    }
+
     pub async fn fetch_variation(&self, name: &str) -> FetchResult<types::VariationDownload> {
         let url = build_url(API_BASE_URL, &format!("/api/variations/{}", name));
         // Use empty token — variations are publicly readable

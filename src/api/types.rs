@@ -435,6 +435,159 @@ pub struct AnimationListItem {
 }
 
 // ============================================================================
+// Scripts
+// ============================================================================
+
+/// A script as the server stores it — detail payload, source included.
+///
+/// `source` is authoritative and everything else is derived from it by
+/// the collect pass. The server has no Rhai engine, so the derived
+/// fields are whatever the uploader sent; the client **re-derives on
+/// load** rather than trusting them, and a mismatch means the stored
+/// metadata is stale, not that the script is wrong.
+///
+/// There is no `description_plain` here, unlike variations and effects.
+/// A script's prose is derived from its own source, which the client
+/// always has, so a stored stripped copy would be a derivation of a
+/// derivation; `script::strip_markdown` does it locally instead.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ScriptResponse {
+    pub id: String,
+    /// Owner. Distinct from `authors`, which is credit.
+    pub user_id: String,
+    /// The owner's display name — case-insensitively unique server-side,
+    /// which makes `owner_display_name/name` a stable human-readable key
+    /// and means an import never has to invent a disambiguator or show a
+    /// UUID fragment.
+    #[serde(default)]
+    pub owner_display_name: String,
+    /// Stem-like key, unique per user.
+    pub name: String,
+    /// The SCRIPT's declared name, from `script("…")`. Not the owner's —
+    /// that is `owner_display_name`.
+    #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
+    pub kind: Option<String>,
+    /// Credit, NOT ownership. Empty is the normal case for an original
+    /// script; a ported one credits whoever wrote the original, who may
+    /// never have used this app.
+    #[serde(default)]
+    pub authors: Vec<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    pub source: String,
+    /// Send this back on PUT. Bumps on EVERY write — unlike `version` on
+    /// variations and effects, which deliberately does not bump for
+    /// prose edits so cached copies stay valid. One field serves both
+    /// purposes here only because the source IS the content: no edit
+    /// leaves a cached copy valid.
+    #[serde(default)]
+    pub version: u32,
+    #[serde(default)]
+    pub visibility: Option<ApiVisibility>,
+    #[serde(default)]
+    pub flags: Vec<String>,
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+}
+
+/// One row of a listing or a search — everything but the source.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ScriptListItem {
+    pub id: String,
+    pub user_id: String,
+    #[serde(default)]
+    pub owner_display_name: String,
+    pub name: String,
+    #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub authors: Vec<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub version: u32,
+    #[serde(default)]
+    pub visibility: Option<ApiVisibility>,
+    #[serde(default)]
+    pub flags: Vec<String>,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+}
+
+/// Create / update payload.
+///
+/// `display_name` and `kind` are **required** by the server, which is
+/// why [`crate::api::sync::script_to_create_request`] returns a Result:
+/// a script that fails to collect declares neither, and inventing a
+/// kind would write a value into the server's search index that the
+/// source contradicts. Such a script still saves locally, where there
+/// is no schema to satisfy.
+#[derive(Debug, Clone, Serialize)]
+pub struct ScriptCreateRequest {
+    pub name: String,
+    pub display_name: String,
+    pub kind: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub authors: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub source: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub flags: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub visibility: Option<ApiVisibility>,
+    /// The version the client last read. Required on update, absent on
+    /// create.
+    ///
+    /// Travels in the body rather than an `If-Match` header: the API is
+    /// JSON end to end with no ETag machinery, so a header would be the
+    /// only one of its kind, and there is no intermediary cache to gain
+    /// from the idiom.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<u32>,
+}
+
+/// The body of a `409 Conflict`: somebody else wrote first.
+///
+/// Deliberately not the whole script — a client that wants the current
+/// content can GET it, and a source can be 256 KB. What is here is
+/// enough to choose between refetch-and-merge and warn-the-user, which
+/// is the choice the panel has to offer instead of "something went
+/// wrong".
+#[derive(Debug, Clone, Deserialize)]
+pub struct ScriptConflict {
+    pub id: String,
+    /// The version currently stored. Yours was older.
+    pub current_version: u32,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+}
+
+impl ScriptConflict {
+    /// Recover the conflict body from a failed update.
+    ///
+    /// Both transports put the raw response body into
+    /// `FetchError::Http::message`, so no new error variant is needed —
+    /// but 403 and 404 are converted to their own variants *before* the
+    /// body is read, and only the fall-through path keeps it. A 409 is
+    /// on the fall-through path, which is the only reason this works.
+    pub fn from_error(e: &crate::resources::FetchError) -> Option<Self> {
+        match e {
+            crate::resources::FetchError::Http { status: 409, message } => {
+                serde_json::from_str(message).ok()
+            }
+            _ => None,
+        }
+    }
+}
+
+// ============================================================================
 // Variations
 // ============================================================================
 
