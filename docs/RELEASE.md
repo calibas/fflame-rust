@@ -189,6 +189,28 @@ new use of unwinding must be checked against it.
 
 Nothing here is settled. What has to be answered:
 
+### The console window, and one caveat
+
+Release builds on Windows are GUI-subsystem, so launching from Explorer
+opens no black console beside the app. The same binary is still the CLI,
+so it re-attaches to the parent terminal when launched with arguments.
+
+Verified working: git bash, PowerShell pipes, `cmd` including `> file`,
+`Start-Process -RedirectStandardOutput`, and Python `subprocess` capture
+— which is what every test and benchmark harness here uses.
+
+**One known gap: PowerShell 5.1's `>` operator captures nothing** from a
+GUI-subsystem exe. `| Out-File`, `Start-Process
+-RedirectStandardOutput`, and `cmd /c ... >` all work. This is a
+platform behaviour, not something the attach logic can repair — a
+control run of `cargo --version > file` in the same shell works, so it
+is specific to the subsystem.
+
+If that proves annoying, the alternatives are a second console-subsystem
+binary (~22 MB more in the zip) or reverting to console-subsystem and
+hiding the window at startup, which trades the gap for a console flash
+on every GUI launch.
+
 **Windows.** Leaning toward a plain `.zip`. It needs the executable plus
 `assets/` (presets and palettes are loaded from disk at startup) and
 `shaders/` is *no longer required* — every shader is embedded, and the

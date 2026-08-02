@@ -275,7 +275,7 @@ export:
   with_background: "Export with Background"
   transparent: "Export Transparent"
   premultiplied_alpha: "Premultiplied alpha"
-  strip_metadata: "Strip metadata (private export)"
+  strip_metadata: "Strip metadata"
   strip_metadata_tooltip: "Exported PNGs normally embed the complete fractal config, so anyone with the image can reopen and edit your flame. Turn this on to export the picture only. Note that it also removes the build and render information that makes a bug report reproducible."
   supersample: "2× Antialiasing"
   supersample_tooltip: "Render internally at double resolution with 4× the iterations, then box-filter down (with a firefly clamp).
