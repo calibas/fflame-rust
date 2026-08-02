@@ -151,6 +151,31 @@ cargo build --target aarch64-apple-ios
 cargo build --target aarch64-linux-android
 ```
 
+### Releasing, and changing anything the API sees
+
+**See [docs/RELEASE.md](docs/RELEASE.md)** — every procedure that has to
+run, in order, plus what is still undecided about packaging.
+
+The short version of the part that bites most often: three committed
+files are **generated**, and a stale one fails a test rather than
+failing silently. Regenerate deliberately and read the diff.
+
+```bash
+UPDATE_CONTRACT=1 cargo test --lib contract_is_current        # docs/generated/engine-contract.json
+UPDATE_SHADER_DUMPS=1 cargo test --lib canonical_shader_dumps # tests/shader_dumps/
+cargo run --release --bin export_variations_json              # the corpus the API serves
+cargo run --release --bin export_effects_json
+```
+
+**A new `Feature`, `VariationCategory` or `ParamType` does NOT move the
+contract's shape fingerprint** — it adds an array element, not a key
+path — so the API's staleness pin will not fire. Tell the API repository
+directly. See RELEASE.md §3.
+
+Release builds use `cargo build --profile dist`, not `--release`: 31%
+smaller, ~10 minutes, and the profile name is recorded in every exported
+PNG so a bug report identifies its binary.
+
 ### Testing & Profiling
 
 See [docs/TESTING-GUIDE.md](docs/TESTING-GUIDE.md) for complete guide.

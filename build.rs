@@ -16,8 +16,27 @@ fn main() {
     let target = env::var("TARGET").unwrap_or_else(|_| "unknown".to_string());
     println!("cargo:rustc-env=BUILD_TARGET={}", target);
 
-    // Get build profile
-    let profile = env::var("PROFILE").unwrap_or_else(|_| "unknown".to_string());
+    // Get build profile.
+    //
+    // NOT `PROFILE`: cargo sets that to "release" or "debug" only — a
+    // custom profile reports the one it inherits from. So a `dist`
+    // build (LTO, stripped, panic=abort) was indistinguishable from a
+    // developer's `release` build in every exported PNG, which defeats
+    // the point of embedding build provenance at all: a bug report is
+    // supposed to identify the binary it came from.
+    //
+    // OUT_DIR carries the real directory name — `target/dist/build/...`
+    // — and the asset copy below already relies on that shape.
+    let profile = env::var("OUT_DIR")
+        .ok()
+        .and_then(|dir| {
+            std::path::PathBuf::from(dir)
+                .ancestors()
+                .nth(3) // .../target/<profile>/build/<crate>-<hash>/out
+                .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+        })
+        .or_else(|| env::var("PROFILE").ok())
+        .unwrap_or_else(|| "unknown".to_string());
     println!("cargo:rustc-env=BUILD_PROFILE={}", profile);
 
     // Get git commit hash (if available)
