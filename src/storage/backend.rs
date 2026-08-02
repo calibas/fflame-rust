@@ -318,3 +318,26 @@ mod tests {
         assert!(matches!(result.unwrap_err(), StorageError::NotFound(_)));
     }
 }
+
+#[cfg(test)]
+mod naming_probe {
+    /// What `directories` produces for a candidate name, on this
+    /// platform. Not an assertion — a way to see the real strings
+    /// before committing to them, since they differ per OS.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    #[ignore = "informational; run with --ignored"]
+    fn show_candidate_paths() {
+        for (q, o, a) in [
+            ("com", "fractal-flame", "fractal_flame_wgpu"),
+            ("com", "Fractals for All", "Fractal Art Editor"),
+            ("com", "FractalsForAll", "FractalArtEditor"),
+        ] {
+            if let Some(d) = directories::ProjectDirs::from(q, o, a) {
+                println!("({q}, {o}, {a})");
+                println!("   data:  {}", d.data_dir().display());
+                println!("   cache: {}", d.cache_dir().display());
+            }
+        }
+    }
+}

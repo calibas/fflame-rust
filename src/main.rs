@@ -1,3 +1,15 @@
+// Release builds on Windows are GUI-subsystem: launching the app from
+// Explorer or a shortcut must not open an empty black console beside it.
+//
+// The same binary is also the CLI (`export`, `generate`,
+// `export-animation`), and a GUI-subsystem process has no console at
+// all — so `--help` would print into the void. `attach_parent_console`
+// below puts that back when there is a terminal to attach to.
+//
+// Debug builds keep the console subsystem, so `cargo run` still shows
+// panics and log output without ceremony.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 use fractal_flame_wgpu::desktop_main;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -184,9 +196,121 @@ enum Commands {
     },
 }
 
+
+/// Re-attach to the terminal that launched us, if there was one.
+///
+/// A GUI-subsystem process starts with no console and invalid standard
+/// handles, so every `println!` goes nowhere. `AttachConsole` with
+/// `ATTACH_PARENT_PROCESS` borrows the parent's console when the parent
+/// has one — a `cmd`, PowerShell or terminal window — and does nothing
+/// when it does not, which is exactly the Explorer / shortcut case.
+///
+/// Declared inline rather than pulling in `windows-sys` for two
+/// symbols. `AttachConsole` is kernel32 and has been since Windows XP.
+///
+/// # Why the handles are re-bound
+///
+/// Attaching gives the process a console but does **not** repoint the
+/// standard handles it started with — those are still the invalid ones
+/// from launch. Rust's `Stdout` resolves `STD_OUTPUT_HANDLE` lazily and
+/// then caches it, so this has to happen before the first print or the
+/// output is lost with no error anywhere.
+#[cfg(all(windows, not(debug_assertions)))]
+fn attach_parent_console() {
+    const ATTACH_PARENT_PROCESS: u32 = 0xFFFF_FFFF;
+    const STD_INPUT_HANDLE: u32 = 0xFFFF_FFF6;
+    const STD_OUTPUT_HANDLE: u32 = 0xFFFF_FFF5;
+    const STD_ERROR_HANDLE: u32 = 0xFFFF_FFF4;
+    const GENERIC_READ: u32 = 0x8000_0000;
+    const GENERIC_WRITE: u32 = 0x4000_0000;
+    const FILE_SHARE_READ: u32 = 0x0000_0001;
+    const FILE_SHARE_WRITE: u32 = 0x0000_0002;
+    const OPEN_EXISTING: u32 = 3;
+    const INVALID_HANDLE_VALUE: isize = -1;
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn AttachConsole(dwProcessId: u32) -> i32;
+        fn GetStdHandle(nStdHandle: u32) -> isize;
+        fn SetStdHandle(nStdHandle: u32, hHandle: isize) -> i32;
+        fn CreateFileA(
+            lpFileName: *const u8,
+            dwDesiredAccess: u32,
+            dwShareMode: u32,
+            lpSecurityAttributes: *mut core::ffi::c_void,
+            dwCreationDisposition: u32,
+            dwFlagsAndAttributes: u32,
+            hTemplateFile: isize,
+        ) -> isize;
+    }
+
+    unsafe {
+        // Snapshot the handles BEFORE attaching.
+        //
+        // This ordering is the whole trick, and getting it wrong is
+        // silent. `AttachConsole` REPLACES the standard handles with the
+        // console's, so a shell that redirected `> file` loses the file
+        // handle — and inspecting the handles afterwards cannot tell
+        // that apart from a console it legitimately created, because by
+        // then both look like valid console handles.
+        //
+        // Measured, not assumed: with the check placed after the attach,
+        // `--help > file` produced a zero-byte file from both cmd and
+        // PowerShell while a pipe still worked.
+        let slots = [STD_OUTPUT_HANDLE, STD_ERROR_HANDLE, STD_INPUT_HANDLE];
+        let before = slots.map(|slot| GetStdHandle(slot));
+        let usable = |h: isize| h != 0 && h != INVALID_HANDLE_VALUE;
+
+        // Every stream already goes somewhere real: piped, redirected,
+        // or inherited. There is nothing to attach to and nothing to
+        // repair, so do not touch anything.
+        if before.iter().all(|h| usable(*h)) {
+            return;
+        }
+
+        if AttachConsole(ATTACH_PARENT_PROCESS) == 0 {
+            // No parent console — launched from Explorer or a shortcut.
+            // A GUI app with nowhere to print is the correct outcome.
+            return;
+        }
+
+        for (i, slot) in slots.iter().enumerate() {
+            if usable(before[i]) {
+                // Put back what the shell gave us, undoing the attach's
+                // replacement.
+                SetStdHandle(*slot, before[i]);
+                continue;
+            }
+            // Genuinely had nothing: point it at the console we just
+            // attached to. `CONOUT$` / `CONIN$` name that console.
+            let name: &[u8] = if *slot == STD_INPUT_HANDLE { b"CONIN$\0" } else { b"CONOUT$\0" };
+            let h = CreateFileA(
+                name.as_ptr(),
+                GENERIC_READ | GENERIC_WRITE,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                core::ptr::null_mut(),
+                OPEN_EXISTING,
+                0,
+                0,
+            );
+            if h != INVALID_HANDLE_VALUE {
+                SetStdHandle(*slot, h);
+            }
+        }
+    }
+}
+
+#[cfg(not(all(windows, not(debug_assertions))))]
+fn attach_parent_console() {}
+
 fn main() {
     #[cfg(not(target_arch = "wasm32"))]
     {
+        // Before anything can print, including clap's `--help` and its
+        // parse errors.
+        if std::env::args_os().len() > 1 {
+            attach_parent_console();
+        }
         let cli = Cli::parse();
 
         match cli.command {
