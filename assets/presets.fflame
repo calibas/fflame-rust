@@ -953,7 +953,7 @@
           },
           "variations": {
             "bubble": 0.5,
-            "pre_blur": 0.009999999776482582
+            "pre_blur": 1.2
           },
           "weight": 1.0
         },

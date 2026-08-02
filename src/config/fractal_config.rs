@@ -7,7 +7,7 @@ use crate::effects::EffectInstance;
 /// Current config format version.
 ///
 /// v2 introduces the cloud "opaque blob" wire format (see
-/// `docs/projects/api-v2.md`): the same JSON a `.fflame` file holds is stored
+/// `docs/archive/api-v1-v2/api-v2.md`): the same JSON a `.fflame` file holds is stored
 /// as a blob, so new config fields need no API/DB change. Both `.fflame` and
 /// cloud loads run through `migrate_value` (version-keyed, on the raw JSON
 /// *before* deserialize) so a version's old field defaults can be restored for
@@ -940,7 +940,7 @@ impl FractalConfig {
                 // v0 -> v1: pre-versioning configs. No structural/default
                 // changes; serde defaults handle missing fields.
                 0 => {}
-                // v1 -> v2: opaque-blob format (docs/projects/api-v2.md). No
+                // v1 -> v2: opaque-blob format (docs/archive/api-v1-v2/api-v2.md). No
                 // field defaults changed, so this is a no-op for now. The arm
                 // exists so a *future* default change lands here as an explicit
                 // `obj.entry("field").or_insert(json!(v1_default))` rather than
