@@ -658,6 +658,13 @@ impl App {
         let initial_viewport_size = (gpu.size.width, gpu.size.height);
 
         // Get export dimensions before moving config_manager
+        // The privacy switch is persisted, but every export reads it
+        // from a global at encode time — so mirror it before anything
+        // can export, or the first export of a session ignores it.
+        crate::png_metadata::set_strip_metadata(
+            config_manager.system_settings().png_export_strip_metadata,
+        );
+
         let export_width = config_manager.system_settings().default_export_width;
         let export_height = config_manager.system_settings().default_export_height;
 

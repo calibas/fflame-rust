@@ -1,8 +1,27 @@
-//! Thumbnail cache for FractalConfig gallery previews
+//! Disk cache for browser thumbnails.
 //!
-//! Uses hash-based filenames for content-addressable storage:
-//! - Desktop: Persistent disk cache in user data directory (LRU, max 200 items)
-//! - WASM: Memory-only cache (regenerate each session)
+//! # Why these are JPEG, and smaller than they are rendered
+//!
+//! Thumbnails were cached as 512x512 RGBA PNG and averaged **474 KB**
+//! each — 4.2 MB for nine of them. Measured rather than guessed, because
+//! the obvious suspect was wrong: the files carry **no** metadata at all
+//! (`IHDR, IDAT, IEND` and nothing else). It was all pixels.
+//!
+//! Two things were being paid for and neither was used:
+//!
+//! * **Resolution.** The gallery displays them at 64-256 px, defaulting
+//!   to 128. Caching at 512 stored 16x the pixels needed at the default
+//!   and 4x at the maximum.
+//! * **An alpha channel.** The thumbnail render never sets
+//!   `transparent`, so alpha is a constant 255 — a quarter of every raw
+//!   byte encoding nothing.
+//!
+//! So the cache holds JPEG at the largest size the UI can show. PNG is
+//! the wrong format here regardless: flame output is noisy and
+//! gradient-heavy, which is where lossless compression does worst.
+//!
+//! The RENDER stays at 512 ([`crate::renderer::THUMBNAIL_SIZE`]) because
+//! the API upload wants that size. Only the local cache shrinks.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -39,6 +58,17 @@ pub struct ThumbnailCache {
     disk_enabled: bool,
 }
 
+/// Cache entries are stored at the largest size the gallery can display
+/// (`fractal_gallery.rs` caps its slider at 256), not at the size they
+/// are rendered. Anything larger is stored and never seen.
+const CACHE_PIXELS: u32 = 256;
+
+/// JPEG quality. 88 is above the point where artefacts are visible at
+/// thumbnail scale, and well below the size cliff near 95.
+const CACHE_QUALITY: u8 = 88;
+
+const CACHE_EXT: &str = "jpg";
+
 impl ThumbnailCache {
     /// Create cache, scanning existing thumbnails on desktop
     pub fn new() -> Self {
@@ -70,16 +100,38 @@ impl ThumbnailCache {
     #[cfg(not(target_arch = "wasm32"))]
     fn scan_cache_dir(cache_dir: &PathBuf) -> HashSet<String> {
         let mut hashes = HashSet::new();
+        let mut stale = Vec::new();
+
         if let Ok(entries) = std::fs::read_dir(cache_dir) {
             for entry in entries.flatten() {
-                if let Some(filename) = entry.path().file_stem() {
-                    if let Some(hash) = filename.to_str() {
-                        // Only add if it looks like a valid hash (16 hex chars)
-                        if hash.len() == 16 && hash.chars().all(|c| c.is_ascii_hexdigit()) {
-                            hashes.insert(hash.to_string());
-                        }
-                    }
+                let path = entry.path();
+                let Some(hash) = path.file_stem().and_then(|f| f.to_str()) else {
+                    continue;
+                };
+                // Only a 16-hex-digit stem is one of ours.
+                if hash.len() != 16 || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
+                    continue;
                 }
+                // The extension has to match, not just the stem. Indexing
+                // a leftover `.png` from the pre-JPEG cache would make
+                // `exists()` say yes while `load()` looked for a `.jpg`
+                // and found nothing — a thumbnail permanently blank and
+                // never regenerated, because the index claims it is there.
+                if path.extension().and_then(|e| e.to_str()) == Some(CACHE_EXT) {
+                    hashes.insert(hash.to_string());
+                } else {
+                    stale.push(path);
+                }
+            }
+        }
+
+        if !stale.is_empty() {
+            log::info!(
+                "Removing {} thumbnail(s) from the previous cache format",
+                stale.len()
+            );
+            for path in stale {
+                let _ = std::fs::remove_file(path);
             }
         }
         hashes
@@ -100,7 +152,7 @@ impl ThumbnailCache {
 
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let path = self.cache_dir.join(format!("{}.png", hash));
+            let path = self.cache_dir.join(format!("{}.{CACHE_EXT}", hash));
             if let Ok(img) = image::open(&path) {
                 // Touch file to update mtime for LRU tracking
                 Self::touch_file(&path);
@@ -143,8 +195,25 @@ impl ThumbnailCache {
             // Enforce cache size limit before adding new file
             self.enforce_cache_limit();
 
-            let path = self.cache_dir.join(format!("{}.png", hash));
-            image.save(&path)?;
+            let path = self.cache_dir.join(format!("{}.{CACHE_EXT}", hash));
+
+            // Downscale to what the UI can actually show, then JPEG.
+            // Lanczos3 because a thumbnail is looked at, and the cheaper
+            // filters visibly alias on the fine structure flames produce.
+            let scaled = image::imageops::resize(
+                image,
+                CACHE_PIXELS,
+                CACHE_PIXELS,
+                image::imageops::FilterType::Lanczos3,
+            );
+
+            // JPEG has no alpha, which is exactly right — see the module
+            // docs. `into_rgb8`-equivalent conversion drops the constant
+            // 255s rather than encoding them.
+            let rgb = image::DynamicImage::ImageRgba8(scaled).into_rgb8();
+            let mut file = std::io::BufWriter::new(std::fs::File::create(&path)?);
+            image::codecs::jpeg::JpegEncoder::new_with_quality(&mut file, CACHE_QUALITY)
+                .encode_image(&rgb)?;
         }
 
         Ok(())

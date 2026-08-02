@@ -910,6 +910,15 @@ impl ConfigManager {
                 let value: u32 = new_value.try_into()?;
                 self.system_settings.default_export_height = value;
             }
+            ConfigPath::SystemPngStripMetadata => {
+                let value: bool = new_value.try_into()?;
+                self.system_settings.png_export_strip_metadata = value;
+                // Mirror into the encoder's global immediately. The
+                // setting is the record; that flag is what every export
+                // path actually reads, and a toggle that only takes
+                // effect after a restart is a privacy switch that lies.
+                crate::png_metadata::set_strip_metadata(value);
+            }
             ConfigPath::SystemLanguage => {
                 // Extract String from ConfigValue manually
                 let value = match new_value {
@@ -2161,6 +2170,7 @@ impl ConfigManager {
             | ConfigPath::SystemFlyCameraMode
             | ConfigPath::SystemExportWidth
             | ConfigPath::SystemExportHeight
+            | ConfigPath::SystemPngStripMetadata
             | ConfigPath::SystemLanguage
             | ConfigPath::SystemBurnIn
             | ConfigPath::SystemShowHelpOnStartup => {
@@ -3024,6 +3034,7 @@ impl ConfigManager {
             | ConfigPath::SystemFlyCameraMode
             | ConfigPath::SystemExportWidth
             | ConfigPath::SystemExportHeight
+            | ConfigPath::SystemPngStripMetadata
             | ConfigPath::SystemLanguage
             | ConfigPath::SystemBurnIn
             | ConfigPath::SystemShowHelpOnStartup => {

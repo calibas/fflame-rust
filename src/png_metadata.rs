@@ -9,7 +9,10 @@
 use serde::{Deserialize, Serialize};
 
 /// Complete metadata for a rendered fractal flame PNG
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// `Default` exists for tests and for partial construction; a real
+/// export always goes through `from_app_state`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PngMetadata {
     // Build Info
     pub version: String,
@@ -161,7 +164,44 @@ impl PngMetadata {
     }
 }
 
-/// Encode RGBA pixel data as PNG with embedded metadata
+/// Whether exported PNGs omit their metadata.
+///
+/// # Why this is enforced at the encoder, not at the call sites
+///
+/// The complete `FractalConfig` travels in every exported PNG — which is
+/// the feature that makes an image reproducible and a bug report
+/// actionable. It is also, for anyone who did not choose it, a leak: a
+/// flame someone spent a week on is fully recoverable from a picture of
+/// it, and so is any name or comment they put in the config.
+///
+/// Nine places construct a `PngMetadata`. A privacy switch honoured at
+/// nine call sites is one that will eventually be forgotten at the
+/// tenth, and the failure mode is silent — the export succeeds and the
+/// data ships anyway. So the switch lives here, at the single point
+/// every PNG passes through, and the call sites are not trusted with it.
+///
+/// Process-global rather than threaded through: exports run on
+/// background threads and from the headless CLI, and the alternative is
+/// a parameter on every signature between the setting and the encoder.
+static STRIP_METADATA: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Set from `SystemSettings` at startup and whenever the user toggles
+/// it, and from `--strip-metadata` in the headless CLI.
+pub fn set_strip_metadata(strip: bool) {
+    STRIP_METADATA.store(strip, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn strip_metadata() -> bool {
+    STRIP_METADATA.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Encode RGBA pixel data as PNG, with metadata unless stripping is on.
+///
+/// Named for what it usually does. It honours [`strip_metadata`], so a
+/// caller cannot leak by forgetting — see that constant for why the
+/// check is here rather than at the nine sites that build a
+/// `PngMetadata`.
 pub fn encode_png_with_metadata(
     width: u32,
     height: u32,
@@ -177,10 +217,13 @@ pub fn encode_png_with_metadata(
         encoder.set_color(ColorType::Rgba);
         encoder.set_depth(BitDepth::Eight);
 
-        // Add text chunks for metadata
-        for (key, value) in metadata.to_text_chunks() {
-            encoder.add_text_chunk(key, value)
-                .map_err(|e| format!("Failed to add text chunk: {}", e))?;
+        // The privacy switch, applied where nothing can route around it.
+        // See `STRIP_METADATA`.
+        if !strip_metadata() {
+            for (key, value) in metadata.to_text_chunks() {
+                encoder.add_text_chunk(key, value)
+                    .map_err(|e| format!("Failed to add text chunk: {}", e))?;
+            }
         }
 
         let mut writer = encoder.write_header()
@@ -282,5 +325,69 @@ mod tests {
         let checksum1 = PngMetadata::calculate_checksum("config1");
         let checksum2 = PngMetadata::calculate_checksum("config2");
         assert_ne!(checksum1, checksum2);
+    }
+}
+
+#[cfg(test)]
+mod strip_tests {
+    use super::*;
+
+    fn chunk_keys(png: &[u8]) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut pos = 8;
+        while pos + 8 <= png.len() {
+            let len = u32::from_be_bytes([png[pos], png[pos + 1], png[pos + 2], png[pos + 3]])
+                as usize;
+            let ctype = String::from_utf8_lossy(&png[pos + 4..pos + 8]).to_string();
+            if ctype == "IEND" {
+                break;
+            }
+            out.push(ctype);
+            pos += 12 + len;
+        }
+        out
+    }
+
+    /// Stripping must remove the config, and the image must still be a
+    /// valid PNG of the right size — a privacy switch that corrupts the
+    /// export is not a privacy switch.
+    ///
+    /// Serialised against the global by construction: this test owns
+    /// the flag for its duration and restores it, and no other test
+    /// touches it.
+    #[test]
+    fn stripping_removes_every_text_chunk_and_nothing_else() {
+        let was = strip_metadata();
+        let rgba = vec![128u8; 4 * 4 * 4];
+        let meta = PngMetadata {
+            config_json: "{\"secret\":true}".to_string(),
+            ..Default::default()
+        };
+
+        set_strip_metadata(false);
+        let with = encode_png_with_metadata(4, 4, rgba.clone(), &meta).expect("encode");
+        assert!(
+            chunk_keys(&with).iter().any(|c| c == "tEXt"),
+            "the default must still carry metadata: {:?}",
+            chunk_keys(&with)
+        );
+        assert!(
+            String::from_utf8_lossy(&with).contains("secret"),
+            "sanity: the config is in there when not stripping"
+        );
+
+        set_strip_metadata(true);
+        let without = encode_png_with_metadata(4, 4, rgba, &meta).expect("encode");
+        let keys = chunk_keys(&without);
+        assert!(!keys.iter().any(|c| c == "tEXt"), "{keys:?}");
+        assert!(
+            !String::from_utf8_lossy(&without).contains("secret"),
+            "the config must not survive anywhere in the file"
+        );
+        assert_eq!(keys.first().map(String::as_str), Some("IHDR"));
+        assert!(keys.iter().any(|c| c == "IDAT"), "still a real image: {keys:?}");
+        assert!(without.len() < with.len(), "and smaller");
+
+        set_strip_metadata(was);
     }
 }

@@ -301,6 +301,7 @@ pub enum ConfigPath {
     SystemFlyCameraMode,
     SystemExportWidth,
     SystemExportHeight,
+    SystemPngStripMetadata,
     SystemLanguage,
     SystemShowHelpOnStartup,
 }
@@ -837,6 +838,7 @@ impl Display for ConfigPath {
             ConfigPath::SystemFlyCameraMode => write!(f, "System: Fly Camera Mode"),
             ConfigPath::SystemExportWidth => write!(f, "System: Export Width"),
             ConfigPath::SystemExportHeight => write!(f, "System: Export Height"),
+            ConfigPath::SystemPngStripMetadata => write!(f, "System: Strip PNG Metadata"),
             ConfigPath::SystemLanguage => write!(f, "System: Language"),
             ConfigPath::SystemShowHelpOnStartup => write!(f, "System: Show Help On Startup"),
         }
@@ -1307,6 +1309,7 @@ impl ConfigPath {
             ConfigPath::SystemFlyCameraMode => I18nKey::simple("history.param.system_fly_camera_mode"),
             ConfigPath::SystemExportWidth => I18nKey::simple("history.param.system_export_width"),
             ConfigPath::SystemExportHeight => I18nKey::simple("history.param.system_export_height"),
+            ConfigPath::SystemPngStripMetadata => I18nKey::simple("history.param.system_png_strip_metadata"),
             ConfigPath::SystemLanguage => I18nKey::simple("history.param.system_language"),
             ConfigPath::SystemShowHelpOnStartup => I18nKey::simple("history.param.system_show_help_on_startup"),
         }
@@ -2242,7 +2245,10 @@ impl ConfigPath {
             // System Settings
             ConfigPath::SystemIterationsPerThread | ConfigPath::SystemBurnIn => UpdateType::IterationReset,
             ConfigPath::SystemVsyncEnabled | ConfigPath::SystemTargetFps | ConfigPath::SystemFlyMouseSensitivity | ConfigPath::SystemFlyMoveSpeed | ConfigPath::SystemFlySprintMultiplier | ConfigPath::SystemFlyInvertY | ConfigPath::SystemFlyCameraMode => UpdateType::ViewOnly,
-            ConfigPath::SystemExportWidth | ConfigPath::SystemExportHeight | ConfigPath::SystemLanguage | ConfigPath::SystemShowHelpOnStartup => UpdateType::None,
+            ConfigPath::SystemExportWidth | ConfigPath::SystemExportHeight | ConfigPath::SystemLanguage | ConfigPath::SystemShowHelpOnStartup
+            // Nothing to re-render: it only changes what a future
+            // export writes into the file.
+            | ConfigPath::SystemPngStripMetadata => UpdateType::None,
         }
     }
 
@@ -2509,6 +2515,7 @@ impl ConfigPath {
             ConfigPath::SystemFlyCameraMode => "System.FlyCameraMode".to_string(),
             ConfigPath::SystemExportWidth => "System.ExportWidth".to_string(),
             ConfigPath::SystemExportHeight => "System.ExportHeight".to_string(),
+            ConfigPath::SystemPngStripMetadata => "System.PngStripMetadata".to_string(),
             ConfigPath::SystemLanguage => "System.Language".to_string(),
             ConfigPath::SystemShowHelpOnStartup => "System.ShowHelpOnStartup".to_string(),
         }
@@ -2811,6 +2818,7 @@ impl ConfigPath {
                 "FlyCameraMode" => return Some(ConfigPath::SystemFlyCameraMode),
                 "ExportWidth" => return Some(ConfigPath::SystemExportWidth),
                 "ExportHeight" => return Some(ConfigPath::SystemExportHeight),
+                "PngStripMetadata" => return Some(ConfigPath::SystemPngStripMetadata),
                 "Language" => return Some(ConfigPath::SystemLanguage),
                 "ShowHelpOnStartup" => return Some(ConfigPath::SystemShowHelpOnStartup),
                 _ => {}
@@ -3073,7 +3081,8 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::SystemIterationsPerThread
         | ConfigPath::SystemBurnIn
         | ConfigPath::SystemExportWidth
-        | ConfigPath::SystemExportHeight => {
+        | ConfigPath::SystemExportHeight
+        | ConfigPath::SystemPngStripMetadata => {
             json.as_u64().map(|u| ConfigValue::UInt(u as u32))
         }
 
@@ -3551,6 +3560,7 @@ mod tests {
             ConfigPath::SystemFlyCameraMode,
             ConfigPath::SystemExportWidth,
             ConfigPath::SystemExportHeight,
+            ConfigPath::SystemPngStripMetadata,
             ConfigPath::SystemLanguage,
             ConfigPath::SystemShowHelpOnStartup,
         ];
