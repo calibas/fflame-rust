@@ -492,7 +492,7 @@ let depth = p.z;  // Planar depth (like camera distance)
 
 - [wrighter.xyz flame fractals article](https://wrighter.xyz/blog/2023_08_17_flame_fractals_in_comp_shader) - Original inspiration
 - [Terrarium](https://www.hailpixel.com/articles/terrarium-a-path-tracer) - DOF + motion blur example
-- [STATUS.md](../STATUS.md) - Original 3D depth effects plan (post-process approach)
+- [STATUS.md](../archive/STATUS.md) - Original 3D depth effects plan (post-process approach)
 - [3D_IMPLEMENTATION_PLAN.md](../archive/3D_IMPLEMENTATION_PLAN.md) - Initial 3D feature design
 
 ---

@@ -63,7 +63,7 @@ docs/
 - Command reference with examples
 - What's tested and how to run
 
-**[STATUS.md](STATUS.md)** - Implementation Status
+**[STATUS.md](archive/STATUS.md)** - Implementation Status
 - What's implemented vs original design
 - Current features and limitations
 - Priority breakdown
@@ -73,7 +73,7 @@ docs/
 - Platform-specific details
 - Limitations and workarounds
 
-**[outline.md](outline.md)** - Original Design
+**[outline.md](archive/outline.md)** - Original Design
 - Original goals and vision
 - Design decisions and rationale
 

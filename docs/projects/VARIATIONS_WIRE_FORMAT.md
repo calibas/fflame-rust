@@ -592,7 +592,7 @@ with a warning, not rejected**, so a newer server can serve an older
 client.
 
 Design background:
-[docs/projects/intra-iteration-state-and-accum.md](intra-iteration-state-and-accum.md).
+[docs/projects/intra-iteration-state-and-accum.md](../archive/intra-iteration-state-and-accum.md).
 
 **Proposed API-side extension** (additive, no breakage):
 

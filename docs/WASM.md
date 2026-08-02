@@ -29,7 +29,7 @@ The fractal flame renderer has been successfully configured for WebAssembly/brow
    - Controls info panel
    - Error handling for WebGPU compatibility
 
-5. **Documentation** ([README-WASM.md](README-WASM.md))
+5. **Documentation** ([README-WASM.md](archive/README-WASM.md))
    - Setup instructions
    - Build process
    - Browser compatibility guide

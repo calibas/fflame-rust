@@ -85,7 +85,7 @@ haven't built it yet" and could be added with focused work.
    killer is *cross-thread* accumulator reads (one pixel reading
    another's state), which still doesn't exist in any audited
    variation. See
-   [`intra-iteration-state-and-accum.md`](intra-iteration-state-and-accum.md).
+   [`intra-iteration-state-and-accum.md`](../archive/intra-iteration-state-and-accum.md).
 
 4. **Pre-affine input read in post phase** — `post_depth` and similar
    need access to `pAffineTP` (the pre-affine input) inside a post-
@@ -116,7 +116,7 @@ haven't built it yet" and could be added with focused work.
    for thread-start initialization. State persists across the inner
    iteration loop within a single shader invocation; re-initializes
    each compute dispatch. See
-   [`intra-iteration-state-and-accum.md`](intra-iteration-state-and-accum.md).
+   [`intra-iteration-state-and-accum.md`](../archive/intra-iteration-state-and-accum.md).
    The remaining gap is *cross-dispatch* persistence (state surviving
    between frames), which only mandelbrot's point-cache appears to
    actually need from the audited cases — and even there, re-init each
@@ -149,7 +149,7 @@ haven't built it yet" and could be added with focused work.
 
 10. **~~16-slot per-variation budget~~** — RESOLVED 2026-05-04 by the
     packed-variation-params buffer (see
-    [`packed-variation-params.md`](packed-variation-params.md)). Each
+    [`packed-variation-params.md`](../archive/packed-variation-params.md)). Each
     variation now allocates exactly its slot count (user + init), with
     per-flame compile-time offsets baked into the WGSL `get_param`
     switch. Quaternion at 93 slots and the other 7 slot-blocked
@@ -201,7 +201,7 @@ haven't built it yet" and could be added with focused work.
     csinh, asinh/acosh/...`) NOT included — adds opportunistically as
     future variations need them. Unblocked `klein_group` (Indra's
     Pearls Kleinian limit-set chaos game). See
-    [`complex-math-and-klein-group.md`](complex-math-and-klein-group.md).
+    [`complex-math-and-klein-group.md`](../archive/complex-math-and-klein-group.md).
 
 ### Special case: complete duplicates
 

@@ -488,4 +488,4 @@ Recommended order based on impact and dependencies:
 
 - [UI.md](../main/UI.md) - Current UI architecture
 - [ui-improvements-docking.md](../archive/projects/ui-improvements-docking.md) - Previous UX work
-- [STATUS.md](../STATUS.md) - Project status and priorities
+- [STATUS.md](../archive/STATUS.md) - Project status and priorities

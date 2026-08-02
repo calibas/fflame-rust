@@ -148,6 +148,6 @@ This is expected behavior for a real-time rendering application running at 60 FP
 
 ## References
 
-- Delta-based state management: [delta-based-state-management.md](./delta-based-state-management.md)
+- Delta-based state management: [delta-based-state-management.md](../archive/delta-migration/delta-based-state-management.md)
 - Event loop: [src/app/mod.rs](../../src/app/mod.rs) lines 175-289
 - Render function: [src/app/mod.rs](../../src/app/mod.rs) lines 298-1068

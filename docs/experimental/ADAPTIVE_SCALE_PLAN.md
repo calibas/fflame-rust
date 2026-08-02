@@ -420,6 +420,6 @@ Adaptive scaling is the **ideal solution** for the histogram overflow vs precisi
 
 ## References
 
-- [HISTOGRAM_INVESTIGATION_SUMMARY.md](HISTOGRAM_INVESTIGATION_SUMMARY.md) - Investigation findings
-- [HISTOGRAM_EVOLUTION.md](HISTOGRAM_EVOLUTION.md) - Algorithm history
-- [FINDINGS_PRESENTATION.md](FINDINGS_PRESENTATION.md) - Visual presentation
+- [HISTOGRAM_INVESTIGATION_SUMMARY.md](../archive/histogram/HISTOGRAM_INVESTIGATION_SUMMARY.md) - Investigation findings
+- [HISTOGRAM_EVOLUTION.md](../archive/histogram/HISTOGRAM_EVOLUTION.md) - Algorithm history
+- [FINDINGS_PRESENTATION.md](../archive/histogram/FINDINGS_PRESENTATION.md) - Visual presentation
