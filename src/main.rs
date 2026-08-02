@@ -105,6 +105,12 @@ enum Commands {
         #[arg(long)]
         premultiplied: bool,
 
+        /// Omit metadata from the exported PNG. Exports normally embed the
+        /// complete config, which makes them reproducible — and shares the
+        /// flame with anyone who has the image.
+        #[arg(long)]
+        strip_metadata: bool,
+
         /// 2× supersampled antialiasing: render at double resolution and box-filter down (with firefly clamp). ~4× render cost.
         #[arg(long, default_value_t = false)]
         supersample: bool,
@@ -198,7 +204,9 @@ fn main() {
                     list_params,
                 );
             }
-            Some(Commands::Export { input, output, width, height, category, iterations_per_thread, dump_shader, transparent, premultiplied, supersample, engine }) => {
+            Some(Commands::Export { input, output, width, height, category, iterations_per_thread, dump_shader, transparent, premultiplied, supersample, strip_metadata, engine }) => {
+                // Before any render: the encoder reads this from a global.
+                fractal_flame_wgpu::png_metadata::set_strip_metadata(strip_metadata);
                 // Run in headless export mode
                 fractal_flame_wgpu::export_mode(&input, &output, width, height, category, iterations_per_thread, dump_shader, transparent, premultiplied, engine, supersample);
             }

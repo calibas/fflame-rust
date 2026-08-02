@@ -120,6 +120,23 @@ pub fn render_export_content(
     ui.checkbox(png_export_premultiplied, t!("export.premultiplied_alpha"))
         .on_hover_text(t!("export.premultiplied_alpha_tooltip"));
 
+    // Privacy. Every export normally carries the complete FractalConfig,
+    // which is what makes an image reproducible — and what leaks a
+    // flame somebody would rather keep.
+    {
+        let mut strip = config_manager.system_settings().png_export_strip_metadata;
+        if ui
+            .checkbox(&mut strip, t!("export.strip_metadata"))
+            .on_hover_text(t!("export.strip_metadata_tooltip"))
+            .changed()
+        {
+            let _ = config_manager.update_system_setting(
+                crate::config::ConfigPath::SystemPngStripMetadata,
+                strip.into(),
+            );
+        }
+    }
+
     // 2× supersampled antialiasing (desktop export paths only for now).
     #[cfg(not(target_arch = "wasm32"))]
     ui.checkbox(png_export_supersample, t!("export.supersample"))

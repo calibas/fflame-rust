@@ -141,6 +141,16 @@ pub struct SystemSettings {
     #[serde(default = "default_export_height")]
     pub default_export_height: u32,
 
+    /// Omit metadata from exported PNGs.
+    ///
+    /// Off by default, because the embedded config is what makes an
+    /// export reproducible and a bug report actionable. On for anyone
+    /// who would rather a picture of their work not contain the work:
+    /// the complete `FractalConfig` is recoverable from a normal export,
+    /// and so is anything they named or wrote in it.
+    #[serde(default)]
+    pub png_export_strip_metadata: bool,
+
     // File Paths (Desktop only)
     #[cfg(not(target_arch = "wasm32"))]
     /// Last opened file path
@@ -234,6 +244,7 @@ impl Default for SystemSettings {
             fly_camera_mode: FlyCameraMode::default(),
             default_export_width: default_export_width(),
             default_export_height: default_export_height(),
+            png_export_strip_metadata: false,
             #[cfg(not(target_arch = "wasm32"))]
             last_opened_file: None,
             #[cfg(not(target_arch = "wasm32"))]
