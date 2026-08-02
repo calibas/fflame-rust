@@ -156,6 +156,13 @@ cargo build --target aarch64-linux-android
 **See [docs/RELEASE.md](docs/RELEASE.md)** — every procedure that has to
 run, in order, plus what is still undecided about packaging.
 
+```bash
+python scripts/release.py check      # every fast gate, ~4s
+python scripts/release.py            # ...and a changelog preview
+```
+
+Nothing runs on push or on a timer. It is a command you type.
+
 The short version of the part that bites most often: three committed
 files are **generated**, and a stale one fails a test rather than
 failing silently. Regenerate deliberately and read the diff.
@@ -246,7 +253,7 @@ const pngData = await api.export_png(800, 600, 256, false); // w, h, iters/threa
 ### GPU Code
 - All shaders use **WGSL**; follow std140/std430 layout rules for buffers
 - **WASM Compatibility**: `textureSample()` only from uniform control flow; use `textureLoad()` inside conditionals (desktop drivers are lenient, browsers fail silently with black output)
-- **Trust the shader compiler for optimization**: modern GPU compilers perform aggressive CSE — write clear code, don't hand-hoist (see [docs/SHADER_COMPILER_CSE_ANALYSIS.md](docs/SHADER_COMPILER_CSE_ANALYSIS.md))
+- **Trust the shader compiler for optimization**: modern GPU compilers perform aggressive CSE — write clear code, don't hand-hoist (see [docs/SHADER_COMPILER_CSE_ANALYSIS.md](docs/archive/optimization-attempt-2025-11-02/SHADER_COMPILER_CSE_ANALYSIS.md))
 
 ### Rust Code
 - Use `bytemuck::Pod` and `bytemuck::Zeroable` for GPU data structures

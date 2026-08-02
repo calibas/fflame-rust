@@ -6,7 +6,6 @@
 - [ARCHITECTURE.md](../ARCHITECTURE.md) - Overall system design
 - [RENDERER.md](RENDERER.md) - Rendering pipeline *(coming soon)*
 - [SHADERS.md](SHADERS.md) - Shader system *(coming soon)*
-- [PIPELINE.md](PIPELINE.md) - Pipeline details *(coming soon)*
 
 **Code locations:**
 - [src/gpu/buffers.rs](../../src/gpu/buffers.rs) - Buffer creation and management

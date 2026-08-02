@@ -19,7 +19,7 @@
 
 ### 1. Tiled High-Resolution Export
 **Status:** Planning
-**Doc:** [tiled-high-res-export.md](tiled-high-res-export.md)
+**Doc:** [tiled-high-res-export.md](../archive/tiled-high-res-export.md)
 
 **What it solves:**
 - Export at any resolution (5K, 8K, 10K+)
@@ -43,7 +43,7 @@
 
 ### 2. Supersampling Anti-Aliasing
 **Status:** Planning
-**Doc:** [supersampling-antialiasing.md](supersampling-antialiasing.md)
+**Doc:** [supersampling-antialiasing.md](../archive/supersampling-antialiasing.md)
 
 **What it solves:**
 - Smooth edges and curves
@@ -275,9 +275,9 @@ Would you like me to proceed with Phase 1 implementation?
 
 ## Related Documentation
 
-- [tiled-high-res-export.md](tiled-high-res-export.md) - Detailed tiled rendering design
-- [supersampling-antialiasing.md](supersampling-antialiasing.md) - Detailed supersampling design
-- [../STATUS.md](../STATUS.md) - Feature priority tracking
+- [tiled-high-res-export.md](../archive/tiled-high-res-export.md) - Detailed tiled rendering design
+- [supersampling-antialiasing.md](../archive/supersampling-antialiasing.md) - Detailed supersampling design
+- [../STATUS.md](../archive/STATUS.md) - Feature priority tracking
 - [../../CLAUDE.md](../../CLAUDE.md) - Project overview
 
 ---

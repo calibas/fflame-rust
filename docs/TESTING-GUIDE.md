@@ -452,7 +452,7 @@ println!("{}", json);
 
 **What:** Browser-based performance monitoring
 
-**See:** [WASM-PROFILING.md](WASM-PROFILING.md) for complete guide
+**See:** [WASM-PROFILING.md](archive/WASM-PROFILING.md) for complete guide
 
 **Quick Start:**
 ```bash

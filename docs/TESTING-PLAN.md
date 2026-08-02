@@ -502,7 +502,7 @@ cargo bench                               # Benchmarks
 ### Related Documentation
 - [TESTING-GUIDE.md](TESTING-GUIDE.md) - Current testing infrastructure
 - [ARCHITECTURE.md](ARCHITECTURE.md) - Codebase organization
-- [WASM-STATUS.md](WASM-STATUS.md) - WASM build status
+- [WASM.md](WASM.md) - WASM build guide
 
 ### External Resources
 - [PNG Specification](http://www.libpng.org/pub/png/spec/1.2/PNG-Contents.html) - Text chunks for metadata

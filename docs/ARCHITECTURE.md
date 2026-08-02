@@ -841,7 +841,7 @@ for frame in animation {
 Result: Variable throughput based on motion, but constant visual quality.
 
 ### References
-- Complete analysis: [ITERATIONS_PER_THREAD_QUALITY.md](ITERATIONS_PER_THREAD_QUALITY.md)
+- Complete analysis: [ITERATIONS_PER_THREAD_QUALITY.md](archive/ITERATIONS_PER_THREAD_QUALITY.md)
 - Root cause investigation: 4 failed attempts documented
 - Implementation details: Frame rate control vs iteration chunking
 
@@ -974,7 +974,7 @@ config_manager.update_batch(changes, "Transform affine update")?;
 
 **Current Documentation:**
 - [CONFIG.md](main/CONFIG.md) - Complete ConfigManager reference
-- [palette-system-redesign.md](projects/palette-system-redesign.md) - Palette architecture
+- [palette-system-redesign.md](archive/projects/palette-system-redesign.md) - Palette architecture
 
 ### Performance Characteristics
 

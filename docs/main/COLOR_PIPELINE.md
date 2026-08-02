@@ -578,7 +578,7 @@ Final Display (RGBA8 pixels)
 
 ## Recommendations for Quality Investigation ✅ COMPLETE
 
-Investigation completed 2025-10-26. See [HISTOGRAM_INVESTIGATION_SUMMARY.md](HISTOGRAM_INVESTIGATION_SUMMARY.md) for results.
+Investigation completed 2025-10-26. See [HISTOGRAM_INVESTIGATION_SUMMARY.md](../archive/histogram/HISTOGRAM_INVESTIGATION_SUMMARY.md) for results.
 
 Key findings:
 1. ✅ Baseline established (main branch, ef0cdd8)

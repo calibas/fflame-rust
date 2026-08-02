@@ -57,15 +57,22 @@ maintain.
 
 ## 2. Gates — what must pass
 
-Run these before anything is packaged. None of them is currently
-automated; there is **no CI** (§7).
+```bash
+python scripts/release.py check          # ~4s: tests, wasm, contract, dumps, doc links
+python scripts/release.py check --fix    # ...and regenerate what is stale
+```
+
+**Nothing runs on push, on commit, or on a timer.** That is deliberate:
+the work CI would do is worth automating, the *triggering* is what gets
+in the way. `release.py` is a command you type when you are releasing —
+or when you want to know whether you could.
+
+Two gates it does NOT run, because they need a GPU and minutes rather
+than seconds:
 
 ```bash
-cargo test                                    # 566 tests
-cargo check --release --target wasm32-unknown-unknown --lib
-python scripts/check_doc_links.py             # exits non-zero on live docs only
-python tests/visual/run_tests.py              # needs `cargo build --release` first
-python scripts/run_benchmarks.py --quick      # regression vs benchmark_results/
+cargo build --release && python tests/visual/run_tests.py
+python scripts/run_benchmarks.py --quick
 ```
 
 Three of the tests are **generated-artifact gates** — they fail when a
@@ -124,15 +131,23 @@ has gone stale before.
 
 ## 4. Release procedure
 
-1. **Decide the version** (§1) and bump every crate that participates.
-2. **Update the changelog.** There isn't one — see §7.
+1. **Bump the version:** `python scripts/release.py version 0.5.0`
+   — every crate, in lockstep (§1). `--dry-run` first.
+2. **Generate the changelog:** `python scripts/release.py changelog`
+   — grouped by the `area:` prefix in commit subjects, which 141 of the
+   last 150 commits use. Edit the result; a generator gets the raw
+   material, not the judgement about what mattered.
 3. **Run every gate** (§2). Regenerate artifacts if a gate demands it,
    and read the diffs.
 4. **Sync the API** (§3) if any generated artifact changed. Do this
    *before* tagging, so the tag matches what the server serves.
 5. **Build each surface:**
    ```bash
-   cargo build --profile dist              # NOT --release, see below
+   python scripts/release.py build         # all four, in order
+   ```
+   or individually — note `--profile dist`, not `--release`, see below:
+   ```bash
+   cargo build --profile dist
    ./build-wasm.sh                         # or .bat
    cd wasm/render && wasm-pack build --target web --release
    cd wasm/script && wasm-pack build --target web --release
@@ -227,13 +242,15 @@ an image and it carries the build and the flame that produced it.
 
 Honest list, so nobody assumes these exist:
 
-- **No CI.** No `.github/`. Every gate in §2 is run by hand, which means
-  they are run when someone remembers.
-- **No changelog.** The only one is `docs/archive/CHANGELOG.md`, which
-  stopped. Releases need a record of what changed for users, not commits.
-- **No release checklist automation.** This document is the checklist.
-- **26 broken links in live docs**, including one in `CLAUDE.md`. Found
-  by `scripts/check_doc_links.py`; not yet fixed.
+- **No CI, deliberately.** `scripts/release.py` does what CI would do,
+  on demand. It exits non-zero, so it *could* become a hook later
+  without being one now. What is genuinely given up: nothing enforces
+  that anyone ran it.
+- **No hand-written changelog, deliberately.**
+  `release.py changelog` generates one from commit subjects. It gets the
+  raw material; deciding what mattered to a user is still a person's
+  job.
+- **No signing or notarization** for any platform (§5).
 - **Repository hygiene**: `debug_shader_3d.wgsl` and `random-notes.txt`
   are tracked at the root and probably should not be.
 - **`build-wasm.bat` and `build-wasm.sh` are parallel implementations**
