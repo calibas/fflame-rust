@@ -91,7 +91,7 @@ class VisualTestRunner:
             self.binary = binary_path
         else:
             profile = "release" if use_release else "debug"
-            exe_name = "fractal_flame_wgpu.exe" if sys.platform == "win32" else "fractal_flame_wgpu"
+            exe_name = "FractalArtEditor.exe" if sys.platform == "win32" else "FractalArtEditor"
             self.binary = Path(f"target/{profile}/{exe_name}")
 
         # Ensure directories exist

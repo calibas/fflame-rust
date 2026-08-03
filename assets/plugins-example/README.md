@@ -10,7 +10,7 @@ restart.
 | effects | `<app data>/plugins/effects/` | localStorage `plugins/effects/…` |
 
 On Windows the app data folder is
-`%APPDATA%\fractal-flame\fractal_flame_wgpu\data\`.
+`%APPDATA%\Fractals for All\Fractal Art Editor\data\`.
 
 ## The file *name* is the identity
 

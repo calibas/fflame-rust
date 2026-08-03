@@ -133,7 +133,7 @@ impl PngMetadata {
     /// Convert metadata to PNG tEXt chunk key-value pairs
     pub fn to_text_chunks(&self) -> Vec<(String, String)> {
         vec![
-            ("Software".to_string(), format!("Fractal Flame Renderer v{}", self.version)),
+            ("Software".to_string(), format!("Fractal Art Editor v{}", self.version)),
             ("GitHash".to_string(), self.git_hash.clone()),
             ("Branch".to_string(), self.git_branch.clone()),
             ("BuildDate".to_string(), self.build_timestamp.clone()),
@@ -252,8 +252,16 @@ pub fn read_png_metadata(png_data: &[u8]) -> Result<PngMetadata, String> {
         .collect();
 
     // Extract metadata from text chunks
+    // Both spellings. The product was called "Fractal Flame Renderer"
+    // in every PNG exported before the rename, and those files are
+    // exactly the ones somebody reaches for when they want an old
+    // flame back — dropping the old prefix would report their version
+    // as "unknown" for no reason.
     let version = text_chunks.get("Software")
-        .and_then(|s| s.strip_prefix("Fractal Flame Renderer v"))
+        .and_then(|s| {
+            s.strip_prefix("Fractal Art Editor v")
+                .or_else(|| s.strip_prefix("Fractal Flame Renderer v"))
+        })
         .unwrap_or("unknown")
         .to_string();
 
@@ -389,5 +397,50 @@ mod strip_tests {
         assert!(without.len() < with.len(), "and smaller");
 
         set_strip_metadata(was);
+    }
+}
+
+#[cfg(test)]
+mod naming_tests {
+    use super::*;
+
+    /// The version must parse out of BOTH the current product name and
+    /// the one every PNG exported before the rename carries.
+    ///
+    /// Old exports are exactly the files somebody reaches for when they
+    /// want an old flame back. Reporting their version as "unknown"
+    /// because the product was renamed would be a self-inflicted wound,
+    /// and a silent one — the config still loads, so nothing looks
+    /// broken until someone asks which build made it.
+    #[test]
+    fn both_product_names_parse_their_version() {
+        let render = |software: &str| {
+            let mut meta = PngMetadata { version: "9.9.9".into(), ..Default::default() };
+            meta.config_json = "{}".into();
+            let png = {
+                // Build a PNG carrying exactly this Software string.
+                let mut data = Vec::new();
+                {
+                    let mut enc = png::Encoder::new(&mut data, 1, 1);
+                    enc.set_color(png::ColorType::Rgba);
+                    enc.set_depth(png::BitDepth::Eight);
+                    enc.add_text_chunk("Software".into(), software.into()).unwrap();
+                    enc.add_text_chunk("Config".into(), "{}".into()).unwrap();
+                    let mut w = enc.write_header().unwrap();
+                    w.write_image_data(&[0, 0, 0, 255]).unwrap();
+                }
+                data
+            };
+            let _ = &meta;
+            read_png_metadata(&png).expect("parses").version
+        };
+
+        assert_eq!(render("Fractal Art Editor v0.5.0"), "0.5.0", "the current name");
+        assert_eq!(
+            render("Fractal Flame Renderer v0.4.4"),
+            "0.4.4",
+            "every PNG exported before the rename"
+        );
+        assert_eq!(render("Some Other Tool v1.0"), "unknown", "and nothing else");
     }
 }

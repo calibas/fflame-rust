@@ -19,7 +19,7 @@ Four artifacts, built four different ways, from one repository.
 
 | surface | built by | output | version source |
 |---|---|---|---|
-| Desktop app | `cargo build --profile dist` | `target/dist/fractal_flame_wgpu(.exe)` | `Cargo.toml` |
+| Desktop app | `cargo build --profile dist` | `target/dist/FractalArtEditor(.exe)` | `Cargo.toml` |
 | Web app | `build-wasm.bat` / `.sh` | `pkg/` + `index.html`, `css/`, `js/` | `Cargo.toml` |
 | Gallery modules | `wasm-pack build` in `wasm/render`, `wasm/script` | `wasm/*/pkg/` | each crate's `Cargo.toml` |
 | Python | `maturin build` in `python/` | a wheel | `python/pyproject.toml` |

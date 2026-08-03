@@ -784,7 +784,7 @@ for _ in 0..speed_multiplier {
 
 **CLI Usage**: `--speed-multiplier` parameter
 ```bash
-fractal_flame_wgpu export -i config.fflame -o output.png \
+FractalArtEditor export -i config.fflame -o output.png \
   --iterations-per-thread 4096 --speed-multiplier 16
 ```
 

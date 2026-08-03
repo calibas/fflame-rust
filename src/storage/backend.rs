@@ -48,15 +48,23 @@ pub type StorageResult<T> = Result<T, StorageError>;
 
 /// Get the application data directory (cross-platform)
 ///
-/// Returns:
-/// - Windows: `%APPDATA%\fractal_flame_wgpu\`
-/// - macOS: `~/Library/Application Support/fractal_flame_wgpu/`
-/// - Linux: `~/.config/fractal_flame_wgpu/` or `$XDG_CONFIG_HOME/fractal_flame_wgpu/`
+/// Named for the product, never for the crate: these paths are things a
+/// user browses to, and `fractal_flame_wgpu` means nothing to them.
+/// `directories` applies each platform's own convention, so the strings
+/// differ by design:
+///
+/// - Windows: `%APPDATA%\Fractals for All\Fractal Art Editor\data\`
+/// - macOS: `~/Library/Application Support/com.Fractals-for-All.Fractal-Art-Editor/`
+/// - Linux: `$XDG_DATA_HOME/fractalarteditor/`
+///
+/// Changing these strings **moves everyone's data**. There is no
+/// migration: settings, scripts, plugins and cached downloads under a
+/// previous name are orphaned, not lost, and have to be moved by hand.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn get_app_data_dir() -> StorageResult<PathBuf> {
     use directories::ProjectDirs;
 
-    ProjectDirs::from("com", "fractal-flame", "fractal_flame_wgpu")
+    ProjectDirs::from("com", "Fractals for All", "Fractal Art Editor")
         .map(|proj_dirs| proj_dirs.data_dir().to_path_buf())
         .ok_or_else(|| StorageError::NotAvailable("Could not determine application data directory".to_string()))
 }
@@ -277,14 +285,19 @@ mod tests {
     use super::*;
 
     #[cfg(not(target_arch = "wasm32"))]
+    /// The data directory resolves to a real absolute path.
+    ///
+    /// This used to assert the path contained `fractal_flame_wgpu`,
+    /// which is precisely what must NOT be there — see
+    /// `naming_tests::storage_paths_carry_no_internal_names`, which owns
+    /// that question now. Two tests asserting opposite things about one
+    /// string is worth avoiding.
     #[test]
     fn test_get_app_data_dir() {
         let dir = get_app_data_dir().unwrap();
         println!("App data dir: {}", dir.display());
-
-        // Should contain app name
-        let dir_str = dir.to_string_lossy();
-        assert!(dir_str.contains("fractal_flame_wgpu"));
+        assert!(dir.is_absolute(), "must be absolute: {}", dir.display());
+        assert!(dir.components().count() > 2, "suspiciously shallow: {}", dir.display());
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -320,24 +333,32 @@ mod tests {
 }
 
 #[cfg(test)]
-mod naming_probe {
-    /// What `directories` produces for a candidate name, on this
-    /// platform. Not an assertion — a way to see the real strings
-    /// before committing to them, since they differ per OS.
+mod naming_tests {
+    use super::*;
+
+    /// No internal name may appear in a path a user can see.
+    ///
+    /// The repo is `fflame-rust`, the crate is `fractal_flame_wgpu`, and
+    /// an earlier build wrote to `FractalFlame`. None of those mean
+    /// anything to somebody browsing their AppData folder, and every one
+    /// of them has been in a user-visible path at some point.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    #[ignore = "informational; run with --ignored"]
-    fn show_candidate_paths() {
-        for (q, o, a) in [
-            ("com", "fractal-flame", "fractal_flame_wgpu"),
-            ("com", "Fractals for All", "Fractal Art Editor"),
-            ("com", "FractalsForAll", "FractalArtEditor"),
-        ] {
-            if let Some(d) = directories::ProjectDirs::from(q, o, a) {
-                println!("({q}, {o}, {a})");
-                println!("   data:  {}", d.data_dir().display());
-                println!("   cache: {}", d.cache_dir().display());
-            }
+    fn storage_paths_carry_no_internal_names() {
+        let dir = match get_app_data_dir() {
+            Ok(d) => d.to_string_lossy().to_lowercase(),
+            // No home directory in this environment; nothing to check.
+            Err(_) => return,
+        };
+        for internal in ["fractal_flame_wgpu", "fractal-flame", "fflame", "flame_wgpu"] {
+            assert!(
+                !dir.contains(internal),
+                "`{internal}` is visible in the data path: {dir}"
+            );
         }
+        assert!(
+            dir.contains("fractal") && dir.contains("art") && dir.contains("editor"),
+            "the product name should be recognisable: {dir}"
+        );
     }
 }

@@ -36,7 +36,7 @@ OUT = os.path.join(ROOT, "output")
 def find_binary():
     for profile in ("release", "debug"):
         for ext in (".exe", ""):
-            p = os.path.join(ROOT, "target", profile, "fractal_flame_wgpu" + ext)
+            p = os.path.join(ROOT, "target", profile, "FractalArtEditor" + ext)
             if os.path.exists(p):
                 return p
     sys.exit("error: build the binary first (cargo build --release)")

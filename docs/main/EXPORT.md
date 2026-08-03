@@ -310,7 +310,7 @@ The main app supports headless batch PNG export for testing and automation.
 
 **Command syntax:**
 ```bash
-fractal_flame_wgpu export [OPTIONS]
+FractalArtEditor export [OPTIONS]
 ```
 
 **Options:**
@@ -326,7 +326,7 @@ fractal_flame_wgpu export [OPTIONS]
 
 **Single file export:**
 ```bash
-fractal_flame_wgpu export \
+FractalArtEditor export \
   -i config.fflame \
   -o output.png \
   --width 1920 \
@@ -335,14 +335,14 @@ fractal_flame_wgpu export \
 
 **Batch directory export:**
 ```bash
-fractal_flame_wgpu export \
+FractalArtEditor export \
   -i tests/visual/configs \
   -o tests/visual/current
 ```
 
 **With test category metadata:**
 ```bash
-fractal_flame_wgpu export \
+FractalArtEditor export \
   -i tests/visual/configs/variations \
   -o tests/visual/current \
   --category variations
@@ -350,7 +350,7 @@ fractal_flame_wgpu export \
 
 **With speed multiplier (quality control):**
 ```bash
-fractal_flame_wgpu export \
+FractalArtEditor export \
   -i config.fflame \
   -o output.png \
   --iterations-per-thread 4096 \
@@ -766,7 +766,7 @@ if crate::export::needs_cpu_export(self.export_width, self.export_height) {
 # Export all presets to separate PNGs
 for config in assets/presets/*.fflame; do
     name=$(basename "$config" .fflame)
-    fractal_flame_wgpu export -i "$config" -o "output/$name.png"
+    FractalArtEditor export -i "$config" -o "output/$name.png"
 done
 ```
 
