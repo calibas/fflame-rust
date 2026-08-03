@@ -253,6 +253,9 @@ const pngData = await api.export_png(800, 600, 256, false); // w, h, iters/threa
 ### GPU Code
 - All shaders use **WGSL**; follow std140/std430 layout rules for buffers
 - **WASM Compatibility**: `textureSample()` only from uniform control flow; use `textureLoad()` inside conditionals (desktop drivers are lenient, browsers fail silently with black output)
+- **Metal runs shaders with fast-math ON, so IEEE NaN/Inf rules do not hold there.** wgpu never clears `MTLCompileOptions.fastMathEnabled`, which defaults to true. Measured on an M2: `x != x` returns **false** for a real NaN, and `Inf/Inf` returns **1.0** instead of NaN — so a bad value can pass a guard *and* survive as a plausible finite number.
+  - Never detect non-finite values with a self-compare (`x != x`) or by expecting `Inf` arithmetic to poison a result. Use `!(abs(x) <= 1e32)`, the idiom `main_template.wgsl`'s bad-value recovery uses — it is negated-comparison based, so NaN fails the comparison and the negation fires. Verified to survive the optimizer.
+  - This is a real rendering difference, not just rounding: `apo-misc7` loses **73% of its lit pixels** on Metal, and a local wgpu patch setting `fastMathEnabled(false)` makes it match the Windows baseline exactly. Disabling it globally is not free — measured **1.4x slower** typical, **5.2x** worst case — so the fix is to write guards that survive fast-math, not to turn it off.
 - **Trust the shader compiler for optimization**: modern GPU compilers perform aggressive CSE — write clear code, don't hand-hoist (see [docs/SHADER_COMPILER_CSE_ANALYSIS.md](docs/archive/optimization-attempt-2025-11-02/SHADER_COMPILER_CSE_ANALYSIS.md))
 
 ### Rust Code
