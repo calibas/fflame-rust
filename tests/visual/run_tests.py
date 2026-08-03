@@ -63,7 +63,13 @@ TOLERANCE_MAX = 40.0
 # the slowest sits 4.1x below the median — so this must clear that to avoid
 # flagging expensive-but-correct variations. A real collapse is far larger:
 # the vsync governor ratchet cost ~128x.
-THROUGHPUT_FACTOR = 8.0
+#
+# 12 rather than 8 because 8 produced a false positive in practice: on a
+# slow, noisy run the machine does not scale every test uniformly, and
+# spray_blur-normal-xform drifted from its usual 4.1x below median to 8.5x
+# and tripped. The headroom is cheap; a false failure that has to be
+# investigated is not.
+THROUGHPUT_FACTOR = 12.0
 
 
 @dataclass
