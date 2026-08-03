@@ -82,6 +82,27 @@ pub async fn wasm_main() {
     run().await.expect("Failed to run app");
 }
 
+
+/// The icon the running window carries — taskbar, Alt-Tab, title bar.
+///
+/// Separate from the one `build.rs` embeds in the executable's resource
+/// table: that one is what the *file* looks like in Explorer before it
+/// is launched, and cannot be read back from inside the process. Both
+/// come from the same source PNG, so they cannot drift.
+///
+/// 64px rather than 256: winit hands this to the platform to scale as
+/// it likes, and 64 covers every place a window icon is drawn without
+/// carrying four times the bytes for a size nothing asks for.
+///
+/// Returns `None` rather than failing — a window with the default icon
+/// is a cosmetic problem, not a reason not to start.
+#[cfg(not(target_arch = "wasm32"))]
+fn window_icon() -> Option<winit::window::Icon> {
+    const ICON_PNG: &[u8] = include_bytes!("../assets/branding/icon-64.png");
+    let img = image::load_from_memory(ICON_PNG).ok()?.into_rgba8();
+    let (w, h) = img.dimensions();
+    winit::window::Icon::from_rgba(img.into_raw(), w, h).ok()
+}
 #[cfg(not(target_arch = "wasm32"))]
 pub fn desktop_main() {
     env_logger::init();
@@ -648,6 +669,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     {
         let attributes = winit::window::Window::default_attributes()
             .with_title("Fractal Art Editor")
+            .with_window_icon(window_icon())
             .with_inner_size(PhysicalSize::new(1920, 1080))
             .with_min_inner_size(PhysicalSize::new(300, 200));
 

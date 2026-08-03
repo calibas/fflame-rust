@@ -183,4 +183,37 @@ fn copy_shaders_to_target() {
 
     // Tell cargo to rerun if shaders change
     println!("cargo:rerun-if-changed=shaders");
+
+    embed_windows_icon();
 }
+
+/// Put the app icon into the executable's resource table.
+///
+/// This is what Explorer, the taskbar and Alt-Tab read. It is separate
+/// from the icon the running window sets for itself (see
+/// `desktop_main`): the resource is what the file looks like before it
+/// is launched, and there is no way to set it from inside the program.
+#[cfg(windows)]
+fn embed_windows_icon() {
+    let icon = "assets/branding/icon.ico";
+    println!("cargo:rerun-if-changed={icon}");
+    if !Path::new(icon).exists() {
+        // Not fatal: a checkout without the artwork should still build.
+        println!("cargo:warning=No {icon}; the executable will have no icon");
+        return;
+    }
+    let mut res = winresource::WindowsResource::new();
+    res.set_icon(icon);
+    // Shown on the file's Properties > Details tab.
+    res.set("ProductName", "Fractal Art Editor");
+    res.set("FileDescription", "Fractal Art Editor");
+    res.set("CompanyName", "Fractals for All");
+    if let Err(e) = res.compile() {
+        // Missing rc.exe on a cross-build, say. Worth saying out loud,
+        // not worth failing the build over.
+        println!("cargo:warning=Could not embed the icon: {e}");
+    }
+}
+
+#[cfg(not(windows))]
+fn embed_windows_icon() {}
