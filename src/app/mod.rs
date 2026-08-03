@@ -2145,6 +2145,17 @@ impl App {
                 // so ipt IS the trajectory depth — a user-visible quality
                 // setting for long-memory fractals — while the workgroup
                 // count is pure throughput.
+                // Under vsync the compositor blocks until the next refresh, so
+                // this delta cannot go below the refresh interval however
+                // little work we submit — landing exactly ON the target is the
+                // healthy steady state, not a warning sign. `adjust_iter_scale`
+                // grows the batch there for that reason; requiring the frame to
+                // beat the target made the increase branch unreachable on every
+                // vsync-locked platform, and the batch ratcheted to its
+                // 1-workgroup floor on the first hitch and stayed. macOS and
+                // WASM are both pinned to Fifo (WASM has no other option);
+                // Windows with vsync off escaped it because Immediate lets the
+                // delta track real GPU time.
                 let now = web_time::Instant::now();
                 if let Some(prev) = self.last_iter_frame {
                     let target = 1.0 / self.config_manager.system_settings().target_fps.max(1.0) as f64;
@@ -2552,11 +2563,21 @@ impl App {
 /// catastrophic frame doesn't collapse the batch). Comfortably under
 /// budget -> recover gently toward full batches. The dead zone between
 /// avoids oscillation around the target.
+/// Additive-increase / multiplicative-decrease on the batch size, driven
+/// by how the last frame compared to its budget (see the dispatch site).
+///
+/// Growth triggers at MEETING the budget, not beating it. A frame that
+/// lands exactly on budget — `ratio == 1.0` — is the healthy steady state
+/// under vsync, because the compositor hands back the refresh interval
+/// however little work was submitted. The old threshold of 0.9 asked the
+/// frame to come in 10% under a floor it could not go below, so the
+/// increase branch was dead code on every vsync-locked platform and the
+/// governor could only ever shed.
 pub(crate) fn adjust_iter_scale(scale: f64, ratio: f64) -> f64 {
     let mut s = scale;
     if ratio > 1.3 {
         s /= ratio.min(4.0);
-    } else if ratio < 0.9 {
+    } else if ratio < 1.05 {
         s *= 1.15;
     }
     // 1/256 lets the dispatch reach its 1-workgroup floor (128/256 -> 1
@@ -2588,8 +2609,59 @@ mod governor_tests {
             worst = adjust_iter_scale(worst, 100.0);
         }
         assert!(worst >= 1.0 / 256.0);
-        // Dead zone: near-target frames leave the batch alone.
-        assert_eq!(adjust_iter_scale(0.5, 1.0), 0.5);
+        // Dead zone: over budget but not by enough to shed.
+        assert_eq!(adjust_iter_scale(0.5, 1.10), 0.5);
         assert_eq!(adjust_iter_scale(0.5, 1.25), 0.5);
+        // On budget is HEALTHY and must grow — under vsync this is the
+        // steady state, and treating it as "leave alone" is what let the
+        // governor ratchet to the floor.
+        assert!(adjust_iter_scale(0.5, 1.0) > 0.5);
+    }
+
+    /// The macOS/WASM collapse. Under vsync the compositor blocks until the
+    /// next refresh, so the frame delta is QUANTIZED to whole refresh
+    /// intervals: light work does not buy a fast frame, it buys a 16.7ms
+    /// frame like everything else. The ratio therefore sits at exactly 1.0
+    /// in the healthy case — never below 0.9 to grow, and one hitch away
+    /// from shedding — so the old governor walked to its 1-workgroup floor
+    /// and stayed there, at roughly 1/128th throughput.
+    ///
+    /// Modelling the quantization is the whole point: the pre-existing test
+    /// assumed frame cost was proportional to batch size, which is true
+    /// only with vsync off, and so could not express this failure.
+    #[test]
+    fn vsync_quantized_frames_do_not_ratchet_the_batch_away() {
+        const REFRESH: f64 = 1.0 / 60.0;
+        let target = REFRESH;
+        // Work scales with the batch; the compositor then rounds UP to the
+        // next refresh boundary.
+        let present = |s: f64, fixed: f64, per_batch: f64| {
+            ((fixed + per_batch * s) / REFRESH).ceil().max(1.0) * REFRESH
+        };
+
+        // A flame that comfortably fits the frame must keep its full batch,
+        // INCLUDING across the occasional hitch — a panel repaint, the
+        // compositor stealing a slice — that costs one extra refresh. The
+        // hitch is what made this a ratchet: each one halved the batch, and
+        // the steady 1.0 ratio in between could never earn it back.
+        let mut s = 1.0;
+        for i in 0..400 {
+            let mut delta = present(s, 0.004, 0.012);
+            if i % 20 == 0 {
+                delta += REFRESH;
+            }
+            s = adjust_iter_scale(s, delta / target);
+        }
+        assert!(s > 0.5, "vsync-locked frames collapsed the batch to {s}");
+
+        // ...and one that genuinely does not fit must still shed, or the
+        // governor is useless in the case it exists for. This is the case
+        // that caught a floor-tracking heuristic which latched onto the
+        // first (already slow) frame and then never shed at all.
+        let mut h = 1.0;
+        for _ in 0..400 {
+            h = adjust_iter_scale(h, present(h, 0.004, 0.400) / target);
+        }
+        assert!(h < 0.25, "overloaded flame failed to shed work: {h}");
     }
 }
