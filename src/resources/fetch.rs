@@ -106,7 +106,9 @@ mod native {
             } else {
                 url
             };
-            std::fs::read_to_string(path)
+            // Resolve against the executable too: a bundled app runs with
+            // the working directory set to `/`. See resources::bundled.
+            std::fs::read_to_string(crate::resources::resource_path(path))
                 .map_err(|e| FetchError::Network(format!("Failed to read file: {}", e)))
         } else {
             // HTTP URL - for now, return an error until we add a proper HTTP client

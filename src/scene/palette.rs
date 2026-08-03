@@ -896,9 +896,8 @@ impl PaletteLibrary {
 
                     // Fallback: scan filesystem directly
                     use std::fs;
-                    use std::path::Path;
 
-                    let packs_dir = Path::new("assets/palettes/packs");
+                    let packs_dir = crate::resources::resource_path("assets/palettes/packs");
                     if packs_dir.exists() {
                         if let Ok(entries) = fs::read_dir(packs_dir) {
                             for entry in entries.flatten() {

@@ -3,11 +3,13 @@
 //! A unified system for fetching resources (palettes, fractals, animations)
 //! from HTTP sources, working consistently across desktop and WASM platforms.
 
+mod bundled;
 mod error;
 mod fetch;
 pub mod palettes;
 pub mod presets;
 
+pub use bundled::resource_path;
 pub use error::FetchError;
 pub use fetch::{fetch_json, fetch_text, FetchHandle, FetchResult, FetchState};
 pub use palettes::PalettePackInfo;
