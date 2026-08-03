@@ -679,3 +679,115 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         App::run(event_loop, std::sync::Arc::new(window)).await
     }
 }
+
+#[cfg(test)]
+mod embedded_file_tests {
+    /// Every `include_str!` / `include_bytes!` must name a file that is
+    /// **committed**.
+    ///
+    /// This is the cheapest possible test and it guards the most
+    /// expensive failure. `flame_xml.rs` embedded a fixture from
+    /// `output/`, which is gitignored — so the crate compiled here and
+    /// nowhere else, and the failure was not one test going red but
+    /// `cargo test` refusing to build at all. Every other test became
+    /// unrunnable on any fresh checkout, which is how it survived: the
+    /// machine that introduced it was the only one that could run
+    /// anything.
+    ///
+    /// Reads the sources rather than the compiler's view, because the
+    /// compiler cannot tell a tracked file from an untracked one — by
+    /// the time it looks, both are just bytes on disk.
+    #[test]
+    fn every_embedded_file_is_committed() {
+        use std::process::Command;
+
+        // Canonicalized, because the paths we compare against are.
+        // On Windows `canonicalize` returns a `\?\C:\...` extended
+        // path while `CARGO_MANIFEST_DIR` is plain `C:\...`, so
+        // stripping one prefix from the other silently failed and this
+        // test checked NOTHING while reporting success — the exact
+        // shape of bug it was written to prevent.
+        let root_plain = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let root = root_plain.canonicalize().unwrap_or_else(|_| root_plain.to_path_buf());
+        let out = Command::new("git")
+            .arg("ls-files")
+            .current_dir(&root)
+            .output();
+        let Ok(out) = out else {
+            eprintln!("skipped: git unavailable");
+            return;
+        };
+        if !out.status.success() {
+            eprintln!("skipped: not a git checkout");
+            return;
+        }
+        let tracked: std::collections::HashSet<String> = String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(|l| l.trim().to_string())
+            .collect();
+
+        let mut offenders = Vec::new();
+        let mut checked = 0usize;
+        let mut resolved_any = false;
+        visit(&root.join("src"), &mut |path, text| {
+            for (line_no, line) in text.lines().enumerate() {
+                for marker in ["include_str!(\"", "include_bytes!(\""] {
+                    let mut from = 0;
+                    while let Some(i) = line[from..].find(marker) {
+                        let start = from + i + marker.len();
+                        let Some(end) = line[start..].find('"') else { break };
+                        let rel = &line[start..start + end];
+                        from = start + end;
+                        checked += 1;
+
+                        // Resolve against the including file's directory,
+                        // the way the compiler does.
+                        let dir = path.parent().unwrap();
+                        let joined = dir.join(rel);
+                        let Ok(abs) = joined.canonicalize() else { continue };
+                        let Ok(rel_to_root) = abs.strip_prefix(&root) else { continue };
+                        resolved_any = true;
+                        let key = rel_to_root.to_string_lossy().replace('\\', "/");
+                        if !tracked.contains(&key) {
+                            offenders.push(format!(
+                                "{}:{} embeds `{}` ({key}), which is not committed",
+                                path.strip_prefix(&root).unwrap_or(path).display(),
+                                line_no + 1,
+                                rel
+                            ));
+                        }
+                    }
+                }
+            }
+        });
+
+        assert!(checked > 0, "found no includes at all — the scan is broken");
+        // Counting the includes is not enough: if every one of them
+        // failed to resolve, this test would pass while inspecting
+        // nothing. That happened.
+        assert!(
+            resolved_any,
+            "found {checked} include(s) but resolved none of them against the              repo root — this test is not checking anything"
+        );
+        assert!(
+            offenders.is_empty(),
+            "an embedded file is not in the repository, so this crate will not \
+             COMPILE on a fresh checkout:\n  {}",
+            offenders.join("\n  ")
+        );
+    }
+
+    fn visit(dir: &std::path::Path, f: &mut impl FnMut(&std::path::Path, &str)) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                visit(&path, f);
+            } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+                if let Ok(text) = std::fs::read_to_string(&path) {
+                    f(&path, &text);
+                }
+            }
+        }
+    }
+}

@@ -2761,13 +2761,18 @@ mod tests {
         assert!(!plain_xml.contains("sld_render"), "plain flame leaked sld block");
     }
 
-    /// Real-world Apo file (`output/ship-on-the-sea.flame`, exported
-    /// from Apophysis 7X v15C.9 with 3 xforms, julia3D, zscale, custom
-    /// palette, cam_pitch, cam_dof) — should round-trip through our
-    /// import/export without losing any field the parser reads.
+    /// Real-world Apo file (exported from Apophysis 7X v15C.9 with 3
+    /// xforms, julia3D, zscale, custom palette, cam_pitch, cam_dof) —
+    /// should round-trip through our import/export without losing any
+    /// field the parser reads.
+    ///
+    /// The fixture lives in `tests/test_configs/` beside the other
+    /// `.flame` samples. It used to be `include_str!`'d from `output/`,
+    /// which is **gitignored** — so on any machine but the one it was
+    /// written on, the crate did not compile and NO test could run.
     #[test]
     fn test_roundtrip_real_apo_file() {
-        let xml_in = include_str!("../output/ship-on-the-sea.flame");
+        let xml_in = include_str!("../tests/test_configs/ship-on-the-sea.flame");
 
         let original = parse_flame_xml(xml_in).expect("parse real Apo file")
             .into_iter().next().unwrap();
