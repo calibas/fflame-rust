@@ -522,9 +522,14 @@ pub struct SystemSettings {
 
 **Storage Backend** ([src/storage/backend.rs](../../src/storage/backend.rs)):
 - **Desktop**: JSON files in platform-specific user data directory
-  - Windows: `%APPDATA%\FractalFlame\system_settings.json`
-  - macOS: `~/Library/Application Support/FractalFlame/system_settings.json`
-  - Linux: `~/.config/FractalFlame/system_settings.json`
+  - Windows: `%APPDATA%\Fractals for All\Fractal Art Editor\data\system_settings.json`
+  - macOS: `~/Library/Application Support/com.Fractals-for-All.Fractal-Art-Editor/system_settings.json`
+  - Linux: `$XDG_DATA_HOME/fractalarteditor/system_settings.json`
+
+  Resolved by `directories::ProjectDirs`, so each platform gets its own
+  convention rather than one shape forced onto all three. Named for the
+  product — `FractalFlame` and `fractal_flame_wgpu` were internal names
+  in a path users browse to.
 - **WASM**: Browser localStorage (5-10 MB quota)
 
 **Usage Pattern:**

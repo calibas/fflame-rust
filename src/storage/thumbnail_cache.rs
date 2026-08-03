@@ -306,7 +306,7 @@ impl Default for ThumbnailCache {
 fn get_cache_dir() -> PathBuf {
     use directories::ProjectDirs;
 
-    ProjectDirs::from("com", "fractal-flame", "fractal_flame_wgpu")
+    ProjectDirs::from("com", "Fractals for All", "Fractal Art Editor")
         .map(|dirs| dirs.cache_dir().to_path_buf())
         .unwrap_or_else(|| PathBuf::from(".cache"))
 }

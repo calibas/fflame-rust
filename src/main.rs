@@ -17,8 +17,8 @@ use clap::{Parser, Subcommand};
 
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Parser)]
-#[command(name = "fractal_flame_wgpu")]
-#[command(about = "Fractal Flame Renderer", long_about = None)]
+#[command(name = "FractalArtEditor")]
+#[command(about = "Fractal Art Editor - GPU fractal flame renderer", long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,

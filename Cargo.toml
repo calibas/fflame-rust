@@ -2,7 +2,15 @@
 name = "fractal_flame_wgpu"
 version = "0.4.4"
 edition = "2021"
-default-run = "fractal_flame_wgpu"
+# The shipped executable is named for the product. The PACKAGE keeps
+# its crate name — that is an internal identifier, and renaming it would
+# churn every `use fractal_flame_wgpu::` path, the Python module and the
+# wasm-bindgen output for no user-visible gain.
+default-run = "FractalArtEditor"
+
+[[bin]]
+name = "FractalArtEditor"
+path = "src/main.rs"
 
 [lib]
 crate-type = ["cdylib", "rlib"]

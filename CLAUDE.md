@@ -116,7 +116,7 @@
   - **SystemSettings**: device preferences (no undo, persisted to disk immediately)
 - **System settings include**: VSync + target FPS, iterations per thread, language, export defaults, fly-mode input preferences (sensitivity, speed, sprint, invert-Y, camera mode), online-mode credentials, compact mode
 - **Storage backend** (`src/storage/backend.rs`):
-  - Windows: `%APPDATA%\FractalFlame\system_settings.json`; macOS/Linux equivalents
+  - Windows: `%APPDATA%\Fractals for All\Fractal Art Editor\data\`; macOS/Linux equivalents via `directories`
   - WASM: browser localStorage
 - All changes flow through `config_manager.update_system_setting()` which returns an `UpdateType` for GPU synchronization
 - **See**: [docs/projects/local-storage-system.md](docs/projects/local-storage-system.md)
@@ -207,16 +207,16 @@ The main app supports headless batch PNG export for testing and automation:
 
 ```bash
 # Export single file
-fractal_flame_wgpu export -i config.fflame -o output.png --width 1920 --height 1080
+FractalArtEditor export -i config.fflame -o output.png --width 1920 --height 1080
 
 # High-resolution export (automatically switches paths for large sizes)
-fractal_flame_wgpu export -i config.fflame -o output.png --width 4000 --height 4000
+FractalArtEditor export -i config.fflame -o output.png --width 4000 --height 4000
 
 # Batch export directory
-fractal_flame_wgpu export -i tests/visual/configs -o tests/visual/current
+FractalArtEditor export -i tests/visual/configs -o tests/visual/current
 
 # With test category metadata
-fractal_flame_wgpu export -i tests/visual/configs/variations -o tests/visual/current --category variations
+FractalArtEditor export -i tests/visual/configs/variations -o tests/visual/current --category variations
 ```
 
 **Features:**

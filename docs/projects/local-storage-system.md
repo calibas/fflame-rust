@@ -237,7 +237,7 @@ See [../archive/config-versioning.md](../archive/config-versioning.md) for compl
 
 **Windows:**
 ```
-%APPDATA%\fractal_flame_wgpu\
+%APPDATA%\Fractals for All\Fractal Art Editor\data\
   ├── settings.json           # System settings
   ├── custom_fractals\        # User fractal library
   │   ├── my_flame_1.fflame

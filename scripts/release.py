@@ -260,7 +260,7 @@ def cmd_version(args):
 # ----------------------------------------------------------------- build
 
 BUILDS = [
-    ("desktop (dist)", ["cargo", "build", "--profile", "dist"],
+    ("desktop (dist)", ["cargo", "build", "--profile", "dist", "--bin", "FractalArtEditor"],
      "~7-10 min: LTO, one codegen unit, stripped"),
     ("web app", ["bash", "build-wasm.sh"], "wasm-bindgen -> pkg/"),
     ("gallery: render", ["wasm-pack", "build", "--target", "web", "--release"],
