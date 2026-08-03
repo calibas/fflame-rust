@@ -269,17 +269,59 @@ should be confirmed per release.
 Open: signing (unsigned binaries get SmartScreen warnings), and whether
 to ship a portable zip, an installer, or both.
 
-**macOS.** The icon exists now (`assets/branding/icon.icns`, §Icons);
-the bundle around it does not. A `.app` needs an `Info.plist` naming
-`CFBundleIconFile`, the binary and `assets/` laid out in
-`Contents/MacOS` and `Contents/Resources`, and — to avoid Gatekeeper
-refusing it outright — notarization, which needs a paid developer
-account. An unsigned zip is possible but users must right-click-open
-past a scary dialog.
+**macOS.** A `.app` bundle, shipped as a zip. **Decided.**
 
-Also unverified: the app has never been run on macOS beyond compiling.
-Metal is a different wgpu backend from the Vulkan path Windows uses, and
-nothing in the visual-regression baselines was generated there.
+```bash
+cargo build --profile dist
+python scripts/make_macos_app.py --zip      # -> target/macos/
+```
+
+The bundle is not cosmetic. macOS has no equivalent of the Windows
+resource table, so `Contents/Info.plist` → `CFBundleIconFile` is the only
+way the app ever shows its icon; the bundle also gives it a menu-bar
+name and a stable identity for preferences.
+
+`assets/` goes in `Contents/Resources/`. That is Apple's convention and
+also the third place `resources::resource_path` looks, which is what
+makes it work: Finder launches a bundled app with the working directory
+set to `/`, and every asset path in the codebase is repo-relative.
+Verified by launching from the bundle with `cwd=/` — palette manifest and
+packs load, nothing missing. `shaders/` is deliberately omitted; every
+shader is embedded and the on-disk tree is a developer override only.
+
+Signed ad-hoc (`codesign -s -`), which needs no account. On Apple Silicon
+a bundle modified after linking can fail to launch without it. **This is
+not Gatekeeper approval.**
+
+### The cost of not notarizing, which is not the obvious one
+
+An unsigned app downloaded through a browser carries
+`com.apple.quarantine`, and Gatekeeper refuses it. On macOS 15 the
+right-click → Open bypass is gone; the user must go to System Settings →
+Privacy & Security → "Open Anyway", or run:
+
+```bash
+xattr -d com.apple.quarantine "/Applications/Fractal Art Editor.app"
+```
+
+**Every download is quarantined, so this repeats on every update**, not
+just first install. That is the real price of skipping the $99/yr
+Developer ID, and it is worse than "one scary dialog once".
+
+### Updates — **PARTLY DECIDED**
+
+Replace the bundle: download, drag to `/Applications`, replace. That is
+the normal macOS model and needs nothing built.
+
+Not yet built, in the order worth doing:
+
+- **A version check in-app.** Cheap — `APP_VERSION` and an HTTP client
+  both exist — and it only has to say "0.5.0 is out" and link. No
+  auto-install, so no new failure modes.
+- **Sparkle**, eventually. Its real appeal here is that an in-place
+  update is not a browser download, so it would dodge the repeating
+  quarantine above. How it interacts with an unsigned app needs checking
+  before committing to it.
 
 **Linux.** Nothing decided. AppImage is the usual answer for a GPU app.
 
