@@ -181,6 +181,12 @@ web-app = []
 chrono = "0.4"
 rustc_version = "0.4"
 
+# Embeds the icon (and version strings) into the .exe resource table so
+# Explorer, the taskbar and Alt-Tab show it. Windows-only and
+# build-only: nothing links it, and no other platform sees it.
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
+
 [dev-dependencies]
 anyhow = "1.0"
 criterion = "0.5"

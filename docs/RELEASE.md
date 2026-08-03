@@ -185,6 +185,32 @@ new use of unwinding must be checked against it.
 
 ---
 
+### Icons
+
+`assets/branding/ffa-logo.png` is the master, 256x256. Everything else
+is generated:
+
+```bash
+python scripts/make_icons.py     # after changing the logo
+```
+
+It lands in three places, and they are genuinely three:
+
+- **The executable's resource table**, via `build.rs`. This is what
+  Explorer, the taskbar and Alt-Tab show *before* the app runs, and it
+  cannot be set from inside the process.
+- **The running window**, via `winit`, from the 64px PNG.
+- **The web favicon**, inlined into `index.html` as a data URI — the
+  wasm build copies only palette packs into `pkg/`, so a file would
+  need a new copy step in both `build-wasm.bat` and `.sh`, kept in step
+  by hand.
+
+All three come from one source, so they cannot drift.
+
+**macOS still needs a `.icns`** (§5), which `make_icons.py` does not
+produce — it needs `iconutil` or a cross-platform equivalent, and there
+is no macOS packaging story yet to put it in.
+
 ## 5. Packaging — **UNDECIDED**
 
 Nothing here is settled. What has to be answered:
