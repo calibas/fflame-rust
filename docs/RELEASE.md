@@ -194,22 +194,44 @@ is generated:
 python scripts/make_icons.py     # after changing the logo
 ```
 
-It lands in three places, and they are genuinely three:
+It lands in four places, and they are genuinely four:
 
 - **The executable's resource table**, via `build.rs`. This is what
   Explorer, the taskbar and Alt-Tab show *before* the app runs, and it
   cannot be set from inside the process.
-- **The running window**, via `winit`, from the 64px PNG.
+- **The running window**, via `winit`, from the 64px PNG. Windows and
+  Linux only — macOS has no per-window icon, so `with_window_icon` is a
+  no-op there and the `.icns` is the *only* route to a Dock icon.
 - **The web favicon**, inlined into `index.html` as a data URI — the
   wasm build copies only palette packs into `pkg/`, so a file would
   need a new copy step in both `build-wasm.bat` and `.sh`, kept in step
   by hand.
+- **`assets/branding/icon.icns`**, for the macOS bundle. Ten members,
+  16px through 1024px, built by `iconutil`.
 
-All three come from one source, so they cannot drift.
+All four come from one source, so they cannot drift.
 
-**macOS still needs a `.icns`** (§5), which `make_icons.py` does not
-produce — it needs `iconutil` or a cross-platform equivalent, and there
-is no macOS packaging story yet to put it in.
+Two things about the macOS path are deliberate and easy to "fix" by
+mistake:
+
+- **The mark is a rounded tile there, not the full-bleed square.** macOS
+  does not mask app icons the way iOS does, so the shape in the `.icns`
+  is the shape the Dock draws, and a hard-cornered tile among rounded
+  ones reads as foreign. The script insets the mark onto Apple's icon
+  grid. Same mark, each platform's convention.
+- **The `.icns` step needs `iconutil`, so it is macOS-only** and skips
+  with a message elsewhere; the PNGs and `.ico` still build everywhere.
+  Pillow can write `.icns` unaided, but its writer emits no 16px member
+  — Finder list view would downscale the 32px one, at exactly the size
+  where the tuned Lanczos matters most.
+
+**Known limitation:** the master is 256x256, so the 512 and 1024 members
+are upscaled and visibly soft at Quick Look / large-icon sizes. The
+script warns when it does this. A 1024x1024 master fixes it with no code
+change, since every size resizes from the master.
+
+**Nothing consumes the `.icns` yet** — it is an inert build input until
+there is a `.app` bundle to put it in (§5).
 
 ## 5. Packaging — **UNDECIDED**
 
@@ -247,10 +269,17 @@ should be confirmed per release.
 Open: signing (unsigned binaries get SmartScreen warnings), and whether
 to ship a portable zip, an installer, or both.
 
-**macOS.** Nothing decided. A `.app` bundle needs a plist, an icon, and
-— to avoid Gatekeeper refusing it outright — notarization, which needs a
-paid developer account. An unsigned zip is possible but users must
-right-click-open past a scary dialog.
+**macOS.** The icon exists now (`assets/branding/icon.icns`, §Icons);
+the bundle around it does not. A `.app` needs an `Info.plist` naming
+`CFBundleIconFile`, the binary and `assets/` laid out in
+`Contents/MacOS` and `Contents/Resources`, and — to avoid Gatekeeper
+refusing it outright — notarization, which needs a paid developer
+account. An unsigned zip is possible but users must right-click-open
+past a scary dialog.
+
+Also unverified: the app has never been run on macOS beyond compiling.
+Metal is a different wgpu backend from the Vulkan path Windows uses, and
+nothing in the visual-regression baselines was generated there.
 
 **Linux.** Nothing decided. AppImage is the usual answer for a GPU app.
 
