@@ -409,6 +409,11 @@ pub struct App {
     // budget and back up when there is headroom. 1.0 = full batch.
     pub(super) iter_scale: f64,
     pub(super) last_iter_frame: Option<web_time::Instant>,
+    // Display refresh in millihertz, and a counter that re-queries it every
+    // 120 iterating frames. Under vsync this — not `target_fps` — is the
+    // governor's budget; see `frame_budget`.
+    pub(super) display_refresh_mhz: Option<u32>,
+    pub(super) display_refresh_age: u32,
     pub(super) accumulation_batch_size: u32,  // Process every N frames (1 = normal, 4 = batched)
     pub(super) frames_since_accumulation: u32,
     // Overwrite mode timing (100ms window after parameter changes)
@@ -695,6 +700,8 @@ impl App {
             last_frame_time: None,
             iter_scale: 1.0,
             last_iter_frame: None,
+            display_refresh_mhz: None,
+            display_refresh_age: 0,
             accumulation_batch_size: 4, // EXPERIMENT: Test batching
             frames_since_accumulation: 0,
             use_overwrite_next_frame: false,
@@ -2158,7 +2165,22 @@ impl App {
                 // delta track real GPU time.
                 let now = web_time::Instant::now();
                 if let Some(prev) = self.last_iter_frame {
-                    let target = 1.0 / self.config_manager.system_settings().target_fps.max(1.0) as f64;
+                    // Re-ask the platform every so often rather than every
+                    // frame: the answer only changes when the window moves to
+                    // a different display, and `current_monitor` is a syscall.
+                    if self.display_refresh_age == 0 {
+                        self.display_refresh_mhz = window
+                            .current_monitor()
+                            .and_then(|m| m.refresh_rate_millihertz());
+                    }
+                    self.display_refresh_age = (self.display_refresh_age + 1) % 120;
+
+                    let settings = self.config_manager.system_settings();
+                    let target = crate::app::frame_budget(
+                        settings.vsync_enabled,
+                        settings.target_fps,
+                        self.display_refresh_mhz,
+                    );
                     let ratio = prev.elapsed().as_secs_f64() / target;
                     self.iter_scale = crate::app::adjust_iter_scale(self.iter_scale, ratio);
                 }
@@ -2563,6 +2585,30 @@ impl App {
 /// catastrophic frame doesn't collapse the batch). Comfortably under
 /// budget -> recover gently toward full batches. The dead zone between
 /// avoids oscillation around the target.
+/// The frame time the governor is trying to hit, in seconds.
+///
+/// With vsync ON the compositor only ever hands back whole refresh
+/// intervals, so the display's rate IS the budget — and `target_fps` is
+/// documented as vsync-off-only anyway. Asking for more than the panel
+/// can give (144 on a 60Hz screen) is unreachable by construction, and
+/// budgeting against it would shed work forever chasing a frame time
+/// that will never arrive.
+///
+/// `refresh_mhz` is winit's millihertz — 60000 for 60Hz. `None` (WASM,
+/// or a platform that will not say) falls back to 60Hz rather than to
+/// `target_fps`, because under vsync the target is the thing we already
+/// know to be wrong.
+pub(crate) fn frame_budget(vsync: bool, target_fps: f32, refresh_mhz: Option<u32>) -> f64 {
+    if vsync {
+        match refresh_mhz {
+            Some(mhz) if mhz > 0 => 1000.0 / mhz as f64,
+            _ => 1.0 / 60.0,
+        }
+    } else {
+        1.0 / target_fps.max(1.0) as f64
+    }
+}
+
 /// Additive-increase / multiplicative-decrease on the batch size, driven
 /// by how the last frame compared to its budget (see the dispatch site).
 ///
@@ -2587,7 +2633,40 @@ pub(crate) fn adjust_iter_scale(scale: f64, ratio: f64) -> f64 {
 
 #[cfg(test)]
 mod governor_tests {
-    use super::adjust_iter_scale;
+    use super::{adjust_iter_scale, frame_budget};
+
+    /// `target_fps` is documented as vsync-off-only. Honour that: under
+    /// vsync the budget is the panel's, and a target it cannot reach must
+    /// not turn into a permanent shed.
+    #[test]
+    fn vsync_budget_comes_from_the_display_not_target_fps() {
+        // 144fps asked for on a 60Hz panel: budget stays 60Hz.
+        let b = frame_budget(true, 144.0, Some(60_000));
+        assert!((b - 1.0 / 60.0).abs() < 1e-9, "{b}");
+        // A 120Hz panel is believed.
+        assert!((frame_budget(true, 60.0, Some(120_000)) - 1.0 / 120.0).abs() < 1e-9);
+        // Unknown refresh (WASM) falls back to 60Hz, NOT to target_fps.
+        assert!((frame_budget(true, 144.0, None) - 1.0 / 60.0).abs() < 1e-9);
+        assert!((frame_budget(true, 144.0, Some(0)) - 1.0 / 60.0).abs() < 1e-9);
+        // With vsync off, target_fps is exactly what it claims to be.
+        assert!((frame_budget(false, 144.0, Some(60_000)) - 1.0 / 144.0).abs() < 1e-9);
+        // ...and cannot divide by zero.
+        assert!(frame_budget(false, 0.0, None).is_finite());
+    }
+
+    /// The unreachable-target case end to end: a 144fps target on a 60Hz
+    /// panel used to make every frame look 2.4x over budget, so the batch
+    /// shed forever. With the display supplying the budget it does not.
+    #[test]
+    fn unreachable_target_fps_does_not_starve_the_batch() {
+        const REFRESH: f64 = 1.0 / 60.0;
+        let budget = frame_budget(true, 144.0, Some(60_000));
+        let mut s = 1.0;
+        for _ in 0..200 {
+            s = adjust_iter_scale(s, REFRESH / budget);
+        }
+        assert!((s - 1.0).abs() < 1e-9, "starved to {s}");
+    }
 
     #[test]
     fn governor_converges_and_recovers() {
