@@ -271,17 +271,25 @@ use std::sync::{Arc, Mutex};
 /// `Surface::get_current_texture` returns the `CurrentSurfaceTexture`
 /// enum instead of a `Result`, with finer-grained non-success states
 /// (Suboptimal counts as usable; Validation/Timeout are new).
-/// We collapse them to the recovery / fatal pattern the caller cares
-/// about: Lost or Outdated → recreate surface; anything else → log
-/// and recover.
+/// These are NOT all the same severity, and collapsing them was a real
+/// bug: `Occluded` and `Timeout` used to share an `Other` variant with
+/// `Validation`, so all three tore down and rebuilt the entire GPU
+/// device. An occluded surface only means the window is not visible —
+/// routine while a window is first being composited, or minimised — and
+/// the correct response is to skip the frame.
 #[derive(Debug)]
 pub enum RenderError {
     /// Surface dropped/invalidated — needs full recreate.
     Lost,
     /// Surface configuration outdated — needs reconfigure.
     Outdated,
-    /// Acquisition timed out or a validation error fired — recover.
-    Other,
+    /// The window is not visible, so there is nothing to present to.
+    /// Routine, and not a device problem: skip the frame.
+    Occluded,
+    /// Acquisition timed out. Transient — skip the frame and try again.
+    Timeout,
+    /// The surface reported a validation error. Genuine trouble.
+    Validation,
 }
 
 /// Tracks which flame/animation is currently loaded from the API.
@@ -981,6 +989,16 @@ impl App {
                                     #[cfg(target_arch = "wasm32")]
                                     { app.gpu.resize(app.gpu.size); }
                                 }
+                                Err(e @ (RenderError::Occluded | RenderError::Timeout)) => {
+                                    // Not a device fault. The window is hidden
+                                    // or the swapchain was busy; there is
+                                    // nothing to fix and nothing to present
+                                    // to. Rebuilding the GPU here cost two
+                                    // full reinitialisations on every macOS
+                                    // launch, purely because the window had
+                                    // not finished appearing yet.
+                                    log::debug!("Surface not presentable ({e:?}); skipping frame");
+                                }
                                 Err(e) => {
                                     log::error!("Surface error: {:?}, scheduling recovery...", e);
                                     #[cfg(not(target_arch = "wasm32"))]
@@ -1167,9 +1185,9 @@ impl App {
             CurrentSurfaceTexture::Suboptimal(f) => f,
             CurrentSurfaceTexture::Outdated => return Err(RenderError::Outdated),
             CurrentSurfaceTexture::Lost => return Err(RenderError::Lost),
-            CurrentSurfaceTexture::Timeout
-            | CurrentSurfaceTexture::Occluded
-            | CurrentSurfaceTexture::Validation => return Err(RenderError::Other),
+            CurrentSurfaceTexture::Occluded => return Err(RenderError::Occluded),
+            CurrentSurfaceTexture::Timeout => return Err(RenderError::Timeout),
+            CurrentSurfaceTexture::Validation => return Err(RenderError::Validation),
         };
         let surface_view = frame.texture.create_view(&egui_wgpu::wgpu::TextureViewDescriptor::default());
         let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
