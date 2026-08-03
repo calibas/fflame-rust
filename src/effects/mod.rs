@@ -129,7 +129,7 @@ impl EffectSource {
                 // falls through to the embedded copy rather than
                 // failing, which is the fix.
                 #[cfg(not(target_arch = "wasm32"))]
-                if let Ok(from_disk) = std::fs::read_to_string(format!("shaders/{path}")) {
+                if let Ok(from_disk) = std::fs::read_to_string(crate::resources::resource_path(format!("shaders/{path}"))) {
                     return from_disk;
                 }
                 let _ = path;
