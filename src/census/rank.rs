@@ -156,6 +156,9 @@ pub fn run_cli(old: &Path, new: &Path, census_path: &Path) -> i32 {
         }
     };
     let census = parse_census(&census_text);
+    let accepted = super::accepted::Accepted::load(std::path::Path::new(
+        super::accepted::DEFAULT_PATH,
+    ));
     let divergences = match report::compare(&ra, &rb) {
         Ok(d) => d,
         Err(e) => {
@@ -175,11 +178,18 @@ pub fn run_cli(old: &Path, new: &Path, census_path: &Path) -> i32 {
     }
     let mut rows = Vec::new();
     let mut soft = 0usize;
+    let mut accepted_sites = 0usize;
     for d in &divergences {
         match d {
             report::Divergence::Class { name, dim, at, before, after } => {
                 let (sev_rank, sev) = severity(before, after);
                 for label in at {
+                    // Dispositioned sites come off the worklist — the file
+                    // carries the reason; the count below keeps them visible.
+                    if accepted.covers(name, dim, label) {
+                        accepted_sites += 1;
+                        continue;
+                    }
                     let reach = reach_for(&census, name, label, dim);
                     let reach_w = match &reach {
                         Reach::Observed(bucket, _) => match bucket.as_str() {
@@ -219,12 +229,14 @@ pub fn run_cli(old: &Path, new: &Path, census_path: &Path) -> i32 {
         .count();
 
     println!(
-        "# rank — {} hard divergence sites: {} REACHABLE, {} unobserved-by-corpus, {} not-exercised ({} value-only entries ignored)",
+        "# rank — {} hard divergence sites: {} REACHABLE, {} unobserved-by-corpus, {} not-exercised ({} accepted via {}; {} value-only entries ignored)",
         rows.len(),
         reachable,
         unobserved,
         unexercised,
-    soft
+        accepted_sites,
+        super::accepted::DEFAULT_PATH,
+        soft
     );
     println!(
         "{:<6} {:<24} {:<4} {:<16} {:<15} {}",
