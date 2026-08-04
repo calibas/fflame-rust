@@ -1489,6 +1489,22 @@ impl FlameRenderer {
         self.histogram_blur_v_bind_group = self.pipelines.create_histogram_blur_v_bind_group(device, &self.buffers);
     }
 
+    /// Zero the census tail. The tail is deliberately excluded from
+    /// every ordinary clear (counters accumulate across the run), which
+    /// leaves buffer-creation zeroing as its only initializer — and
+    /// that is a guarantee about logical buffers, not about recycled
+    /// allocations behaving well under destroy/create cycles. A corpus
+    /// sweep that creates one renderer per flame on a shared device
+    /// showed cross-flame count contamination; single flames on a fresh
+    /// device were bit-clean. Call once before the first census pass.
+    pub fn clear_census_tail(&self, encoder: &mut CommandEncoder) {
+        if self.buffers.census_region {
+            let rgbd =
+                (self.width as u64) * (self.height as u64) * 4 * std::mem::size_of::<u32>() as u64;
+            encoder.clear_buffer(&self.buffers.histogram_buffer, rgbd, None);
+        }
+    }
+
     /// Copy the census tail off the GPU and return its
     /// `census::TOTAL_WORDS` words. Blocking; census tooling only.
     pub fn read_census_blocking(&self, device: &Device, queue: &Queue) -> Option<Vec<u32>> {
