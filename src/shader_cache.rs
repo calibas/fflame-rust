@@ -117,6 +117,7 @@ impl ShaderCache {
             flatten_z_per_iter: false,
             solid_enabled: false,
             probe: false,
+            census: false,
             attachment_cap: flame.attachment_cap() as u32,
             inlined_transforms: None,
             cumulative_weights: None,
@@ -328,6 +329,7 @@ impl ShaderCache {
                 solid_enabled: config.solid_strength > 0.0
                     && matches!(config.render_mode, crate::scene::transforms::RenderMode::ThreeD),
                 probe: false,
+            census: false,
                 attachment_cap: config.flame.attachment_cap() as u32,
                 inlined_transforms: None,
                 cumulative_weights: None,
