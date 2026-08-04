@@ -39,6 +39,35 @@ fn main() {
         .unwrap_or_else(|| "unknown".to_string());
     println!("cargo:rustc-env=BUILD_PROFILE={}", profile);
 
+    // Rebuild when the commit changes, or GIT_HASH silently goes stale.
+    //
+    // Cargo only re-runs this script when a declared input changes, and
+    // none of the others move on `git commit`. The value was therefore
+    // baked at whatever commit happened to trigger the last rerun and
+    // stayed there: a census regenerated at 5317d46c labelled itself
+    // 8912253b, several commits behind. That label is the provenance of
+    // every generated report AND of every exported PNG — the thing
+    // `docs/RELEASE.md` relies on to identify which binary produced a
+    // bug report — so a wrong one is worse than none.
+    //
+    // Both files are needed and neither alone suffices: `.git/HEAD`
+    // changes on checkout but not on commit, while the ref it names
+    // changes on commit but not on checkout. Missing files are fine —
+    // cargo treats an absent rerun-if-changed path as "always rerun",
+    // which is the safe direction, and a tarball with no `.git` still
+    // builds (the hash falls back to "unknown" below).
+    let git_dir = std::path::Path::new(".git");
+    if git_dir.exists() {
+        println!("cargo:rerun-if-changed=.git/HEAD");
+        if let Ok(head) = std::fs::read_to_string(git_dir.join("HEAD")) {
+            // "ref: refs/heads/main" -> watch that ref. A detached HEAD
+            // holds a bare sha instead, and `.git/HEAD` itself covers it.
+            if let Some(r) = head.strip_prefix("ref:").map(str::trim) {
+                println!("cargo:rerun-if-changed=.git/{r}");
+            }
+        }
+    }
+
     // Get git commit hash (if available)
     let git_hash = std::process::Command::new("git")
         .args(&["rev-parse", "--short", "HEAD"])
