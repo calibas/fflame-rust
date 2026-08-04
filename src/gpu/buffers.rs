@@ -1595,7 +1595,13 @@ impl FlameBuffers {
         let histogram_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Histogram Buffer"),
             size: histogram_buffer_size,
-            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            // COPY_SRC to match the reallocating path below, which has
+            // carried it since the solid-rendering bounds tail needed
+            // reading back. Without it here, whether the histogram can
+            // be read depends on whether the window has been resized
+            // yet — and the numerical probe reads it straight after
+            // construction. A usage flag costs nothing at runtime.
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
         let histogram_buffer_scratch = device.create_buffer(&BufferDescriptor {

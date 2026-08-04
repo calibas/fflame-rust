@@ -555,6 +555,7 @@ impl FlameRenderer {
                 && !preserve_z,
             solid_enabled: (self.solid_strength > 0.0 || self.solid_shading.active())
                 && matches!(render_mode, crate::scene::transforms::RenderMode::ThreeD),
+            probe: false,
             attachment_cap: flame.attachment_cap() as u32,
             // No inlining for incremental updates (would trigger too many shader rebuilds)
             inlined_transforms: None,
@@ -3362,6 +3363,202 @@ impl FlameRenderer {
 
         // Return raw pixel data (width, height, rgba_bytes)
         Ok((self.width, self.height, rgba_data))
+    }
+
+    /// Rewrite the packed variation parameters from `flame`, without
+    /// touching anything else.
+    ///
+    /// For the probe's parameter sweep, which changes one parameter and
+    /// re-dispatches ~2000 times. `load_config` would reallocate every
+    /// buffer and recreate every bind group each time; this is the
+    /// `queue.write_buffer` underneath it. The flame's *structure* must
+    /// not have changed — same transforms, same variations, same order —
+    /// because the packing offsets are derived from it.
+    ///
+    /// Marks the init-derived slots dirty: they are computed from the
+    /// user parameters, so changing one invalidates them. Call
+    /// [`Self::run_init_pass`] afterwards or they keep the previous
+    /// step's values.
+    pub fn set_variation_params(&mut self, queue: &Queue, flame: &crate::scene::transforms::Flame) {
+        self.buffers.update_variation_params(queue, flame);
+        self.init_dirty = true;
+    }
+
+    /// Run the variation init dispatch on its own, outside a render.
+    ///
+    /// `load_config` marks the derived parameters dirty but does not
+    /// compute them — the init pass rides along inside `render()`, which
+    /// is fine for every caller that renders and wrong for the one that
+    /// does not. The numerical probe dispatches its own entry point
+    /// directly, so without this the 134 variations with init-derived
+    /// slots read a buffer of zeros. That does not fail loudly: it
+    /// produces stable, reproducible, identical-on-every-platform
+    /// nonsense, which is the worst possible outcome for a tool whose
+    /// entire output is a cross-platform comparison.
+    ///
+    /// Idempotent — a no-op when nothing is dirty or no active variation
+    /// has an init function.
+    pub fn run_init_pass(&mut self, device: &Device, queue: &Queue) {
+        if !self.init_dirty {
+            return;
+        }
+        let Some(pipeline) = self.pipelines.shader_cache.init_pipeline.as_ref() else {
+            self.init_dirty = false;
+            return;
+        };
+        let pair_count = self.pipelines.shader_cache.init_pair_count;
+        if pair_count == 0 {
+            self.init_dirty = false;
+            return;
+        }
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Standalone Variation Init"),
+        });
+        {
+            let mut pass = encoder.begin_compute_pass(&ComputePassDescriptor {
+                label: Some("Variation Init Pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &self.init_bind_group, &[]);
+            pass.dispatch_workgroups(pair_count.div_ceil(64), 1, 1);
+        }
+        queue.submit(Some(encoder.finish()));
+        self.init_dirty = false;
+    }
+
+    /// Run one dispatch of a caller-supplied compute shader against this
+    /// renderer's live bind group, and read words back from the
+    /// histogram buffer.
+    ///
+    /// This exists for the numerical probe (`src/probe/`), and it is
+    /// deliberately the *only* thing the probe needs from the renderer.
+    /// Everything the probe knows — the buffer layout, the input grid,
+    /// how results are classified — stays on its side; what it cannot
+    /// get from outside this module is the bind group, which is private
+    /// and correct, holding the transforms, params and packed variation
+    /// parameters that `apply_variations` reads.
+    ///
+    /// Passing WGSL in rather than building it here keeps the direction
+    /// of the dependency right: the renderer does not know what a probe
+    /// is.
+    ///
+    /// `input_words` are written at the head of the histogram buffer
+    /// before the dispatch, and `output_words` are read from the same
+    /// buffer after it — the probe shader's contract, not this
+    /// function's business.
+    ///
+    /// `phase` is called with `(name, milliseconds)` for the compile and
+    /// the dispatch separately. The split is what makes a slow result
+    /// actionable: a shader the driver takes a minute to compile and one
+    /// whose math takes a minute to run are entirely different problems,
+    /// and a single total cannot tell them apart.
+    pub fn dispatch_readback(
+        &self,
+        device: &Device,
+        queue: &Queue,
+        source: &str,
+        entry_point: &str,
+        input_words: &[u32],
+        output_words: usize,
+        threads: u32,
+        phase: &mut dyn FnMut(&str, f64),
+    ) -> Result<Vec<u32>, String> {
+        let byte_len = (output_words * std::mem::size_of::<u32>()) as u64;
+        if byte_len > self.buffers.histogram_buffer.size() {
+            return Err(format!(
+                "probe needs {byte_len} bytes but the histogram buffer is {} — \
+                 construct the renderer at a larger resolution",
+                self.buffers.histogram_buffer.size()
+            ));
+        }
+
+        let compile_started = web_time::Instant::now();
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("probe shader"),
+            source: wgpu::ShaderSource::Wgsl(source.into()),
+        });
+
+        // Reuse the render path's bind group layout rather than an auto
+        // layout: the probe entry point touches only a few of the
+        // bindings, and an auto layout would derive a *narrower* one
+        // that the existing bind group no longer satisfies.
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("probe pipeline layout"),
+            bind_group_layouts: &[Some(&self.pipelines.compute_bind_group_layout)],
+            immediate_size: 0,
+        });
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("probe pipeline"),
+            layout: Some(&layout),
+            module: &module,
+            entry_point: Some(entry_point),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
+        // The driver does its real work lazily, so timing
+        // `create_compute_pipeline` alone can under-report. Polling here
+        // forces the compile to have happened before the clock stops.
+        let _ = device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
+        phase("compile", compile_started.elapsed().as_secs_f64() * 1000.0);
+
+        let dispatch_started = web_time::Instant::now();
+        queue.write_buffer(
+            &self.buffers.histogram_buffer,
+            0,
+            bytemuck::cast_slice(input_words),
+        );
+
+        let readback = device.create_buffer(&BufferDescriptor {
+            label: Some("probe readback"),
+            size: byte_len,
+            usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("probe encoder"),
+        });
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("probe pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &self.compute_bind_group, &[]);
+            pass.dispatch_workgroups(threads.div_ceil(64), 1, 1);
+        }
+        encoder.copy_buffer_to_buffer(
+            &self.buffers.histogram_buffer,
+            0,
+            &readback,
+            0,
+            byte_len,
+        );
+        queue.submit(Some(encoder.finish()));
+
+        let slice = readback.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        let _ = device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
+        rx.recv()
+            .map_err(|e| format!("probe readback channel closed: {e}"))?
+            .map_err(|e| format!("probe readback failed: {e}"))?;
+
+        let words = bytemuck::cast_slice::<u8, u32>(&slice.get_mapped_range()).to_vec();
+        readback.unmap();
+        phase("dispatch", dispatch_started.elapsed().as_secs_f64() * 1000.0);
+        Ok(words)
     }
 }
 
