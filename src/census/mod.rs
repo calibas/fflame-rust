@@ -43,6 +43,11 @@
 //! - Subflame dispatchers are not instrumented.
 
 pub mod rank;
+/// Desktop only: the runner drives the GPU synchronously through
+/// `pollster`, which is a `cfg(not(wasm32))` dependency. `rank` and the
+/// class tables stay available everywhere so the report format is
+/// readable from any target — the same split `probe::run` uses.
+#[cfg(not(target_arch = "wasm32"))]
 pub mod run;
 
 /// One u32 counter per possible transform, before the class tables:
