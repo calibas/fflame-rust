@@ -73,6 +73,12 @@ mod tests {
     use super::*;
     use crate::probe::batch::{builtin_targets, plan_batches};
 
+    /// Canonical form: LF endings only — the same normalization
+    /// `shader_dumps::canonical` applies, for the same reason.
+    fn canonical(text: &str) -> String {
+        text.replace("\r\n", "\n")
+    }
+
     fn validate(source: &str, what: &str) {
         let module = match wgpu::naga::front::wgsl::parse_str(source) {
             Ok(m) => m,
@@ -147,16 +153,33 @@ mod tests {
             );
 
             let on = build(batch, render_3d);
+
+            // Normalized to LF first, the same way `shader_dumps::canonical`
+            // does and for the same reason: the templates are embedded from
+            // the working copy, so on a `core.autocrlf` checkout they arrive
+            // CRLF while the builder's own output is LF. Line endings are a
+            // property of whose checkout ran the test, not of the codegen.
+            //
+            // Without this the test passed on an LF working copy and failed
+            // on a fresh Windows clone — `BLOCK_MARKER` begins with `\n`, so
+            // against CRLF it absorbed the `\n` and left the `\r` behind,
+            // making the PROBE=on head one byte longer. A byte-identity test
+            // that depends on the checkout is worse than none: it reports a
+            // difference that is not there and hides in review as "works on
+            // my machine".
+            let off = canonical(&off);
+            let on = canonical(&on);
+
             // Everything before the probe block must be untouched.
             let head = on
                 .split_once(BLOCK_MARKER)
                 .map(|(head, _)| head)
                 .expect("the probe block should carry its begin marker");
-            // Compared exactly, not trimmed. Trailing whitespace is
-            // still a difference, and tolerating it here let a stray
-            // blank line and a CRLF/LF mismatch through — both of which
-            // showed up as two extra lines in every canonical shader
-            // dump, which is where they should never have reached.
+
+            // Still compared exactly — no trimming. Normalizing line
+            // endings is not the same as tolerating trailing whitespace:
+            // a stray blank line is `\n\n` against `\n` either way, so
+            // the bug this test caught before still fails it.
             assert_eq!(
                 off, head,
                 "enabling PROBE perturbed the rest of the shader"
