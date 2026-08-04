@@ -19,6 +19,20 @@ fn main() {
 
     let args: Vec<String> = std::env::args().skip(1).collect();
     let code = match args.first().map(String::as_str) {
+        Some("census") => match args.get(1) {
+            Some(p) => {
+                // Optional second arg: iteration budget (default 100M).
+                let iters = args
+                    .get(2)
+                    .and_then(|s| s.replace('_', "").parse::<u64>().ok())
+                    .unwrap_or(100_000_000);
+                fractal_flame_wgpu::census::run::run_single_cli(Path::new(p), iters)
+            }
+            None => {
+                eprintln!("usage: variation_probe census <config.fflame> [iterations]");
+                2
+            }
+        },
         Some("compare") => match args.get(1..3) {
             Some([a, b]) => do_compare(Path::new(a), Path::new(b)),
             _ => {

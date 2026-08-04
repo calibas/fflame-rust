@@ -42,6 +42,8 @@
 //!   solid flames and says so.
 //! - Subflame dispatchers are not instrumented.
 
+pub mod run;
+
 /// One u32 counter per possible transform, before the class tables:
 /// how many times `apply_variations` ran for that `xform_id`. The
 /// denominator for every fraction in the report.
