@@ -335,6 +335,18 @@ pub struct ShaderConstants {
     /// path that binding is the `samples` array instead.
     pub probe: bool,
 
+    /// Emit the reachability-census instrumentation inside the generated
+    /// dispatcher (see `src/census/`): per-transform input classes,
+    /// per-variation output and pre/post-input classes, counted into a
+    /// tail of the histogram buffer. Only ever true for the census
+    /// runner, never a render. False ⇒ byte-identical WGSL — the same
+    /// contract `probe` and `solid_enabled` hold to, enforced for free
+    /// by the canonical shader dumps.
+    ///
+    /// Requires the direct-histogram path (the tail rides the histogram
+    /// binding) and excludes solid, whose own tail owns that space.
+    pub census: bool,
+
     /// Per-flame `array<u32, N>` length for the AttachmentList struct.
     /// Substituted into the shader headers via the `{{ATTACHMENT_CAP}}`
     /// placeholder; also drives the dynamic stride used when the host
@@ -378,6 +390,7 @@ impl Default for ShaderConstants {
             flatten_z_per_iter: false,
             solid_enabled: false,
             probe: false,
+            census: false,
             attachment_cap: 1,
             inlined_transforms: None,
             cumulative_weights: None,
@@ -609,6 +622,7 @@ impl ShaderConstants {
             // construction.
             solid_enabled: false,
             probe: false,
+            census: false,
             attachment_cap: flame.attachment_cap() as u32,
             inlined_transforms: Some(inlined),
             cumulative_weights: Some(cumulative),
@@ -1618,15 +1632,22 @@ impl ShaderBuilder {
         shader.push_str(&self.generate_variation_code(flame, &active, render_3d));
         shader.push('\n');
 
+        // 6b. Reachability-census helpers — module-scope functions the
+        // instrumented dispatcher calls. Census off ⇒ nothing emitted.
+        if constants.census {
+            shader.push_str(crate::census::helpers_wgsl());
+            shader.push('\n');
+        }
+
         // 7. Generate apply_variations with fixed registry indices
         // Pass inlined transforms for dead code elimination if available
         if render_3d {
             // `flatten_z_per_iter` (render_3d && !preserve_z) now drives
             // per-variation z gating at the dispatch sites instead of a
             // blanket end-of-iteration flatten.
-            shader.push_str(&self.build_apply_variations_3d(&active, constants.inlined_transforms.as_ref(), constants.num_transforms, &constants.variation_priorities, has_dc, has_rgb, false, constants.flatten_z_per_iter, constants.has_analytic_blur));
+            shader.push_str(&self.build_apply_variations_3d(&active, constants.inlined_transforms.as_ref(), constants.num_transforms, &constants.variation_priorities, has_dc, has_rgb, false, constants.flatten_z_per_iter, constants.has_analytic_blur, constants.census));
         } else {
-            shader.push_str(&self.build_apply_variations_2d(&active, constants.inlined_transforms.as_ref(), constants.num_transforms, &constants.variation_priorities, has_dc, has_rgb, false, constants.has_analytic_blur));
+            shader.push_str(&self.build_apply_variations_2d(&active, constants.inlined_transforms.as_ref(), constants.num_transforms, &constants.variation_priorities, has_dc, has_rgb, false, constants.has_analytic_blur, constants.census));
         }
         shader.push('\n');
 
@@ -1642,9 +1663,9 @@ impl ShaderBuilder {
             name == "subflame_wf" || name == "pre_subflame_wf");
         if has_subflame {
             if render_3d {
-                shader.push_str(&self.build_apply_variations_3d(&active, constants.inlined_transforms.as_ref(), constants.num_transforms, &constants.variation_priorities, has_dc, has_rgb, true, constants.flatten_z_per_iter, false));
+                shader.push_str(&self.build_apply_variations_3d(&active, constants.inlined_transforms.as_ref(), constants.num_transforms, &constants.variation_priorities, has_dc, has_rgb, true, constants.flatten_z_per_iter, false, false));
             } else {
-                shader.push_str(&self.build_apply_variations_2d(&active, constants.inlined_transforms.as_ref(), constants.num_transforms, &constants.variation_priorities, has_dc, has_rgb, true, false));
+                shader.push_str(&self.build_apply_variations_2d(&active, constants.inlined_transforms.as_ref(), constants.num_transforms, &constants.variation_priorities, has_dc, has_rgb, true, false, false));
             }
             shader.push('\n');
             let subflame_src = include_str!("../shaders/core/subflame.wgsl");
@@ -1925,6 +1946,7 @@ impl ShaderBuilder {
         has_rgb: bool,
         is_subflame: bool,
         has_analytic_blur: bool,
+        census: bool,
     ) -> String {
         #[allow(unused_imports)]
         use crate::variations::VariationPhase;
@@ -1972,6 +1994,11 @@ impl ShaderBuilder {
              // set means no inner call references vc, so it's pure overhead.\n",
         );
         code.push_str(&signature);
+        if census && !is_subflame {
+            // One counter bump per call — the denominator for every
+            // fraction in the census report.
+            code.push_str("    census_sel(xform_id);\n");
+        }
         // Subflame stand-in for the `hide` param (no plot in subflames yet).
         if is_subflame { code.push_str("    var hide_flag: bool = false;\n"); }
 
@@ -2033,6 +2060,13 @@ impl ShaderBuilder {
                 } else {
                     format!("temp = variation_{}(temp{});", name, params)
                 };
+                // Census: pre inputs are chained (each sees the previous
+                // pre's output), so they are counted per variation.
+                let body = if census {
+                    format!("census_pp2({0}u, temp); {1} census_out2({0}u, temp);", idx, body)
+                } else {
+                    body
+                };
                 code.push_str(&format!(
                     "    // {}: {} (PRE{})\n\
                      \x20   if ({}) {{\n\
@@ -2051,6 +2085,12 @@ impl ShaderBuilder {
         // PHASE 3: Normal variations - weighted sum accumulation
         code.push_str("    // Phase 3: Normal variations (weighted sum from modified input)\n");
         code.push_str("    var result = vec2<f32>(0.0, 0.0);\n\n");
+        if census && !normal_variations.is_empty() {
+            // Every normal-phase variation of this transform receives the
+            // same `temp` — classified once here, attributed per variation
+            // on the CPU (which knows the transform's active set).
+            code.push_str("    census_in2(xform_id, temp);\n\n");
+        }
 
         for placed in &normal_variations {
             let (idx, info) = (placed.idx, placed.info);
@@ -2123,24 +2163,51 @@ impl ShaderBuilder {
 
             // Use inlined weights when available (enables dead code elimination)
             if use_inlined {
-                code.push_str(&format!(
-                    "    // {}: {} (NORMAL{} - INLINED)\n\
-                     \x20   {{\n\
-                     \x20       let w = get_inlined_var_weight(xform_id, {}u);\n\
-                     \x20       if (w != 0.0{}) {{\n\
-                     \x20           result {} w * {};\n\
-                     \x20       }}\n\
-                     \x20   }}\n\n",
-                    idx, info.display_name, tag, idx, gate, op, call
-                ));
+                if census {
+                    code.push_str(&format!(
+                        "    // {}: {} (NORMAL{} - INLINED)\n\
+                         \x20   {{\n\
+                         \x20       let w = get_inlined_var_weight(xform_id, {}u);\n\
+                         \x20       if (w != 0.0{}) {{\n\
+                         \x20           let census_r = {};\n\
+                         \x20           census_out2({}u, census_r);\n\
+                         \x20           result {} w * census_r;\n\
+                         \x20       }}\n\
+                         \x20   }}\n\n",
+                        idx, info.display_name, tag, idx, gate, call, idx, op
+                    ));
+                } else {
+                    code.push_str(&format!(
+                        "    // {}: {} (NORMAL{} - INLINED)\n\
+                         \x20   {{\n\
+                         \x20       let w = get_inlined_var_weight(xform_id, {}u);\n\
+                         \x20       if (w != 0.0{}) {{\n\
+                         \x20           result {} w * {};\n\
+                         \x20       }}\n\
+                         \x20   }}\n\n",
+                        idx, info.display_name, tag, idx, gate, op, call
+                    ));
+                }
             } else {
-                code.push_str(&format!(
-                    "    // {}: {} (NORMAL{})\n\
-                     \x20   if (xform.variations[{}] != 0.0{}) {{\n\
-                     \x20       result {} xform.variations[{}] * {};\n\
-                     \x20   }}\n\n",
-                    idx, info.display_name, tag, idx, gate, op, idx, call
-                ));
+                if census {
+                    code.push_str(&format!(
+                        "    // {}: {} (NORMAL{})\n\
+                         \x20   if (xform.variations[{}] != 0.0{}) {{\n\
+                         \x20       let census_r = {};\n\
+                         \x20       census_out2({}u, census_r);\n\
+                         \x20       result {} xform.variations[{}] * census_r;\n\
+                         \x20   }}\n\n",
+                        idx, info.display_name, tag, idx, gate, call, idx, op, idx
+                    ));
+                } else {
+                    code.push_str(&format!(
+                        "    // {}: {} (NORMAL{})\n\
+                         \x20   if (xform.variations[{}] != 0.0{}) {{\n\
+                         \x20       result {} xform.variations[{}] * {};\n\
+                         \x20   }}\n\n",
+                        idx, info.display_name, tag, idx, gate, op, idx, call
+                    ));
+                }
             }
         }
 
@@ -2192,6 +2259,11 @@ impl ShaderBuilder {
                 } else {
                     format!("result = {}({});", info.wgsl_function, params)
                 };
+                let body = if census {
+                    format!("census_pp2({0}u, result); {1} census_out2({0}u, result);", idx, body)
+                } else {
+                    body
+                };
                 code.push_str(&format!(
                     "    // {}: {} (POST{})\n\
                      \x20   if ({}) {{\n\
@@ -2222,6 +2294,7 @@ impl ShaderBuilder {
         is_subflame: bool,
         gate_2d_z: bool,
         has_analytic_blur: bool,
+        census: bool,
     ) -> String {
         #[allow(unused_imports)]
         use crate::variations::VariationPhase;
@@ -2250,6 +2323,11 @@ impl ShaderBuilder {
              // See 2D variant for the meaning of the `vc` and `vrc` pointers.\n",
         );
         code.push_str(&signature);
+        if census && !is_subflame {
+            // One counter bump per call — the denominator for every
+            // fraction in the census report.
+            code.push_str("    census_sel(xform_id);\n");
+        }
         if is_subflame { code.push_str("    var hide_flag: bool = false;\n"); }
 
         // Separate variations by phase, honoring Any-variation fx_priority
@@ -2312,6 +2390,12 @@ impl ShaderBuilder {
                 } else {
                     format!("temp = variation_{}(temp{});", name, params)
                 };
+                // Census: see the 2D builder.
+                let body = if census {
+                    format!("census_pp3({0}u, temp); {1} census_out3({0}u, temp);", idx, body)
+                } else {
+                    body
+                };
                 code.push_str(&format!(
                     "    // {}: {} (PRE{})\n\
                      \x20   if ({}) {{\n\
@@ -2330,6 +2414,9 @@ impl ShaderBuilder {
         // PHASE 3: Normal variations - weighted sum accumulation (lines 363-373)
         code.push_str("    // Phase 3: Normal variations (weighted sum from modified input)\n");
         code.push_str("    var result = vec3<f32>(0.0, 0.0, 0.0);\n\n");
+        if census && !normal_variations.is_empty() {
+            code.push_str("    census_in3(xform_id, temp);\n\n");
+        }
         if has_w_normal {
             code.push_str("    point_w_acc = 0.0;\n    point_w_hit = false;\n\n");
         }
@@ -2440,24 +2527,51 @@ impl ShaderBuilder {
 
             // Use inlined weights when available
             if use_inlined {
-                code.push_str(&format!(
-                    "    // {}: {} (NORMAL{} - INLINED)\n\
-                     \x20   {{\n\
-                     \x20       let w = get_inlined_var_weight(xform_id, {}u);\n\
-                     \x20       if (w != 0.0{}) {{\n\
-                     \x20           result {} w * {};\n\
-                     {}\x20       }}\n\
-                     \x20   }}\n\n",
-                    idx, info.display_name, tag, idx, gate, op, contrib, w_sum_inlined
-                ));
+                if census {
+                    code.push_str(&format!(
+                        "    // {}: {} (NORMAL{} - INLINED)\n\
+                         \x20   {{\n\
+                         \x20       let w = get_inlined_var_weight(xform_id, {}u);\n\
+                         \x20       if (w != 0.0{}) {{\n\
+                         \x20           let census_r = {};\n\
+                         \x20           census_out3({}u, census_r);\n\
+                         \x20           result {} w * census_r;\n\
+                         {}\x20       }}\n\
+                         \x20   }}\n\n",
+                        idx, info.display_name, tag, idx, gate, contrib, idx, op, w_sum_inlined
+                    ));
+                } else {
+                    code.push_str(&format!(
+                        "    // {}: {} (NORMAL{} - INLINED)\n\
+                         \x20   {{\n\
+                         \x20       let w = get_inlined_var_weight(xform_id, {}u);\n\
+                         \x20       if (w != 0.0{}) {{\n\
+                         \x20           result {} w * {};\n\
+                         {}\x20       }}\n\
+                         \x20   }}\n\n",
+                        idx, info.display_name, tag, idx, gate, op, contrib, w_sum_inlined
+                    ));
+                }
             } else {
-                code.push_str(&format!(
-                    "    // {}: {} (NORMAL{})\n\
-                     \x20   if (xform.variations[{}] != 0.0{}) {{\n\
-                     \x20       result {} xform.variations[{}] * {};\n\
-                     {}\x20   }}\n\n",
-                    idx, info.display_name, tag, idx, gate, op, idx, contrib, w_sum_plain
-                ));
+                if census {
+                    code.push_str(&format!(
+                        "    // {}: {} (NORMAL{})\n\
+                         \x20   if (xform.variations[{}] != 0.0{}) {{\n\
+                         \x20       let census_r = {};\n\
+                         \x20       census_out3({}u, census_r);\n\
+                         \x20       result {} xform.variations[{}] * census_r;\n\
+                         {}\x20   }}\n\n",
+                        idx, info.display_name, tag, idx, gate, contrib, idx, op, idx, w_sum_plain
+                    ));
+                } else {
+                    code.push_str(&format!(
+                        "    // {}: {} (NORMAL{})\n\
+                         \x20   if (xform.variations[{}] != 0.0{}) {{\n\
+                         \x20       result {} xform.variations[{}] * {};\n\
+                         {}\x20   }}\n\n",
+                        idx, info.display_name, tag, idx, gate, op, idx, contrib, w_sum_plain
+                    ));
+                }
             }
         }
 
@@ -2515,6 +2629,11 @@ impl ShaderBuilder {
                     }
                 } else {
                     format!("result = {}({});", info.wgsl_function, params)
+                };
+                let body = if census {
+                    format!("census_pp3({0}u, result); {1} census_out3({0}u, result);", idx, body)
+                } else {
+                    body
                 };
                 code.push_str(&format!(
                     "    // {}: {} (POST{})\n\
@@ -2621,7 +2740,7 @@ mod tests {
         let active = vec![("blur".to_string(), 0u32)];
         let no_overrides: BTreeMap<u32, BTreeMap<u32, i32>> = BTreeMap::new();
 
-        let code = builder.build_apply_variations_2d(&active, None, 1, &no_overrides, false, false, false, false);
+        let code = builder.build_apply_variations_2d(&active, None, 1, &no_overrides, false, false, false, false, false);
         assert!(
             code.contains("result += xform.variations[0] * variation_blur(temp"),
             "expected the standard normal weighted-sum emission; got:\n{}", code
@@ -2642,14 +2761,14 @@ mod tests {
         let mut overrides: BTreeMap<u32, BTreeMap<u32, i32>> = BTreeMap::new();
         overrides.entry(0).or_default().insert(0, -1);
 
-        let code = builder.build_apply_variations_2d(&active, None, 1, &overrides, false, false, false, false);
+        let code = builder.build_apply_variations_2d(&active, None, 1, &overrides, false, false, false, false, false);
         assert!(
             code.contains("temp = temp + xform.variations[0] * variation_blur(temp"),
             "accumulate var moved to pre must add; got:\n{}", code
         );
         // combimirror IS Replace, so for contrast its moved-pre form assigns.
         let active_c = vec![("combimirror".to_string(), 0u32)];
-        let code_c = builder.build_apply_variations_2d(&active_c, None, 1, &overrides, false, false, false, false);
+        let code_c = builder.build_apply_variations_2d(&active_c, None, 1, &overrides, false, false, false, false, false);
         assert!(
             code_c.contains("temp = xform.variations[0] * variation_combimirror(temp"),
             "replace var moved to pre must assign; got:\n{}", code_c
@@ -2666,7 +2785,7 @@ mod tests {
         let active = vec![("spherical".to_string(), 0u32), ("shredlin".to_string(), 1u32)];
         let no_overrides: BTreeMap<u32, BTreeMap<u32, i32>> = BTreeMap::new();
 
-        let code = builder.build_apply_variations_2d(&active, None, 1, &no_overrides, false, false, false, false);
+        let code = builder.build_apply_variations_2d(&active, None, 1, &no_overrides, false, false, false, false, false);
         assert!(
             code.contains("result += xform.variations[0] * variation_spherical(temp"),
             "accumulate var must add; got:\n{}", code
@@ -2691,7 +2810,7 @@ mod tests {
         let builder = test_builder();
         let active = vec![("shredlin".to_string(), 0u32)];
         let no_overrides: BTreeMap<u32, BTreeMap<u32, i32>> = BTreeMap::new();
-        let code = builder.build_apply_variations_2d(&active, None, 1, &no_overrides, false, false, false, false);
+        let code = builder.build_apply_variations_2d(&active, None, 1, &no_overrides, false, false, false, false, false);
         // result starts at vec2(0.0) so the assignment is equivalent to +=.
         assert!(code.contains("var result = vec2<f32>(0.0, 0.0);"));
         assert!(code.contains("result = xform.variations[0] * variation_shredlin(temp"));
@@ -3014,6 +3133,63 @@ mod tests {
     /// parse — in the app a shader that fails validation is silently
     /// dropped (no error scope), leaving the previous pipeline running,
     /// which presents as "the variation does nothing".
+    /// Census contract, both directions. Off: not one census token in
+    /// the module — combined with the canonical dumps (built census-off)
+    /// this is the byte-identity guarantee. On: the instrumented module
+    /// parses, and every table the design names is actually written.
+    #[test]
+    fn census_off_no_trace_census_on_validates() {
+        use crate::scene::transforms::{Flame, Transform};
+        let registry = crate::variations::global_registry().clone();
+        let builder = ShaderBuilder::new(registry);
+
+        // A flame exercising every instrumented shape: pre + normal +
+        // post phases, and enough variations for both weight forms.
+        let mut flame = Flame::new();
+        let mut t0 = Transform::new();
+        t0.variations.insert("pre_blur".to_string(), 0.5);   // pre
+        t0.variations.insert("spherical".to_string(), 1.0);  // normal
+        t0.variations.insert("flatten".to_string(), 1.0);    // post (3D)
+        flame.transforms.push(t0);
+        let mut t1 = Transform::new();
+        t1.variations.insert("linear".to_string(), 1.0);
+        flame.transforms.push(t1);
+        let mut active = HashMap::new();
+        active.insert("pre_blur".to_string(), 0.5);
+        active.insert("spherical".to_string(), 1.0);
+        active.insert("flatten".to_string(), 1.0);
+        active.insert("linear".to_string(), 1.0);
+
+        for render_3d in [false, true] {
+            let off = builder.build_from_template(
+                &flame, &active, render_3d, false, false, true,
+                &ShaderConstants { num_transforms: 2, ..Default::default() },
+            );
+            assert!(
+                !off.contains("census"),
+                "census=false leaked instrumentation (render_3d={render_3d})"
+            );
+
+            let on = builder.build_from_template(
+                &flame, &active, render_3d, false, false, true,
+                &ShaderConstants { num_transforms: 2, census: true, ..Default::default() },
+            );
+            for token in [
+                "fn census_class(",
+                "census_sel(xform_id);",
+                if render_3d { "census_in3(xform_id, temp);" } else { "census_in2(xform_id, temp);" },
+                if render_3d { "census_out3(" } else { "census_out2(" },
+                if render_3d { "census_pp3(" } else { "census_pp2(" },
+            ] {
+                assert!(on.contains(token), "missing `{token}` (render_3d={render_3d})");
+            }
+            if let Err(e) = wgpu::naga::front::wgsl::parse_str(&on) {
+                let msg = e.emit_to_string(&on);
+                panic!("census WGSL fails to parse (render_3d={render_3d}):\n{msg}");
+            }
+        }
+    }
+
     #[test]
     fn plot_emit_wgsl_parses_in_plain_mode() {
         use crate::scene::transforms::{Flame, Transform};
@@ -3515,4 +3691,5 @@ fn split_wgsl_top_level_fns(source: &str) -> Vec<(String, String)> {
     }
 
     blocks
+
 }

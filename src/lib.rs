@@ -30,6 +30,7 @@ pub mod audio;
 pub mod api;
 pub mod script;
 pub mod probe;
+pub mod census;
 #[cfg(not(target_arch = "wasm32"))]
 pub use script::cli::generate_mode;
 // mod shader_builder; // Legacy - replaced by shader_builder_v2
