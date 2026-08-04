@@ -151,7 +151,8 @@ fn variation_log_db(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
     fix_atan_period = fix_atan_period * fixpe;
 
     let r2 = max(p.x * p.x + p.y * p.y, 1.1754944e-38);
-    return vec2<f32>(denom * log(r2), atan2(p.x, p.y) + fix_atan_period);
+    // ff_atan2: the origin is reachable (every fuse starts there); see utilities.wgsl.
+    return vec2<f32>(denom * log(r2), ff_atan2(p.x, p.y) + fix_atan_period);
 }
 "#,
     wgsl_3d: r#"
@@ -170,7 +171,8 @@ fn variation_log_db(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
     fix_atan_period = fix_atan_period * fixpe;
 
     let r2 = max(p.x * p.x + p.y * p.y, 1.1754944e-38);
-    return vec3<f32>(denom * log(r2), atan2(p.x, p.y) + fix_atan_period, p.z);
+    // ff_atan2: the origin is reachable (every fuse starts there); see utilities.wgsl.
+    return vec3<f32>(denom * log(r2), ff_atan2(p.x, p.y) + fix_atan_period, p.z);
 }
 "#,
 };

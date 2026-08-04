@@ -479,35 +479,10 @@ fn init_npolar(user: array<f32, 2>) -> array<f32, 4> {
     state_count: 0,
     wgsl_state_init: None,
     wgsl_2d: r#"
-// Metal compiles shaders with fast-math on, where atan2(0, 0) returns
-// PI/4 instead of 0. That is a plausible FINITE value, so no bad-value
-// guard catches it -- it silently relocates the point.
-//
-// npolar reaches (0, 0) as a matter of course, not by accident: with the
-// default parity = 0, `parity_factor` is parity itself, so r == 0 and
-// both cosa and sina are exactly zero on every call. The variation is a
-// constant map there, and the wrong constant moved the whole attractor
-// -- 79% of apo-misc7's lit pixels on Metal.
-//
-// Vulkan and the WGSL spec already give 0 here, so this select is a
-// no-op everywhere except Metal: no rendering change on Windows, and one
-// comparison of cost.
-fn npolar_atan2(y: f32, x: f32) -> f32 {
-    if (y == 0.0 && x == 0.0) {
-        // Reproduce IEEE exactly, which is NOT "always 0": the result
-        // depends on the SIGNS of the two zeros.
-        //   atan2(+0, +0) = +0     atan2(+0, -0) = +pi
-        //   atan2(-0, +0) = -0     atan2(-0, -0) = -pi
-        // Collapsing all four to 0 changes the render on Vulkan, where
-        // atan2 is already correct -- measured, and it moved the image.
-        // The sign bit is read via bitcast because `x < 0.0` is false for
-        // -0.0, and because integer ops are immune to fast-math.
-        let pi = 3.14159265358979;
-        let mag = select(0.0, pi, (bitcast<u32>(x) & 0x80000000u) != 0u);
-        return select(mag, -mag, (bitcast<u32>(y) & 0x80000000u) != 0u);
-    }
-    return atan2(y, x);
-}
+// atan2(0,0) is pi/4 under Metal fast-math, and npolar reaches the
+// origin on EVERY call at its default parity (parity_factor = 0 makes
+// cosa = sina = 0, a constant map). ff_atan2 (utilities.wgsl) is the
+// IEEE-exact guard.
 fn variation_npolar(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let parity = get_param(xform_id, variation_id, 0u);
     let nnz = get_param(xform_id, variation_id, 2u);
@@ -527,10 +502,10 @@ fn variation_npolar(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
         x = p.x;
         y = p.y;
     } else {
-        x = vvar * npolar_atan2(p.x, p.y);  // cpp swap (Java uses atan2(y,x))
+        x = vvar * ff_atan2(p.x, p.y);  // cpp swap (Java uses atan2(y,x))
         y = vvar_2 * log(max(p.x * p.x + p.y * p.y, 1e-30));
     }
-    let angle = (npolar_atan2(y, x) + two_pi * floor(rng_nextf(rng) * absn)) / nnz;
+    let angle = (ff_atan2(y, x) + two_pi * floor(rng_nextf(rng) * absn)) / nnz;
     let radial = pow(max(x * x + y * y, 1e-30), cn);
     let parity_factor = select(1.0, parity, isodd == 0.0);
     let r = w * radial * parity_factor;
@@ -543,41 +518,16 @@ fn variation_npolar(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
         fy = sina;
     } else {
         fx = vvar_2 * log(max(cosa * cosa + sina * sina, 1e-30));
-        fy = vvar * npolar_atan2(cosa, sina);  // cpp swap preserved
+        fy = vvar * ff_atan2(cosa, sina);  // cpp swap preserved
     }
     return vec2<f32>(fx * inv_w, fy * inv_w);
 }
 "#,
     wgsl_3d: r#"
-// Metal compiles shaders with fast-math on, where atan2(0, 0) returns
-// PI/4 instead of 0. That is a plausible FINITE value, so no bad-value
-// guard catches it -- it silently relocates the point.
-//
-// npolar reaches (0, 0) as a matter of course, not by accident: with the
-// default parity = 0, `parity_factor` is parity itself, so r == 0 and
-// both cosa and sina are exactly zero on every call. The variation is a
-// constant map there, and the wrong constant moved the whole attractor
-// -- 79% of apo-misc7's lit pixels on Metal.
-//
-// Vulkan and the WGSL spec already give 0 here, so this select is a
-// no-op everywhere except Metal: no rendering change on Windows, and one
-// comparison of cost.
-fn npolar_atan2(y: f32, x: f32) -> f32 {
-    if (y == 0.0 && x == 0.0) {
-        // Reproduce IEEE exactly, which is NOT "always 0": the result
-        // depends on the SIGNS of the two zeros.
-        //   atan2(+0, +0) = +0     atan2(+0, -0) = +pi
-        //   atan2(-0, +0) = -0     atan2(-0, -0) = -pi
-        // Collapsing all four to 0 changes the render on Vulkan, where
-        // atan2 is already correct -- measured, and it moved the image.
-        // The sign bit is read via bitcast because `x < 0.0` is false for
-        // -0.0, and because integer ops are immune to fast-math.
-        let pi = 3.14159265358979;
-        let mag = select(0.0, pi, (bitcast<u32>(x) & 0x80000000u) != 0u);
-        return select(mag, -mag, (bitcast<u32>(y) & 0x80000000u) != 0u);
-    }
-    return atan2(y, x);
-}
+// atan2(0,0) is pi/4 under Metal fast-math, and npolar reaches the
+// origin on EVERY call at its default parity (parity_factor = 0 makes
+// cosa = sina = 0, a constant map). ff_atan2 (utilities.wgsl) is the
+// IEEE-exact guard.
 fn variation_npolar(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let parity = get_param(xform_id, variation_id, 0u);
     let nnz = get_param(xform_id, variation_id, 2u);
@@ -597,10 +547,10 @@ fn variation_npolar(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
         x = p.x;
         y = p.y;
     } else {
-        x = vvar * npolar_atan2(p.x, p.y);
+        x = vvar * ff_atan2(p.x, p.y);
         y = vvar_2 * log(max(p.x * p.x + p.y * p.y, 1e-30));
     }
-    let angle = (npolar_atan2(y, x) + two_pi * floor(rng_nextf(rng) * absn)) / nnz;
+    let angle = (ff_atan2(y, x) + two_pi * floor(rng_nextf(rng) * absn)) / nnz;
     let radial = pow(max(x * x + y * y, 1e-30), cn);
     let parity_factor = select(1.0, parity, isodd == 0.0);
     let r = w * radial * parity_factor;
@@ -613,7 +563,7 @@ fn variation_npolar(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
         fy = sina;
     } else {
         fx = vvar_2 * log(max(cosa * cosa + sina * sina, 1e-30));
-        fy = vvar * npolar_atan2(cosa, sina);
+        fy = vvar * ff_atan2(cosa, sina);
     }
     return vec3<f32>(fx * inv_w, fy * inv_w, p.z);
 }
