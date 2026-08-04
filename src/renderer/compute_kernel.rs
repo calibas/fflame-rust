@@ -113,6 +113,11 @@ impl PathEntry {
 use crate::variations::analytic_blur::BlurSlotInfo;
 
 pub struct FlameRenderer {
+    /// Reachability-census mode (see `src/census/`). Set only by
+    /// `enable_census`, read into `ShaderConstants::census`. Never a
+    /// render: census renders are the census runner's own.
+    census: bool,
+
     pipelines: FlamePipelines,
     buffers: FlameBuffers,
     compute_bind_group: BindGroup,
@@ -403,6 +408,7 @@ impl FlameRenderer {
             num_transforms: flame.transforms.len() as u32,
             path_filters: Vec::new(), // No filters by default
             min_suffix_filter_length: 0,
+            census: false,
         }
     }
 
@@ -423,6 +429,7 @@ impl FlameRenderer {
         let solid_enabled = (self.solid_strength > 0.0 || self.solid_shading.active())
             && matches!(self.current_render_mode, crate::scene::transforms::RenderMode::ThreeD);
         self.buffers.set_solid_depth_region(device, solid_enabled);
+        self.buffers.set_census_region(device, self.census);
         self.needs_depth_prime = solid_enabled;
         self.shade_pass.resize(device, width, height);
 
@@ -556,7 +563,7 @@ impl FlameRenderer {
             solid_enabled: (self.solid_strength > 0.0 || self.solid_shading.active())
                 && matches!(render_mode, crate::scene::transforms::RenderMode::ThreeD),
             probe: false,
-            census: false,
+            census: self.census,
             attachment_cap: flame.attachment_cap() as u32,
             // No inlining for incremental updates (would trigger too many shader rebuilds)
             inlined_transforms: None,
@@ -1463,6 +1470,60 @@ impl FlameRenderer {
         changed
     }
 
+    /// Turn on the reachability census for this renderer: the next
+    /// shader build carries `ShaderConstants::census`, the histogram
+    /// grows the counter tail, and the bind groups that reference it
+    /// are recreated. Call after construction and before `load_config`.
+    /// v1 refuses solid (see the census module docs).
+    pub fn enable_census(&mut self, device: &Device) {
+        assert!(
+            !self.buffers.solid_depth_region,
+            "census excludes solid rendering (v1)"
+        );
+        self.census = true;
+        self.buffers.set_census_region(device, true);
+        self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
+        self.init_bind_group = self.pipelines.create_init_bind_group(device, &self.buffers);
+        self.accumulate_bind_group = self.pipelines.create_accumulate_bind_group(device, &self.buffers);
+        self.histogram_blur_h_bind_group = self.pipelines.create_histogram_blur_h_bind_group(device, &self.buffers);
+        self.histogram_blur_v_bind_group = self.pipelines.create_histogram_blur_v_bind_group(device, &self.buffers);
+    }
+
+    /// Copy the census tail off the GPU and return its
+    /// `census::TOTAL_WORDS` words. Blocking; census tooling only.
+    pub fn read_census_blocking(&self, device: &Device, queue: &Queue) -> Option<Vec<u32>> {
+        if !self.buffers.census_region {
+            return None;
+        }
+        let bytes = (crate::census::TOTAL_WORDS * std::mem::size_of::<u32>()) as u64;
+        let offset =
+            (self.width as u64) * (self.height as u64) * 4 * std::mem::size_of::<u32>() as u64;
+        let staging = device.create_buffer(&BufferDescriptor {
+            label: Some("Census Readback"),
+            size: bytes,
+            usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut enc = device.create_command_encoder(&CommandEncoderDescriptor {
+            label: Some("Census Readback"),
+        });
+        enc.copy_buffer_to_buffer(&self.buffers.histogram_buffer, offset, &staging, 0, bytes);
+        queue.submit(std::iter::once(enc.finish()));
+        let slice = staging.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+        rx.recv().ok()?.ok()?;
+        let words: Vec<u32> = {
+            let data = slice.get_mapped_range();
+            bytemuck::cast_slice(&data).to_vec()
+        };
+        staging.unmap();
+        Some(words)
+    }
+
     /// Interactive-path density-stats tick (solid brightness renorm):
     /// pumps the async measurement and encodes a fresh reduction every N
     /// frames while occlusion is actively culling. Call once per frame,
@@ -1539,7 +1600,7 @@ impl FlameRenderer {
         // Determine if path features are needed (PathMap mode or path filters active)
         let path_features_enabled = config.color_mode == ColorMode::PathMap
             || !self.path_filters.is_empty();
-        let shaders_changed = self.pipelines.ensure_shaders_current_with_config(device, config, path_features_enabled);
+        let shaders_changed = self.pipelines.ensure_shaders_current_with_config(device, config, path_features_enabled, self.census);
         if shaders_changed {
             log::info!("Shaders recompiled during preset load - recreating bind group");
             // Recreate compute bind group with new pipeline
