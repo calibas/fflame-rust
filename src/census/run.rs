@@ -463,7 +463,11 @@ fn walkdir(root: &str) -> Vec<String> {
             if p.is_dir() {
                 stack.push(p);
             } else if p.extension().and_then(|x| x.to_str()) == Some("fflame") {
-                out.push(p.to_string_lossy().into_owned());
+                // Forward slashes on every platform: these become `worst`
+                // labels in a committed, cross-platform-diffable report,
+                // and Windows separators made identical measurements
+                // un-comparable line-by-line.
+                out.push(p.to_string_lossy().replace('\\', "/"));
             }
         }
     }
