@@ -3170,10 +3170,10 @@ littlewood.w4 2d 0..pm.h...0..pm.h... 538f52174d7f120d
 littlewood.w4 3d 0.zpmHh...0.zpmHh... 72611819196ecc61
 log.base 2d 0..pm..Ii.0..pm..Ii. 296e6ffd2f0fa37e
 log.base 3d 0.zpmH.Ii.0.zpmH.Ii. eb1a87e69d57b27a
-log_db.base 2d 0..pm..Ii.0..pm..Ii. 7a9b56590cb89e8b
-log_db.base 3d 0.zpmH.Ii.0.zpmH.Ii. e12d44b921eb2037
-log_db.fix_period 2d 0..pm..Ii.0..pm..Ii. 128900ad470c1938
-log_db.fix_period 3d 0.zpmH.Ii.0.zpmH.Ii. 600c20bdf8181288
+log_db.base 2d 0..pm...i.0..pm..I.. 4eed08530164fe4a
+log_db.base 3d 0.zpmH..i.0.zpmH.I.. 0ef8620fc38d22ee
+log_db.fix_period 2d 0..pm..I..0..pm..I.. e0f011df1523be28
+log_db.fix_period 3d 0.zpmH.I..0.zpmH.I.. 59f3f022ff4a9b24
 log_tile2.spreadx 2d 0.zpmHh...0.zpmHh...0.zpmHh... 23b495fa81425a7a
 log_tile2.spreadx 3d 0.zpmHh...0.zpmHh...0.zpmHh... db27df232d983727
 log_tile2.spready 2d 0.zpmHh...0.zpmHh...0.zpmHh... 77b534d469d704c6
