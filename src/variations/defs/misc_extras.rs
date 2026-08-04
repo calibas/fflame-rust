@@ -66,8 +66,10 @@ fn variation_ho(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let cv = cos(v); let sv = sin(v);
     let cucv = cu * cv;
     let sucv = su * cv;
-    let at_x = atan2(v * v, 0.0);
-    let at_y = atan2(u * u, 0.0);
+    // ff_atan2: u or v == 0 lands on atan2(0,0) — and so does any
+    // |v| small enough that v*v underflows. See utilities.wgsl.
+    let at_x = ff_atan2(v * v, 0.0);
+    let at_y = ff_atan2(u * u, 0.0);
     let x = pow(max(abs(cucv), 1e-30), xpow) * sign_or_one(cucv) + cucv * xpow + 0.25 * at_x;
     let y = pow(max(abs(sucv), 1e-30), ypow) * sign_or_one(sucv) + sucv * ypow + 0.25 * at_y;
     return vec2<f32>(x, y);
@@ -87,8 +89,10 @@ fn variation_ho(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let cv = cos(v); let sv = sin(v);
     let cucv = cu * cv;
     let sucv = su * cv;
-    let at_x = atan2(v * v, w * w);
-    let at_y = atan2(u * u, w * w);
+    // ff_atan2: reaches atan2(0,0) when both operands are zero or
+    // underflow; see utilities.wgsl.
+    let at_x = ff_atan2(v * v, w * w);
+    let at_y = ff_atan2(u * u, w * w);
     let x = pow(max(abs(cucv), 1e-30), xpow) * sign_or_one_3d(cucv) + cucv * xpow + 0.25 * at_x;
     let y = pow(max(abs(sucv), 1e-30), ypow) * sign_or_one_3d(sucv) + sucv * ypow + 0.25 * at_y;
     let z = pow(max(abs(sv), 1e-30), zpow) * sign_or_one_3d(sv) + sv * zpow;
