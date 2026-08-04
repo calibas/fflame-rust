@@ -951,3 +951,268 @@ mod category_wire_tests {
         assert_ne!(C::from_api_str("3d"), C::Full3D);
     }
 }
+
+/// No float literal in shader code may be subnormal in f32.
+///
+/// 28 guard sites across exp_log, hyperbolic and sqrt_hyperbolic were
+/// ported from JWildfire as `1e-40` — unremarkable in the f64 source
+/// (f64's smallest normal is ~2.2e-308), but subnormal in f32, and GPUs
+/// flush subnormals to zero. Every one of those guards silently became
+/// `max(x, 0.0)` and did nothing, on every platform at once. See the
+/// module docs in `defs/exp_log.rs` for the full account.
+///
+/// The hazard recurs with every port: 63 of the JWildfire sources in
+/// `output/variation-jwf-source/` reference `MathLib.SMALL_EPSILON`,
+/// an f64-scaled constant, and any port that copies such a value
+/// numerically re-creates the bug. This lint makes that a test failure
+/// instead of a silent no-op guard.
+///
+/// It scans the WGSL **strings** via the registry, not the `.rs` files
+/// — the doc comments that *explain* the 1e-40 bug cite the literal,
+/// and a lint that flags its own documentation teaches people to write
+/// worse documentation. WGSL comments are stripped for the same reason.
+#[cfg(test)]
+mod shader_literal_lint {
+    /// `f32::MIN_POSITIVE` as f64: the smallest NORMAL f32. Anything
+    /// below it (and not zero) flushes to zero on the GPU.
+    const MIN_NORMAL_F32: f64 = 1.175_494_350_822_287_5e-38;
+
+    /// Strip `//` line comments and (nesting, per the WGSL spec) block
+    /// comments. Note `/*` opens a comment in WGSL's own lexer even
+    /// against a pointer deref — valid code writes `/ *p` with a space
+    /// — so matching the exact two-byte sequence is the correct rule,
+    /// not an approximation.
+    fn strip_wgsl_comments(src: &str) -> String {
+        let b = src.as_bytes();
+        let mut out = Vec::with_capacity(b.len());
+        let mut i = 0;
+        while i < b.len() {
+            if b[i] == b'/' && i + 1 < b.len() && b[i + 1] == b'/' {
+                while i < b.len() && b[i] != b'\n' {
+                    i += 1;
+                }
+            } else if b[i] == b'/' && i + 1 < b.len() && b[i + 1] == b'*' {
+                let mut depth = 1u32;
+                i += 2;
+                while i < b.len() && depth > 0 {
+                    if b[i] == b'/' && i + 1 < b.len() && b[i + 1] == b'*' {
+                        depth += 1;
+                        i += 2;
+                    } else if b[i] == b'*' && i + 1 < b.len() && b[i + 1] == b'/' {
+                        depth -= 1;
+                        i += 2;
+                    } else {
+                        i += 1;
+                    }
+                }
+                // Keep token separation where the comment was.
+                out.push(b' ');
+            } else {
+                out.push(b[i]);
+                i += 1;
+            }
+        }
+        String::from_utf8_lossy(&out).into_owned()
+    }
+
+    /// Decimal float literals with a negative exponent whose value is
+    /// subnormal (or underflows to zero) in f32, as `(literal, value)`.
+    ///
+    /// Only negative-exponent forms are scanned: a literal written
+    /// without an exponent cannot reach 1e-38 without ~38 typed zeros,
+    /// and a too-large positive literal already fails shader
+    /// compilation, which existing tests catch.
+    fn subnormal_literals(wgsl: &str) -> Vec<(String, f64)> {
+        let text = strip_wgsl_comments(wgsl);
+        let b = text.as_bytes();
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i + 1 < b.len() {
+            if (b[i] != b'e' && b[i] != b'E') || b[i + 1] != b'-' {
+                i += 1;
+                continue;
+            }
+            // Mantissa: walk left over digits and at most one dot.
+            let mut s = i;
+            let mut dot_seen = false;
+            while s > 0 {
+                let c = b[s - 1];
+                if c.is_ascii_digit() {
+                    s -= 1;
+                } else if c == b'.' && !dot_seen {
+                    dot_seen = true;
+                    s -= 1;
+                } else {
+                    break;
+                }
+            }
+            let mantissa = &text[s..i];
+            let has_digit = mantissa.bytes().any(|c| c.is_ascii_digit());
+            // A letter/underscore/digit before the mantissa means this
+            // `e-` belongs to an identifier or a hex literal (`0x1e-40`
+            // is the hex int 0x1e minus 40), not a float.
+            let ident_before = s > 0 && (b[s - 1].is_ascii_alphanumeric() || b[s - 1] == b'_');
+            // Exponent digits.
+            let mut e = i + 2;
+            while e < b.len() && b[e].is_ascii_digit() {
+                e += 1;
+            }
+            if !has_digit || ident_before || e == i + 2 {
+                i += 1;
+                continue;
+            }
+
+            // Normalise shapes Rust's parser is picky about: `1.e-40`,
+            // `.5e-40`.
+            let mant = mantissa.trim_end_matches('.');
+            let mant = if mant.starts_with('.') {
+                format!("0{mant}")
+            } else {
+                mant.to_string()
+            };
+            let value: f64 = format!("{mant}e-{}", &text[i + 2..e])
+                .parse()
+                .expect("extracted text should always parse as a float");
+
+            // `0.0e-40` is a harmless zero; only a nonzero mantissa can
+            // lose information to the flush. `value < MIN` also catches
+            // literals so small they underflow to zero even in f64.
+            let mantissa_nonzero = mantissa.bytes().any(|c| (b'1'..=b'9').contains(&c));
+            if mantissa_nonzero && value < MIN_NORMAL_F32 {
+                out.push((text[s..e].to_string(), value));
+            }
+            i = e;
+        }
+        out
+    }
+
+    fn explain(violations: &[String]) -> String {
+        format!(
+            "float literal(s) that are SUBNORMAL in f32 — GPUs flush these to \
+             zero, so on the GPU each one IS 0.0 and any guard built on it \
+             does nothing:\n  {}\n\
+             These usually arrive by copying an epsilon from f64 source \
+             (JWildfire/Apophysis), where the same value is an ordinary \
+             normal number. Use 1.1754944e-38 (f32::MIN_POSITIVE) when the \
+             intent is 'smallest safe guard', or a coarser epsilon matched \
+             to the formula. See the module docs in defs/exp_log.rs.",
+            violations.join("\n  ")
+        )
+    }
+
+    /// Every registered variation's WGSL, exactly as the shader builder
+    /// will splice it.
+    #[test]
+    fn no_subnormal_f32_literals_in_variation_wgsl() {
+        let reg = super::global_registry();
+        let mut violations = Vec::new();
+        for name in reg.names() {
+            let Some(info) = reg.get(name) else { continue };
+            for (which, src) in [
+                ("wgsl_2d", info.wgsl_source.as_deref()),
+                ("wgsl_3d", info.wgsl_source_3d.as_deref()),
+                ("wgsl_init", info.wgsl_source_init.as_deref()),
+                ("wgsl_state_init", info.wgsl_source_state_init.as_deref()),
+            ] {
+                let Some(src) = src else { continue };
+                for (lit, v) in subnormal_literals(src) {
+                    violations.push(format!("{name} {which}: `{lit}` ({v:e})"));
+                }
+            }
+        }
+        assert!(violations.is_empty(), "{}", explain(&violations));
+    }
+
+    /// The static shader files — templates and the helper libraries
+    /// variations pull in — get the same rule.
+    #[test]
+    fn no_subnormal_f32_literals_in_shader_files() {
+        fn visit(dir: &std::path::Path, f: &mut impl FnMut(&std::path::Path, &str)) {
+            let Ok(entries) = std::fs::read_dir(dir) else { return };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    visit(&path, f);
+                } else if path.extension().and_then(|e| e.to_str()) == Some("wgsl") {
+                    if let Ok(text) = std::fs::read_to_string(&path) {
+                        f(&path, &text);
+                    }
+                }
+            }
+        }
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("shaders");
+        let mut violations = Vec::new();
+        let mut checked = 0usize;
+        visit(&root, &mut |path, text| {
+            checked += 1;
+            for (lit, v) in subnormal_literals(text) {
+                violations.push(format!("{}: `{lit}` ({v:e})", path.display()));
+            }
+        });
+
+        assert!(checked > 10, "scanned only {checked} shader files — the walk is broken");
+        assert!(violations.is_empty(), "{}", explain(&violations));
+    }
+
+    // ---- the scanner itself ----
+
+    #[test]
+    fn catches_the_shape_of_the_actual_bug() {
+        let hits = subnormal_literals("let r2 = max(p.x * p.x + p.y * p.y, 1e-40);");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].0, "1e-40");
+    }
+
+    #[test]
+    fn passes_the_committed_fix_and_ordinary_epsilons() {
+        for ok in ["max(r2, 1.1754944e-38)", "max(r, 1e-30)", "x + 1e-6", "1.2e-38"] {
+            assert!(subnormal_literals(ok).is_empty(), "`{ok}` wrongly flagged");
+        }
+    }
+
+    #[test]
+    fn the_boundary_is_the_smallest_normal() {
+        // 9e-39 is subnormal; 1.2e-38 (just above MIN_POSITIVE) is not.
+        assert_eq!(subnormal_literals("9e-39").len(), 1);
+        assert!(subnormal_literals("1.2e-38").is_empty());
+    }
+
+    #[test]
+    fn an_f64_scale_epsilon_is_flagged() {
+        // The value future JWF ports are most likely to copy: an
+        // epsilon sized for f64, ordinary there, zero on the GPU.
+        assert_eq!(subnormal_literals("r + 1.0e-300").len(), 1);
+        // And one so small it underflows even f64 parsing.
+        assert_eq!(subnormal_literals("r + 1e-400").len(), 1);
+    }
+
+    #[test]
+    fn comments_do_not_trip_it() {
+        assert!(subnormal_literals("// JWF uses 1e-40 here\nlet x = 1.0;").is_empty());
+        assert!(
+            subnormal_literals("/* outer /* 1e-40 nested */ still comment */ let x = 1.0;")
+                .is_empty(),
+            "WGSL block comments nest"
+        );
+    }
+
+    #[test]
+    fn hex_and_identifier_context_is_not_a_float_literal() {
+        // `0x1e - 40` written tight: hex int, minus, int.
+        assert!(subnormal_literals("let a = 0x1e-40;").is_empty());
+        // An identifier ending in a digit-e run, minus an int.
+        assert!(subnormal_literals("let b = var1e-40;").is_empty());
+    }
+
+    #[test]
+    fn capital_e_and_suffixes_are_still_literals() {
+        assert_eq!(subnormal_literals("1E-40").len(), 1);
+        assert_eq!(subnormal_literals("let x = 1e-40f;").len(), 1);
+    }
+
+    #[test]
+    fn a_zero_mantissa_is_harmless() {
+        assert!(subnormal_literals("0.0e-40").is_empty());
+    }
+}
