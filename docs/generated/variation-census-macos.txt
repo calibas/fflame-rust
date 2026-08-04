@@ -4,7 +4,7 @@
 # This file is generated. See src/census/ for what it means.
 # Regenerate: cargo run --release --bin variation_probe -- census --corpus
 #
-# build    0.4.4 (5317d46c)
+# build    0.4.4 (6c3a31f3)
 # os       macos aarch64
 # adapter  Apple M2 / Metal
 # corpus   presets + tests/visual/configs + random seed 1..100  (252 run, 5 skipped)
@@ -101,7 +101,6 @@ blob                     out  (tiny,tiny)              rare      preset:Flower
 blob                     out  (tiny,normal)            rare      preset:Flower
 blob                     out  (normal,+0)              trace     preset:Flower
 blob                     out  (normal,tiny)            rare      preset:Flower
-blob                     out  (nan,nan)                rare      preset:Flower
 blob                     use  (exercised)              dominant  tests/visual/configs/variations/misc-variations.fflame
 blob3D                   out  (normal,+0)              trace     tests/visual/configs/variations/numbered-extras-smoke.fflame
 blob3D                   out  z:+0                     trace     tests/visual/configs/variations/numbered-extras-smoke.fflame
@@ -132,7 +131,6 @@ butterfly_fay            in   (+0,+0)                  trace     tests/visual/co
 butterfly_fay            out  (+0,normal)              trace     tests/visual/configs/variations/butterfly-fay-smoke.fflame
 butterfly_fay            out  (-0,normal)              trace     tests/visual/configs/variations/butterfly-fay-smoke.fflame
 butterfly_fay            out  (normal,+0)              trace     tests/visual/configs/variations/butterfly-fay-smoke.fflame
-butterfly_fay            out  (nan,nan)                trace     tests/visual/configs/variations/butterfly-fay-smoke.fflame
 butterfly_fay            use  (exercised)              dominant  tests/visual/configs/variations/butterfly-fay-smoke.fflame
 bwraps                   use  (exercised)              dominant  tests/visual/configs/variations/init-migration-smoke.fflame
 bwraps7                  use  (exercised)              dominant  tests/visual/configs/variations/bwraps7-smoke.fflame
@@ -565,7 +563,7 @@ julian                   in   (normal,tiny)            rare      preset:Flower
 julian                   out  (+0,normal)              rare      tests/visual/configs/warmup.fflame
 julian                   out  (normal,+0)              rare      tests/visual/configs/warmup.fflame
 julian                   out  (inf,inf)                rare      preset:Flower
-julian                   out  (nan,nan)                rare      preset:Flower
+julian                   out  (inf,nan)                rare      preset:Flower
 julian                   use  (exercised)              dominant  preset:Grand Julian
 julian2                  use  (exercised)              dominant  tests/visual/configs/variations/apo-misc9-smoke.fflame
 julian3Dx                in   (normal,+0)              trace     tests/visual/configs/variations/apo-misc15-smoke.fflame
@@ -935,7 +933,6 @@ subflame_wf              in   z:+0                     dominant  tests/visual/co
 subflame_wf              out  (+0,normal)              common    tests/visual/configs/2d/subflame-blob.fflame
 subflame_wf              out  (normal,+0)              common    tests/visual/configs/2d/subflame-julian.fflame
 subflame_wf              out  (normal,tiny)            rare      tests/visual/configs/2d/subflame-julian.fflame
-subflame_wf              out  (nan,nan)                dominant  tests/visual/configs/2d/subflame-blob.fflame
 subflame_wf              out  z:+0                     dominant  tests/visual/configs/3d/subflame-smoke.fflame
 subflame_wf              use  (exercised)              dominant  tests/visual/configs/2d/subflame-blob.fflame
 superShape3d             in   (+0,+0)                  trace     tests/visual/configs/variations/supershape3d-smoke.fflame
