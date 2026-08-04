@@ -376,11 +376,21 @@ fn random_transform_with_settings<R: Rng>(
         transform.color = rng.random_range(0.0..1.0);
     }
 
-    // Build list of enabled variations
-    let enabled: Vec<&str> = settings.enabled_variations
+    // Build list of enabled variations.
+    //
+    // SORTED, and the sort is load-bearing: the rng draws below index
+    // into this list, and `enabled_variations` is a HashSet whose
+    // iteration order is randomized per process. Unsorted, the same
+    // seed produced a DIFFERENT flame in every process — the in-process
+    // determinism test can't see it (both batches share one iteration
+    // order), and it surfaced as census corpus runs drifting on two
+    // platforms while curated flames were byte-stable. A seed is only a
+    // shareable artifact if the list it indexes has one order.
+    let mut enabled: Vec<&str> = settings.enabled_variations
         .iter()
         .map(|s| s.as_str())
         .collect();
+    enabled.sort_unstable();
 
     if enabled.is_empty() {
         // Fallback to linear if no variations enabled
@@ -546,6 +556,41 @@ mod tests {
         assert_eq!(batch.len(), batch2.len());
         for (f1, f2) in batch.iter().zip(batch2.iter()) {
             assert_eq!(f1.flame.transforms.len(), f2.flame.transforms.len());
+        }
+    }
+
+    /// The rng draws index into the enabled-variations list, so its
+    /// order must not depend on HashSet iteration. Two sets with the
+    /// same CONTENT but different construction order (distinct
+    /// RandomState instances iterate differently even in one process)
+    /// must produce identical flames from identical seeds — without the
+    /// sort in `add_random_variations`' caller this fails, and across
+    /// processes every seed silently meant a different flame.
+    #[test]
+    fn same_seed_same_set_same_flame_regardless_of_hash_order() {
+        use rand::SeedableRng;
+        let mut a = RandomGeneratorSettings::default();
+        let mut b = RandomGeneratorSettings::default();
+        // Rebuild b's set in reverse insertion order.
+        let mut names: Vec<String> = a.enabled_variations.iter().cloned().collect();
+        names.sort();
+        b.enabled_variations = names.iter().rev().cloned().collect();
+        a.enabled_variations = names.iter().cloned().collect();
+
+        for seed in [1u64, 7, 42, 77] {
+            let mut ra = rand_pcg::Pcg64Mcg::seed_from_u64(seed);
+            let mut rb = rand_pcg::Pcg64Mcg::seed_from_u64(seed);
+            let fa = generate_random_flame_with_rng(&a, &mut ra);
+            let fb = generate_random_flame_with_rng(&b, &mut rb);
+            assert_eq!(fa.transforms.len(), fb.transforms.len(), "seed {seed}");
+            for (i, (ta, tb)) in fa.transforms.iter().zip(fb.transforms.iter()).enumerate() {
+                assert_eq!(ta.a, tb.a, "seed {seed} x{i} affine");
+                let mut va: Vec<_> = ta.variations.iter().collect();
+                let mut vb: Vec<_> = tb.variations.iter().collect();
+                va.sort_by(|x, y| x.0.cmp(y.0));
+                vb.sort_by(|x, y| x.0.cmp(y.0));
+                assert_eq!(va, vb, "seed {seed} x{i} variations");
+            }
         }
     }
 }

@@ -482,9 +482,6 @@ pub fn run_corpus_cli(iterations: u64, seeds: u32, out_path: &Path) -> i32 {
 
 fn run_corpus(iterations: u64, seeds: u32, out_path: &Path) -> Result<(), String> {
     pollster::block_on(async {
-        // Shared device. A device-per-flame variant was tried while
-        // chasing run-to-run count drift and did NOT reduce it — see
-        // the stability notes in the design doc.
         let (device, queue, adapter_line) = create_device().await?;
         let mut flames = corpus(seeds);
         for (_, config) in &mut flames {
@@ -497,6 +494,17 @@ fn run_corpus(iterations: u64, seeds: u32, out_path: &Path) -> Result<(), String
         let started = web_time::Instant::now();
 
         for (i, (label, config)) in flames.iter().enumerate() {
+            // One device per flame, and it is load-bearing: with a
+            // shared device, corpus runs drifted (~150 of ~1110 rows)
+            // while every flame was bit-deterministic standalone —
+            // cross-flame contamination through recycled allocations.
+            // An earlier version of this experiment appeared to refute
+            // that, but it ran while the random-flame GENERATOR was
+            // itself nondeterministic (HashSet-order bug, see
+            // randomize.rs), which confounded everything. Fixed
+            // generation + fresh devices = two identical corpus runs,
+            // byte-for-byte, at no measurable time cost.
+            let (device, queue, _) = create_device().await?;
             match census_config(&device, &queue, config, iterations) {
                 Ok(raw) => {
                     aggregate(config, &raw, label, &mut agg);
