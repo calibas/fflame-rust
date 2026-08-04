@@ -629,11 +629,25 @@ pub static JULIAC: VariationDef = VariationDef {
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
+    // `re` and `im` follow JuliaCFunc's own defaults, not zero.
+    //
+    // JWF randomizes: `re = genRandomPower() + 0.5`, which can only land
+    // on {3,4,5,6,7,8} or {-2,…,-7}, and `im = 0.5`. We pick
+    // deterministically — the same convention julian and juliascope
+    // already use — taking the smallest positive value JWF can produce.
+    //
+    // `re = 0` is not merely a different look, it is outside JWF's whole
+    // range and makes the variation unable to render: `re_recip` becomes
+    // 1/1e-30 = 1e30, so `mod2 = exp(lnmod · 1e30)` is +inf for every
+    // point outside the unit circle and 0 for every point inside it.
+    // Found by the numerical probe (docs/projects/variation-math-probe.md),
+    // which flagged juliac returning inf/NaN at all four diagonals and
+    // exactly (0,0) at ordinary inputs.
     parameters: &[
         VariationParamDef { name: "re", display_name: "Re", param_type: ParamType::UnlimitedFloat,
-                            default_value: 0.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Real part of the complex power.") },
+                            default_value: 3.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Real part of the complex power.") },
         VariationParamDef { name: "im", display_name: "Im", param_type: ParamType::UnlimitedFloat,
-                            default_value: 0.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Imaginary part of the complex power.") },
+                            default_value: 0.5, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Imaginary part of the complex power.") },
         VariationParamDef { name: "dist", display_name: "Dist", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Distance scaling on the log-of-radius term — affects how rapidly the spiral grows outward.") },
     ],
