@@ -42,6 +42,7 @@
 //!   solid flames and says so.
 //! - Subflame dispatchers are not instrumented.
 
+pub mod rank;
 pub mod run;
 
 /// One u32 counter per possible transform, before the class tables:

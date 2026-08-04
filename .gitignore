@@ -60,3 +60,10 @@ wasm/*/pkg/
 # changed numbers in every diff and train people to skip the file.
 docs/generated/variation-probe.timings.txt
 docs/generated/variation-probe.progress
+
+# Reachability-census report: generated locally (48s), read by
+# `variation_probe rank`. NOT committed — two identical runs still
+# differ in ~11/1110 rows (corpus-context nondeterminism; single-flame
+# runs are bit-identical). See the stability note in
+# docs/projects/variation-reachability-census.md.
+docs/generated/variation-census.txt

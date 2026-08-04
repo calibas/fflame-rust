@@ -19,17 +19,42 @@ fn main() {
 
     let args: Vec<String> = std::env::args().skip(1).collect();
     let code = match args.first().map(String::as_str) {
-        Some("census") => match args.get(1) {
-            Some(p) => {
-                // Optional second arg: iteration budget (default 100M).
-                let iters = args
-                    .get(2)
+        Some("census") => {
+            // census <flame.fflame> [iters]      one flame, exact numbers
+            // census --corpus [iters] [seeds]    the sweep + committed report
+            let num = |i: usize, default: u64| {
+                args.get(i)
                     .and_then(|s| s.replace('_', "").parse::<u64>().ok())
-                    .unwrap_or(100_000_000);
-                fractal_flame_wgpu::census::run::run_single_cli(Path::new(p), iters)
+                    .unwrap_or(default)
+            };
+            match args.get(1).map(String::as_str) {
+                Some("--corpus") => fractal_flame_wgpu::census::run::run_corpus_cli(
+                    num(2, 50_000_000),
+                    num(3, 100) as u32,
+                    Path::new("docs/generated/variation-census.txt"),
+                ),
+                Some(p) => fractal_flame_wgpu::census::run::run_single_cli(
+                    Path::new(p),
+                    num(2, 100_000_000),
+                ),
+                None => {
+                    eprintln!(
+                        "usage: variation_probe census <config.fflame> [iterations]\n       variation_probe census --corpus [iterations] [seeds]"
+                    );
+                    2
+                }
             }
-            None => {
-                eprintln!("usage: variation_probe census <config.fflame> [iterations]");
+        }
+        Some("rank") => match args.get(1..3) {
+            Some([a, b]) => {
+                let census = args
+                    .get(3)
+                    .map(|s| Path::new(s).to_path_buf())
+                    .unwrap_or_else(|| Path::new("docs/generated/variation-census.txt").to_path_buf());
+                fractal_flame_wgpu::census::rank::run_cli(Path::new(a), Path::new(b), &census)
+            }
+            _ => {
+                eprintln!("usage: variation_probe rank <old-report> <new-report> [census-report]");
                 2
             }
         },

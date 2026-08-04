@@ -1,6 +1,8 @@
 # Variation reachability census
 
-**Status: DESIGN DRAFT — not yet built.**
+**Status: BUILT** — phases 1–3 shipped (instrument 05deb591, runtime
+9a218b15, corpus + rank in the phase-2/3 commit). Phase 4's commit
+decision is resolved below, for now: **the report is not committed.**
 
 Counts what real renders actually feed every variation, so the math
 probe's divergence list can be ranked by what occurs instead of read as
@@ -147,6 +149,49 @@ established response) or an accepted-diff entry with a reason.
   becomes a gate is decided after seeing run-to-run stability; counts
   are stochastic and cross-platform counts drift by construction
   (the divergences themselves alter trajectories).
+
+## Measured results (2026-08-04, M2 / Metal)
+
+- Corpus: 9 presets + 148 visual configs + 100 seeded randoms = 257
+  flames, 252 run (5 solid skipped), 50M iterations each, **48 s**
+  total — the 10-minute estimate was off by 12x in the good direction.
+- ~1,110 report rows; 367 variations exercised.
+- Validation: npolar's `(normal, ±0)` output structure — the apo-misc7
+  bug — appears at 52.8% + 3.0% of its calls, from orbit, on the first
+  run. A count=3 observation (fdisc) sits beside it with no false rows.
+- `rank` over the standing Windows↔Metal probe diff: **2,275 hard
+  divergence sites → 91 REACHABLE** (with reproducer flames), 1,422
+  unobserved-by-corpus, 762 not-exercised. The top of the list is
+  exp-family NaN transitions at `large`/`near_threshold` inputs that a
+  real corpus flame delivers.
+
+### Stability, measured honestly
+
+The committed-report question got three experiments:
+
+1. **Forcing `deterministic_rng` across the corpus** (presets and
+   randoms don't set it): run-to-run churn dropped ~150 → ~65 rows.
+   Kept.
+2. **Explicitly clearing the census tail** before the first pass: the
+   tail is excluded from every ordinary clear, and relying on
+   buffer-creation zeroing let recycled allocations leak the previous
+   flame's counters — row counts stabilised (1112 = 1112) once
+   cleared. Kept.
+3. **Device-per-flame** (virgin allocations for everything): did NOT
+   reduce the residual churn — the recycling hypothesis is
+   insufficient. Reverted.
+
+Residual: ~40–80 of ~1,110 rows drift between identical corpus runs,
+concentrated in heavy-tailed classes (how often a walk escapes past
+1e16) of a handful of flames. The same flame is **bit-deterministic
+run-to-run standalone**, and our generated WGSL is process-stable (the
+canonical dumps prove that), so the residual lives below our source —
+naga codegen or Metal compilation/execution. Until that is understood,
+the report is **generated locally and gitignored**; `rank` reads the
+local file. Buckets damp most of the churn for human reading either
+way. Worth re-running the two-corpus experiment on Windows/NVIDIA —
+if it is byte-stable there, the committed-report convention can be
+"regenerate on Windows", like the probe reports.
 
 ## Phases
 
