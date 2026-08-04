@@ -165,33 +165,44 @@ established response) or an accepted-diff entry with a reason.
   exp-family NaN transitions at `large`/`near_threshold` inputs that a
   real corpus flame delivers.
 
-### Stability, measured honestly
+### Stability: two bugs, both fixed, report committed
 
-The committed-report question got three experiments:
+Getting to a byte-stable report took four experiments and found two
+real bugs — one of them nowhere near the census:
 
-1. **Forcing `deterministic_rng` across the corpus** (presets and
-   randoms don't set it): run-to-run churn dropped ~150 → ~65 rows.
-   Kept.
-2. **Explicitly clearing the census tail** before the first pass: the
-   tail is excluded from every ordinary clear, and relying on
-   buffer-creation zeroing let recycled allocations leak the previous
-   flame's counters — row counts stabilised (1112 = 1112) once
-   cleared. Kept.
-3. **Device-per-flame** (virgin allocations for everything): did NOT
-   reduce the residual churn — the recycling hypothesis is
-   insufficient. Reverted.
+1. **The random-flame generator was nondeterministic per process.**
+   `enabled_variations` is a HashSet, the rng draws index into its
+   collected order, and HashSet iteration is per-process random — so
+   the same Pcg seed generated a DIFFERENT flame in every process. The
+   in-process determinism test could never see it (one process, one
+   order). Found by the curated-vs-random split measured on Windows;
+   proven by dumping generated flames from two processes; fixed by
+   sorting the list (randomize.rs), with a regression test that builds
+   the same set in two insertion orders. Every stability measurement
+   taken before this fix was confounded by it.
+2. **The census tail inherited the previous flame's counters** through
+   recycled allocations on a shared device — explicit clear added
+   (clear_census_tail).
+3. **Device-per-flame** was tried under the confounding and wrongly
+   "refuted"; re-run after the generator fix, it is the remaining piece:
+   shared-device corpus runs still drifted (~150 rows) while every
+   flame was bit-deterministic standalone; fresh devices per flame +
+   fixed generation = **two full-corpus runs byte-identical**, at no
+   measurable cost (48s).
 
-Residual: ~40–80 of ~1,110 rows drift between identical corpus runs,
-concentrated in heavy-tailed classes (how often a walk escapes past
-1e16) of a handful of flames. The same flame is **bit-deterministic
-run-to-run standalone**, and our generated WGSL is process-stable (the
-canonical dumps prove that), so the residual lives below our source —
-naga codegen or Metal compilation/execution. Until that is understood,
-the report is **generated locally and gitignored**; `rank` reads the
-local file. Buckets damp most of the churn for human reading either
-way. Worth re-running the two-corpus experiment on Windows/NVIDIA —
-if it is byte-stable there, the committed-report convention can be
-"regenerate on Windows", like the probe reports.
+The report is therefore **committed** (docs/generated/
+variation-census.txt). Cross-platform counts still differ by
+construction — platform math differences alter trajectories — so the
+regeneration convention should follow the probe reports: one
+authoring platform. Whether that is Windows (matching the probe) is
+decided at the first Windows regeneration.
+
+Open question, deliberately not chased here: what exactly the
+shared-device contamination corrupts for flames run back-to-back on
+one device. The census sidesteps it with fresh devices; the app and
+CLI exports are insulated (one flame per renderer lifetime per
+process); but it is a real observation about the stack, recorded in
+the runner's comment.
 
 ## Phases
 
