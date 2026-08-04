@@ -273,7 +273,12 @@ pub static EX: VariationDef = VariationDef {
     wgsl_2d: r#"
 fn variation_ex(p: vec2<f32>) -> vec2<f32> {
     let r = length(p);
-    let theta = atan2(p.y, p.x);
+    // ff_atan2: Metal's fast atan2 is pi/4 at SAME-sign zero pairs and
+    // NaN at MIXED-sign ones (measured; IEEE is finite for all four).
+    // This variation reaches zero pairs in real renders — the probe
+    // showed NaN output at the origin classes on Metal only. See
+    // utilities.wgsl.
+    let theta = ff_atan2(p.y, p.x);
     let n0 = sin(theta + r);
     let n1 = cos(theta - r);
     let m0 = n0 * n0 * n0;  // n0³
@@ -284,7 +289,12 @@ fn variation_ex(p: vec2<f32>) -> vec2<f32> {
     wgsl_3d: r#"
 fn variation_ex(p: vec3<f32>) -> vec3<f32> {
     let r = length(p.xy);
-    let theta = atan2(p.y, p.x);
+    // ff_atan2: Metal's fast atan2 is pi/4 at SAME-sign zero pairs and
+    // NaN at MIXED-sign ones (measured; IEEE is finite for all four).
+    // This variation reaches zero pairs in real renders — the probe
+    // showed NaN output at the origin classes on Metal only. See
+    // utilities.wgsl.
+    let theta = ff_atan2(p.y, p.x);
     let n0 = sin(theta + r);
     let n1 = cos(theta - r);
     let m0 = n0 * n0 * n0;

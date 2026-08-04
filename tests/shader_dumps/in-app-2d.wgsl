@@ -991,13 +991,19 @@ fn post_symmetry_copy(p: vec3<f32>, k: u32) -> vec3<f32> {
 // reach atan2(0, 0).
 //
 // Metal compiles shaders with fast-math (wgpu never clears
-// `fastMathEnabled`, which defaults to true), and its fast atan2
-// returns pi/4 at the origin. Probed on an M2: that is the ONLY input
-// where it diverges from IEEE — everything else agrees to 1 ulp. pi/4
-// is a plausible finite value, so no bad-value guard downstream can
-// tell it from a real angle; it silently relocates the point. It cost
-// npolar 73% of apo-misc7's lit pixels, because npolar at its default
-// parity reaches (0, 0) on every call.
+// `fastMathEnabled`, which defaults to true), and its fast atan2 is
+// broken at the origin in BOTH ways, measured on an M2:
+//
+//   atan2(+0,+0) = pi/4     atan2(+0,-0) = NaN
+//   atan2(-0,-0) = pi/4     atan2(-0,+0) = NaN
+//
+// Same-sign zero pairs give pi/4 — a plausible finite value no
+// bad-value guard can tell from a real angle; it silently relocates
+// the point, and cost npolar 73% of apo-misc7's lit pixels. MIXED-sign
+// pairs give NaN, which killed points at the origin (where every
+// respawn starts) in circular, circular2, ex, flower_db, and at the
+// exact n-gon corners of hypercrop. Away from zero pairs it agrees
+// with IEEE to 1 ulp.
 //
 // The branch reproduces IEEE exactly, which is NOT "return 0": the
 // result depends on the signs of the two zeros.
