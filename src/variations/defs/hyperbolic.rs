@@ -8,6 +8,38 @@
 //! Reference (per-variation):
 //!   - https://github.com/mwegner/chaotica-apophysis-plugins-from-jwildfire/blob/master/output/<name>.cpp
 //!   - JWildfire Java source linked from each header.
+//!
+//! # The `1.1754944e-38` guards
+//!
+//! That is `f32::MIN_POSITIVE`, the smallest NORMAL float, and it is
+//! chosen for exactly that property.
+//!
+//! These sites were ported as `1e-40`, which is what the JWildfire /
+//! Apophysis source uses. There it is fine: those run in f64, where the
+//! smallest normal is ~2.2e-308, so `log(0 + 1e-40)` is a perfectly
+//! ordinary -92.103.
+//!
+//! In f32 the smallest normal is 1.1754944e-38, so `1e-40` is SUBNORMAL —
+//! and GPUs flush subnormals to zero. NVIDIA/Vulkan and Apple/Metal both
+//! do. So the guard evaluated to `max(r2, 0)` / `log(x + 0)` and did
+//! nothing, and a zero argument produced -Inf where the reference
+//! implementation produces a finite number. -Inf is not a near miss: it
+//! trips the bad-value recovery in `main_template.wgsl` and respawns the
+//! point, where Apophysis carries on.
+//!
+//! This is a straight f64 -> f32 porting hazard, NOT a platform
+//! difference — it was equally broken on both. It is fixed here rather
+//! than kept "consistent" because the reference behaviour is the one we
+//! are trying to match.
+//!
+//! The smallest normal is used rather than the `1e-30` common elsewhere
+//! in this codebase because it is the closest we can get to the source's
+//! intent while surviving the flush: it lands at -87.337 against
+//! JWildfire's -92.103, in the same class, where `1e-30` would give
+//! -69.078.
+//!
+//! Found by the variation math probe; see
+//! `docs/projects/variation-math-probe.md`.
 
 use crate::variations::{
     definition::{Feature, VariationDef},
@@ -45,7 +77,7 @@ fn variation_acoth(p: vec2<f32>) -> vec2<f32> {
     let ratio_re = ((p.x + 1.0) * (p.x - 1.0) + p.y * p.y) / denom_mag2;
     let ratio_im = -2.0 * p.y / denom_mag2;
     // (1/2) * ln(ratio): complex log scaled by 1/2
-    let log_re = 0.25 * log(ratio_re * ratio_re + ratio_im * ratio_im + 1e-40);
+    let log_re = 0.25 * log(ratio_re * ratio_re + ratio_im * ratio_im + 1.1754944e-38);
     let log_im = 0.5 * atan2(ratio_im, ratio_re);
     // Flip then scale by 2/π
     return vec2<f32>(two_over_pi * log_im, two_over_pi * log_re);
@@ -57,7 +89,7 @@ fn variation_acoth(p: vec3<f32>) -> vec3<f32> {
     let denom_mag2 = max((p.x - 1.0) * (p.x - 1.0) + p.y * p.y, 1e-20);
     let ratio_re = ((p.x + 1.0) * (p.x - 1.0) + p.y * p.y) / denom_mag2;
     let ratio_im = -2.0 * p.y / denom_mag2;
-    let log_re = 0.25 * log(ratio_re * ratio_re + ratio_im * ratio_im + 1e-40);
+    let log_re = 0.25 * log(ratio_re * ratio_re + ratio_im * ratio_im + 1.1754944e-38);
     let log_im = 0.5 * atan2(ratio_im, ratio_re);
     return vec3<f32>(two_over_pi * log_im, two_over_pi * log_re, p.z);
 }
@@ -101,7 +133,7 @@ fn variation_acosh(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     let arg_re = p.x + s_re;
     let arg_im = p.y + s_im;
     // log(arg)
-    let log_re = 0.5 * log(arg_re * arg_re + arg_im * arg_im + 1e-40);
+    let log_re = 0.5 * log(arg_re * arg_re + arg_im * arg_im + 1.1754944e-38);
     let log_im = atan2(arg_im, arg_re);
     let sign_flip = select(1.0, -1.0, rng_nextf(rng) < 0.5);
     return vec2<f32>(sign_flip * two_over_pi * log_re, sign_flip * two_over_pi * log_im);
@@ -118,7 +150,7 @@ fn variation_acosh(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
     let s_im = select(s_im_mag, -s_im_mag, z2_im < 0.0);
     let arg_re = p.x + s_re;
     let arg_im = p.y + s_im;
-    let log_re = 0.5 * log(arg_re * arg_re + arg_im * arg_im + 1e-40);
+    let log_re = 0.5 * log(arg_re * arg_re + arg_im * arg_im + 1.1754944e-38);
     let log_im = atan2(arg_im, arg_re);
     let sign_flip = select(1.0, -1.0, rng_nextf(rng) < 0.5);
     return vec3<f32>(sign_flip * two_over_pi * log_re, sign_flip * two_over_pi * log_im, p.z);
@@ -167,7 +199,7 @@ fn variation_acosech(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     let arg_re = w_re + s_re;
     let arg_im = w_im + s_im;
     // log(arg)
-    let log_re = 0.5 * log(arg_re * arg_re + arg_im * arg_im + 1e-40);
+    let log_re = 0.5 * log(arg_re * arg_re + arg_im * arg_im + 1.1754944e-38);
     let log_im = atan2(arg_im, arg_re);
     // Flip then scale 2/π, then random ±
     let sign_flip = select(1.0, -1.0, rng_nextf(rng) < 0.5);
@@ -188,7 +220,7 @@ fn variation_acosech(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
     let s_im = select(s_im_mag, -s_im_mag, w2_im < 0.0);
     let arg_re = w_re + s_re;
     let arg_im = w_im + s_im;
-    let log_re = 0.5 * log(arg_re * arg_re + arg_im * arg_im + 1e-40);
+    let log_re = 0.5 * log(arg_re * arg_re + arg_im * arg_im + 1.1754944e-38);
     let log_im = atan2(arg_im, arg_re);
     let sign_flip = select(1.0, -1.0, rng_nextf(rng) < 0.5);
     return vec3<f32>(sign_flip * two_over_pi * log_im, sign_flip * two_over_pi * log_re, p.z);
@@ -243,7 +275,7 @@ fn variation_arcsech(p: vec2<f32>) -> vec2<f32> {
     let arg_re = w_re + prod_re;
     let arg_im = w_im + prod_im;
     // log(arg)
-    let log_re = 0.5 * log(arg_re * arg_re + arg_im * arg_im + 1e-40);
+    let log_re = 0.5 * log(arg_re * arg_re + arg_im * arg_im + 1.1754944e-38);
     let log_im = atan2(arg_im, arg_re);
     return vec2<f32>(two_over_pi * log_re, two_over_pi * log_im);
 }
@@ -268,7 +300,7 @@ fn variation_arcsech(p: vec3<f32>) -> vec3<f32> {
     let prod_im = sa_re * sb_im + sa_im * sb_re;
     let arg_re = w_re + prod_re;
     let arg_im = w_im + prod_im;
-    let log_re = 0.5 * log(arg_re * arg_re + arg_im * arg_im + 1e-40);
+    let log_re = 0.5 * log(arg_re * arg_re + arg_im * arg_im + 1.1754944e-38);
     let log_im = atan2(arg_im, arg_re);
     return vec3<f32>(two_over_pi * log_re, two_over_pi * log_im, 0.0);
 }
@@ -316,7 +348,7 @@ fn variation_arcsech2(p: vec2<f32>) -> vec2<f32> {
     let prod_im = sa_re * sb_im + sa_im * sb_re;
     let arg_re = w_re + prod_re;
     let arg_im = w_im + prod_im;
-    let log_re = 0.5 * log(arg_re * arg_re + arg_im * arg_im + 1e-40);
+    let log_re = 0.5 * log(arg_re * arg_re + arg_im * arg_im + 1.1754944e-38);
     let log_im = atan2(arg_im, arg_re);
     let res_re = scale * log_re;
     let res_im = scale * log_im;
@@ -348,7 +380,7 @@ fn variation_arcsech2(p: vec3<f32>) -> vec3<f32> {
     let prod_im = sa_re * sb_im + sa_im * sb_re;
     let arg_re = w_re + prod_re;
     let arg_im = w_im + prod_im;
-    let log_re = 0.5 * log(arg_re * arg_re + arg_im * arg_im + 1e-40);
+    let log_re = 0.5 * log(arg_re * arg_re + arg_im * arg_im + 1.1754944e-38);
     let log_im = atan2(arg_im, arg_re);
     let res_re = scale * log_re;
     let res_im = scale * log_im;
@@ -398,7 +430,7 @@ fn variation_arcsinh(p: vec2<f32>) -> vec2<f32> {
     let arg_re = p.x + s_re;
     let arg_im = p.y + s_im;
     // log(arg)
-    let log_re = 0.5 * log(arg_re * arg_re + arg_im * arg_im + 1e-40);
+    let log_re = 0.5 * log(arg_re * arg_re + arg_im * arg_im + 1.1754944e-38);
     let log_im = atan2(arg_im, arg_re);
     return vec2<f32>(two_over_pi * log_re, two_over_pi * log_im);
 }
@@ -414,7 +446,7 @@ fn variation_arcsinh(p: vec3<f32>) -> vec3<f32> {
     let s_im = select(s_im_mag, -s_im_mag, z2_im < 0.0);
     let arg_re = p.x + s_re;
     let arg_im = p.y + s_im;
-    let log_re = 0.5 * log(arg_re * arg_re + arg_im * arg_im + 1e-40);
+    let log_re = 0.5 * log(arg_re * arg_re + arg_im * arg_im + 1.1754944e-38);
     let log_im = atan2(arg_im, arg_re);
     return vec3<f32>(two_over_pi * log_re, two_over_pi * log_im, 0.0);
 }
@@ -451,7 +483,7 @@ fn variation_arctanh(p: vec2<f32>) -> vec2<f32> {
     let ratio_re = ((1.0 + p.x) * (1.0 - p.x) - p.y * p.y) / denom_mag2;
     let ratio_im = (p.y * (1.0 - p.x) + p.y * (1.0 + p.x)) / denom_mag2;
     // (1/2) * ln(ratio): scaled below by extra (2/π)/2 = 1/π
-    let log_re = 0.5 * log(ratio_re * ratio_re + ratio_im * ratio_im + 1e-40);
+    let log_re = 0.5 * log(ratio_re * ratio_re + ratio_im * ratio_im + 1.1754944e-38);
     let log_im = atan2(ratio_im, ratio_re);
     return vec2<f32>(one_over_pi * 0.5 * log_re, one_over_pi * 0.5 * log_im);
 }
@@ -462,7 +494,7 @@ fn variation_arctanh(p: vec3<f32>) -> vec3<f32> {
     let denom_mag2 = max((1.0 - p.x) * (1.0 - p.x) + p.y * p.y, 1e-20);
     let ratio_re = ((1.0 + p.x) * (1.0 - p.x) - p.y * p.y) / denom_mag2;
     let ratio_im = (p.y * (1.0 - p.x) + p.y * (1.0 + p.x)) / denom_mag2;
-    let log_re = 0.5 * log(ratio_re * ratio_re + ratio_im * ratio_im + 1e-40);
+    let log_re = 0.5 * log(ratio_re * ratio_re + ratio_im * ratio_im + 1.1754944e-38);
     let log_im = atan2(ratio_im, ratio_re);
     return vec3<f32>(one_over_pi * 0.5 * log_re, one_over_pi * 0.5 * log_im, 0.0);
 }
