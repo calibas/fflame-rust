@@ -201,6 +201,23 @@ python scripts/run_benchmarks.py --quick  # Quick mode (skip WASM)
 
 **What's tested:** transform math, variations, palette interpolation, XML round-trips (camera, variation-param unit conversions), camera-matrix/rotation math (fly-mode `to_euler_near` round-trips and pole handling), config storage keys, version info
 
+**Variation math probe** (`cargo run --release --bin variation_probe`):
+evaluates every shipped variation's shader arithmetic at a fixed
+adversarial input grid (all four signed zeros, values straddling the
+`1e32` bad-value threshold, subnormals) in 2D and 3D, and writes
+`docs/generated/variation-probe.txt`, plus a `-sweep.txt` companion that
+moves each parameter one at a time (both arms of every boolean, every
+enum choice, numeric extremes) — that sweep reaches NaN/Inf in 386 places
+the defaults never do. Diff two of them —
+`variation_probe -- compare OLD NEW` — to find cross-platform
+divergence; it is the tool for the fast-math class of bug that cost
+`npolar` 73% of its pixels on Metal. Compares **classes** (zero / finite
+/ NaN / inf / past-threshold), which no rounding difference can perturb,
+separately from quantised magnitudes; only a class change exits
+non-zero. The first run on a machine pays cold driver compiles (~4 min);
+subsequent runs are seconds. See
+[docs/projects/variation-math-probe.md](docs/projects/variation-math-probe.md).
+
 ### CLI Export Mode
 
 The main app supports headless batch PNG export for testing and automation:

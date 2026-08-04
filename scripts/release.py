@@ -149,6 +149,8 @@ def cmd_check(args):
     print(f"{DIM}Not covered here — they need a GPU and a few minutes:{RESET}")
     print(f"{DIM}  cargo build --release && python tests/visual/run_tests.py{RESET}")
     print(f"{DIM}  python scripts/run_benchmarks.py --quick{RESET}")
+    print(f"{DIM}  cargo run --release --bin variation_probe   "
+          f"(regenerate if variation math changed){RESET}")
     return 0
 
 

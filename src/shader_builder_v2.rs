@@ -321,6 +321,20 @@ pub struct ShaderConstants {
     /// docs/projects/solid-rendering.md, Phase 0 export notes).
     pub solid_enabled: bool,
 
+    /// Emit the numerical probe's `probe_main` entry point alongside the
+    /// normal one. Drives the `PROBE` template flag.
+    ///
+    /// Only ever true for `src/probe/`, never for a render. When false
+    /// the emitted WGSL is byte-identical to a build predating the
+    /// feature — the same contract `solid_enabled` holds to, and for
+    /// the same reason: a diagnostic that perturbs the thing it
+    /// measures is worth nothing.
+    ///
+    /// Requires the direct-histogram output path, because the probe
+    /// carries its I/O on the histogram binding; on the sample-emit
+    /// path that binding is the `samples` array instead.
+    pub probe: bool,
+
     /// Per-flame `array<u32, N>` length for the AttachmentList struct.
     /// Substituted into the shader headers via the `{{ATTACHMENT_CAP}}`
     /// placeholder; also drives the dynamic stride used when the host
@@ -363,6 +377,7 @@ impl Default for ShaderConstants {
             has_analytic_blur: false,
             flatten_z_per_iter: false,
             solid_enabled: false,
+            probe: false,
             attachment_cap: 1,
             inlined_transforms: None,
             cumulative_weights: None,
@@ -593,6 +608,7 @@ impl ShaderConstants {
             // config-level. constants_from_config overrides after
             // construction.
             solid_enabled: false,
+            probe: false,
             attachment_cap: flame.attachment_cap() as u32,
             inlined_transforms: Some(inlined),
             cumulative_weights: Some(cumulative),
@@ -1529,6 +1545,13 @@ impl ShaderBuilder {
         // plot section. False ⇒ byte-identical to a non-blur build. See
         // docs/projects/analytic-blur-buffer.md.
         processor.set("HAS_ANALYTIC_BLUR", constants.has_analytic_blur);
+        // PROBE appends `probe_main` (see the block at the end of
+        // main_template.wgsl). It reuses this same processor, so its
+        // `apply_variations` call inherits the HAS_DC / HAS_RGB /
+        // HAS_ANALYTIC_BLUR gates from the very same flags the real
+        // call sites above use — which is the point of putting it in
+        // the template rather than generating it separately.
+        processor.set("PROBE", constants.probe);
         // FLATTEN_Z_PER_ITER used to insert a blanket `current.z = 0.0;`
         // at the end of each iteration under preserve_z=false. That
         // destroyed the z compounding JWF gets through unconditional

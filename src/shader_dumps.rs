@@ -112,6 +112,7 @@ impl Spec {
         let constants = ShaderConstants {
             num_transforms: flame.transforms.len() as u32,
             solid_enabled: self.solid,
+            probe: false,
             ..ShaderConstants::default()
         };
 

@@ -54,3 +54,9 @@ python/.pytest_cache/
 # Infinite Gallery thin wasm crates (standalone, python/-style)
 wasm/*/target/
 wasm/*/pkg/
+
+# Probe timings are machine-specific — the report beside them is the
+# artefact that travels. Committing these would put a few hundred
+# changed numbers in every diff and train people to skip the file.
+docs/generated/variation-probe.timings.txt
+docs/generated/variation-probe.progress
