@@ -42,6 +42,7 @@
 //!   solid flames and says so.
 //! - Subflame dispatchers are not instrumented.
 
+pub mod accepted;
 pub mod rank;
 /// Desktop only: the runner drives the GPU synchronously through
 /// `pollster`, which is a `cfg(not(wasm32))` dependency. `rank` and the

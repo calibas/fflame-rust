@@ -1,0 +1,50 @@
+# Accepted cross-platform divergences
+#
+# HAND-CURATED — not generated. Each line records a probe divergence
+# that was investigated and deliberately not fixed, with the reason and
+# the commit that carries the evidence. `variation_probe rank` reads
+# this file and subtracts matching sites from its worklist, so the top
+# of the list is always something nobody has looked at yet.
+#
+# An entry is not an exemption forever: it asserts the divergence is
+# understood and consequence-acceptable AS MEASURED. If a variation's
+# math changes, its entries deserve re-examination — the evidence
+# commit is the anchor for that.
+#
+# Format, whitespace-separated:
+#   <variation>  <dims>       comma-list: 2d, 3d
+#   <inputs>     comma-list of probe input labels, or *
+#   <reason...>  free text to end of line, citing the evidence commit
+#
+# The bar for adding a line: the mechanism is NAMED and MEASURED (not
+# guessed), and the consequence is one of
+#   - identical on both platforms (e.g. both reach bad-value recovery),
+#   - or a finite value difference too small to move a pixel.
+# "Probably fine" does not clear the bar; that is what the worklist is
+# for.
+
+# exp overflow at |x| beyond ~88 makes Inf/NaN mixes that differ per
+# platform, but every mix trips bad-value recovery, and the f64
+# reference overflows exp at these magnitudes too: all three
+# implementations respawn the point. Consequence-identical. (5317d46c)
+exp2         2d,3d  big,large,near_threshold,past_threshold,lopsided  exp-overflow Inf/NaN mix; recovery respawns on both platforms and in the reference (5317d46c)
+exponential  2d,3d  big,large,near_threshold,past_threshold,lopsided  exp-overflow Inf/NaN mix; recovery respawns on both platforms and in the reference (5317d46c)
+
+# Metal's fast tanh/FTZ flushes magnitudes around 1e-30 to zero where
+# NVIDIA keeps a denormal-adjacent value; the positional difference is
+# ~1e-30 units. (5317d46c)
+funnel       2d,3d  tiny,normal_min,lopsided  tanh/FTZ flush texture at 1e-30 magnitudes; value-invisible (5317d46c)
+
+# 1-ulp atan2 differences at exact quadrant/axis points, amplified
+# through cos/sin zero crossings into finite sign flips of ~1e-7
+# magnitude components. Sub-pixel at any reachable zoom, and not
+# guardable without replacing the platform's trig. (942c9246)
+circular     2d,3d  q1,q3,pi_e,neg0y_x     1-ulp atan2 -> cos/sin sign texture, ~1e-7; sub-pixel (942c9246)
+circular2    2d,3d  q1,q3,unit,neg0y_x     1-ulp atan2 -> cos/sin sign texture, ~1e-7; sub-pixel (942c9246)
+ex           2d,3d  q2,q3,half_unit,neg0y_x  1-ulp atan2 -> cos/sin sign texture, ~1e-7; sub-pixel (942c9246)
+flower_db    2d,3d  q1,q3,half_unit,neg0y_x  1-ulp atan2 -> cos/sin sign texture, ~1e-7; sub-pixel (942c9246)
+
+# At its exact n-gon corners hypercrop's dx/dy are zeros vs ~1e-7
+# depending on platform trig rounding; both finite, both land the
+# point on the corner to sub-pixel precision. (942c9246)
+hypercrop    2d,3d  -x,-y,q2,q3  corner-exact zero vs ~1e-7 finite texture; sub-pixel (942c9246)
