@@ -48,3 +48,15 @@ flower_db    2d,3d  q1,q3,half_unit,neg0y_x  1-ulp atan2 -> cos/sin sign texture
 # depending on platform trig rounding; both finite, both land the
 # point on the corner to sub-pixel precision. (942c9246)
 hypercrop    2d,3d  -x,-y,q2,q3  corner-exact zero vs ~1e-7 finite texture; sub-pixel (942c9246)
+
+# Batch 3 (blob, julian, maurer_rose, butterfly_fay, cannabiscurve_wf,
+# rhodonea): after their ff_atan2 adoptions eliminated the zero-pair
+# NaNs, what remains is finite<->zero/sign texture at ~1e-7 component
+# magnitudes — trig-ULP at exact axis/quadrant angles, and Metal's
+# sign handling of single-signed-zero atan2 arguments. Sub-pixel.
+blob             2d,3d  y_neg0x                    single-signed-zero atan2 sign texture, ~1e-7 (batch 3)
+julian           2d,3d  -x,neg0y_x                 single-signed-zero atan2 sign texture, ~1e-7 (batch 3)
+maurer_rose      2d,3d  neg0y_x                    single-signed-zero atan2 sign texture, ~1e-7 (batch 3)
+butterfly_fay    2d,3d  neg0y_x                    single-signed-zero atan2 sign texture, ~1e-7 (batch 3)
+cannabiscurve_wf 2d,3d  +0-0,-y,subnormal,y_neg0x  sin(pi)-ULP and FTZ flush texture, finite, ~1e-7 (batch 3)
+rhodonea         2d,3d  -0+0,-0-0,-x,+y,-y,q1,q2,q3,normal_min,neg0y_x  trig-ULP zero/sign texture at exact angles, finite, ~1e-7 (batch 3)

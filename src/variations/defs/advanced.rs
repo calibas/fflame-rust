@@ -484,7 +484,10 @@ fn variation_julian(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
 
     let r2 = dot(p, p);
     let r = pow(r2, cpower);
-    let theta = atan2(p.y, p.x);
+    // ff_atan2: Metal's fast atan2 is pi/4 at same-sign zero pairs and
+    // NaN at mixed-sign ones; the origin is reachable (respawn/fuse,
+    // and the probe showed NaN there on Metal only). See utilities.wgsl.
+    let theta = ff_atan2(p.y, p.x);
 
     let trunc_val = floor(abs(power) * rng_nextf(rng));
     let t = (theta + 6.28318530718 * trunc_val) / power;
@@ -499,7 +502,10 @@ fn variation_julian(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
 
     let r2 = dot(p.xy, p.xy);
     let r = pow(r2, cpower);
-    let theta = atan2(p.y, p.x);
+    // ff_atan2: Metal's fast atan2 is pi/4 at same-sign zero pairs and
+    // NaN at mixed-sign ones; the origin is reachable (respawn/fuse,
+    // and the probe showed NaN there on Metal only). See utilities.wgsl.
+    let theta = ff_atan2(p.y, p.x);
 
     let trunc_val = floor(abs(power) * rng_nextf(rng));
     let t = (theta + 6.28318530718 * trunc_val) / power;
@@ -562,7 +568,10 @@ fn variation_blob(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let p3 = get_param(xform_id, variation_id, 2u);  // waves
 
     let r = length(p);
-    let theta = atan2(p.x, p.y);  // Apophysis uses atan2(x,y)
+    // ff_atan2: Metal's fast atan2 is pi/4 at same-sign zero pairs and
+    // NaN at mixed-sign ones; the origin is reachable (respawn/fuse,
+    // and the probe showed NaN there on Metal only). See utilities.wgsl.
+    let theta = ff_atan2(p.x, p.y);  // Apophysis uses ff_atan2(x,y)
 
     let scale = r * (p2 + ((p1 - p2) / 2.0) * (sin(p3 * theta) + 1.0));
 
@@ -576,7 +585,10 @@ fn variation_blob(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let p3 = get_param(xform_id, variation_id, 2u);
 
     let r = length(p.xy);
-    let theta = atan2(p.x, p.y);
+    // ff_atan2: Metal's fast atan2 is pi/4 at same-sign zero pairs and
+    // NaN at mixed-sign ones; the origin is reachable (respawn/fuse,
+    // and the probe showed NaN there on Metal only). See utilities.wgsl.
+    let theta = ff_atan2(p.x, p.y);
 
     let scale = r * (p2 + ((p1 - p2) / 2.0) * (sin(p3 * theta) + 1.0));
 

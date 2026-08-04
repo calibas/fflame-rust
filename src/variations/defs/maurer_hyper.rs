@@ -134,7 +134,10 @@ fn variation_maurer_rose(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: pt
     let point_thickness = get_param(xform_id, variation_id, 19u);
     let curve_thickness = get_param(xform_id, variation_id, 20u);
 
-    let tin = atan2(p.y, p.x);
+    // ff_atan2: Metal's fast atan2 is pi/4 at same-sign zero pairs and
+    // NaN at mixed-sign ones; the origin is reachable (respawn/fuse,
+    // and the probe showed NaN there on Metal only). See utilities.wgsl.
+    let tin = ff_atan2(p.y, p.x);
     let t = cycles * tin;
     let step = floor(t / safe_step);
     let theta1 = step * step_size;
@@ -215,7 +218,10 @@ fn variation_maurer_rose(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: pt
     let point_thickness = get_param(xform_id, variation_id, 19u);
     let curve_thickness = get_param(xform_id, variation_id, 20u);
 
-    let tin = atan2(p.y, p.x);
+    // ff_atan2: Metal's fast atan2 is pi/4 at same-sign zero pairs and
+    // NaN at mixed-sign ones; the origin is reachable (respawn/fuse,
+    // and the probe showed NaN there on Metal only). See utilities.wgsl.
+    let tin = ff_atan2(p.y, p.x);
     let t = cycles * tin;
     let step = floor(t / safe_step);
     let theta1 = step * step_size;

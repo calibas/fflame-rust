@@ -168,7 +168,10 @@ fn variation_rhodonea(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
     let safe_w = select(weight, 1e-30, abs(weight) < 1e-30);
 
     let rin = spread_split * length(p);
-    let tin = atan2(p.y, p.x);
+    // ff_atan2: Metal's fast atan2 is pi/4 at same-sign zero pairs and
+    // NaN at mixed-sign ones; the origin is reachable (respawn/fuse,
+    // and the probe showed NaN there on Metal only). See utilities.wgsl.
+    let tin = ff_atan2(p.y, p.x);
     let t = cycles * (tin + cycle_offset * two_pi);
     var r = cos(k * t) + radial_offset;
     if (fill != 0.0) {
@@ -293,7 +296,10 @@ fn variation_rhodonea_2d(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: pt
     let safe_w = select(weight, 1e-30, abs(weight) < 1e-30);
 
     let rin = spread_split * length(p);
-    let tin = atan2(p.y, p.x);
+    // ff_atan2: Metal's fast atan2 is pi/4 at same-sign zero pairs and
+    // NaN at mixed-sign ones; the origin is reachable (respawn/fuse,
+    // and the probe showed NaN there on Metal only). See utilities.wgsl.
+    let tin = ff_atan2(p.y, p.x);
     let t = cycles * (tin + cycle_offset * two_pi);
     var r = cos(k * t) + radial_offset;
     if (fill != 0.0) {
