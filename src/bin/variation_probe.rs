@@ -14,6 +14,31 @@ use std::path::{Path, PathBuf};
 
 const DEFAULT_REPORT: &str = "docs/generated/variation-probe.txt";
 
+/// Where this machine's census report lives.
+///
+/// Platform-suffixed, unlike the probe reports. A census row is a
+/// *measurement of this GPU* — 424 of ~1,270 rows differ between Windows
+/// and macOS on identical input — so one shared path would mean each
+/// platform's regeneration silently overwrote the other's, and the
+/// cross-platform comparison the report exists for would be impossible
+/// to keep in the repository. Both are committed; each machine reads and
+/// rewrites only its own.
+///
+/// The probe reports stay single-file because they are compared
+/// *against* a chosen baseline rather than kept side by side.
+fn default_census_path() -> PathBuf {
+    let os = if cfg!(target_os = "windows") {
+        "windows"
+    } else if cfg!(target_os = "macos") {
+        "macos"
+    } else if cfg!(target_os = "linux") {
+        "linux"
+    } else {
+        "other"
+    };
+    PathBuf::from(format!("docs/generated/variation-census-{os}.txt"))
+}
+
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
 
@@ -31,7 +56,7 @@ fn main() {
                 Some("--corpus") => fractal_flame_wgpu::census::run::run_corpus_cli(
                     num(2, 50_000_000),
                     num(3, 100) as u32,
-                    Path::new("docs/generated/variation-census.txt"),
+                    &default_census_path(),
                 ),
                 Some(p) => fractal_flame_wgpu::census::run::run_single_cli(
                     Path::new(p),
@@ -50,7 +75,7 @@ fn main() {
                 let census = args
                     .get(3)
                     .map(|s| Path::new(s).to_path_buf())
-                    .unwrap_or_else(|| Path::new("docs/generated/variation-census.txt").to_path_buf());
+                    .unwrap_or_else(default_census_path);
                 fractal_flame_wgpu::census::rank::run_cli(Path::new(a), Path::new(b), &census)
             }
             _ => {

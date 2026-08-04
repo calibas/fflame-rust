@@ -190,12 +190,25 @@ real bugs — one of them nowhere near the census:
    fixed generation = **two full-corpus runs byte-identical**, at no
    measurable cost (48s).
 
-The report is therefore **committed** (docs/generated/
-variation-census.txt). Cross-platform counts still differ by
-construction — platform math differences alter trajectories — so the
-regeneration convention should follow the probe reports: one
-authoring platform. Whether that is Windows (matching the probe) is
-decided at the first Windows regeneration.
+The report is therefore **committed**, and — decided at the first
+Windows regeneration — **one file per platform**:
+`docs/generated/variation-census-{windows,macos}.txt`. Each machine
+reads and rewrites only its own; the path comes from
+`default_census_path()` in the CLI, so a regeneration cannot clobber the
+other platform's measurement.
+
+That is deliberately *unlike* the probe reports, which stay single-file.
+The difference is what the artifact is. A probe report is a description
+of the shader math, compared against a chosen baseline; a census row is
+a measurement of a specific GPU running the corpus. Measured on the
+first Windows run: **424 of ~1,270 rows differ** between Windows/NVIDIA
+and macOS/Metal (959 identical, 118 macOS-only, 271 Windows-only, 35
+differing only in bucket). Collapsing that onto one authoring platform
+would throw away the comparison the census exists to make.
+
+Byte-stability confirmed independently on Windows after the generator
+fix: three consecutive full-corpus runs byte-identical (252 flames, 50M
+iterations, ~50 s each).
 
 Open question, deliberately not chased here: what exactly the
 shared-device contamination corrupts for flames run back-to-back on
