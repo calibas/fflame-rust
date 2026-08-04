@@ -241,7 +241,12 @@ fn variation_circular2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<
     let aux = h - trunc(h);
     let rnd = (2.0 * (rng_nextf(rng) + aux) - 2.0) * c_a;
     let rad = sqrt(p.x * p.x + p.y * p.y);
-    let ang = atan2(p.y, p.x);
+    // ff_atan2: Metal's fast atan2 is pi/4 at SAME-sign zero pairs and
+    // NaN at MIXED-sign ones (measured; IEEE is finite for all four).
+    // This variation reaches zero pairs in real renders — the probe
+    // showed NaN output at the origin classes on Metal only. See
+    // utilities.wgsl.
+    let ang = ff_atan2(p.y, p.x);
     return vec2<f32>(cos(ang + rnd) * rad, sin(ang + rnd) * rad);
 }
 "#,
@@ -256,7 +261,12 @@ fn variation_circular2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
     let aux = h - trunc(h);
     let rnd = (2.0 * (rng_nextf(rng) + aux) - 2.0) * c_a;
     let rad = sqrt(p.x * p.x + p.y * p.y);
-    let ang = atan2(p.y, p.x);
+    // ff_atan2: Metal's fast atan2 is pi/4 at SAME-sign zero pairs and
+    // NaN at MIXED-sign ones (measured; IEEE is finite for all four).
+    // This variation reaches zero pairs in real renders — the probe
+    // showed NaN output at the origin classes on Metal only. See
+    // utilities.wgsl.
+    let ang = ff_atan2(p.y, p.x);
     return vec3<f32>(cos(ang + rnd) * rad, sin(ang + rnd) * rad, p.z);
 }
 "#,
