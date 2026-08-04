@@ -972,7 +972,7 @@ mod category_wire_tests {
 /// and a lint that flags its own documentation teaches people to write
 /// worse documentation. WGSL comments are stripped for the same reason.
 #[cfg(test)]
-mod shader_literal_lint {
+mod shader_lint {
     /// `f32::MIN_POSITIVE` as f64: the smallest NORMAL f32. Anything
     /// below it (and not zero) flushes to zero on the GPU.
     const MIN_NORMAL_F32: f64 = 1.175_494_350_822_287_5e-38;
@@ -1155,6 +1155,102 @@ mod shader_literal_lint {
         assert!(violations.is_empty(), "{}", explain(&violations));
     }
 
+
+    /// Self-comparisons (`x != x`, `x == x`) and self-divisions
+    /// (`x / x`, `x /= x`) of one operand — a dotted identifier chain
+    /// (`dx`, `p.x`) or a bare number. Returns `(operator, operand)`.
+    ///
+    /// Both idioms only mean anything through IEEE semantics that GPU
+    /// compilers are allowed to ignore. A self-compare is the classic
+    /// NaN test, and Metal's fast-math folds it to a constant — which
+    /// made popcorn's guard dead code (c338d988). A self-division is
+    /// 1.0 everywhere EXCEPT 0/0 and Inf/Inf, and fast-math folds those
+    /// to 1.0 too: a plausible finite value no downstream guard can
+    /// see, measured on an M2 for both cases.
+    ///
+    /// Deliberately not caught: an operand that reads as the tail of a
+    /// larger arithmetic expression (`a * x != x`, `m / t1 / t`) —
+    /// without a real parser the scan cannot know where that expression
+    /// starts, and a lint that cries wolf teaches people to ignore it.
+    /// The banned idiom is the bare form; that is also the only form
+    /// the JWF/GLSL sources ever use it in.
+    fn self_operations(wgsl: &str) -> Vec<(String, String)> {
+        let text = strip_wgsl_comments(wgsl);
+        let b = text.as_bytes();
+        let is_operand = |c: u8| c.is_ascii_alphanumeric() || c == b'_' || c == b'.';
+        let is_ws = |c: u8| c == b' ' || c == b'\t' || c == b'\n' || c == b'\r';
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i + 1 < b.len() {
+            // The operator at `i`, and where its right-hand side begins.
+            // `/=` before `/`, and `==` must not be the tail of another
+            // comparison operator.
+            let (op, rhs_at) = if b[i] == b'!' && b[i + 1] == b'=' {
+                ("!=", i + 2)
+            } else if b[i] == b'=' && b[i + 1] == b'='
+                && (i == 0 || !matches!(b[i - 1], b'!' | b'<' | b'>' | b'=')) {
+                ("==", i + 2)
+            } else if b[i] == b'/' && b[i + 1] == b'=' {
+                ("/=", i + 2)
+            } else if b[i] == b'/' {
+                ("/", i + 1)
+            } else {
+                i += 1;
+                continue;
+            };
+
+            // Left operand: back over whitespace, then operand chars.
+            let mut l_end = i;
+            while l_end > 0 && is_ws(b[l_end - 1]) { l_end -= 1; }
+            let mut l = l_end;
+            while l > 0 && is_operand(b[l - 1]) { l -= 1; }
+            // Right operand, mirrored.
+            let mut r = rhs_at;
+            while r < b.len() && is_ws(b[r]) { r += 1; }
+            let mut r_end = r;
+            while r_end < b.len() && is_operand(b[r_end]) { r_end += 1; }
+
+            let lhs = &text[l..l_end];
+            let rhs = &text[r..r_end];
+            // At least one identifier/digit character, so a stray dot
+            // cannot match a stray dot.
+            let significant = lhs.bytes().any(|c| c.is_ascii_alphanumeric() || c == b'_');
+
+            // Adjacent arithmetic means the operand is part of a larger
+            // expression (see the doc comment).
+            let mut before = l;
+            while before > 0 && is_ws(b[before - 1]) { before -= 1; }
+            let left_tail = before > 0 && matches!(b[before - 1], b'+' | b'-' | b'*' | b'/' | b'%');
+            let mut after = r_end;
+            while after < b.len() && is_ws(b[after]) { after += 1; }
+            let right_head = after < b.len()
+                && matches!(b[after], b'+' | b'-' | b'*' | b'/' | b'%' | b'(' | b'[');
+
+            if !lhs.is_empty() && lhs == rhs && significant && !left_tail && !right_head {
+                out.push((op.to_string(), lhs.to_string()));
+            }
+            i = rhs_at;
+        }
+        out
+    }
+
+    fn explain_self_ops(violations: &[String]) -> String {
+        format!(
+            "self-comparison / self-division of one operand — these only work \
+             through IEEE rules that Metal's fast-math does not honour:\n  {}\n\
+             `x != x` / `x == x` (the NaN test) folds to a constant there — \
+             popcorn shipped with exactly that dead guard. Use \
+             `!(abs(x) <= 1e32)`, the idiom main_template.wgsl's bad-value \
+             recovery uses; it survives the optimizer (measured).\n\
+             `x / x` is 1.0 except at 0/0 and Inf/Inf — and fast-math folds \
+             those to 1.0 TOO, a plausible value no later guard can catch. \
+             Write the intended value explicitly and handle the zero case the \
+             way the JWF/f64 reference behaves; see cut_btree in \
+             defs/cut_simple.rs for a worked example.",
+            violations.join("\n  ")
+        )
+    }
+
     // ---- the scanner itself ----
 
     #[test]
@@ -1214,5 +1310,102 @@ mod shader_literal_lint {
     #[test]
     fn a_zero_mantissa_is_harmless() {
         assert!(subnormal_literals("0.0e-40").is_empty());
+    }
+
+    #[test]
+    fn no_self_comparisons_or_divisions_in_variation_wgsl() {
+        let reg = super::global_registry();
+        let mut violations = Vec::new();
+        for name in reg.names() {
+            let Some(info) = reg.get(name) else { continue };
+            for (which, src) in [
+                ("wgsl_2d", info.wgsl_source.as_deref()),
+                ("wgsl_3d", info.wgsl_source_3d.as_deref()),
+                ("wgsl_init", info.wgsl_source_init.as_deref()),
+                ("wgsl_state_init", info.wgsl_source_state_init.as_deref()),
+            ] {
+                let Some(src) = src else { continue };
+                for (op, operand) in self_operations(src) {
+                    violations.push(format!("{name} {which}: `{operand} {op} {operand}`"));
+                }
+            }
+        }
+        assert!(violations.is_empty(), "{}", explain_self_ops(&violations));
+    }
+
+    #[test]
+    fn no_self_comparisons_or_divisions_in_shader_files() {
+        fn visit(dir: &std::path::Path, f: &mut impl FnMut(&std::path::Path, &str)) {
+            let Ok(entries) = std::fs::read_dir(dir) else { return };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    visit(&path, f);
+                } else if path.extension().and_then(|e| e.to_str()) == Some("wgsl") {
+                    if let Ok(text) = std::fs::read_to_string(&path) {
+                        f(&path, &text);
+                    }
+                }
+            }
+        }
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("shaders");
+        let mut violations = Vec::new();
+        let mut checked = 0usize;
+        visit(&root, &mut |path, text| {
+            checked += 1;
+            for (op, operand) in self_operations(text) {
+                violations.push(format!("{}: `{operand} {op} {operand}`", path.display()));
+            }
+        });
+        assert!(checked > 10, "scanned only {checked} shader files — the walk is broken");
+        assert!(violations.is_empty(), "{}", explain_self_ops(&violations));
+    }
+
+    #[test]
+    fn catches_the_nan_self_compare_shapes() {
+        // popcorn, before c338d988.
+        assert_eq!(self_operations("if (dx != dx) { dx = 0.0; }").len(), 1);
+        assert_eq!(self_operations("select(0u, 1u, p.x == p.x)").len(), 1);
+        // The vector form is folded componentwise just the same.
+        assert_eq!(self_operations("all(v == v)").len(), 1);
+    }
+
+    #[test]
+    fn catches_the_self_division_shapes() {
+        // cut_btree, as shipped until this lint existed.
+        let hits = self_operations("var tv = (w / w) * fract(time);");
+        assert_eq!(hits, vec![("/".to_string(), "w".to_string())]);
+        assert_eq!(self_operations("x /= x;").len(), 1);
+    }
+
+    #[test]
+    fn different_operands_and_division_chains_pass() {
+        for ok in [
+            // Shares a suffix — the scan must take the maximal operand.
+            "factor = select(1.0, mindist / dist, dist > mindist);",
+            "let t2 = m / t1 / (100.0 * thickness);",
+            "if (a != b) { c = a / b; }",
+        ] {
+            assert!(self_operations(ok).is_empty(), "`{ok}` wrongly flagged");
+        }
+    }
+
+    #[test]
+    fn expression_tails_are_not_flagged() {
+        for ok in ["x * 2.0 != 2.0 * y", "a - x != x + a", "y / x / x"] {
+            assert!(self_operations(ok).is_empty(), "`{ok}` wrongly flagged");
+        }
+    }
+
+    #[test]
+    fn negation_is_not_a_self_operand() {
+        assert!(self_operations("if (-x != x) { }").is_empty());
+        assert!(self_operations("if (x != -x) { }").is_empty());
+    }
+
+    #[test]
+    fn comments_do_not_trip_self_ops() {
+        // popcorn's fix EXPLAINS the banned idiom in a WGSL comment.
+        assert!(self_operations("// NOT `dx != dx`: folded on Metal\nlet a = 1.0;").is_empty());
     }
 }
