@@ -6,8 +6,12 @@ exists because the procedures were real but scattered — `build-wasm.bat`,
 no single place to see them, and nothing saying which are required for a
 release rather than merely available.
 
-**Status: partly decided.** Sections marked **UNDECIDED** are open
-questions, not steps. They are recorded here rather than left implicit,
+**Read §4 to run a release.** Everything else is why.
+
+Three things are deliberately still open, and each says so where it
+lives: code signing on both desktop platforms (§5), Linux and PyPI
+packaging (§5), and how a user learns an update exists (§4b). None of
+them block shipping; all of them are recorded rather than left implicit,
 because the gap between "we build it" and "someone can install it" is
 where a release actually stalls.
 
@@ -131,37 +135,173 @@ has gone stale before.
 
 ## 4. Release procedure
 
-1. **Bump the version:** `python scripts/release.py version 0.5.0`
-   — every crate, in lockstep (§1). `--dry-run` first.
-2. **Generate the changelog:** `python scripts/release.py changelog`
-   — grouped by the `area:` prefix in commit subjects, which 141 of the
-   last 150 commits use. Edit the result; a generator gets the raw
-   material, not the judgement about what mattered.
-3. **Run every gate** (§2). Regenerate artifacts if a gate demands it,
-   and read the diffs.
-4. **Sync the API** (§3) if any generated artifact changed. Do this
-   *before* tagging, so the tag matches what the server serves.
-5. **Build each surface:**
-   ```bash
-   python scripts/release.py build         # all four, in order
-   ```
-   or individually — note `--profile dist`, not `--release`, see below:
-   ```bash
-   cargo build --profile dist
-   ./build-wasm.sh                         # or .bat
-   cd wasm/render && wasm-pack build --target web --release
-   cd wasm/script && wasm-pack build --target web --release
-   cd python && maturin build --release
-   ```
-6. **Smoke-test each artifact** — not just that it built:
-   - desktop: launch it, and export a PNG; check `BuildProfile` in the
-     metadata says `dist`
-   - web: serve `pkg/` and load it in Chrome and Firefox
-   - python: `import pyfflame`, run a script, compare against the app
-   - gallery modules: `wasm/README.md` has an end-to-end example
-7. **Tag the commit.** Every exported PNG records the git hash, so a tag
-   is what makes a bug report traceable to a source tree.
-8. **Package and publish** — **UNDECIDED**, see §5.
+Ordered, and every step is a command you type. Nothing fires on push or
+on a timer.
+
+### Before you start
+
+You need **both machines**. There is no cross-compilation here: the
+macOS bundle needs macOS (plistlib layout + `codesign`), and the Windows
+build needs Windows. Decide which is the *authoring* machine for the
+generated reports (§4.3) and do the tag there.
+
+### 4.1 — Version and notes
+
+```bash
+python scripts/release.py version 0.5.0 --dry-run   # read it first
+python scripts/release.py version 0.5.0             # all four crates, lockstep
+python scripts/release.py changelog                 # from commit subjects since the last tag
+```
+
+The changelog is raw material. Grouping by `area:` prefix gets the
+shape; deciding what mattered to a *user* is still a person's job —
+most commits here are internal and belong in one line, not thirty.
+
+**On the version numbers.** Nothing has been tagged yet, so
+`release.py changelog` has no "since the last tag" to work from until
+the first tag exists. The first release should tag whatever it ships,
+even if the number is arbitrary, so every release after it has a
+boundary to diff against.
+
+### 4.2 — Gates
+
+```bash
+python scripts/release.py check     # ~4s: tests, wasm, contract, dumps, doc links
+```
+
+Then the two it deliberately does not run, because they need a GPU and
+minutes:
+
+```bash
+cargo build --release && python tests/visual/run_tests.py    # 148 tests
+python scripts/run_benchmarks.py --quick
+```
+
+Regenerate any artifact a gate demands, and **read the diff** — a stale
+generated file fails a test rather than failing silently, and that is
+the whole point.
+
+### 4.3 — Per-platform generated reports
+
+These describe *the machine that ran them*, so they are per-platform
+files and each machine rewrites only its own:
+
+```bash
+cargo run --release --bin variation_probe            # if variation math changed
+cargo run --release --bin variation_probe -- census --corpus
+```
+
+- `docs/generated/variation-probe*.txt` — shader math, one authoring
+  platform (currently Windows).
+- `docs/generated/variation-census-{windows,macos}.txt` — what a corpus
+  of real flames feeds each variation, **per platform**, because it is a
+  measurement of that GPU.
+- `variation_probe rank <old> <new>` joins them into a worklist;
+  `docs/accepted-divergences.txt` records what has been examined and
+  deliberately left alone. A release should not carry unexamined
+  REACHABLE entries.
+
+### 4.4 — Build
+
+```bash
+python scripts/release.py build     # every surface, in order
+```
+
+Host-specific packaging runs automatically as the second step — the
+`.app` bundle on macOS, the zip on Windows. Individually:
+
+| surface | command | where |
+|---|---|---|
+| desktop | `cargo build --profile dist` | both |
+| macOS bundle | `python3 scripts/make_macos_app.py --zip` | macOS |
+| Windows zip | `python scripts/make_windows_zip.py` | Windows |
+| web app | `./build-wasm.sh` / `build-wasm.bat` | either |
+| gallery modules | `wasm-pack build --target web --release` in `wasm/render`, `wasm/script` | either |
+| python wheel | `maturin build --release` in `python/` | per-platform wheel |
+
+`--profile dist`, never `--release` — §4c says why.
+
+### 4.5 — Smoke-test each artifact
+
+Building is not shipping.
+
+- **desktop (both platforms):** launch it, check the Performance panel
+  says the new version and `dist`, export a PNG, confirm the same in its
+  metadata. On macOS launch the **bundle**, not the loose binary —
+  Finder's working directory is `/`, which is what asset loading and the
+  video default path both depend on.
+- **macOS additionally:** `docs/projects/macos-release-checklist.md`
+  Tier 2 — the interactive surface (audio, video export, dialogs,
+  shortcuts, DPI). Most of it only needs re-running when something in
+  that area changed.
+- **web:** serve `pkg/`, load in Chrome and Firefox. Check undo (⌘/Ctrl+Z)
+  and one export.
+- **python:** `import pyfflame`, run a script, compare against the app.
+- **gallery modules:** `wasm/README.md` has an end-to-end example.
+
+### 4.6 — Tag
+
+```bash
+git tag -a v0.5.0 -m "0.5.0"
+git push origin v0.5.0
+```
+
+Every exported PNG records the git hash, so the tag is what makes a bug
+report traceable to a source tree. Tag *after* the gates and *before*
+publishing, so the artifacts and the tag agree.
+
+### 4.7 — Publish
+
+**GitHub release** (Windows + macOS):
+
+```bash
+gh release create v0.5.0 \
+   --title "0.5.0" --notes-file NOTES.md \
+   "FractalArtEditor-0.5.0-windows.zip" \
+   "target/macos/FractalArtEditor-0.5.0-macos.zip"
+```
+
+Both zips have to be built on their own machine and collected before
+this runs — whoever tags uploads both. The macOS one comes out of
+`target/macos/`, the Windows one out of `target/windows/`.
+
+The release notes must carry the **macOS install instructions** —
+unsigned means Gatekeeper refuses on first launch, and the steps differ
+by macOS version. Copy from the checklist doc, which keeps the current
+wording.
+
+**Web:** upload `pkg/` + `index.html`, `css/`, `js/` to
+`fractalsforall.com/editor/`. `pkg/` is gitignored and there is no deploy
+script, so this is a manual copy (§5). Load the page afterwards and check
+the version — a partial upload leaves a working page running old wasm.
+
+---
+
+## 4b. How upgrades reach users
+
+Different on every surface, and none of it is automatic yet.
+
+| surface | mechanism | friction |
+|---|---|---|
+| **Windows** | download the new zip, replace the folder | SmartScreen warns on an unsigned exe |
+| **macOS** | download, drag the `.app` to Applications, replace | Gatekeeper **repeats on every update** until notarized |
+| **Web** | user reloads | none — whatever is uploaded is what they run |
+
+User data survives on both desktop platforms because it lives outside
+the app: `%APPDATA%` / `~/Library/Application Support/…` keyed by bundle
+identity (settings, downloaded plugins, scripts, effects). Replacing the
+app never touches it. `.fflame` files migrate forward on load
+(`CURRENT_CONFIG_VERSION`), and new fields are skip-if-default so an
+older build reading a newer file degrades rather than breaks.
+
+**Nothing tells a user an update exists.** No version check, no
+auto-update. The cheapest fix by far is an in-app version check —
+`APP_VERSION` plus one HTTP GET plus a link — and it is the thing to
+build before Sparkle or anything else.
+
+---
+
+## 4c. Two build details that bite
 
 ### Use `--profile dist`, not `--release`
 
@@ -176,14 +316,13 @@ dist      22.5 MB    ~7-10 min      31% smaller
 
 It builds clean and the binary runs. Budget the ten minutes; do not
 substitute `--release` because the wait is annoying — a shipped binary
-that says `release` is indistinguishable from a developer's build.
+that says `release` is indistinguishable from a developer's build, and
+the profile name is recorded in every exported PNG.
 
 `panic = "abort"` means no unwinding. Nothing in the codebase relies on
 `catch_unwind`, and the GPU error path uses wgpu's uncaptured-error
 handler rather than panics — but this is the profile users get, so any
 new use of unwinding must be checked against it.
-
----
 
 ### Icons
 
@@ -230,75 +369,101 @@ are upscaled and visibly soft at Quick Look / large-icon sizes. The
 script warns when it does this. A 1024x1024 master fixes it with no code
 change, since every size resizes from the master.
 
-**Nothing consumes the `.icns` yet** — it is an inert build input until
-there is a `.app` bundle to put it in (§5).
+`make_macos_app.py` copies the `.icns` into `Contents/Resources/` and
+points `CFBundleIconFile` at it, so a missing one fails the bundle build
+with the command that regenerates it — not silently, and not at launch.
 
-## 5. Packaging — **UNDECIDED**
+## 5. Packaging
 
-Nothing here is settled. What has to be answered:
+**Windows and macOS: a zip each. Web: a directory copy.** Signing is the
+one thing still genuinely open, and it is open on both desktop platforms
+for the same reason — it costs money and neither is blocking.
 
-### The console window, and one caveat
+### Windows — a portable zip
 
-Release builds on Windows are GUI-subsystem, so launching from Explorer
-opens no black console beside the app. The same binary is still the CLI,
-so it re-attaches to the parent terminal when launched with arguments.
+```bash
+cargo build --profile dist
+python scripts/make_windows_zip.py          # -> target/windows/
+```
 
-Verified working: git bash, PowerShell pipes, `cmd` including `> file`,
+```
+FractalArtEditor-0.5.0-windows.zip
+  FractalArtEditor-0.5.0/
+    FractalArtEditor.exe      target/dist/
+    assets/                   presets, palettes, fonts — loaded from disk
+```
+
+`shaders/` is **not** included: every shader is embedded in the binary,
+and the on-disk tree is a developer *override* that takes precedence.
+Shipping it would add half a megabyte whose only effect is to let a stray
+edit change what a released app renders. The script exists mostly to hold
+that decision — both halves of it fail quietly when packaged by hand, one
+as an app missing half its content, the other as an app that renders
+something other than what was tested.
+
+No installer. A portable zip needs no elevation, leaves no uninstall
+entry to rot, and matches how the app already stores its data (in
+`%APPDATA%`, not beside the exe) — so "delete the folder" is a complete
+uninstall. Revisit if file associations or Start-menu presence start
+mattering.
+
+**Open: code signing.** Unsigned means SmartScreen warns on first run.
+An OV certificate is a few hundred dollars a year and the warning fades
+with reputation; an EV one clears it immediately and costs more. Neither
+is blocking a first release.
+
+#### The console window, and one caveat
+
+Release builds are GUI-subsystem, so launching from Explorer opens no
+black console beside the app. The same binary is still the CLI, so it
+re-attaches to the parent terminal when launched with arguments.
+
+Verified: git bash, PowerShell pipes, `cmd` including `> file`,
 `Start-Process -RedirectStandardOutput`, and Python `subprocess` capture
 — which is what every test and benchmark harness here uses.
 
 **One known gap: PowerShell 5.1's `>` operator captures nothing** from a
-GUI-subsystem exe. `| Out-File`, `Start-Process
--RedirectStandardOutput`, and `cmd /c ... >` all work. This is a
-platform behaviour, not something the attach logic can repair — a
-control run of `cargo --version > file` in the same shell works, so it
-is specific to the subsystem.
+GUI-subsystem exe. `| Out-File`, `Start-Process -RedirectStandardOutput`
+and `cmd /c ... >` all work. This is platform behaviour, not something
+the attach logic can repair — a control run of `cargo --version > file`
+in the same shell works, so it is specific to the subsystem.
 
-If that proves annoying, the alternatives are a second console-subsystem
-binary (~22 MB more in the zip) or reverting to console-subsystem and
-hiding the window at startup, which trades the gap for a console flash
-on every GUI launch.
+If it proves annoying: a second console-subsystem binary (~22 MB more in
+the zip), or reverting to console-subsystem and hiding the window at
+startup — which trades the gap for a console flash on every GUI launch.
 
-**Windows.** Leaning toward a plain `.zip`. It needs the executable plus
-`assets/` (presets and palettes are loaded from disk at startup) and
-`shaders/` is *no longer required* — every shader is embedded, and the
-on-disk copy is only a developer override. Verify by unzipping somewhere
-with no `shaders/` and rendering an effect; that path is now tested but
-should be confirmed per release.
-
-Open: signing (unsigned binaries get SmartScreen warnings), and whether
-to ship a portable zip, an installer, or both.
-
-**macOS.** A `.app` bundle, shipped as a zip. **Decided.**
+### macOS — a `.app` bundle, shipped as a zip
 
 ```bash
 cargo build --profile dist
-python scripts/make_macos_app.py --zip      # -> target/macos/
+python3 scripts/make_macos_app.py --zip      # -> target/macos/
 ```
 
 The bundle is not cosmetic. macOS has no equivalent of the Windows
 resource table, so `Contents/Info.plist` → `CFBundleIconFile` is the only
 way the app ever shows its icon; the bundle also gives it a menu-bar
-name and a stable identity for preferences.
+name, a stable identity for preferences, and the `NS*UsageDescription`
+keys **without which macOS silently suppresses the microphone prompt and
+CoreAudio delivers nothing** — the audio-reactive stack appears dead with
+no error anywhere. That one cost a full debugging session; the key is in
+`make_macos_app.py` now.
 
-`assets/` goes in `Contents/Resources/`. That is Apple's convention and
-also the third place `resources::resource_path` looks, which is what
-makes it work: Finder launches a bundled app with the working directory
+`assets/` goes in `Contents/Resources/`, which is Apple's convention and
+also the third place `resources::resource_path` looks. That is
+load-bearing: Finder launches a bundled app with the working directory
 set to `/`, and every asset path in the codebase is repo-relative.
-Verified by launching from the bundle with `cwd=/` — palette manifest and
-packs load, nothing missing. `shaders/` is deliberately omitted; every
-shader is embedded and the on-disk tree is a developer override only.
+`shaders/` is omitted, same reasoning as Windows.
 
-Signed ad-hoc (`codesign -s -`), which needs no account. On Apple Silicon
-a bundle modified after linking can fail to launch without it. **This is
-not Gatekeeper approval.**
+Signed ad-hoc (`codesign -s -`), which needs no account — on Apple
+Silicon a bundle modified after linking can fail to launch without it.
+**This is not Gatekeeper approval.**
 
-### The cost of not notarizing, which is not the obvious one
+#### The cost of not notarizing, which is not the obvious one
 
 An unsigned app downloaded through a browser carries
 `com.apple.quarantine`, and Gatekeeper refuses it. On macOS 15 the
-right-click → Open bypass is gone; the user must go to System Settings →
-Privacy & Security → "Open Anyway", or run:
+right-click → Open bypass is gone; the user must use System Settings →
+Privacy & Security → "Open Anyway", or:
 
 ```bash
 xattr -d com.apple.quarantine "/Applications/Fractal Art Editor.app"
@@ -306,32 +471,43 @@ xattr -d com.apple.quarantine "/Applications/Fractal Art Editor.app"
 
 **Every download is quarantined, so this repeats on every update**, not
 just first install. That is the real price of skipping the $99/yr
-Developer ID, and it is worse than "one scary dialog once".
+Developer ID, and it is worse than "one scary dialog once". The
+paste-ready user-facing instructions live in
+`docs/projects/macos-release-checklist.md`.
 
-### Updates — **PARTLY DECIDED**
+### Web — copy four things to `fractalsforall.com/editor/`
 
-Replace the bundle: download, drag to `/Applications`, replace. That is
-the normal macOS model and needs nothing built.
+The live app is **`https://fractalsforall.com/editor/`**. `pkg/` is
+gitignored, so this is build-locally-and-upload; there is no CI step and
+no deploy script.
 
-Not yet built, in the order worth doing:
+| upload | from | changes |
+|---|---|---|
+| `pkg/` | `build-wasm.sh` / `.bat` | every release |
+| `index.html` | repo root | rarely |
+| `css/`, `js/` | repo root | rarely — the virtual-keyboard bridge |
 
-- **A version check in-app.** Cheap — `APP_VERSION` and an HTTP client
-  both exist — and it only has to say "0.5.0 is out" and link. No
-  auto-install, so no new failure modes.
-- **Sparkle**, eventually. Its real appeal here is that an in-place
-  update is not a browser download, so it would dodge the repeating
-  quarantine above. How it interacts with an unsigned app needs checking
-  before committing to it.
+Deployment is by whatever moves files onto that host. Verify by loading
+the page and reading the **Performance panel** — it shows version, git
+hash, branch, build time and profile. Do not trust the copy: a partial
+upload leaves a working page running old wasm.
 
-**Linux.** Nothing decided. AppImage is the usual answer for a GPU app.
+**The README's demo link is a second, stale deployment.**
+`calibas.github.io` was last built **2026-02-11** (11.8 MB wasm) against
+fractalsforall.com/editor's **2026-06-30** (15.2 MB) — five months and a
+product rename behind, still titled "FAR - Online Version". Either
+update it as part of the release or point the README at the main site.
+Two hosts for one artifact is the kind of thing that stays wrong.
 
-**Web.** `pkg/` is gitignored, so deployment is currently "build locally,
-upload somewhere" — undocumented, and the README already points at
-`calibas.github.io`. Write down what that upload actually is.
+### Linux — nothing decided
 
-**Python.** A wheel is per-platform and per-Python-version. Publishing to
-PyPI means either a build matrix or shipping only what can be built by
-hand.
+The build works; packaging does not exist. AppImage is the usual answer
+for a GPU app that has to carry its own assets.
+
+### Python — nothing decided
+
+A wheel is per-platform and per-Python-version. Publishing to PyPI means
+either a build matrix or shipping only what can be built by hand.
 
 ---
 
@@ -370,8 +546,13 @@ Honest list, so nobody assumes these exist:
   raw material; deciding what mattered to a user is still a person's
   job.
 - **No signing or notarization** for any platform (§5).
-- **Repository hygiene**: `debug_shader_3d.wgsl` and `random-notes.txt`
-  are tracked at the root and probably should not be.
+- **No release tags.** `git tag` returns nothing, so `release.py
+  changelog` has no boundary to diff from until the first one exists
+  (§4.1). Every exported PNG records a git *hash*, so builds are already
+  traceable — tags are what make them nameable.
+- **No web deploy step.** `pkg/` is gitignored and the upload is manual
+  (§5), which is also why a second, five-months-stale copy of the app is
+  live at the URL the README links to.
 - **`build-wasm.bat` and `build-wasm.sh` are parallel implementations**
   of one procedure. They agree today; nothing enforces that.
 
