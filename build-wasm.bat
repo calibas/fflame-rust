@@ -3,12 +3,12 @@ echo Building for WASM...
 
 REM Build the WASM module
 set RUSTFLAGS=--cfg=web_sys_unstable_apis
-cargo build --lib --target wasm32-unknown-unknown --release
+cargo build --lib --target wasm32-unknown-unknown --profile dist
 if %errorlevel% neq 0 exit /b %errorlevel%
 
 REM Generate bindings with wasm-bindgen
 echo Generating JavaScript bindings...
-wasm-bindgen --out-dir ./pkg --target web ./target/wasm32-unknown-unknown/release/fractal_flame_wgpu.wasm
+wasm-bindgen --out-dir ./pkg --target web ./target/wasm32-unknown-unknown/dist/fractal_flame_wgpu.wasm
 if %errorlevel% neq 0 exit /b %errorlevel%
 
 REM Copy assets for runtime loading

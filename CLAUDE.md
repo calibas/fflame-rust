@@ -143,8 +143,12 @@ cargo run --release
 cargo run --release -- export --input tests/visual/configs --output tests/visual/current
 # See CLI Export section below for details
 
-# WASM (Web)
-wasm-pack build --target web --release
+# WASM (Web app) — the scripts, not wasm-pack: they build `--profile dist`
+# (18% smaller than release, see docs/RELEASE.md §4c) and run wasm-bindgen.
+./build-wasm.sh          # or build-wasm.bat on Windows
+
+# WASM (gallery modules only — these DO use wasm-pack)
+wasm-pack build --target web --release   # in wasm/render, wasm/script
 
 # iOS / Android (experimental, not fully functional — see Mobile section)
 cargo build --target aarch64-apple-ios
