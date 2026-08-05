@@ -744,7 +744,10 @@ fn variation_julia3Dz(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
     }
 
     let rnd_int = i32(rng_nextf(rng) * f32(abs_power));
-    let angle = (atan2(p.y, p.x) + 2.0 * PI * f32(rnd_int)) / power_f;
+    // ff_atan2: zero pairs are reachable (preset:Bubbles, measured) and
+    // Metal's fast atan2 NaNs the mixed-sign ones; the z-lane 0/0 NaN
+    // that remains is shared with Windows and zeroed by recovery.
+    let angle = (ff_atan2(p.y, p.x) + 2.0 * PI * f32(rnd_int)) / power_f;
 
     if (power == 2) {
         let r2d_sqrt = sqrt(r2d);
