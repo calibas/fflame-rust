@@ -186,9 +186,31 @@ impl AudioCapture {
     }
 
     /// Stop capturing.
+    ///
+    /// The explicit `pause()` is required, not tidiness: dropping the
+    /// stream is NOT enough to release the microphone on macOS.
+    /// cpal 0.15.3's CoreAudio backend has no `Drop for Stream`; teardown
+    /// relies on `AudioUnit`'s own Drop, and that never runs because
+    /// `add_disconnect_listener` stores a listener holding a CLONE of the
+    /// stream's `Arc<Mutex<StreamInner>>` *inside that same StreamInner*.
+    /// The reference cycle keeps the AudioUnit alive for the life of the
+    /// process, so the OS kept showing the mic in use — on the Mac and on
+    /// a Continuity iPhone — until the app quit.
+    ///
+    /// `pause()` reaches through to `AudioUnit::stop()`, which is what
+    /// actually ends capture and clears the indicator. The unit itself
+    /// still leaks (one per start/stop cycle, bounded by user actions);
+    /// fixing that needs a patched or newer cpal, and is not worth
+    /// vendoring the crate for.
     pub fn stop(&mut self) {
         self.active.store(false, Ordering::SeqCst);
-        self._stream = None;
+        if let Some(stream) = self._stream.take() {
+            use cpal::traits::StreamTrait;
+            if let Err(e) = stream.pause() {
+                log::warn!("Could not stop audio stream cleanly: {e}");
+            }
+            drop(stream);
+        }
         self.state = CaptureState::Stopped;
     }
 
