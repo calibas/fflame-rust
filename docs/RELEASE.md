@@ -24,7 +24,7 @@ Four artifacts, built four different ways, from one repository.
 | surface | built by | output | version source |
 |---|---|---|---|
 | Desktop app | `cargo build --profile dist` | `target/dist/FractalArtEditor(.exe)` | `Cargo.toml` |
-| Web app | `build-wasm.bat` / `.sh` | `pkg/` + `index.html`, `css/`, `js/` | `Cargo.toml` |
+| Web app | `build-wasm.bat` / `.sh` — `--profile dist` | `pkg/` + `index.html`, `css/`, `js/` | `Cargo.toml` |
 | Gallery modules | `wasm-pack build` in `wasm/render`, `wasm/script` | `wasm/*/pkg/` | each crate's `Cargo.toml` |
 | Python | `maturin build` in `python/` | a wheel | `python/pyproject.toml` |
 
@@ -223,11 +223,14 @@ Host-specific packaging runs automatically as the second step — the
 | desktop | `cargo build --profile dist` | both |
 | macOS bundle | `python3 scripts/make_macos_app.py --zip` | macOS |
 | Windows zip | `python scripts/make_windows_zip.py` | Windows |
-| web app | `./build-wasm.sh` / `build-wasm.bat` | either |
+| web app | `./build-wasm.sh` / `build-wasm.bat` (they build `--profile dist`) | either |
 | gallery modules | `wasm-pack build --target web --release` in `wasm/render`, `wasm/script` | either |
 | python wheel | `maturin build --release` in `python/` | per-platform wheel |
 
-`--profile dist`, never `--release` — §4c says why.
+`--profile dist`, never `--release`, for **desktop and web alike** — §4c
+says why, and has the measured numbers for each. The gallery modules are
+the exception: their own `[profile.release]` already sets everything
+`dist` would, plus `wasm-opt`.
 
 ### 4.5 — Smoke-test each artifact
 
@@ -311,26 +314,45 @@ build before Sparkle or anything else.
 
 ## 4c. Two build details that bite
 
-### Use `--profile dist`, not `--release`
+### Use `--profile dist`, not `--release` — on **both** desktop and web
 
 `[profile.dist]` (LTO fat, one codegen unit, stripped, `panic = "abort"`)
 exists in `Cargo.toml` and, until this document, **nothing had ever
-invoked it.** Verified:
+invoked it.** Measured on Windows:
 
 ```
-release   32.7 MB    ~1 min
-dist      22.5 MB    ~7-10 min      31% smaller
+desktop   release  32.9 MB   ~1 min       dist  22.6 MB   7m17s    31% smaller
+web       release  16.3 MB                dist  13.4 MB   5m20s    18% smaller
 ```
 
-It builds clean and the binary runs. Budget the ten minutes; do not
-substitute `--release` because the wait is annoying — a shipped binary
-that says `release` is indistinguishable from a developer's build, and
-the profile name is recorded in every exported PNG.
+The web figures are the shipped `.wasm` — after `wasm-bindgen`, which is
+what a browser downloads. `build-wasm.sh` / `.bat` build `--profile dist`
+for that reason; the flag is inside the scripts, so §4.4's table shows
+the script rather than the profile.
+
+**Size argues harder on web than on desktop.** 10 MB off the desktop
+binary is a one-time download someone already chose to start. 2.9 MB off
+the wasm is paid by every visitor on every cold load, before a single
+pixel renders. `dist` also brings LTO and one codegen unit, so it is not
+purely a size trade.
+
+Do not substitute `--release` because the wait is annoying — a shipped
+binary that says `release` is indistinguishable from a developer's
+build, and the profile name is recorded in every exported PNG *and* in
+the web Performance panel, which §4.7 tells you to read after a deploy.
+
+**Still on the table, unmeasured:** `[profile.dist]` inherits `release`'s
+`opt-level = 3`. The gallery crates (`wasm/render`, `wasm/script`) chose
+`opt-level = "z"` and add `wasm-opt -Oz` through wasm-pack, which the app
+build bypasses entirely. So 13.4 MB is a floor on the win, not a ceiling
+— both levers are untried on the app.
 
 `panic = "abort"` means no unwinding. Nothing in the codebase relies on
 `catch_unwind`, and the GPU error path uses wgpu's uncaptured-error
 handler rather than panics — but this is the profile users get, so any
-new use of unwinding must be checked against it.
+new use of unwinding must be checked against it. On web it is also safe
+with `console_error_panic_hook`: a panic *hook* runs before the abort, so
+browser error text survives.
 
 ### Icons
 
@@ -491,7 +513,7 @@ no deploy script.
 
 | upload | from | changes |
 |---|---|---|
-| `pkg/` | `build-wasm.sh` / `.bat` | every release |
+| `pkg/` | `build-wasm.sh` / `.bat` (`--profile dist`, 13.4 MB) | every release |
 | `index.html` | repo root | rarely |
 | `css/`, `js/` | repo root | rarely — the virtual-keyboard bridge |
 
@@ -571,7 +593,11 @@ Honest list, so nobody assumes these exist:
   from being half-uploaded, which is why §4.7 says to load the page and
   read the version afterwards.
 - **`build-wasm.bat` and `build-wasm.sh` are parallel implementations**
-  of one procedure. They agree today; nothing enforces that.
+  of one procedure. They agree today; nothing enforces that. The move to
+  `--profile dist` is what that costs in practice: two lines in each
+  file, in two languages, and a build that still succeeds if you edit
+  only one — it would just quietly ship the unoptimized wasm from
+  whichever platform ran the stale script.
 
 ---
 
