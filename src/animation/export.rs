@@ -1051,6 +1051,8 @@ static FFMPEG_PATH: once_cell::sync::Lazy<Option<std::path::PathBuf>> =
 ///
 /// No-op everywhere else: on macOS and Linux a spawned child has no
 /// window to begin with.
+///
+/// Verified on Windows 10 (2026-08-05): a full video export, no console.
 #[cfg(not(target_arch = "wasm32"))]
 fn hide_console_window(cmd: &mut std::process::Command) {
     #[cfg(windows)]
