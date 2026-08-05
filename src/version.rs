@@ -19,7 +19,20 @@ pub struct VersionInfo {
     /// Build target triple (e.g., "x86_64-pc-windows-msvc")
     pub target: &'static str,
 
-    /// Build profile ("debug" or "release")
+    /// Cargo profile the binary was built with: `debug`, `release`, or
+    /// **`dist`** — the one users get.
+    ///
+    /// `dist` is the shipped profile (`docs/RELEASE.md` §4c), and the
+    /// whole reason this field is recorded in exported PNG metadata: a
+    /// released binary reporting `release` would be indistinguishable
+    /// from a developer's build, so a bug report could not say which one
+    /// produced the image. Verified end to end on Windows — a
+    /// `--profile dist` build exports `BuildProfile dist`.
+    ///
+    /// Read from `BUILD_PROFILE`, which `build.rs` derives from
+    /// `OUT_DIR` rather than from `PROFILE` (that reports `release` for
+    /// any optimized profile, `dist` included — which is exactly the
+    /// confusion this field exists to avoid).
     pub profile: &'static str,
 
     /// Build timestamp (RFC3339 format) - used to identify builds

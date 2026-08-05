@@ -43,19 +43,20 @@ A user reporting "0.4.4 crashes" is describing the app. A user reporting
 "pyfflame 0.1.0 gives a different flame" is describing a build that could
 have come from any app version, because nothing records which.
 
-**Decide before the first release.** Two workable answers:
+**Decided: lockstep.** One version for everything, bumped together.
+`release.py version` implements it — it sets all four files or none, and
+says so when it runs.
 
-- **Lockstep** — one version for everything, bumped together. Simple to
-  reason about, and honest given they are built from one commit. Costs a
-  version bump on crates that did not change.
-- **Independent, with a recorded floor** — each crate versions itself,
-  and each records the app version it was built from (the same way
-  `build.rs` already records the git hash).
+The artifacts are not independently useful: a `pyfflame` wheel and the
+app it matches come from one commit, and pretending otherwise creates a
+compatibility matrix nobody will maintain. The cost is a version bump on
+crates that did not change, which is cheap and visible.
 
-Lockstep is the recommendation. The artifacts are not independently
-useful — a `pyfflame` wheel and the app it matches come from one commit,
-and pretending otherwise creates a compatibility matrix nobody will
-maintain.
+The alternative considered was independent versions with each crate
+recording the app version it was built from (the way `build.rs` records
+the git hash). It buys accuracy nobody needs at the price of the matrix.
+The first `version` bump makes lockstep true — until then the numbers
+above are the historical drift, not a scheme.
 
 ---
 
@@ -150,12 +151,19 @@ generated reports (§4.3) and do the tag there.
 ```bash
 python scripts/release.py version 0.5.0 --dry-run   # read it first
 python scripts/release.py version 0.5.0             # all four crates, lockstep
-python scripts/release.py changelog                 # from commit subjects since the last tag
+python scripts/release.py changelog > NOTES.md      # raw material, then edit it
 ```
 
-The changelog is raw material. Grouping by `area:` prefix gets the
-shape; deciding what mattered to a *user* is still a person's job —
-most commits here are internal and belong in one line, not thirty.
+The changelog is raw material, and `NOTES.md` is the edited result you
+hand to `gh` in §4.7. Grouping by `area:` prefix gets the shape;
+deciding what mattered to a *user* is still a person's job — most
+commits here are internal and belong in one line, not thirty. Expect to
+cut most of it.
+
+`NOTES.md` is **scratch, per release, and not committed** — it is in
+`.gitignore` for that reason. The published notes live on the GitHub
+release; the repository's record of what changed is the commit history
+the changelog was generated from.
 
 **On the version numbers.** Nothing has been tagged yet, so
 `release.py changelog` has no "since the last tag" to work from until
@@ -257,7 +265,7 @@ publishing, so the artifacts and the tag agree.
 ```bash
 gh release create v0.5.0 \
    --title "0.5.0" --notes-file NOTES.md \
-   "FractalArtEditor-0.5.0-windows.zip" \
+   "target/windows/FractalArtEditor-0.5.0-windows.zip" \
    "target/macos/FractalArtEditor-0.5.0-macos.zip"
 ```
 
@@ -492,12 +500,18 @@ the page and reading the **Performance panel** — it shows version, git
 hash, branch, build time and profile. Do not trust the copy: a partial
 upload leaves a working page running old wasm.
 
-**The README's demo link is a second, stale deployment.**
-`calibas.github.io` was last built **2026-02-11** (11.8 MB wasm) against
-fractalsforall.com/editor's **2026-06-30** (15.2 MB) — five months and a
-product rename behind, still titled "FAR - Online Version". Either
-update it as part of the release or point the README at the main site.
-Two hosts for one artifact is the kind of thing that stays wrong.
+**One host, decided.** `fractalsforall.com/editor/` is production.
+`calibas.github.io` is being retired — it was a second deployment of the
+same artifact, last built **2026-02-11** (11.8 MB wasm) against
+fractalsforall.com/editor's **2026-06-30** (15.2 MB): five months and a
+product rename behind, still titled "FAR - Online Version". The README
+now points at production.
+
+Until the DNS or the GitHub Pages source is actually switched off, treat
+it as live-and-wrong: anyone who has it bookmarked is running February's
+build. Retiring it is a release step, not a cleanup task — a redirect to
+`fractalsforall.com/editor/` is better than a 404 for anyone holding the
+old link.
 
 ### Linux — nothing decided
 
@@ -550,9 +564,12 @@ Honest list, so nobody assumes these exist:
   changelog` has no boundary to diff from until the first one exists
   (§4.1). Every exported PNG records a git *hash*, so builds are already
   traceable — tags are what make them nameable.
-- **No web deploy step.** `pkg/` is gitignored and the upload is manual
-  (§5), which is also why a second, five-months-stale copy of the app is
-  live at the URL the README links to.
+- **No web deploy step.** `pkg/` is gitignored and the upload to
+  `fractalsforall.com/editor/` is manual (§5). A manual upload is also
+  how the retired `calibas.github.io` mirror drifted five months behind
+  before anyone noticed — one host now, but nothing stops the one host
+  from being half-uploaded, which is why §4.7 says to load the page and
+  read the version afterwards.
 - **`build-wasm.bat` and `build-wasm.sh` are parallel implementations**
   of one procedure. They agree today; nothing enforces that.
 

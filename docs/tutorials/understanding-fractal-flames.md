@@ -20,7 +20,7 @@ That's enough theory for now, let's get started on actually making something.
 
 ## Creating a basic Fractal Flame
 
-Load up FAE ([online version here](https://calibas.github.io/)).
+Load up FAE ([online version here](https://fractalsforall.com/editor/)).
 
 In the top menu, select File and then New. This will create a new fractal with a single transform. 
 
