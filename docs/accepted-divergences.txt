@@ -19,7 +19,12 @@
 # The bar for adding a line: the mechanism is NAMED and MEASURED (not
 # guessed), and the consequence is one of
 #   - identical on both platforms (e.g. both reach bad-value recovery),
-#   - or a finite value difference too small to move a pixel.
+#   - a finite value difference too small to move a pixel,
+#   - or the computation exceeds f32 argument resolution and ALL
+#     implementations — including the f64 reference — produce mutually
+#     different results, so no target class exists to guard toward.
+#     (First case: trig of arguments past ~2^24, where adjacent f32s
+#     differ by more than the whole period.)
 # "Probably fine" does not clear the bar; that is what the worklist is
 # for.
 
@@ -60,3 +65,13 @@ maurer_rose      2d,3d  neg0y_x                    single-signed-zero atan2 sign
 butterfly_fay    2d,3d  neg0y_x                    single-signed-zero atan2 sign texture, ~1e-7 (batch 3)
 cannabiscurve_wf 2d,3d  +0-0,-y,subnormal,y_neg0x  sin(pi)-ULP and FTZ flush texture, finite, ~1e-7 (batch 3)
 rhodonea         2d,3d  -0+0,-0-0,-x,+y,-y,q1,q2,q3,normal_min,neg0y_x  trig-ULP zero/sign texture at exact angles, finite, ~1e-7 (batch 3)
+
+# Trig of unresolvable arguments: at |x*pi| beyond f32 resolution,
+# measured sin/cos(1e20*pi): Metal fast (+0,+0) — point collapses to
+# origin; NVIDIA (0, garbage) — point pins to the y-axis; IEEE/f64
+# (-0.607, 0.794) — point scatters at radius |1+y|. Three
+# implementations, three mutually-incompatible answers; a guard could
+# only fake agreement with nothing. The tiny row is the reverse-
+# direction flush: WINDOWS zeroes sin(3e-20) where Metal keeps it,
+# ~1e-20 offset. (invpolar disposition)
+invpolar     2d,3d  tiny,large,near_threshold,past_threshold,lopsided  trig past f32 argument resolution: no reference class exists (see header, third clause)
