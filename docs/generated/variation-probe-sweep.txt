@@ -6,7 +6,7 @@
 # Compare two of these with:  cargo run --release --bin variation_probe \
 #                                 -- compare OLD NEW
 #
-# build    0.4.4 (595c994f)
+# build    0.4.4 (942c9246)
 # os       Windows x86_64
 # adapter  NVIDIA GeForce GTX 1660 SUPER
 # backend  Vulkan
@@ -1150,16 +1150,16 @@ cut_bricks.zoom 2d ...pm........pm........pm..... adade15bf6fb717e
 cut_bricks.zoom 3d 0.zpmH....0.zpmH....0.zpmH.... 2b5eb1b6a521e887
 cut_btree.invert 2d 0..pm.....0..pm..... 0461f64cf79f2a3d
 cut_btree.invert 3d 0.zpmH....0.zpmH.... 11eff671c2e4c775
-cut_btree.mode 2d 0..pmHh...0..pm..... 62f431cf312e63d5
-cut_btree.mode 3d 0.zpmHh...0.zpmH.... 72a294b743286d85
+cut_btree.mode 2d 0o.pmHh...0..pm..... 5902b0e19d7f1a98
+cut_btree.mode 3d 0ozpmHh...0.zpmH.... 2a66758c17b2c1f4
 cut_btree.seed 2d 0..pm.....0..pm..... 4bac4485e406af7d
 cut_btree.seed 3d 0.zpmH....0.zpmH.... 243420f65a0aac7d
 cut_btree.thickness 2d 0..pm.....0..pm..... ae5a99d78986e546
 cut_btree.thickness 3d 0.zpmH....0.zpmH.... 08f358d4f95afca6
 cut_btree.time 2d 0..pm.....0..pm.....0..pm..... 0c226f63aead9781
 cut_btree.time 3d 0.zpmH....0.zpmH....0.zpmH.... 26c697891047d85c
-cut_btree.zoom 2d 0..pm.....0.........0..pm..... b168362c0adee8bd
-cut_btree.zoom 3d 0.zpmH....0.zpmH....0.zpmH.... f92e3fcef82aefa0
+cut_btree.zoom 2d 0..pm........pm.....0..pm..... e31bd66ff0747569
+cut_btree.zoom 3d 0.zpmH....0.zpmH....0.zpmH.... 4904498dcf316acc
 cut_celtic.invert 2d ...pm........pm..... 53c2145c51b29510
 cut_celtic.invert 3d 0.zpmH....0.zpmH.... e34eff8dd5a27c94
 cut_celtic.mode 2d 0ozpmHh......pm..... 6cbe05d78b9e1d40
