@@ -4,6 +4,11 @@ Everything between the current state of `macos-support` and calling
 macOS supported. Check items off in place; each carries enough context
 to be worked without re-deriving it.
 
+**Status 2026-08-05: Tier 1 and Tier 2 are complete.** Nothing on this
+list blocks a release. Tier 3 is deferred by decision, not by neglect —
+each entry says what it would buy. One Tier 2 item is verified-except-
+for-hardware: second-display drag, for whenever a second display exists.
+
 **Already done and cross-verified, for orientation:** icons + `.app`
 bundle + zip packaging (`make_macos_app.py`), executable-relative asset
 loading, the vsync governor fix, startup surface-error fix, and the
@@ -85,7 +90,9 @@ does anything feel platform-wrong (shortcuts, focus, lag)?
       A real in-app export from the bundle is still worth one run.
 - [x] **Fly mode** works (2026-08-04) — but bare F2 does not: macOS
       sends it as brightness. Help now carries the Fn+F2 hint on macOS.
-      OPEN QUESTION for the user: add an alternate non-Fn binding?
+      **Decided 2026-08-05: Fn+F2 stands, no alternate binding.** It is
+      the standard macOS convention for a function key, and the panel
+      documents it per-platform, so the only cost was not knowing.
 - [x] **Clipboard** works (2026-08-04).
 - [x] **File dialogs** work (2026-08-04).
 - [x] **Fullscreen** works (2026-08-04). Second-display drag untested —
