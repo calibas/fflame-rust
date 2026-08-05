@@ -6,7 +6,7 @@
 # Compare two of these with:  cargo run --release --bin variation_probe \
 #                                 -- compare OLD NEW
 #
-# build    0.4.4 (942c9246)
+# build    0.4.4 (e2c8a523)
 # os       Windows x86_64
 # adapter  NVIDIA GeForce GTX 1660 SUPER
 # backend  Vulkan
