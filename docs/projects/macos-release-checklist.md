@@ -14,24 +14,42 @@ Windows, two shipped presets (Flower, Bubbles) fixed. Visual suite
 
 ## Tier 1 — blocks the first release
 
-- [ ] **dist-profile build + bundle + smoke test.** Everything so far
-      was `--release`; a shipped binary must report `dist` in its PNG
-      provenance (docs/RELEASE.md). Steps: `cargo build --profile dist`,
-      `python3 scripts/make_macos_app.py --zip`, then launch the bundle,
-      export a PNG, and confirm `BuildProfile: dist` in its metadata.
-- [ ] **DECISION — Intel Macs.** The bundle is aarch64-only; Intel users
-      get "can't open". Recommendation: *Apple Silicon only for v1* (one
-      sentence on the download page, zero work). Alternative: universal2
-      (`x86_64-apple-darwin` + `lipo`) — launchable under Rosetta here,
-      but Intel-Mac GPUs (AMD/Intel Metal) have their own unprobed
-      fast-math texture, so launching ≠ rendering correctly on real
-      Intel hardware.
-- [ ] **Quarantine instructions on the download page.** Unsigned app ⇒
-      Gatekeeper refuses; macOS 15 removed right-click→Open. User-facing
-      copy needed wherever the zip lives: System Settings → Privacy &
-      Security → "Open Anyway", or
-      `xattr -d com.apple.quarantine "/Applications/Fractal Art Editor.app"`.
-      This repeats on EVERY update until the app is notarized.
+- [x] **dist-profile build + bundle + smoke test.** (Done 2026-08-04,
+      63d66c69.) dist built 4m40s / 19.7 MB; bundle 35 MB, zip 21 MB;
+      smoke on the BUNDLED binary: export works, PNG provenance reads
+      `BuildProfile: dist`, GUI launch clean (assets, 0 errors).
+- [x] **DECISION — Intel Macs: Apple Silicon only for v1.** (Decided
+      2026-08-04.) The requirements line in the download copy below
+      carries it. Universal2 stays possible later, with the caveat that
+      Intel-Mac GPUs have their own unprobed fast-math texture.
+- [x] **Quarantine instructions — download-page copy.** Drafted below,
+      paste-ready; lives here until there is a download page. The steps
+      branch on macOS version because Sequoia removed right-click→Open,
+      and they repeat on EVERY update until the app is notarized.
+
+      ---
+      **Installing on macOS**
+
+      Fractal Art Editor is not yet notarized with Apple, so macOS will
+      warn you the first time you open it — including after every
+      update.
+
+      *Requires an Apple Silicon Mac (M1 or later), macOS 11+.*
+
+      1. Unzip and drag **Fractal Art Editor.app** into Applications.
+      2. Open it once. macOS will refuse ("Apple could not verify…") —
+         click **Done** (don't move it to Trash), then:
+         - **macOS 15 (Sequoia) and later:** System Settings → Privacy &
+           Security → scroll down → **Open Anyway** next to Fractal Art
+           Editor, and authenticate.
+         - **macOS 14 and earlier:** Control-click the app in
+           Applications → **Open** → **Open**.
+      3. That's once per downloaded version — macOS re-quarantines each
+         update until the app is notarized.
+
+      Terminal alternative, any macOS version:
+      `xattr -d com.apple.quarantine "/Applications/Fractal Art Editor.app"`
+      ---
 
 ## Tier 2 — untested surface area (interactive checklist)
 
