@@ -1196,13 +1196,6 @@ pub fn print_available_encoders() {
     }
 }
 
-/// Export animation directly to video via FFmpeg pipe (desktop only)
-///
-/// This pipes raw RGBA pixel data directly to FFmpeg's stdin, avoiding:
-/// - PNG encoding (CPU-intensive compression)
-/// - Disk I/O (writing/reading thousands of files)
-/// - PNG decoding (FFmpeg decompressing what we just compressed)
-/// - Disk space (no temp files)
 #[cfg(not(target_arch = "wasm32"))]
 impl AnimationExportConfig {
     /// Round the frame size down to even numbers, returning the sizes
@@ -1236,6 +1229,14 @@ impl AnimationExportConfig {
     }
 }
 
+/// Export animation directly to video via FFmpeg pipe (desktop only)
+///
+/// This pipes raw RGBA pixel data directly to FFmpeg's stdin, avoiding:
+/// - PNG encoding (CPU-intensive compression)
+/// - Disk I/O (writing/reading thousands of files)
+/// - PNG decoding (FFmpeg decompressing what we just compressed)
+/// - Disk space (no temp files)
+#[cfg(not(target_arch = "wasm32"))]
 pub async fn export_animation(
     mut export_config: AnimationExportConfig,
     reporter: &mut dyn crate::export::ExportReporter,

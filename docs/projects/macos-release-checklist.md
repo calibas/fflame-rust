@@ -73,7 +73,10 @@ does anything feel platform-wrong (shortcuts, focus, lag)?
       (BlackHole) selected as INPUT — CoreAudio has no WASAPI-style
       output capture; the WASM build's tab capture is a Chrome API.
       RC2 (2026-08-05) has the key; retest pending.
-- [x] **Animation** works (2026-08-04). **Video export** FAILED: ffmpeg
+- [x] **Animation + video export** BOTH WORK as of 2026-08-05, after
+      three independent bugs: ffmpeg not found (launchd PATH), odd frame
+      dimensions killing the encoder, and a relative default output path
+      resolving to a read-only volume. **Video export** FAILED: ffmpeg
       installed but not detected — Finder-launched bundles get
       launchd's PATH, which lacks /opt/homebrew/bin. Fixed: resolver
       probes PATH then Homebrew/MacPorts locations. VERIFIED on RC2
