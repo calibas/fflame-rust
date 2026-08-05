@@ -81,3 +81,27 @@ invpolar     2d,3d  tiny,large,near_threshold,past_threshold,lopsided  trig past
 # signed-zero input remains — the single-signed-zero atan2 texture.
 julia3Dz     3d  neg0y_x  single-signed-zero atan2 sign texture, one component (batch 4)
 popcorn2_3D  3d  neg0y_x  single-signed-zero atan2 sign texture, one component (batch 4)
+
+# Final REACHABLE sweep — every entry below was individually examined
+# (glyphs decoded; npolar and waves2b micro-probed on the M2). Common
+# thread: single-component finite<->zero or sign differences at exact
+# special points, from three measured micro-mechanisms: (a) fast-math
+# dropping the sign of finite*(+0), (b) NVIDIA flushing sin of tiny
+# arguments to zero where Metal/IEEE keep them (Metal is the
+# reference-correct side there), (c) trig past f32 argument resolution
+# (header, third clause). No NaN, no point-death, no consequence
+# asymmetry anywhere in this batch.
+#
+# npolar, measured end to end: at parity=0 every point's cosa/sina are
+# signed zeros; fast-math turns sin(tiny_negative)*(+0) into +0 instead
+# of -0, flipping ff_atan2's IEEE branch — fy 1.0 (NVIDIA) vs 0.0
+# (Metal). Confined to angle ~ 0, i.e. points within ~1e-7 of exactly
+# |p| = 1 — a measure-zero ring, which is why apo-misc7 sits at mean
+# 0.007 despite the O(1) per-point stake.
+npolar       2d,3d  -0+0,half_unit  fast-math sign-of-zero fold flips ff_atan2 branch; measure-zero ring (micro-probed)
+anamorphcyl  2d,3d  -0+0,-0-0,pi_e,tiny,large,near_threshold,past_threshold,lopsided,neg0y_x  signed-zero/reverse-flush texture at exact points; large family is third-clause trig
+intersection 2d,3d  big,large,near_threshold  single-component finite<->zero at exact points; third-clause trig at large
+plusrecip    2d,3d  -x,+y,-y,neg0y_x  axis-exact single-component reciprocal/signed-zero texture
+jac_asn      2d,3d  +0+0,+0-0,-0+0,-0-0,+x,-x,+y,-y,unit,tiny,normal_min,subnormal,y_neg0x,neg0y_x  elliptic-series sign/flush texture, small magnitudes (the old sparse-pixel visual case)
+lazyjess     2d,3d  q2,q3,q4  quadrant sign texture
+waves2b      2d,3d  +0+0,+0-0,-0+0,-0-0,tiny,normal_min,subnormal  NVIDIA flushes sin(2e-10-scale) to 0, Metal/IEEE keep it — Metal matches the reference; diff <= 1e-9 (micro-probed)
