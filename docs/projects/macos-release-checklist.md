@@ -67,11 +67,14 @@ does anything feel platform-wrong (shortcuts, focus, lag)?
       Note: "loopback" on macOS structurally needs a virtual device
       (BlackHole) selected as INPUT — CoreAudio has no WASAPI-style
       output capture; the WASM build's tab capture is a Chrome API.
+      RC2 (2026-08-05) has the key; retest pending.
 - [x] **Animation** works (2026-08-04). **Video export** FAILED: ffmpeg
       installed but not detected — Finder-launched bundles get
       launchd's PATH, which lacks /opt/homebrew/bin. Fixed: resolver
-      probes PATH then Homebrew/MacPorts locations; RETEST from a
-      rebuilt bundle.
+      probes PATH then Homebrew/MacPorts locations. VERIFIED on RC2
+      under a simulated launchd PATH: "ffmpeg found:
+      /opt/homebrew/bin/ffmpeg" where bare `ffmpeg` does not resolve.
+      A real in-app export from the bundle is still worth one run.
 - [x] **Fly mode** works (2026-08-04) — but bare F2 does not: macOS
       sends it as brightness. Help now carries the Fn+F2 hint on macOS.
       OPEN QUESTION for the user: add an alternate non-Fn binding?
@@ -82,8 +85,8 @@ does anything feel platform-wrong (shortcuts, focus, lag)?
       is (the governor's refresh re-read is the edge in question).
 - [x] **Retina/DPI** crisp (2026-08-04).
 - [x] **Keyboard shortcuts** work (2026-08-04).
-- [ ] **High-res export in-app + longevity** — 8K×8K @ 2x AA export in
-      progress (2026-08-04), doubles as the longevity soak.
+- [x] **High-res export in-app + longevity** (2026-08-04). 8K×8K @ 2x AA
+      completed, PNG fine; no issues over a long session.
 
 ## Tier 3 — deferred by decision, tracked so they stay decisions
 
