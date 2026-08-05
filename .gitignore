@@ -61,3 +61,8 @@ wasm/*/pkg/
 docs/generated/variation-probe.timings.txt
 docs/generated/variation-probe.progress
 
+# Edited release notes, per release, handed to `gh release create`
+# (docs/RELEASE.md 4.1). Scratch: the published copy lives on the GitHub
+# release, and the repository's record is the commit history the
+# changelog was generated from.
+NOTES.md
