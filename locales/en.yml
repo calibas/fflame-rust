@@ -118,6 +118,12 @@ help:
   fly_mode_macos: "  Fn+F2    - Toggle Fly Mode (bare F2 is brightness on Mac keyboards; System Settings > Keyboard can swap this)"
   undo_shortcut_macos: "  Cmd+Z    - Undo"
   redo_shortcut_macos: "  Cmd+Y    - Redo"
+  # Web: a wasm build cannot know at compile time which OS it is on, so
+  # the app accepts either modifier and the text names both rather than
+  # guessing (or sniffing the user agent).
+  undo_shortcut_web: "  Ctrl/Cmd+Z - Undo"
+  redo_shortcut_web: "  Ctrl/Cmd+Y - Redo"
+  alt_drag_rotate_web: "  Alt/Opt-Drag - Rotate view"
   alt_drag_rotate_macos: "  Opt-Drag - Rotate view"
   editing: "Editing:"
   undo_shortcut: "  Ctrl+Z   - Undo"
