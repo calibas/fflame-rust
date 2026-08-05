@@ -75,3 +75,9 @@ rhodonea         2d,3d  -0+0,-0-0,-x,+y,-y,q1,q2,q3,normal_min,neg0y_x  trig-ULP
 # direction flush: WINDOWS zeroes sin(3e-20) where Metal keeps it,
 # ~1e-20 offset. (invpolar disposition)
 invpolar     2d,3d  tiny,large,near_threshold,past_threshold,lopsided  trig past f32 argument resolution: no reference class exists (see header, third clause)
+
+# Batch 4 residuals: after julia3Dz's ff_atan2 adoption and the
+# popcorn-family tan guards, a single component sign at one mixed
+# signed-zero input remains — the single-signed-zero atan2 texture.
+julia3Dz     3d  neg0y_x  single-signed-zero atan2 sign texture, one component (batch 4)
+popcorn2_3D  3d  neg0y_x  single-signed-zero atan2 sign texture, one component (batch 4)

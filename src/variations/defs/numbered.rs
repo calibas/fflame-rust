@@ -278,7 +278,17 @@ fn variation_popcorn2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f3
     let x_p = get_param(xform_id, variation_id, 0u);
     let y_p = get_param(xform_id, variation_id, 1u);
     let c = get_param(xform_id, variation_id, 2u);
-    return vec2<f32>(p.x + x_p * sin(tan(p.y * c)), p.y + y_p * sin(tan(p.x * c)));
+    // Metal's fast tan goes Inf/NaN where its cos flushes to zero at a
+    // pole, and at arguments past f32 resolution; sin(that) then poisons
+    // the point where NVIDIA — whose f32 tan is bounded ~2e7 by argument
+    // granularity — stays finite. Same guard as popcorn (c338d988):
+    // Inf/NaN fails abs(t) <= 1e32 and falls to 0; every finite tan
+    // passes through, so Windows is bit-identical.
+    var tan_y = tan(p.y * c);
+    tan_y = select(0.0, tan_y, abs(tan_y) <= 1e32);
+    var tan_x = tan(p.x * c);
+    tan_x = select(0.0, tan_x, abs(tan_x) <= 1e32);
+    return vec2<f32>(p.x + x_p * sin(tan_y), p.y + y_p * sin(tan_x));
 }
 "#,
     wgsl_3d: r#"
@@ -286,7 +296,17 @@ fn variation_popcorn2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
     let x_p = get_param(xform_id, variation_id, 0u);
     let y_p = get_param(xform_id, variation_id, 1u);
     let c = get_param(xform_id, variation_id, 2u);
-    return vec3<f32>(p.x + x_p * sin(tan(p.y * c)), p.y + y_p * sin(tan(p.x * c)), p.z);
+    // Metal's fast tan goes Inf/NaN where its cos flushes to zero at a
+    // pole, and at arguments past f32 resolution; sin(that) then poisons
+    // the point where NVIDIA — whose f32 tan is bounded ~2e7 by argument
+    // granularity — stays finite. Same guard as popcorn (c338d988):
+    // Inf/NaN fails abs(t) <= 1e32 and falls to 0; every finite tan
+    // passes through, so Windows is bit-identical.
+    var tan_y = tan(p.y * c);
+    tan_y = select(0.0, tan_y, abs(tan_y) <= 1e32);
+    var tan_x = tan(p.x * c);
+    tan_x = select(0.0, tan_x, abs(tan_x) <= 1e32);
+    return vec3<f32>(p.x + x_p * sin(tan_y), p.y + y_p * sin(tan_x), p.z);
 }
 "#,
 };

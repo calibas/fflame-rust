@@ -4,7 +4,7 @@
 # This file is generated. See src/census/ for what it means.
 # Regenerate: cargo run --release --bin variation_probe -- census --corpus
 #
-# build    0.4.4 (6c3a31f3)
+# build    0.4.4 (5a31aa58)
 # os       macos aarch64
 # adapter  Apple M2 / Metal
 # corpus   presets + tests/visual/configs + random seed 1..100  (252 run, 5 skipped)
