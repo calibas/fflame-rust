@@ -1019,7 +1019,9 @@ static FFMPEG_PATH: once_cell::sync::Lazy<Option<std::path::PathBuf>> =
             "/opt/local/bin/ffmpeg",    // MacPorts
         ];
         for c in candidates {
-            let ok = std::process::Command::new(c)
+            let mut probe = std::process::Command::new(c);
+            hide_console_window(&mut probe);
+            let ok = probe
                 .arg("-version")
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
@@ -1038,14 +1040,45 @@ static FFMPEG_PATH: once_cell::sync::Lazy<Option<std::path::PathBuf>> =
         None
     });
 
+/// Keep Windows from opening a console window for a child process.
+///
+/// The app is GUI-subsystem (see the console handling in `main.rs`), and
+/// when a GUI process spawns a console-subsystem child, Windows gives
+/// the child its OWN console — so every video export flashed up an empty
+/// black ffmpeg window beside the app. `CREATE_NO_WINDOW` suppresses it;
+/// stdout/stderr are piped and read by the caller either way, so nothing
+/// is lost by having no console attached.
+///
+/// No-op everywhere else: on macOS and Linux a spawned child has no
+/// window to begin with.
+#[cfg(not(target_arch = "wasm32"))]
+fn hide_console_window(cmd: &mut std::process::Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = cmd;
+    }
+}
+
 /// The command to invoke ffmpeg with, wherever it was found.
+///
+/// Every ffmpeg spawn goes through here, which is what makes the
+/// no-console-window flag a single line rather than four call sites to
+/// keep in step.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn ffmpeg_command() -> std::process::Command {
-    std::process::Command::new(
+    let mut cmd = std::process::Command::new(
         FFMPEG_PATH
             .as_deref()
             .unwrap_or_else(|| std::path::Path::new("ffmpeg")),
-    )
+    );
+    hide_console_window(&mut cmd);
+    cmd
 }
 
 /// Check if ffmpeg is available on the system (cached after first call)
