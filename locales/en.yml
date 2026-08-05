@@ -112,6 +112,7 @@ help:
   zoom_numpad: "  Numpad +/-  - Zoom in/out"
   full_screen: "  F        - Full Screen Mode"
   fly_mode: "  F2       - Toggle Fly Mode"
+  fly_mode_mac_hint: "             (Mac keyboards send F2 as brightness: press Fn+F2, or enable 'Use F1, F2, etc. keys as standard function keys' in System Settings > Keyboard)"
   editing: "Editing:"
   undo_shortcut: "  Ctrl+Z   - Undo"
   redo_shortcut: "  Ctrl+Y   - Redo"

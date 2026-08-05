@@ -113,6 +113,14 @@ def build_bundle(profile: str, out_dir: Path) -> Path:
         "NSHighResolutionCapable": True,
         "LSMinimumSystemVersion": MIN_MACOS,
         "NSHumanReadableCopyright": "Fractals for All",
+        # Without this key macOS SUPPRESSES the microphone permission
+        # prompt and CoreAudio silently delivers nothing — the
+        # audio-reactive stack appears dead with no error anywhere.
+        # With it, the first mic open triggers the system prompt.
+        "NSMicrophoneUsageDescription":
+            "Fractal Art Editor uses the microphone for audio-reactive "
+            "animation — sound levels drive fractal parameters. Audio is "
+            "analysed live and never recorded or stored.",
     }
     with open(app / "Contents" / "Info.plist", "wb") as fp:
         plistlib.dump(plist, fp)

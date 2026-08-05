@@ -57,32 +57,33 @@ The viewport, editing, and the governor are user-verified. Nothing
 below has been exercised on macOS at all. For each: does it work, and
 does anything feel platform-wrong (shortcuts, focus, lag)?
 
-- [ ] **Audio-reactive stack** (cpal → CoreAudio). Mic capture: does the
-      OS permission prompt appear, does the Signal panel see levels?
-      Audio-file playback analysis (mp3/wav via symphonia). BPM
-      detection sanity. Screen/tab capture is Chrome-only web — skip.
-- [ ] **Animation + video export.** Track animation plays in-app; video
-      export produces a playable file; export doesn't wedge the UI
-      longer than expected.
-- [ ] **Fly mode** (F2 / 🚀). WASD/QE + mouse-look feel; sensitivity
-      sane on a trackpad?; FreeLook vs FPS both behave; Esc exits
-      cleanly.
-- [ ] **Clipboard.** Copy/paste of config JSON in and out of the app;
-      palette import via clipboard; ⌘C/⌘V in egui text fields.
-- [ ] **File dialogs** (rfd → native). Open/save flame, palette import,
-      PNG export path picking; a filename with spaces/unicode.
-- [ ] **Fullscreen + display changes.** Toggle fullscreen; drag the
-      window to a second display mid-render (the governor re-reads
-      refresh every 120 frames — a 60↔120 Hz move should not wedge
-      iteration rate); close the lid / reopen.
-- [ ] **Retina/DPI.** UI crispness at 2x; export resolution unaffected
-      by window scale; screenshots of the window look right.
-- [ ] **Keyboard shortcuts.** ⌘Q quits cleanly (settings persisted?),
-      ⌘W behavior, undo/redo binding on macOS.
-- [ ] **High-res export in-app** (4K/8K path switch) — CLI is verified,
-      the in-app dialog path is not.
-- [ ] **Longevity.** Leave it rendering 30+ min: memory stable, no
-      thermal runaway weirdness, no surface errors in the log.
+- [ ] **Audio-reactive stack** (cpal → CoreAudio). FIRST PASS FAILED
+      (2026-08-04): no input from mic/iPhone/loopback, no permission
+      prompt. Root cause: the bundle plist had no
+      `NSMicrophoneUsageDescription` — macOS suppresses the prompt and
+      delivers silence. Key added to make_macos_app.py; RETEST from a
+      rebuilt bundle (the prompt should appear on first capture; after
+      a denial, flip it in System Settings → Privacy → Microphone).
+      Note: "loopback" on macOS structurally needs a virtual device
+      (BlackHole) selected as INPUT — CoreAudio has no WASAPI-style
+      output capture; the WASM build's tab capture is a Chrome API.
+- [x] **Animation** works (2026-08-04). **Video export** FAILED: ffmpeg
+      installed but not detected — Finder-launched bundles get
+      launchd's PATH, which lacks /opt/homebrew/bin. Fixed: resolver
+      probes PATH then Homebrew/MacPorts locations; RETEST from a
+      rebuilt bundle.
+- [x] **Fly mode** works (2026-08-04) — but bare F2 does not: macOS
+      sends it as brightness. Help now carries the Fn+F2 hint on macOS.
+      OPEN QUESTION for the user: add an alternate non-Fn binding?
+- [x] **Clipboard** works (2026-08-04).
+- [x] **File dialogs** work (2026-08-04).
+- [x] **Fullscreen** works (2026-08-04). Second-display drag untested —
+      no second display available; keep on the list for whenever one
+      is (the governor's refresh re-read is the edge in question).
+- [x] **Retina/DPI** crisp (2026-08-04).
+- [x] **Keyboard shortcuts** work (2026-08-04).
+- [ ] **High-res export in-app + longevity** — 8K×8K @ 2x AA export in
+      progress (2026-08-04), doubles as the longevity soak.
 
 ## Tier 3 — deferred by decision, tracked so they stay decisions
 

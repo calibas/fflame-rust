@@ -1000,28 +1000,64 @@ fn apply_flame_value(
 // FFmpeg Pipe-Based Video Export
 // ============================================================================
 
-/// Cached FFmpeg availability check (spawning process every frame is expensive)
+/// Where ffmpeg actually is — cached (spawning a probe process every
+/// frame is expensive).
+///
+/// `Command::new("ffmpeg")` alone breaks on macOS the moment the app is
+/// launched from Finder: a bundled GUI app inherits launchd's PATH
+/// (`/usr/sbin:/usr/bin:/bin:/sbin`), not the shell's, so a Homebrew
+/// ffmpeg in /opt/homebrew/bin is invisible even though `ffmpeg` works
+/// fine in every terminal. Probe PATH first (terminal launches, Windows,
+/// Linux), then the conventional install locations.
 #[cfg(not(target_arch = "wasm32"))]
-static FFMPEG_AVAILABLE: once_cell::sync::Lazy<bool> = once_cell::sync::Lazy::new(|| {
-    std::process::Command::new("ffmpeg")
-        .arg("-version")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-});
+static FFMPEG_PATH: once_cell::sync::Lazy<Option<std::path::PathBuf>> =
+    once_cell::sync::Lazy::new(|| {
+        let candidates = [
+            "ffmpeg", // PATH — covers terminals, Windows, most Linux
+            "/opt/homebrew/bin/ffmpeg", // Homebrew, Apple Silicon
+            "/usr/local/bin/ffmpeg",    // Homebrew Intel / manual installs
+            "/opt/local/bin/ffmpeg",    // MacPorts
+        ];
+        for c in candidates {
+            let ok = std::process::Command::new(c)
+                .arg("-version")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+            if ok {
+                log::info!("ffmpeg found: {c}");
+                return Some(std::path::PathBuf::from(c));
+            }
+        }
+        log::warn!(
+            "ffmpeg not found — probed PATH and {:?}",
+            &candidates[1..]
+        );
+        None
+    });
+
+/// The command to invoke ffmpeg with, wherever it was found.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn ffmpeg_command() -> std::process::Command {
+    std::process::Command::new(
+        FFMPEG_PATH
+            .as_deref()
+            .unwrap_or_else(|| std::path::Path::new("ffmpeg")),
+    )
+}
 
 /// Check if ffmpeg is available on the system (cached after first call)
 #[cfg(not(target_arch = "wasm32"))]
 pub fn is_ffmpeg_available() -> bool {
-    *FFMPEG_AVAILABLE
+    FFMPEG_PATH.is_some()
 }
 
 /// Get ffmpeg version string (if available)
 #[cfg(not(target_arch = "wasm32"))]
 pub fn get_ffmpeg_version() -> Option<String> {
-    let output = std::process::Command::new("ffmpeg")
+    let output = ffmpeg_command()
         .arg("-version")
         .output()
         .ok()?;
@@ -1038,7 +1074,7 @@ pub fn get_ffmpeg_version() -> Option<String> {
 /// Check if a specific encoder is available in FFmpeg
 #[cfg(not(target_arch = "wasm32"))]
 pub fn is_encoder_available(encoder: &str) -> bool {
-    let output = std::process::Command::new("ffmpeg")
+    let output = ffmpeg_command()
         .args(["-hide_banner", "-encoders"])
         .output()
         .ok();
@@ -1241,7 +1277,7 @@ pub async fn export_animation(
     let has_signals = !export_config.signals.is_empty();
 
     // Build FFmpeg command for piped raw video input
-    let mut ffmpeg = Command::new("ffmpeg");
+    let mut ffmpeg = ffmpeg_command();
 
     // Overwrite output without asking
     ffmpeg.arg("-y");
@@ -1737,7 +1773,7 @@ pub async fn export_animation_fast(
     let output_path = export_config.output_path.clone();
 
     let writer_handle = std::thread::spawn(move || -> Result<(), String> {
-        let mut ffmpeg = Command::new("ffmpeg");
+        let mut ffmpeg = ffmpeg_command();
         for arg in &ffmpeg_args {
             ffmpeg.arg(arg);
         }
