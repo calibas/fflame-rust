@@ -115,7 +115,7 @@ help:
   # Platform variants. Only keys that genuinely differ need one; anything
   # without a `_macos` / `_web` twin falls back to the base string above
   # (see `shortcut()` in src/ui/help.rs). Windows and Linux use the base.
-  fly_mode_macos: "  Fn+F2    - Toggle Fly Mode (bare F2 is brightness on Mac keyboards; System Settings > Keyboard can swap this)"
+  fly_mode_macos: "  Fn+F2    - Toggle Fly Mode"
   undo_shortcut_macos: "  Cmd+Z    - Undo"
   redo_shortcut_macos: "  Cmd+Y    - Redo"
   # Web: a wasm build cannot know at compile time which OS it is on, so
