@@ -43,11 +43,27 @@ impl App {
             return;
         }
 
-        // Check for Ctrl/Cmd modifier
+        // Check for Ctrl/Cmd modifier.
+        //
+        // On the web, ACCEPT EITHER — and that is not laziness. The cfg
+        // below is resolved at compile time, but a wasm build has no
+        // compile-time platform: `target_os` is "unknown" whatever the
+        // user is actually running. winit's web backend maps Cmd to
+        // SUPER and Ctrl to CONTROL faithfully (see
+        // platform_impl/web/web_sys/event.rs), so a macOS visitor
+        // pressing Cmd+Z was sending SUPER to a build that only looked
+        // at CONTROL: undo silently did nothing for every Mac user of
+        // the web app.
+        //
+        // Accepting both avoids sniffing the user agent to decide, and
+        // costs nothing: on Windows and Linux the Super key is the OS's,
+        // and Super+Z does not reach the page.
         let ctrl_or_cmd = {
-            #[cfg(target_os = "macos")]
+            #[cfg(target_arch = "wasm32")]
+            { self.modifiers.control_key() || self.modifiers.super_key() }
+            #[cfg(all(not(target_arch = "wasm32"), target_os = "macos"))]
             { self.modifiers.super_key() }
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(all(not(target_arch = "wasm32"), not(target_os = "macos")))]
             { self.modifiers.control_key() }
         };
 
