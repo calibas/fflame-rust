@@ -62,6 +62,11 @@ pub fn render_keyboard_shortcuts_content(ui: &mut egui::Ui) {
     ui.label(t!("help.zoom_numpad"));
     ui.label(t!("help.full_screen"));
     ui.label(t!("help.fly_mode"));
+    // macOS routes bare F2 to brightness; the app never sees it. Say so
+    // where the binding is advertised. (rust-i18n falls back to en for
+    // locales without the key.)
+    #[cfg(target_os = "macos")]
+    ui.label(t!("help.fly_mode_mac_hint"));
 
     ui.separator();
     ui.label(t!("help.editing"));
