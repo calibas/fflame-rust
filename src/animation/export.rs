@@ -1204,10 +1204,43 @@ pub fn print_available_encoders() {
 /// - PNG decoding (FFmpeg decompressing what we just compressed)
 /// - Disk space (no temp files)
 #[cfg(not(target_arch = "wasm32"))]
+impl AnimationExportConfig {
+    /// Round the frame size down to even numbers, returning the sizes
+    /// actually used.
+    ///
+    /// H.264/H.265 in yuv420p — the pixel format every path here emits,
+    /// because it is what players actually support — subsamples chroma
+    /// 2x2 and therefore CANNOT encode an odd dimension. libx264 and
+    /// libx265 do not warn and adapt; they refuse to open the encoder
+    /// and ffmpeg exits, which downstream looks like the pipe dying a
+    /// few frames in (the frame channel buffers a few first).
+    ///
+    /// Rounding down rather than rejecting: an odd size is almost always
+    /// an incidental consequence of a window size or a typed number, not
+    /// a deliberate request, and losing one pixel column is a far better
+    /// outcome than a failed export. It is logged, not silent.
+    fn force_even_dimensions(&mut self) {
+        let (w, h) = (self.width & !1, self.height & !1);
+        if (w, h) != (self.width, self.height) {
+            log::warn!(
+                "Video export: {}x{} is not encodable in yuv420p (odd dimension); \
+                 using {}x{}",
+                self.width, self.height, w, h
+            );
+            self.width = w;
+            self.height = h;
+        }
+        // A zero dimension cannot be rounded into validity.
+        self.width = self.width.max(2);
+        self.height = self.height.max(2);
+    }
+}
+
 pub async fn export_animation(
-    export_config: AnimationExportConfig,
+    mut export_config: AnimationExportConfig,
     reporter: &mut dyn crate::export::ExportReporter,
 ) -> Result<AnimationExportResult, AnimationExportError> {
+    export_config.force_even_dimensions();
     use std::io::Write;
     use std::process::Stdio;
     use std::time::Instant;
@@ -1669,9 +1702,10 @@ impl ExportTimingStats {
 /// This keeps the GPU saturated while we process completed frames.
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn export_animation_fast(
-    export_config: AnimationExportConfig,
+    mut export_config: AnimationExportConfig,
     reporter: &mut dyn crate::export::ExportReporter,
 ) -> Result<AnimationExportResult, AnimationExportError> {
+    export_config.force_even_dimensions();
     use crate::renderer::compute_kernel::FlameRenderer;
     use egui_wgpu::wgpu::{
         self, BufferDescriptor, BufferUsages, CommandEncoderDescriptor,
@@ -2039,9 +2073,20 @@ pub async fn export_animation_fast(
 
         // Send to FFmpeg writer thread
         let send_start = Instant::now();
-        frame_tx
-            .send(rgba_data)
-            .map_err(|_| AnimationExportError::FfmpegFailed("Writer thread died".to_string()))?;
+        if frame_tx.send(rgba_data).is_err() {
+            // The receiver is gone, so the writer thread has already
+            // returned — and it holds the ONLY copy of ffmpeg's stderr,
+            // which is the thing that actually explains the failure.
+            // Reporting "writer thread died" here and dropping the
+            // handle threw that away and sent people looking at the
+            // pipe instead of at the encoder's complaint.
+            let reason = match writer_handle.join() {
+                Ok(Err(e)) => e,
+                Ok(Ok(())) => "ffmpeg exited before all frames were written".to_string(),
+                Err(_) => "writer thread panicked".to_string(),
+            };
+            return Err(AnimationExportError::FfmpegFailed(reason));
+        }
         timing_stats.channel_send_time_ms += send_start.elapsed().as_secs_f64() * 1000.0;
 
         let frame_secs = frame_start.elapsed().as_secs_f64();
