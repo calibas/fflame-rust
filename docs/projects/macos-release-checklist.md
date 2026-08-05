@@ -57,7 +57,12 @@ The viewport, editing, and the governor are user-verified. Nothing
 below has been exercised on macOS at all. For each: does it work, and
 does anything feel platform-wrong (shortcuts, focus, lag)?
 
-- [ ] **Audio-reactive stack** (cpal → CoreAudio). FIRST PASS FAILED
+- [x] **Audio-reactive stack** (cpal → CoreAudio). MIC WORKS as of RC3
+      (2026-08-05) — the plist key was the whole problem. Loopback is
+      NOT available on macOS by platform design; the misleading entry
+      is now hidden there (use BlackHole/Loopback.app, which appear as
+      ordinary input devices). Switching device mid-capture now
+      restarts capture on the new device. FIRST PASS FAILED
       (2026-08-04): no input from mic/iPhone/loopback, no permission
       prompt. Root cause: the bundle plist had no
       `NSMicrophoneUsageDescription` — macOS suppresses the prompt and
