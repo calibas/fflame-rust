@@ -4,7 +4,7 @@
 # This file is generated. See src/census/ for what it means.
 # Regenerate: cargo run --release --bin variation_probe -- census --corpus
 #
-# build    0.4.4 (5317d46c)
+# build    0.4.4 (942c9246)
 # os       windows x86_64
 # adapter  NVIDIA GeForce GTX 1660 SUPER / Vulkan
 # corpus   presets + tests/visual/configs + random seed 1..100  (252 run, 5 skipped)
