@@ -1209,7 +1209,7 @@ pub async fn export_animation(
     reporter: &mut dyn crate::export::ExportReporter,
 ) -> Result<AnimationExportResult, AnimationExportError> {
     use std::io::Write;
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
     use std::time::Instant;
 
     let total_start = Instant::now();
@@ -1680,7 +1680,7 @@ pub async fn export_animation_fast(
         COPY_BYTES_PER_ROW_ALIGNMENT,
     };
     use std::io::Write;
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
     use std::sync::mpsc;
     use std::time::Instant;
 

@@ -76,7 +76,18 @@ impl AudioCapture {
             .map(|devices| devices.filter_map(|d| d.name().ok()).collect())
             .unwrap_or_default();
 
-        // Add system output (loopback) if an output device is available
+        // System-output loopback, where the platform can actually do it.
+        //
+        // NOT on macOS: the implementation opens the default OUTPUT
+        // device as a capture stream, which is a WASAPI loopback idiom.
+        // CoreAudio has no equivalent — an output device cannot be
+        // opened for input — so the entry appeared in the list, started
+        // without complaint and delivered permanent silence. Routing
+        // system audio on macOS requires a virtual loopback device
+        // (BlackHole, Loopback.app, Soundflower); those present
+        // themselves as ordinary INPUT devices and so are already listed
+        // above, by name, and work.
+        #[cfg(not(target_os = "macos"))]
         if host.default_output_device().is_some() {
             devices.push(LOOPBACK_DEVICE_NAME.to_string());
         }

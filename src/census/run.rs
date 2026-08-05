@@ -486,7 +486,9 @@ pub fn run_corpus_cli(iterations: u64, seeds: u32, out_path: &Path) -> i32 {
 
 fn run_corpus(iterations: u64, seeds: u32, out_path: &Path) -> Result<(), String> {
     pollster::block_on(async {
-        let (device, queue, adapter_line) = create_device().await?;
+        // Only for the report header — each flame gets its own device
+        // below (see the loop).
+        let (_probe_device, _probe_queue, adapter_line) = create_device().await?;
         let mut flames = corpus(seeds);
         for (_, config) in &mut flames {
             config.deterministic_rng = true;
