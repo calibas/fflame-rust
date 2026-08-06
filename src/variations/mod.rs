@@ -951,3 +951,461 @@ mod category_wire_tests {
         assert_ne!(C::from_api_str("3d"), C::Full3D);
     }
 }
+
+/// No float literal in shader code may be subnormal in f32.
+///
+/// 28 guard sites across exp_log, hyperbolic and sqrt_hyperbolic were
+/// ported from JWildfire as `1e-40` — unremarkable in the f64 source
+/// (f64's smallest normal is ~2.2e-308), but subnormal in f32, and GPUs
+/// flush subnormals to zero. Every one of those guards silently became
+/// `max(x, 0.0)` and did nothing, on every platform at once. See the
+/// module docs in `defs/exp_log.rs` for the full account.
+///
+/// The hazard recurs with every port: 63 of the JWildfire sources in
+/// `output/variation-jwf-source/` reference `MathLib.SMALL_EPSILON`,
+/// an f64-scaled constant, and any port that copies such a value
+/// numerically re-creates the bug. This lint makes that a test failure
+/// instead of a silent no-op guard.
+///
+/// It scans the WGSL **strings** via the registry, not the `.rs` files
+/// — the doc comments that *explain* the 1e-40 bug cite the literal,
+/// and a lint that flags its own documentation teaches people to write
+/// worse documentation. WGSL comments are stripped for the same reason.
+#[cfg(test)]
+mod shader_lint {
+    /// `f32::MIN_POSITIVE` as f64: the smallest NORMAL f32. Anything
+    /// below it (and not zero) flushes to zero on the GPU.
+    const MIN_NORMAL_F32: f64 = 1.175_494_350_822_287_5e-38;
+
+    /// Strip `//` line comments and (nesting, per the WGSL spec) block
+    /// comments. Note `/*` opens a comment in WGSL's own lexer even
+    /// against a pointer deref — valid code writes `/ *p` with a space
+    /// — so matching the exact two-byte sequence is the correct rule,
+    /// not an approximation.
+    fn strip_wgsl_comments(src: &str) -> String {
+        let b = src.as_bytes();
+        let mut out = Vec::with_capacity(b.len());
+        let mut i = 0;
+        while i < b.len() {
+            if b[i] == b'/' && i + 1 < b.len() && b[i + 1] == b'/' {
+                while i < b.len() && b[i] != b'\n' {
+                    i += 1;
+                }
+            } else if b[i] == b'/' && i + 1 < b.len() && b[i + 1] == b'*' {
+                let mut depth = 1u32;
+                i += 2;
+                while i < b.len() && depth > 0 {
+                    if b[i] == b'/' && i + 1 < b.len() && b[i + 1] == b'*' {
+                        depth += 1;
+                        i += 2;
+                    } else if b[i] == b'*' && i + 1 < b.len() && b[i + 1] == b'/' {
+                        depth -= 1;
+                        i += 2;
+                    } else {
+                        i += 1;
+                    }
+                }
+                // Keep token separation where the comment was.
+                out.push(b' ');
+            } else {
+                out.push(b[i]);
+                i += 1;
+            }
+        }
+        String::from_utf8_lossy(&out).into_owned()
+    }
+
+    /// Decimal float literals with a negative exponent whose value is
+    /// subnormal (or underflows to zero) in f32, as `(literal, value)`.
+    ///
+    /// Only negative-exponent forms are scanned: a literal written
+    /// without an exponent cannot reach 1e-38 without ~38 typed zeros,
+    /// and a too-large positive literal already fails shader
+    /// compilation, which existing tests catch.
+    fn subnormal_literals(wgsl: &str) -> Vec<(String, f64)> {
+        let text = strip_wgsl_comments(wgsl);
+        let b = text.as_bytes();
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i + 1 < b.len() {
+            if (b[i] != b'e' && b[i] != b'E') || b[i + 1] != b'-' {
+                i += 1;
+                continue;
+            }
+            // Mantissa: walk left over digits and at most one dot.
+            let mut s = i;
+            let mut dot_seen = false;
+            while s > 0 {
+                let c = b[s - 1];
+                if c.is_ascii_digit() {
+                    s -= 1;
+                } else if c == b'.' && !dot_seen {
+                    dot_seen = true;
+                    s -= 1;
+                } else {
+                    break;
+                }
+            }
+            let mantissa = &text[s..i];
+            let has_digit = mantissa.bytes().any(|c| c.is_ascii_digit());
+            // A letter/underscore/digit before the mantissa means this
+            // `e-` belongs to an identifier or a hex literal (`0x1e-40`
+            // is the hex int 0x1e minus 40), not a float.
+            let ident_before = s > 0 && (b[s - 1].is_ascii_alphanumeric() || b[s - 1] == b'_');
+            // Exponent digits.
+            let mut e = i + 2;
+            while e < b.len() && b[e].is_ascii_digit() {
+                e += 1;
+            }
+            if !has_digit || ident_before || e == i + 2 {
+                i += 1;
+                continue;
+            }
+
+            // Normalise shapes Rust's parser is picky about: `1.e-40`,
+            // `.5e-40`.
+            let mant = mantissa.trim_end_matches('.');
+            let mant = if mant.starts_with('.') {
+                format!("0{mant}")
+            } else {
+                mant.to_string()
+            };
+            let value: f64 = format!("{mant}e-{}", &text[i + 2..e])
+                .parse()
+                .expect("extracted text should always parse as a float");
+
+            // `0.0e-40` is a harmless zero; only a nonzero mantissa can
+            // lose information to the flush. `value < MIN` also catches
+            // literals so small they underflow to zero even in f64.
+            let mantissa_nonzero = mantissa.bytes().any(|c| (b'1'..=b'9').contains(&c));
+            if mantissa_nonzero && value < MIN_NORMAL_F32 {
+                out.push((text[s..e].to_string(), value));
+            }
+            i = e;
+        }
+        out
+    }
+
+    fn explain(violations: &[String]) -> String {
+        format!(
+            "float literal(s) that are SUBNORMAL in f32 — GPUs flush these to \
+             zero, so on the GPU each one IS 0.0 and any guard built on it \
+             does nothing:\n  {}\n\
+             These usually arrive by copying an epsilon from f64 source \
+             (JWildfire/Apophysis), where the same value is an ordinary \
+             normal number. Use 1.1754944e-38 (f32::MIN_POSITIVE) when the \
+             intent is 'smallest safe guard', or a coarser epsilon matched \
+             to the formula. See the module docs in defs/exp_log.rs.",
+            violations.join("\n  ")
+        )
+    }
+
+    /// Every registered variation's WGSL, exactly as the shader builder
+    /// will splice it.
+    #[test]
+    fn no_subnormal_f32_literals_in_variation_wgsl() {
+        let reg = super::global_registry();
+        let mut violations = Vec::new();
+        for name in reg.names() {
+            let Some(info) = reg.get(name) else { continue };
+            for (which, src) in [
+                ("wgsl_2d", info.wgsl_source.as_deref()),
+                ("wgsl_3d", info.wgsl_source_3d.as_deref()),
+                ("wgsl_init", info.wgsl_source_init.as_deref()),
+                ("wgsl_state_init", info.wgsl_source_state_init.as_deref()),
+            ] {
+                let Some(src) = src else { continue };
+                for (lit, v) in subnormal_literals(src) {
+                    violations.push(format!("{name} {which}: `{lit}` ({v:e})"));
+                }
+            }
+        }
+        assert!(violations.is_empty(), "{}", explain(&violations));
+    }
+
+    /// The static shader files — templates and the helper libraries
+    /// variations pull in — get the same rule.
+    #[test]
+    fn no_subnormal_f32_literals_in_shader_files() {
+        fn visit(dir: &std::path::Path, f: &mut impl FnMut(&std::path::Path, &str)) {
+            let Ok(entries) = std::fs::read_dir(dir) else { return };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    visit(&path, f);
+                } else if path.extension().and_then(|e| e.to_str()) == Some("wgsl") {
+                    if let Ok(text) = std::fs::read_to_string(&path) {
+                        f(&path, &text);
+                    }
+                }
+            }
+        }
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("shaders");
+        let mut violations = Vec::new();
+        let mut checked = 0usize;
+        visit(&root, &mut |path, text| {
+            checked += 1;
+            for (lit, v) in subnormal_literals(text) {
+                violations.push(format!("{}: `{lit}` ({v:e})", path.display()));
+            }
+        });
+
+        assert!(checked > 10, "scanned only {checked} shader files — the walk is broken");
+        assert!(violations.is_empty(), "{}", explain(&violations));
+    }
+
+
+    /// Self-comparisons (`x != x`, `x == x`) and self-divisions
+    /// (`x / x`, `x /= x`) of one operand — a dotted identifier chain
+    /// (`dx`, `p.x`) or a bare number. Returns `(operator, operand)`.
+    ///
+    /// Both idioms only mean anything through IEEE semantics that GPU
+    /// compilers are allowed to ignore. A self-compare is the classic
+    /// NaN test, and Metal's fast-math folds it to a constant — which
+    /// made popcorn's guard dead code (c338d988). A self-division is
+    /// 1.0 everywhere EXCEPT 0/0 and Inf/Inf, and fast-math folds those
+    /// to 1.0 too: a plausible finite value no downstream guard can
+    /// see, measured on an M2 for both cases.
+    ///
+    /// Deliberately not caught: an operand that reads as the tail of a
+    /// larger arithmetic expression (`a * x != x`, `m / t1 / t`) —
+    /// without a real parser the scan cannot know where that expression
+    /// starts, and a lint that cries wolf teaches people to ignore it.
+    /// The banned idiom is the bare form; that is also the only form
+    /// the JWF/GLSL sources ever use it in.
+    fn self_operations(wgsl: &str) -> Vec<(String, String)> {
+        let text = strip_wgsl_comments(wgsl);
+        let b = text.as_bytes();
+        let is_operand = |c: u8| c.is_ascii_alphanumeric() || c == b'_' || c == b'.';
+        let is_ws = |c: u8| c == b' ' || c == b'\t' || c == b'\n' || c == b'\r';
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i + 1 < b.len() {
+            // The operator at `i`, and where its right-hand side begins.
+            // `/=` before `/`, and `==` must not be the tail of another
+            // comparison operator.
+            let (op, rhs_at) = if b[i] == b'!' && b[i + 1] == b'=' {
+                ("!=", i + 2)
+            } else if b[i] == b'=' && b[i + 1] == b'='
+                && (i == 0 || !matches!(b[i - 1], b'!' | b'<' | b'>' | b'=')) {
+                ("==", i + 2)
+            } else if b[i] == b'/' && b[i + 1] == b'=' {
+                ("/=", i + 2)
+            } else if b[i] == b'/' {
+                ("/", i + 1)
+            } else {
+                i += 1;
+                continue;
+            };
+
+            // Left operand: back over whitespace, then operand chars.
+            let mut l_end = i;
+            while l_end > 0 && is_ws(b[l_end - 1]) { l_end -= 1; }
+            let mut l = l_end;
+            while l > 0 && is_operand(b[l - 1]) { l -= 1; }
+            // Right operand, mirrored.
+            let mut r = rhs_at;
+            while r < b.len() && is_ws(b[r]) { r += 1; }
+            let mut r_end = r;
+            while r_end < b.len() && is_operand(b[r_end]) { r_end += 1; }
+
+            let lhs = &text[l..l_end];
+            let rhs = &text[r..r_end];
+            // At least one identifier/digit character, so a stray dot
+            // cannot match a stray dot.
+            let significant = lhs.bytes().any(|c| c.is_ascii_alphanumeric() || c == b'_');
+
+            // Adjacent arithmetic means the operand is part of a larger
+            // expression (see the doc comment).
+            let mut before = l;
+            while before > 0 && is_ws(b[before - 1]) { before -= 1; }
+            let left_tail = before > 0 && matches!(b[before - 1], b'+' | b'-' | b'*' | b'/' | b'%');
+            let mut after = r_end;
+            while after < b.len() && is_ws(b[after]) { after += 1; }
+            let right_head = after < b.len()
+                && matches!(b[after], b'+' | b'-' | b'*' | b'/' | b'%' | b'(' | b'[');
+
+            if !lhs.is_empty() && lhs == rhs && significant && !left_tail && !right_head {
+                out.push((op.to_string(), lhs.to_string()));
+            }
+            i = rhs_at;
+        }
+        out
+    }
+
+    fn explain_self_ops(violations: &[String]) -> String {
+        format!(
+            "self-comparison / self-division of one operand — these only work \
+             through IEEE rules that Metal's fast-math does not honour:\n  {}\n\
+             `x != x` / `x == x` (the NaN test) folds to a constant there — \
+             popcorn shipped with exactly that dead guard. Use \
+             `!(abs(x) <= 1e32)`, the idiom main_template.wgsl's bad-value \
+             recovery uses; it survives the optimizer (measured).\n\
+             `x / x` is 1.0 except at 0/0 and Inf/Inf — and fast-math folds \
+             those to 1.0 TOO, a plausible value no later guard can catch. \
+             Write the intended value explicitly and handle the zero case the \
+             way the JWF/f64 reference behaves; see cut_btree in \
+             defs/cut_simple.rs for a worked example.",
+            violations.join("\n  ")
+        )
+    }
+
+    // ---- the scanner itself ----
+
+    #[test]
+    fn catches_the_shape_of_the_actual_bug() {
+        let hits = subnormal_literals("let r2 = max(p.x * p.x + p.y * p.y, 1e-40);");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].0, "1e-40");
+    }
+
+    #[test]
+    fn passes_the_committed_fix_and_ordinary_epsilons() {
+        for ok in ["max(r2, 1.1754944e-38)", "max(r, 1e-30)", "x + 1e-6", "1.2e-38"] {
+            assert!(subnormal_literals(ok).is_empty(), "`{ok}` wrongly flagged");
+        }
+    }
+
+    #[test]
+    fn the_boundary_is_the_smallest_normal() {
+        // 9e-39 is subnormal; 1.2e-38 (just above MIN_POSITIVE) is not.
+        assert_eq!(subnormal_literals("9e-39").len(), 1);
+        assert!(subnormal_literals("1.2e-38").is_empty());
+    }
+
+    #[test]
+    fn an_f64_scale_epsilon_is_flagged() {
+        // The value future JWF ports are most likely to copy: an
+        // epsilon sized for f64, ordinary there, zero on the GPU.
+        assert_eq!(subnormal_literals("r + 1.0e-300").len(), 1);
+        // And one so small it underflows even f64 parsing.
+        assert_eq!(subnormal_literals("r + 1e-400").len(), 1);
+    }
+
+    #[test]
+    fn comments_do_not_trip_it() {
+        assert!(subnormal_literals("// JWF uses 1e-40 here\nlet x = 1.0;").is_empty());
+        assert!(
+            subnormal_literals("/* outer /* 1e-40 nested */ still comment */ let x = 1.0;")
+                .is_empty(),
+            "WGSL block comments nest"
+        );
+    }
+
+    #[test]
+    fn hex_and_identifier_context_is_not_a_float_literal() {
+        // `0x1e - 40` written tight: hex int, minus, int.
+        assert!(subnormal_literals("let a = 0x1e-40;").is_empty());
+        // An identifier ending in a digit-e run, minus an int.
+        assert!(subnormal_literals("let b = var1e-40;").is_empty());
+    }
+
+    #[test]
+    fn capital_e_and_suffixes_are_still_literals() {
+        assert_eq!(subnormal_literals("1E-40").len(), 1);
+        assert_eq!(subnormal_literals("let x = 1e-40f;").len(), 1);
+    }
+
+    #[test]
+    fn a_zero_mantissa_is_harmless() {
+        assert!(subnormal_literals("0.0e-40").is_empty());
+    }
+
+    #[test]
+    fn no_self_comparisons_or_divisions_in_variation_wgsl() {
+        let reg = super::global_registry();
+        let mut violations = Vec::new();
+        for name in reg.names() {
+            let Some(info) = reg.get(name) else { continue };
+            for (which, src) in [
+                ("wgsl_2d", info.wgsl_source.as_deref()),
+                ("wgsl_3d", info.wgsl_source_3d.as_deref()),
+                ("wgsl_init", info.wgsl_source_init.as_deref()),
+                ("wgsl_state_init", info.wgsl_source_state_init.as_deref()),
+            ] {
+                let Some(src) = src else { continue };
+                for (op, operand) in self_operations(src) {
+                    violations.push(format!("{name} {which}: `{operand} {op} {operand}`"));
+                }
+            }
+        }
+        assert!(violations.is_empty(), "{}", explain_self_ops(&violations));
+    }
+
+    #[test]
+    fn no_self_comparisons_or_divisions_in_shader_files() {
+        fn visit(dir: &std::path::Path, f: &mut impl FnMut(&std::path::Path, &str)) {
+            let Ok(entries) = std::fs::read_dir(dir) else { return };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    visit(&path, f);
+                } else if path.extension().and_then(|e| e.to_str()) == Some("wgsl") {
+                    if let Ok(text) = std::fs::read_to_string(&path) {
+                        f(&path, &text);
+                    }
+                }
+            }
+        }
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("shaders");
+        let mut violations = Vec::new();
+        let mut checked = 0usize;
+        visit(&root, &mut |path, text| {
+            checked += 1;
+            for (op, operand) in self_operations(text) {
+                violations.push(format!("{}: `{operand} {op} {operand}`", path.display()));
+            }
+        });
+        assert!(checked > 10, "scanned only {checked} shader files — the walk is broken");
+        assert!(violations.is_empty(), "{}", explain_self_ops(&violations));
+    }
+
+    #[test]
+    fn catches_the_nan_self_compare_shapes() {
+        // popcorn, before c338d988.
+        assert_eq!(self_operations("if (dx != dx) { dx = 0.0; }").len(), 1);
+        assert_eq!(self_operations("select(0u, 1u, p.x == p.x)").len(), 1);
+        // The vector form is folded componentwise just the same.
+        assert_eq!(self_operations("all(v == v)").len(), 1);
+    }
+
+    #[test]
+    fn catches_the_self_division_shapes() {
+        // cut_btree, as shipped until this lint existed.
+        let hits = self_operations("var tv = (w / w) * fract(time);");
+        assert_eq!(hits, vec![("/".to_string(), "w".to_string())]);
+        assert_eq!(self_operations("x /= x;").len(), 1);
+    }
+
+    #[test]
+    fn different_operands_and_division_chains_pass() {
+        for ok in [
+            // Shares a suffix — the scan must take the maximal operand.
+            "factor = select(1.0, mindist / dist, dist > mindist);",
+            "let t2 = m / t1 / (100.0 * thickness);",
+            "if (a != b) { c = a / b; }",
+        ] {
+            assert!(self_operations(ok).is_empty(), "`{ok}` wrongly flagged");
+        }
+    }
+
+    #[test]
+    fn expression_tails_are_not_flagged() {
+        for ok in ["x * 2.0 != 2.0 * y", "a - x != x + a", "y / x / x"] {
+            assert!(self_operations(ok).is_empty(), "`{ok}` wrongly flagged");
+        }
+    }
+
+    #[test]
+    fn negation_is_not_a_self_operand() {
+        assert!(self_operations("if (-x != x) { }").is_empty());
+        assert!(self_operations("if (x != -x) { }").is_empty());
+    }
+
+    #[test]
+    fn comments_do_not_trip_self_ops() {
+        // popcorn's fix EXPLAINS the banned idiom in a WGSL comment.
+        assert!(self_operations("// NOT `dx != dx`: folded on Metal\nlet a = 1.0;").is_empty());
+    }
+}

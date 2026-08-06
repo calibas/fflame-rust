@@ -479,6 +479,10 @@ fn init_npolar(user: array<f32, 2>) -> array<f32, 4> {
     state_count: 0,
     wgsl_state_init: None,
     wgsl_2d: r#"
+// atan2(0,0) is pi/4 under Metal fast-math, and npolar reaches the
+// origin on EVERY call at its default parity (parity_factor = 0 makes
+// cosa = sina = 0, a constant map). ff_atan2 (utilities.wgsl) is the
+// IEEE-exact guard.
 fn variation_npolar(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let parity = get_param(xform_id, variation_id, 0u);
     let nnz = get_param(xform_id, variation_id, 2u);
@@ -498,10 +502,10 @@ fn variation_npolar(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
         x = p.x;
         y = p.y;
     } else {
-        x = vvar * atan2(p.x, p.y);  // cpp swap (Java uses atan2(y,x))
+        x = vvar * ff_atan2(p.x, p.y);  // cpp swap (Java uses atan2(y,x))
         y = vvar_2 * log(max(p.x * p.x + p.y * p.y, 1e-30));
     }
-    let angle = (atan2(y, x) + two_pi * floor(rng_nextf(rng) * absn)) / nnz;
+    let angle = (ff_atan2(y, x) + two_pi * floor(rng_nextf(rng) * absn)) / nnz;
     let radial = pow(max(x * x + y * y, 1e-30), cn);
     let parity_factor = select(1.0, parity, isodd == 0.0);
     let r = w * radial * parity_factor;
@@ -514,12 +518,16 @@ fn variation_npolar(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
         fy = sina;
     } else {
         fx = vvar_2 * log(max(cosa * cosa + sina * sina, 1e-30));
-        fy = vvar * atan2(cosa, sina);  // cpp swap preserved
+        fy = vvar * ff_atan2(cosa, sina);  // cpp swap preserved
     }
     return vec2<f32>(fx * inv_w, fy * inv_w);
 }
 "#,
     wgsl_3d: r#"
+// atan2(0,0) is pi/4 under Metal fast-math, and npolar reaches the
+// origin on EVERY call at its default parity (parity_factor = 0 makes
+// cosa = sina = 0, a constant map). ff_atan2 (utilities.wgsl) is the
+// IEEE-exact guard.
 fn variation_npolar(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let parity = get_param(xform_id, variation_id, 0u);
     let nnz = get_param(xform_id, variation_id, 2u);
@@ -539,10 +547,10 @@ fn variation_npolar(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
         x = p.x;
         y = p.y;
     } else {
-        x = vvar * atan2(p.x, p.y);
+        x = vvar * ff_atan2(p.x, p.y);
         y = vvar_2 * log(max(p.x * p.x + p.y * p.y, 1e-30));
     }
-    let angle = (atan2(y, x) + two_pi * floor(rng_nextf(rng) * absn)) / nnz;
+    let angle = (ff_atan2(y, x) + two_pi * floor(rng_nextf(rng) * absn)) / nnz;
     let radial = pow(max(x * x + y * y, 1e-30), cn);
     let parity_factor = select(1.0, parity, isodd == 0.0);
     let r = w * radial * parity_factor;
@@ -555,7 +563,7 @@ fn variation_npolar(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
         fy = sina;
     } else {
         fx = vvar_2 * log(max(cosa * cosa + sina * sina, 1e-30));
-        fy = vvar * atan2(cosa, sina);
+        fy = vvar * ff_atan2(cosa, sina);
     }
     return vec3<f32>(fx * inv_w, fy * inv_w, p.z);
 }

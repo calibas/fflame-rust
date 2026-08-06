@@ -113,6 +113,11 @@ impl PathEntry {
 use crate::variations::analytic_blur::BlurSlotInfo;
 
 pub struct FlameRenderer {
+    /// Reachability-census mode (see `src/census/`). Set only by
+    /// `enable_census`, read into `ShaderConstants::census`. Never a
+    /// render: census renders are the census runner's own.
+    census: bool,
+
     pipelines: FlamePipelines,
     buffers: FlameBuffers,
     compute_bind_group: BindGroup,
@@ -403,6 +408,7 @@ impl FlameRenderer {
             num_transforms: flame.transforms.len() as u32,
             path_filters: Vec::new(), // No filters by default
             min_suffix_filter_length: 0,
+            census: false,
         }
     }
 
@@ -423,6 +429,7 @@ impl FlameRenderer {
         let solid_enabled = (self.solid_strength > 0.0 || self.solid_shading.active())
             && matches!(self.current_render_mode, crate::scene::transforms::RenderMode::ThreeD);
         self.buffers.set_solid_depth_region(device, solid_enabled);
+        self.buffers.set_census_region(device, self.census);
         self.needs_depth_prime = solid_enabled;
         self.shade_pass.resize(device, width, height);
 
@@ -555,6 +562,8 @@ impl FlameRenderer {
                 && !preserve_z,
             solid_enabled: (self.solid_strength > 0.0 || self.solid_shading.active())
                 && matches!(render_mode, crate::scene::transforms::RenderMode::ThreeD),
+            probe: false,
+            census: self.census,
             attachment_cap: flame.attachment_cap() as u32,
             // No inlining for incremental updates (would trigger too many shader rebuilds)
             inlined_transforms: None,
@@ -1461,6 +1470,76 @@ impl FlameRenderer {
         changed
     }
 
+    /// Turn on the reachability census for this renderer: the next
+    /// shader build carries `ShaderConstants::census`, the histogram
+    /// grows the counter tail, and the bind groups that reference it
+    /// are recreated. Call after construction and before `load_config`.
+    /// v1 refuses solid (see the census module docs).
+    pub fn enable_census(&mut self, device: &Device) {
+        assert!(
+            !self.buffers.solid_depth_region,
+            "census excludes solid rendering (v1)"
+        );
+        self.census = true;
+        self.buffers.set_census_region(device, true);
+        self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
+        self.init_bind_group = self.pipelines.create_init_bind_group(device, &self.buffers);
+        self.accumulate_bind_group = self.pipelines.create_accumulate_bind_group(device, &self.buffers);
+        self.histogram_blur_h_bind_group = self.pipelines.create_histogram_blur_h_bind_group(device, &self.buffers);
+        self.histogram_blur_v_bind_group = self.pipelines.create_histogram_blur_v_bind_group(device, &self.buffers);
+    }
+
+    /// Zero the census tail. The tail is deliberately excluded from
+    /// every ordinary clear (counters accumulate across the run), which
+    /// leaves buffer-creation zeroing as its only initializer — and
+    /// that is a guarantee about logical buffers, not about recycled
+    /// allocations behaving well under destroy/create cycles. A corpus
+    /// sweep that creates one renderer per flame on a shared device
+    /// showed cross-flame count contamination; single flames on a fresh
+    /// device were bit-clean. Call once before the first census pass.
+    pub fn clear_census_tail(&self, encoder: &mut CommandEncoder) {
+        if self.buffers.census_region {
+            let rgbd =
+                (self.width as u64) * (self.height as u64) * 4 * std::mem::size_of::<u32>() as u64;
+            encoder.clear_buffer(&self.buffers.histogram_buffer, rgbd, None);
+        }
+    }
+
+    /// Copy the census tail off the GPU and return its
+    /// `census::TOTAL_WORDS` words. Blocking; census tooling only.
+    pub fn read_census_blocking(&self, device: &Device, queue: &Queue) -> Option<Vec<u32>> {
+        if !self.buffers.census_region {
+            return None;
+        }
+        let bytes = (crate::census::TOTAL_WORDS * std::mem::size_of::<u32>()) as u64;
+        let offset =
+            (self.width as u64) * (self.height as u64) * 4 * std::mem::size_of::<u32>() as u64;
+        let staging = device.create_buffer(&BufferDescriptor {
+            label: Some("Census Readback"),
+            size: bytes,
+            usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut enc = device.create_command_encoder(&CommandEncoderDescriptor {
+            label: Some("Census Readback"),
+        });
+        enc.copy_buffer_to_buffer(&self.buffers.histogram_buffer, offset, &staging, 0, bytes);
+        queue.submit(std::iter::once(enc.finish()));
+        let slice = staging.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+        rx.recv().ok()?.ok()?;
+        let words: Vec<u32> = {
+            let data = slice.get_mapped_range();
+            bytemuck::cast_slice(&data).to_vec()
+        };
+        staging.unmap();
+        Some(words)
+    }
+
     /// Interactive-path density-stats tick (solid brightness renorm):
     /// pumps the async measurement and encodes a fresh reduction every N
     /// frames while occlusion is actively culling. Call once per frame,
@@ -1537,7 +1616,7 @@ impl FlameRenderer {
         // Determine if path features are needed (PathMap mode or path filters active)
         let path_features_enabled = config.color_mode == ColorMode::PathMap
             || !self.path_filters.is_empty();
-        let shaders_changed = self.pipelines.ensure_shaders_current_with_config(device, config, path_features_enabled);
+        let shaders_changed = self.pipelines.ensure_shaders_current_with_config(device, config, path_features_enabled, self.census);
         if shaders_changed {
             log::info!("Shaders recompiled during preset load - recreating bind group");
             // Recreate compute bind group with new pipeline
@@ -3362,6 +3441,202 @@ impl FlameRenderer {
 
         // Return raw pixel data (width, height, rgba_bytes)
         Ok((self.width, self.height, rgba_data))
+    }
+
+    /// Rewrite the packed variation parameters from `flame`, without
+    /// touching anything else.
+    ///
+    /// For the probe's parameter sweep, which changes one parameter and
+    /// re-dispatches ~2000 times. `load_config` would reallocate every
+    /// buffer and recreate every bind group each time; this is the
+    /// `queue.write_buffer` underneath it. The flame's *structure* must
+    /// not have changed — same transforms, same variations, same order —
+    /// because the packing offsets are derived from it.
+    ///
+    /// Marks the init-derived slots dirty: they are computed from the
+    /// user parameters, so changing one invalidates them. Call
+    /// [`Self::run_init_pass`] afterwards or they keep the previous
+    /// step's values.
+    pub fn set_variation_params(&mut self, queue: &Queue, flame: &crate::scene::transforms::Flame) {
+        self.buffers.update_variation_params(queue, flame);
+        self.init_dirty = true;
+    }
+
+    /// Run the variation init dispatch on its own, outside a render.
+    ///
+    /// `load_config` marks the derived parameters dirty but does not
+    /// compute them — the init pass rides along inside `render()`, which
+    /// is fine for every caller that renders and wrong for the one that
+    /// does not. The numerical probe dispatches its own entry point
+    /// directly, so without this the 134 variations with init-derived
+    /// slots read a buffer of zeros. That does not fail loudly: it
+    /// produces stable, reproducible, identical-on-every-platform
+    /// nonsense, which is the worst possible outcome for a tool whose
+    /// entire output is a cross-platform comparison.
+    ///
+    /// Idempotent — a no-op when nothing is dirty or no active variation
+    /// has an init function.
+    pub fn run_init_pass(&mut self, device: &Device, queue: &Queue) {
+        if !self.init_dirty {
+            return;
+        }
+        let Some(pipeline) = self.pipelines.shader_cache.init_pipeline.as_ref() else {
+            self.init_dirty = false;
+            return;
+        };
+        let pair_count = self.pipelines.shader_cache.init_pair_count;
+        if pair_count == 0 {
+            self.init_dirty = false;
+            return;
+        }
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Standalone Variation Init"),
+        });
+        {
+            let mut pass = encoder.begin_compute_pass(&ComputePassDescriptor {
+                label: Some("Variation Init Pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &self.init_bind_group, &[]);
+            pass.dispatch_workgroups(pair_count.div_ceil(64), 1, 1);
+        }
+        queue.submit(Some(encoder.finish()));
+        self.init_dirty = false;
+    }
+
+    /// Run one dispatch of a caller-supplied compute shader against this
+    /// renderer's live bind group, and read words back from the
+    /// histogram buffer.
+    ///
+    /// This exists for the numerical probe (`src/probe/`), and it is
+    /// deliberately the *only* thing the probe needs from the renderer.
+    /// Everything the probe knows — the buffer layout, the input grid,
+    /// how results are classified — stays on its side; what it cannot
+    /// get from outside this module is the bind group, which is private
+    /// and correct, holding the transforms, params and packed variation
+    /// parameters that `apply_variations` reads.
+    ///
+    /// Passing WGSL in rather than building it here keeps the direction
+    /// of the dependency right: the renderer does not know what a probe
+    /// is.
+    ///
+    /// `input_words` are written at the head of the histogram buffer
+    /// before the dispatch, and `output_words` are read from the same
+    /// buffer after it — the probe shader's contract, not this
+    /// function's business.
+    ///
+    /// `phase` is called with `(name, milliseconds)` for the compile and
+    /// the dispatch separately. The split is what makes a slow result
+    /// actionable: a shader the driver takes a minute to compile and one
+    /// whose math takes a minute to run are entirely different problems,
+    /// and a single total cannot tell them apart.
+    pub fn dispatch_readback(
+        &self,
+        device: &Device,
+        queue: &Queue,
+        source: &str,
+        entry_point: &str,
+        input_words: &[u32],
+        output_words: usize,
+        threads: u32,
+        phase: &mut dyn FnMut(&str, f64),
+    ) -> Result<Vec<u32>, String> {
+        let byte_len = (output_words * std::mem::size_of::<u32>()) as u64;
+        if byte_len > self.buffers.histogram_buffer.size() {
+            return Err(format!(
+                "probe needs {byte_len} bytes but the histogram buffer is {} — \
+                 construct the renderer at a larger resolution",
+                self.buffers.histogram_buffer.size()
+            ));
+        }
+
+        let compile_started = web_time::Instant::now();
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("probe shader"),
+            source: wgpu::ShaderSource::Wgsl(source.into()),
+        });
+
+        // Reuse the render path's bind group layout rather than an auto
+        // layout: the probe entry point touches only a few of the
+        // bindings, and an auto layout would derive a *narrower* one
+        // that the existing bind group no longer satisfies.
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("probe pipeline layout"),
+            bind_group_layouts: &[Some(&self.pipelines.compute_bind_group_layout)],
+            immediate_size: 0,
+        });
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("probe pipeline"),
+            layout: Some(&layout),
+            module: &module,
+            entry_point: Some(entry_point),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
+        // The driver does its real work lazily, so timing
+        // `create_compute_pipeline` alone can under-report. Polling here
+        // forces the compile to have happened before the clock stops.
+        let _ = device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
+        phase("compile", compile_started.elapsed().as_secs_f64() * 1000.0);
+
+        let dispatch_started = web_time::Instant::now();
+        queue.write_buffer(
+            &self.buffers.histogram_buffer,
+            0,
+            bytemuck::cast_slice(input_words),
+        );
+
+        let readback = device.create_buffer(&BufferDescriptor {
+            label: Some("probe readback"),
+            size: byte_len,
+            usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("probe encoder"),
+        });
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("probe pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &self.compute_bind_group, &[]);
+            pass.dispatch_workgroups(threads.div_ceil(64), 1, 1);
+        }
+        encoder.copy_buffer_to_buffer(
+            &self.buffers.histogram_buffer,
+            0,
+            &readback,
+            0,
+            byte_len,
+        );
+        queue.submit(Some(encoder.finish()));
+
+        let slice = readback.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        let _ = device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
+        rx.recv()
+            .map_err(|e| format!("probe readback channel closed: {e}"))?
+            .map_err(|e| format!("probe readback failed: {e}"))?;
+
+        let words = bytemuck::cast_slice::<u8, u32>(&slice.get_mapped_range()).to_vec();
+        readback.unmap();
+        phase("dispatch", dispatch_started.elapsed().as_secs_f64() * 1000.0);
+        Ok(words)
     }
 }
 

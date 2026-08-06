@@ -501,3 +501,46 @@ fn post_symmetry_copy(p: vec3<f32>, k: u32) -> vec3<f32> {
 
     return vec3<f32>(x, y, p.z);
 }
+
+// atan2 with IEEE behaviour at the origin, for variation code that can
+// reach atan2(0, 0).
+//
+// Metal compiles shaders with fast-math (wgpu never clears
+// `fastMathEnabled`, which defaults to true), and its fast atan2 is
+// broken at the origin in BOTH ways, measured on an M2:
+//
+//   atan2(+0,+0) = pi/4     atan2(+0,-0) = NaN
+//   atan2(-0,-0) = pi/4     atan2(-0,+0) = NaN
+//
+// Same-sign zero pairs give pi/4 — a plausible finite value no
+// bad-value guard can tell from a real angle; it silently relocates
+// the point, and cost npolar 73% of apo-misc7's lit pixels. MIXED-sign
+// pairs give NaN, which killed points at the origin (where every
+// respawn starts) in circular, circular2, ex, flower_db, and at the
+// exact n-gon corners of hypercrop. Away from zero pairs it agrees
+// with IEEE to 1 ulp.
+//
+// The branch reproduces IEEE exactly, which is NOT "return 0": the
+// result depends on the signs of the two zeros.
+//
+//   atan2(+0, +0) = +0     atan2(+0, -0) = +pi
+//   atan2(-0, +0) = -0     atan2(-0, -0) = -pi
+//
+// Collapsing all four to 0 changes the render on Vulkan, where atan2
+// is already IEEE — measured, it moved the image. Getting this right
+// is what makes the guard a bit-exact no-op on platforms that never
+// needed it. The sign bit is read via bitcast because `x < 0.0` is
+// false for -0.0, and because integer ops are immune to fast-math.
+//
+// Not substituted globally: one comparison per call costs ~5% across
+// the full variation set, and probing all 646 variations found only
+// npolar, ho and log_db reaching the origin at default parameters.
+// Call this where (0, 0) is reachable; plain atan2 is fine elsewhere.
+fn ff_atan2(y: f32, x: f32) -> f32 {
+    if (y == 0.0 && x == 0.0) {
+        let pi = 3.14159265358979;
+        let mag = select(0.0, pi, (bitcast<u32>(x) & 0x80000000u) != 0u);
+        return select(mag, -mag, (bitcast<u32>(y) & 0x80000000u) != 0u);
+    }
+    return atan2(y, x);
+}

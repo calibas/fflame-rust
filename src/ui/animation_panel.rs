@@ -30,6 +30,36 @@ use crate::animation::export::{VideoCodec, HardwareAccel};
 // `crate::ui::ExportStatus` and drawn by the global overlay
 // (`export_status::render_export_overlay`) — no panel-local progress struct.
 
+/// Where a video export should land by default.
+///
+/// NOT a relative path. A relative default resolves against the process
+/// working directory, and a macOS app launched from Finder inherits `/`
+/// — so "./animation.mp4" meant "/animation.mp4", on a read-only
+/// volume, and the export failed at the very last step after rendering
+/// every frame. The same hazard exists on Windows for an app installed
+/// under Program Files.
+///
+/// The platform video directory (~/Movies, ~/Videos) is where a user
+/// expects video anyway; home is the fallback, and only if the platform
+/// will not name either do we end up back at a relative path.
+#[cfg(not(target_arch = "wasm32"))]
+fn default_video_output_path() -> std::path::PathBuf {
+    use directories::UserDirs;
+    UserDirs::new()
+        .and_then(|dirs| {
+            dirs.video_dir()
+                .map(|d| d.to_path_buf())
+                .or_else(|| Some(dirs.home_dir().to_path_buf()))
+        })
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("animation.mp4")
+}
+
+#[cfg(target_arch = "wasm32")]
+fn default_video_output_path() -> std::path::PathBuf {
+    std::path::PathBuf::from("animation.mp4")
+}
+
 /// Export settings for animation rendering
 #[derive(Clone)]
 pub struct AnimationExportSettings {
@@ -70,7 +100,7 @@ pub struct AnimationExportSettings {
 impl Default for AnimationExportSettings {
     fn default() -> Self {
         Self {
-            output_path: std::path::PathBuf::from("./animation.mp4"),
+            output_path: default_video_output_path(),
             width: 1920,
             height: 1080,
             fps: 30,

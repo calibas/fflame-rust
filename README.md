@@ -1,7 +1,7 @@
 # Fractal Art Editor [FAE]
 GPU-accelerated Fractal Flame Renderer
 
-See our [demo in your browser](https://calibas.github.io/) (limited mobile support, Chrome recommended).
+See our [demo in your browser](https://fractalsforall.com/editor/) (limited mobile support, Chrome recommended).
 
 ## Installation
 Download or clone this reposity, [install Rust](https://rust-lang.org/tools/install/) and then run:

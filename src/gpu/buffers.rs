@@ -1224,6 +1224,12 @@ pub struct FlameBuffers {
     pub histogram_buffer_scratch: Buffer,
     // Whether histogram_buffer carries the solid-rendering depth region.
     pub solid_depth_region: bool,
+
+    // Whether histogram_buffer carries the reachability-census tail
+    // (census::TOTAL_WORDS u32s after the RGBD pixel data). Mutually
+    // exclusive with the solid depth region in v1 — the census runner
+    // filters solid flames before ever asking.
+    pub census_region: bool,
     // Solid rendering: per-pixel encoded depth the ACCUMULATOR's data
     // belongs to (accumulate.wgsl's depth-tightening reset). Allocated
     // with the depth region; 0-filled = "no data yet".
@@ -1595,7 +1601,13 @@ impl FlameBuffers {
         let histogram_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Histogram Buffer"),
             size: histogram_buffer_size,
-            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            // COPY_SRC to match the reallocating path below, which has
+            // carried it since the solid-rendering bounds tail needed
+            // reading back. Without it here, whether the histogram can
+            // be read depends on whether the window has been resized
+            // yet — and the numerical probe reads it straight after
+            // construction. A usage flag costs nothing at runtime.
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
         let histogram_buffer_scratch = device.create_buffer(&BufferDescriptor {
@@ -1820,6 +1832,7 @@ impl FlameBuffers {
             histogram_buffer,
             histogram_buffer_scratch,
             solid_depth_region: false,
+            census_region: false,
             accum_depth_buffer: None,
             path_buffer,
             path_filter_buffer,
@@ -1906,7 +1919,12 @@ impl FlameBuffers {
 
         // Clear histogram buffer (zero out all pixels)
         // Note: This is done via queue.write_buffer to avoid encoder ordering issues
-        encoder.clear_buffer(&self.histogram_buffer, 0, None);
+        if self.census_region {
+            // Census counters survive full resets too (see clear_histogram).
+            encoder.clear_buffer(&self.histogram_buffer, 0, Some(self.histogram_rgbd_bytes()));
+        } else {
+            encoder.clear_buffer(&self.histogram_buffer, 0, None);
+        }
         if let Some(ref ad) = self.accum_depth_buffer {
             encoder.clear_buffer(ad, 0, None);
         }
@@ -1959,6 +1977,37 @@ impl FlameBuffers {
     /// Bytes of the RGBD portion of the histogram (4 u32 per pixel).
     fn histogram_rgbd_bytes(&self) -> u64 {
         (self.width as u64) * (self.height as u64) * 4 * std::mem::size_of::<u32>() as u64
+    }
+
+    /// Ensure the histogram buffer does / does not carry the
+    /// reachability-census tail. Recreates the buffer when the
+    /// requirement changes; the caller recreates the bind groups, as
+    /// with the solid depth region.
+    pub fn set_census_region(&mut self, device: &Device, enabled: bool) -> bool {
+        if self.census_region == enabled {
+            return false;
+        }
+        assert!(
+            !(enabled && self.solid_depth_region),
+            "census and the solid depth region are mutually exclusive (v1 — census runner filters solid flames)"
+        );
+        let tail = if enabled {
+            (crate::census::TOTAL_WORDS * std::mem::size_of::<u32>()) as u64
+        } else {
+            0
+        };
+        self.histogram_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some(if enabled {
+                "Histogram Buffer (+census tail)"
+            } else {
+                "Histogram Buffer"
+            }),
+            size: self.histogram_rgbd_bytes() + tail,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        self.census_region = enabled;
+        true
     }
 
     /// Ensure the histogram buffer does / does not carry the per-pixel depth
@@ -2027,7 +2076,13 @@ impl FlameBuffers {
     /// progressive accumulation, where depth persists across batches and
     /// the occlusion test tightens as the run converges.
     pub fn clear_histogram(&self, encoder: &mut CommandEncoder, reset_depth: bool) {
-        if self.solid_depth_region && !reset_depth {
+        if self.census_region {
+            // RGBD only — the census tail accumulates across the whole
+            // run and survives every clear (the runner reads it once at
+            // the end). v1 excludes solid, so RGBD is the whole pixel
+            // region.
+            encoder.clear_buffer(&self.histogram_buffer, 0, Some(self.histogram_rgbd_bytes()));
+        } else if self.solid_depth_region && !reset_depth {
             // RGBD only — the depth region survives this batch boundary.
             // Full resets go through clear_all / clear_histogram_and_paths,
             // which zero everything — 0 is the depth encoding's "no sample"
