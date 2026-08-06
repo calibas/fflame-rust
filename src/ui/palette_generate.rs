@@ -179,7 +179,7 @@ pub fn render(
                 // Same seed, same palette — so a result worth keeping can
                 // be got back, and Reroll is just the next one along.
                 ui.label(t!("palette_editor.generate_seed"));
-                ui.add(super::VkbDragValue::new(&mut gen.seed).speed(1.0));
+                ui.add(super::VkbU64::new(&mut gen.seed, "palette_gen_seed").desired_width(150.0));
                 if ui
                     .button(t!("palette_editor.generate_reroll"))
                     .clicked()

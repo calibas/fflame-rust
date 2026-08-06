@@ -1010,7 +1010,7 @@ impl ScriptsPanel {
         if uses_rng {
             ui.horizontal(|ui| {
                 ui.label("Seed:");
-                ui.add(super::VkbDragValue::new(&mut self.seed).speed(1.0));
+                ui.add(super::VkbU64::new(&mut self.seed, "script_seed").desired_width(150.0));
                 if ui
                     .button("Reroll")
                     .on_hover_text("Next seed — a different flame from the same script")
