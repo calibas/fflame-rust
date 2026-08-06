@@ -158,17 +158,6 @@ pub async fn render(
     job: RenderJob<'_>,
     progress: &mut dyn RenderProgress,
 ) -> Result<RenderOutput, RenderError> {
-    let start_time = web_time::Instant::now();
-
-    let target = job.target_iterations.unwrap_or(job.config.max_iterations);
-
-    log::info!(
-        "Render: Starting {}x{}, target={} iterations",
-        job.width,
-        job.height,
-        target
-    );
-
     // Create renderer with config's palette size
     let surface_format = TextureFormat::Rgba8Unorm;
     let mut renderer = FlameRenderer::with_palette_size(
@@ -179,6 +168,55 @@ pub async fn render(
         job.height,
         &job.config.flame,
         job.config.palette_size,
+    );
+
+    let out = render_with(&mut renderer, device, queue, job, progress).await;
+
+    // On WebGPU, dropping `renderer` frees nothing: wgpu's `Drop` for
+    // `WebBuffer`/`WebTexture` is a no-op, so the GPU memory lives until
+    // the JS GC collects the wrappers. Callers that own their renderer
+    // (see `render_with`) handle this themselves; a throwaway one has to
+    // be swept here or repeated renders exhaust the device.
+    //
+    // Idempotent and safe after the pixels are on the CPU, which they are
+    // by the time `render_with` returns — including on its error paths,
+    // where nothing was read but nothing is owed either.
+    renderer.destroy();
+
+    out
+}
+
+/// Render into a **caller-owned** renderer, reusing it across calls.
+///
+/// `render` creates a renderer per call, which is right for a one-shot
+/// export and wrong for anything rendering repeatedly on WebGPU: buffer
+/// and texture `Drop` are no-ops there, so every discarded renderer's
+/// memory stays allocated until the JS garbage collector runs. A caller
+/// looping over tiles either sweeps explicitly or reuses — and reuse is
+/// strictly better, because it also keeps the shader cache warm across
+/// configs that share a variation set.
+///
+/// `load_config` is a full reset point (transforms, variation params,
+/// palette *size*, accumulation, solid state), so the renderer does not
+/// need to have been built for this config. It does need to be the right
+/// SIZE: call `resize` first if the dimensions changed, or the render
+/// silently uses the old ones.
+pub async fn render_with(
+    renderer: &mut FlameRenderer,
+    device: &Device,
+    queue: &Queue,
+    job: RenderJob<'_>,
+    progress: &mut dyn RenderProgress,
+) -> Result<RenderOutput, RenderError> {
+    let start_time = web_time::Instant::now();
+
+    let target = job.target_iterations.unwrap_or(job.config.max_iterations);
+
+    log::info!(
+        "Render: Starting {}x{}, target={} iterations",
+        job.width,
+        job.height,
+        target
     );
 
     // Get palette directly from config (palette is always present)
