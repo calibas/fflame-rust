@@ -93,6 +93,106 @@ pub fn vkb_sync_full(
 }
 
 /// Builder for a DragValue with automatic VKB sync.
+/// Display form for an integral value that arrived as `f64`.
+///
+/// Sign-aware because `as i64` **saturates**: every unsigned value above
+/// 2^63 - 1 rendered as 9223372036854775807, one number standing in for
+/// the whole upper half of the range. Seeds now use [`VkbU64`] (exact,
+/// no float on the path), but `u64` fields like `max_iterations` still
+/// come through here, and a display that silently collapses is worse
+/// than one that rounds.
+///
+/// Values above 2^53 remain approximate — that is `f64`, and unavoidable
+/// here. Use [`VkbU64`] when every integer has to be exact.
+fn fmt_integral(v: f64) -> String {
+    if v >= 0.0 {
+        format!("{}", v as u64)
+    } else {
+        format!("{}", v as i64)
+    }
+}
+
+/// Exact text entry for a `u64` — the whole range, no float anywhere.
+///
+/// `VkbDragValue` cannot carry a `u64`. egui's `DragValue` works in
+/// `f64`, whose 53-bit mantissa stops representing consecutive integers
+/// at 9,007,199,254,740,992, and the integer display path additionally
+/// went through `as i64`, which saturates — so every value above
+/// 2^63 - 1 rendered as that one number.
+///
+/// That is fine for a pixel count and wrong for a seed. A seed is a
+/// shareable artifact addressing a ring of 2^64 (`wasm/README.md`,
+/// "Seeds — a ring of 2⁶⁴", which states outright that nothing special
+/// happens at 2^53), and only 0.049% of that ring survives an `f64`
+/// round-trip. The Random Generator's dice button draws over the full
+/// range, so it produced an unrepresentable seed 2047 times out of 2048.
+///
+/// Deliberately a text field rather than a drag: consecutive seeds are
+/// scrambled far apart by design (SplitMix64), so scrubbing walks
+/// unrelated flames rather than a gradient. Stepping belongs to the
+/// caller's Reroll button, which does exact `u64` arithmetic.
+///
+/// Invalid input is *held, not discarded* — the caller's value only
+/// changes when the text parses, so a half-typed number cannot silently
+/// reset the seed to 0.
+pub struct VkbU64<'a> {
+    value: &'a mut u64,
+    id_salt: &'a str,
+    desired_width: Option<f32>,
+}
+
+impl<'a> VkbU64<'a> {
+    pub fn new(value: &'a mut u64, id_salt: &'a str) -> Self {
+        Self { value, id_salt, desired_width: None }
+    }
+
+    pub fn desired_width(mut self, w: f32) -> Self {
+        self.desired_width = Some(w);
+        self
+    }
+}
+
+impl egui_dock::egui::Widget for VkbU64<'_> {
+    fn ui(self, ui: &mut egui_dock::egui::Ui) -> egui_dock::egui::Response {
+        use egui_dock::egui;
+
+        // The in-progress text lives in egui memory, keyed per field, so
+        // typing can pass through states that do not parse ("", "12a")
+        // without touching the caller's value. Re-seeded from the value
+        // whenever the two have diverged and the field is not focused —
+        // that is what makes an external change (Reroll, dice, loading a
+        // config) show up.
+        let id = ui.make_persistent_id(("vkb_u64", self.id_salt));
+        let mut text = ui
+            .memory(|m| m.data.get_temp::<String>(id))
+            .unwrap_or_else(|| self.value.to_string());
+
+        let focused = ui.memory(|m| m.has_focus(id.with("edit")));
+        if !focused && text.parse::<u64>() != Ok(*self.value) {
+            text = self.value.to_string();
+        }
+
+        let mut edit = egui::TextEdit::singleline(&mut text).id(id.with("edit"));
+        if let Some(w) = self.desired_width {
+            edit = edit.desired_width(w);
+        }
+        let response = ui.add(edit);
+
+        if response.changed() {
+            // Tolerate separators a person might paste in; reject
+            // anything else by leaving the value alone.
+            let cleaned: String = text.chars().filter(|c| !matches!(c, ',' | '_' | ' ')).collect();
+            if let Ok(v) = cleaned.parse::<u64>() {
+                *self.value = v;
+            }
+        }
+
+        ui.memory_mut(|m| m.data.insert_temp(id, text.clone()));
+        vkb_sync_opts(ui, &response, &text, "integer");
+        response
+    }
+}
+
 /// Usage: `ui.add(VkbDragValue::new(&mut val).speed(0.01).range(0..=100))`
 /// Entry point only — `new()` returns the generic builder below.
 pub struct VkbDragValue<'a> {
@@ -173,7 +273,7 @@ impl<Num: egui_dock::egui::emath::Numeric> egui_dock::egui::Widget for VkbDragVa
         let is_integer = Num::INTEGRAL;
         let before = self.num.scratch;
         let value_str = if is_integer {
-            format!("{}", before as i64)
+            fmt_integral(before)
         } else {
             precision::fmt_f32(before as f32)
         };
@@ -277,7 +377,7 @@ impl<Num: egui_dock::egui::emath::Numeric> egui_dock::egui::Widget for VkbSlider
         let is_integer = Num::INTEGRAL;
         let before = self.num.scratch;
         let value_str = if is_integer {
-            format!("{}", before as i64)
+            fmt_integral(before)
         } else {
             precision::fmt_f32(before as f32)
         };
@@ -337,6 +437,199 @@ impl<Num: egui_dock::egui::emath::Numeric> egui_dock::egui::Widget for VkbSlider
         let field_type = if is_integer { "integer" } else { "decimal" };
         vkb_sync_full(ui, &response, &value_str, field_type, Some(self.min), Some(self.max));
         response
+    }
+}
+
+#[cfg(test)]
+mod u64_field_tests {
+    use super::fmt_integral;
+
+    /// The reported bug: a seed is a `u64`, the drag widget is `f64`.
+    ///
+    /// egui's `DragValue` works in `f64` throughout, and `f64` stops
+    /// representing consecutive integers at 2^53. Only 0.049% of the
+    /// 2^64 seed ring survives the round trip, and the Random
+    /// Generator's dice button draws over the whole ring — so it
+    /// produced an unrepresentable seed 2047 times in 2048.
+    #[test]
+    fn f64_cannot_carry_a_large_seed_which_is_why_vkbu64_exists() {
+        let exact = (1u64 << 53) - 1;
+        assert_eq!(exact as f64 as u64, exact, "2^53-1 is the last exact one");
+
+        for seed in [(1u64 << 53) + 1, 12_345_678_901_234_567, u64::MAX - 1] {
+            assert_ne!(
+                seed as f64 as u64,
+                seed,
+                "{seed} must NOT survive f64 — if it does, this test is wrong, not the widget"
+            );
+        }
+    }
+
+    /// `as i64` saturates, so the whole upper half of `u64` displayed as
+    /// one number. Values there are still approximate (that is `f64`),
+    /// but they must at least be distinguishable and in the right range.
+    #[test]
+    fn the_integer_display_no_longer_collapses_above_i64_max() {
+        let big = (1u64 << 63) as f64;
+        let bigger = ((1u64 << 63) + (1u64 << 40)) as f64;
+
+        assert_eq!(big as i64, i64::MAX, "the old path saturated here");
+        assert_eq!(bigger as i64, i64::MAX, "...and here, to the same value");
+
+        assert_ne!(
+            fmt_integral(big),
+            fmt_integral(bigger),
+            "two different seeds must not render as the same number"
+        );
+        assert_eq!(fmt_integral(big), "9223372036854775808");
+    }
+
+    #[test]
+    fn negative_values_still_render_signed() {
+        assert_eq!(fmt_integral(-7.0), "-7");
+        assert_eq!(fmt_integral(0.0), "0");
+        assert_eq!(fmt_integral(42.0), "42");
+    }
+
+    /// What `VkbU64` accepts. Parsing is the whole widget: it holds the
+    /// caller's value unchanged unless the text parses, so a half-typed
+    /// number cannot reset a seed to 0.
+    #[test]
+    fn seed_text_parses_across_the_whole_ring_and_rejects_junk() {
+        let clean = |t: &str| -> Option<u64> {
+            t.chars().filter(|c| !matches!(c, ',' | '_' | ' ')).collect::<String>().parse().ok()
+        };
+
+        assert_eq!(clean("0"), Some(0));
+        assert_eq!(clean("18446744073709551615"), Some(u64::MAX));
+        assert_eq!(clean("18_446_744_073_709_551_615"), Some(u64::MAX));
+        assert_eq!(clean("9,007,199,254,740,993"), Some(9_007_199_254_740_993));
+
+        assert_eq!(clean(""), None);
+        assert_eq!(clean("12a"), None);
+        assert_eq!(clean("-1"), None, "the ring's -1 is entered as its u64 position");
+        assert_eq!(clean("18446744073709551616"), None, "2^64 does not fit");
+    }
+
+    /// Drive the real widget through real egui frames — no window.
+    ///
+    /// The tests above check arithmetic; this checks the egui
+    /// integration, which is where the widget could still be wrong: it
+    /// keeps in-progress text in `Memory`, re-seeds that text from the
+    /// caller's value when the two diverge and the field is not focused,
+    /// and must not write back on a frame where nothing was typed. A bug
+    /// in any of those corrupts the seed on display — the failure being
+    /// fixed.
+    ///
+    /// Note this alone does NOT distinguish the new widget from the old:
+    /// `VkbDragValue` only writes back when its value changes, so with no
+    /// input events it also leaves a large seed intact. The old widget
+    /// corrupted on INTERACTION — see the typing test below, which is the
+    /// one with teeth.
+    #[test]
+    fn a_large_seed_survives_being_displayed() {
+        use egui_dock::egui;
+
+        for original in [u64::MAX, (1u64 << 63) + 12_345, (1u64 << 53) + 1] {
+            let ctx = egui::Context::default();
+            let mut seed = original;
+
+            // Several frames: the first populates Memory, later ones take
+            // the "text already present" path where a careless re-seed or
+            // an unconditional write-back would show up.
+            for _ in 0..3 {
+                let _ = ctx.run(Default::default(), |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        ui.add(super::VkbU64::new(&mut seed, "test_seed"));
+                    });
+                });
+            }
+
+            assert_eq!(
+                seed, original,
+                "displaying {original} changed it to {seed} — the old f64 widget's bug"
+            );
+        }
+    }
+
+    /// Type a seed that `f64` cannot hold, and read back what landed.
+    ///
+    /// This is the test with teeth. The old widget survived mere display
+    /// (it only writes back when its value changes), so the failure only
+    /// appears once someone edits — which is exactly how it presented:
+    /// the seed looked right until you touched it.
+    ///
+    /// Focus, then send the digits as text events, then commit with
+    /// Enter, the way a person does it.
+    #[test]
+    fn typing_a_seed_past_2_pow_53_lands_exactly() {
+        use egui_dock::egui;
+
+        const TYPED: u64 = 9_007_199_254_740_993; // 2^53 + 1
+        assert_ne!(TYPED as f64 as u64, TYPED, "premise: f64 cannot hold it");
+
+        let ctx = egui::Context::default();
+        let mut seed: u64 = 1;
+
+        // Frame 1: draw, and take focus.
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let r = ui.add(super::VkbU64::new(&mut seed, "typed_seed"));
+                r.request_focus();
+            });
+        });
+
+        // Frame 2: select-all then type the digits, then Enter.
+        let mut input = egui::RawInput::default();
+        input.events.push(egui::Event::Key {
+            key: egui::Key::A,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::COMMAND,
+        });
+        input.events.push(egui::Event::Text(TYPED.to_string()));
+        input.events.push(egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        let _ = ctx.run(input, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.add(super::VkbU64::new(&mut seed, "typed_seed"));
+            });
+        });
+
+        assert_eq!(
+            seed, TYPED,
+            "typed {TYPED} but got {seed} — an f64 round-trip in the widget"
+        );
+    }
+
+    /// An external change (Reroll, the dice button, loading a config)
+    /// must reach the field, not be masked by the cached text.
+    #[test]
+    fn an_externally_changed_seed_reaches_the_field() {
+        use egui_dock::egui;
+
+        let ctx = egui::Context::default();
+        let mut seed: u64 = 1;
+
+        for step in 0..3 {
+            if step == 1 {
+                // What Reroll does: exact u64 arithmetic, outside the widget.
+                seed = u64::MAX - 3;
+            }
+            let _ = ctx.run(Default::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.add(super::VkbU64::new(&mut seed, "reroll_seed"));
+                });
+            });
+        }
+
+        assert_eq!(seed, u64::MAX - 3, "the external write must survive");
     }
 }
 

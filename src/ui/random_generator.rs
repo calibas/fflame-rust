@@ -115,7 +115,7 @@ impl RandomGeneratorPanel {
                     self.settings.seed = if use_seed { Some(12345) } else { None };
                 }
                 if let Some(ref mut seed) = self.settings.seed {
-                    ui.add(super::VkbDragValue::new(seed).speed(100));
+                    ui.add(super::VkbU64::new(seed, "random_generator_seed").desired_width(150.0));
                     if ui.button("🎲").on_hover_text(t!("random_generator.randomize_seed")).clicked() {
                         *seed = rand::random();
                     }
